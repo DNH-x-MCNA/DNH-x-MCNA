@@ -1,0 +1,9 @@
+.env
+__pycache__/
+*.pyc
+scratch/
+data/alerts_state.db
+data/dnh_local.db
+sync_service_stderr.log
+sync_service_stdout.log
+nssm_log.txt

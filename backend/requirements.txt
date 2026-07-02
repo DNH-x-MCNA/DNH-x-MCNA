@@ -1,0 +1,6 @@
+fastapi>=0.100.0
+uvicorn>=0.20.0
+pydantic>=2.0
+openai>=1.0.0
+botbuilder-core>=4.14.0
+botbuilder-schema>=4.14.0

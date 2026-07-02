@@ -1,0 +1,42 @@
+# Cấu hình hệ thống Pipeline ETL & Cảnh báo
+
+# Môi trường chạy: 'local' (sử dụng SQLite giả lập) hoặc 'production' (sử dụng SQL Server thật)
+environment: local
+
+# Cấu hình Cơ sở dữ liệu
+database:
+  # Cấu hình cho môi trường local (SQLite)
+  local:
+    erp_connection_string: "sqlite:///mock_source/erp.db"
+    crm_connection_string: "sqlite:///mock_source/crm.db"
+  
+  # Cấu hình cho môi trường production (SQL Server)
+  # Lưu ý: Các trường ${DB_PASS} sẽ được tự động load từ file .env
+  production:
+    erp_connection_string: "mssql+pyodbc://{DB_USER}:{DB_PASS}@{DB_HOST}:{DB_PORT}/{ERP_DB_NAME}?driver=ODBC+Driver+17+for+SQL+Server"
+    crm_connection_string: "mssql+pyodbc://{DB_USER}:{DB_PASS}@{DB_HOST}:{DB_PORT}/{CRM_DB_NAME}?driver=ODBC+Driver+17+for+SQL+Server"
+
+# Cấu hình thông báo Email (Outlook SMTP)
+# Lưu ý: Mật khẩu email được lấy từ biến môi trường SMTP_PASSWORD trong file .env
+email:
+  smtp_server: smtp.office365.com
+  smtp_port: 587
+  use_tls: true
+  sender_name: "Alerting System (ETL)"
+  sender_email: "" # Điền email gửi (Outlook) của bạn vào đây hoặc trong .env
+  recipient_emails:
+    - "" # Email người nhận cảnh báo, ví dụ: user@example.com
+
+# Cấu hình các ngưỡng cảnh báo (Warning Thresholds)
+thresholds:
+  erp:
+    low_inventory_limit: 20       # Cảnh báo khi số lượng tồn kho < 20
+    failed_orders_limit: 5        # Cảnh báo khi số lượng đơn lỗi/hủy trong 1 giờ qua > 5
+    failed_orders_lookback_hours: 1
+  crm:
+    unresolved_urgent_tickets_limit: 3  # Cảnh báo khi số ca Urgent/Open > 3
+
+# Cấu hình Chu kỳ chạy (giây hoặc phút)
+scheduler:
+  etl_check_interval_seconds: 30  # Chạy check cảnh báo sau mỗi 30 giây (để dễ kiểm thử)
+  daily_digest_time: "17:30"      # Thời gian gửi báo cáo tổng hợp hằng ngày

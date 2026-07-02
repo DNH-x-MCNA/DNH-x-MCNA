@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DNH Portal - Hệ Thống Quản Lý & AI Chatbot Dược Nam Hà</title>
+    <meta name="description" content="Cổng thông tin quản lý chỉ số doanh thu, theo dõi hạn mức công nợ ngày và phân tích dữ liệu tự động bằng AI của Dược Nam Hà.">
+    <!-- Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <!-- FontAwesome Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+    <!-- 1. LOGIN SCREEN -->
+    <div id="login-screen" class="login-container">
+        <div class="login-card">
+            <div class="brand">
+                <i class="fa-solid fa-prescription-bottle-medical logo-icon"></i>
+                <h2>Dược Nam Hà</h2>
+                <p>Hệ thống Portal & AI Chatbot</p>
+            </div>
+            <form id="login-form">
+                <div class="input-group">
+                    <label for="username"><i class="fa-solid fa-user"></i> Tên đăng nhập</label>
+                    <input type="text" id="username" placeholder="Nhập tên đăng nhập (ví dụ: c_level)" required>
+                </div>
+                <div class="input-group">
+                    <label for="password"><i class="fa-solid fa-lock"></i> Mật khẩu</label>
+                    <input type="password" id="password" placeholder="Nhập mật khẩu" required>
+                </div>
+                <button type="submit" id="btn-login" class="btn-primary">Đăng Nhập <i class="fa-solid fa-right-to-bracket"></i></button>
+            </form>
+            <div class="login-hints">
+                <p>Gợi ý tài khoản demo:</p>
+                <code>c_level / dnh@clevel2026</code><br>
+                <code>manager_bac / dnh@bac2026</code>
+            </div>
+            <div id="login-error" class="error-msg" style="display: none;"></div>
+        </div>
+    </div>
+
+    <!-- 2. MAIN APP PORTAL -->
+    <div id="app-container" class="app-layout" style="display: none;">
+        <!-- Sidebar Navigation -->
+        <aside class="sidebar">
+            <div class="sidebar-brand">
+                <i class="fa-solid fa-prescription-bottle-medical brand-icon"></i>
+                <div>
+                    <h3>Dược Nam Hà</h3>
+                    <span class="status-badge"><i class="fa-solid fa-circle"></i> Connected</span>
+                </div>
+            </div>
+            <nav class="sidebar-menu">
+                <a href="#" class="menu-item active" id="menu-dashboard"><i class="fa-solid fa-chart-line"></i> Dashboard</a>
+                <a href="#" class="menu-item" id="menu-debt"><i class="fa-solid fa-triangle-exclamation"></i> Công Nợ Cảnh Báo</a>
+                <a href="#" class="menu-item" id="menu-chatbot"><i class="fa-solid fa-robot"></i> AI Chatbot</a>
+            </nav>
+            <div class="sidebar-user">
+                <div class="user-info">
+                    <i class="fa-solid fa-circle-user avatar-icon"></i>
+                    <div>
+                        <h4 id="user-display-name">User</h4>
+                        <p id="user-role">Role</p>
+                    </div>
+                </div>
+                <button id="btn-logout" class="btn-logout" title="Đăng xuất"><i class="fa-solid fa-power-off"></i></button>
+            </div>
+        </aside>
+
+        <!-- Main Workspace -->
+        <main class="main-content">
+            <!-- Header bar -->
+            <header class="workspace-header">
+                <h1 id="page-title">Dashboard Tổng Quan</h1>
+                <div class="header-actions">
+                    <div class="cycle-badge"><i class="fa-solid fa-calendar-days"></i> Chu kỳ tài chính: 2024 - 2026</div>
+                </div>
+            </header>
+
+            <!-- Workspace Views -->
+            <div class="workspace-body">
+                
+                <!-- VIEW 1: DASHBOARD -->
+                <section id="view-dashboard" class="workspace-view">
+                    <!-- Key Stats Cards -->
+                    <div class="stats-grid">
+                        <div class="stat-card">
+                            <div class="stat-icon purple"><i class="fa-solid fa-sack-dollar"></i></div>
+                            <div class="stat-content">
+                                <h3>Nợ Phải Thu Tổng</h3>
+                                <p id="stat-revenue">0 VND</p>
+                            </div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-icon blue"><i class="fa-solid fa-file-invoice-dollar"></i></div>
+                            <div class="stat-content">
+                                <h3>Tổng Nợ Quá Hạn</h3>
+                                <p id="stat-orders">0 VND</p>
+                            </div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-icon green"><i class="fa-solid fa-users"></i></div>
+                            <div class="stat-content">
+                                <h3>Khách Hàng</h3>
+                                <p id="stat-customers">0</p>
+                            </div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-icon red"><i class="fa-solid fa-warehouse"></i></div>
+                            <div class="stat-content">
+                                <h3>Mặt Hàng Kho</h3>
+                                <p id="stat-contracts">0</p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Charts Grid -->
+                    <div class="charts-grid">
+                        <div class="chart-card large">
+                            <h3>Nợ Phải Thu Theo Kênh Bán Hàng</h3>
+                            <div class="chart-container">
+                                <canvas id="chart-quarterly"></canvas>
+                            </div>
+                        </div>
+                        <div class="chart-card">
+                            <h3>Doanh Số KPI Theo Vùng Miền</h3>
+                            <div class="chart-container">
+                                <canvas id="chart-regional"></canvas>
+                            </div>
+                        </div>
+                        <div class="chart-card">
+                            <h3>Phân Tích Tuổi Nợ Quá Hạn</h3>
+                            <div class="chart-container">
+                                <canvas id="chart-segment"></canvas>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- VIEW 2: DEBT ALERTS -->
+                <section id="view-debt" class="workspace-view" style="display: none;">
+                    <div class="alert-info-banner">
+                        <i class="fa-solid fa-triangle-exclamation banner-icon"></i>
+                        <div>
+                            <h3>Cảnh Báo Công Nợ Hàng Ngày</h3>
+                            <p>Các đối tượng khách hàng dưới đây đang vượt quá hạn mức công nợ ngày hoặc quá hạn số ngày nợ cho phép. Cần kiểm duyệt trước khi tiếp tục lên đơn hàng mới.</p>
+                        </div>
+                    </div>
+                    
+                    <div class="table-card">
+                        <table id="debt-alerts-table">
+                            <thead>
+                                <tr>
+                                    <th>Mã KH</th>
+                                    <th>Tên Khách Hàng</th>
+                                    <th>Kênh bán hàng</th>
+                                    <th>Tổng Nợ Phải Thu</th>
+                                    <th>Nợ Quá Hạn</th>
+                                    <th>Chi tiết Tuổi nợ quá hạn (VND)</th>
+                                    <th>Trạng Thái Cảnh Báo</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <!-- Inserted dynamically -->
+                            </tbody>
+                        </table>
+                    </div>
+                </section>
+
+                <!-- VIEW 3: AI CHATBOT -->
+                <section id="view-chatbot" class="workspace-view" style="display: none;">
+                    <div class="chatbot-container">
+                        <!-- Left Panel: Chat messages -->
+                        <div class="chat-main">
+                            <div class="chat-messages" id="chat-messages-box">
+                                <div class="message bot">
+                                    <div class="message-avatar"><i class="fa-solid fa-robot"></i></div>
+                                    <div class="message-bubble">
+                                        Chào anh/chị. Tôi là AI trợ lý phân tích dữ liệu Dược Nam Hà. Tôi có thể giúp anh/chị truy vấn nhanh thông tin doanh thu vùng miền, tình hình thầu ETC, hoặc khách hàng quá hạn công nợ. Hãy nhập câu hỏi của bạn bằng tiếng Việt.
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="chat-input-area">
+                                <form id="chat-form">
+                                    <input type="text" id="chat-input" placeholder="Hỏi AI về doanh thu, công nợ, hợp đồng ETC..." autocomplete="off">
+                                    <button type="submit" id="btn-chat-send" class="btn-chat-send"><i class="fa-solid fa-paper-plane"></i></button>
+                                </form>
+                            </div>
+                        </div>
+                        
+                        <!-- Right Panel: Suggestions & Metadata -->
+                        <aside class="chat-sidebar">
+                            <h3>Câu hỏi gợi ý</h3>
+                            <div class="suggestions-list">
+                                <button class="suggest-btn" data-q="Cho tôi biết doanh thu mien bac"><i class="fa-solid fa-search"></i> Doanh thu Miền Bắc</button>
+                                <button class="suggest-btn" data-q="Khách hàng nào đang vượt hạn mức công nợ"><i class="fa-solid fa-search"></i> Kiểm tra vượt hạn mức nợ</button>
+                                <button class="suggest-btn" data-q="Xem chi tiết các hợp đồng thầu ETC"><i class="fa-solid fa-search"></i> Hợp đồng thầu ETC</button>
+                                <button class="suggest-btn" data-q="Doanh thu mien nam bao nhieu"><i class="fa-solid fa-search"></i> Doanh thu Miền Nam</button>
+                            </div>
+                            <hr>
+                            <div class="chatbot-meta">
+                                <h4><i class="fa-solid fa-shield-halved"></i> Bảo Mật Dữ Liệu AI</h4>
+                                <p>Hệ thống sử dụng **Text-to-SQL + Semantic Layer**. Dữ liệu thô được truy vấn và thực thi trực tiếp trên máy chủ nội bộ. AI không lưu trữ thông tin nhạy cảm của Dược Nam Hà.</p>
+                                <span class="badge" id="ai-mode-badge">Offline Mock Engine</span>
+                            </div>
+                        </aside>
+                    </div>
+                </section>
+
+            </div>
+        </main>
+    </div>
+
+    <!-- Script Entry -->
+    <script src="app.js"></script>
+</body>
+</html>
