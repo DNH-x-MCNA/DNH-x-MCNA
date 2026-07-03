@@ -554,34 +554,15 @@ class DNHChatbot:
         
         # 1. Phân loại ý định của câu hỏi (Intent Classification)
         intent = "DATA_QUERY"
-        if not self.is_mock:
-            intent_prompt = f"""
-Phân loại câu hỏi của người dùng đối với hệ thống dữ liệu Dược Nam Hà (DNH).
-Chọn một trong bốn nhãn sau:
-1. 'DATA_QUERY': Câu hỏi cần tra cứu số liệu cụ thể, danh sách chi tiết, hoặc cần chạy câu lệnh SQL để truy vấn CSDL (ví dụ: "doanh thu bao nhiêu", "liệt kê tồn kho", "ai nợ nhiều nhất").
-2. 'ANALYSIS': Câu hỏi dạng tại sao (why), làm thế nào (how), giải thích nguyên nhân, tư vấn chiến lược, hoặc phân tích xu hướng dựa trên tình hình kinh doanh (ví dụ: "tại sao doanh số miền Bắc giảm", "làm sao để giảm công nợ quá hạn", "giải pháp khắc phục thiếu hàng").
-3. 'GENERAL': Câu chào hỏi hoặc hội thoại thông thường (ví dụ: "xin chào", "bạn là ai", "hướng dẫn sử dụng").
-4. 'AMBIGUOUS': Câu hỏi quá mơ hồ, chung chung, không rõ ràng phạm vi tra cứu (ví dụ: "báo cáo đi", "tình hình thế nào", "số liệu", "cho xin báo cáo", "hôm nay thế nào").
-
-Trả về DUY NHẤT nhãn lựa chọn ('DATA_QUERY', 'ANALYSIS', 'GENERAL', hoặc 'AMBIGUOUS'). Không viết thêm gì khác.
-
-Câu hỏi của người dùng: "{user_question}"
-"""
-            try:
-                intent_text = self._call_ai(
-                    model=self.summary_model,
-                    system_prompt="You are a helpful classifier. Answer with exactly one word: DATA_QUERY, ANALYSIS, GENERAL, or AMBIGUOUS.",
-                    user_prompt=intent_prompt,
-                    temperature=0.0
-                ).upper()
-                if "ANALYSIS" in intent_text:
-                    intent = "ANALYSIS"
-                elif "GENERAL" in intent_text:
-                    intent = "GENERAL"
-                elif "AMBIGUOUS" in intent_text:
-                    intent = "AMBIGUOUS"
-            except Exception as e:
-                print(f"[Error classifying intent]: {e}")
+        q_lower = user_question.lower().strip()
+        
+        # Fast Heuristic Intent Classifier (Bypasses LLM to save 3+ seconds)
+        if any(w in q_lower for w in ["chào", "hello", "hi ", "bạn là ai", "huong dan", "hướng dẫn", "chức năng", "giúp gì", "cmd", "help"]):
+            intent = "GENERAL"
+        elif any(w in q_lower for w in ["tại sao", "tai sao", "vì sao", "vi sao", "làm thế nào", "lam the nao", "giải pháp", "giai phap", "khắc phục", "khac phuc"]):
+            intent = "ANALYSIS"
+        elif q_lower in ["báo cáo đi", "tình hình thế nào", "số liệu", "cho xin báo cáo", "hôm nay thế nào", "báo cáo", "bao cao", "tình hình", "tinh hinh"]:
+            intent = "AMBIGUOUS"
 
         # 2. Xử lý theo từng Intent
         if intent == "AMBIGUOUS":
@@ -1095,67 +1076,41 @@ Then present the Q2 numbers clearly labeled as "Q2/2026 (Tháng 4-6)" not "6 th�
 
     def _parse_data_intent(self, user_question):
         """
-        Parses a data query into a structured JSON taxonomy for sếp:
+        Fast heuristic visual intent parser (Bypasses LLM call to save 3+ seconds).
+        Returns a dictionary containing:
         - intent: Single_Value, Trend, Composition, Comparison_Rank, Variance
         - metrics: list of strings
         - dimensions: list of strings
         - time_context: string
         - filter: string
         """
-        parser_system_prompt = """
-You are a data analysis intent parser. Read the user's business question and parse it into a strict JSON object.
-The JSON object MUST have the following keys:
-1. "intent": MUST be one of:
-   - "Single_Value": asking for a single metric at a single point in time (e.g., "Doanh số hôm nay?", "Hạn mức công nợ của đại lý X").
-   - "Trend": asking about changes over continuous time (e.g., "Doanh thu 6 tháng qua?", "Xu hướng hàng tồn kho YTD").
-   - "Composition": asking about percentage, shares, or structure breakdown (e.g., "Tỷ trọng doanh thu các vùng miền", "Cơ cấu nợ theo kênh").
-   - "Comparison_Rank": comparing categories or ranking items (e.g., "Top 5 sản phẩm bán chạy", "So sánh doanh số miền Bắc vs miền Nam").
-   - "Variance": asking about discrepancies, variance, or changes between targets/actuals or past periods (e.g., "Tại sao lợi nhuận tụt so với tháng trước", "Biến động chỉ tiêu thực đạt").
-2. "metrics": list of metric names mentioned (e.g., ["doanh thu"], ["nợ quá hạn"]).
-3. "dimensions": list of dimensions / group by columns mentioned (e.g., ["vùng miền"], ["kênh"], ["sản phẩm"]).
-4. "time_context": time filter mentioned (e.g., "YTD", "6 tháng qua", "tháng 5").
-5. "filter": specific filter conditions (e.g., "miền Bắc", "ETC", "sản phẩm mới").
-
-Ensure you return ONLY a raw JSON block, no markdown, no explanation, no backticks. E.g.
-{
-  "intent": "Trend",
-  "metrics": ["doanh thu"],
-  "dimensions": ["mã sản phẩm"],
-  "time_context": "YTD",
-  "filter": "sản phẩm mới"
-}
-"""
-        try:
-            res_text = self._call_ai(
-                model=self.summary_model,
-                system_prompt=parser_system_prompt,
-                user_prompt=user_question,
-                temperature=0.0
-            )
-            if "```json" in res_text:
-                res_text = res_text.split("```json")[1].split("```")[0]
-            elif "```" in res_text:
-                res_text = res_text.split("```")[1].split("```")[0]
-            import json
-            parsed = json.loads(res_text.strip())
-            return parsed
-        except Exception as e:
-            print(f"[Error parsing data intent]: {e}")
-            q_lower = user_question.lower()
-            intent = "Comparison_Rank"
-            if "xu huong" in q_lower or "trend" in q_lower or "ngay" in q_lower or "thang" in q_lower:
-                intent = "Trend"
-            elif "ty le" in q_lower or "phan tram" in q_lower or "co cau" in q_lower or "chiem" in q_lower:
-                intent = "Composition"
-            elif "tai sao" in q_lower or "bien dong" in q_lower or "chenh lech" in q_lower:
-                intent = "Variance"
-            return {
-                "intent": intent,
-                "metrics": ["doanh số"],
-                "dimensions": [],
-                "time_context": "",
-                "filter": ""
-            }
+        q_lower = user_question.lower()
+        intent = "Comparison_Rank"
+        if any(k in q_lower for k in ["xu huong", "trend", "ngay", "thang", "tháng", "chu ky", "chu kỳ", "7 ngày", "thời gian", "lịch sử", "theo ngày", "theo tháng"]):
+            intent = "Trend"
+        elif any(k in q_lower for k in ["ty le", "tỷ lệ", "phan tram", "phần trăm", "co cau", "cơ cấu", "chiem", "chiếm", "tỷ trọng", "tỷ trọng"]):
+            intent = "Composition"
+        elif any(k in q_lower for k in ["tai sao", "tại sao", "bien dong", "biến động", "chenh lech", "chênh lệch"]):
+            intent = "Variance"
+            
+        # Check if the question is querying a single value without breakdown or comparison
+        breakdown_keywords = [
+            "so sanh", "so sánh", "top", "hon", "hơn", "thap", "thấp", "cao", 
+            "lon", "lớn", "nho", "nhỏ", "chia theo", "theo", "breakdown", 
+            "phan bo", "phân bổ", "kênh", "kenh", "miền", "mien", "vùng", "vung",
+            "nhân viên", "nhan vien", "tdv", "danh sách", "danh sach", "bảng"
+        ]
+        if not any(k in q_lower for k in breakdown_keywords):
+            if intent != "Trend":
+                intent = "Single_Value"
+                
+        return {
+            "intent": intent,
+            "metrics": ["doanh số"],
+            "dimensions": [],
+            "time_context": "",
+            "filter": ""
+        }
 
     def _render_visual(self, visual_type, columns, rows, question):
         if not rows or len(rows) == 0 or not columns:
