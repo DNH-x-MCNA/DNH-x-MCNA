@@ -1,6 +1,7 @@
 import os
 import sqlite3
 import re
+import anthropic
 from openai import OpenAI
 from dotenv import load_dotenv
 
@@ -9,16 +10,43 @@ load_dotenv()
 
 DB_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "scripts", "dnh_intermediate.db")
 
+# Cached, pooled engine for the cloud Postgres DB. Built once per process and
+# reused by every call site below (schema fetch, date lookups, query exec)
+# instead of opening a brand new TCP/SSL connection on every single request.
+_cloud_engine = None
+_cloud_engine_url = None
+
+def _get_cloud_engine():
+    global _cloud_engine, _cloud_engine_url
+    cloud_db_url = os.getenv("CLOUD_DB_URL", "")
+    if not cloud_db_url:
+        return None
+
+    db_url = cloud_db_url.strip()
+    if db_url.startswith("postgres://"):
+        db_url = db_url.replace("postgres://", "postgresql://", 1)
+
+    if _cloud_engine is not None and _cloud_engine_url == db_url:
+        return _cloud_engine
+
+    from sqlalchemy import create_engine
+    _cloud_engine = create_engine(
+        db_url,
+        pool_size=5,
+        max_overflow=5,
+        pool_pre_ping=True,   # discard/replace stale pooled connections automatically
+        pool_recycle=300,     # avoid Supabase/pgbouncer idle-connection kills
+        connect_args={'connect_timeout': 3}
+    )
+    _cloud_engine_url = db_url
+    return _cloud_engine
+
 # Helper to get the database schema dynamically
 def get_db_schema():
-    cloud_db_url = os.getenv("CLOUD_DB_URL", "")
-    if cloud_db_url:
+    engine = _get_cloud_engine()
+    if engine is not None:
         try:
-            from sqlalchemy import create_engine, text
-            db_url = cloud_db_url.strip()
-            if db_url.startswith("postgres://"):
-                db_url = db_url.replace("postgres://", "postgresql://", 1)
-            engine = create_engine(db_url, connect_args={'connect_timeout': 3})
+            from sqlalchemy import text
             with engine.connect() as conn:
                 tables_to_include = (
                     'brv_hoadonhdr', 'brv_hoadonct', 'brvsx_hoadonhdr', 'brvsx_hoadonct',
@@ -66,10 +94,18 @@ def get_db_schema():
 
 class DNHChatbot:
     def __init__(self):
+        self.anthropic_key = os.getenv("ANTHROPIC_API_KEY", "")
         self.gemini_key = os.getenv("GEMINI_API_KEY", "")
         self.openai_key = os.getenv("OPENAI_API_KEY", "")
-        
-        if self.gemini_key:
+
+        if self.anthropic_key:
+            self.client = anthropic.Anthropic(api_key=self.anthropic_key)
+            self.is_mock = False
+            self.model_type = "claude"
+            self.sql_model = "claude-opus-4-8"
+            self.summary_model = "claude-opus-4-8"
+            print("[Info] Running in Live Claude Mode.")
+        elif self.gemini_key:
             self.client = None
             self.is_mock = False
             self.model_type = "gemini"
@@ -111,18 +147,13 @@ class DNHChatbot:
             return self._cloud_available_cached
             
         self._last_cloud_check = now
-        cloud_db_url = os.getenv("CLOUD_DB_URL", "")
-        if not cloud_db_url or self.is_mock:
+        engine = _get_cloud_engine()
+        if engine is None or self.is_mock:
             self._cloud_available_cached = False
             return False
-            
+
         try:
-            from sqlalchemy import create_engine, text
-            db_url = cloud_db_url.strip()
-            if db_url.startswith("postgres://"):
-                db_url = db_url.replace("postgres://", "postgresql://", 1)
-            # Use short timeout for quick check
-            engine = create_engine(db_url, connect_args={'connect_timeout': 2})
+            from sqlalchemy import text
             with engine.connect() as conn:
                 conn.execute(text("SELECT 1 FROM regions LIMIT 1"))
                 self._cloud_available_cached = True
@@ -132,6 +163,61 @@ class DNHChatbot:
             # Print warning on transition to False or first check
             print(f"[Warning] Postgres Cloud DB check failed: {e}. Bot will use SQLite fallback if query fails.")
             return False
+
+    def _get_latest_dates(self):
+        """Retrieves the latest invoice date, month-end date, and receivable period dynamically."""
+        latest_date = "2026-06-30"
+        latest_month_end = "2026-06-30"
+        latest_period = "9_2025"
+        
+        engine = _get_cloud_engine()
+        if engine is not None and not self.is_mock and self.cloud_available:
+            try:
+                from sqlalchemy import text
+                with engine.connect() as conn:
+                    # Get max DocDate
+                    res1 = conn.execute(text('SELECT MAX("DocDate") FROM brv_hoadonhdr WHERE "IsActive" = TRUE'))
+                    row1 = res1.fetchone()
+                    if row1 and row1[0]:
+                        latest_date = str(row1[0]).split(' ')[0].split('T')[0]
+                        
+                    # Get max SaveDate
+                    res2 = conn.execute(text('SELECT MAX("SaveDate") FROM fact_tonghopkhachhang'))
+                    row2 = res2.fetchone()
+                    if row2 and row2[0]:
+                        latest_month_end = str(row2[0]).split(' ')[0].split('T')[0]
+                        
+                    # Get max Period from receivable_detail
+                    res3 = conn.execute(text('SELECT MAX(period) FROM receivable_detail'))
+                    row3 = res3.fetchone()
+                    if row3 and row3[0]:
+                        latest_period = str(row3[0])
+                return latest_date, latest_month_end, latest_period
+            except Exception as e:
+                print(f"[Warning] Failed to fetch max dates from cloud: {e}")
+                
+        # Try local SQLite fallback
+        if os.path.exists(DB_PATH):
+            try:
+                conn = sqlite3.connect(DB_PATH)
+                cursor = conn.cursor()
+                cursor.execute('SELECT MAX(DocDate) FROM brv_hoadonhdr WHERE IsActive = 1')
+                r1 = cursor.fetchone()
+                if r1 and r1[0]:
+                    latest_date = str(r1[0]).split(' ')[0].split('T')[0]
+                cursor.execute('SELECT MAX(SaveDate) FROM fact_tonghopkhachhang')
+                r2 = cursor.fetchone()
+                if r2 and r2[0]:
+                    latest_month_end = str(r2[0]).split(' ')[0].split('T')[0]
+                cursor.execute('SELECT MAX(period) FROM receivable_detail')
+                r3 = cursor.fetchone()
+                if r3 and r3[0]:
+                    latest_period = str(r3[0])
+                conn.close()
+            except Exception as e:
+                print(f"[Warning] Failed to fetch max dates from SQLite: {e}")
+                
+        return latest_date, latest_month_end, latest_period
 
     def _call_gemini_rest(self, model, system_instruction, user_content, temperature=0.0):
         import urllib.request
@@ -168,9 +254,22 @@ class DNHChatbot:
             text = res['candidates'][0]['content']['parts'][0]['text']
             return text.strip()
 
+    def _call_claude(self, model, system_instruction, user_content):
+        # NOTE: claude-opus-4-8 does not accept temperature/top_p/top_k (400 if sent), so
+        # unlike the Gemini/OpenAI branches, no sampling parameter is forwarded here.
+        response = self.client.messages.create(
+            model=model,
+            max_tokens=4096,
+            system=system_instruction,
+            messages=[{"role": "user", "content": user_content}],
+        )
+        return next((b.text for b in response.content if b.type == "text"), "").strip()
+
     def _call_ai(self, model, system_prompt, user_prompt, temperature=0.0):
         if self.model_type == "gemini":
             return self._call_gemini_rest(model, system_prompt, user_prompt, temperature)
+        elif self.model_type == "claude":
+            return self._call_claude(model, system_prompt, user_prompt)
         else:
             resp = self.client.chat.completions.create(
                 model=model,
@@ -182,119 +281,48 @@ class DNHChatbot:
             )
             return resp.choices[0].message.content.strip()
 
-    def _adjust_june_revenue(self, sql_query, columns, rows):
-        """Ensures June 2026 actual sales match Slide 1 official report numbers 100% exactly."""
-        if not rows or not columns:
-            return rows
-            
-        sql_lower = sql_query.lower()
-        # Look for June 2026 query markers
-        is_june_query = ('2026-06' in sql_lower or '6/2026' in sql_lower or 'month_sale' in sql_lower or 'sales_date' in sql_lower)
-        is_sub_month = ('2026-06-20' in sql_lower or 'interval' in sql_lower or '6 days' in sql_lower)
-        if not is_june_query or is_sub_month:
-            return rows
-            
-        # Official C-level report values for June 2026 (Slide 1)
-        targets = {
-            ('OTC', 'MB'): 20874510792.0,
-            ('OTC', 'MN'): 7589505689.0,
-            ('OTC', 'MT'): 4203754295.0,
-            ('ETC', 'MB'): 16117144383.0,
-            ('ETC', 'MN'): 12034109791.0,
-            ('ETC', 'MT'): 1245536633.0,
-        }
-        
-        def normalize_channel(val):
-            val_str = str(val or "").upper()
-            if "OTC" in val_str: return "OTC"
-            if "ETC" in val_str: return "ETC"
-            return None
-            
-        def normalize_region(val):
-            val_str = str(val or "").upper()
-            if "MB" in val_str or "BẮC" in val_str or "BAC" in val_str: return "MB"
-            if "MN" in val_str or "NAM" in val_str: return "MN"
-            if "MT" in val_str or "TRUNG" in val_str: return "MT"
-            return None
 
-        # Detect columns dynamically
-        chan_col = None
-        reg_col = None
-        val_cols = []
-        
-        for col in columns:
-            col_lower = col.lower()
-            if col_lower in ['channel', 'kênh', 'kenh', 'source_table', 'final_channel']:
-                chan_col = col
-            elif col_lower in ['region', 'miền', 'mien', 'areacode', 'phân vùng', 'phan vung', 'areacode2']:
-                reg_col = col
-            elif any(k in col_lower for k in ['amount', 'revenue', 'doanh_thu', 'doanh thu', 'value', 'actual', 'thực đạt', 'thuc dat']):
-                val_cols.append(col)
-                
-        if not val_cols:
-            return rows
-            
-        val_col = val_cols[0]
-        
-        # 1. Channel + Region breakdown
-        if chan_col and reg_col:
-            for r in rows:
-                c_val = normalize_channel(r.get(chan_col))
-                r_val = normalize_region(r.get(reg_col))
-                if (c_val, r_val) in targets:
-                    r[val_col] = targets[(c_val, r_val)]
-                    
-        # 2. Channel-only breakdown
-        elif chan_col and not reg_col:
-            for r in rows:
-                c_val = normalize_channel(r.get(chan_col))
-                if c_val == "OTC":
-                    r[val_col] = sum(targets[(c, r_)] for c, r_ in targets if c == "OTC")
-                elif c_val == "ETC":
-                    r[val_col] = sum(targets[(c, r_)] for c, r_ in targets if c == "ETC")
-                    
-        # 3. Region-only breakdown
-        elif reg_col and not chan_col:
-            for r in rows:
-                r_val = normalize_region(r.get(reg_col))
-                if r_val == "MB":
-                    r[val_col] = sum(targets[(c_, r)] for c_, r in targets if r == "MB")
-                elif r_val == "MN":
-                    r[val_col] = sum(targets[(c_, r)] for c_, r in targets if r == "MN")
-                elif r_val == "MT":
-                    r[val_col] = sum(targets[(c_, r)] for c_, r in targets if r == "MT")
-                    
-        # 4. Grand total or single value
-        elif len(rows) == 1 and not chan_col and not reg_col:
-            r = rows[0]
-            try:
-                curr_val = float(r.get(val_col) or 0)
-                # Verify if it falls within the expected total actual range for June 2026
-                if 55_000_000_000 <= curr_val <= 65_000_000_000:
-                    r[val_col] = sum(targets.values())
-            except:
-                pass
-                
-        return rows
 
     def _execute_sql(self, sql_query):
         """Executes SQL query safely on the intermediate database (Postgres Cloud or SQLite Local)."""
         # Basic SQL safety check (Read-only check)
         lower_sql = sql_query.lower().strip()
-        forbidden_keywords = ['drop', 'delete', 'update', 'insert', 'alter', 'truncate', 'create', 'replace']
+        forbidden_keywords = ['drop', 'delete', 'update', 'insert', 'alter', 'truncate', 'create', 'replace', 'xp_cmdshell', 'exec']
         for keyword in forbidden_keywords:
             if re.search(r'\b' + keyword + r'\b', lower_sql):
                 return {"error": f"Bao mat: Cau lenh chua tu khoa khong cho phep '{keyword}'"}
 
-        cloud_db_url = os.getenv("CLOUD_DB_URL", "")
+        # 1. Enforce SELECT/WITH whitelist
+        # Strip comments/whitespace to find the first word
+        clean_sql = re.sub(r'--.*$', '', sql_query, flags=re.MULTILINE)
+        clean_sql = re.sub(r'/\*.*?\*/', '', clean_sql, flags=re.DOTALL)
+        first_word_match = re.match(r'^\s*([a-zA-Z]+)', clean_sql)
+        if not first_word_match:
+            return {"error": "Bao mat: Cau lenh SQL khong hop le."}
+        first_word = first_word_match.group(1).upper()
+        if first_word not in ['SELECT', 'WITH']:
+            return {"error": f"Bao mat: Chi cho phep truy van SELECT hoac WITH. Tu khoa bat dau: '{first_word}'"}
+
+        # 2. Block ';' if it is not the very last non-whitespace character (prevent multi-statement)
+        stripped_sql = sql_query.strip()
+        if ';' in stripped_sql:
+            if stripped_sql.find(';') != len(stripped_sql) - 1:
+                return {"error": "Bao mat: Phat hien multi-statement query (;)."}
+
+        # 3. Block comment injection (only allow '-- NOTE:' case-insensitive at start of line)
+        if '--' in sql_query:
+            for line in sql_query.split('\n'):
+                if '--' in line:
+                    if not line.strip().upper().startswith('-- NOTE:'):
+                        return {"error": "Bao mat: Phat hien SQL comment injection."}
+        if '/*' in sql_query or '*/' in sql_query:
+            return {"error": "Bao mat: Phat hien SQL block comment injection."}
+
+        engine = _get_cloud_engine()
         postgres_error = None
-        if cloud_db_url and not self.is_mock and self.cloud_available:
+        if engine is not None and not self.is_mock and self.cloud_available:
             try:
-                from sqlalchemy import create_engine, text
-                db_url = cloud_db_url.strip()
-                if db_url.startswith("postgres://"):
-                    db_url = db_url.replace("postgres://", "postgresql://", 1)
-                engine = create_engine(db_url, connect_args={'connect_timeout': 3})
+                from sqlalchemy import text
                 with engine.connect() as conn:
                     result = conn.execute(text(sql_query))
                     if result.returns_rows:
@@ -302,7 +330,7 @@ class DNHChatbot:
                         formatted_rows = [dict(row._mapping) for row in result.fetchall()]
                         return {
                             "columns": columns,
-                            "rows": self._adjust_june_revenue(sql_query, columns, formatted_rows),
+                            "rows": formatted_rows,
                             "count": len(formatted_rows)
                         }
                     else:
@@ -330,7 +358,7 @@ class DNHChatbot:
             conn.close()
             return {
                 "columns": columns,
-                "rows": self._adjust_june_revenue(sql_query, columns, formatted_rows),
+                "rows": formatted_rows,
                 "count": len(formatted_rows)
             }
         except Exception as e:
@@ -547,7 +575,30 @@ class DNHChatbot:
     def ask(self, user_question):
         """Translates natural language question to SQL, runs it, and formats response."""
         if user_question.strip() == "admin_restart_bot_process":
-            import os
+            # Acknowledge the update to Telegram to break the infinite restart loop
+            try:
+                import urllib.request
+                import json
+                token = os.getenv("TELEGRAM_BOT_TOKEN", "")
+                if token:
+                    # Fetch latest updates to get the update_id of this restart command
+                    get_url = f"https://api.telegram.org/bot{token}/getUpdates?limit=10"
+                    with urllib.request.urlopen(get_url, timeout=5) as resp:
+                        res = json.loads(resp.read().decode('utf-8'))
+                        if res.get("ok") and res.get("result"):
+                            # Find the update_id of the restart message
+                            max_update_id = None
+                            for update in res["result"]:
+                                msg = update.get("message", {})
+                                if msg.get("text", "").strip() == "admin_restart_bot_process":
+                                    max_update_id = max(max_update_id or 0, update["update_id"])
+                            if max_update_id is not None:
+                                # Send getUpdates with offset to acknowledge the message
+                                ack_url = f"https://api.telegram.org/bot{token}/getUpdates?offset={max_update_id + 1}&limit=1"
+                                urllib.request.urlopen(ack_url, timeout=5).close()
+            except Exception as e:
+                print(f"[Error acknowledging restart update]: {e}")
+                
             os._exit(0)
             
         db_schema = get_db_schema()
@@ -649,7 +700,19 @@ Câu hỏi/Lời chào của người dùng: "{user_question}"
 
         # LUỒNG CHẠY DATA_QUERY (HOẶC MOCK): Dịch SQL, thực thi và tóm tắt kết quả
         cloud_db_url = os.getenv("CLOUD_DB_URL", "")
-        db_dialect = "PostgreSQL" if (cloud_db_url and not self.is_mock and self.cloud_available) else "SQLite"
+        
+        # Get dynamic date context from the database to avoid hardcoding date boundaries
+        latest_date_str, latest_month_end_str, latest_period = self._get_latest_dates()
+        parts = latest_date_str.split('-')
+        latest_year = parts[0] if len(parts) > 0 else "2026"
+        latest_month = parts[1] if len(parts) > 1 else "06"
+        latest_q_start = f"{latest_year}-04-01"
+
+        db_dialect = "PostgreSQL"
+        if "mssql" in cloud_db_url.lower() or "sqlserver" in cloud_db_url.lower() or os.getenv("DB_DIALECT", "").lower() == "mssql":
+            db_dialect = "TSQL"
+        elif not cloud_db_url or self.is_mock or not self.cloud_available:
+            db_dialect = "SQLite"
         
         dialect_rules = ""
         if db_dialect == "PostgreSQL":
@@ -660,6 +723,16 @@ Câu hỏi/Lời chào của người dùng: "{user_question}"
 6. VERY IMPORTANT: In the DNH database, date columns like 'DocDate' or 'SaveDate' are stored as TEXT (VARCHAR). In PostgreSQL, you MUST explicitly cast them to timestamp or date when using date/time functions like DATE_TRUNC or when doing date comparisons. For example: DATE_TRUNC('month', "DocDate"::timestamp), DATE_TRUNC('day', "DocDate"::timestamp), or WHERE "DocDate"::date >= '2026-04-01'. Failure to do so will cause PostgreSQL crash error: "function date_trunc(unknown, text) does not exist".
 7. Do not use SQLite specific functions like strftime. Use standard Postgres date/time operators and intervals.
 8. ALWAYS wrap case-sensitive table and column names in double quotes if they contain uppercase letters (e.g. "TotalAmount", "DocStatus", "EInvoiceStatus", "IsActive", "CustomerCode", "EmployeeCode", "MonthSaleTarget", "Amount_Cus", "Amount_CT", "SaveDate"). For example: h."TotalAmount", f."MonthSaleTarget".
+"""
+        elif db_dialect == "TSQL":
+            dialect_rules = """
+3. Make sure to use SQL functions that are compatible with Microsoft SQL Server (T-SQL) (e.g. COALESCE, GETDATE(), TRY_CAST, CONVERT, DATEADD, DATEDIFF, DATEPART, etc.).
+4. ALWAYS use 'LIKE' instead of 'ILIKE' (T-SQL is case-insensitive by default under standard collation). Since values in the database (like CityName, Name, item_name) may be stored without Vietnamese tone marks, when filtering Vietnamese text, you MUST search for BOTH the accented and unaccented versions using OR. For example: (t.CityName LIKE '%Bắc%' OR t.CityName LIKE '%Bac%') or (n.Name LIKE '%Tùng%' OR n.Name LIKE '%Tung%').
+5. ALWAYS wrap case-sensitive table and column names in square brackets if they contain uppercase letters or spaces (e.g. h.[TotalAmount], f.[MonthSaleTarget], [brv_hoadonhdr], [dms_khachhang]). Do NOT use double quotes.
+6. VERY IMPORTANT: In T-SQL, there is no LIMIT clause. To limit the number of rows returned, use 'SELECT TOP N ...' at the very beginning of the query instead of 'LIMIT N' at the end. For example: 'SELECT TOP 100 ...' or 'SELECT TOP 5 ...'. Always default to TOP 100 for open list queries.
+7. VERY IMPORTANT: In the DNH database, date columns like 'DocDate' or 'SaveDate' are stored as TEXT (VARCHAR). In T-SQL, you MUST explicitly cast them to DATE or DATETIME when doing date/time functions or date comparisons using TRY_CAST or CONVERT. For example: TRY_CAST([DocDate] AS DATE), or DATEADD(month, DATEDIFF(month, 0, TRY_CAST([DocDate] AS DATE)), 0) to truncate to the beginning of the month.
+8. For multi-month grouping in T-SQL, use DATEPART(month, TRY_CAST([DocDate] AS DATE)) or convert to month-start, and group by it.
+9. ALWAYS default to adding 'TOP 100' for open-ended queries to prevent dumping thousands of records.
 """
         else:
             dialect_rules = """
@@ -736,8 +809,14 @@ Key Business Logic & Tables & Strict Mapping Rules:
          AND (e."IsCancelled" IS NULL OR e."IsCancelled" = FALSE)
 
 3. Chỉ tiêu Doanh thu (Revenue Targets):
-   - Target OTC Region: Query 'dim_targetvungmien' (column 'Amount'). Grouped by 'AreaCode' ('MB', 'MT', 'MN').
-   - Target ETC Company-wide: Query 'fact_kehoachtongetc' (column 'Amount').
+   - CRITICAL DATE FILTER: 'dim_targetvungmien' và 'fact_kehoachtongetc' lưu chỉ tiêu THEO THÁNG — mỗi tháng có NHIỀU dòng (theo từng nhân viên/khu vực chi tiết trong dim_targetvungmien, hoặc theo ItemGroup trong fact_kehoachtongetc). Cột "DocDate" là TEXT dạng 'YYYY-MM-01T00:00:00' (luôn là ngày 01 đầu tháng kèm giờ). BẮT BUỘC lọc "DocDate"::date = 'YYYY-MM-01' (ép kiểu date rồi so sánh) khi cần chỉ tiêu của MỘT tháng cụ thể — KHÔNG so sánh chuỗi thô kiểu "DocDate" = 'YYYY-MM-01' (thiếu phần 'T00:00:00' sẽ không khớp dòng nào, trả về SUM = 0, dẫn tới báo sai "chưa có target"). Nếu quên lọc "DocDate" hoàn toàn, kết quả sẽ CỘNG DỒN target của TẤT CẢ các tháng có trong bảng (sai, bị nhân lên nhiều lần).
+   - Target OTC Region: Query 'dim_targetvungmien' (column 'Amount'). Grouped by 'AreaCode' ('MB', 'MT', 'MN'). ALWAYS filter: "ChannelCode" = 'GT' for OTC region targets. Ví dụ target OTC miền Bắc của tháng hiện tại:
+     SELECT COALESCE(SUM("Amount"), 0) AS target_amount
+     FROM dim_targetvungmien
+     WHERE "AreaCode" = 'MB' AND "ChannelCode" = 'GT'
+       AND "DocDate"::date = '{latest_year}-{latest_month}-01'
+   - Target ETC Region: Query 'dim_targetvungmien' with "ChannelCode" = 'MT', áp dụng cùng cách lọc "DocDate"::date như trên.
+   - Target ETC toàn công ty: Query 'fact_kehoachtongetc' (column 'Amount', có cột 'ItemGroup' nhưng KHÔNG có cột vùng miền), cũng phải lọc "DocDate"::date = 'YYYY-MM-01' như trên.
    - Employee targets: Query 'fact_tonghopkhachhang' (column 'MonthSaleTarget').
      * VERY IMPORTANT: Since fact_tonghopkhachhang has duplicate target values per customer row for each employee, ALWAYS group by EmployeeCode and SaveDate to get the unique employee targets before summing them:
        SELECT SUM(target) FROM (SELECT DISTINCT "EmployeeCode", "SaveDate", "MonthSaleTarget" as target FROM fact_tonghopkhachhang) t
@@ -755,7 +834,7 @@ Key Business Logic & Tables & Strict Mapping Rules:
      * 'QLV' or 'Quản lý vùng' -> dim_nhanvien."PositionCode" = 'QLV'
      * 'TP' or 'Trưởng phòng' -> dim_nhanvien."PositionCode" = 'TP'
    - When the user asks about KPI or nhân viên without specifying position, DEFAULT to TDV (Trình dược viên) since they are the primary salesforce.
-   - SaveDate is the month-end date stored as TEXT: '2026-06-30T00:00:00' for June 2026. The LATEST period is '2026-06-30T00:00:00'.
+   - SaveDate is the month-end date stored as TEXT: '{latest_month_end_str}T00:00:00' for the latest month. The LATEST period is '{latest_month_end_str}T00:00:00'.
    - Example to get Top TDV by KPI completion (correct dedup):
      WITH tdv_actual AS (
        SELECT f."EmployeeCode", SUM(f."Amount_Cus") AS total_actual
@@ -763,7 +842,7 @@ Key Business Logic & Tables & Strict Mapping Rules:
        JOIN dim_nhanvien n ON f."EmployeeCode" = n."EmployeeCode"
        WHERE n."PositionCode" = 'TDV'
          AND (n."IsDuplicate" IS NULL OR n."IsDuplicate" = 0)
-         AND f."SaveDate" = '2026-06-30T00:00:00'
+         AND f."SaveDate" = '{latest_month_end_str}T00:00:00'
        GROUP BY f."EmployeeCode"
      ),
      tdv_target AS (
@@ -772,7 +851,7 @@ Key Business Logic & Tables & Strict Mapping Rules:
        JOIN dim_nhanvien n ON f."EmployeeCode" = n."EmployeeCode"
        WHERE n."PositionCode" = 'TDV'
          AND (n."IsDuplicate" IS NULL OR n."IsDuplicate" = 0)
-         AND f."SaveDate" = '2026-06-30T00:00:00'
+         AND f."SaveDate" = '{latest_month_end_str}T00:00:00'
          AND f."MonthSaleTarget" IS NOT NULL
      )
      SELECT n."Name", a."EmployeeCode", a.total_actual, t."MonthSaleTarget" AS target,
@@ -816,26 +895,26 @@ Key Business Logic & Tables & Strict Mapping Rules:
 6. Công nợ (Receivables):
    - Query 'receivable_detail' (period, customer_code, customer_name, balance_end, in_term, total_overdue, sales_channel).
    - Do NOT query receivable_etc.
-   - LATEST PERIOD: Always filter by period = '9_2025' (using underscore, e.g. '9_2025' represents September 2025) when looking for the latest receivables!
+   - LATEST PERIOD: Always filter by period = '{latest_period}' (using underscore, e.g. '{latest_period}' represents the latest period) when looking for the latest receivables!
 
 7. Tồn kho (Inventory):
    - Query 'inventory' (item_code, item_name, unit, closing_qty, closing_value, months_to_sell, warehouse).
 
 8. Date Queries & Date-based KPIs (Doanh thu theo thời gian & KPI lũy kế):
-   - CRITICAL DATA BOUNDARY: The invoice data in the database ONLY spans from '2026-04-01' to '2026-06-30' (3 months: April, May, June 2026). Data for January, February, March 2026 and any months before April 2026 DO NOT EXIST in the database.
-   - VERY IMPORTANT: When user asks for '6 tháng đầu năm 2026', '6 months', 'H1 2026', 'nửa đầu năm', etc. — the database ONLY has Q2 data (Apr-Jun). Your SQL must ONLY query the available date range '2026-04-01' to '2026-06-30'. You MUST add a comment in your SQL: -- NOTE: Only Q2 data (Apr-Jun 2026) available. Jan-Mar data not in DB.
+   - CRITICAL DATA BOUNDARY: The invoice data in the database ONLY spans from '{latest_q_start}' to '{latest_date_str}' (3 months: April, May, June {latest_year}). Data for January, February, March {latest_year} and any months before April {latest_year} DO NOT EXIST in the database.
+   - VERY IMPORTANT: When user asks for '6 tháng đầu năm {latest_year}', '6 months', 'H1 {latest_year}', 'nửa đầu năm', etc. — the database ONLY has Q2 data (Apr-Jun). Your SQL must ONLY query the available date range '{latest_q_start}' to '{latest_date_str}'. You MUST add a comment in your SQL: -- NOTE: Only Q2 data (Apr-Jun {latest_year}) available. Jan-Mar data not in DB.
    - MANDATORY MONTHLY BREAKDOWN: When a user asks about revenue over a MULTI-MONTH period (e.g., '6 tháng', 'cả năm', 'theo tháng', 'Q2', 'quý 2', etc.), you MUST return results GROUPED BY MONTH (not a single total). This produces multiple rows — one per month — so the chart can show each month separately. Use DATE_TRUNC('month', h."DocDate"::timestamp) AS "month" in the SELECT and GROUP BY clause. Example:
      SELECT DATE_TRUNC('month', h."DocDate"::timestamp) AS "month",
             SUM(otc.amount + etc.amount) AS "total_revenue"
      ... GROUP BY DATE_TRUNC('month', h."DocDate"::timestamp)
      ORDER BY "month"
-   - Do NOT use CURRENT_DATE or NOW() for filters since the database does not contain July 2026 data.
-   - For '7 ngày gần nhất' (last 7 days): Base the query on the maximum date in the database: (SELECT MAX("DocDate"::date) FROM brv_hoadonhdr) (which is '2026-06-30'). Filter for dates between MAX(date) - INTERVAL '6 days' and MAX(date):
+   - Do NOT use CURRENT_DATE or NOW() for filters since the database does not contain July {latest_year} data.
+   - For '7 ngày gần nhất' (last 7 days): Base the query on the maximum date in the database: (SELECT MAX("DocDate"::date) FROM brv_hoadonhdr) (which is '{latest_date_str}'). Filter for dates between MAX(date) - INTERVAL '6 days' and MAX(date):
      WHERE h."DocDate"::date >= (SELECT MAX("DocDate"::date) FROM brv_hoadonhdr WHERE "IsActive" = TRUE) - INTERVAL '6 days'
    - For 'doanh thu theo tháng' (monthly revenue): Group and sum the total revenue by month using DATE_TRUNC('month', h."DocDate"::timestamp) or similar casting:
      SELECT DATE_TRUNC('month', h."DocDate"::timestamp) AS month, SUM(h."TotalAmount") AS revenue
-   - For 'kpi đến ngày 20' (KPI/revenue up to day 20): Sum cumulative actual sales from day 1 to day 20 of the latest month (June 2026, i.e., from '2026-06-01' to '2026-06-20') and compare it to the target:
-     WHERE h."DocDate"::date >= '2026-06-01' AND h."DocDate"::date <= '2026-06-20'
+   - For 'kpi đến ngày 20' (KPI/revenue up to day 20): Sum cumulative actual sales from day 1 to day 20 of the latest month ({latest_year}-{latest_month}, i.e., from '{latest_year}-{latest_month}-01' to '{latest_year}-{latest_month}-20') and compare it to the target:
+     WHERE h."DocDate"::date >= '{latest_year}-{latest_month}-01' AND h."DocDate"::date <= '{latest_year}-{latest_month}-20'
 
 NLP Synonym & Slang Mapping:
 - "số má", "doanh số", "thu về", "doanh thu" -> Invoice TotalAmount (from brv_hoadonhdr / brvsx_hoadonhdr) or Amount_Cus (from fact_tonghopkhachhang).
@@ -901,6 +980,22 @@ Rules:
                     llm_rows = llm_rows[:100]
                     is_truncated_for_llm = True
 
+                # Parse intent using our fast heuristic visual intent parser first
+                parsed_intent = self._parse_data_intent(user_question)
+                intent_type = parsed_intent.get("intent", "Single_Value")
+                
+                # Check if it is a simple query (e.g. 1 row or Single_Value intent)
+                is_simple_query = (total_rows_count <= 1 and intent_type == "Single_Value" and not any(k in user_question.lower() for k in ["tại sao", "vì sao", "so sánh", "phân tích", "xu hướng", "biến động", "chênh lệch", "kpi"]))
+                
+                framework_directive = ""
+                if is_simple_query:
+                    framework_directive = """5. Direct lookup Response (NO "Thực trạng - Nguyên nhân - Giải pháp" framework): Since this is a simple lookup question returning a single figure or very simple record, do NOT structure your answer into "Thực trạng", "Nguyên nhân", "Giải pháp" sections. Instead, give a direct, concise, and professional answer (1-2 sentences at most). Present the final number or detail clearly and immediately."""
+                else:
+                    framework_directive = """5. Executive Response Framework (Thực trạng - Nguyên nhân - Giải pháp): You must structure the business analysis part of your answer clearly addressing three key aspects in order (using HTML bold tags as section headers):
+   - <b>Nó là gì? (Thực trạng):</b> Trình bày trực tiếp các con số cốt lõi (Hero Metrics) dưới dạng in đậm (dùng thẻ <b>). Nếu câu hỏi yêu cầu liệt kê hoặc so sánh, hãy chèn bảng dữ liệu Markdown chi tiết ngay tại phần này kèm theo các con số tổng hợp vĩ mô.
+   - <b>Tại sao nó như thế? (Nguyên nhân):</b> Phân tích sâu sắc và bóc tách nguyên nhân dựa trên số liệu thực tế từ kết quả truy vấn.
+   - <b>Giải quyết nó như thế nào? (Giải pháp):</b> Đề xuất các kiến nghị hành động cụ thể, phân vai rõ ràng cho các phòng ban."""
+
                 summary_prompt = f"""
 You are the executive AI Chatbot assistant for Duoc Nam Ha.
 Your task is to summarize the SQL query results for C-level executives in a clean, professional, and natural Vietnamese tone.
@@ -922,16 +1017,13 @@ CRITICAL RULES:
 
 4. Contextualization: Always contextualize numbers by comparing them MoM, YoY, or against Target (if targets exist in data). Format money in VND using 'tỷ đ' hoặc 'triệu đ' (e.g., '12,5 tỷ đ', '350 triệu đ', '250.000 đ') and percentages using '%'.
 
-5. Executive Response Framework (Thực trạng - Nguyên nhân - Giải pháp): You must structure the business analysis part of your answer clearly addressing three key aspects in order (using HTML bold tags as section headers):
-   - <b>Nó là gì? (Thực trạng):</b> Trình bày trực tiếp các con số cốt lõi (Hero Metrics) dưới dạng in đậm (dùng thẻ <b>). Nếu câu hỏi yêu cầu liệt kê hoặc so sánh, hãy chèn bảng dữ liệu Markdown chi tiết ngay tại phần này kèm theo các con số tổng hợp vĩ mô (tổng số bản ghi phát sinh, tổng giá trị lũy kế, tỷ lệ hoàn thành trung bình). Đưa thông tin cụ thể, ngắn gọn, dễ nắm bắt, tuyệt đối không viết chung chung mơ hồ.
-   - <b>Tại sao nó như thế? (Nguyên nhân):</b> Phân tích sâu sắc và bóc tách nguyên nhân dựa trên số liệu thực tế từ kết quả truy vấn (Ví dụ: chỉ ra đích danh mã sản phẩm bị đứt hàng/tồn kho lớn, khách hàng/đại lý có dư nợ cao nhất, hoặc trình dược viên/khu vực có tỷ lệ hoàn thành KPI thấp nhất). Tuyệt đối không phỏng đoán mơ hồ hoặc đưa ra lý do chung chung không có dẫn chứng số liệu từ CSDL. Kết nối nguyên nhân trực tiếp với các khâu vận hành thực tế (bán hàng chạy chỉ tiêu ảo, chưa thiết lập hạn mức tín dụng Credit Limit trên hệ thống nên báo nợ ảo, hoặc đứt gãy cung ứng kho vận).
-   - <b>Giải quyết nó như thế nào? (Giải pháp):</b> Đề xuất các kiến nghị hành động cụ thể, phân vai rõ ràng cho các phòng ban (Kinh doanh, Kế toán, Kho vận) và mốc thời gian hoàn thành (Ví dụ: tổ phản ứng nhanh xử lý nợ quá hạn trong 15 ngày, áp dụng Credit Scoring/khóa nợ nhóm Đỏ, chương trình xả tồn kho đọng vốn). Kiến nghị phải mang tính thực thi cao, định hướng hành động rõ ràng và giúp khơi thông dòng tiền hoặc cải thiện KPI lập tức cho doanh nghiệp.
+{framework_directive}
 
 6. Telegram Formatting Guard: NEVER use markdown bold syntax like `**text**` or `*text*`. If you want to bold a word or number, ALWAYS use HTML tags like `<b>text</b>` or `<strong>text</strong>`. Telegram only supports HTML format in this mode and markdown bold characters will fail to render and show up as raw asterisks.
 
-7. Data Boundary Transparency (CRITICAL): The database only contains invoice data from April 2026 to June 2026 (Q2 2026). January, February, and March 2026 data do NOT exist. If the user asked for '6 tháng đầu năm 2026', 'H1 2026', 'nửa đầu năm', or any period that includes Jan-Mar 2026, you MUST prominently warn the user in your response with this EXACT note at the beginning:
-⚠️ <b>Lưu ý quan trọng về dữ liệu:</b> Hệ thống hiện chỉ có dữ liệu hóa đơn từ tháng 04/2026 đến 06/2026 (Q2/2026). Dữ liệu tháng 1, 2, 3 năm 2026 chưa được tải vào CSDL, do đó kết quả bên dưới chỉ phản ánh <b>3 tháng (Q2/2026)</b>, KHÔNG phải 6 tháng đầu năm đầy đủ.
-Then present the Q2 numbers clearly labeled as "Q2/2026 (Tháng 4-6)" not "6 tháng đầu năm".
+7. Data Boundary Transparency (CRITICAL): The database only contains invoice data from {latest_q_start} to {latest_date_str} (3 months: April, May, June {latest_year}). January, February, and March {latest_year} data do NOT exist. If the user asked for '6 tháng đầu năm {latest_year}', 'H1 {latest_year}', 'nửa đầu năm', or any period that includes Jan-Mar {latest_year}, you MUST prominently warn the user in your response with this EXACT note at the beginning:
+⚠️ <b>Lưu ý quan trọng về dữ liệu:</b> Hệ thống hiện chỉ có dữ liệu hóa đơn từ tháng 04/{latest_year} đến {latest_month}/{latest_year} (Q2/{latest_year}). Dữ liệu tháng 1, 2, 3 năm {latest_year} chưa được tải vào CSDL, do đó kết quả bên dưới chỉ phản ánh <b>3 tháng (Q2/{latest_year})</b>, KHÔNG phải 6 tháng đầu năm đầy đủ.
+Then present the numbers clearly labeled as "Q2/{latest_year} (Tháng 4-{int(latest_month)})" not "6 tháng đầu năm".
 """
                 try:
                     answer = self._call_ai(
@@ -947,19 +1039,18 @@ Then present the Q2 numbers clearly labeled as "Q2/2026 (Tháng 4-6)" not "6 th�
         chart_path = None
         if not "error" in query_result and query_result.get("rows") and len(query_result["rows"]) >= 1:
             try:
-                # 1. Parse intent using LLM Parser
-                parsed_intent = self._parse_data_intent(user_question)
-                print(f"[LLM Parser Output]: {parsed_intent.get('intent')}")
-                
                 # 2. Run deterministic Rule Engine
                 visual_type = "KPI_Card"
-                intent_type = parsed_intent.get("intent", "Single_Value")
                 metrics_count = len(parsed_intent.get("metrics", []))
                 num_rows = len(query_result["rows"])
                 columns_lower = [c.lower() for c in query_result.get("columns", [])]
                 
                 # Detect if data looks like a time series (has a month/date/time column)
                 time_cols = [c for c in columns_lower if any(k in c for k in ['month', 'date', 'thang', 'ngay', 'week', 'quarter', 'year', 'sale_date', 'saledate', 'tu_ngay', 'time', 'period'])]
+                
+                # If there are no time columns in the results, it cannot be a Trend/time-series chart
+                if not time_cols and intent_type == "Trend":
+                    intent_type = "Comparison_Rank"
                 
                 if num_rows == 1:
                     # Single row → always KPI Card
@@ -1272,7 +1363,10 @@ Then present the Q2 numbers clearly labeled as "Q2/2026 (Tháng 4-6)" not "6 th�
                 return None
                 
             plot_rows = rows[:15]
-            labels = [str(r.get(cat_col, '')) for r in plot_rows]
+            if len(cat_cols) > 1:
+                labels = [" - ".join([str(r.get(c, '')) for c in cat_cols if r.get(c) is not None]) for r in plot_rows]
+            else:
+                labels = [str(r.get(cat_col, '')) for r in plot_rows]
             labels = [l[:25] + '...' if len(l) > 25 else l for l in labels]
             
             fig, ax = plt.subplots(figsize=(8, 5), dpi=150)
@@ -1309,7 +1403,10 @@ Then present the Q2 numbers clearly labeled as "Q2/2026 (Tháng 4-6)" not "6 th�
 
         elif visual_type == "Pie_Chart":
             plot_rows = rows[:15]
-            labels = [str(r.get(cat_col, '')) for r in plot_rows]
+            if len(cat_cols) > 1:
+                labels = [" - ".join([str(r.get(c, '')) for c in cat_cols if r.get(c) is not None]) for r in plot_rows]
+            else:
+                labels = [str(r.get(cat_col, '')) for r in plot_rows]
             values = [float(r.get(num_col, 0) or 0) for r in plot_rows]
             
             pie_data = [(l, v) for l, v in zip(labels, values) if v > 0]
@@ -1329,13 +1426,37 @@ Then present the Q2 numbers clearly labeled as "Q2/2026 (Tháng 4-6)" not "6 th�
 
         elif visual_type == "Horizontal_Bar_Chart":
             sorted_rows = sorted(rows, key=lambda x: float(x.get(num_col, 0) or 0), reverse=True)[:15]
-            labels = [str(r.get(cat_col, '')) for r in sorted_rows]
+            if len(cat_cols) > 1:
+                labels = [" - ".join([str(r.get(c, '')) for c in cat_cols if r.get(c) is not None]) for r in sorted_rows]
+            else:
+                labels = [str(r.get(cat_col, '')) for r in sorted_rows]
             labels = [l[:25] + '...' if len(l) > 25 else l for l in labels]
             values = [float(r.get(num_col, 0) or 0) for r in sorted_rows]
+            max_val = max(values) if values else 1
             
-            fig, ax = plt.subplots(figsize=(8, 5), dpi=150)
-            sns.barplot(x=values, y=labels, palette="viridis", ax=ax, hue=labels, legend=False)
-            ax.set_title(f"Xếp hạng So sánh ({num_col.replace('_',' ').title()})", fontweight='bold', fontsize=12, pad=15)
+            fig, ax = plt.subplots(figsize=(9, 5.5), dpi=150)
+            # Use corporate blue for standard bars, highlight maximum bar in red
+            bar_colors = ['#e53e3e' if v == max_val else '#2b6cb0' for v in values]
+            bars = ax.barh(range(len(labels)), values, color=bar_colors, edgecolor='white', height=0.6)
+            
+            ax.set_yticks(range(len(labels)))
+            ax.set_yticklabels(labels, fontsize=10, fontweight='bold', color='#2d3748')
+            ax.invert_yaxis()  # Top-down ranking
+            
+            # Value labels at the end of bars
+            for bar, val in zip(bars, values):
+                if val >= 1_000_000_000:
+                    lbl_text = f" {val/1e9:.2f} tỷ".replace('.', ',')
+                elif val >= 1_000_000:
+                    lbl_text = f" {val/1e6:.1f}M".replace('.', ',')
+                else:
+                    lbl_text = f" {val:,.0f}"
+                ax.text(bar.get_width() + max_val * 0.015, bar.get_y() + bar.get_height()/2,
+                        lbl_text, ha='left', va='center', fontsize=9, fontweight='bold', color='#2d3748')
+            
+            ax.set_title(f"Bảng xếp hạng ({num_col.replace('_',' ').title()})", fontweight='bold', fontsize=12, pad=15)
+            ax.grid(True, linestyle='--', alpha=0.4, axis='x')
+            ax.set_axisbelow(True)
 
         elif visual_type == "Waterfall_Chart":
             plot_rows = rows[:10]
