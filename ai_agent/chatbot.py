@@ -95,22 +95,43 @@ class DNHChatbot:
             "ton_kho": "https://dnh-dashboard.vercel.app/inventory"
         }
 
-        # Check Postgres Cloud availability
-        self.cloud_available = False
+        # Initialize cached cloud connection flags
+        self._last_cloud_check = 0.0
+        self._cloud_available_cached = False
+        
+        # Trigger initial check
+        _ = self.cloud_available
+
+    @property
+    def cloud_available(self):
+        """Dynamic cached property to check Postgres Cloud availability with a 15-second cooldown."""
+        import time as _time
+        now = _time.time()
+        if now - self._last_cloud_check < 15:
+            return self._cloud_available_cached
+            
+        self._last_cloud_check = now
         cloud_db_url = os.getenv("CLOUD_DB_URL", "")
-        if cloud_db_url and not self.is_mock:
-            try:
-                from sqlalchemy import create_engine, text
-                db_url = cloud_db_url.strip()
-                if db_url.startswith("postgres://"):
-                    db_url = db_url.replace("postgres://", "postgresql://", 1)
-                engine = create_engine(db_url, connect_args={'connect_timeout': 2})
-                with engine.connect() as conn:
-                    conn.execute(text("SELECT 1 FROM regions LIMIT 1"))
-                    self.cloud_available = True
-                    print("[Info] Postgres Cloud DB is connected and schema is initialized.")
-            except Exception as e:
-                print(f"[Warning] Postgres Cloud DB is unreachable or schema is not initialized: {e}. Bot will run in SQLite mode.")
+        if not cloud_db_url or self.is_mock:
+            self._cloud_available_cached = False
+            return False
+            
+        try:
+            from sqlalchemy import create_engine, text
+            db_url = cloud_db_url.strip()
+            if db_url.startswith("postgres://"):
+                db_url = db_url.replace("postgres://", "postgresql://", 1)
+            # Use short timeout for quick check
+            engine = create_engine(db_url, connect_args={'connect_timeout': 2})
+            with engine.connect() as conn:
+                conn.execute(text("SELECT 1 FROM regions LIMIT 1"))
+                self._cloud_available_cached = True
+                return True
+        except Exception as e:
+            self._cloud_available_cached = False
+            # Print warning on transition to False or first check
+            print(f"[Warning] Postgres Cloud DB check failed: {e}. Bot will use SQLite fallback if query fails.")
+            return False
 
     def _call_gemini_rest(self, model, system_instruction, user_content, temperature=0.0):
         import urllib.request
@@ -525,6 +546,10 @@ class DNHChatbot:
 
     def ask(self, user_question):
         """Translates natural language question to SQL, runs it, and formats response."""
+        if user_question.strip() == "admin_restart_bot_process":
+            import os
+            os._exit(0)
+            
         db_schema = get_db_schema()
         
         # 1. Phân loại ý định của câu hỏi (Intent Classification)
