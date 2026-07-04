@@ -1,5 +1,6 @@
 import os
 import sys
+import time
 import smtplib
 from datetime import datetime
 from email.mime.text import MIMEText
@@ -85,8 +86,8 @@ ALERT_EMAIL_TEMPLATE = """
 </html>
 """
 
-# HTML template for Daily Digest
-DAILY_DIGEST_TEMPLATE = """
+# HTML template dùng chung cho digest định kỳ (Daily/Weekly/Monthly) qua Email
+DIGEST_EMAIL_TEMPLATE = """
 <!DOCTYPE html>
 <html>
 <head>
@@ -116,8 +117,8 @@ DAILY_DIGEST_TEMPLATE = """
 <body>
     <div class="container">
         <div class="header">
-            <h1>BÁO CÁO TỔNG HỢP HOẠT ĐỘNG DAILY</h1>
-            <p>Ngày ghi nhận: {{ metrics.date }}</p>
+            <h1>BÁO CÁO TỔNG HỢP HOẠT ĐỘNG {{ period_label|upper }}</h1>
+            <p>{{ metrics.period_range or metrics.date }}</p>
         </div>
         
         <div class="content">
@@ -287,17 +288,19 @@ def build_alert_email(alert_name, severity, summary, table_headers, table_rows):
         timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     )
 
-def build_daily_digest_email(metrics):
+def build_digest_email(metrics, period_label="Daily"):
     """
-    Tạo nội dung HTML cho email báo cáo tổng hợp daily
+    Tạo nội dung HTML cho email báo cáo tổng hợp định kỳ.
+    period_label: "Daily" / "Weekly" / "Monthly" (hiển thị trong tiêu đề email).
     """
     config = load_config()
     low_limit = config['thresholds']['erp']['low_inventory_limit']
-    
-    template = Template(DAILY_DIGEST_TEMPLATE)
+
+    template = Template(DIGEST_EMAIL_TEMPLATE)
     return template.render(
         metrics=metrics,
-        low_limit=low_limit
+        low_limit=low_limit,
+        period_label=period_label
     )
 
 def analyze_alert_with_gemini(alert_name, summary, table_headers, table_rows):
@@ -397,135 +400,227 @@ def send_telegram_alert(text):
         print(f"[TELEGRAM] Loi ket noi: {e}")
         return False
 
-def send_teams_alert(title, summary, table_headers=None, table_rows=None):
+def _severity_to_card_style(severity):
+    """Map severity -> Adaptive Card Container style (mau sac)."""
+    s = (severity or "").upper()
+    if s == "CRITICAL":
+        return "attention"  # do
+    if s == "WARNING":
+        return "warning"    # vang
+    return "good"           # xanh, dung cho INFO
+
+def _build_teams_adaptive_card(title, summary, severity, table_headers=None, table_rows=None):
     """
-    Gửi tin nhắn cảnh báo qua Microsoft Teams Incoming Webhook
+    Dung Adaptive Card (schema 1.5) thay vi text Markdown tho, de Teams hien thi
+    co mau theo severity (do=CRITICAL, vang=WARNING, xanh=INFO).
+    """
+    body = [
+        {
+            "type": "Container",
+            "style": _severity_to_card_style(severity),
+            "bleed": True,
+            "items": [
+                {"type": "TextBlock", "text": f"🚨 {title}", "weight": "Bolder", "size": "Large", "wrap": True},
+                {"type": "TextBlock", "text": f"Mức độ: {severity}", "isSubtle": True, "size": "Small", "wrap": True}
+            ]
+        },
+        {"type": "TextBlock", "text": summary, "wrap": True, "spacing": "Medium"}
+    ]
+
+    if table_headers and table_rows:
+        columns = [{"width": 1} for _ in table_headers]
+        header_row = {
+            "type": "TableRow",
+            "cells": [
+                {"type": "TableCell", "items": [{"type": "TextBlock", "text": str(h), "weight": "Bolder", "wrap": True}]}
+                for h in table_headers
+            ]
+        }
+        data_rows = []
+        for row in table_rows:
+            data_rows.append({
+                "type": "TableRow",
+                "cells": [
+                    {"type": "TableCell", "items": [{"type": "TextBlock", "text": str(cell), "wrap": True}]}
+                    for cell in row
+                ]
+            })
+        body.append({
+            "type": "Table",
+            "columns": columns,
+            "firstRowAsHeaders": True,
+            "rows": [header_row] + data_rows
+        })
+
+    body.append({
+        "type": "TextBlock",
+        "text": f"Hệ thống Giám sát DWH Dược Nam Hà (DNH) • {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+        "isSubtle": True,
+        "size": "Small",
+        "spacing": "Medium",
+        "wrap": True
+    })
+
+    adaptive_card = {
+        "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+        "type": "AdaptiveCard",
+        "version": "1.5",
+        "body": body
+    }
+    return {
+        "type": "message",
+        "attachments": [
+            {
+                "contentType": "application/vnd.microsoft.card.adaptive",
+                "content": adaptive_card
+            }
+        ]
+    }
+
+def send_teams_alert(title, summary, table_headers=None, table_rows=None, severity="INFO"):
+    """
+    Gửi tin nhắn cảnh báo qua Microsoft Teams Incoming Webhook dưới dạng Adaptive Card
+    (phân màu theo severity thay vì text Markdown thô).
     """
     webhook_url = os.getenv("TEAMS_WEBHOOK_URL")
     if not webhook_url:
         print("[WARNING] TEAMS_WEBHOOK_URL is not configured in .env. Skipping Teams alert.")
         return False
-        
-    # Tạo nội dung dạng văn bản Markdown
-    text_content = f"### 🚨 {title}\n\n**{summary}**\n\n"
-    if table_headers and table_rows:
-        header_line = " | ".join(table_headers)
-        separator_line = " | ".join(["---"] * len(table_headers))
-        text_content += f"| {header_line} |\n| {separator_line} |\n"
-        for row in table_rows:
-            row_line = " | ".join([str(cell) for cell in row])
-            text_content += f"| {row_line} |\n"
-            
-    payload = {
-        "text": text_content
-    }
-    
+
+    payload = _build_teams_adaptive_card(title, summary, severity, table_headers, table_rows)
+
     try:
         data = json.dumps(payload).encode('utf-8')
         req = urllib.request.Request(
-            webhook_url.strip(), 
-            data=data, 
+            webhook_url.strip(),
+            data=data,
             headers={'Content-Type': 'application/json'}
         )
         with urllib.request.urlopen(req, timeout=10) as response:
-            print("[TEAMS] Gui canh bao Teams thanh cong!")
+            print("[TEAMS] Gui canh bao Teams (Adaptive Card) thanh cong!")
             return True
     except Exception as e:
         print(f"[TEAMS] Loi gui Teams: {e}")
         return False
 
-def send_alert_to_all_channels(alert_name, severity, summary, table_headers=None, table_rows=None):
+def _send_with_retry(fn, *args, max_retries=2, delays=(3, 6), **kwargs):
     """
-    Gửi cảnh báo đồng thời qua các kênh cấu hình: Email, Telegram, Teams.
+    Goi fn(*args, **kwargs), retry khi co exception (loi mang/timeout).
+    KHONG retry khi fn tra ve False do thieu cau hinh (SMTP/webhook rong) —
+    retry khong giai quyet duoc loi cau hinh, chi lam cham vo ich.
     """
-    print(f"\n--- BAT DAU GUI CANH BAO: {alert_name} [{severity}] ---")
+    last_exception = None
+    for attempt in range(max_retries + 1):
+        try:
+            return fn(*args, **kwargs)
+        except Exception as e:
+            last_exception = e
+            if attempt < max_retries:
+                delay = delays[min(attempt, len(delays) - 1)]
+                print(f"[RETRY] {fn.__name__} loi ({e}), thu lai sau {delay}s (lan {attempt + 1}/{max_retries})...")
+                time.sleep(delay)
+    print(f"[RETRY] {fn.__name__} that bai sau {max_retries} lan thu lai: {last_exception}")
+    return False
+
+def send_alert_to_all_channels(alert_name, severity, summary, table_headers=None, table_rows=None,
+                                channels=("email", "telegram", "teams")):
+    """
+    Gửi cảnh báo qua các kênh được chỉ định trong `channels` (mặc định cả 3: Email, Telegram, Teams).
+    Dùng `channels` để định tuyến theo loại nội dung — vd. alert tức thời/daily digest chỉ đi
+    Telegram+Teams, báo cáo tuần/tháng chỉ đi Email (xem main.py/src/alerts.py).
+    """
+    print(f"\n--- BAT DAU GUI CANH BAO: {alert_name} [{severity}] (kenh: {', '.join(channels)}) ---")
     any_sent = False
-    
+
     # Gọi Gemini AI phân tích dữ liệu cảnh báo nếu có API Key
     gemini_analysis = ""
     if os.getenv("GEMINI_API_KEY"):
         print("[GEMINI] Dang phan tich du lieu bang AI...")
         gemini_analysis = analyze_alert_with_gemini(alert_name, summary, table_headers, table_rows)
-    
-    # 1. Gui qua Email
-    try:
-        subject = f"[{severity}] {alert_name}"
-        html_content = build_alert_email(alert_name, severity, summary, table_headers, table_rows)
-        # Thêm phân tích Gemini vào email nếu có
-        if gemini_analysis:
-            # Chèn phân tích vào trước thẻ kết thúc của class content
-            insert_idx = html_content.find("</div>\n        <div class=\"footer\">")
-            if insert_idx != -1:
-                ai_html = f"""
-                <div style="margin-top: 20px; padding: 15px; background: #f0f7ff; border-left: 4px solid #3b82f6; border-radius: 6px;">
-                    <strong style="color: #1e3a8a; font-size: 14px;">💡 PHÂN TÍCH THÔNG MINH (AI GEMINI):</strong>
-                    <p style="margin: 5px 0 0 0; font-size: 13px; color: #2d3748; line-height: 1.5; font-style: italic;">{gemini_analysis}</p>
-                </div>
-                """
-                html_content = html_content[:insert_idx] + ai_html + html_content[insert_idx:]
-                
-        email_sent = send_email(subject, html_content)
-        if email_sent:
-            any_sent = True
-    except Exception as e:
-        print(f"[ERROR] Loi gui Email: {e}")
-        
-    # 2. Gui qua Telegram
-    try:
-        def escape_html(text):
-            if not isinstance(text, str):
-                text = str(text)
-            return text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
 
-        # Format text cho Telegram cực đẹp mắt và chuyên nghiệp (Sử dụng tiếng Việt có dấu)
-        emoji = "🔴" if severity == "CRITICAL" else "🟡" if severity == "WARNING" else "ℹ️"
-        
-        telegram_text = f"{emoji} <b>{escape_html(alert_name)}</b>\n"
-        telegram_text += f"━━━━━━━━━━━━━━━━━━━━━\n"
-        telegram_text += f"📝 <b>Mô tả:</b> {escape_html(summary)}\n"
-        telegram_text += f"⚠️ <b>Độ nghiêm trọng:</b> <code>{escape_html(severity)}</code>\n"
-        telegram_text += f"📅 <b>Thời gian:</b> <code>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</code>\n"
-        telegram_text += f"━━━━━━━━━━━━━━━━━━━━━\n\n"
-        
-        if table_headers and table_rows:
-            telegram_text += "📊 <b>CHI TIẾT DỮ LIỆU CẢNH BÁO:</b>\n"
-            for idx, row in enumerate(table_rows):
-                telegram_text += f"\n<b>Hồ sơ #{idx+1}:</b>\n"
-                for col_idx, header in enumerate(table_headers):
-                    telegram_text += f"   • {escape_html(header)}: <b>{escape_html(row[col_idx])}</b>\n"
-            telegram_text += "\n━━━━━━━━━━━━━━━━━━━━━\n\n"
-            
-        if gemini_analysis:
-            telegram_text += f"💡 <b>PHÂN TÍCH THÔNG MINH (AI GEMINI):</b>\n"
-            telegram_text += f"<i>{escape_html(gemini_analysis)}</i>\n\n"
+    # 1. Gui qua Email
+    if "email" in channels:
+        try:
+            subject = f"[{severity}] {alert_name}"
+            html_content = build_alert_email(alert_name, severity, summary, table_headers, table_rows)
+            # Thêm phân tích Gemini vào email nếu có
+            if gemini_analysis:
+                # Chèn phân tích vào trước thẻ kết thúc của class content
+                insert_idx = html_content.find("</div>\n        <div class=\"footer\">")
+                if insert_idx != -1:
+                    ai_html = f"""
+                    <div style="margin-top: 20px; padding: 15px; background: #f0f7ff; border-left: 4px solid #3b82f6; border-radius: 6px;">
+                        <strong style="color: #1e3a8a; font-size: 14px;">💡 PHÂN TÍCH THÔNG MINH (AI GEMINI):</strong>
+                        <p style="margin: 5px 0 0 0; font-size: 13px; color: #2d3748; line-height: 1.5; font-style: italic;">{gemini_analysis}</p>
+                    </div>
+                    """
+                    html_content = html_content[:insert_idx] + ai_html + html_content[insert_idx:]
+
+            email_sent = _send_with_retry(send_email, subject, html_content)
+            if email_sent:
+                any_sent = True
+        except Exception as e:
+            print(f"[ERROR] Loi gui Email: {e}")
+
+    # 2. Gui qua Telegram
+    if "telegram" in channels:
+        try:
+            def escape_html(text):
+                if not isinstance(text, str):
+                    text = str(text)
+                return text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+
+            # Format text cho Telegram cực đẹp mắt và chuyên nghiệp (Sử dụng tiếng Việt có dấu)
+            emoji = "🔴" if severity == "CRITICAL" else "🟡" if severity == "WARNING" else "ℹ️"
+
+            telegram_text = f"{emoji} <b>{escape_html(alert_name)}</b>\n"
             telegram_text += f"━━━━━━━━━━━━━━━━━━━━━\n"
-            
-        telegram_text += "🤖 <i>Hệ thống Giám sát DWH Dược Nam Hà (DNH)</i>"
-        
-        telegram_sent = send_telegram_alert(telegram_text)
-        if telegram_sent:
-            any_sent = True
-    except Exception as e:
-        print(f"[ERROR] Loi gui Telegram: {e}")
-        
+            telegram_text += f"📝 <b>Mô tả:</b> {escape_html(summary)}\n"
+            telegram_text += f"⚠️ <b>Độ nghiêm trọng:</b> <code>{escape_html(severity)}</code>\n"
+            telegram_text += f"📅 <b>Thời gian:</b> <code>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</code>\n"
+            telegram_text += f"━━━━━━━━━━━━━━━━━━━━━\n\n"
+
+            if table_headers and table_rows:
+                telegram_text += "📊 <b>CHI TIẾT DỮ LIỆU CẢNH BÁO:</b>\n"
+                for idx, row in enumerate(table_rows):
+                    telegram_text += f"\n<b>Hồ sơ #{idx+1}:</b>\n"
+                    for col_idx, header in enumerate(table_headers):
+                        telegram_text += f"   • {escape_html(header)}: <b>{escape_html(row[col_idx])}</b>\n"
+                telegram_text += "\n━━━━━━━━━━━━━━━━━━━━━\n\n"
+
+            if gemini_analysis:
+                telegram_text += f"💡 <b>PHÂN TÍCH THÔNG MINH (AI GEMINI):</b>\n"
+                telegram_text += f"<i>{escape_html(gemini_analysis)}</i>\n\n"
+                telegram_text += f"━━━━━━━━━━━━━━━━━━━━━\n"
+
+            telegram_text += "🤖 <i>Hệ thống Giám sát DWH Dược Nam Hà (DNH)</i>"
+
+            telegram_sent = _send_with_retry(send_telegram_alert, telegram_text)
+            if telegram_sent:
+                any_sent = True
+        except Exception as e:
+            print(f"[ERROR] Loi gui Telegram: {e}")
+
     # 3. Gui qua Teams
-    try:
-        # Nếu có phân tích AI, đính kèm vào nội dung Teams
-        teams_summary = summary
-        if gemini_analysis:
-            teams_summary = f"{summary}\n\n**💡 Phân tích AI:** *{gemini_analysis}*"
-        teams_sent = send_teams_alert(alert_name, teams_summary, table_headers, table_rows)
-        if teams_sent:
-            any_sent = True
-    except Exception as e:
-        print(f"[ERROR] Loi gui Teams: {e}")
-        
+    if "teams" in channels:
+        try:
+            # Nếu có phân tích AI, đính kèm vào nội dung Teams
+            teams_summary = summary
+            if gemini_analysis:
+                teams_summary = f"{summary}\n\n💡 Phân tích AI: {gemini_analysis}"
+            teams_sent = _send_with_retry(send_teams_alert, alert_name, teams_summary, table_headers, table_rows, severity=severity)
+            if teams_sent:
+                any_sent = True
+        except Exception as e:
+            print(f"[ERROR] Loi gui Teams: {e}")
+
     return any_sent
 
 if __name__ == '__main__':
     # Kiểm duyệt render template cục bộ
     mock_metrics = {
         "date": "01/07/2026",
+        "period_range": "Tuần 25/06/2026 - 01/07/2026",
         "erp": {
             "total_orders": 120,
             "completed_orders": 115,
@@ -544,10 +639,10 @@ if __name__ == '__main__':
             "high_open": 2
         }
     }
-    
-    html = build_daily_digest_email(mock_metrics)
-    print("Daily digest rendered length:", len(html))
-    
+
+    html = build_digest_email(mock_metrics, period_label="Weekly")
+    print("Digest email rendered length:", len(html))
+
     alert_html = build_alert_email(
         alert_name="CẢNH BÁO TỒN KHO THẤP",
         severity="WARNING",
@@ -556,11 +651,24 @@ if __name__ == '__main__':
         table_rows=[["LAP-DELL-XPS", "Laptop Dell XPS", "12"]]
     )
     print("Alert rendered length:", len(alert_html))
-    
+
+    # Kiểm tra Adaptive Card sinh ra là JSON hợp lệ (không gửi thật vì chưa có webhook)
+    adaptive_card_payload = _build_teams_adaptive_card(
+        title="CẢNH BÁO TỒN KHO THẤP",
+        summary="Phát hiện sản phẩm Laptop Dell XPS dưới ngưỡng tồn tối thiểu",
+        severity="WARNING",
+        table_headers=["Mã SKU", "Tên sản phẩm", "Tồn kho thực tế"],
+        table_rows=[["LAP-DELL-XPS", "Laptop Dell XPS", "12"]]
+    )
+    adaptive_card_json = json.dumps(adaptive_card_payload, ensure_ascii=False, indent=2)
+    print("Adaptive Card JSON hop le, do dai:", len(adaptive_card_json))
+
     # Save a copy to examine design locally
     os.makedirs(os.path.join(PROJECT_ROOT, 'scratch'), exist_ok=True)
     with open(os.path.join(PROJECT_ROOT, 'scratch', 'test_alert.html'), 'w', encoding='utf-8') as f:
         f.write(alert_html)
-    with open(os.path.join(PROJECT_ROOT, 'scratch', 'test_daily.html'), 'w', encoding='utf-8') as f:
+    with open(os.path.join(PROJECT_ROOT, 'scratch', 'test_digest.html'), 'w', encoding='utf-8') as f:
         f.write(html)
-    print("Rendered HTML saved for verification in scratch/ directory.")
+    with open(os.path.join(PROJECT_ROOT, 'scratch', 'test_teams_adaptive_card.json'), 'w', encoding='utf-8') as f:
+        f.write(adaptive_card_json)
+    print("Rendered HTML/JSON saved for verification in scratch/ directory.")

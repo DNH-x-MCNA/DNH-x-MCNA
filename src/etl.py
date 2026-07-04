@@ -43,21 +43,21 @@ def get_unresolved_urgent_tickets(crm_engine):
     df = pd.read_sql(query, crm_engine)
     return df
 
-def get_daily_digest_metrics():
+def get_digest_metrics(start_dt, end_dt, period_label):
     """
-    Tổng hợp dữ liệu trong ngày phục vụ Daily Digest
+    Tổng hợp dữ liệu trong khoảng [start_dt, end_dt) phục vụ digest định kỳ
+    (dùng chung cho daily/weekly/monthly — xem get_daily_digest_metrics() etc. bên dưới).
     """
     erp_engine, crm_engine = get_db_engines()
-    today_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-    
-    # 1. ERP - Số lượng và doanh thu đơn hàng hoàn thành hôm nay
+
+    # 1. ERP - Số lượng và doanh thu đơn hàng hoàn thành trong kỳ
     orders_query = """
-        SELECT status, amount 
-        FROM orders 
-        WHERE order_date >= :today_start
+        SELECT status, amount
+        FROM orders
+        WHERE order_date >= :start_dt AND order_date < :end_dt
     """
-    df_orders = pd.read_sql(orders_query, erp_engine, params={"today_start": today_start})
-    
+    df_orders = pd.read_sql(orders_query, erp_engine, params={"start_dt": start_dt, "end_dt": end_dt})
+
     if not df_orders.empty:
         total_orders = len(df_orders)
         completed_orders = len(df_orders[df_orders['status'] == 'Completed'])
@@ -68,29 +68,31 @@ def get_daily_digest_metrics():
         completed_orders = 0
         failed_orders = 0
         total_revenue = 0.0
-        
-    # 2. ERP - Danh sách tồn kho thấp hiện tại
+
+    # 2. ERP - Danh sách tồn kho thấp hiện tại (snapshot tại thời điểm chạy)
     config = load_config()
     inv_limit = config['thresholds']['erp']['low_inventory_limit']
     df_low_inv = get_low_inventory(erp_engine, inv_limit)
-    
-    # 3. CRM - Tổng hợp ticket hôm nay
+
+    # 3. CRM - Tổng hợp ticket trong kỳ
     tickets_query = """
-        SELECT priority, status 
-        FROM support_tickets 
-        WHERE created_at >= :today_start OR updated_at >= :today_start
+        SELECT priority, status
+        FROM support_tickets
+        WHERE (created_at >= :start_dt AND created_at < :end_dt)
+           OR (updated_at >= :start_dt AND updated_at < :end_dt)
     """
-    df_tickets = pd.read_sql(tickets_query, crm_engine, params={"today_start": today_start})
-    
+    df_tickets = pd.read_sql(tickets_query, crm_engine, params={"start_dt": start_dt, "end_dt": end_dt})
+
     total_tickets = len(df_tickets)
     resolved_tickets = len(df_tickets[df_tickets['status'] == 'Resolved'])
     open_tickets = len(df_tickets[df_tickets['status'] != 'Resolved'])
-    
+
     urgent_open = len(df_tickets[(df_tickets['status'] != 'Resolved') & (df_tickets['priority'] == 'Urgent')])
     high_open = len(df_tickets[(df_tickets['status'] != 'Resolved') & (df_tickets['priority'] == 'High')])
-    
+
     return {
-        "date": today_start.strftime("%d/%m/%Y"),
+        "date": end_dt.strftime("%d/%m/%Y"),
+        "period_range": period_label,
         "erp": {
             "total_orders": total_orders,
             "completed_orders": completed_orders,
@@ -107,6 +109,27 @@ def get_daily_digest_metrics():
             "high_open": high_open
         }
     }
+
+def get_daily_digest_metrics():
+    """Tổng hợp dữ liệu trong ngày phục vụ Daily Digest (Teams/Telegram)."""
+    today_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    today_end = today_start + timedelta(days=1)
+    return get_digest_metrics(today_start, today_end, today_start.strftime("%d/%m/%Y"))
+
+def get_weekly_digest_metrics():
+    """Tổng hợp dữ liệu 7 ngày gần nhất phục vụ Weekly Report (Email)."""
+    today_end = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
+    week_start = today_end - timedelta(days=7)
+    label = f"Tuần {week_start.strftime('%d/%m/%Y')} - {(today_end - timedelta(days=1)).strftime('%d/%m/%Y')}"
+    return get_digest_metrics(week_start, today_end, label)
+
+def get_monthly_digest_metrics():
+    """Tổng hợp dữ liệu từ đầu tháng hiện tại phục vụ Monthly Report (Email)."""
+    now = datetime.now()
+    month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    today_end = now.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
+    label = f"Tháng {month_start.strftime('%m/%Y')} ({month_start.strftime('%d/%m')} - {(today_end - timedelta(days=1)).strftime('%d/%m/%Y')})"
+    return get_digest_metrics(month_start, today_end, label)
 
 if __name__ == '__main__':
     # Chạy thử kiểm tra việc trích xuất

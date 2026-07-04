@@ -44,10 +44,15 @@ class DNHBot(ActivityHandler):
         
         try:
             # Query the AI Chatbot
+            conversation_id = None
+            if turn_context.activity and turn_context.activity.conversation:
+                conversation_id = turn_context.activity.conversation.id
+            session_key = f"teams_{conversation_id}" if conversation_id else None
+
             # Run in executor to avoid blocking the event loop on sync API calls
             loop = asyncio.get_event_loop()
             chatbot_response = await loop.run_in_executor(
-                None, self.chatbot.ask, cleaned_message
+                None, self.chatbot.ask, cleaned_message, session_key
             )
             
             # Format Markdown Response
@@ -79,7 +84,36 @@ class DNHBot(ActivityHandler):
                     table_md += "| " + " | ".join(row_vals) + " |\n"
                 reply_text += table_md
                 
-            await turn_context.send_activity(reply_text)
+            # Build the reply activity
+            from botbuilder.schema import ActivityTypes, Attachment
+            import base64
+            
+            reply = Activity(type=ActivityTypes.message, text=reply_text)
+            
+            # Attach chart if present
+            chart_path = chatbot_response.get("chart_path")
+            if chart_path and os.path.exists(chart_path):
+                try:
+                    with open(chart_path, "rb") as f:
+                        img_base64 = base64.b64encode(f.read()).decode("utf-8")
+                    
+                    attachment = Attachment(
+                        name="chart.png",
+                        content_type="image/png",
+                        content_url=f"data:image/png;base64,{img_base64}"
+                    )
+                    reply.attachments = [attachment]
+                except Exception as chart_err:
+                    print(f"[Teams Bot] Failed to encode chart: {chart_err}")
+            
+            await turn_context.send_activity(reply)
+            
+            # Clean up the temp chart file to avoid filling up the disk
+            if chart_path and os.path.exists(chart_path):
+                try:
+                    os.remove(chart_path)
+                except Exception as ex:
+                    print(f"[Teams Bot] Error removing temp chart file: {ex}")
             
         except Exception as e:
             print(f"[Teams Bot Error]: {e}")

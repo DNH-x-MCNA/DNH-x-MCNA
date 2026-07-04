@@ -386,7 +386,12 @@ function appendBotResponse(data) {
     msg.classList.add("message", "bot");
     
     let bubbleContent = `<p>${data.answer}</p>`;
-    
+
+    // Add chart image (server sends it inline as base64 PNG)
+    if (data.chart_base64) {
+        bubbleContent += `<img class="chat-chart" src="data:image/png;base64,${data.chart_base64}" alt="Biểu đồ phân tích">`;
+    }
+
     // Add SQL details
     if (data.sql) {
         bubbleContent += `<details><summary><i class="fa-solid fa-code"></i> Xem câu lệnh SQL do AI sinh</summary><code>${data.sql}</code></details>`;
@@ -394,21 +399,34 @@ function appendBotResponse(data) {
     
     // Add table if rows are returned
     if (data.data && data.data.length > 0) {
-        let tableHtml = "<table><thead><tr>";
-        data.columns.forEach(col => {
-            tableHtml += `<th>${col}</th>`;
+        const tableId = `chat-table-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
+        let tableHtml = `<table id="${tableId}"><thead><tr>`;
+        data.columns.forEach((col, idx) => {
+            tableHtml += `<th onclick="sortChatTable('${tableId}', ${idx})">${col}<span class="sort-indicator"></span></th>`;
+        });
+        tableHtml += "</tr><tr class=\"col-filter-row\">";
+        data.columns.forEach((col, idx) => {
+            tableHtml += `<th><input type="text" class="col-filter-input" placeholder="Lọc..." oninput="filterChatTable('${tableId}')" data-col-index="${idx}"></th>`;
         });
         tableHtml += "</tr></thead><tbody>";
-        
+
+        const MONEY_COL_PATTERN = /doanh thu|công nợ|nợ|giá trị|tiền|chỉ tiêu|thực đạt|dư nợ|thanh toán|revenue|budget|amount|debt|balance|target|value/i;
         data.data.forEach(row => {
-            tableHtml += "tr";
             tableHtml += "<tr>";
             data.columns.forEach(col => {
-                let val = row[col];
-                if (typeof val === 'number' && (col.includes('revenue') || col.includes('budget') || col.includes('amount') || col.includes('debt'))) {
-                    val = formatVND(val);
+                let raw = row[col];
+                let val = raw;
+                if (typeof val === 'number' && Number.isFinite(val)) {
+                    if (MONEY_COL_PATTERN.test(col)) {
+                        val = formatVND(val);
+                    } else if (Math.abs(val) >= 1000) {
+                        // Not detected as currency, but still a long number — group digits
+                        // so it stays legible instead of one unbroken string of digits.
+                        val = val.toLocaleString('vi-VN');
+                    }
                 }
-                tableHtml += `<td>${val}</td>`;
+                const rawAttr = String(raw === null || raw === undefined ? '' : raw).replace(/"/g, '&quot;');
+                tableHtml += `<td data-raw="${rawAttr}">${val}</td>`;
             });
             tableHtml += "</tr>";
         });
@@ -422,4 +440,60 @@ function appendBotResponse(data) {
     `;
     chatMessagesBox.appendChild(msg);
     chatMessagesBox.scrollTop = chatMessagesBox.scrollHeight;
+}
+
+function filterChatTable(tableId) {
+    const table = document.getElementById(tableId);
+    if (!table) return;
+
+    const filterInputs = table.querySelectorAll(".col-filter-input");
+    const filters = Array.from(filterInputs).map(input => ({
+        colIndex: parseInt(input.dataset.colIndex, 10),
+        value: input.value.trim().toLowerCase()
+    })).filter(f => f.value !== "");
+
+    const rows = table.querySelectorAll("tbody tr");
+    rows.forEach(row => {
+        const cells = row.children;
+        const matches = filters.every(f => {
+            const cell = cells[f.colIndex];
+            return cell && cell.textContent.toLowerCase().includes(f.value);
+        });
+        row.style.display = matches ? "" : "none";
+    });
+}
+
+function sortChatTable(tableId, colIndex) {
+    const table = document.getElementById(tableId);
+    if (!table) return;
+
+    const tbody = table.querySelector("tbody");
+    const rows = Array.from(tbody.querySelectorAll("tr"));
+
+    const isSameColumn = table.dataset.sortCol === String(colIndex);
+    const newDir = isSameColumn && table.dataset.sortDir === "asc" ? "desc" : "asc";
+    table.dataset.sortCol = colIndex;
+    table.dataset.sortDir = newDir;
+
+    rows.sort((rowA, rowB) => {
+        const rawA = rowA.children[colIndex]?.dataset.raw ?? "";
+        const rawB = rowB.children[colIndex]?.dataset.raw ?? "";
+        const numA = parseFloat(rawA);
+        const numB = parseFloat(rawB);
+        let cmp;
+        if (rawA !== "" && rawB !== "" && !isNaN(numA) && !isNaN(numB)) {
+            cmp = numA - numB;
+        } else {
+            cmp = rawA.localeCompare(rawB, "vi");
+        }
+        return newDir === "asc" ? cmp : -cmp;
+    });
+
+    rows.forEach(row => tbody.appendChild(row));
+
+    table.querySelectorAll("thead tr:first-child th").forEach((th, idx) => {
+        const indicator = th.querySelector(".sort-indicator");
+        if (!indicator) return;
+        indicator.textContent = idx === colIndex ? (newDir === "asc" ? " ▲" : " ▼") : "";
+    });
 }

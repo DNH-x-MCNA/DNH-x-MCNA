@@ -36,23 +36,25 @@ DNH/
 - Kiến trúc: Text-to-SQL + Semantic Layer trong `ai_agent/`
 - Bắt buộc theo `dnh-nl2sql-security` skill khi code hoặc review phần này
 
-## Kiến trúc dữ liệu (đã chốt — cập nhật 03/07/2026)
+## Kiến trúc dữ liệu (ĐANG TEST trên Supabase — chưa phải quyết định cuối cùng, cập nhật 03/07/2026)
 
-- **Tầng dữ liệu trung gian chạy trên cloud Postgres (Supabase)**, không còn on-premises SQL Server. Đây là thay đổi kế hoạch so với bản gốc — xem "Lịch sử thay đổi" bên dưới. Code kết nối qua biến `CLOUD_DB_URL` (`.env`), có fallback về SQLite cục bộ (`scripts/dnh_intermediate.db`) khi cloud không khả dụng.
-- ETL vẫn là **read-only** từ hệ thống nguồn (Bravo, DMS) — mọi write chỉ nằm trong DB trung gian (giờ là Supabase), không ghi ngược nguồn.
+- **Giai đoạn hiện tại: build & test trên cloud Postgres (Supabase).** Đây là chỉ đạo rõ ràng "cứ test trước bằng Postgres qua Supabase" (03/07/2026) — KHÔNG coi đây là đã chốt thay thế vĩnh viễn constraint SQL Server on-prem trong hợp đồng gốc. Code kết nối qua biến `CLOUD_DB_URL` (`.env`), có fallback về SQLite cục bộ (`scripts/dnh_intermediate.db`) khi cloud không khả dụng.
+- **Mâu thuẫn CHƯA giải quyết**: `Plan_He_thong_Notify_Chatbot_DNH.pdf` (soạn 03/07/2026 bởi Đặng - Data Analyst) mô tả kiến trúc Metric & Alert Engine chạy trên **SQL Server Agent** + bảng `AlertQueue` — khác hẳn Supabase đang dùng để test. Trước khi build Notification Dispatcher/Metric Engine thật, cần đối chiếu lại xem sản phẩm cuối cùng chạy trên SQL Server hay Supabase — đừng giả định Supabase là đích cuối chỉ vì đang test trên đó.
+- ETL vẫn là **read-only** từ hệ thống nguồn (Bravo, DMS) — mọi write chỉ nằm trong DB trung gian, không ghi ngược nguồn.
 - Kết nối tới cloud DB phải dùng **một engine/connection pool dùng chung** (đã từng phát hiện lỗi tạo `create_engine` mới cho mỗi lần gọi trong `ai_agent/chatbot.py`, gây chậm và tốn kết nối — đã sửa bằng `_get_cloud_engine()` cache theo process). Không revert về pattern tạo engine rời rạc mỗi call.
-- Vì đổi sang cloud, cần rà lại data residency/compliance cho dữ liệu dược phẩm (khách hàng, công nợ) trước khi go-live thật — xem mục câu hỏi mở bên dưới, chưa nên coi đây là đã xác nhận đầy đủ với client chỉ vì đã đổi trong code.
+- Vì đang test trên cloud, cần rà lại data residency/compliance cho dữ liệu dược phẩm (khách hàng, công nợ) trước khi go-live thật nếu Supabase được chốt làm đích cuối — xem mục câu hỏi mở bên dưới.
 - **Kiến trúc kỹ thuật chi tiết** (4 phương án lấy dữ liệu realtime, schema `raw_*/stg_*/mart_*`, watermark/upsert, Notification Engine event-driven, Claude API cho chatbot) → xem skill `dnh-realtime-etl-pipeline`, nguồn là `MCNA_DNH_Timeline_v1.2.pdf`. Không lặp lại chi tiết đó ở đây, chỉ giữ bối cảnh tổng quan.
 
 ### Lịch sử thay đổi
 - **Bản gốc hợp đồng:** 3 tầng dữ liệu on-premises trên SQL Server, do chính sách data residency của DNH — không dùng cloud DB.
-- **03/07/2026:** đổi sang cloud DB (Supabase Postgres) theo chỉ đạo cập nhật kế hoạch. Lý do nghiệp vụ cụ thể (đổi yêu cầu từ client hay quyết định kỹ thuật nội bộ) **chưa được ghi lại** — nếu có thêm chi tiết, bổ sung vào đây để không mất ngữ cảnh khi hợp đồng/PM cần đối chiếu.
+- **03/07/2026:** chỉ đạo test trước trên cloud DB (Supabase Postgres) theo Timeline v1.2 — CHƯA phải quyết định cuối, xem "Mâu thuẫn CHƯA giải quyết" ở trên. `Plan_He_thong_Notify_Chatbot_DNH.pdf` (cùng ngày, tác giả Đặng) vẫn mô tả SQL Server, cho thấy có thể team chưa đồng bộ thông tin về việc chuyển sang test-trên-cloud này.
 
 ## Timeline
 
-- Kick-off: **07/07/2026**
+- **Ngày bắt đầu dự án thực tế: 01/07/2026** (đã xác nhận 03/07/2026 — không phải 07/07 như ghi trước đây). Tính đến 03/07/2026 đang ở Tuần 1, ngày làm việc thứ 3.
 - **Bản kỹ thuật chi tiết nhất (ưu tiên dùng)**: `MCNA_DNH_Timeline_v1.2.pdf` (lập 02/07/2026) — lộ trình 3 tháng/12 tuần: T1 W1-2 khảo sát hạ tầng & tạo project Supabase → T1 W3-4 xây ETL lõi (watermark) → T2 W5-6 Notification Engine bản test (Gmail/Telegram) → T2 W7-8 tích hợp Claude API cho chatbot + chuyển kênh production (Graph API/Teams) → T3 W9-10 UAT & go-live → T3 W11-12 giám sát & tối ưu. Chi tiết đầy đủ xem `dnh-realtime-etl-pipeline`.
-- Mốc "9 tuần, 2 phase" trong `MCNA_DNH_ProjectPlan_v3.docx` (bản đề xuất/hợp đồng gốc) vẫn là tài liệu phạm vi/scope tổng quát — nếu hai bản mâu thuẫn về mốc thời gian kỹ thuật, ưu tiên Timeline v1.2 vì mới hơn và chi tiết hơn.
+- `Plan_He_thong_Notify_Chatbot_DNH.pdf` (soạn 03/07/2026, Đặng - Data Analyst): kế hoạch riêng cho Notify system (Email+Teams tách kênh theo loại nội dung) + Chatbot Web UI riêng (tách khỏi Teams). Timeline nội bộ: Phase 1 (~4-5 tuần đầu) = hệ thống notify, Phase 2 (~4-5 tuần cuối) = Chatbot NL2SQL + Web UI. Ranh giới tuần cụ thể giữa 2 phase tác giả tự nhận là ước lượng, chưa đối chiếu hợp đồng.
+- Mốc "9 tuần, 2 phase" trong `MCNA_DNH_ProjectPlan_v3.docx` (bản đề xuất/hợp đồng gốc) vẫn là tài liệu phạm vi/scope tổng quát — nếu các bản mâu thuẫn về mốc thời gian kỹ thuật, ưu tiên Timeline v1.2 vì mới hơn và chi tiết hơn.
 
 ## Câu hỏi mở cần xác nhận khi onsite (chưa chốt)
 

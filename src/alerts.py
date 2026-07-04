@@ -117,7 +117,8 @@ def run_alert_checks(erp_engine, crm_engine):
                     severity="WARNING",
                     summary=f"San pham '{item_name}' (SKU: {sku}) hien chi con {qty} san pham trong kho (Nguong canh bao: < {low_inv_limit}).",
                     table_headers=["Ma SKU", "Ten San Pham", "Ton Kho Hien Tai", "Thoi Gian Cap Nhat"],
-                    table_rows=[[sku, item_name, str(qty), str(row['updated_at'])]]
+                    table_rows=[[sku, item_name, str(qty), str(row['updated_at'])]],
+                    channels=("telegram", "teams")
                 ):
                     record_alert_sent(alert_key, qty)
     else:
@@ -143,7 +144,8 @@ def run_alert_checks(erp_engine, crm_engine):
                 severity="CRITICAL",
                 summary=f"He thong phat hien so luong don hang loi tang dot bien: {failed_count} don hang that bai trong {lookback} gio qua (Nguong cho phep: <= {failed_limit}).",
                 table_headers=["ID Don", "Ma Khach Hang", "Gia Tri", "Thoi Gian Giao Dich"],
-                table_rows=rows
+                table_rows=rows,
+                channels=("telegram", "teams")
             ):
                 record_alert_sent(alert_key_failed, failed_count)
     else:
@@ -167,7 +169,8 @@ def run_alert_checks(erp_engine, crm_engine):
                 severity="CRITICAL",
                 summary=f"So luong yeu cau ho tro khan cap (Urgent) chua giai quyet dang vuot nguong: {urgent_count} ca (Nguong cho phep: <= {crm_limit}).",
                 table_headers=["ID Ca", "Ma Khach Hang", "Do Uu Tien", "Thoi Gian Yeu Cau"],
-                table_rows=rows
+                table_rows=rows,
+                channels=("telegram", "teams")
             ):
                 record_alert_sent(alert_key_crm, urgent_count)
     else:
@@ -312,7 +315,8 @@ def run_smart_business_alerts():
                     severity="CRITICAL",
                     summary=f"Hệ thống phát hiện danh sách nhà thuốc/đại lý đang có nợ quá hạn lớn nhất ở mức báo động đỏ (Kỳ: {latest_period}).",
                     table_headers=["Mã KH", "Tên Đại Lý", "Nợ Quá Hạn", "Tổng Nợ", "Số Ngày Nợ"],
-                    table_rows=rows
+                    table_rows=rows,
+                    channels=("telegram", "teams")
                 )
                 record_alert_sent(alert_key, top_overdue)
                 
@@ -357,7 +361,8 @@ def run_smart_business_alerts():
                     severity="WARNING",
                     summary="Các mặt hàng sau có tốc độ bán quá nhanh và tồn kho chỉ đủ dùng trong dưới 1 tháng.",
                     table_headers=["Mã SKU", "Tên Thuốc", "Tồn Kho Hiện Tại", "Dự Kiến Bán Hết"],
-                    table_rows=rows
+                    table_rows=rows,
+                    channels=("telegram", "teams")
                 )
                 record_alert_sent(alert_key, top_qty)
 
@@ -389,7 +394,8 @@ def run_smart_business_alerts():
                     severity="WARNING",
                     summary="Các Trình dược viên sau đang đạt dưới 60% chỉ tiêu doanh số tháng.",
                     table_headers=["Mã TDV", "Tên TDV", "Chỉ Tiêu", "Doanh Số Đạt", "Đạt Được"],
-                    table_rows=rows
+                    table_rows=rows,
+                    channels=("telegram", "teams")
                 )
                 record_alert_sent(alert_key, lowest_pct)
 
@@ -475,7 +481,8 @@ def run_sales_kpi_insights_alert():
             severity="INFO",
             summary=f"Báo cáo định kỳ phân tích hiệu suất thực hiện KPI doanh số theo Kênh phân phối và cấp bậc quản lý (TP/PP/QLV) vs nhân viên trực tiếp (TDV/CTV/CS) tại kỳ báo cáo {data['latest_period']}.",
             table_headers=["Phân Loại / Nhân Sự", "KPI Mục Tiêu", "Doanh Số Đạt", "Tỷ Lệ Hoàn Thành"],
-            table_rows=rows
+            table_rows=rows,
+            channels=("telegram", "teams")
         )
         record_alert_sent(alert_key, "sent")
 

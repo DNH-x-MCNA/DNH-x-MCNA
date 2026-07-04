@@ -39,4 +39,5 @@ thresholds:
 # Cấu hình Chu kỳ chạy (giây hoặc phút)
 scheduler:
   etl_check_interval_seconds: 30  # Chạy check cảnh báo sau mỗi 30 giây (để dễ kiểm thử)
-  daily_digest_time: "17:30"      # Thời gian gửi báo cáo tổng hợp hằng ngày
+  daily_digest_time: "17:30"      # Thời gian gửi báo cáo Daily (Teams/Telegram) + Weekly/Monthly (Email)
+  weekly_digest_day: "Monday"     # Ngày trong tuần gửi Báo cáo Tuần qua Email (tên tiếng Anh, khớp %A của Python)
