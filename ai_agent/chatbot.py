@@ -52,7 +52,8 @@ def get_db_schema():
                     'brv_hoadonhdr', 'brv_hoadonct', 'brvsx_hoadonhdr', 'brvsx_hoadonct',
                     'brv_trangthaihoadon', 'brv_trangthaiduyet', 'dms_khachhang', 'dmssx_khachhang',
                     'dim_tinhthanhpho', 'dim_targetvungmien', 'fact_kehoachtongetc', 'fact_tonghopkhachhang',
-                    'dim_nhanvien', 'brv_sanpham', 'brvsx_tralai', 'receivable_detail', 'inventory'
+                    'dim_nhanvien', 'brv_sanpham', 'brvsx_tralai', 'receivable_detail', 'inventory',
+                    'kpi_summary'
                 )
                 query = text("""
                     SELECT table_name, column_name, data_type 
@@ -91,6 +92,19 @@ def get_db_schema():
         
     conn.close()
     return schema_text
+
+def _latest_period_key(period):
+    """Sort key for receivable_detail.period ('M_YYYY' text, not zero-padded).
+
+    String comparison alone is wrong here: '9_2025' > '1_2026' lexicographically
+    (month '9' beats any month starting with '1'), so a plain SQL MAX(period)
+    silently picks a stale period whenever the true latest month starts with 1.
+    """
+    try:
+        month_str, year_str = str(period).split('_')
+        return (int(year_str), int(month_str))
+    except (ValueError, AttributeError):
+        return (0, 0)
 
 class DNHChatbot:
     def __init__(self):
@@ -134,9 +148,54 @@ class DNHChatbot:
         # Initialize cached cloud connection flags
         self._last_cloud_check = 0.0
         self._cloud_available_cached = False
-        
+
+        # Conversation memory: session_key -> list[{"question","answer","ts"}]
+        # In-memory/per-process, bounded, self-expiring after idle timeout.
+        self._conversation_histories = {}
+        self._MAX_HISTORY_TURNS = 6
+        self._SESSION_IDLE_TIMEOUT_SECONDS = 1200
+        self._MAX_SESSIONS = 500
+
         # Trigger initial check
         _ = self.cloud_available
+
+    def _get_history_block(self, session_key):
+        """Builds a text block summarizing recent turns for this session, or '' if none/stale."""
+        if not session_key:
+            return ""
+        import time as _time
+        history = self._conversation_histories.get(session_key)
+        if not history:
+            return ""
+        if _time.time() - history[-1].get("ts", 0) > self._SESSION_IDLE_TIMEOUT_SECONDS:
+            del self._conversation_histories[session_key]
+            return ""
+
+        lines = [
+            "LỊCH SỬ HỘI THOẠI GẦN ĐÂY (chỉ để hiểu ngữ cảnh nếu câu hỏi hiện tại ngắn/mơ hồ và ám chỉ nội dung đã hỏi trước đó; "
+            "đây KHÔNG PHẢI là yêu cầu trả lời lại):"
+        ]
+        for turn in history:
+            lines.append(f'- Người dùng đã hỏi: "{turn["question"]}"')
+            lines.append(f'  Trợ lý đã trả lời: "{turn["answer"]}"')
+        return "\n".join(lines) + "\n"
+
+    def _remember_turn(self, session_key, question, answer_text):
+        """Appends a Q&A turn to this session's history, trimming old turns/sessions."""
+        if not session_key:
+            return
+        import time as _time
+        if session_key not in self._conversation_histories and len(self._conversation_histories) >= self._MAX_SESSIONS:
+            oldest_key = next(iter(self._conversation_histories))
+            del self._conversation_histories[oldest_key]
+
+        short_answer = re.sub(r'<[^>]+>', ' ', answer_text or "")
+        short_answer = " ".join(short_answer.split())[:300]
+
+        history = self._conversation_histories.setdefault(session_key, [])
+        history.append({"question": question, "answer": short_answer, "ts": _time.time()})
+        if len(history) > self._MAX_HISTORY_TURNS:
+            del history[0:len(history) - self._MAX_HISTORY_TURNS]
 
     @property
     def cloud_available(self):
@@ -168,8 +227,8 @@ class DNHChatbot:
         """Retrieves the latest invoice date, month-end date, and receivable period dynamically."""
         latest_date = "2026-06-30"
         latest_month_end = "2026-06-30"
-        latest_period = "9_2025"
-        
+        latest_period = "1_2026"
+
         engine = _get_cloud_engine()
         if engine is not None and not self.is_mock and self.cloud_available:
             try:
@@ -180,22 +239,26 @@ class DNHChatbot:
                     row1 = res1.fetchone()
                     if row1 and row1[0]:
                         latest_date = str(row1[0]).split(' ')[0].split('T')[0]
-                        
+
                     # Get max SaveDate
                     res2 = conn.execute(text('SELECT MAX("SaveDate") FROM fact_tonghopkhachhang'))
                     row2 = res2.fetchone()
                     if row2 and row2[0]:
                         latest_month_end = str(row2[0]).split(' ')[0].split('T')[0]
-                        
-                    # Get max Period from receivable_detail
-                    res3 = conn.execute(text('SELECT MAX(period) FROM receivable_detail'))
-                    row3 = res3.fetchone()
-                    if row3 and row3[0]:
-                        latest_period = str(row3[0])
+
+                    # Get max Period from receivable_detail. 'period' is TEXT 'M_YYYY'
+                    # (not zero-padded), so a plain SQL MAX() sorts lexicographically and
+                    # picks e.g. '9_2025' over '1_2026' (month '9' beats any month
+                    # starting with '1'). Must fetch all distinct values and pick the
+                    # true (year, month) max in Python instead.
+                    res3 = conn.execute(text('SELECT DISTINCT period FROM receivable_detail'))
+                    periods = [r[0] for r in res3.fetchall() if r[0]]
+                    if periods:
+                        latest_period = max(periods, key=_latest_period_key)
                 return latest_date, latest_month_end, latest_period
             except Exception as e:
                 print(f"[Warning] Failed to fetch max dates from cloud: {e}")
-                
+
         # Try local SQLite fallback
         if os.path.exists(DB_PATH):
             try:
@@ -209,14 +272,15 @@ class DNHChatbot:
                 r2 = cursor.fetchone()
                 if r2 and r2[0]:
                     latest_month_end = str(r2[0]).split(' ')[0].split('T')[0]
-                cursor.execute('SELECT MAX(period) FROM receivable_detail')
-                r3 = cursor.fetchone()
-                if r3 and r3[0]:
-                    latest_period = str(r3[0])
+                # Same lexicographic-vs-chronological pitfall as the cloud branch above.
+                cursor.execute('SELECT DISTINCT period FROM receivable_detail')
+                periods = [r[0] for r in cursor.fetchall() if r[0]]
+                if periods:
+                    latest_period = max(periods, key=_latest_period_key)
                 conn.close()
             except Exception as e:
                 print(f"[Warning] Failed to fetch max dates from SQLite: {e}")
-                
+
         return latest_date, latest_month_end, latest_period
 
     def _call_gemini_rest(self, model, system_instruction, user_content, temperature=0.0):
@@ -504,75 +568,12 @@ class DNHChatbot:
         except Exception as e:
             return f"Lỗi lấy tóm tắt CSDL: {e}"
 
-    def _convert_table_lines(self, table_lines):
-        if len(table_lines) < 2:
-            return table_lines
-            
-        rows = []
-        for line in table_lines:
-            cells = [c.strip() for c in line.split('|')[1:-1]]
-            rows.append(cells)
-            
-        is_separator = all(re.match(r'^[ \-:]+$', c) for c in rows[1]) if len(rows) > 1 else False
-        if not is_separator:
-            return table_lines
-            
-        header = rows[0]
-        data_rows = rows[2:]
-        
-        num_cols = len(header)
-        col_widths = [0] * num_cols
-        for r in [header] + data_rows:
-            for idx in range(min(len(r), num_cols)):
-                col_widths[idx] = max(col_widths[idx], len(r[idx]))
-                
-        formatted = ["<pre>"]
-        
-        header_str = " | ".join(header[idx].ljust(col_widths[idx]) for idx in range(num_cols))
-        formatted.append(header_str)
-        
-        sep_str = "-+-".join("-" * col_widths[idx] for idx in range(num_cols))
-        formatted.append(sep_str)
-        
-        for r in data_rows:
-            row_cells = []
-            for idx in range(num_cols):
-                val = r[idx] if idx < len(r) else ""
-                is_numeric = re.match(r'^\s*[\d,.-]+\s*(?:%|đ|tỷ|triệu|VND|tỷ đ|triệu đ)?\s*$', val, re.IGNORECASE)
-                if is_numeric:
-                    row_cells.append(val.rjust(col_widths[idx]))
-                else:
-                    row_cells.append(val.ljust(col_widths[idx]))
-            formatted.append(" | ".join(row_cells))
-            
-        formatted.append("</pre>")
-        return formatted
+    _RESET_CONVERSATION_PHRASES = {
+        "reset", "reset_conversation", "xóa hội thoại", "xoá hội thoại",
+        "quên đi", "bắt đầu lại"
+    }
 
-    def _format_markdown_tables(self, text):
-        lines = text.split('\n')
-        in_table = False
-        table_lines = []
-        new_lines = []
-        
-        for line in lines:
-            stripped = line.strip()
-            if stripped.startswith('|') and stripped.endswith('|'):
-                in_table = True
-                table_lines.append(line)
-            else:
-                if in_table:
-                    formatted_table = self._convert_table_lines(table_lines)
-                    new_lines.extend(formatted_table)
-                    table_lines = []
-                    in_table = False
-                new_lines.append(line)
-        if in_table:
-            formatted_table = self._convert_table_lines(table_lines)
-            new_lines.extend(formatted_table)
-            
-        return '\n'.join(new_lines)
-
-    def ask(self, user_question):
+    def ask(self, user_question, session_key=None):
         """Translates natural language question to SQL, runs it, and formats response."""
         if user_question.strip() == "admin_restart_bot_process":
             # Acknowledge the update to Telegram to break the infinite restart loop
@@ -600,15 +601,40 @@ class DNHChatbot:
                 print(f"[Error acknowledging restart update]: {e}")
                 
             os._exit(0)
-            
+
+        if user_question.strip().lower() in self._RESET_CONVERSATION_PHRASES:
+            if session_key and session_key in self._conversation_histories:
+                del self._conversation_histories[session_key]
+            return {
+                "question": user_question,
+                "sql": "",
+                "data": [],
+                "columns": [],
+                "answer": "Đã xóa lịch sử hội thoại. Anh/Chị có thể bắt đầu câu hỏi mới.",
+                "mode": "System"
+            }
+
         db_schema = get_db_schema()
-        
+        history_block = self._get_history_block(session_key)
+
         # 1. Phân loại ý định của câu hỏi (Intent Classification)
         intent = "DATA_QUERY"
         q_lower = user_question.lower().strip()
-        
+
+        # Mặc định mọi bảng/danh sách chỉ hiển thị Top 10 (giữ câu trả lời + bảng gọn),
+        # trừ khi người dùng chủ động hỏi xem toàn bộ/đầy đủ danh sách.
+        wants_full_list = any(k in q_lower for k in [
+            "toàn bộ", "toan bo", "tất cả", "tat ca", "đầy đủ", "day du",
+            "danh sách đầy đủ", "danh sach day du", "full list", "không giới hạn", "khong gioi han"
+        ])
+
         # Fast Heuristic Intent Classifier (Bypasses LLM to save 3+ seconds)
-        if any(w in q_lower for w in ["chào", "hello", "hi ", "bạn là ai", "huong dan", "hướng dẫn", "chức năng", "giúp gì", "cmd", "help"]):
+        # "hi" phải check bằng \b (word boundary), KHÔNG dùng substring "hi " thô — "hi " từng
+        # khớp nhầm bên trong vô số từ tiếng Việt thông dụng chứa "hi" theo sau khoảng trắng/âm
+        # tiết khác, ví dụ "chi tiết", "khi tôi", "nghi ngờ" — khiến các câu hỏi dữ liệu hợp lệ
+        # bị coi là lời chào và không bao giờ chạy SQL (ví dụ: "Xem chi tiết các hợp đồng ETC").
+        _has_hi_greeting = bool(re.search(r'\bhi\b', q_lower))
+        if _has_hi_greeting or any(w in q_lower for w in ["chào", "hello", "bạn là ai", "huong dan", "hướng dẫn", "chức năng", "giúp gì", "cmd", "help"]):
             intent = "GENERAL"
         elif any(w in q_lower for w in ["tại sao", "tai sao", "vì sao", "vi sao", "làm thế nào", "lam the nao", "giải pháp", "giai phap", "khắc phục", "khac phuc"]):
             intent = "ANALYSIS"
@@ -624,7 +650,7 @@ class DNHChatbot:
 3️⃣ <b>Báo cáo Tồn kho & Đứt hàng</b> (Sản phẩm bán chạy, cháy hàng dưới 1 tháng).
 
 <i>(Vui lòng gõ số hoặc câu hỏi chi tiết hơn để em hỗ trợ nhé!)</i>"""
-            return {
+            result = {
                 "question": user_question,
                 "sql": "",
                 "data": [],
@@ -632,21 +658,32 @@ class DNHChatbot:
                 "answer": answer,
                 "mode": "Disambiguation Menu"
             }
+            self._remember_turn(session_key, user_question, result["answer"])
+            return result
         if intent == "ANALYSIS" and not self.is_mock:
             # Lấy tóm tắt dữ liệu hiện tại làm ngữ cảnh
             db_summary = self._get_database_summary()
-            
+
             analysis_prompt = f"""
 Bạn là chuyên gia phân tích dữ liệu kinh doanh và tư vấn chiến lược của Dược Nam Hà (DNH).
 Người dùng hỏi một câu hỏi dạng "tại sao" hoặc "làm thế nào" (why/how) liên quan đến hoạt động kinh doanh.
 
+{history_block}
 Dưới đây là tóm tắt trạng thái dữ liệu hiện tại của hệ thống DNH:
 {db_summary}
 
-Hãy trả lời câu hỏi của người dùng một cách chuyên nghiệp, logic, phân tích rõ ràng nguyên nhân dựa trên số liệu tóm tắt trên (nếu có liên quan) và đề xuất các giải pháp thực tế, hành động cụ thể (how-to) cho doanh nghiệp.
-Mục tiêu là giúp người quản lý hiểu rõ bản chất vấn đề và có hướng giải quyết cụ thể. Hãy viết bằng tiếng Việt tự nhiên và mạch lạc.
-
 Câu hỏi của người dùng: "{user_question}"
+
+QUY TẮC TRÌNH BÀY (BẮT BUỘC):
+1. Trả lời NGẮN GỌN, súc tích, KHÔNG quá 150 từ. Đây là tin nhắn chat, không phải báo cáo văn bản dài.
+2. Trình bày đúng 3 phần theo thứ tự, mỗi phần CHỈ 1-2 câu ngắn (dùng thẻ <b> làm tiêu đề, KHÔNG dùng #, ##, ###):
+   <b>Thực trạng:</b> 1 câu nêu con số cốt lõi.
+   <b>Nguyên nhân:</b> tối đa 2-3 nguyên nhân chính, mỗi nguyên nhân 1 câu ngắn.
+   <b>Giải pháp:</b> tối đa 2-3 giải pháp chính, mỗi giải pháp 1 câu ngắn.
+3. TUYỆT ĐỐI KHÔNG dùng markdown: không `**text**`, không `*text*`, không `###`/`##`, không `---`, không đánh số La Mã (I./II.), không tiêu đề phụ lồng nhau. Nếu cần in đậm, dùng thẻ HTML <b>text</b>.
+4. Nếu cần liệt kê, dùng gạch đầu dòng đơn giản "- " trên từng dòng, KHÔNG lồng thêm bullet con bên dưới mỗi ý.
+5. Không lặp lại toàn bộ số liệu chi tiết (tên từng nhân viên/từng SKU/từng khách hàng) — chỉ nêu tối đa 1 ví dụ tiêu biểu nhất cho mỗi nguyên nhân nếu thực sự cần thiết.
+6. Viết bằng tiếng Việt tự nhiên, giọng văn chuyên nghiệp nhưng đi thẳng vào trọng tâm.
 """
             try:
                 answer = self._call_ai(
@@ -654,7 +691,7 @@ Câu hỏi của người dùng: "{user_question}"
                     system_prompt="You are a helpful data analyst.",
                     user_prompt=analysis_prompt
                 )
-                return {
+                result = {
                     "question": user_question,
                     "sql": "",
                     "data": [],
@@ -662,6 +699,8 @@ Câu hỏi của người dùng: "{user_question}"
                     "answer": answer,
                     "mode": f"Live {self.model_type.upper()} API (Analysis)"
                 }
+                self._remember_turn(session_key, user_question, result["answer"])
+                return result
             except Exception as e:
                 print(f"[Error generating analysis]: {e}")
                 # Fallback to query if analysis generation fails
@@ -670,7 +709,7 @@ Câu hỏi của người dùng: "{user_question}"
         elif intent == "GENERAL" and not self.is_mock:
             general_prompt = f"""
 Bạn là trợ lý ảo phân tích dữ liệu Dược Nam Hà (DNH).
-Người dùng đang chào hỏi hoặc nói chuyện thông thường. 
+Người dùng đang chào hỏi hoặc nói chuyện thông thường.
 Hãy trả lời một cách thân thiện, ngắn gọn và giới thiệu các nhóm dữ liệu bạn có thể giúp họ tra cứu hoặc phân tích bao gồm:
 1. Dữ liệu công nợ khách hàng (overdue, OTC, ETC).
 2. Dữ liệu tồn kho sản phẩm (mặt hàng bán chậm, cận date, thiếu hàng).
@@ -678,6 +717,7 @@ Hãy trả lời một cách thân thiện, ngắn gọn và giới thiệu các
 
 Hãy viết bằng tiếng Việt.
 
+{history_block}
 Câu hỏi/Lời chào của người dùng: "{user_question}"
 """
             try:
@@ -686,7 +726,7 @@ Câu hỏi/Lời chào của người dùng: "{user_question}"
                     system_prompt="You are a helpful chatbot assistant.",
                     user_prompt=general_prompt
                 )
-                return {
+                result = {
                     "question": user_question,
                     "sql": "",
                     "data": [],
@@ -694,6 +734,8 @@ Câu hỏi/Lời chào của người dùng: "{user_question}"
                     "answer": answer,
                     "mode": f"Live {self.model_type.upper()} API (Chat)"
                 }
+                self._remember_turn(session_key, user_question, result["answer"])
+                return result
             except Exception as e:
                 print(f"[Error generating general reply]: {e}")
                 intent = "DATA_QUERY"
@@ -709,6 +751,12 @@ Câu hỏi/Lời chào của người dùng: "{user_question}"
         latest_q_start = f"{latest_year}-04-01"
 
         db_dialect = "PostgreSQL"
+        # Cloud is configured but unreachable right now (DNS/network failure) — distinct from
+        # "no cloud configured"/"mock mode", both of which are intentional offline setups the
+        # user already knows about. This case silently swaps in the old, much smaller SQLite
+        # fallback schema (missing brv_hoadonhdr/dms_khachhang/etc.), so answers can look
+        # confidently correct while actually coming from an unrelated/stale mock table.
+        cloud_unreachable_fallback = bool(cloud_db_url) and not self.is_mock and not self.cloud_available
         if "mssql" in cloud_db_url.lower() or "sqlserver" in cloud_db_url.lower() or os.getenv("DB_DIALECT", "").lower() == "mssql":
             db_dialect = "TSQL"
         elif not cloud_db_url or self.is_mock or not self.cloud_available:
@@ -820,9 +868,58 @@ Key Business Logic & Tables & Strict Mapping Rules:
    - Employee targets: Query 'fact_tonghopkhachhang' (column 'MonthSaleTarget').
      * VERY IMPORTANT: Since fact_tonghopkhachhang has duplicate target values per customer row for each employee, ALWAYS group by EmployeeCode and SaveDate to get the unique employee targets before summing them:
        SELECT SUM(target) FROM (SELECT DISTINCT "EmployeeCode", "SaveDate", "MonthSaleTarget" as target FROM fact_tonghopkhachhang) t
+   - COMPARISON (ACTUAL VS TARGET MONTHLY BREAKDOWN): Khi so sánh thực tế và chỉ tiêu của một Quý hoặc cả năm, bạn BẮT BUỘC phải GROUP BY theo từng tháng (sử dụng WITH CTEs cho actual và target, sau đó JOIN trên ngày đầu tháng). KHÔNG ĐƯỢC gộp chung cả quý vào 1 dòng duy nhất.
+     Ví dụ so sánh doanh số thực tế và chỉ tiêu target OTC của miền Bắc trong quý 2-2026:
+     WITH actual_monthly AS (
+       SELECT 
+         DATE_TRUNC('month', h."DocDate"::timestamp)::date AS month_start,
+         COALESCE(SUM(h."TotalAmount"), 0) AS actual_revenue
+       FROM brv_hoadonhdr h
+       JOIN dms_khachhang k ON h."CustomerCode" = k."Code"
+       JOIN dim_tinhthanhpho t ON k."CityId" = t."CityId"
+       LEFT JOIN brv_trangthaiduyet d ON h."DocStatus" = d."DocStatusKey"
+       LEFT JOIN brv_trangthaihoadon e ON h."EInvoiceStatus" = e."EInvoiceStatusKey"
+       WHERE h."IsActive" = TRUE AND h."IsHC" = FALSE
+         AND t."AreaCode" = 'MB'
+         AND h."DocDate"::date >= '2026-04-01' AND h."DocDate"::date <= '2026-06-30'
+         AND (d."IsCancelled" IS NULL OR d."IsCancelled" = FALSE)
+         AND (e."IsCancelled" IS NULL OR e."IsCancelled" = FALSE)
+       GROUP BY DATE_TRUNC('month', h."DocDate"::timestamp)::date
+     ),
+     target_monthly AS (
+       SELECT 
+         "DocDate"::date AS month_start,
+         COALESCE(SUM("Amount"), 0) AS target_revenue
+       FROM dim_targetvungmien
+       WHERE "AreaCode" = 'MB' AND "ChannelCode" = 'GT'
+         AND "DocDate"::date >= '2026-04-01' AND "DocDate"::date <= '2026-06-30'
+       GROUP BY "DocDate"::date
+     )
+     SELECT 
+       TO_CHAR(COALESCE(a.month_start, t.month_start), 'MM-YYYY') AS "Tháng",
+       COALESCE(a.actual_revenue, 0) AS "Doanh số thực tế",
+       COALESCE(t.target_revenue, 0) AS "Chỉ tiêu Target",
+       COALESCE(a.actual_revenue, 0) - COALESCE(t.target_revenue, 0) AS "Chênh lệch",
+       CASE 
+         WHEN COALESCE(t.target_revenue, 0) > 0 THEN ROUND((COALESCE(a.actual_revenue, 0) * 100.0 / t.target_revenue)::numeric, 2)
+         ELSE 0
+       END AS "Tỷ lệ hoàn thành"
+     FROM actual_monthly a
+     FULL OUTER JOIN target_monthly t ON a.month_start = t.month_start
+     ORDER BY COALESCE(a.month_start, t.month_start);
 
 4. KPI / Hiệu suất Nhân viên (Employee KPI & Sales Performance):
-   - Query 'fact_tonghopkhachhang' (actual sales = 'Amount_Cus', target = 'MonthSaleTarget', employee code = 'EmployeeCode', region = 'AreaCode' / 'AreaCode2').
+   - CRITICAL — HAI NGUỒN KHÁC NHAU THEO CẤP BẬC, KHÔNG DÙNG LẪN:
+     * 'fact_tonghopkhachhang' CHỈ có dữ liệu cho nhân sự CÓ danh mục khách hàng riêng: PositionCode 'TDV', 'QLV', 'CS', 'CTV', 'TK'. Bảng này là tổng hợp theo TỪNG KHÁCH HÀNG của từng nhân viên, nên cấp quản lý không trực tiếp bán hàng sẽ KHÔNG xuất hiện.
+     * 'TP' (Trưởng phòng), 'PP' (Phó phòng), 'TBP' (Trưởng bộ phận) KHÔNG có dòng nào trong 'fact_tonghopkhachhang' (join với dim_nhanvien sẽ luôn ra 0 dòng — dim_nhanvien."EmployeeCode" của các cấp này có thể là mã VÙNG như 'MB'/'MT'/'MN', không phải mã nhân viên bán hàng thật). BẮT BUỘC dùng bảng 'kpi_summary' (đã tổng hợp sẵn, có cột position_code, employee_code, employee_name, month_sale_target, month_sale_amount, month_sale_percent, quarter_sale_*, year_sale_*) — KHÔNG join với dim_nhanvien/fact_tonghopkhachhang cho các cấp này.
+     * Ví dụ tỉ lệ đạt KPI của Trưởng phòng:
+       SELECT employee_name, month_sale_target, month_sale_amount,
+              ROUND((month_sale_percent * 100)::numeric, 2) AS "Tỉ lệ đạt KPI (%)"
+       FROM kpi_summary
+       WHERE position_code = 'TP'
+       ORDER BY month_sale_percent DESC
+     * LƯU Ý DỮ LIỆU: 'kpi_summary' hiện có thể chưa đầy đủ cho mọi Trưởng phòng/Phó phòng (dữ liệu nhập tay từ báo cáo Excel định kỳ, không đồng bộ tự động như fact_tonghopkhachhang) — nếu kết quả trả về ít dòng hơn số lượng nhân sự cấp đó thực tế có, đừng coi là lỗi truy vấn, hãy nêu rõ trong câu trả lời rằng dữ liệu hệ thống hiện chỉ ghi nhận được từng đó người.
+   - Với TDV/QLV/CS/CTV/TK, tiếp tục dùng 'fact_tonghopkhachhang' (actual sales = 'Amount_Cus', target = 'MonthSaleTarget', employee code = 'EmployeeCode', region = 'AreaCode' / 'AreaCode2').
    - Join with 'dim_nhanvien' on EmployeeCode = EmployeeCode to get employee details (like employee name: 'Name', position: 'PositionCode').
    - IMPORTANT DEDUP RULES:
      * dim_nhanvien has 'IsDuplicate' column. ALWAYS filter: (n."IsDuplicate" IS NULL OR n."IsDuplicate" = 0) to exclude duplicate employee records.
@@ -830,9 +927,11 @@ Key Business Logic & Tables & Strict Mapping Rules:
      * To get the correct target: SELECT DISTINCT "EmployeeCode", "SaveDate", "MonthSaleTarget" FROM fact_tonghopkhachhang
      * To get the correct actual total: SUM("Amount_Cus") grouped by EmployeeCode.
    - Position codes:
-     * 'TDV' or 'Trình dược viên' -> dim_nhanvien."PositionCode" = 'TDV'
-     * 'QLV' or 'Quản lý vùng' -> dim_nhanvien."PositionCode" = 'QLV'
-     * 'TP' or 'Trưởng phòng' -> dim_nhanvien."PositionCode" = 'TP'
+     * 'TDV' or 'Trình dược viên' -> dim_nhanvien."PositionCode" = 'TDV' (dùng fact_tonghopkhachhang)
+     * 'QLV' or 'Quản lý vùng' -> dim_nhanvien."PositionCode" = 'QLV' (dùng fact_tonghopkhachhang)
+     * 'TP' or 'Trưởng phòng' -> kpi_summary.position_code = 'TP' (dùng kpi_summary, xem CRITICAL ở trên — KHÔNG dùng fact_tonghopkhachhang)
+     * 'PP' or 'Phó phòng' -> kpi_summary.position_code = 'PP' (dùng kpi_summary)
+     * 'TBP' or 'Trưởng bộ phận' -> kpi_summary.position_code = 'TBP' (dùng kpi_summary)
    - When the user asks about KPI or nhân viên without specifying position, DEFAULT to TDV (Trình dược viên) since they are the primary salesforce.
    - SaveDate is the month-end date stored as TEXT: '{latest_month_end_str}T00:00:00' for the latest month. The LATEST period is '{latest_month_end_str}T00:00:00'.
    - Example to get Top TDV by KPI completion (correct dedup):
@@ -899,15 +998,58 @@ Key Business Logic & Tables & Strict Mapping Rules:
 
 7. Tồn kho (Inventory):
    - Query 'inventory' (item_code, item_name, unit, closing_qty, closing_value, months_to_sell, warehouse).
+   - 'months_to_sell' là cột nhập thẳng từ hệ thống nguồn (dự phòng số tháng bán), KHÔNG rõ cách tính — KHÔNG dùng cột này làm câu trả lời chính khi người dùng hỏi về tốc độ bán/số ngày còn lại; PHẢI tự tính toán minh bạch từ dữ liệu hóa đơn thực tế theo hướng dẫn dưới đây.
+   - VERY IMPORTANT — "Tồn kho nhiều nhất/ít nhất", "còn bán được bao lâu", "số ngày tồn kho còn lại": KHÔNG được chỉ trả về closing_qty thô. PHẢI tính thêm "trung bình bán mỗi ngày" (từ tổng SL Thực bán trong dữ liệu hóa đơn đã có, chia cho số ngày của khoảng dữ liệu đó) và "số ngày tồn kho còn lại" = closing_qty / trung bình bán mỗi ngày. Tính trung bình bán bằng cách gộp cả 2 kênh OTC ('brv_hoadonct'+'brv_hoadonhdr') và ETC ('brvsx_hoadonct'+'brvsx_hoadonhdr') qua CTE riêng rồi UNION ALL (theo đúng quy tắc CTE-per-channel ở mục 5), chỉ tính SL Thực bán (loại trừ dòng khuyến mãi CTKM), join với inventory qua ItemCode = item_code. Ví dụ:
+     WITH otc_sold AS (
+       SELECT c."ItemCode" AS item_code,
+              SUM(CASE WHEN c."CTKM" IS NULL OR c."CTKM" = '' THEN c."Quantity9" ELSE 0 END) AS qty_sold
+       FROM brv_hoadonct c
+       JOIN brv_hoadonhdr h ON c."Stt" = h."Stt"
+       LEFT JOIN brv_trangthaiduyet d ON h."DocStatus" = d."DocStatusKey"
+       LEFT JOIN brv_trangthaihoadon e ON h."EInvoiceStatus" = e."EInvoiceStatusKey"
+       WHERE h."IsActive" = TRUE
+         AND h."DocDate"::date >= '{latest_q_start}' AND h."DocDate"::date <= '{latest_date_str}'
+         AND (d."IsCancelled" IS NULL OR d."IsCancelled" = FALSE)
+         AND (e."IsCancelled" IS NULL OR e."IsCancelled" = FALSE)
+       GROUP BY c."ItemCode"
+     ),
+     etc_sold AS (
+       SELECT c."ItemCode" AS item_code,
+              SUM(CASE WHEN c."CTKM" IS NULL OR c."CTKM" = '' THEN c."Quantity9" ELSE 0 END) AS qty_sold
+       FROM brvsx_hoadonct c
+       JOIN brvsx_hoadonhdr h ON c."Stt" = h."Stt"
+       LEFT JOIN brv_trangthaiduyet d ON h."DocStatus" = d."DocStatusKey"
+       LEFT JOIN brv_trangthaihoadon e ON h."EInvoiceStatus" = e."EInvoiceStatusKey"
+       WHERE h."IsActive" = TRUE
+         AND h."DocDate"::date >= '{latest_q_start}' AND h."DocDate"::date <= '{latest_date_str}'
+         AND (d."IsCancelled" IS NULL OR d."IsCancelled" = FALSE)
+         AND (e."IsCancelled" IS NULL OR e."IsCancelled" = FALSE)
+       GROUP BY c."ItemCode"
+     ),
+     total_sold AS (
+       SELECT item_code, SUM(qty_sold) AS total_qty_sold
+       FROM (SELECT * FROM otc_sold UNION ALL SELECT * FROM etc_sold) x
+       GROUP BY item_code
+     )
+     SELECT i.item_name AS "Tên sản phẩm",
+            i.closing_qty AS "Tồn kho hiện tại",
+            ROUND((COALESCE(s.total_qty_sold, 0) / (DATE '{latest_date_str}' - DATE '{latest_q_start}' + 1))::numeric, 2) AS "TB bán/ngày",
+            ROUND((i.closing_qty / NULLIF(COALESCE(s.total_qty_sold, 0) / (DATE '{latest_date_str}' - DATE '{latest_q_start}' + 1), 0))::numeric, 1) AS "Số ngày tồn kho còn lại"
+     FROM inventory i
+     LEFT JOIN total_sold s ON i.item_code = s.item_code
+     ORDER BY i.closing_qty DESC
+     LIMIT 10
+   - Mặt hàng có total_qty_sold = 0 (chưa bán trong kỳ) sẽ có "Số ngày tồn kho còn lại" = NULL (không chia được cho 0) — nêu rõ trong câu trả lời là "chưa phát sinh bán trong kỳ, không ước tính được" thay vì bỏ qua hoặc báo lỗi.
 
 8. Date Queries & Date-based KPIs (Doanh thu theo thời gian & KPI lũy kế):
    - CRITICAL DATA BOUNDARY: The invoice data in the database ONLY spans from '{latest_q_start}' to '{latest_date_str}' (3 months: April, May, June {latest_year}). Data for January, February, March {latest_year} and any months before April {latest_year} DO NOT EXIST in the database.
    - VERY IMPORTANT: When user asks for '6 tháng đầu năm {latest_year}', '6 months', 'H1 {latest_year}', 'nửa đầu năm', etc. — the database ONLY has Q2 data (Apr-Jun). Your SQL must ONLY query the available date range '{latest_q_start}' to '{latest_date_str}'. You MUST add a comment in your SQL: -- NOTE: Only Q2 data (Apr-Jun {latest_year}) available. Jan-Mar data not in DB.
-   - MANDATORY MONTHLY BREAKDOWN: When a user asks about revenue over a MULTI-MONTH period (e.g., '6 tháng', 'cả năm', 'theo tháng', 'Q2', 'quý 2', etc.), you MUST return results GROUPED BY MONTH (not a single total). This produces multiple rows — one per month — so the chart can show each month separately. Use DATE_TRUNC('month', h."DocDate"::timestamp) AS "month" in the SELECT and GROUP BY clause. Example:
+   - MANDATORY MONTHLY BREAKDOWN: When a user asks about revenue over a MULTI-MONTH period (e.g., '6 tháng', 'cả năm', 'theo tháng', 'Q2', 'quý 2', 'so sánh tháng X và tháng Y', etc.), you MUST return results GROUPED BY MONTH (not a single total). This produces multiple rows — one per month — so the chart can show each month separately. Use DATE_TRUNC('month', h."DocDate"::timestamp) AS "month" in the SELECT and GROUP BY clause. Example:
      SELECT DATE_TRUNC('month', h."DocDate"::timestamp) AS "month",
             SUM(otc.amount + etc.amount) AS "total_revenue"
      ... GROUP BY DATE_TRUNC('month', h."DocDate"::timestamp)
      ORDER BY "month"
+   - VERY IMPORTANT — GROUP BY / SELECT EXPRESSION MUST MATCH EXACTLY: PostgreSQL requires every non-aggregated SELECT expression to appear VERBATIM in GROUP BY. NEVER mix two different date functions between SELECT and GROUP BY — e.g. do NOT write `SELECT TO_CHAR(h."DocDate"::timestamp, 'MM-YYYY') ... GROUP BY DATE_TRUNC('month', h."DocDate"::timestamp)`, this WILL fail with "column must appear in the GROUP BY clause". If you need a formatted month label (e.g. 'MM-YYYY') in SELECT, GROUP BY that exact same TO_CHAR(...) expression — do not swap in DATE_TRUNC for GROUP BY. Prefer grouping/ordering by DATE_TRUNC('month', h."DocDate"::timestamp) as a plain column (not reformatted with TO_CHAR) unless the user explicitly needs a text label; this also sorts chronologically correctly, unlike a formatted 'MM-YYYY' string.
    - Do NOT use CURRENT_DATE or NOW() for filters since the database does not contain July {latest_year} data.
    - For '7 ngày gần nhất' (last 7 days): Base the query on the maximum date in the database: (SELECT MAX("DocDate"::date) FROM brv_hoadonhdr) (which is '{latest_date_str}'). Filter for dates between MAX(date) - INTERVAL '6 days' and MAX(date):
      WHERE h."DocDate"::date >= (SELECT MAX("DocDate"::date) FROM brv_hoadonhdr WHERE "IsActive" = TRUE) - INTERVAL '6 days'
@@ -915,6 +1057,17 @@ Key Business Logic & Tables & Strict Mapping Rules:
      SELECT DATE_TRUNC('month', h."DocDate"::timestamp) AS month, SUM(h."TotalAmount") AS revenue
    - For 'kpi đến ngày 20' (KPI/revenue up to day 20): Sum cumulative actual sales from day 1 to day 20 of the latest month ({latest_year}-{latest_month}, i.e., from '{latest_year}-{latest_month}-01' to '{latest_year}-{latest_month}-20') and compare it to the target:
      WHERE h."DocDate"::date >= '{latest_year}-{latest_month}-01' AND h."DocDate"::date <= '{latest_year}-{latest_month}-20'
+
+9. Chỉ số phái sinh BẮT BUỘC (Derived Metrics — cùng nguyên tắc với mục 7 Tồn kho):
+   Nguyên tắc chung: con số thô gần như vô nghĩa với người quản lý — mọi câu hỏi dạng xếp hạng/đánh giá/so sánh PHẢI kèm thêm cột phái sinh giúp diễn giải con số đó. Cụ thể theo từng nhóm:
+   - CÔNG NỢ ("khách nào nợ nhiều nhất", "rủi ro công nợ", "nợ xấu"): luôn thêm cột "Tỷ lệ quá hạn (%)" = ROUND((total_overdue / NULLIF(balance_end, 0) * 100)::numeric, 1). Khách nợ lớn nhưng tỷ lệ quá hạn thấp khác hẳn khách nợ nhỏ nhưng 100% đã quá hạn — bảng phải cho thấy điều đó.
+   - TOP SẢN PHẨM BÁN CHẠY: ngoài 4 cột ở mục 5, thêm "TB bán/ngày" = SL Thực bán / (DATE '{latest_date_str}' - DATE '{latest_q_start}' + 1) và "Tỷ lệ KM (%)" = ROUND((SL Khuyến mãi / NULLIF(Tổng SL, 0) * 100)::numeric, 1) — tỷ lệ khuyến mãi cao cho thấy doanh số "ảo" nhờ hàng tặng.
+   - KPI NHÂN VIÊN: ngoài % đạt chỉ tiêu, luôn thêm cột "Còn thiếu" = GREATEST(target - actual, 0) để thấy khoảng cách tuyệt đối phải bù (0 nếu đã vượt chỉ tiêu).
+   - DOANH THU NHIỀU THÁNG (so sánh theo tháng): luôn thêm cột "% so với tháng trước" dùng window function LAG:
+     ROUND(((rev - LAG(rev) OVER (ORDER BY month)) / NULLIF(LAG(rev) OVER (ORDER BY month), 0) * 100)::numeric, 1) AS "% so với tháng trước"
+     (bọc aggregate trong CTE/subquery trước rồi mới áp LAG ở SELECT ngoài để tránh lồng aggregate + window sai cú pháp).
+   - KHÁCH HÀNG MUA NHIỀU NHẤT (theo doanh thu): thêm "Số đơn hàng" = COUNT(DISTINCT h."Stt") và "Giá trị TB/đơn" = doanh thu / NULLIF(COUNT(DISTINCT h."Stt"), 0) — cho thấy khách mua đều đặn hay chỉ 1 đơn lớn.
+   - LUÔN dùng NULLIF(mẫu_số, 0) cho mọi phép chia; nếu kết quả NULL do mẫu số bằng 0, câu trả lời phải nêu rõ "không đủ dữ liệu để tính" thay vì lờ đi.
 
 NLP Synonym & Slang Mapping:
 - "số má", "doanh số", "thu về", "doanh thu" -> Invoice TotalAmount (from brv_hoadonhdr / brvsx_hoadonhdr) or Amount_Cus (from fact_tonghopkhachhang).
@@ -925,6 +1078,10 @@ NLP Synonym & Slang Mapping:
 Rules:
 1. Return ONLY the {db_dialect} statement. Do not wrap it in markdown code block or write any explanation.
 2. The query must be a SELECT statement.
+VERY IMPORTANT — Default Row Limit: If the query returns a LIST of multiple records (e.g. ranking/listing of customers, products, employees, invoices — NOT a single aggregate SUM/COUNT/AVG row), by default add ORDER BY <cột giá trị/số lượng phản ánh đúng ý "cao nhất"/"nhiều nhất"/"thấp nhất" mà câu hỏi ngụ ý> (DESC, hoặc ASC nếu câu hỏi hỏi "thấp nhất"/"ít nhất") and limit the result to only the top 10 rows (use "LIMIT 10" in PostgreSQL/SQLite, or "TOP 10" in T-SQL — match the {db_dialect} syntax). {"Người dùng ĐÃ yêu cầu xem toàn bộ/đầy đủ danh sách trong câu hỏi này — KHÔNG giới hạn số dòng, trả về TẤT CẢ các dòng phù hợp." if wants_full_list else "Người dùng KHÔNG yêu cầu xem toàn bộ danh sách — PHẢI giới hạn 10 dòng như trên."}
+VERY IMPORTANT — Vietnamese Column Labels (BẮT BUỘC): EVERY column in the SELECT clause MUST be aliased with a clear, human-readable Vietnamese label using AS "Tên tiếng Việt" — kể cả các cột passthrough đơn giản như mã khách hàng, tên khách hàng, kênh bán hàng. TUYỆT ĐỐI KHÔNG để lộ ra tên cột thô/snake_case/tiếng Anh của database (ví dụ: customer_code, customer_name, balance_end, total_overdue, sales_channel, employee_name, item_code, month_sale_target...) trong kết quả trả về — người dùng cuối không đọc được tên kỹ thuật này, nó sẽ hiển thị thẳng làm tiêu đề cột trên giao diện. Ví dụ ĐÚNG:
+     SELECT customer_code AS "Mã khách hàng", customer_name AS "Tên khách hàng", sales_channel AS "Kênh bán hàng", total_overdue AS "Nợ quá hạn" FROM receivable_detail ...
+   Áp dụng quy tắc này cho MỌI bảng/cột, không chỉ ví dụ trên — luôn tự dịch tên cột kỹ thuật sang tiếng Việt sát nghĩa nhất theo ngữ cảnh nghiệp vụ dược phẩm/thương mại của DNH.
 {dialect_rules}
 """
         sql_query = ""
@@ -932,10 +1089,17 @@ Rules:
             sql_query = self._generate_mock_sql(user_question)
         else:
             try:
+                sql_user_prompt = user_question
+                if history_block:
+                    sql_user_prompt = (
+                        f'{history_block}\n'
+                        f'Câu hỏi HIỆN TẠI cần chuyển thành SQL (dùng lịch sử ở trên chỉ để hiểu ngữ cảnh/tham chiếu, '
+                        f'ví dụ câu hỏi ngắn như "1" hay "còn tháng khác thì sao" ám chỉ nội dung đã hỏi trước đó): "{user_question}"'
+                    )
                 sql_query = self._call_ai(
                     model=self.sql_model,
                     system_prompt=system_prompt,
-                    user_prompt=user_question,
+                    user_prompt=sql_user_prompt,
                     temperature=0.0
                 )
                 if sql_query.startswith("```"):
@@ -984,22 +1148,30 @@ Rules:
                 parsed_intent = self._parse_data_intent(user_question)
                 intent_type = parsed_intent.get("intent", "Single_Value")
                 
-                # Check if it is a simple query (e.g. 1 row or Single_Value intent)
-                is_simple_query = (total_rows_count <= 1 and intent_type == "Single_Value" and not any(k in user_question.lower() for k in ["tại sao", "vì sao", "so sánh", "phân tích", "xu hướng", "biến động", "chênh lệch", "kpi"]))
-                
+                # Mặc định LUÔN trả lời đơn giản/trực tiếp — chỉ mở rộng thành khung đầy đủ
+                # Thực trạng-Nguyên nhân-Giải pháp khi câu hỏi TRỰC TIẾP hỏi "tại sao"/"như thế nào"
+                # (không còn phụ thuộc số dòng kết quả — trước đây multi-row vẫn tự bị áp khung đầy
+                # đủ dù người dùng không hỏi nguyên nhân/giải pháp).
+                wants_deep_analysis = any(k in user_question.lower() for k in [
+                    "tại sao", "tai sao", "vì sao", "vi sao",
+                    "như thế nào", "nhu the nao", "làm thế nào", "lam the nao",
+                    "làm sao", "lam sao", "nguyên nhân", "nguyen nhan", "giải pháp", "giai phap"
+                ])
+
                 framework_directive = ""
-                if is_simple_query:
-                    framework_directive = """5. Direct lookup Response (NO "Thực trạng - Nguyên nhân - Giải pháp" framework): Since this is a simple lookup question returning a single figure or very simple record, do NOT structure your answer into "Thực trạng", "Nguyên nhân", "Giải pháp" sections. Instead, give a direct, concise, and professional answer (1-2 sentences at most). Present the final number or detail clearly and immediately."""
+                if not wants_deep_analysis:
+                    framework_directive = """5. Direct Response (KHÔNG dùng khung "Thực trạng - Nguyên nhân - Giải pháp"): Người dùng chỉ hỏi số liệu/thông tin, KHÔNG hỏi "tại sao" hay "như thế nào". Chỉ trả lời đúng cái được hỏi — trình bày số liệu/kết quả trực tiếp, ngắn gọn, chuyên nghiệp, TỐI ĐA 2-3 CÂU. TUYỆT ĐỐI KHÔNG tự thêm phần phân tích nguyên nhân hay đề xuất giải pháp khi không được hỏi. TUYỆT ĐỐI KHÔNG liệt kê nhiều mục theo từng nhóm/bullet point kiểu "Nhóm A: ...", "Nhóm B: ..." hay nêu tên từng dòng dữ liệu một — bảng dữ liệu chi tiết (Top 10) đã hiển thị riêng ở giao diện, câu trả lời chỉ cần nêu con số tổng hợp nổi bật nhất (ví dụ tổng số lượng, giá trị cao nhất) và tối đa 1 ví dụ tiêu biểu, rồi dẫn người dùng xem bảng bên dưới để biết chi tiết."""
                 else:
-                    framework_directive = """5. Executive Response Framework (Thực trạng - Nguyên nhân - Giải pháp): You must structure the business analysis part of your answer clearly addressing three key aspects in order (using HTML bold tags as section headers):
-   - <b>Nó là gì? (Thực trạng):</b> Trình bày trực tiếp các con số cốt lõi (Hero Metrics) dưới dạng in đậm (dùng thẻ <b>). Nếu câu hỏi yêu cầu liệt kê hoặc so sánh, hãy chèn bảng dữ liệu Markdown chi tiết ngay tại phần này kèm theo các con số tổng hợp vĩ mô.
-   - <b>Tại sao nó như thế? (Nguyên nhân):</b> Phân tích sâu sắc và bóc tách nguyên nhân dựa trên số liệu thực tế từ kết quả truy vấn.
-   - <b>Giải quyết nó như thế nào? (Giải pháp):</b> Đề xuất các kiến nghị hành động cụ thể, phân vai rõ ràng cho các phòng ban."""
+                    framework_directive = """5. Executive Response Framework (Thực trạng - Nguyên nhân - Giải pháp): Người dùng có hỏi "tại sao"/"như thế nào" nên PHẢI trình bày đủ 3 phần theo thứ tự (dùng thẻ <b> làm tiêu đề):
+   - <b>Thực trạng:</b> Trình bày trực tiếp các con số cốt lõi (Hero Metrics) dưới dạng in đậm (dùng thẻ <b>). Không cần liệt kê lại bảng dữ liệu chi tiết (đã hiển thị riêng ở giao diện), chỉ nêu con số tổng hợp.
+   - <b>Nguyên nhân:</b> Phân tích sâu sắc và bóc tách nguyên nhân dựa trên số liệu thực tế từ kết quả truy vấn.
+   - <b>Giải pháp:</b> Đề xuất các kiến nghị hành động cụ thể, phân vai rõ ràng cho các phòng ban."""
 
                 summary_prompt = f"""
 You are the executive AI Chatbot assistant for Duoc Nam Ha.
 Your task is to summarize the SQL query results for C-level executives in a clean, professional, and natural Vietnamese tone.
 
+{history_block}
 User's original question: {user_question}
 SQL query run: {sql_query}
 Query results (showing {len(llm_rows)} of {total_rows_count} total records): {str(llm_rows)}
@@ -1010,16 +1182,13 @@ CRITICAL RULES:
 
 2. BLUF (Bottom Line Up Front): Always present the most critical overall number (Hero Metric) on the very first line of the answer. E.g. "Doanh số OTC đạt <b>4,28 tỷ đ</b>, hoàn thành <b>95%</b> chỉ tiêu." Do not use polite greetings or introduction phrases.
 
-3. Markdown Tables for Listings: If the results contain multiple rows or list of items (e.g. list of Top 5 products, list of TDVs, regions breakdown), you MUST format them as a clean Markdown table with headers instead of bullet points. Example:
-| STT | Tên đại lý | Nợ quá hạn | Tổng nợ |
-|---|---|---|---|
-| 1 | Nhà thuốc A | 15 triệu đ | 50 triệu đ |
+3. KHÔNG chèn bảng dữ liệu (Markdown table) vào trong câu trả lời văn bản, kể cả khi kết quả có nhiều dòng — giao diện đã tự hiển thị bảng dữ liệu riêng từ kết quả truy vấn gốc (cột `data`/`columns`), chèn thêm bảng trong `answer` sẽ bị lặp. Chỉ viết văn xuôi ngắn gọn nêu con số/kết luận nổi bật.
 
 4. Contextualization: Always contextualize numbers by comparing them MoM, YoY, or against Target (if targets exist in data). Format money in VND using 'tỷ đ' hoặc 'triệu đ' (e.g., '12,5 tỷ đ', '350 triệu đ', '250.000 đ') and percentages using '%'.
 
 {framework_directive}
 
-6. Telegram Formatting Guard: NEVER use markdown bold syntax like `**text**` or `*text*`. If you want to bold a word or number, ALWAYS use HTML tags like `<b>text</b>` or `<strong>text</strong>`. Telegram only supports HTML format in this mode and markdown bold characters will fail to render and show up as raw asterisks.
+6. Formatting Guard: NEVER use markdown bold syntax like `**text**` or `*text*`. If you want to bold a word or number, ALWAYS use HTML tags like `<b>text</b>` or `<strong>text</strong>` — cả web UI lẫn Telegram đều render trực tiếp `answer` dưới dạng HTML, markdown thô sẽ hiện dấu sao thô.
 
 7. Data Boundary Transparency (CRITICAL): The database only contains invoice data from {latest_q_start} to {latest_date_str} (3 months: April, May, June {latest_year}). January, February, and March {latest_year} data do NOT exist. If the user asked for '6 tháng đầu năm {latest_year}', 'H1 {latest_year}', 'nửa đầu năm', or any period that includes Jan-Mar {latest_year}, you MUST prominently warn the user in your response with this EXACT note at the beginning:
 ⚠️ <b>Lưu ý quan trọng về dữ liệu:</b> Hệ thống hiện chỉ có dữ liệu hóa đơn từ tháng 04/{latest_year} đến {latest_month}/{latest_year} (Q2/{latest_year}). Dữ liệu tháng 1, 2, 3 năm {latest_year} chưa được tải vào CSDL, do đó kết quả bên dưới chỉ phản ánh <b>3 tháng (Q2/{latest_year})</b>, KHÔNG phải 6 tháng đầu năm đầy đủ.
@@ -1078,18 +1247,30 @@ Then present the numbers clearly labeled as "Q2/{latest_year} (Tháng 4-{int(lat
             except Exception as e:
                 print(f"[Error generating chart via Rule Engine]: {e}")
 
-        # Convert any markdown tables to beautiful monospace tables for Telegram
-        answer = self._format_markdown_tables(answer)
-        
-        return {
+        # Lưới an toàn: dù SQL sinh ra có quên ORDER BY/LIMIT 10 hay không, bảng hiển thị
+        # cho người dùng vẫn không bao giờ vượt quá 10 dòng, trừ khi họ hỏi "toàn bộ".
+        table_rows = query_result.get("rows", [])
+        if not wants_full_list and len(table_rows) > 10:
+            table_rows = table_rows[:10]
+
+        if cloud_unreachable_fallback:
+            answer = (
+                "⚠️ <b>Không kết nối được CSDL chính (Supabase)</b> tại thời điểm này — câu trả lời dưới đây "
+                "dùng dữ liệu offline dự phòng, có thể THIẾU bảng dữ liệu hoặc KHÔNG khớp với câu hỏi. "
+                "Vui lòng kiểm tra kết nối mạng/DNS rồi thử lại để có số liệu chính xác.\n\n" + answer
+            )
+
+        result = {
             "question": user_question,
             "sql": sql_query,
-            "data": query_result.get("rows", []),
+            "data": table_rows,
             "columns": query_result.get("columns", []),
             "answer": answer,
             "chart_path": chart_path,
             "mode": f"Live {self.model_type.upper()} API" if not self.is_mock else "Offline Mock Engine"
         }
+        self._remember_turn(session_key, user_question, result["answer"])
+        return result
 
     def _format_heuristically(self, columns, rows, question):
         if not rows:

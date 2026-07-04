@@ -69,5 +69,5 @@ Chatbot xác định vùng miền của hóa đơn bằng cách map khách hàng
 
 ## 6. Công nợ & Tồn kho (Receivables & Inventory)
 *   **Công nợ phải thu:** Truy vấn bảng `receivable_detail` (không sử dụng `receivable_etc`).
-    *   *Lưu ý:* Kỳ dữ liệu mới nhất được quy chuẩn là `'9_2025'` (dùng gạch dưới).
+    *   *Lưu ý:* `period` là TEXT dạng `'thang_nam'` (không đệm số 0, ví dụ `'1_2026'`, `'9_2025'`). Kỳ mới nhất **không cố định** và **không được lấy bằng `MAX(period)` trong SQL** — so sánh chuỗi sẽ sai (`'9_2025'` > `'1_2026'` theo thứ tự chữ vì ký tự `'9'` > `'1'`, dù `1_2026` mới hơn). Phải lấy `DISTINCT period` rồi parse `(năm, tháng)` để tìm kỳ mới nhất thật (xem `ai_agent/chatbot.py:_latest_period_key`, `src/alerts.py:get_latest_period`, `src/analytics.py:get_latest_period`).
 *   **Tồn kho thành phẩm:** Truy vấn bảng `inventory` (closing_qty, closing_value, months_to_sell).

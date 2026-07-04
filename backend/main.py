@@ -1,20 +1,19 @@
 import os
-import sqlite3
 import sys
 import json
+import base64
 from fastapi import FastAPI, HTTPException, Header, Depends, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from typing import Optional
+from sqlalchemy import text
 
 # Add parent directory to path to import chatbot
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
-from ai_agent.chatbot import DNHChatbot
+from ai_agent.chatbot import DNHChatbot, _get_cloud_engine, _latest_period_key
 from botbuilder.schema import Activity
 from src.teams_bot import ADAPTER, dnh_bot
-
-DB_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "scripts", "dnh_intermediate.db")
 
 app = FastAPI(title="DNH Intermediate API Middleware", version="1.0.0")
 
@@ -45,12 +44,24 @@ class LoginRequest(BaseModel):
 class QueryRequest(BaseModel):
     question: str
 
-def get_db_connection():
-    if not os.path.exists(DB_PATH):
-        raise HTTPException(status_code=500, detail="Database trung gian chua duoc khoi tao.")
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    return conn
+def get_cloud_connection():
+    """All dashboard/debt/kpi endpoints read from Supabase (cloud Postgres) —
+    the same engine/pool the chatbot uses, not the local SQLite intermediate DB."""
+    engine = _get_cloud_engine()
+    if engine is None:
+        raise HTTPException(status_code=500, detail="CLOUD_DB_URL chua duoc cau hinh.")
+    try:
+        return engine.connect()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Khong ket noi duoc Supabase: {e}")
+
+def get_latest_receivable_period(conn):
+    """receivable_detail.period is TEXT 'M_YYYY' (not zero-padded) — must parse
+    (year, month) rather than take a plain SQL/string MAX(). See _latest_period_key."""
+    periods = [r[0] for r in conn.execute(text("SELECT DISTINCT period FROM receivable_detail")).fetchall() if r[0]]
+    if not periods:
+        raise HTTPException(status_code=500, detail="Khong tim thay ky bao cao nao trong receivable_detail.")
+    return max(periods, key=_latest_period_key)
 
 # Simple Authentication dependency
 def verify_token(authorization: Optional[str] = Header(None)):
@@ -77,30 +88,32 @@ def login(req: LoginRequest):
 
 @app.get("/api/dashboard/stats")
 def get_stats(token: str = Depends(verify_token)):
-    conn = get_db_connection()
-    cursor = conn.cursor()
-
+    conn = get_cloud_connection()
     try:
-        cursor.execute("SELECT COALESCE(SUM(balance_end), 0) FROM receivable_detail")
-        total_receivable = cursor.fetchone()[0]
+        period = get_latest_receivable_period(conn)
 
-        cursor.execute("SELECT COALESCE(SUM(total_overdue), 0) FROM receivable_detail")
-        total_overdue = cursor.fetchone()[0]
+        total_receivable = conn.execute(text(
+            "SELECT COALESCE(SUM(balance_end), 0) FROM receivable_detail WHERE period = :p"
+        ), {"p": period}).scalar()
 
-        cursor.execute("SELECT COUNT(DISTINCT customer_code) FROM receivable_detail")
-        total_customers = cursor.fetchone()[0]
+        total_overdue = conn.execute(text(
+            "SELECT COALESCE(SUM(total_overdue), 0) FROM receivable_detail WHERE period = :p"
+        ), {"p": period}).scalar()
 
-        cursor.execute("SELECT COUNT(*) FROM inventory")
-        total_inventory_items = cursor.fetchone()[0]
+        total_customers = conn.execute(text(
+            "SELECT COUNT(DISTINCT customer_code) FROM receivable_detail WHERE period = :p"
+        ), {"p": period}).scalar()
 
-        cursor.execute("SELECT COALESCE(SUM(closing_value), 0) FROM inventory")
-        total_inventory_value = cursor.fetchone()[0]
+        total_inventory_items = conn.execute(text("SELECT COUNT(*) FROM inventory")).scalar()
 
-        cursor.execute("SELECT COUNT(*) FROM kpi_summary")
-        total_employees = cursor.fetchone()[0]
+        total_inventory_value = conn.execute(text(
+            "SELECT COALESCE(SUM(closing_value), 0) FROM inventory"
+        )).scalar()
 
-        conn.close()
+        total_employees = conn.execute(text("SELECT COUNT(*) FROM kpi_summary")).scalar()
+
         return {
+            "period": period,
             "total_receivable": total_receivable,
             "total_overdue": total_overdue,
             "total_customers": total_customers,
@@ -108,35 +121,38 @@ def get_stats(token: str = Depends(verify_token)):
             "total_inventory_value": total_inventory_value,
             "total_employees": total_employees
         }
+    except HTTPException:
+        raise
     except Exception as e:
-        conn.close()
         raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        conn.close()
 
 @app.get("/api/dashboard/charts")
 def get_charts(token: str = Depends(verify_token)):
-    conn = get_db_connection()
-    cursor = conn.cursor()
-
+    conn = get_cloud_connection()
     try:
+        period = get_latest_receivable_period(conn)
+
         # 1. Cong no theo kenh ban hang
-        cursor.execute("""
+        receivable_by_channel = [dict(r._mapping) for r in conn.execute(text("""
             SELECT sales_channel, COALESCE(SUM(balance_end), 0) as total_balance
             FROM receivable_detail
+            WHERE period = :p
             GROUP BY sales_channel
             ORDER BY total_balance DESC
-        """)
-        receivable_by_channel = [dict(row) for row in cursor.fetchall()]
+        """), {"p": period})]
 
         # 2. Phan tich tuoi no qua han
-        cursor.execute("""
+        aging_row = conn.execute(text("""
             SELECT
                 COALESCE(SUM(overdue_1_15), 0)  as overdue_1_15,
                 COALESCE(SUM(overdue_15_30), 0) as overdue_15_30,
                 COALESCE(SUM(overdue_30_45), 0) as overdue_30_45,
                 COALESCE(SUM(overdue_gt_45), 0) as overdue_gt_45
             FROM receivable_detail
-        """)
-        aging_row = dict(cursor.fetchone())
+            WHERE period = :p
+        """), {"p": period}).mappings().fetchone()
         overdue_aging = [
             {"bucket": "1-15 ngay",  "amount": aging_row["overdue_1_15"]},
             {"bucket": "15-30 ngay", "amount": aging_row["overdue_15_30"]},
@@ -145,45 +161,46 @@ def get_charts(token: str = Depends(verify_token)):
         ]
 
         # 3. Top 10 khach hang qua han cao nhat
-        cursor.execute("""
+        top_overdue_customers = [dict(r._mapping) for r in conn.execute(text("""
             SELECT customer_code, customer_name,
                    COALESCE(SUM(total_overdue), 0) as total_overdue
             FROM receivable_detail
+            WHERE period = :p
             GROUP BY customer_code, customer_name
             ORDER BY total_overdue DESC
             LIMIT 10
-        """)
-        top_overdue_customers = [dict(row) for row in cursor.fetchall()]
+        """), {"p": period})]
 
         # 4. KPI doanh so theo vung
-        cursor.execute("""
+        kpi_by_region = [dict(r._mapping) for r in conn.execute(text("""
             SELECT area_code,
                    COALESCE(SUM(month_sale_amount), 0) as total_month_sale
             FROM kpi_summary
             GROUP BY area_code
             ORDER BY total_month_sale DESC
-        """)
-        kpi_by_region = [dict(row) for row in cursor.fetchall()]
+        """))]
 
-        conn.close()
         return {
+            "period": period,
             "receivable_by_channel": receivable_by_channel,
             "overdue_aging": overdue_aging,
             "top_overdue_customers": top_overdue_customers,
             "kpi_by_region": kpi_by_region
         }
+    except HTTPException:
+        raise
     except Exception as e:
-        conn.close()
         raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        conn.close()
 
 @app.get("/api/debt/alerts")
 def get_debt_alerts(token: str = Depends(verify_token)):
     """Tra ve khach hang co no qua han, sap xep giam dan theo total_overdue."""
-    conn = get_db_connection()
-    cursor = conn.cursor()
-
+    conn = get_cloud_connection()
     try:
-        cursor.execute("""
+        period = get_latest_receivable_period(conn)
+        alerts = [dict(r._mapping) for r in conn.execute(text("""
             SELECT customer_code, customer_name, sales_channel,
                    COALESCE(SUM(balance_end), 0)    as balance_end,
                    COALESCE(SUM(in_term), 0)         as in_term,
@@ -193,31 +210,32 @@ def get_debt_alerts(token: str = Depends(verify_token)):
                    COALESCE(SUM(overdue_gt_45), 0)   as overdue_gt_45,
                    COALESCE(SUM(total_overdue), 0)   as total_overdue
             FROM receivable_detail
+            WHERE period = :p
             GROUP BY customer_code, customer_name, sales_channel
             HAVING SUM(total_overdue) > 0
             ORDER BY total_overdue DESC
             LIMIT 50
-        """)
-        alerts = [dict(row) for row in cursor.fetchall()]
+        """), {"p": period})]
 
-        conn.close()
         return {
+            "period": period,
             "total_alerts": len(alerts),
             "alerts": alerts
         }
+    except HTTPException:
+        raise
     except Exception as e:
-        conn.close()
         raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        conn.close()
 
 
 @app.get("/api/inventory/summary")
 def get_inventory_summary(token: str = Depends(verify_token)):
     """Tra ve danh sach ton kho va phan loai rui ro theo months_to_sell."""
-    conn = get_db_connection()
-    cursor = conn.cursor()
-
+    conn = get_cloud_connection()
     try:
-        cursor.execute("""
+        items = [dict(r._mapping) for r in conn.execute(text("""
             SELECT item_code, item_name, unit,
                    closing_qty, closing_value, months_to_sell,
                    CASE
@@ -227,8 +245,7 @@ def get_inventory_summary(token: str = Depends(verify_token)):
                    END as risk_level
             FROM inventory
             ORDER BY months_to_sell ASC
-        """)
-        items = [dict(row) for row in cursor.fetchall()]
+        """))]
 
         # Thong ke theo nhom rui ro
         risk_summary = {}
@@ -239,25 +256,23 @@ def get_inventory_summary(token: str = Depends(verify_token)):
             risk_summary[level]["count"] += 1
             risk_summary[level]["total_value"] += item["closing_value"] or 0
 
-        conn.close()
         return {
             "total_items": len(items),
             "risk_summary": risk_summary,
             "items": items
         }
     except Exception as e:
-        conn.close()
         raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        conn.close()
 
 
 @app.get("/api/kpi/summary")
 def get_kpi_summary(token: str = Depends(verify_token)):
     """Tra ve bang tong hop KPI nhan vien."""
-    conn = get_db_connection()
-    cursor = conn.cursor()
-
+    conn = get_cloud_connection()
     try:
-        cursor.execute("""
+        rows = [dict(r._mapping) for r in conn.execute(text("""
             SELECT area_code, employee_code, employee_name, position_code,
                    month_sale_target, month_sale_amount, month_sale_percent,
                    total_point,
@@ -265,25 +280,31 @@ def get_kpi_summary(token: str = Depends(verify_token)):
                    year_sale_target, year_sale_amount, year_sale_percent
             FROM kpi_summary
             ORDER BY area_code, employee_code
-        """)
-        rows = [dict(row) for row in cursor.fetchall()]
+        """))]
 
-        conn.close()
         return {
             "total_employees": len(rows),
             "data": rows
         }
     except Exception as e:
-        conn.close()
         raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        conn.close()
 
 @app.post("/api/chatbot/query")
 def chat_query(req: QueryRequest, token: str = Depends(verify_token)):
     if not req.question:
         raise HTTPException(status_code=400, detail="Cau hoi khong duoc de trong")
-    
+
     try:
-        response_data = chatbot.ask(req.question)
+        response_data = chatbot.ask(req.question, session_key=token)
+        # Chart is a local file on the server (matplotlib output). Inline it as
+        # base64 so the browser can render it directly, same as the Telegram/Teams
+        # bots do — no need for a separate static-file route to the scratch dir.
+        chart_path = response_data.get("chart_path")
+        if chart_path and os.path.exists(chart_path):
+            with open(chart_path, "rb") as f:
+                response_data["chart_base64"] = base64.b64encode(f.read()).decode("utf-8")
         return response_data
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

@@ -109,7 +109,7 @@ def start_telegram_bot_thread():
                     print(f"[TELEGRAM_BOT] Nhận tin nhắn từ Chat ID {chat_id}: {text}")
                     
                     # Gọi Chatbot AI trả lời
-                    reply = chatbot.ask(text)
+                    reply = chatbot.ask(text, session_key=f"tg_{chat_id}")
                     answer = reply.get("answer", "Xin lỗi, tôi gặp lỗi khi xử lý câu hỏi của bạn.")
                     chart_path = reply.get("chart_path")
                     
