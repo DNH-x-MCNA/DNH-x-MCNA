@@ -7,7 +7,68 @@ from dotenv import load_dotenv
 from src.database import get_db_engines, load_config
 from src.etl import get_daily_digest_metrics, get_weekly_digest_metrics, get_monthly_digest_metrics
 from src.notifier import build_digest_email, send_email, send_alert_to_all_channels
-from src.alerts import run_alert_checks, should_send_alert, record_alert_sent
+from src.alerts import (
+    run_alert_checks,               # bản MOCK (ERP/CRM giả lập) — chỉ dùng ở môi trường 'local'
+    run_smart_business_alerts,      # cảnh báo thật: nợ quá hạn / cháy kho / KPI thấp
+    run_sales_kpi_insights_alert,   # báo cáo phân tích doanh số & KPI theo kênh/chức danh
+    check_revenue_drop_alert,       # doanh thu giảm > ngưỡng so với kỳ trước
+    check_credit_limit_exceeded_alert,   # nợ vượt hạn mức tín dụng (no-op nếu thiếu dữ liệu)
+    # --- Trigger mở rộng (nhóm A-G) ---
+    check_company_overdue_ratio_alert,   # A3: tỷ lệ nợ quá hạn toàn công ty
+    check_overdue_customer_new_orders_alert,  # A2: khách quá hạn vẫn được lên đơn mới
+    check_debt_aging_migration_alert,    # A1: nợ mới chuyển nhóm >45 ngày
+    check_dead_stock_alert,              # B2: tồn kho chết / bán chậm
+    check_near_expiry_alert,             # B1: cận date (no-op nếu thiếu dữ liệu hạn dùng)
+    check_customer_churn_alert,          # C1: khách lớn sụt giảm / nguy cơ mất khách
+    check_revenue_concentration_alert,   # C2: rủi ro tập trung doanh thu
+    check_return_rate_alert,             # E: tỷ lệ hàng trả về cao (ETC)
+    check_zero_sales_rep_alert,          # F: nhân sự doanh số = 0
+    check_data_sanity_ok,                # G2: guard chặn alert khi dữ liệu rỗng/hỏng
+    check_etl_freshness_alert,           # G1: ETL đứng (dữ liệu không refresh)
+    should_send_alert, record_alert_sent
+)
+
+
+def run_all_alert_checks(config, erp_engine=None, crm_engine=None):
+    """
+    Chạy TOÀN BỘ cảnh báo nghiệp vụ THẬT của DNH đọc từ dữ liệu thật:
+      - run_smart_business_alerts(): nợ quá hạn, cháy kho, KPI thấp
+      - run_sales_kpi_insights_alert(): phân tích doanh số & KPI theo kênh/chức danh
+      - check_revenue_drop_alert(): doanh thu giảm > ngưỡng so với kỳ trước
+      - check_credit_limit_exceeded_alert(): nợ vượt hạn mức tín dụng (no-op nếu chưa có dữ liệu)
+
+    Mỗi hàm tự bọc try/except bên trong nên lỗi 1 loại cảnh báo không làm chết cả vòng lặp.
+    Bản MOCK run_alert_checks(ERP/CRM giả lập) CHỈ chạy khi environment == 'local' để dev test;
+    production KHÔNG bao giờ chạy mock.
+    """
+    # G1: health-check ETL trước (không phụ thuộc dữ liệu nghiệp vụ)
+    check_etl_freshness_alert()
+
+    # G2: guard — nếu dữ liệu cốt lõi rỗng/hỏng thì DỪNG, không gửi alert nghiệp vụ sai
+    if not check_data_sanity_ok():
+        print("[ALERTS] Dữ liệu bất thường (rỗng) — bỏ qua các cảnh báo nghiệp vụ lần này.")
+        return
+
+    print("[ALERTS] Chạy các cảnh báo nghiệp vụ thật...")
+    # Nhóm cảnh báo gốc
+    run_smart_business_alerts()          # nợ quá hạn / cháy kho / KPI thấp
+    run_sales_kpi_insights_alert()       # phân tích doanh số & KPI
+    # Trigger mở rộng — mỗi hàm tự try/except, lỗi 1 cái không chặn cái khác
+    check_revenue_drop_alert()
+    check_credit_limit_exceeded_alert()
+    check_company_overdue_ratio_alert()
+    check_overdue_customer_new_orders_alert()
+    check_debt_aging_migration_alert()
+    check_dead_stock_alert()
+    check_near_expiry_alert()
+    check_customer_churn_alert()
+    check_revenue_concentration_alert()
+    check_return_rate_alert()
+    check_zero_sales_rep_alert()
+
+    if str(config.get('environment', 'local')).lower() == 'local' and erp_engine is not None and crm_engine is not None:
+        print("[ALERTS] (môi trường 'local') Chạy thêm bộ MOCK ERP/CRM để dev test...")
+        run_alert_checks(erp_engine, crm_engine)
 
 load_dotenv()
 
@@ -84,8 +145,16 @@ def main():
     parser.add_argument('--send-monthly', action='store_true', help='Gửi báo cáo Monthly (Email) ngay lập tức rồi thoát')
     args = parser.parse_args()
 
-    erp_engine, crm_engine = get_db_engines()
     config = load_config()
+    is_local = str(config.get('environment', 'local')).lower() == 'local'
+
+    # Chỉ tạo mock ERP/CRM engine ở môi trường 'local' (production đọc dữ liệu thật, không cần mock).
+    erp_engine = crm_engine = None
+    if is_local:
+        try:
+            erp_engine, crm_engine = get_db_engines()
+        except Exception as e:
+            print(f"[{datetime.now()}] Cảnh báo: không tạo được mock ERP/CRM engine (bỏ qua bản mock): {e}")
 
     # 1. Nếu yêu cầu gửi báo cáo ngay lập tức
     if args.send_daily:
@@ -100,9 +169,9 @@ def main():
 
     # 2. Nếu yêu cầu chạy check 1 lần duy nhất
     if args.once:
-        print(f"[{datetime.now()}] Bắt đầu quét dữ liệu ERP/CRM một lần...")
-        run_alert_checks(erp_engine, crm_engine)
-        print(f"[{datetime.now()}] Quét dữ liệu hoàn thành.")
+        print(f"[{datetime.now()}] Bắt đầu quét cảnh báo nghiệp vụ DNH một lần...")
+        run_all_alert_checks(config, erp_engine, crm_engine)
+        print(f"[{datetime.now()}] Quét cảnh báo hoàn thành.")
         sys.exit(0)
 
     # 3. Chạy dạng Vòng lặp/Dịch vụ nền liên tục
@@ -125,9 +194,9 @@ def main():
             current_time_str = now.strftime("%H:%M")
             current_date_str = now.strftime("%Y-%m-%d")
 
-            # Quét dữ liệu và kiểm tra ngưỡng cảnh báo
-            print(f"[{now.strftime('%Y-%m-%d %H:%M:%S')}] Đang quét dữ liệu ERP/CRM...")
-            run_alert_checks(erp_engine, crm_engine)
+            # Quét dữ liệu và kiểm tra ngưỡng cảnh báo nghiệp vụ thật của DNH
+            print(f"[{now.strftime('%Y-%m-%d %H:%M:%S')}] Đang quét cảnh báo nghiệp vụ DNH...")
+            run_all_alert_checks(config, erp_engine, crm_engine)
 
             # Kiểm tra xem đã đến giờ gửi báo cáo định kỳ chưa
             if current_time_str == daily_time_str:
