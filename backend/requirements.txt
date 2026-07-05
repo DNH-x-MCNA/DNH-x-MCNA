@@ -2,5 +2,4 @@ fastapi>=0.100.0
 uvicorn>=0.20.0
 pydantic>=2.0
 openai>=1.0.0
-botbuilder-core>=4.14.0
-botbuilder-schema>=4.14.0
+# botbuilder-* đã gỡ (Go-Live Plan Phase 5.1): không còn Teams Q&A bot, Teams chỉ nhận alert webhook.

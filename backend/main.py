@@ -1,8 +1,7 @@
 import os
 import sys
-import json
 import base64
-from fastapi import FastAPI, HTTPException, Header, Depends, Request, Response
+from fastapi import FastAPI, HTTPException, Header, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -12,15 +11,19 @@ from sqlalchemy import text
 # Add parent directory to path to import chatbot
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 from ai_agent.chatbot import DNHChatbot, _get_cloud_engine, _latest_period_key
-from botbuilder.schema import Activity
-from src.teams_bot import ADAPTER, dnh_bot
+# NOTE: Teams Q&A bot đã deprecate (Go-Live Plan Phase 5.1) — chatbot chỉ chạy trên web UI.
+# Teams chỉ nhận alert webhook (src/notifier.py). Xem _deprecated/README.md.
 
 app = FastAPI(title="DNH Intermediate API Middleware", version="1.0.0")
 
-# Enable CORS for frontend integration
+# CORS: mặc định "*" cho tiện dev; production PHẢI siết về domain nội bộ DNH bằng cách
+# đặt biến môi trường ALLOWED_ORIGINS (danh sách domain, phân tách bằng dấu phẩy).
+# Ví dụ: ALLOWED_ORIGINS="https://portal.duocnamha.local,https://dnh.internal"
+_allowed_origins_env = os.getenv("ALLOWED_ORIGINS", "").strip()
+_allowed_origins = [o.strip() for o in _allowed_origins_env.split(",") if o.strip()] or ["*"]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -309,32 +312,9 @@ def chat_query(req: QueryRequest, token: str = Depends(verify_token)):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/api/messages")
-async def messages(request: Request):
-    """Endpoint chính tiếp nhận tin nhắn từ Microsoft Teams"""
-    if "application/json" in request.headers.get("content-type", ""):
-        body = await request.json()
-    else:
-        return Response(status_code=415, content="Unsupported Media Type")
-
-    activity = Activity().deserialize(body)
-    auth_header = request.headers.get("Authorization", "")
-
-    async def call_bot(turn_context):
-        await dnh_bot.on_turn(turn_context)
-
-    try:
-        response = await ADAPTER.process_activity(activity, auth_header, call_bot)
-        if response:
-            return Response(
-                content=json.dumps(response.body),
-                status_code=response.status,
-                media_type="application/json"
-            )
-        return Response(status_code=200)
-    except Exception as e:
-        print(f"Error processing Teams activity: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+# NOTE: Route POST /api/messages (Teams Bot webhook) đã gỡ theo Go-Live Plan Phase 5.1.
+# Teams giờ chỉ nhận alert một chiều qua Incoming Webhook (src/notifier.py::send_teams_alert),
+# không còn hội thoại hai chiều. Xem _deprecated/README.md.
 
 # Mount static files
 frontend_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "frontend")

@@ -35,6 +35,18 @@ thresholds:
     failed_orders_lookback_hours: 1
   crm:
     unresolved_urgent_tickets_limit: 3  # Cảnh báo khi số ca Urgent/Open > 3
+  business:
+    revenue_drop_pct: 0.20        # Doanh thu tháng mới nhất giảm > 20% so với tháng liền trước
+    # comparison_mode: "mom"      # mom = so tháng liền kề (đang dùng); "yoy" = cùng kỳ năm trước (chờ DNH chốt)
+    overdue_ratio_pct: 0.35       # Tổng nợ quá hạn / tổng dư nợ toàn công ty vượt 35%
+    dead_stock_months: 12.0       # Tồn "chết": months_to_sell >= 12 tháng
+    dead_stock_min_value: 50000000    # ...và giá trị tồn > 50 triệu (mới đáng cảnh báo vốn đọng)
+    customer_churn_drop_pct: 0.50 # Khách lớn: doanh số tháng mới nhất rớt > 50% so tháng trước
+    customer_churn_min_prev: 50000000 # ...và tháng trước từng mua > 50 triệu (mới coi là "khách lớn")
+    concentration_top_n: 3        # Rủi ro tập trung: top N khách...
+    concentration_pct: 0.50       # ...chiếm > 50% tổng doanh thu kỳ
+    return_rate_pct: 0.05         # Tỷ lệ giá trị hàng trả về / doanh số ETC vượt 5%
+    etl_stale_hours: 3            # Meta-alert: dữ liệu (MAX SyncAt) không mới quá 3 giờ -> nghi ETL đứng
 
 # Cấu hình Chu kỳ chạy (giây hoặc phút)
 scheduler:
