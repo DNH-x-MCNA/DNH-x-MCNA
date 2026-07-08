@@ -31,8 +31,12 @@ const SAMPLE_QUESTIONS = [
   "Công nợ quá hạn nhiều nhất là khách hàng nào?",
 ];
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+// Goi vao route noi bo (/api/...) cua chinh Next.js thay vi goi thang backend - route nay chay
+// server-side tren Vercel, giu BACKEND_API_URL/BACKEND_API_KEY (khong phai NEXT_PUBLIC_) nen trinh
+// duyet khong bao gio thay duoc URL that/API key cua backend.
+const API_URL = "/api";
 const SESSION_KEY = "dnh_chat_session_id";
+const API_HEADERS: HeadersInit = { "Content-Type": "application/json" };
 
 // Style rieng cho tung the Markdown trong bong bong chat cua bot (bang, in dam, danh sach...)
 const markdownComponents = {
@@ -84,7 +88,7 @@ export default function Home() {
   useEffect(() => {
     const sid = getOrCreateSessionId();
     setSessionId(sid);
-    fetch(`${API_URL}/history/${sid}`)
+    fetch(`${API_URL}/history/${sid}`, { headers: API_HEADERS })
       .then((r) => (r.ok ? r.json() : []))
       .then((history: HistoryMessage[]) => {
         setMessages(
@@ -110,7 +114,7 @@ export default function Home() {
     try {
       const res = await fetch(`${API_URL}/chat`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: API_HEADERS,
         body: JSON.stringify({ question, session_id: sessionId }),
       });
       if (!res.ok) {
@@ -141,7 +145,7 @@ export default function Home() {
   async function startNewConversation() {
     if (loading) return;
     try {
-      await fetch(`${API_URL}/clear/${sessionId}`, { method: "POST" });
+      await fetch(`${API_URL}/clear/${sessionId}`, { method: "POST", headers: API_HEADERS });
     } catch {
       // bo qua loi xoa - van tao session moi phia client
     }
@@ -160,9 +164,13 @@ export default function Home() {
     <div className="flex h-screen flex-col bg-slate-50">
       <header className="border-b border-slate-200 bg-slate-900 px-6 py-4 text-white">
         <div className="mx-auto flex max-w-3xl items-center justify-between">
-          <div>
-            <div className="text-xs tracking-wide text-blue-300">DƯỢC NAM HÀ · AI ANALYST</div>
-            <h1 className="text-xl font-bold">Trợ lý phân tích dữ liệu kinh doanh</h1>
+          <div className="flex items-center gap-3">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src="/namha-logo.png" alt="NAMHA PHARMA" className="h-9 w-auto" />
+            <div>
+              <div className="text-xs tracking-wide text-blue-300">DƯỢC NAM HÀ · AI ANALYST</div>
+              <h1 className="text-xl font-bold">Trợ lý phân tích dữ liệu kinh doanh</h1>
+            </div>
           </div>
           <button
             onClick={startNewConversation}
