@@ -2,4 +2,13 @@ fastapi>=0.100.0
 uvicorn>=0.20.0
 pydantic>=2.0
 openai>=1.0.0
+anthropic>=0.25.0
+python-dotenv>=1.0.0
+sqlalchemy>=2.0
+psycopg2-binary>=2.9
+pyyaml>=6.0
 # botbuilder-* đã gỡ (Go-Live Plan Phase 5.1): không còn Teams Q&A bot, Teams chỉ nhận alert webhook.
+# sqlalchemy/psycopg2-binary/pyyaml thêm 09/07/2026: ai_agent/chatbot.py (Postgres qua
+# _get_cloud_engine) và src/database.py::load_config() (gọi lười trong _resolve_user_scope) cần
+# các gói này lúc chạy dù backend/main.py không import trực tiếp — thiếu gói là nguyên nhân
+# Serverless Function crash (FUNCTION_INVOCATION_FAILED) khi deploy Vercel.
