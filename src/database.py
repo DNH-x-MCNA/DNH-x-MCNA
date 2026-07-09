@@ -9,6 +9,131 @@ load_dotenv()
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CONFIG_PATH = os.path.join(PROJECT_ROOT, 'config', 'config.yaml')
 
+# ---- Failover Supabase (Postgres) -> Bravo SQL Server (T-SQL) --------------
+# Dùng cho các query đọc bảng hóa đơn/khách hàng/nhân viên có mặt ở CẢ HAI nguồn
+# (brv_*/brvsx_*/dms_*/dim_* — đã sync bởi scripts/sync_from_bravo_to_supabase.py). KHÔNG áp
+# dụng cho receivable_detail/kpi_summary/inventory — 3 bảng này KHÔNG tồn tại trên Bravo, không
+# có đường fallback.
+
+_bravo_engine = None
+_fast_cloud_engine = None
+_fast_cloud_engine_url = None
+_supabase_down_until = None  # time.monotonic() mốc hết "circuit breaker" — None = chưa ghi nhận lỗi
+_CIRCUIT_BREAKER_SECONDS = 120  # trong 1 lần build report/alert (thường vài chục giây), 1 lần lỗi
+                                 # là đủ tín hiệu — 120s đủ dài để không thử lại Postgres vô ích
+                                 # nhiều lần trong CÙNG 1 lần chạy, nhưng đủ ngắn để lần chạy SAU
+                                 # (sync Bravo kế tiếp, ~vài chục phút sau) tự thử lại Postgres.
+
+
+def _get_bravo_engine():
+    """
+    Engine SQLAlchemy kết nối trực tiếp Bravo SQL Server (172.16.0.26) — đọc credentials từ
+    BRAVO_SQL_SERVER/DATABASE/UID/PWD trong .env (đúng biến scripts/sync_from_bravo_to_supabase.py
+    đang dùng ổn định 5 lần/ngày). driver="SQL Server" vì máy chỉ cài driver ODBC cũ này (không có
+    "ODBC Driver 17"), xác nhận qua pyodbc.drivers(). Chỉ dùng cho query đọc dữ liệu hóa đơn/khách
+    hàng/nhân viên — KHÔNG dùng cho công nợ/tồn kho/KPI (không tồn tại trên Bravo).
+    """
+    global _bravo_engine
+    if _bravo_engine is not None:
+        return _bravo_engine
+    server = os.getenv("BRAVO_SQL_SERVER")
+    database = os.getenv("BRAVO_SQL_DATABASE")
+    uid = os.getenv("BRAVO_SQL_UID")
+    pwd = os.getenv("BRAVO_SQL_PWD")
+    if not all([server, database, uid, pwd]):
+        print("[DB][bravo] Thiếu BRAVO_SQL_SERVER/DATABASE/UID/PWD trong .env — không tạo được engine Bravo.")
+        return None
+    from sqlalchemy.engine import URL
+    url = URL.create(
+        "mssql+pyodbc",
+        username=uid, password=pwd,
+        host=server, database=database,
+        query={"driver": "SQL Server", "TrustServerCertificate": "yes"},
+    )
+    try:
+        _bravo_engine = create_engine(url, connect_args={"timeout": 10})
+    except Exception as e:
+        print(f"[DB][bravo] Không tạo được engine Bravo: {e}")
+        return None
+    return _bravo_engine
+
+
+def _get_fast_cloud_engine():
+    """
+    Engine Postgres RIÊNG (không dùng chung cache với ai_agent.chatbot._get_cloud_engine() —
+    tránh đổi hành vi timeout của pool đang phục vụ chatbot sống) trỏ cùng CLOUD_DB_URL nhưng có
+    connect_timeout=5s + statement_timeout=15s (qua psycopg2 "options") — để khi Supabase hết IO
+    budget/nghẽn thì BAIL SỚM (15s) thay vì đợi Supabase tự huỷ statement sau 90-150s+ như quan sát
+    thực tế 09/07/2026, rồi mới chuyển sang Bravo qua run_with_failover().
+    """
+    global _fast_cloud_engine, _fast_cloud_engine_url
+    cloud_db_url = os.getenv("CLOUD_DB_URL", "")
+    if not cloud_db_url:
+        return None
+    db_url = cloud_db_url.strip()
+    if db_url.startswith("postgres://"):
+        db_url = db_url.replace("postgres://", "postgresql://", 1)
+    if _fast_cloud_engine is not None and _fast_cloud_engine_url == db_url:
+        return _fast_cloud_engine
+    _fast_cloud_engine = create_engine(
+        db_url,
+        pool_size=3,
+        max_overflow=2,
+        pool_pre_ping=True,
+        pool_recycle=300,
+        connect_args={"connect_timeout": 5, "options": "-c statement_timeout=15000"},
+    )
+    _fast_cloud_engine_url = db_url
+    return _fast_cloud_engine
+
+
+def run_with_failover(pg_fn, mssql_fn, label=""):
+    """
+    Thử pg_fn(conn) trên Supabase (engine "fast", bail sớm nếu nghẽn); bất kỳ lỗi nào (mất kết
+    nối, statement timeout...) -> log rõ + thử mssql_fn(conn) trên Bravo SQL Server trực tiếp.
+    Trả kết quả của bên thành công (None nếu cả 2 đều không dùng được).
+
+    pg_fn/mssql_fn: callable(conn) -> kết quả bất kỳ (row/list row/scalar...) — mỗi bên tự viết
+    câu SQL đúng dialect của mình (Postgres vs T-SQL khác cú pháp: TRUE/FALSE vs 1/0, DATE_TRUNC
+    vs DATEFROMPARTS, LIMIT vs TOP...).
+
+    CHỈ dùng cho bảng có ở CẢ HAI nguồn (brv_*/brvsx_*/dms_*/dim_* — không dùng cho
+    receivable_detail/kpi_summary/inventory (chỉ có trên Supabase, không có gì để fallback).
+
+    Circuit breaker: 1 hàm digest/alert thường gọi hàm này NHIỀU LẦN liên tiếp (vd trend 7 ngày =
+    7 lần) — nếu để mỗi lần đều tự thử+chờ timeout Postgres riêng thì 1 lần build report có thể
+    mất vài phút khi Supabase đang down (xác nhận thực tế 09/07/2026). Sau 1 lần pg_fn thất bại,
+    nhớ lại "Supabase đang down" trong _CIRCUIT_BREAKER_SECONDS giây tới -> các lần gọi sau trong
+    cửa sổ đó bỏ qua thẳng Bravo, không thử lại Postgres vô ích.
+    """
+    global _supabase_down_until
+    import time
+    now = time.monotonic()
+    skip_pg = _supabase_down_until is not None and now < _supabase_down_until
+
+    if not skip_pg:
+        engine = _get_fast_cloud_engine()
+        if engine is not None:
+            try:
+                with engine.connect() as conn:
+                    result = pg_fn(conn)
+                _supabase_down_until = None  # thành công -> xoá trạng thái down (nếu có)
+                return result
+            except Exception as e:
+                print(f"[DB][{label}] Supabase lỗi/timeout ({e}) — chuyển sang Bravo trực tiếp.")
+                _supabase_down_until = now + _CIRCUIT_BREAKER_SECONDS
+        else:
+            print(f"[DB][{label}] Chưa cấu hình CLOUD_DB_URL — thử thẳng Bravo.")
+    else:
+        print(f"[DB][{label}] Supabase mới báo lỗi gần đây — bỏ qua, dùng thẳng Bravo (tự thử lại Postgres sau {_CIRCUIT_BREAKER_SECONDS}s).")
+
+    bravo_engine = _get_bravo_engine()
+    if bravo_engine is None:
+        print(f"[DB][{label}] Không có Bravo engine để fallback — bỏ qua.")
+        return None
+    with bravo_engine.connect() as conn:
+        return mssql_fn(conn)
+
 def load_config():
     if not os.path.exists(CONFIG_PATH):
         raise FileNotFoundError(f"Config file not found at {CONFIG_PATH}")

@@ -850,3 +850,400 @@ tr:hover {
         border-top: 1px solid var(--panel-border);
     }
 }
+
+/* ====================================================
+   SIDEBAR ACTION BUTTONS (Đổi mật khẩu, Hướng dẫn)
+   ==================================================== */
+.sidebar-actions {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    margin-bottom: 0.5rem;
+}
+.btn-sidebar-action {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    width: 100%;
+    padding: 0.75rem 1rem;
+    background: none;
+    border: none;
+    border-radius: 8px;
+    color: var(--text-muted);
+    font-family: inherit;
+    font-size: 0.88rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: var(--transition-smooth);
+    text-align: left;
+    letter-spacing: 0;
+}
+.btn-sidebar-action:hover {
+    color: var(--text-main);
+    background: rgba(51, 115, 55, 0.08);
+}
+.btn-sidebar-action i {
+    font-size: 0.95rem;
+    width: 18px;
+    text-align: center;
+    flex-shrink: 0;
+}
+.btn-sidebar-action.btn-guide i {
+    color: var(--info);
+}
+.btn-sidebar-action.btn-changepw i {
+    color: var(--warning);
+}
+.btn-sidebar-action.btn-guide:hover {
+    color: var(--info);
+    background: rgba(59, 130, 246, 0.08);
+}
+.btn-sidebar-action.btn-changepw:hover {
+    color: var(--warning);
+    background: rgba(245, 158, 11, 0.08);
+}
+
+/* ====================================================
+   MODAL OVERLAY (dùng chung cho đổi MK + hướng dẫn)
+   ==================================================== */
+.modal-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.45);
+    backdrop-filter: blur(4px);
+    z-index: 2000;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    padding: 1.5rem;
+    animation: fadeIn 0.2s ease-out;
+}
+.modal-overlay.hidden {
+    display: none;
+}
+.modal-card {
+    background: var(--panel-bg);
+    border: 1px solid var(--panel-border);
+    backdrop-filter: var(--glass-blur);
+    border-radius: 16px;
+    padding: 2rem;
+    width: 100%;
+    max-width: 460px;
+    box-shadow: 0 24px 60px rgba(0, 0, 0, 0.25);
+    animation: slideUp 0.25s ease-out;
+    position: relative;
+    max-height: 90vh;
+    overflow-y: auto;
+}
+.modal-card.wide {
+    max-width: 640px;
+}
+.modal-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 1.5rem;
+}
+.modal-header h2 {
+    font-size: 1.2rem;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    color: var(--text-main);
+}
+.modal-header h2 i {
+    color: var(--primary);
+}
+.btn-modal-close {
+    background: none;
+    border: 1px solid var(--panel-border);
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    cursor: pointer;
+    color: var(--text-muted);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: var(--transition-smooth);
+    font-size: 0.9rem;
+}
+.btn-modal-close:hover {
+    color: var(--danger);
+    border-color: var(--danger);
+    background: rgba(239, 68, 68, 0.06);
+}
+
+/* Đổi mật khẩu */
+.change-pw-form .input-group {
+    margin-bottom: 1rem;
+}
+.change-pw-form .input-group label {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    font-size: 0.82rem;
+    color: var(--text-muted);
+    margin-bottom: 0.4rem;
+}
+.change-pw-form .pw-input-wrap {
+    position: relative;
+}
+.change-pw-form .pw-input-wrap input {
+    width: 100%;
+    background: var(--input-bg);
+    border: 1px solid var(--panel-border);
+    border-radius: 8px;
+    padding: 0.72rem 2.5rem 0.72rem 1rem;
+    color: var(--text-main);
+    font-family: inherit;
+    font-size: 0.92rem;
+    transition: var(--transition-smooth);
+}
+.change-pw-form .pw-input-wrap input:focus {
+    outline: none;
+    border-color: var(--primary);
+    box-shadow: 0 0 0 3px rgba(51, 115, 55, 0.12);
+}
+.change-pw-form .btn-toggle-pw {
+    position: absolute;
+    right: 0.75rem;
+    top: 50%;
+    transform: translateY(-50%);
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    font-size: 0.9rem;
+    transition: color 0.2s;
+}
+.change-pw-form .btn-toggle-pw:hover {
+    color: var(--primary);
+}
+.pw-strength-bar {
+    height: 4px;
+    border-radius: 4px;
+    margin-top: 0.4rem;
+    background: var(--panel-border);
+    overflow: hidden;
+}
+.pw-strength-fill {
+    height: 100%;
+    border-radius: 4px;
+    transition: width 0.3s ease, background 0.3s ease;
+    width: 0%;
+}
+.pw-hint {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    margin-top: 0.3rem;
+}
+.modal-actions {
+    display: flex;
+    gap: 0.75rem;
+    margin-top: 1.5rem;
+    justify-content: flex-end;
+}
+.btn-secondary {
+    background: none;
+    border: 1px solid var(--panel-border);
+    border-radius: 8px;
+    padding: 0.65rem 1.25rem;
+    color: var(--text-muted);
+    font-family: inherit;
+    font-size: 0.9rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: var(--transition-smooth);
+}
+.btn-secondary:hover {
+    border-color: var(--primary);
+    color: var(--primary);
+    background: rgba(51, 115, 55, 0.04);
+}
+.modal-success-msg {
+    display: none;
+    background: rgba(16, 185, 129, 0.1);
+    border: 1px solid rgba(16, 185, 129, 0.3);
+    color: #065f46;
+    border-radius: 8px;
+    padding: 0.65rem 1rem;
+    font-size: 0.88rem;
+    margin-top: 0.75rem;
+    align-items: center;
+    gap: 0.5rem;
+}
+.modal-success-msg.visible {
+    display: flex;
+}
+.modal-error-msg {
+    display: none;
+    background: rgba(239, 68, 68, 0.08);
+    border: 1px solid rgba(239, 68, 68, 0.25);
+    color: #b91c1c;
+    border-radius: 8px;
+    padding: 0.65rem 1rem;
+    font-size: 0.88rem;
+    margin-top: 0.75rem;
+}
+.modal-error-msg.visible {
+    display: block;
+}
+
+/* ====================================================
+   HƯỚNG DẪN CHATBOT — accordion + cards
+   ==================================================== */
+.guide-intro {
+    background: linear-gradient(135deg, rgba(51,115,55,0.08), rgba(241,90,37,0.05));
+    border: 1px solid rgba(51,115,55,0.15);
+    border-radius: 10px;
+    padding: 1rem 1.2rem;
+    margin-bottom: 1.25rem;
+    font-size: 0.88rem;
+    color: var(--text-main);
+    line-height: 1.6;
+}
+.guide-intro strong {
+    color: var(--primary);
+}
+.guide-section {
+    border: 1px solid var(--panel-border);
+    border-radius: 10px;
+    overflow: hidden;
+    margin-bottom: 0.75rem;
+}
+.guide-section-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.85rem 1rem;
+    cursor: pointer;
+    background: var(--table-header-bg);
+    transition: background 0.2s;
+    user-select: none;
+}
+.guide-section-header:hover {
+    background: rgba(51,115,55,0.1);
+}
+.guide-section-header .gs-title {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    font-size: 0.9rem;
+    font-weight: 600;
+    color: var(--text-main);
+}
+.guide-section-header .gs-title i {
+    color: var(--primary);
+    font-size: 1rem;
+}
+.guide-section-header .gs-chevron {
+    color: var(--text-muted);
+    font-size: 0.8rem;
+    transition: transform 0.25s;
+}
+.guide-section.open .gs-chevron {
+    transform: rotate(180deg);
+}
+.guide-section-body {
+    display: none;
+    padding: 1rem;
+    border-top: 1px solid var(--panel-border);
+    background: var(--panel-bg);
+}
+.guide-section.open .guide-section-body {
+    display: block;
+}
+.guide-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    margin-top: 0.5rem;
+}
+.guide-chip {
+    background: var(--input-bg);
+    border: 1px solid var(--panel-border);
+    border-radius: 20px;
+    padding: 0.35rem 0.85rem;
+    font-size: 0.78rem;
+    color: var(--text-main);
+    cursor: pointer;
+    transition: var(--transition-smooth);
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+}
+.guide-chip:hover {
+    border-color: var(--primary);
+    color: var(--primary);
+    background: rgba(51,115,55,0.06);
+    transform: translateY(-1px);
+}
+.guide-chip i {
+    font-size: 0.7rem;
+}
+.guide-tip-list {
+    list-style: none;
+    margin-top: 0.5rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+.guide-tip-list li {
+    display: flex;
+    gap: 0.5rem;
+    font-size: 0.85rem;
+    color: var(--text-main);
+    line-height: 1.5;
+}
+.guide-tip-list li::before {
+    content: '✦';
+    color: var(--primary);
+    font-size: 0.65rem;
+    margin-top: 4px;
+    flex-shrink: 0;
+}
+.guide-shortcut-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.6rem;
+    margin-top: 0.5rem;
+}
+.guide-shortcut-item {
+    background: var(--input-bg);
+    border: 1px solid var(--panel-border);
+    border-radius: 8px;
+    padding: 0.6rem 0.85rem;
+    font-size: 0.8rem;
+}
+.guide-shortcut-item .sk-label {
+    color: var(--text-muted);
+    font-size: 0.72rem;
+    margin-bottom: 0.2rem;
+}
+.guide-shortcut-item .sk-value {
+    color: var(--text-main);
+    font-weight: 500;
+}
+kbd {
+    display: inline-block;
+    background: rgba(15,23,42,0.08);
+    border: 1px solid var(--panel-border);
+    border-radius: 4px;
+    padding: 0.1rem 0.45rem;
+    font-size: 0.75rem;
+    font-family: monospace;
+    color: var(--text-main);
+}
+.guide-note {
+    background: rgba(59,130,246,0.07);
+    border-left: 3px solid var(--info);
+    border-radius: 0 6px 6px 0;
+    padding: 0.65rem 0.9rem;
+    font-size: 0.82rem;
+    color: var(--text-main);
+    margin-top: 0.75rem;
+    line-height: 1.5;
+}
+

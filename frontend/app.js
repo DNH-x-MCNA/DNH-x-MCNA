@@ -422,3 +422,196 @@ function sortChatTable(tableId, colIndex) {
         indicator.textContent = idx === colIndex ? (newDir === "asc" ? " ▲" : " ▼") : "";
     });
 }
+
+// ============================================================
+//  MODAL: ĐỔI MẬT KHẨU
+// ============================================================
+const modalChangePw  = document.getElementById("modal-change-pw");
+const changePwForm   = document.getElementById("change-pw-form");
+const changepwError  = document.getElementById("changepw-error");
+const changepwSuccess= document.getElementById("changepw-success");
+const strengthFill   = document.getElementById("pw-strength-fill");
+const strengthLabel  = document.getElementById("pw-strength-label");
+
+function openChangePwModal() {
+    changePwForm.reset();
+    changepwError.classList.remove("visible");
+    changepwError.textContent = "";
+    changepwSuccess.classList.remove("visible");
+    strengthFill.style.width = "0%";
+    strengthFill.style.background = "";
+    strengthLabel.textContent = "Nhập mật khẩu mới để xem độ mạnh";
+    modalChangePw.classList.remove("hidden");
+    document.getElementById("pw-old").focus();
+}
+function closeChangePwModal() {
+    modalChangePw.classList.add("hidden");
+}
+
+document.getElementById("btn-open-change-pw").addEventListener("click", openChangePwModal);
+document.getElementById("btn-close-change-pw").addEventListener("click", closeChangePwModal);
+document.getElementById("btn-cancel-change-pw").addEventListener("click", closeChangePwModal);
+// Đóng khi click overlay (ngoài card)
+modalChangePw.addEventListener("click", (e) => { if (e.target === modalChangePw) closeChangePwModal(); });
+
+// Show/hide password toggle
+document.querySelectorAll(".btn-toggle-pw").forEach(btn => {
+    btn.addEventListener("click", () => {
+        const targetId = btn.dataset.target;
+        const input = document.getElementById(targetId);
+        const icon = btn.querySelector("i");
+        if (!input) return;
+        if (input.type === "password") {
+            input.type = "text";
+            icon.className = "fa-regular fa-eye-slash";
+        } else {
+            input.type = "password";
+            icon.className = "fa-regular fa-eye";
+        }
+    });
+});
+
+// Password strength meter
+function calcStrength(pw) {
+    let score = 0;
+    if (pw.length >= 8)  score++;
+    if (pw.length >= 12) score++;
+    if (/[A-Z]/.test(pw)) score++;
+    if (/[0-9]/.test(pw)) score++;
+    if (/[^A-Za-z0-9]/.test(pw)) score++;
+    return score; // 0-5
+}
+
+document.getElementById("pw-new").addEventListener("input", (e) => {
+    const pw = e.target.value;
+    if (!pw) {
+        strengthFill.style.width = "0%";
+        strengthLabel.textContent = "Nhập mật khẩu mới để xem độ mạnh";
+        return;
+    }
+    const score = calcStrength(pw);
+    const levels = [
+        { pct: "15%", color: "#ef4444", text: "Rất yếu" },
+        { pct: "30%", color: "#f97316", text: "Yếu" },
+        { pct: "55%", color: "#f59e0b", text: "Trung bình" },
+        { pct: "78%", color: "#22c55e", text: "Mạnh" },
+        { pct: "100%",color: "#10b981", text: "Rất mạnh 💪" },
+    ];
+    const lvl = levels[Math.min(score - 1, 4)] || levels[0];
+    strengthFill.style.width  = lvl.pct;
+    strengthFill.style.background = lvl.color;
+    strengthLabel.textContent = `Độ mạnh: ${lvl.text}`;
+});
+
+// Submit đổi mật khẩu
+changePwForm.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    changepwError.classList.remove("visible");
+    changepwError.textContent = "";
+    changepwSuccess.classList.remove("visible");
+
+    const oldPw  = document.getElementById("pw-old").value;
+    const newPw  = document.getElementById("pw-new").value;
+    const cfmPw  = document.getElementById("pw-confirm").value;
+    const submitBtn = document.getElementById("btn-submit-change-pw");
+
+    // Client-side validation nhanh
+    if (!oldPw || !newPw || !cfmPw) {
+        changepwError.textContent = "Vui lòng điền đầy đủ tất cả các trường.";
+        changepwError.classList.add("visible");
+        return;
+    }
+    if (newPw !== cfmPw) {
+        changepwError.textContent = "Mật khẩu mới và xác nhận mật khẩu không khớp.";
+        changepwError.classList.add("visible");
+        return;
+    }
+    if (newPw.length < 8) {
+        changepwError.textContent = "Mật khẩu mới phải có ít nhất 8 ký tự.";
+        changepwError.classList.add("visible");
+        return;
+    }
+
+    submitBtn.disabled = true;
+    submitBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Đang xử lý...';
+
+    try {
+        const resp = await fetch(`${API_BASE}/api/auth/change-password`, {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                "Authorization": `Bearer ${authToken}`
+            },
+            body: JSON.stringify({
+                old_password: oldPw,
+                new_password: newPw,
+                confirm_password: cfmPw
+            })
+        });
+        const data = await resp.json();
+        if (!resp.ok) throw new Error(data.detail || "Đổi mật khẩu thất bại");
+
+        // Thành công
+        changepwSuccess.classList.add("visible");
+        submitBtn.disabled = true;
+        submitBtn.innerHTML = '<i class="fa-solid fa-check"></i> Đã đổi thành công';
+
+        // Tự động đăng xuất sau 2.5s để bắt buộc đăng nhập với mật khẩu mới
+        setTimeout(() => {
+            closeChangePwModal();
+            btnLogout.click();
+        }, 2500);
+
+    } catch (err) {
+        changepwError.textContent = err.message;
+        changepwError.classList.add("visible");
+        submitBtn.disabled = false;
+        submitBtn.innerHTML = '<i class="fa-solid fa-check"></i> Xác nhận đổi';
+    }
+});
+
+// ============================================================
+//  MODAL: HƯỚNG DẪN SỬ DỤNG CHATBOT
+// ============================================================
+const modalGuide = document.getElementById("modal-guide");
+
+function openGuideModal() {
+    modalGuide.classList.remove("hidden");
+}
+function closeGuideModal() {
+    modalGuide.classList.add("hidden");
+}
+
+document.getElementById("btn-open-guide").addEventListener("click", openGuideModal);
+document.getElementById("btn-close-guide").addEventListener("click", closeGuideModal);
+document.getElementById("btn-close-guide-bottom").addEventListener("click", closeGuideModal);
+modalGuide.addEventListener("click", (e) => { if (e.target === modalGuide) closeGuideModal(); });
+
+// Accordion toggle
+function toggleGuideSection(id) {
+    const section = document.getElementById(id);
+    if (!section) return;
+    section.classList.toggle("open");
+}
+
+// Guide chip click → đóng modal + gửi câu hỏi vào chat
+function sendGuideChip(el) {
+    // Lấy text, bỏ icon FontAwesome (textContent bao gồm cả text icon)
+    const text = el.textContent.trim();
+    closeGuideModal();
+    // Đặt vào input rồi submit
+    if (chatInput) {
+        chatInput.value = text;
+        submitChatQuestion(text);
+        chatInput.value = "";
+    }
+}
+
+// Phím Escape đóng modal đang mở
+document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") {
+        if (!modalChangePw.classList.contains("hidden")) closeChangePwModal();
+        if (!modalGuide.classList.contains("hidden")) closeGuideModal();
+    }
+});
+

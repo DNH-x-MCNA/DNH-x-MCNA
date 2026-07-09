@@ -170,9 +170,12 @@ def _send_periodic_email_report(get_metrics_fn, period_label, report_title):
             metrics = get_metrics_fn(region=region, channel=channel)
             scope = _scope_label(region, channel)
             subject_suffix = f" ({audience})" if audience else ""
-            subject = f"📊 {report_title}{subject_suffix} — {metrics.get('period_range', metrics['date'])}"
+            has_critical = metrics.get("has_critical")
+            subject_prefix = "🔴 " if has_critical else "📊 "
+            subject = f"{subject_prefix}{report_title}{subject_suffix} — {metrics.get('period_range', metrics['date'])}"
             html_content = build_digest_email(metrics, period_label=period_label, audience=audience, scope_label=scope)
-            if send_email(subject, html_content, recipient_override=emails or None):
+            importance = "high" if has_critical else None
+            if send_email(subject, html_content, recipient_override=emails or None, importance=importance):
                 print(f"[{datetime.now()}] {report_title} cho '{audience or 'mặc định'}' đã gửi thành công.")
             else:
                 print(f"[{datetime.now()}] Gửi {report_title} cho '{audience or 'mặc định'}' thất bại.")
