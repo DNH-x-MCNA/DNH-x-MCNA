@@ -261,29 +261,117 @@ def normalize_region_label(area_code):
     return str(area_code)
 
 
-def get_customer_regions_by_code(conn, customer_codes, channel_label):
+def get_customer_regions_by_code(customer_codes, channel_label):
     """
     Tra map {customer_code: tên miền} qua chain CityId -> dim_tinhthanhpho.AreaCode đã xác minh
     (docs/dev_supabase_schema.sql): khách OTC tra qua dms_khachhang, khách ETC qua dmssx_khachhang.
     Dùng 1 câu truy vấn IN theo lô (không query từng khách hàng riêng lẻ) để đỡ tải Supabase.
     Trả dict rỗng nếu lỗi hoặc danh sách mã KH rỗng — gọi nơi dùng phải tự fallback (vd "Không rõ").
+    Tự failover Supabase -> Bravo qua run_with_failover() (xem src/etl.py::_period_revenue).
     """
     if not customer_codes:
         return {}
     from sqlalchemy import text, bindparam
-    table = "dms_khachhang" if channel_label == "OTC" else "dmssx_khachhang"
-    sql = text(f'''
-        SELECT k."Code" AS cc, t."AreaCode" AS area_code
-        FROM {table} k
-        LEFT JOIN dim_tinhthanhpho t ON k."CityId" = t."CityId"
-        WHERE k."Code" IN :codes
-    ''').bindparams(bindparam("codes", expanding=True))
+    from src.database import run_with_failover
+
+    def _pg(conn):
+        table = "dms_khachhang" if channel_label == "OTC" else "dmssx_khachhang"
+        sql = text(f'''
+            SELECT k."Code" AS cc, t."AreaCode" AS area_code
+            FROM {table} k
+            LEFT JOIN dim_tinhthanhpho t ON k."CityId" = t."CityId"
+            WHERE k."Code" IN :codes
+        ''').bindparams(bindparam("codes", expanding=True))
+        return conn.execute(sql, {"codes": tuple(customer_codes)}).fetchall()
+
+    def _mssql(conn):
+        table = "dbo.DMS_KhachHang" if channel_label == "OTC" else "dbo.DMSSX_KhachHang"
+        sql = text(f'''
+            SELECT k."Code" AS cc, t."AreaCode" AS area_code
+            FROM {table} k
+            LEFT JOIN dbo.DIM_TinhThanhPho t ON k."CityId" = t."CityId"
+            WHERE k."Code" IN :codes
+        ''').bindparams(bindparam("codes", expanding=True))
+        return conn.execute(sql, {"codes": tuple(customer_codes)}).fetchall()
+
     try:
-        rows = conn.execute(sql, {"codes": tuple(customer_codes)}).fetchall()
+        rows = run_with_failover(_pg, _mssql, label="customer_regions")
     except Exception as e:
-        print(f"[ALERTS][region_lookup] Lỗi tra vùng theo CityId ({table}): {e}")
+        print(f"[ALERTS][region_lookup] Lỗi tra vùng theo CityId ({channel_label}): {e}")
+        return {}
+    if not rows:
         return {}
     return {r.cc: normalize_region_label(r.area_code) for r in rows}
+
+
+def _last_complete_data_day():
+    """
+    Trả về ngày LIỀN TRƯỚC ngày mới nhất có dữ liệu hóa đơn (gộp cả OTC brv_hoadonhdr và ETC
+    brvsx_hoadonhdr) — mốc "hôm nay" dùng chung cho MỌI alert cần gắn nhãn thời gian rõ ràng
+    (ngày/tháng/năm cụ thể) thay vì datetime.now() (giờ máy chạy job, có thể khác ngày dữ liệu
+    thật đã đồng bộ) hoặc MAX(DocDate) thẳng (ngày mới nhất luôn có thể đang dở dang do TDV nhập
+    liệu suốt ngày / sync chưa bắt kịp cuối ngày — xác minh thực tế 08/07/2026: ngày mới nhất chỉ
+    16/~135 nhân viên phát sinh hóa đơn so với ngày liền trước có 135 người).
+    None nếu chưa có dữ liệu hóa đơn nào. Tự failover Supabase -> Bravo qua run_with_failover().
+    """
+    from sqlalchemy import text
+    from src.database import run_with_failover
+
+    def _pg(conn):
+        overall_max_row = conn.execute(text('''
+            SELECT MAX(d) FROM (
+                SELECT MAX("DocDate"::date) AS d FROM brv_hoadonhdr WHERE "IsActive"=TRUE
+                UNION ALL
+                SELECT MAX("DocDate"::date) FROM brvsx_hoadonhdr WHERE "IsActive"=TRUE
+            ) x
+        ''')).fetchone()
+        overall_max = overall_max_row[0] if overall_max_row else None
+        if not overall_max:
+            return None
+        complete_row = conn.execute(text('''
+            SELECT MAX(d) FROM (
+                SELECT MAX("DocDate"::date) AS d FROM brv_hoadonhdr WHERE "IsActive"=TRUE AND "DocDate"::date < :overall_max
+                UNION ALL
+                SELECT MAX("DocDate"::date) FROM brvsx_hoadonhdr WHERE "IsActive"=TRUE AND "DocDate"::date < :overall_max
+            ) x
+        '''), {"overall_max": overall_max}).fetchone()
+        return complete_row[0] if complete_row else None
+
+    def _mssql(conn):
+        overall_max_row = conn.execute(text('''
+            SELECT MAX(d) FROM (
+                SELECT MAX("DocDate") AS d FROM dbo.BRV_HoaDonHdr WHERE "IsActive"=1
+                UNION ALL
+                SELECT MAX("DocDate") FROM dbo.BRVSX_HoaDonHdr WHERE "IsActive"=1
+            ) x
+        ''')).fetchone()
+        overall_max = overall_max_row[0] if overall_max_row else None
+        if not overall_max:
+            return None
+        complete_row = conn.execute(text('''
+            SELECT MAX(d) FROM (
+                SELECT MAX("DocDate") AS d FROM dbo.BRV_HoaDonHdr WHERE "IsActive"=1 AND "DocDate" < :overall_max
+                UNION ALL
+                SELECT MAX("DocDate") FROM dbo.BRVSX_HoaDonHdr WHERE "IsActive"=1 AND "DocDate" < :overall_max
+            ) x
+        '''), {"overall_max": overall_max}).fetchone()
+        return complete_row[0] if complete_row else None
+
+    return run_with_failover(_pg, _mssql, label="last_complete_data_day")
+
+
+def _month_period_label(month_start, data_day=None):
+    """
+    Nhãn "Kỳ / Ngày" rõ ràng cho card Teams/email: tháng lấy từ DỮ LIỆU THẬT (không phải giờ máy
+    chạy job) + ngày dữ liệu đã đồng bộ trọn vẹn gần nhất (nếu biết) — tránh nhãn mơ hồ kiểu chỉ
+    "MM/YYYY" hoặc lệch ngày do dùng thẳng datetime.now().
+    """
+    if month_start is None:
+        return datetime.now().strftime("%m/%Y")
+    label = month_start.strftime("%m/%Y")
+    if data_day:
+        label += f" (dữ liệu cập nhật đến ngày {data_day.strftime('%d/%m/%Y')})"
+    return label
 
 
 def run_smart_business_alerts():
@@ -420,9 +508,13 @@ def run_smart_business_alerts():
                 ORDER BY month_sale_percent ASC
                 LIMIT 5
             ''')).fetchall()
+            # kpi_summary không có cột ngày riêng — mượn ngày dữ liệu hóa đơn gần nhất đã đồng bộ
+            # trọn vẹn làm mốc "tính đến ngày" rõ ràng, thay vì giờ máy chạy job (datetime.now()).
+            kpi_data_day = _last_complete_data_day()
     except Exception as e:
         print(f"[ALERTS][smart_kpi] Lỗi truy vấn KPI thấp: {e}")
         kpi_rows = []
+        kpi_data_day = None
 
     if kpi_rows:
         alert_key = "smart_kpi_low_progress_top5"
@@ -447,7 +539,8 @@ def run_smart_business_alerts():
                 table_headers=["Mã TDV", "Tên TDV", "Vùng", "Chỉ Tiêu", "Doanh Số Đạt", "Đạt Được"],
                 table_rows=rows,
                 channels=("teams",),
-                period=datetime.now().strftime("%m/%Y"), region=header_region,
+                period=_month_period_label(kpi_data_day, kpi_data_day),
+                region=header_region,
                 issue="Trình dược viên đạt dưới 60% chỉ tiêu doanh số tháng"
             )
             record_alert_sent(alert_key, lowest_pct)
@@ -608,24 +701,7 @@ def check_revenue_drop_alert():
 
     try:
         with engine.connect() as conn:
-            overall_max_row = conn.execute(text('''
-                SELECT MAX(d) FROM (
-                    SELECT MAX("DocDate"::date) AS d FROM brv_hoadonhdr WHERE "IsActive"=TRUE
-                    UNION ALL
-                    SELECT MAX("DocDate"::date) FROM brvsx_hoadonhdr WHERE "IsActive"=TRUE
-                ) x
-            ''')).fetchone()
-            overall_max = overall_max_row[0] if overall_max_row else None
-            data_max_date = None
-            if overall_max:
-                complete_row = conn.execute(text('''
-                    SELECT MAX(d) FROM (
-                        SELECT MAX("DocDate"::date) AS d FROM brv_hoadonhdr WHERE "IsActive"=TRUE AND "DocDate"::date < :overall_max
-                        UNION ALL
-                        SELECT MAX("DocDate"::date) FROM brvsx_hoadonhdr WHERE "IsActive"=TRUE AND "DocDate"::date < :overall_max
-                    ) x
-                '''), {"overall_max": overall_max}).fetchone()
-                data_max_date = complete_row[0] if complete_row else None
+            data_max_date = _last_complete_data_day()
             if not data_max_date:
                 print("[ALERTS][revenue_drop] Chưa có dữ liệu hóa đơn để so sánh.")
                 return
@@ -641,8 +717,8 @@ def check_revenue_drop_alert():
             # của tháng này (vd so ngày 31 với tháng 2) thì lấy trọn tháng trước, không tràn sang tháng sau nữa.
             prev_end = min(prev_start + timedelta(days=days_elapsed), cur_month_start)
 
-            cur_otc, cur_etc, _ = _period_revenue(conn, cur_start, cur_end)
-            prev_otc, prev_etc, _ = _period_revenue(conn, prev_start, prev_end)
+            cur_otc, cur_etc, _ = _period_revenue(cur_start, cur_end)
+            prev_otc, prev_etc, _ = _period_revenue(prev_start, prev_end)
     except Exception as e:
         print(f"[ALERTS][revenue_drop] Lỗi truy vấn doanh thu: {e}")
         return
@@ -991,8 +1067,7 @@ def check_overdue_customer_new_orders_alert():
         alert_key = f"overdue_customer_new_orders:{channel_label}"
         top = channel_rows[0].total_overdue
         if should_send_alert(alert_key, cooldown_hours=12, current_value=str(top)):
-            with engine.connect() as rconn:
-                region_map = get_customer_regions_by_code(rconn, [r.customer_code for r in channel_rows], channel_label)
+            region_map = get_customer_regions_by_code([r.customer_code for r in channel_rows], channel_label)
             table = [[str(r.customer_code), region_map.get(r.customer_code, "Không rõ"), r.customer_name,
                       format_vietnamese_money(r.total_overdue), str(int(r.n)), format_vietnamese_money(r.amt)]
                      for r in channel_rows]
@@ -1148,50 +1223,97 @@ def check_customer_churn_alert():
     chăm sóc (đã thấy thực tế mã '1001136' 274 tỷ đồng/197 hóa đơn không khớp dim khách hàng nào).
     """
     from sqlalchemy import text
-    engine = _alert_engine()
-    if engine is None:
-        return
+    from src.database import run_with_failover
     drop_pct = float(_biz_threshold('customer_churn_drop_pct', 0.50))
     min_prev = float(_biz_threshold('customer_churn_min_prev', 50000000))
+    params = {"min_prev": min_prev, "drop": drop_pct}
+
+    def _pg(conn):
+        sql = text('''
+            WITH cm AS (
+                SELECT 'OTC' AS channel, h."CustomerCode" AS cc, k."Name" AS cname,
+                       DATE_TRUNC('month',h."DocDate"::timestamp)::date AS m, SUM(h."TotalAmount") AS rev
+                FROM brv_hoadonhdr h
+                JOIN dms_khachhang k ON h."CustomerCode" = k."Code"
+                WHERE h."IsActive"=TRUE AND h."IsHC"=FALSE GROUP BY 1,2,3,4
+                UNION ALL
+                SELECT 'ETC', h."CustomerCode", k."Name",
+                       DATE_TRUNC('month',h."DocDate"::timestamp)::date, SUM(h."TotalAmount")
+                FROM brvsx_hoadonhdr h
+                JOIN dmssx_khachhang k ON h."CustomerCode" = k."Code"
+                WHERE h."IsActive"=TRUE GROUP BY 1,2,3,4
+            ),
+            agg AS (SELECT channel, cc, cname, m, SUM(rev) AS rev FROM cm GROUP BY channel, cc, cname, m),
+            mranked AS (
+                SELECT channel, m, ROW_NUMBER() OVER (PARTITION BY channel ORDER BY m DESC) AS rn
+                FROM (SELECT DISTINCT channel, m FROM agg) d
+            ),
+            latest AS (SELECT channel, m FROM mranked WHERE rn = 1),
+            prevm AS (SELECT channel, m FROM mranked WHERE rn = 2)
+            SELECT a.channel, a.cc, a.cname,
+                   COALESCE(cur.rev,0) AS cur_rev,
+                   prevd.rev AS prev_rev,
+                   l.m AS latest_month
+            FROM (SELECT DISTINCT channel, cc, cname FROM agg) a
+            JOIN prevm p ON p.channel = a.channel
+            JOIN agg prevd ON prevd.cc=a.cc AND prevd.channel=a.channel AND prevd.m=p.m
+            LEFT JOIN latest l ON l.channel=a.channel
+            LEFT JOIN agg cur ON cur.cc=a.cc AND cur.channel=a.channel AND cur.m=l.m
+            WHERE prevd.rev > :min_prev
+              AND (prevd.rev - COALESCE(cur.rev,0)) / prevd.rev > :drop
+            ORDER BY a.channel, prevd.rev DESC
+        ''')
+        return conn.execute(sql, params).fetchall()
+
+    def _mssql(conn):
+        # T-SQL không hỗ trợ GROUP BY theo vị trí số (1,2,3,4 như Postgres) -> liệt kê rõ cột.
+        # DATE_TRUNC('month', x) -> DATEFROMPARTS(YEAR(x), MONTH(x), 1).
+        sql = text('''
+            WITH cm AS (
+                SELECT 'OTC' AS channel, h."CustomerCode" AS cc, k."Name" AS cname,
+                       DATEFROMPARTS(YEAR(h."DocDate"), MONTH(h."DocDate"), 1) AS m, SUM(h."TotalAmount") AS rev
+                FROM dbo.BRV_HoaDonHdr h
+                JOIN dbo.DMS_KhachHang k ON h."CustomerCode" = k."Code"
+                WHERE h."IsActive"=1 AND h."IsHC"=0
+                GROUP BY h."CustomerCode", k."Name", DATEFROMPARTS(YEAR(h."DocDate"), MONTH(h."DocDate"), 1)
+                UNION ALL
+                SELECT 'ETC', h."CustomerCode", k."Name",
+                       DATEFROMPARTS(YEAR(h."DocDate"), MONTH(h."DocDate"), 1), SUM(h."TotalAmount")
+                FROM dbo.BRVSX_HoaDonHdr h
+                JOIN dbo.DMSSX_KhachHang k ON h."CustomerCode" = k."Code"
+                WHERE h."IsActive"=1
+                GROUP BY h."CustomerCode", k."Name", DATEFROMPARTS(YEAR(h."DocDate"), MONTH(h."DocDate"), 1)
+            ),
+            agg AS (SELECT channel, cc, cname, m, SUM(rev) AS rev FROM cm GROUP BY channel, cc, cname, m),
+            mranked AS (
+                SELECT channel, m, ROW_NUMBER() OVER (PARTITION BY channel ORDER BY m DESC) AS rn
+                FROM (SELECT DISTINCT channel, m FROM agg) d
+            ),
+            latest AS (SELECT channel, m FROM mranked WHERE rn = 1),
+            prevm AS (SELECT channel, m FROM mranked WHERE rn = 2)
+            SELECT a.channel, a.cc, a.cname,
+                   COALESCE(cur.rev,0) AS cur_rev,
+                   prevd.rev AS prev_rev,
+                   l.m AS latest_month
+            FROM (SELECT DISTINCT channel, cc, cname FROM agg) a
+            JOIN prevm p ON p.channel = a.channel
+            JOIN agg prevd ON prevd.cc=a.cc AND prevd.channel=a.channel AND prevd.m=p.m
+            LEFT JOIN latest l ON l.channel=a.channel
+            LEFT JOIN agg cur ON cur.cc=a.cc AND cur.channel=a.channel AND cur.m=l.m
+            WHERE prevd.rev > :min_prev
+              AND (prevd.rev - COALESCE(cur.rev,0)) / prevd.rev > :drop
+            ORDER BY a.channel, prevd.rev DESC
+        ''')
+        return conn.execute(sql, params).fetchall()
+
     try:
-        with engine.connect() as conn:
-            sql = text('''
-                WITH cm AS (
-                    SELECT 'OTC' AS channel, h."CustomerCode" AS cc, k."Name" AS cname,
-                           DATE_TRUNC('month',h."DocDate"::timestamp)::date AS m, SUM(h."TotalAmount") AS rev
-                    FROM brv_hoadonhdr h
-                    JOIN dms_khachhang k ON h."CustomerCode" = k."Code"
-                    WHERE h."IsActive"=TRUE AND h."IsHC"=FALSE GROUP BY 1,2,3,4
-                    UNION ALL
-                    SELECT 'ETC', h."CustomerCode", k."Name",
-                           DATE_TRUNC('month',h."DocDate"::timestamp)::date, SUM(h."TotalAmount")
-                    FROM brvsx_hoadonhdr h
-                    JOIN dmssx_khachhang k ON h."CustomerCode" = k."Code"
-                    WHERE h."IsActive"=TRUE GROUP BY 1,2,3,4
-                ),
-                agg AS (SELECT channel, cc, cname, m, SUM(rev) AS rev FROM cm GROUP BY channel, cc, cname, m),
-                mranked AS (
-                    SELECT channel, m, ROW_NUMBER() OVER (PARTITION BY channel ORDER BY m DESC) AS rn
-                    FROM (SELECT DISTINCT channel, m FROM agg) d
-                ),
-                latest AS (SELECT channel, m FROM mranked WHERE rn = 1),
-                prevm AS (SELECT channel, m FROM mranked WHERE rn = 2)
-                SELECT a.channel, a.cc, a.cname,
-                       COALESCE(cur.rev,0) AS cur_rev,
-                       prevd.rev AS prev_rev
-                FROM (SELECT DISTINCT channel, cc, cname FROM agg) a
-                JOIN prevm p ON p.channel = a.channel
-                JOIN agg prevd ON prevd.cc=a.cc AND prevd.channel=a.channel AND prevd.m=p.m
-                LEFT JOIN latest l ON l.channel=a.channel
-                LEFT JOIN agg cur ON cur.cc=a.cc AND cur.channel=a.channel AND cur.m=l.m
-                WHERE prevd.rev > :min_prev
-                  AND (prevd.rev - COALESCE(cur.rev,0)) / prevd.rev > :drop
-                ORDER BY a.channel, prevd.rev DESC
-            ''')
-            rows = conn.execute(sql, {"min_prev": min_prev, "drop": drop_pct}).fetchall()
+        rows = run_with_failover(_pg, _mssql, label="customer_churn")
+        churn_data_day = _last_complete_data_day()
     except Exception as e:
         print(f"[ALERTS][churn] Lỗi: {e}")
         return
+    if rows is None:
+        rows = []
     if not rows:
         print("[ALERTS][churn] Không có khách lớn nào rớt doanh số vượt ngưỡng.")
         return
@@ -1203,8 +1325,7 @@ def check_customer_churn_alert():
         alert_key = f"customer_churn:{channel_label}"
         top = channel_rows[0].cc
         if should_send_alert(alert_key, cooldown_hours=24, current_value=str(top)):
-            with engine.connect() as rconn:
-                region_map = get_customer_regions_by_code(rconn, [r.cc for r in channel_rows], channel_label)
+            region_map = get_customer_regions_by_code([r.cc for r in channel_rows], channel_label)
             table = []
             for r in channel_rows:
                 cur_rev = float(r.cur_rev); prev_rev = float(r.prev_rev)
@@ -1218,7 +1339,8 @@ def check_customer_churn_alert():
                 table_headers=["Mã KH", "Tên KH", "Vùng", "Doanh Số Tháng Trước", "Doanh Số Tháng Này", "Sụt Giảm"],
                 table_rows=table,
                 channels=("teams",),
-                period=datetime.now().strftime("%m/%Y"), channel=channel_label, region="Toàn quốc",
+                period=_month_period_label(channel_rows[0].latest_month, churn_data_day),
+                channel=channel_label, region="Toàn quốc",
                 issue=f"Khách hàng lớn kênh {channel_label} có doanh số tháng mới nhất sụt giảm mạnh so với tháng trước — nguy cơ mất khách"
             )
             record_alert_sent(alert_key, str(top))
@@ -1234,39 +1356,86 @@ def check_revenue_concentration_alert():
     (mã nội bộ/NCC lẫn trong CustomerCode của brv_hoadonhdr/brvsx_hoadonhdr).
     """
     from sqlalchemy import text
-    engine = _alert_engine()
-    if engine is None:
-        return
+    from src.database import run_with_failover
     top_n = int(_biz_threshold('concentration_top_n', 3))
     threshold = float(_biz_threshold('concentration_pct', 0.50))
+    params = {"n": top_n}
+
+    def _pg(conn):
+        sql = text('''
+            WITH mx AS (
+                SELECT 'OTC' AS channel, DATE_TRUNC('month', MAX("DocDate"::date)) AS m FROM brv_hoadonhdr WHERE "IsActive"=TRUE
+                UNION ALL
+                SELECT 'ETC', DATE_TRUNC('month', MAX("DocDate"::date)) FROM brvsx_hoadonhdr WHERE "IsActive"=TRUE
+            ),
+            cm AS (
+                SELECT 'OTC' AS channel, h."CustomerCode" AS cc, SUM(h."TotalAmount") AS rev
+                FROM brv_hoadonhdr h
+                JOIN dms_khachhang k ON h."CustomerCode" = k."Code"
+                WHERE h."IsActive"=TRUE AND h."IsHC"=FALSE
+                  AND DATE_TRUNC('month',h."DocDate"::timestamp) = (SELECT m FROM mx WHERE channel='OTC')
+                GROUP BY 1,2
+                UNION ALL
+                SELECT 'ETC', h."CustomerCode", SUM(h."TotalAmount")
+                FROM brvsx_hoadonhdr h
+                JOIN dmssx_khachhang k ON h."CustomerCode" = k."Code"
+                WHERE h."IsActive"=TRUE
+                  AND DATE_TRUNC('month',h."DocDate"::timestamp) = (SELECT m FROM mx WHERE channel='ETC')
+                GROUP BY 1,2
+            ),
+            agg AS (SELECT channel, cc, SUM(rev) AS rev FROM cm GROUP BY channel, cc)
+            SELECT agg.channel,
+                (SELECT COALESCE(SUM(rev),0) FROM (SELECT rev FROM agg a2 WHERE a2.channel=agg.channel ORDER BY rev DESC LIMIT :n) t) AS top_sum,
+                (SELECT COALESCE(SUM(rev),0) FROM agg a3 WHERE a3.channel=agg.channel) AS total_sum,
+                mx.m AS channel_month
+            FROM agg JOIN mx ON mx.channel = agg.channel
+            GROUP BY agg.channel, mx.m
+        ''')
+        return conn.execute(sql, params).fetchall()
+
+    def _mssql(conn):
+        # DATE_TRUNC('month', x) -> DATEFROMPARTS(YEAR(x), MONTH(x), 1); LIMIT n (trong subquery)
+        # -> TOP (:n) (cần ngoặc vì n là bind param, không phải literal); GROUP BY theo vị trí số
+        # (1,2) không được hỗ trợ -> liệt kê rõ cột.
+        sql = text('''
+            WITH mx AS (
+                SELECT 'OTC' AS channel, DATEFROMPARTS(YEAR(MAX("DocDate")), MONTH(MAX("DocDate")), 1) AS m FROM dbo.BRV_HoaDonHdr WHERE "IsActive"=1
+                UNION ALL
+                SELECT 'ETC', DATEFROMPARTS(YEAR(MAX("DocDate")), MONTH(MAX("DocDate")), 1) FROM dbo.BRVSX_HoaDonHdr WHERE "IsActive"=1
+            ),
+            cm AS (
+                SELECT 'OTC' AS channel, h."CustomerCode" AS cc, SUM(h."TotalAmount") AS rev
+                FROM dbo.BRV_HoaDonHdr h
+                JOIN dbo.DMS_KhachHang k ON h."CustomerCode" = k."Code"
+                WHERE h."IsActive"=1 AND h."IsHC"=0
+                  AND DATEFROMPARTS(YEAR(h."DocDate"), MONTH(h."DocDate"), 1) = (SELECT m FROM mx WHERE channel='OTC')
+                GROUP BY h."CustomerCode"
+                UNION ALL
+                SELECT 'ETC', h."CustomerCode", SUM(h."TotalAmount")
+                FROM dbo.BRVSX_HoaDonHdr h
+                JOIN dbo.DMSSX_KhachHang k ON h."CustomerCode" = k."Code"
+                WHERE h."IsActive"=1
+                  AND DATEFROMPARTS(YEAR(h."DocDate"), MONTH(h."DocDate"), 1) = (SELECT m FROM mx WHERE channel='ETC')
+                GROUP BY h."CustomerCode"
+            ),
+            agg AS (SELECT channel, cc, SUM(rev) AS rev FROM cm GROUP BY channel, cc)
+            SELECT agg.channel,
+                (SELECT COALESCE(SUM(rev),0) FROM (SELECT TOP (:n) rev FROM agg a2 WHERE a2.channel=agg.channel ORDER BY rev DESC) t) AS top_sum,
+                (SELECT COALESCE(SUM(rev),0) FROM agg a3 WHERE a3.channel=agg.channel) AS total_sum,
+                mx.m AS channel_month
+            FROM agg JOIN mx ON mx.channel = agg.channel
+            GROUP BY agg.channel, mx.m
+        ''')
+        return conn.execute(sql, params).fetchall()
+
     try:
-        with engine.connect() as conn:
-            sql = text('''
-                WITH cm AS (
-                    SELECT 'OTC' AS channel, h."CustomerCode" AS cc, SUM(h."TotalAmount") AS rev
-                    FROM brv_hoadonhdr h
-                    JOIN dms_khachhang k ON h."CustomerCode" = k."Code"
-                    WHERE h."IsActive"=TRUE AND h."IsHC"=FALSE
-                      AND DATE_TRUNC('month',h."DocDate"::timestamp) = (SELECT DATE_TRUNC('month', MAX("DocDate"::date)) FROM brv_hoadonhdr WHERE "IsActive"=TRUE)
-                    GROUP BY 1,2
-                    UNION ALL
-                    SELECT 'ETC', h."CustomerCode", SUM(h."TotalAmount")
-                    FROM brvsx_hoadonhdr h
-                    JOIN dmssx_khachhang k ON h."CustomerCode" = k."Code"
-                    WHERE h."IsActive"=TRUE
-                      AND DATE_TRUNC('month',h."DocDate"::timestamp) = (SELECT DATE_TRUNC('month', MAX("DocDate"::date)) FROM brvsx_hoadonhdr WHERE "IsActive"=TRUE)
-                    GROUP BY 1,2
-                ),
-                agg AS (SELECT channel, cc, SUM(rev) AS rev FROM cm GROUP BY channel, cc)
-                SELECT channel,
-                    (SELECT COALESCE(SUM(rev),0) FROM (SELECT rev FROM agg a2 WHERE a2.channel=agg.channel ORDER BY rev DESC LIMIT :n) t) AS top_sum,
-                    (SELECT COALESCE(SUM(rev),0) FROM agg a3 WHERE a3.channel=agg.channel) AS total_sum
-                FROM agg GROUP BY channel
-            ''')
-            rows = conn.execute(sql, {"n": top_n}).fetchall()
+        rows = run_with_failover(_pg, _mssql, label="revenue_concentration")
+        concentration_data_day = _last_complete_data_day()
     except Exception as e:
         print(f"[ALERTS][concentration] Lỗi: {e}")
         return
+    if rows is None:
+        rows = []
 
     for r in rows:
         channel_label = r.channel
@@ -1285,7 +1454,8 @@ def check_revenue_concentration_alert():
                     table_headers=[f"Doanh thu Top {top_n}", "Tổng doanh thu", "Tỷ trọng"],
                     table_rows=[[format_vietnamese_money(r.top_sum), format_vietnamese_money(r.total_sum), f"{ratio*100:.1f}%"]],
                     channels=("teams",),
-                    period=datetime.now().strftime("%m/%Y"), channel=channel_label, region="Toàn quốc",
+                    period=_month_period_label(r.channel_month, concentration_data_day),
+                    channel=channel_label, region="Toàn quốc",
                     issue=f"Top {top_n} khách hàng kênh {channel_label} chiếm {ratio*100:.1f}% tổng doanh thu kênh này — rủi ro tập trung quá cao"
                 )
                 record_alert_sent(alert_key, str(round(ratio, 4)))
@@ -1296,27 +1466,46 @@ def check_revenue_concentration_alert():
 def check_return_rate_alert():
     """E: Tỷ lệ giá trị hàng trả về (brvsx_tralai) / doanh số ETC tháng mới nhất vượt ngưỡng."""
     from sqlalchemy import text
-    engine = _alert_engine()
-    if engine is None:
-        return
+    from src.database import run_with_failover
     threshold = float(_biz_threshold('return_rate_pct', 0.05))
+
+    def _pg(conn):
+        sql = text('''
+            WITH mx AS (SELECT DATE_TRUNC('month', MAX("DocDate"::date)) AS m FROM brvsx_hoadonhdr WHERE "IsActive"=TRUE),
+            ret AS (
+                SELECT COALESCE(SUM("Amount9"),0) AS v FROM brvsx_tralai
+                WHERE "IsActive"=TRUE AND DATE_TRUNC('month',"DocDate"::timestamp) = (SELECT m FROM mx)
+            ),
+            sales AS (
+                SELECT COALESCE(SUM("TotalAmount"),0) AS v FROM brvsx_hoadonhdr
+                WHERE "IsActive"=TRUE AND DATE_TRUNC('month',"DocDate"::timestamp) = (SELECT m FROM mx)
+            )
+            SELECT (SELECT v FROM ret), (SELECT v FROM sales), (SELECT m FROM mx)
+        ''')
+        return conn.execute(sql).fetchone()
+
+    def _mssql(conn):
+        sql = text('''
+            WITH mx AS (SELECT DATEFROMPARTS(YEAR(MAX("DocDate")), MONTH(MAX("DocDate")), 1) AS m FROM dbo.BRVSX_HoaDonHdr WHERE "IsActive"=1),
+            ret AS (
+                SELECT COALESCE(SUM("Amount9"),0) AS v FROM dbo.BRVSX_TraLai
+                WHERE "IsActive"=1 AND DATEFROMPARTS(YEAR("DocDate"), MONTH("DocDate"), 1) = (SELECT m FROM mx)
+            ),
+            sales AS (
+                SELECT COALESCE(SUM("TotalAmount"),0) AS v FROM dbo.BRVSX_HoaDonHdr
+                WHERE "IsActive"=1 AND DATEFROMPARTS(YEAR("DocDate"), MONTH("DocDate"), 1) = (SELECT m FROM mx)
+            )
+            SELECT (SELECT v FROM ret), (SELECT v FROM sales), (SELECT m FROM mx)
+        ''')
+        return conn.execute(sql).fetchone()
+
     try:
-        with engine.connect() as conn:
-            sql = text('''
-                WITH mx AS (SELECT DATE_TRUNC('month', MAX("DocDate"::date)) AS m FROM brvsx_hoadonhdr WHERE "IsActive"=TRUE),
-                ret AS (
-                    SELECT COALESCE(SUM("Amount9"),0) AS v FROM brvsx_tralai
-                    WHERE "IsActive"=TRUE AND DATE_TRUNC('month',"DocDate"::timestamp) = (SELECT m FROM mx)
-                ),
-                sales AS (
-                    SELECT COALESCE(SUM("TotalAmount"),0) AS v FROM brvsx_hoadonhdr
-                    WHERE "IsActive"=TRUE AND DATE_TRUNC('month',"DocDate"::timestamp) = (SELECT m FROM mx)
-                )
-                SELECT (SELECT v FROM ret), (SELECT v FROM sales), (SELECT m FROM mx)
-            ''')
-            row = conn.execute(sql).fetchone()
+        row = run_with_failover(_pg, _mssql, label="return_rate")
     except Exception as e:
         print(f"[ALERTS][return_rate] Lỗi: {e}")
+        return
+    if row is None:
+        print("[ALERTS][return_rate] Không lấy được dữ liệu (Supabase và Bravo đều không dùng được).")
         return
     rate = return_rate(row[0], row[1])
     if rate is None:
@@ -1356,6 +1545,7 @@ def check_zero_sales_rep_alert():
                 WHERE month_sale_target > 10000000 AND COALESCE(month_sale_amount,0) = 0
                 ORDER BY month_sale_target DESC LIMIT 10
             ''')).fetchall()
+            zero_sales_data_day = _last_complete_data_day()
     except Exception as e:
         print(f"[ALERTS][zero_sales] Lỗi: {e}")
         return
@@ -1378,7 +1568,7 @@ def check_zero_sales_rep_alert():
             table_headers=["Mã NV", "Tên NV", "Vùng", "Chức danh", "Chỉ tiêu"],
             table_rows=table,
             channels=("teams",),
-            period=datetime.now().strftime("%m/%Y"), region=header_region,
+            period=_month_period_label(zero_sales_data_day, zero_sales_data_day), region=header_region,
             issue="Nhân sự có chỉ tiêu doanh số nhưng đạt 0 trong kỳ — nghi ngờ nghỉ ngầm/vấn đề địa bàn"
         )
         record_alert_sent(alert_key, str(len(rows)))
@@ -1443,6 +1633,7 @@ def check_kpi_sales_force_risk_alert():
                   AND area_code LIKE 'MN%'
                   AND COALESCE(month_sale_target, 0) > 0
             '''), {"roles": list(risk_map.keys())}).fetchall()
+            kpi_force_data_day = _last_complete_data_day()
     except Exception as e:
         print(f"[ALERTS][kpi_sales_force] Lỗi truy vấn kpi_summary: {e}")
         return
@@ -1482,7 +1673,7 @@ def check_kpi_sales_force_risk_alert():
             table_headers=["Mã NV", "Tên NV", "Vai trò", "% Tháng", "% Quý", "% Năm", "Cảnh báo"],
             table_rows=table,
             channels=("teams",),
-            period=datetime.now().strftime("%m/%Y"), channel="OTC", region="Miền Nam",
+            period=_month_period_label(kpi_force_data_day, kpi_force_data_day), channel="OTC", region="Miền Nam",
             issue=f"{len(at_risk)} nhân sự vi phạm ít nhất 1 ngưỡng KPI theo QĐ 0429-2 (nguy cơ chấm dứt HĐLĐ/mất thưởng)"
         )
         record_alert_sent(alert_key, current_value)
@@ -1648,25 +1839,7 @@ def check_kpi_milestone_drop_alert():
 
     try:
         with engine.connect() as conn:
-            overall_max_row = conn.execute(text('''
-                SELECT MAX(d) FROM (
-                    SELECT MAX("DocDate"::date) AS d FROM brv_hoadonhdr WHERE "IsActive"=TRUE
-                    UNION ALL
-                    SELECT MAX("DocDate"::date) FROM brvsx_hoadonhdr WHERE "IsActive"=TRUE
-                ) x
-            ''')).fetchone()
-            overall_max = overall_max_row[0] if overall_max_row else None
-            if not overall_max:
-                data_max_date = None
-            else:
-                complete_row = conn.execute(text('''
-                    SELECT MAX(d) FROM (
-                        SELECT MAX("DocDate"::date) AS d FROM brv_hoadonhdr WHERE "IsActive"=TRUE AND "DocDate"::date < :overall_max
-                        UNION ALL
-                        SELECT MAX("DocDate"::date) FROM brvsx_hoadonhdr WHERE "IsActive"=TRUE AND "DocDate"::date < :overall_max
-                    ) x
-                '''), {"overall_max": overall_max}).fetchone()
-                data_max_date = complete_row[0] if complete_row else None
+            data_max_date = _last_complete_data_day()
     except Exception as e:
         print(f"[ALERTS][kpi_milestone] Lỗi lấy ngày dữ liệu mới nhất: {e}")
         return
@@ -1696,7 +1869,7 @@ def check_kpi_milestone_drop_alert():
             # (a) Theo từng kênh — tái dùng _period_revenue (src/etl.py)
             channel_series = {"OTC": [], "ETC": []}
             for idx, p_start, p_end in periods:
-                otc_rev, etc_rev, _ = _period_revenue(conn, p_start, p_end)
+                otc_rev, etc_rev, _ = _period_revenue(p_start, p_end)
                 channel_series["OTC"].append((idx, otc_rev))
                 channel_series["ETC"].append((idx, etc_rev))
 

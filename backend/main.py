@@ -120,6 +120,31 @@ def login(req: LoginRequest):
         }
     raise HTTPException(status_code=400, detail="Sai ten dang nhap hoac mat khau")
 
+class ChangePasswordRequest(BaseModel):
+    old_password: str
+    new_password: str
+    confirm_password: str
+
+@app.post("/api/auth/change-password")
+def change_password(req: ChangePasswordRequest, token: str = Depends(verify_token)):
+    username = token.replace("token_", "", 1)
+
+    # Kiểm tra mật khẩu cũ
+    if USERS.get(username) != req.old_password:
+        raise HTTPException(status_code=400, detail="Mật khẩu cũ không đúng")
+
+    # Kiểm tra xác nhận mật khẩu mới
+    if req.new_password != req.confirm_password:
+        raise HTTPException(status_code=400, detail="Mật khẩu mới và xác nhận mật khẩu không khớp")
+
+    # Kiểm tra độ dài mật khẩu mới
+    if len(req.new_password) < 8:
+        raise HTTPException(status_code=400, detail="Mật khẩu mới phải có ít nhất 8 ký tự")
+
+    # Cập nhật mật khẩu (in-memory, có hiệu lực trong phiên server đang chạy)
+    USERS[username] = req.new_password
+    return {"success": True, "message": "Đổi mật khẩu thành công"}
+
 @app.get("/api/dashboard/stats")
 def get_stats(token: str = Depends(verify_token)):
     conn = get_cloud_connection()

@@ -1,6 +1,7 @@
 import os
 import sys
 import time
+import sqlite3
 import smtplib
 from datetime import datetime
 from email.mime.text import MIMEText
@@ -22,6 +23,39 @@ if hasattr(sys.stderr, 'reconfigure'):
 load_dotenv()
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+STATE_DB_PATH = os.path.join(PROJECT_ROOT, 'data', 'alerts_state.db')
+
+
+def _log_alert_severity(alert_name, severity):
+    """
+    Ghi lại (tên alert, mức độ, thời điểm) vào data/alerts_state.db mỗi khi 1 alert THỰC SỰ được
+    gửi — phục vụ báo cáo Weekly/Monthly (main.py::_send_periodic_email_report) biết kỳ vừa qua
+    có alert CRITICAL nào không, để gắn cờ Outlook Importance:High cho đúng email digest đó.
+
+    KHÔNG dùng chung bảng sent_alerts (src/alerts.py) vì bảng đó chỉ giữ TRẠNG THÁI MỚI NHẤT theo
+    alert_key (ghi đè liên tục, phục vụ cooldown) — không phải lịch sử theo thời gian như cần ở
+    đây. Lỗi ghi log không được chặn việc gửi alert thật (chỉ log + bỏ qua).
+    """
+    try:
+        os.makedirs(os.path.dirname(STATE_DB_PATH), exist_ok=True)
+        conn = sqlite3.connect(STATE_DB_PATH)
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS alert_severity_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                alert_name TEXT NOT NULL,
+                severity TEXT NOT NULL,
+                sent_at TIMESTAMP NOT NULL
+            )
+        ''')
+        conn.execute(
+            'INSERT INTO alert_severity_log (alert_name, severity, sent_at) VALUES (?, ?, ?)',
+            (alert_name, severity, datetime.now())
+        )
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print(f"[NOTIFIER] Không ghi được alert_severity_log (bỏ qua, không ảnh hưởng gửi alert): {e}")
+
 
 # HTML template for alerts
 ALERT_EMAIL_TEMPLATE = """
@@ -33,8 +67,9 @@ ALERT_EMAIL_TEMPLATE = """
         body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; color: #333333; margin: 0; padding: 20px; background-color: #f9f9fb; }
         .card { max-width: 600px; margin: 0 auto; background: #ffffff; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.05); overflow: hidden; border: 1px solid #e1e1e7; }
         .header { padding: 24px; color: #ffffff; font-weight: bold; font-size: 20px; text-transform: uppercase; letter-spacing: 0.5px; }
-        .header.critical { background: linear-gradient(135deg, #e53e3e 0%, #b7791f 100%); }
-        .header.warning { background: linear-gradient(135deg, #dd6b20 0%, #d69e2e 100%); }
+        .header.critical { background-color: #e53e3e; background: linear-gradient(135deg, #e53e3e 0%, #b7791f 100%); }
+        .header.warning { background-color: #dd6b20; background: linear-gradient(135deg, #dd6b20 0%, #d69e2e 100%); }
+        .header.info { background-color: #059669; background: linear-gradient(135deg, #059669 0%, #10b981 100%); }
         .content { padding: 24px; line-height: 1.6; }
         .alert-title { font-size: 18px; font-weight: bold; margin-bottom: 8px; color: #1a202c; }
         .alert-desc { font-size: 14px; color: #718096; margin-bottom: 20px; }
@@ -96,7 +131,7 @@ DIGEST_EMAIL_TEMPLATE = """
     <style>
         body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; color: #333333; margin: 0; padding: 20px; background-color: #f4f5f8; }
         .container { max-width: 650px; margin: 0 auto; background: #ffffff; border-radius: 16px; box-shadow: 0 4px 20px rgba(0,0,0,0.06); overflow: hidden; border: 1px solid #e2e8f0; }
-        .header { background: linear-gradient(135deg, #1e3a8a 0%, #3b82f6 100%); padding: 30px 24px; color: #ffffff; }
+        .header { background-color: #1e3a8a; background: linear-gradient(135deg, #1e3a8a 0%, #3b82f6 100%); padding: 30px 24px; color: #ffffff; }
         .header h1 { margin: 0; font-size: 22px; font-weight: 700; letter-spacing: 0.5px; }
         .header p { margin: 5px 0 0 0; font-size: 14px; opacity: 0.9; }
         .content { padding: 24px; }
@@ -130,6 +165,11 @@ DIGEST_EMAIL_TEMPLATE = """
         </div>
 
         <div class="content">
+            {% if metrics.has_critical %}
+            <div style="background: #fef2f2; border: 1px solid #fecaca; border-left: 4px solid #ef4444; border-radius: 8px; padding: 12px 16px; margin-bottom: 20px; font-size: 13px; color: #991b1b; font-weight: 600;">
+                🔴 Kỳ này có ít nhất 1 cảnh báo mức CRITICAL — xem chi tiết ở mục "Điểm Nổi Bật Trong Kỳ" bên dưới.
+            </div>
+            {% endif %}
             {% if metrics.highlights %}
             <!-- Điểm nổi bật Section — nối luồng cảnh báo thời gian thực với báo cáo định kỳ -->
             <div class="section-title">Điểm Nổi Bật Trong Kỳ</div>
@@ -313,6 +353,15 @@ DIGEST_EMAIL_TEMPLATE = """
             </table>
             {% endif %}
 
+            {% if chatbot_url %}
+            <div style="text-align: center; margin-top: 28px; padding-top: 20px; border-top: 1px solid #e2e8f0;">
+                <a href="{{ chatbot_url }}" style="display: inline-block; background-color: #1e3a8a; background: linear-gradient(135deg, #1e3a8a 0%, #3b82f6 100%); color: #ffffff; text-decoration: none; font-size: 14px; font-weight: 700; padding: 12px 28px; border-radius: 8px;">
+                    💬 Mở Chatbot DNH để hỏi thêm
+                </a>
+                <p style="margin: 10px 0 0 0; font-size: 12px; color: #94a3b8;">Đăng nhập đúng tài khoản của bạn để xem đúng phạm vi vùng/kênh được phân quyền.</p>
+            </div>
+            {% endif %}
+
         </div>
         <div class="footer">
             Báo cáo tự động từ Pipeline ETL &bull; Vui lòng không trả lời trực tiếp email này.
@@ -322,12 +371,14 @@ DIGEST_EMAIL_TEMPLATE = """
 </html>
 """
 
-def send_email_via_sendgrid(subject, html_content, recipient_override=None):
+def send_email_via_sendgrid(subject, html_content, recipient_override=None, importance=None):
     """
     Gửi email bằng SendGrid Web API v3 (Không sử dụng SMTP, tránh bị chặn bởi chính sách Office 365)
     recipient_override: nếu truyền vào (list email không rỗng) thì gửi tới danh sách này thay vì
     RECIPIENT_EMAILS/.env hay config.yaml — dùng cho báo cáo đã phân quyền theo audience
     (xem main.py::_send_periodic_email_report).
+    importance: "high" -> gắn header Importance/X-Priority để Outlook hiện cờ đỏ "Mức độ quan
+    trọng cao" trong hộp thư — dùng cho alert CRITICAL (xem send_alert_to_all_channels).
     """
     api_key = os.getenv("SENDGRID_API_KEY")
     sender_email = os.getenv("SENDER_EMAIL")
@@ -381,7 +432,11 @@ def send_email_via_sendgrid(subject, html_content, recipient_override=None):
             }
         ]
     }
-    
+    if importance == "high":
+        # Cả 2 header vì client đọc chuẩn khác nhau: Outlook/Office365 (MAPI) đọc "Importance",
+        # Outlook cũ/1 số client khác đọc "X-Priority" — gắn cả 2 để chắc chắn cờ đỏ hiện ra.
+        payload["headers"] = {"Importance": "high", "X-Priority": "1", "X-MSMail-Priority": "High"}
+
     try:
         data = json.dumps(payload).encode('utf-8')
         req = urllib.request.Request(
@@ -401,16 +456,19 @@ def send_email_via_sendgrid(subject, html_content, recipient_override=None):
                 pass
         return False
 
-def send_email(subject, html_content, recipient_override=None):
+def send_email(subject, html_content, recipient_override=None, importance=None):
     """
     Gửi email báo cáo: Ưu tiên dùng SendGrid Web API nếu có API Key,
     nếu không có sẽ tự động fallback sang SMTP Outlook truyền thống.
     recipient_override: nếu truyền vào (list email không rỗng) thì gửi tới danh sách này thay vì
     RECIPIENT_EMAILS/.env hay config.yaml — dùng cho báo cáo đã phân quyền theo audience
     (xem main.py::_send_periodic_email_report).
+    importance: "high" -> gắn header Importance/X-Priority để Outlook hiện cờ đỏ "Mức độ quan
+    trọng cao" trong hộp thư — dùng cho alert CRITICAL (xem send_alert_to_all_channels).
     """
     if os.getenv("SENDGRID_API_KEY"):
-        return send_email_via_sendgrid(subject, html_content, recipient_override=recipient_override)
+        return send_email_via_sendgrid(subject, html_content, recipient_override=recipient_override,
+                                        importance=importance)
 
     config = load_config()
 
@@ -451,7 +509,14 @@ def send_email(subject, html_content, recipient_override=None):
     msg['Subject'] = subject
     msg['From'] = f"{sender_name} <{sender_email}>"
     msg['To'] = ", ".join(recipient_emails)
-    
+    if importance == "high":
+        # Cả 2 header vì Outlook/Office365 (MAPI) đọc "Importance", 1 số client khác đọc
+        # "X-Priority"/"X-MSMail-Priority" — gắn cả 3 để chắc chắn cờ đỏ "Mức độ quan trọng cao"
+        # hiện ra trong hộp thư thay vì trông giống email thường.
+        msg['Importance'] = 'High'
+        msg['X-Priority'] = '1'
+        msg['X-MSMail-Priority'] = 'High'
+
     msg.attach(MIMEText(html_content, 'html'))
     
     try:
@@ -499,6 +564,7 @@ def build_digest_email(metrics, period_label="Daily", audience=None, scope_label
         period_label=period_label,
         audience=audience,
         scope_label=scope_label,
+        chatbot_url=_chatbot_deep_link(),
     )
 
 def analyze_alert_with_gemini(alert_name, summary, table_headers, table_rows):
@@ -607,11 +673,13 @@ def _severity_to_card_style(severity):
         return "warning"    # vang
     return "good"           # xanh, dung cho INFO
 
-def _chatbot_deep_link(question):
+def _chatbot_deep_link(question=None):
     """
-    URL dẫn thẳng vào web chatbot kèm sẵn câu hỏi (?q=...) — người bấm vào chỉ cần đăng nhập bằng
-    đúng tài khoản của mình, RBAC theo username (DNHChatbot._resolve_user_scope) sẽ tự giới hạn
-    đúng phạm vi vùng/kênh họ được xem, không cần nhúng thêm tham số phân quyền vào link.
+    URL dẫn vào web chatbot — nếu có `question` thì kèm sẵn câu hỏi (?q=...), người bấm vào chỉ
+    cần đăng nhập bằng đúng tài khoản của mình, RBAC theo username (DNHChatbot._resolve_user_scope)
+    sẽ tự giới hạn đúng phạm vi vùng/kênh họ được xem, không cần nhúng thêm tham số phân quyền vào
+    link. `question=None` -> trả về link trần (dùng cho nút "Mở Chatbot" chung trong báo cáo định
+    kỳ, vốn không có 1 câu hỏi cụ thể duy nhất để prefill).
 
     CHATBOT_WEB_URL đọc từ .env, mặc định http://127.0.0.1:8000 (đúng địa chỉ chatbot đang chạy
     hiện tại — backend/main.py chỉ bind 127.0.0.1, chưa có domain public). Link này CHỈ mở được từ
@@ -619,7 +687,9 @@ def _chatbot_deep_link(question):
     trong .env khi đã deploy, không cần sửa code.
     """
     base = os.getenv("CHATBOT_WEB_URL", "http://127.0.0.1:8000").rstrip('/')
-    return f"{base}/?q={quote(question)}"
+    if question:
+        return f"{base}/?q={quote(question)}"
+    return base
 
 
 def _build_teams_adaptive_card(title, summary, severity, table_headers=None, table_rows=None,
@@ -820,6 +890,7 @@ def send_alert_to_all_channels(alert_name, severity, summary, table_headers=None
     xem _build_teams_adaptive_card. Không đổi định dạng Email/Telegram hiện có.
     """
     print(f"\n--- BAT DAU GUI CANH BAO: {alert_name} [{severity}] (kenh: {', '.join(channels)}) ---")
+    _log_alert_severity(alert_name, severity)
     any_sent = False
 
     # Gọi Gemini AI phân tích dữ liệu cảnh báo nếu có API Key
@@ -846,7 +917,9 @@ def send_alert_to_all_channels(alert_name, severity, summary, table_headers=None
                     """
                     html_content = html_content[:insert_idx] + ai_html + html_content[insert_idx:]
 
-            email_sent = _send_with_retry(send_email, subject, html_content)
+            email_sent = _send_with_retry(
+                send_email, subject, html_content,
+                importance="high" if severity == "CRITICAL" else None)
             if email_sent:
                 any_sent = True
         except Exception as e:
