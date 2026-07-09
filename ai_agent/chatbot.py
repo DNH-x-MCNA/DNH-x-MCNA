@@ -46,70 +46,110 @@ def _get_cloud_engine():
 # Helper to get the database schema dynamically — cached theo process (giống _cloud_engine)
 # vì schema hầu như không đổi giữa các câu hỏi, nhưng trước đây bị fetch lại MỖI câu hỏi (~3.25s
 # đo thật mỗi lần), chiếm phần đáng kể trong tổng thời gian trả lời chatbot.
-_schema_cache = None
-_schema_cache_time = 0.0
+# Cache theo TỪNG dialect riêng (dict) — trước đây chỉ 1 cache dùng chung, có thể trả nhầm schema
+# Postgres cho 1 câu hỏi đang chạy trên Bravo (hoặc ngược lại) nếu nguồn đổi giữa 2 lần hỏi.
+_schema_cache = {}
+_schema_cache_time = {}
 _SCHEMA_CACHE_TTL_SECONDS = 300  # 5 phút — đủ mới, không cần fetch lại mỗi câu hỏi
 
-def get_db_schema():
-    global _schema_cache, _schema_cache_time
-    import time as _time
-    now = _time.time()
-    if _schema_cache is not None and (now - _schema_cache_time) < _SCHEMA_CACHE_TTL_SECONDS:
-        return _schema_cache
+# 12 bảng THẬT SỰ tồn tại trên Bravo SQL Server (đã sync bởi scripts/sync_from_bravo_to_supabase.py)
+# — KHÔNG gồm fact_tonghopkhachhang/receivable_detail/inventory/kpi_summary (chỉ có trên Supabase,
+# xác nhận thực tế 09/07/2026 khi xây failover cho src/alerts.py/src/etl.py).
+_BRAVO_TABLES = (
+    'brv_hoadonhdr', 'brv_hoadonct', 'brvsx_hoadonhdr', 'brvsx_hoadonct',
+    'brv_trangthaihoadon', 'brv_trangthaiduyet', 'dms_khachhang', 'dmssx_khachhang',
+    'dim_tinhthanhpho', 'dim_nhanvien', 'brv_sanpham', 'brvsx_tralai',
+)
 
-    engine = _get_cloud_engine()
-    if engine is not None:
-        try:
-            from sqlalchemy import text
-            with engine.connect() as conn:
-                tables_to_include = (
-                    'brv_hoadonhdr', 'brv_hoadonct', 'brvsx_hoadonhdr', 'brvsx_hoadonct',
-                    'brv_trangthaihoadon', 'brv_trangthaiduyet', 'dms_khachhang', 'dmssx_khachhang',
-                    'dim_tinhthanhpho', 'dim_targetvungmien', 'fact_kehoachtongetc', 'fact_tonghopkhachhang',
-                    'dim_nhanvien', 'brv_sanpham', 'brvsx_tralai', 'receivable_detail', 'inventory',
-                    'kpi_summary'
-                )
-                query = text("""
-                    SELECT table_name, column_name, data_type
-                    FROM information_schema.columns
-                    WHERE table_schema = 'public' AND table_name IN :tables
-                    ORDER BY table_name, ordinal_position
-                """)
-                result = conn.execute(query, {"tables": tables_to_include})
-                cols = result.fetchall()
-                schema_dict = {}
-                for r in cols:
-                    schema_dict.setdefault(r[0], []).append(f"{r[1]} ({r[2]})")
+def get_db_schema(dialect="postgres"):
+    """dialect: "postgres" (Supabase, mặc định — giữ nguyên hành vi cũ) / "bravo" (SQL Server trực
+    tiếp) / "sqlite" (local, không cần fetch động — xử lý y hệt nhánh cuối như trước)."""
+    now_ts = __import__("time").time()
+    if dialect in _schema_cache and (now_ts - _schema_cache_time.get(dialect, 0)) < _SCHEMA_CACHE_TTL_SECONDS:
+        return _schema_cache[dialect]
 
-                # mart_layer.mart_revenue_summary — bảng riêng schema khác (không phải 'public'),
-                # query info_schema tự trả về RỖNG nếu schema/bảng chưa tồn tại (không lỗi), nên
-                # an toàn khi chưa chạy DDL tạo mart layer. Khi bảng thật sự tồn tại, tên hiển thị
-                # có tiền tố schema để LLM biết viết đúng "mart_layer.mart_revenue_summary".
-                mart_cols = conn.execute(text("""
-                    SELECT column_name, data_type FROM information_schema.columns
-                    WHERE table_schema = 'mart_layer' AND table_name = 'mart_revenue_summary'
-                    ORDER BY ordinal_position
-                """)).fetchall()
-                if mart_cols:
-                    schema_dict["mart_layer.mart_revenue_summary"] = [f"{r[0]} ({r[1]})" for r in mart_cols]
+    if dialect == "bravo":
+        from src.database import _get_bravo_engine
+        engine = _get_bravo_engine()
+        if engine is not None:
+            try:
+                from sqlalchemy import text, bindparam
+                with engine.connect() as conn:
+                    # Bravo đặt tên bảng khác case với Postgres (vd "BRV_HoaDonHdr" vs
+                    # "brv_hoadonhdr") — so khớp không phân biệt hoa/thường bằng LOWER().
+                    query = text("""
+                        SELECT TABLE_NAME, COLUMN_NAME, DATA_TYPE
+                        FROM INFORMATION_SCHEMA.COLUMNS
+                        WHERE TABLE_SCHEMA = 'dbo' AND LOWER(TABLE_NAME) IN :tables
+                        ORDER BY TABLE_NAME, ORDINAL_POSITION
+                    """).bindparams(bindparam("tables", expanding=True))
+                    cols = conn.execute(query, {"tables": _BRAVO_TABLES}).fetchall()
+                    schema_dict = {}
+                    for r in cols:
+                        schema_dict.setdefault(r[0], []).append(f"{r[1]} ({r[2]})")
+                    schema_text = "Dược Nam Hà central database schema (Bravo SQL Server — dự phòng, KHÔNG có công nợ/tồn kho/KPI):\n"
+                    for t, cols_str in schema_dict.items():
+                        schema_text += f"- Table '{t}': Columns are {', '.join(cols_str)}\n"
+                    _schema_cache["bravo"], _schema_cache_time["bravo"] = schema_text, now_ts
+                    return schema_text
+            except Exception as e:
+                print(f"[Warning] Failed to fetch schema from Bravo: {e}. Falling back to SQLite...")
+        # Bravo không dùng được -> rơi thẳng xuống nhánh SQLite ở cuối hàm (dùng chung code).
 
-                schema_text = "Dược Nam Hà central database schema:\n"
-                for t, cols_str in schema_dict.items():
-                    schema_text += f"- Table '{t}': Columns are {', '.join(cols_str)}\n"
-                _schema_cache, _schema_cache_time = schema_text, now
-                return schema_text
-        except Exception as e:
-            print(f"[Warning] Failed to fetch schema from Supabase: {e}. Falling back to SQLite...")
-            
+    elif dialect == "postgres":
+        engine = _get_cloud_engine()
+        if engine is not None:
+            try:
+                from sqlalchemy import text
+                with engine.connect() as conn:
+                    tables_to_include = (
+                        'brv_hoadonhdr', 'brv_hoadonct', 'brvsx_hoadonhdr', 'brvsx_hoadonct',
+                        'brv_trangthaihoadon', 'brv_trangthaiduyet', 'dms_khachhang', 'dmssx_khachhang',
+                        'dim_tinhthanhpho', 'dim_targetvungmien', 'fact_kehoachtongetc', 'fact_tonghopkhachhang',
+                        'dim_nhanvien', 'brv_sanpham', 'brvsx_tralai', 'receivable_detail', 'inventory',
+                        'kpi_summary'
+                    )
+                    query = text("""
+                        SELECT table_name, column_name, data_type
+                        FROM information_schema.columns
+                        WHERE table_schema = 'public' AND table_name IN :tables
+                        ORDER BY table_name, ordinal_position
+                    """)
+                    result = conn.execute(query, {"tables": tables_to_include})
+                    cols = result.fetchall()
+                    schema_dict = {}
+                    for r in cols:
+                        schema_dict.setdefault(r[0], []).append(f"{r[1]} ({r[2]})")
+
+                    # mart_layer.mart_revenue_summary — bảng riêng schema khác (không phải 'public'),
+                    # query info_schema tự trả về RỖNG nếu schema/bảng chưa tồn tại (không lỗi), nên
+                    # an toàn khi chưa chạy DDL tạo mart layer. Khi bảng thật sự tồn tại, tên hiển thị
+                    # có tiền tố schema để LLM biết viết đúng "mart_layer.mart_revenue_summary".
+                    mart_cols = conn.execute(text("""
+                        SELECT column_name, data_type FROM information_schema.columns
+                        WHERE table_schema = 'mart_layer' AND table_name = 'mart_revenue_summary'
+                        ORDER BY ordinal_position
+                    """)).fetchall()
+                    if mart_cols:
+                        schema_dict["mart_layer.mart_revenue_summary"] = [f"{r[0]} ({r[1]})" for r in mart_cols]
+
+                    schema_text = "Dược Nam Hà central database schema:\n"
+                    for t, cols_str in schema_dict.items():
+                        schema_text += f"- Table '{t}': Columns are {', '.join(cols_str)}\n"
+                    _schema_cache["postgres"], _schema_cache_time["postgres"] = schema_text, now_ts
+                    return schema_text
+            except Exception as e:
+                print(f"[Warning] Failed to fetch schema from Supabase: {e}. Falling back to SQLite...")
+
     if not os.path.exists(DB_PATH):
         return "Database not initialized."
-    
+
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
-    
+
     cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
     tables = [t[0] for t in cursor.fetchall() if t[0] not in ('sqlite_sequence',)]
-    
+
     schema_text = ""
     for table in tables:
         cursor.execute(f"PRAGMA table_info({table});")
@@ -118,7 +158,7 @@ def get_db_schema():
         schema_text += f"- Table '{table}': Columns are {cols_str}\n"
 
     conn.close()
-    _schema_cache, _schema_cache_time = schema_text, now
+    _schema_cache["sqlite"], _schema_cache_time["sqlite"] = schema_text, now_ts
     return schema_text
 
 def _latest_period_key(period):
@@ -252,6 +292,17 @@ class DNHChatbot:
         # Initialize cached cloud connection flags
         self._last_cloud_check = 0.0
         self._cloud_available_cached = False
+        # Cache tương tự cho Bravo SQL Server trực tiếp — dùng khi Supabase (cloud) không kết nối
+        # được (xem property bravo_available bên dưới, cạnh cloud_available).
+        self._last_bravo_check = 0.0
+        self._bravo_available_cached = False
+        # Circuit breaker: cloud_available chỉ chạy "SELECT 1 FROM brv_hoadonhdr LIMIT 1" (rất nhẹ)
+        # nên có thể báo "khoẻ" dù Supabase đang timeout với query THẬT nặng hơn (đã xác nhận thực
+        # tế 09/07/2026: cloud_available trả True, sinh SQL Postgres, chạy timeout thật, rơi xuống
+        # SQLite thay vì Bravo vì lúc quyết định dialect đã lỡ chọn Postgres). Khi _execute_sql()
+        # thấy Postgres THẬT SỰ lỗi lúc chạy câu SQL, ghi mốc này để các câu hỏi SAU trong cùng
+        # request/phiên bỏ qua Postgres, đi thẳng Bravo — không đợi timeout lặp lại vô ích.
+        self._postgres_query_down_until = 0.0
 
         # Conversation memory: session_key -> list[{"question","answer","ts"}]
         # In-memory/per-process, bounded, self-expiring after idle timeout.
@@ -330,15 +381,95 @@ class DNHChatbot:
             print(f"[Warning] Postgres Cloud DB check failed: {e}. Bot will use SQLite fallback if query fails.")
             return False
 
-    def _get_latest_dates(self):
+    @property
+    def bravo_available(self):
+        """
+        Dynamic cached property (cooldown 15s) kiểm tra Bravo SQL Server trực tiếp có dùng được
+        không — CHỈ có ý nghĩa khi chạy trên máy có VPN/LAN vào 172.16.0.26 (không áp dụng cho bản
+        deploy Vercel, ở đó _get_bravo_engine().connect() sẽ tự timeout rồi rơi tiếp xuống SQLite,
+        y hệt hành vi hôm nay). Dùng làm nguồn dự phòng thứ 2 sau Postgres, trước khi rơi về SQLite
+        local (xem _resolve_active_backend()).
+        """
+        import time as _time
+        now = _time.time()
+        if now - self._last_bravo_check < 15:
+            return self._bravo_available_cached
+
+        self._last_bravo_check = now
+        from src.database import _get_bravo_engine
+        engine = _get_bravo_engine()
+        if engine is None:
+            self._bravo_available_cached = False
+            return False
+
+        try:
+            from sqlalchemy import text
+            with engine.connect() as conn:
+                conn.execute(text("SELECT TOP 1 1 FROM brv_hoadonhdr"))
+                self._bravo_available_cached = True
+                return True
+        except Exception as e:
+            self._bravo_available_cached = False
+            print(f"[Warning] Bravo SQL Server check failed: {e}.")
+            return False
+
+    def _resolve_active_backend(self):
+        """
+        Chọn nguồn dữ liệu THẬT SỰ dùng cho câu hỏi này — tính 1 LẦN DUY NHẤT, dùng xuyên suốt cho
+        get_db_schema()/db_dialect/_execute_sql()/banner cảnh báo, tránh tình trạng mỗi nơi tự đoán
+        lại độc lập (trước đây get_db_schema() và khối chọn db_dialect tự thử/catch riêng, có thể
+        ra kết quả lệch nhau giữa 2 lần gọi).
+        Trả "postgres" / "bravo" / "sqlite". self.is_mock luôn ưu tiên trước (không đổi hành vi cũ).
+
+        DB_DIALECT=mssql (.env) ép cứng "bravo" — dùng để TEST failover Bravo chủ động, không cần
+        đợi Supabase lỗi thật (xem mục Kiểm thử trong plan). Đặt SAU is_mock (mock vẫn luôn thắng)
+        nhưng TRƯỚC cloud_available (ép được ngay cả khi Supabase đang khỏe).
+        """
+        import time as _time
+        if self.is_mock:
+            return "sqlite"
+        if os.getenv("DB_DIALECT", "").lower() == "mssql":
+            return "bravo" if self.bravo_available else "sqlite"
+        # Circuit breaker: nếu vừa có câu hỏi TRƯỚC ĐÓ chạy Postgres thật sự bị lỗi/timeout (xem
+        # _execute_sql), bỏ qua cloud_available (probe nhẹ, có thể báo nhầm "khoẻ") trong ít phút,
+        # đi thẳng Bravo — tránh lặp lại y hệt lỗi vừa xảy ra.
+        if _time.time() < self._postgres_query_down_until:
+            return "bravo" if self.bravo_available else "sqlite"
+        if self.cloud_available:
+            return "postgres"
+        if self.bravo_available:
+            return "bravo"
+        return "sqlite"
+
+    def _get_latest_dates(self, backend="postgres"):
         """Retrieves the earliest/latest invoice date, month-end date, and receivable period
         dynamically. earliest_date dùng để tự động cảnh báo đúng "dữ liệu bắt đầu từ tháng nào"
         thay vì hard-code — đã bắt được 1 case thật: rule cũ hard-code "chỉ có Q2 (T4-T6)" trong
-        khi dữ liệu thật đã có đủ từ tháng 1, khiến chatbot báo sai với người dùng."""
+        khi dữ liệu thật đã có đủ từ tháng 1, khiến chatbot báo sai với người dùng.
+        backend="bravo": chỉ lấy earliest/latest_date (brv_hoadonhdr có trên Bravo) — bỏ qua
+        fact_tonghopkhachhang/receivable_detail (KHÔNG tồn tại trên Bravo), latest_month_end/
+        latest_period giữ mặc định (vô hại vì system prompt đã chặn AI dùng 2 bảng đó khi ở Bravo,
+        xem kpi_tdv_instruction/mart_layer_instruction nhánh active_backend=="bravo")."""
         earliest_date = "2026-01-01"
         latest_date = "2026-06-30"
         latest_month_end = "2026-06-30"
         latest_period = "1_2026"
+
+        if backend == "bravo":
+            from src.database import _get_bravo_engine
+            engine = _get_bravo_engine()
+            if engine is not None and self.bravo_available:
+                try:
+                    from sqlalchemy import text
+                    with engine.connect() as conn:
+                        row1 = conn.execute(text('SELECT MIN([DocDate]), MAX([DocDate]) FROM brv_hoadonhdr WHERE [IsActive] = 1')).fetchone()
+                        if row1 and row1[0]:
+                            earliest_date = str(row1[0]).split(' ')[0].split('T')[0]
+                        if row1 and row1[1]:
+                            latest_date = str(row1[1]).split(' ')[0].split('T')[0]
+                except Exception as e:
+                    print(f"[Warning] Failed to fetch earliest/latest DocDate from Bravo: {e}")
+            return earliest_date, latest_date, latest_month_end, latest_period
 
         engine = _get_cloud_engine()
         if engine is not None and not self.is_mock and self.cloud_available:
@@ -479,8 +610,11 @@ class DNHChatbot:
 
 
 
-    def _execute_sql(self, sql_query):
-        """Executes SQL query safely on the intermediate database (Postgres Cloud or SQLite Local)."""
+    def _execute_sql(self, sql_query, target="postgres"):
+        """Executes SQL query safely on the intermediate database (Postgres Cloud, Bravo SQL Server,
+        or SQLite Local). target: "postgres" (mặc định, giữ nguyên hành vi cũ) / "bravo" / "sqlite"
+        — phải khớp với dialect câu SQL ĐÃ ĐƯỢC SINH RA (xem _resolve_active_backend trong ask()),
+        không tự ý thử nguồn khác dialect vì cú pháp không tương thích (TOP vs LIMIT, =1 vs TRUE...)."""
         # Basic SQL safety check (Read-only check)
         lower_sql = sql_query.lower().strip()
         forbidden_keywords = ['drop', 'delete', 'update', 'insert', 'alter', 'truncate', 'create', 'replace', 'xp_cmdshell', 'exec']
@@ -514,32 +648,78 @@ class DNHChatbot:
         if '/*' in sql_query or '*/' in sql_query:
             return {"error": "Bao mat: Phat hien SQL block comment injection."}
 
-        engine = _get_cloud_engine()
-        postgres_error = None
-        if engine is not None and not self.is_mock and self.cloud_available:
-            try:
-                from sqlalchemy import text
-                with engine.connect() as conn:
-                    result = conn.execute(text(sql_query))
-                    if result.returns_rows:
-                        columns = list(result.keys())
-                        formatted_rows = [dict(row._mapping) for row in result.fetchall()]
-                        return {
-                            "columns": columns,
-                            "rows": formatted_rows,
-                            "count": len(formatted_rows)
-                        }
-                    else:
-                        return {"columns": [], "rows": [], "count": 0}
-            except Exception as e:
-                postgres_error = str(e)
-                print(f"[Warning] Resilient Chatbot: Postgres Cloud query failed ({postgres_error}). Falling back to SQLite...")
+        upstream_error = None
+
+        if target == "postgres":
+            # Dùng engine "fast" (connect_timeout=5s, statement_timeout=15s — xem
+            # src/database.py::_get_fast_cloud_engine, đã dùng cho run_with_failover) THAY VÌ
+            # _get_cloud_engine() dùng chung ở đây — câu hỏi thật sự có thể nặng hơn "SELECT 1"
+            # của cloud_available nên vẫn cần tự bail nhanh nếu Supabase đang yếu, không đợi
+            # Supabase tự huỷ statement sau 90-150s+ như quan sát thực tế 09/07/2026.
+            from src.database import _get_fast_cloud_engine
+            engine = _get_fast_cloud_engine()
+            if engine is not None and not self.is_mock:
+                try:
+                    from sqlalchemy import text
+                    with engine.connect() as conn:
+                        result = conn.execute(text(sql_query))
+                        if result.returns_rows:
+                            columns = list(result.keys())
+                            formatted_rows = [dict(row._mapping) for row in result.fetchall()]
+                            return {
+                                "columns": columns,
+                                "rows": formatted_rows,
+                                "count": len(formatted_rows)
+                            }
+                        else:
+                            return {"columns": [], "rows": [], "count": 0}
+                except Exception as e:
+                    upstream_error = str(e)
+                    import time as _time
+                    self._postgres_query_down_until = _time.time() + 120
+                    print(f"[Warning] Resilient Chatbot: Postgres Cloud query failed ({upstream_error}). "
+                          f"Ghi nhận Postgres lỗi trong 120s tới (câu hỏi sau sẽ ưu tiên Bravo). Falling back to SQLite...")
+
+        elif target == "bravo":
+            # KHÔNG thử Postgres trước — sql_query đã được sinh bằng cú pháp T-SQL ngay từ đầu
+            # (xem _resolve_active_backend/db_dialect trong ask()), thử lại Postgres chỉ tổ lỗi cú
+            # pháp (TOP thay vì LIMIT, "col"=1 thay vì TRUE...).
+            from src.database import _get_bravo_engine
+            engine = _get_bravo_engine()
+            if engine is not None and not self.is_mock and self.bravo_available:
+                try:
+                    from sqlalchemy import text
+                    with engine.connect() as conn:
+                        result = conn.execute(text(sql_query))
+                        if result.returns_rows:
+                            columns = list(result.keys())
+                            formatted_rows = [dict(row._mapping) for row in result.fetchall()]
+                            return {
+                                "columns": columns,
+                                "rows": formatted_rows,
+                                "count": len(formatted_rows)
+                            }
+                        else:
+                            return {"columns": [], "rows": [], "count": 0}
+                except Exception as e:
+                    upstream_error = str(e)
+                    # "Invalid object name" = bảng không tồn tại — gần như chắc chắn là câu hỏi
+                    # đụng receivable_detail/kpi_summary/inventory (3 bảng chỉ có trên Supabase,
+                    # KHÔNG có trên Bravo) dù system prompt đã được dặn tránh — trả thông báo rõ
+                    # ràng bằng tiếng Việt thay vì để lộ lỗi pyodbc thô cho người dùng cuối.
+                    if "invalid object name" in upstream_error.lower():
+                        return {"error": (
+                            "Câu hỏi này cần dữ liệu công nợ/tồn kho/KPI — hiện KHÔNG có trên nguồn dữ liệu dự "
+                            "phòng (Bravo) đang dùng do Supabase tạm thời không kết nối được. Vui lòng thử lại "
+                            "sau khi Supabase hồi phục."
+                        )}
+                    print(f"[Warning] Resilient Chatbot: Bravo query failed ({upstream_error}). Falling back to SQLite...")
 
         # Fallback to local SQLite intermediate database
         if not os.path.exists(DB_PATH):
             err_msg = "Intermediate database file not found."
-            if postgres_error:
-                err_msg += f" (Postgres Cloud Error: {postgres_error})"
+            if upstream_error:
+                err_msg += f" (Upstream DB Error: {upstream_error})"
             return {"error": err_msg}
         try:
             conn = sqlite3.connect(DB_PATH)
@@ -559,8 +739,8 @@ class DNHChatbot:
             }
         except Exception as e:
             err_msg = f"Loi thuc thi SQLite: {str(e)}"
-            if postgres_error:
-                err_msg += f" (Postgres Cloud Error: {postgres_error})"
+            if upstream_error:
+                err_msg += f" (Upstream DB Error: {upstream_error})"
             return {"error": err_msg, "query": sql_query}
 
     def _generate_mock_sql(self, query):
@@ -885,7 +1065,8 @@ class DNHChatbot:
                 "mode": "System"
             }
 
-        db_schema = get_db_schema()
+        active_backend = self._resolve_active_backend()
+        db_schema = get_db_schema(dialect=active_backend)
         history_block = self._get_history_block(session_key)
 
         # 1. Phân loại ý định của câu hỏi (Intent Classification)
@@ -1015,7 +1196,7 @@ Câu hỏi/Lời chào của người dùng: "{user_question}"
         cloud_db_url = os.getenv("CLOUD_DB_URL", "")
         
         # Get dynamic date context from the database to avoid hardcoding date boundaries
-        earliest_date_str, latest_date_str, latest_month_end_str, latest_period = self._get_latest_dates()
+        earliest_date_str, latest_date_str, latest_month_end_str, latest_period = self._get_latest_dates(backend=active_backend)
         parts = latest_date_str.split('-')
         latest_year = parts[0] if len(parts) > 0 else "2026"
         latest_month = parts[1] if len(parts) > 1 else "06"
@@ -1041,6 +1222,13 @@ Câu hỏi/Lời chào của người dùng: "{user_question}"
      GROUP BY channel
    CHỈ quay lại bảng raw (brv_hoadonhdr/ct, brvsx_hoadonhdr/ct) khi câu hỏi cần chi tiết mà mart
    layer KHÔNG có — theo khách hàng cụ thể, sản phẩm, nhân viên, hoặc từng hóa đơn riêng lẻ.
+"""
+        elif active_backend == "bravo":
+            mart_layer_instruction = """
+0. Đang dùng nguồn dữ liệu DỰ PHÒNG (Bravo SQL Server) — KHÔNG có 'mart_layer.mart_revenue_summary',
+   KHÔNG có 'receivable_detail' (công nợ), KHÔNG có 'inventory' (tồn kho). Doanh thu vẫn tính được
+   trực tiếp từ brv_hoadonhdr/brv_hoadonct/brvsx_hoadonhdr/brvsx_hoadonct như bình thường; câu hỏi
+   về công nợ/tồn kho thì từ chối lịch sự (xem rule dialect bên dưới), KHÔNG tự chế bảng.
 """
 
         # 'fact_tonghopkhachhang' thuộc mart đầy đủ (production), KHÔNG có ở bản dev hiện tại
@@ -1095,6 +1283,15 @@ Câu hỏi/Lời chào của người dùng: "{user_question}"
      WHERE t."MonthSaleTarget" > 0
      ORDER BY pct DESC
      LIMIT 5"""
+        elif active_backend == "bravo":
+            kpi_tdv_instruction = """   - Đang dùng nguồn dữ liệu DỰ PHÒNG (Bravo SQL Server, vì Supabase tạm không kết nối được).
+   - CẢ 'fact_tonghopkhachhang' LẪN 'kpi_summary' ĐỀU KHÔNG tồn tại trên nguồn dự phòng này (chỉ có
+     trên Supabase) — TUYỆT ĐỐI KHÔNG sinh SQL tham chiếu tới 2 bảng này, sẽ luôn lỗi khi chạy.
+   - Nếu câu hỏi cần dữ liệu KPI/chỉ tiêu/nhân sự: BẮT BUỘC vẫn trả về ĐÚNG 1 câu SELECT hợp lệ (vì
+     câu trả lời CHỈ ĐƯỢC LÀ SQL, không được viết văn xuôi thuần) — dùng đúng dạng:
+     SELECT N'Dữ liệu KPI hiện không có trên nguồn dự phòng (Bravo SQL Server). Vui lòng thử lại khi Supabase hồi phục.' AS [Thông báo]
+     TUYỆT ĐỐI KHÔNG trả lời bằng câu văn thường (không phải SELECT) — sẽ bị hệ thống an toàn chặn
+     và hiện lỗi khó hiểu cho người dùng."""
         else:
             kpi_tdv_instruction = """   - 'fact_tonghopkhachhang' KHÔNG tồn tại trong nguồn dữ liệu đang kết nối hiện tại (không thấy trong schema ở trên) — TUYỆT ĐỐI KHÔNG được sinh SQL tham chiếu tới bảng này, sẽ luôn lỗi khi chạy.
    - Với TDV/QLV/CS/CTV/TK, dùng 'kpi_summary' (đã kiểm chứng có dữ liệu thật cho các position_code này, không chỉ TP/PP/TBP) — CÙNG cách truy vấn như hướng dẫn TP ở trên: filter position_code, dùng month_sale_target/month_sale_amount/month_sale_percent (hoặc quarter_/year_ tương ứng).
@@ -1109,18 +1306,14 @@ Câu hỏi/Lời chào của người dùng: "{user_question}"
      ORDER BY month_sale_percent DESC
      LIMIT 5"""
 
-        db_dialect = "PostgreSQL"
-        # Cloud is configured but unreachable right now (DNS/network failure) — distinct from
-        # "no cloud configured"/"mock mode", both of which are intentional offline setups the
-        # user already knows about. This case silently swaps in the old, much smaller SQLite
-        # fallback schema (missing brv_hoadonhdr/dms_khachhang/etc.), so answers can look
-        # confidently correct while actually coming from an unrelated/stale mock table.
+        # db_dialect suy trực tiếp từ active_backend đã tính 1 lần ở đầu ask() (không tự đoán lại
+        # độc lập nữa — trước đây khối này tự check cloud_db_url/cloud_available riêng, có thể lệch
+        # với quyết định get_db_schema() đã dùng).
+        db_dialect = {"postgres": "PostgreSQL", "bravo": "TSQL", "sqlite": "SQLite"}[active_backend]
+        # Cloud (Supabase) được cấu hình nhưng không dùng được lúc này — banner cảnh báo cuối câu
+        # trả lời (xem dòng ~1720) phân biệt 3 mức theo active_backend, không còn nhị phân.
         cloud_unreachable_fallback = bool(cloud_db_url) and not self.is_mock and not self.cloud_available
-        if "mssql" in cloud_db_url.lower() or "sqlserver" in cloud_db_url.lower() or os.getenv("DB_DIALECT", "").lower() == "mssql":
-            db_dialect = "TSQL"
-        elif not cloud_db_url or self.is_mock or not self.cloud_available:
-            db_dialect = "SQLite"
-        
+
         dialect_rules = ""
         if db_dialect == "PostgreSQL":
             dialect_rules = """
@@ -1150,13 +1343,28 @@ Câu hỏi/Lời chào của người dùng: "{user_question}"
 """
         elif db_dialect == "TSQL":
             dialect_rules = """
-3. Make sure to use SQL functions that are compatible with Microsoft SQL Server (T-SQL) (e.g. COALESCE, GETDATE(), TRY_CAST, CONVERT, DATEADD, DATEDIFF, DATEPART, etc.).
+3. Make sure to use SQL functions that are compatible with Microsoft SQL Server (T-SQL) (e.g. COALESCE, GETDATE(), DATEADD, DATEDIFF, DATEPART, DATEFROMPARTS, etc.).
 4. ALWAYS use 'LIKE' instead of 'ILIKE' (T-SQL is case-insensitive by default under standard collation). Since values in the database (like CityName, Name, item_name) may be stored without Vietnamese tone marks, when filtering Vietnamese text, you MUST search for BOTH the accented and unaccented versions using OR. For example: (t.CityName LIKE '%Bắc%' OR t.CityName LIKE '%Bac%') or (n.Name LIKE '%Tùng%' OR n.Name LIKE '%Tung%').
 5. ALWAYS wrap case-sensitive table and column names in square brackets if they contain uppercase letters or spaces (e.g. h.[TotalAmount], f.[MonthSaleTarget], [brv_hoadonhdr], [dms_khachhang]). Do NOT use double quotes.
 6. VERY IMPORTANT: In T-SQL, there is no LIMIT clause. To limit the number of rows returned, use 'SELECT TOP N ...' at the very beginning of the query instead of 'LIMIT N' at the end. For example: 'SELECT TOP 100 ...' or 'SELECT TOP 5 ...'. Always default to TOP 100 for open list queries.
-7. VERY IMPORTANT: In the DNH database, date columns like 'DocDate' or 'SaveDate' are stored as TEXT (VARCHAR). In T-SQL, you MUST explicitly cast them to DATE or DATETIME when doing date/time functions or date comparisons using TRY_CAST or CONVERT. For example: TRY_CAST([DocDate] AS DATE), or DATEADD(month, DATEDIFF(month, 0, TRY_CAST([DocDate] AS DATE)), 0) to truncate to the beginning of the month.
-8. For multi-month grouping in T-SQL, use DATEPART(month, TRY_CAST([DocDate] AS DATE)) or convert to month-start, and group by it.
-9. ALWAYS default to adding 'TOP 100' for open-ended queries to prevent dumping thousands of records.
+7. VERY IMPORTANT — KHÁC với Postgres: trên nguồn dữ liệu này (Bravo SQL Server, nguồn dự phòng),
+   date columns như 'DocDate'/'SaveDate' là kiểu DATE GỐC THẬT (không phải TEXT như bên Postgres) —
+   ĐỪNG cast (không dùng TRY_CAST/CONVERT khi so sánh/lọc), so sánh trực tiếp: WHERE h.[DocDate]
+   >= '2026-04-01' AND h.[DocDate] < '2026-05-01'. Cast thừa không sai cú pháp nhưng không cần thiết.
+8. VERY IMPORTANT — KHÁC với Postgres: cột boolean (IsActive, IsHC, IsCancelled...) trên nguồn này là
+   kiểu 'bit' THẬT — dùng '= 1' / '= 0', TUYỆT ĐỐI KHÔNG dùng 'TRUE'/'FALSE' (không phải literal hợp
+   lệ trong T-SQL truyền thống). Ví dụ ĐÚNG: WHERE h.[IsActive] = 1 AND h.[IsHC] = 0. Ví dụ SAI:
+   WHERE h.[IsActive] = TRUE.
+9. For multi-month grouping in T-SQL, use DATEFROMPARTS(YEAR([DocDate]), MONTH([DocDate]), 1) to
+   truncate to month-start, and GROUP BY it (tương đương DATE_TRUNC('month', ...) bên Postgres).
+10. ALWAYS default to adding 'TOP 100' for open-ended queries to prevent dumping thousands of records.
+11. Nguồn dữ liệu này (Bravo) là DỰ PHÒNG khi Supabase tạm lỗi — CHỈ có bảng hóa đơn/khách hàng/nhân
+    viên/sản phẩm. KHÔNG có bảng 'receivable_detail' (công nợ), 'kpi_summary'/'fact_tonghopkhachhang'
+    (KPI nhân viên/chỉ tiêu), 'inventory' (tồn kho), hay schema 'mart_layer'. Nếu câu hỏi CẦN các bảng
+    này: BẮT BUỘC vẫn trả về ĐÚNG 1 câu SELECT hợp lệ (câu trả lời CHỈ ĐƯỢC LÀ SQL, không được viết
+    văn xuôi thuần — văn xuôi sẽ bị hệ thống an toàn chặn và hiện lỗi khó hiểu cho người dùng) — dùng
+    đúng dạng:
+    SELECT N'Dữ liệu công nợ/tồn kho/KPI hiện không có trên nguồn dự phòng (Bravo SQL Server). Vui lòng thử lại khi Supabase hồi phục.' AS [Thông báo]
 """
         else:
             dialect_rules = """
@@ -1553,7 +1761,7 @@ VERY IMPORTANT — Vietnamese Column Labels (BẮT BUỘC): EVERY column in the 
             query_result = {"error": unauthorized_reason}
         else:
             # Run the query
-            query_result = self._execute_sql(sql_query)
+            query_result = self._execute_sql(sql_query, target=active_backend)
         
         # Format textual answer
         answer = ""
@@ -1717,7 +1925,16 @@ CRITICAL RULES:
         if not wants_full_list and len(table_rows) > 10:
             table_rows = table_rows[:10]
 
-        if cloud_unreachable_fallback:
+        # Banner cảnh báo — 3 mức theo active_backend (KHÔNG còn nhị phân): "postgres" = không banner
+        # (như cũ); "bravo" = banner nhẹ (dữ liệu Bravo là THẬT/trực tiếp, chỉ thiếu công nợ/tồn
+        # kho/KPI — không đáng báo động mạnh như SQLite offline); "sqlite" = banner mạnh như cũ.
+        if cloud_unreachable_fallback and active_backend == "bravo":
+            answer = (
+                "ℹ️ <b>Supabase tạm không kết nối được</b> — câu trả lời dưới đây dùng dữ liệu TRỰC TIẾP "
+                "từ Bravo (nguồn dự phòng), số liệu hóa đơn/khách hàng vẫn chính xác, nhưng KHÔNG có công "
+                "nợ/tồn kho/KPI lúc này.\n\n" + answer
+            )
+        elif cloud_unreachable_fallback and active_backend == "sqlite":
             answer = (
                 "⚠️ <b>Không kết nối được CSDL chính (Supabase)</b> tại thời điểm này — câu trả lời dưới đây "
                 "dùng dữ liệu offline dự phòng, có thể THIẾU bảng dữ liệu hoặc KHÔNG khớp với câu hỏi. "
