@@ -386,9 +386,10 @@ class DNHChatbot:
         """
         Dynamic cached property (cooldown 15s) kiểm tra Bravo SQL Server trực tiếp có dùng được
         không — CHỈ có ý nghĩa khi chạy trên máy có VPN/LAN vào 172.16.0.26 (không áp dụng cho bản
-        deploy Vercel, ở đó _get_bravo_engine().connect() sẽ tự timeout rồi rơi tiếp xuống SQLite,
-        y hệt hành vi hôm nay). Dùng làm nguồn dự phòng thứ 2 sau Postgres, trước khi rơi về SQLite
-        local (xem _resolve_active_backend()).
+        deploy Vercel — đã ngừng dùng, xem _resolve_active_backend()). Kể từ 09/07/2026, Bravo là
+        NGUỒN CHÍNH (không còn là dự phòng): nhanh hơn, ổn định hơn Supabase/PgBouncer (đã lặp lại
+        sự cố statement_timeout bị bỏ qua), truy vấn trực tiếp không qua tầng đồng bộ trung gian.
+        Postgres/Supabase chỉ còn dùng khi máy chạy KHÔNG có LAN/VPN tới Bravo.
         """
         import time as _time
         now = _time.time()
@@ -421,24 +422,31 @@ class DNHChatbot:
         ra kết quả lệch nhau giữa 2 lần gọi).
         Trả "postgres" / "bravo" / "sqlite". self.is_mock luôn ưu tiên trước (không đổi hành vi cũ).
 
-        DB_DIALECT=mssql (.env) ép cứng "bravo" — dùng để TEST failover Bravo chủ động, không cần
-        đợi Supabase lỗi thật (xem mục Kiểm thử trong plan). Đặt SAU is_mock (mock vẫn luôn thắng)
-        nhưng TRƯỚC cloud_available (ép được ngay cả khi Supabase đang khỏe).
+        09/07/2026: đảo ưu tiên — BRAVO LÀ MẶC ĐỊNH khi máy đang chạy có LAN/VPN tới (172.16.0.26),
+        không còn thử Postgres/Supabase trước nữa. Lý do: Supabase (qua PgBouncer) liên tục chậm/
+        lỗi trong ngày (statement_timeout bị pooler bỏ qua, có lúc mất ~2 phút/câu hỏi dù đã giới
+        hạn client-side 15s ở _execute_sql), trong khi Bravo là nguồn trực tiếp, nhanh, ổn định.
+        Postgres/Supabase giờ CHỈ còn là dự phòng khi Bravo không với tới được (vd chạy trên máy
+        không có LAN/VPN — trường hợp Vercel cũ, đã ngừng dùng). Đánh đổi: các câu hỏi công nợ/tồn
+        kho/KPI (chỉ có trên Supabase, xem kpi_tdv_instruction/mart_layer_instruction) sẽ LUÔN bị
+        từ chối lịch sự khi Bravo khả dụng, kể cả khi Supabase lúc đó thực ra vẫn khoẻ — chấp nhận
+        được vì Supabase đã không ổn định phần lớn thời gian hôm nay.
+
+        DB_DIALECT=mssql (.env) vẫn giữ để ép cứng "bravo" khi cần test, không đổi hành vi.
         """
         import time as _time
         if self.is_mock:
             return "sqlite"
         if os.getenv("DB_DIALECT", "").lower() == "mssql":
             return "bravo" if self.bravo_available else "sqlite"
-        # Circuit breaker: nếu vừa có câu hỏi TRƯỚC ĐÓ chạy Postgres thật sự bị lỗi/timeout (xem
-        # _execute_sql), bỏ qua cloud_available (probe nhẹ, có thể báo nhầm "khoẻ") trong ít phút,
-        # đi thẳng Bravo — tránh lặp lại y hệt lỗi vừa xảy ra.
-        if _time.time() < self._postgres_query_down_until:
-            return "bravo" if self.bravo_available else "sqlite"
-        if self.cloud_available:
-            return "postgres"
         if self.bravo_available:
             return "bravo"
+        # Bravo không với tới được lúc này (hiếm, vd đứt LAN/VPN) — thử Postgres, vẫn tôn trọng
+        # circuit breaker nếu Postgres vừa mới lỗi thật (đặt bởi _execute_sql), tránh lặp lại lỗi.
+        if _time.time() < self._postgres_query_down_until:
+            return "sqlite"
+        if self.cloud_available:
+            return "postgres"
         return "sqlite"
 
     def _get_latest_dates(self, backend="postgres"):
@@ -1323,9 +1331,13 @@ Câu hỏi/Lời chào của người dùng: "{user_question}"
         # độc lập nữa — trước đây khối này tự check cloud_db_url/cloud_available riêng, có thể lệch
         # với quyết định get_db_schema() đã dùng).
         db_dialect = {"postgres": "PostgreSQL", "bravo": "TSQL", "sqlite": "SQLite"}[active_backend]
-        # Cloud (Supabase) được cấu hình nhưng không dùng được lúc này — banner cảnh báo cuối câu
-        # trả lời (xem dòng ~1720) phân biệt 3 mức theo active_backend, không còn nhị phân.
-        cloud_unreachable_fallback = bool(cloud_db_url) and not self.is_mock and not self.cloud_available
+        # Chỉ cần biết Postgres có lỗi thật hay không khi ĐÃ rơi xuống sqlite (cả Bravo lẫn Postgres
+        # đều không dùng được) — banner cho case "bravo" giờ không phụ thuộc cloud_available nữa
+        # (Bravo là mặc định chủ động, không phải fallback do Supabase lỗi, xem _resolve_active_backend),
+        # nên bỏ qua việc gọi self.cloud_available (round-trip mạng) khi active_backend đã là "bravo".
+        cloud_unreachable_fallback = (
+            active_backend == "sqlite" and bool(cloud_db_url) and not self.is_mock and not self.cloud_available
+        )
 
         dialect_rules = ""
         if db_dialect == "PostgreSQL":
@@ -1938,14 +1950,14 @@ CRITICAL RULES:
         if not wants_full_list and len(table_rows) > 10:
             table_rows = table_rows[:10]
 
-        # Banner cảnh báo — 3 mức theo active_backend (KHÔNG còn nhị phân): "postgres" = không banner
-        # (như cũ); "bravo" = banner nhẹ (dữ liệu Bravo là THẬT/trực tiếp, chỉ thiếu công nợ/tồn
-        # kho/KPI — không đáng báo động mạnh như SQLite offline); "sqlite" = banner mạnh như cũ.
-        if cloud_unreachable_fallback and active_backend == "bravo":
+        # Banner — 3 mức theo active_backend: "postgres" = không banner; "bravo" = banner nhẹ, LUÔN
+        # hiện khi dùng Bravo (nguồn CHÍNH từ 09/07/2026, không còn là fallback do lỗi — xem
+        # _resolve_active_backend), chỉ để nhắc thiếu công nợ/tồn kho/KPI, không suy diễn Supabase
+        # có lỗi hay không; "sqlite" = banner mạnh (cả Bravo lẫn Postgres đều không dùng được).
+        if active_backend == "bravo":
             answer = (
-                "ℹ️ <b>Supabase tạm không kết nối được</b> — câu trả lời dưới đây dùng dữ liệu TRỰC TIẾP "
-                "từ Bravo (nguồn dự phòng), số liệu hóa đơn/khách hàng vẫn chính xác, nhưng KHÔNG có công "
-                "nợ/tồn kho/KPI lúc này.\n\n" + answer
+                "ℹ️ <b>Dữ liệu trực tiếp từ Bravo</b> — số liệu hóa đơn/khách hàng chính xác, real-time, "
+                "nhưng KHÔNG có công nợ/tồn kho/KPI (các dữ liệu này chỉ có trên Supabase).\n\n" + answer
             )
         elif cloud_unreachable_fallback and active_backend == "sqlite":
             answer = (
