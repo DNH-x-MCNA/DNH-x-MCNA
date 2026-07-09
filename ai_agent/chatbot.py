@@ -651,29 +651,42 @@ class DNHChatbot:
         upstream_error = None
 
         if target == "postgres":
-            # Dùng engine "fast" (connect_timeout=5s, statement_timeout=15s — xem
-            # src/database.py::_get_fast_cloud_engine, đã dùng cho run_with_failover) THAY VÌ
-            # _get_cloud_engine() dùng chung ở đây — câu hỏi thật sự có thể nặng hơn "SELECT 1"
-            # của cloud_available nên vẫn cần tự bail nhanh nếu Supabase đang yếu, không đợi
-            # Supabase tự huỷ statement sau 90-150s+ như quan sát thực tế 09/07/2026.
+            # Dùng engine "fast" (connect_timeout=5s — xem src/database.py::_get_fast_cloud_engine)
+            # CỘNG THÊM giới hạn thời gian PHÍA CLIENT (concurrent.futures, KHÔNG dựa vào
+            # statement_timeout server-side) — xác nhận thực tế 09/07/2026 trên máy 24:
+            # statement_timeout gửi qua connection "options" bị Supabase PgBouncer (connection
+            # pooler) BỎ QUA, khiến câu lệnh vẫn chạy chậm y hệt cũ (~2 phút) dù đã đặt giới hạn.
+            # Tự đếm giờ ở client là cách DUY NHẤT đảm bảo bail đúng hạn bất kể server/pooler có
+            # tôn trọng giới hạn hay không.
             from src.database import _get_fast_cloud_engine
             engine = _get_fast_cloud_engine()
             if engine is not None and not self.is_mock:
-                try:
+                def _run_pg_query():
                     from sqlalchemy import text
                     with engine.connect() as conn:
                         result = conn.execute(text(sql_query))
                         if result.returns_rows:
                             columns = list(result.keys())
                             formatted_rows = [dict(row._mapping) for row in result.fetchall()]
-                            return {
-                                "columns": columns,
-                                "rows": formatted_rows,
-                                "count": len(formatted_rows)
-                            }
-                        else:
-                            return {"columns": [], "rows": [], "count": 0}
+                            return {"columns": columns, "rows": formatted_rows, "count": len(formatted_rows)}
+                        return {"columns": [], "rows": [], "count": 0}
+
+                import concurrent.futures
+                executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+                future = executor.submit(_run_pg_query)
+                try:
+                    result = future.result(timeout=15)
+                    executor.shutdown(wait=False)
+                    return result
+                except concurrent.futures.TimeoutError:
+                    executor.shutdown(wait=False)  # KHÔNG đợi thread bị bỏ dở — tiến ngay xuống fallback
+                    upstream_error = "Client-side timeout sau 15s (Supabase/PgBouncer không tôn trọng statement_timeout server-side)"
+                    import time as _time
+                    self._postgres_query_down_until = _time.time() + 120
+                    print(f"[Warning] Resilient Chatbot: Postgres Cloud query {upstream_error}. "
+                          f"Ghi nhận Postgres lỗi trong 120s tới (câu hỏi sau sẽ ưu tiên Bravo). Falling back to SQLite...")
                 except Exception as e:
+                    executor.shutdown(wait=False)
                     upstream_error = str(e)
                     import time as _time
                     self._postgres_query_down_until = _time.time() + 120
