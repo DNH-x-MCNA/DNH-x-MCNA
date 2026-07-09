@@ -1,7 +1,6 @@
 import os
 import sys
 import sqlite3
-import pandas as pd
 from datetime import datetime, timedelta
 from src.database import load_config, get_db_engines
 from src.etl import get_low_inventory, get_recent_failed_orders, get_unresolved_urgent_tickets
@@ -118,7 +117,7 @@ def run_alert_checks(erp_engine, crm_engine):
                     summary=f"San pham '{item_name}' (SKU: {sku}) hien chi con {qty} san pham trong kho (Nguong canh bao: < {low_inv_limit}).",
                     table_headers=["Ma SKU", "Ten San Pham", "Ton Kho Hien Tai", "Thoi Gian Cap Nhat"],
                     table_rows=[[sku, item_name, str(qty), str(row['updated_at'])]],
-                    channels=("telegram", "teams")
+                    channels=("teams",)
                 ):
                     record_alert_sent(alert_key, qty)
     else:
@@ -145,7 +144,7 @@ def run_alert_checks(erp_engine, crm_engine):
                 summary=f"He thong phat hien so luong don hang loi tang dot bien: {failed_count} don hang that bai trong {lookback} gio qua (Nguong cho phep: <= {failed_limit}).",
                 table_headers=["ID Don", "Ma Khach Hang", "Gia Tri", "Thoi Gian Giao Dich"],
                 table_rows=rows,
-                channels=("telegram", "teams")
+                channels=("teams",)
             ):
                 record_alert_sent(alert_key_failed, failed_count)
     else:
@@ -170,13 +169,11 @@ def run_alert_checks(erp_engine, crm_engine):
                 summary=f"So luong yeu cau ho tro khan cap (Urgent) chua giai quyet dang vuot nguong: {urgent_count} ca (Nguong cho phep: <= {crm_limit}).",
                 table_headers=["ID Ca", "Ma Khach Hang", "Do Uu Tien", "Thoi Gian Yeu Cau"],
                 table_rows=rows,
-                channels=("telegram", "teams")
+                channels=("teams",)
             ):
                 record_alert_sent(alert_key_crm, urgent_count)
     else:
         clear_alert_state(alert_key_crm)
-
-LOCAL_DB_PATH = os.path.join(PROJECT_ROOT, "scripts", "dnh_intermediate.db")
 
 def format_vietnamese_money(amount):
     if amount is None:
@@ -199,236 +196,285 @@ def format_months_to_sell(months):
     else:
         return f"Còn {days} ngày bán ({months:.1f} thg)"
 
-def get_overdue_days_str(conn, r):
-    customer_code = r['customer_code']
-    period_str = r['period']
-    
-    # 1. Thử truy vấn hóa đơn chưa thanh toán thực tế (Chính xác nhất)
-    query = """
-    SELECT MIN(i.invoice_date) as oldest_date
-    FROM invoices i
-    JOIN orders o ON i.order_id = o.order_id
-    WHERE o.customer_id = ? AND i.status = 'Da phat hanh';
+def estimate_overdue_days_str(period_str, overdue_1_15, overdue_15_30, overdue_30_45, overdue_gt_45):
     """
-    try:
-        df = pd.read_sql(query, conn, params=(customer_code,))
-        if not df.empty and df.iloc[0]['oldest_date'] is not None:
-            oldest_date_str = df.iloc[0]['oldest_date']
-            oldest_date = datetime.strptime(oldest_date_str, "%Y-%m-%d")
-            today = datetime.now()
-            days = (today - oldest_date).days
-            return f"{days} ngày (từ {oldest_date.strftime('%d/%m/%Y')})"
-    except Exception:
-        pass
-        
-    # 2. Phương án dự phòng: Tính toán từ Tuổi nợ (Aging) + Kỳ báo cáo (Period)
+    Ước lượng số ngày quá hạn từ kỳ báo cáo (period) + nhóm tuổi nợ (aging bucket).
+    receivable_detail trên Supabase là bảng tổng hợp nợ theo kỳ, không có cột trạng thái từng
+    hóa đơn để tra ngày quá hạn chính xác tuyệt đối — đây là ước lượng theo bucket, không phải
+    số ngày thực đo từ hóa đơn gốc.
+    """
     try:
         parts = period_str.split('_')
         month, year = int(parts[0]), int(parts[1])
-        
-        # Lấy ngày cuối cùng của tháng báo cáo
+
         import calendar
         last_day = calendar.monthrange(year, month)[1]
         report_date = datetime(year, month, last_day)
-        
-        # Mốc ngày chạy hệ thống
+
         today = datetime.now()
-        days_since_report = (today - report_date).days
-        if days_since_report < 0:
-            days_since_report = 0
-            
-        if r['overdue_gt_45'] > 0:
+        days_since_report = max(0, (today - report_date).days)
+
+        if overdue_gt_45 and overdue_gt_45 > 0:
             return f"Ít nhất {45 + days_since_report} ngày"
-        elif r['overdue_30_45'] > 0:
+        elif overdue_30_45 and overdue_30_45 > 0:
             return f"Từ {30 + days_since_report} đến {45 + days_since_report} ngày"
-        elif r['overdue_15_30'] > 0:
+        elif overdue_15_30 and overdue_15_30 > 0:
             return f"Từ {15 + days_since_report} đến {30 + days_since_report} ngày"
-        elif r['overdue_1_15'] > 0:
+        elif overdue_1_15 and overdue_1_15 > 0:
             return f"Từ {1 + days_since_report} đến {15 + days_since_report} ngày"
     except Exception:
         pass
-        
+
     return "Trên 45 ngày"
 
-def get_latest_period(conn):
+
+def normalize_channel_label(raw_channel):
     """
-    Tự động dò tìm kỳ báo cáo mới nhất trong bảng receivable_detail
+    Chuẩn hoá giá trị kênh thô từ DB (vd receivable_detail.sales_channel) về nhãn hiển thị
+    chuẩn "OTC"/"ETC". Chưa xác nhận 100% định dạng gốc DNH lưu trong cột này nên nhận diện
+    theo từ khoá, KHÔNG suy đoán mù nếu không khớp — trả nguyên giá trị gốc để không hiển thị
+    sai mà không ai biết (dễ phát hiện qua log/card thay vì âm thầm gắn nhãn sai).
     """
-    cursor = conn.cursor()
-    cursor.execute("SELECT DISTINCT period FROM receivable_detail")
-    periods = [row[0] for row in cursor.fetchall() if row[0]]
-    if not periods:
-        return None
-    
-    # Hàm phân tích cú pháp 'month_year' để tìm max
-    def parse_period(p):
-        parts = p.split('_')
-        if len(parts) == 2:
-            return int(parts[1]), int(parts[0])
-        return 0, 0
-    return max(periods, key=parse_period)
+    if not raw_channel:
+        return "Không rõ"
+    val = str(raw_channel).strip().upper()
+    if "OTC" in val:
+        return "OTC"
+    if "ETC" in val:
+        return "ETC"
+    return str(raw_channel)
+
+
+def normalize_region_label(area_code):
+    """
+    Map area_code thô (vd 'MB', 'MB2', 'MN', 'MT') sang tên miền tiếng Việt — dùng lại đúng bảng
+    ánh xạ đã kiểm chứng trong DNHChatbot (_REGION_SQL_MARKERS/_REGION_NAMES_VI), không định
+    nghĩa lại quy ước mã miền ở 2 nơi khác nhau trong codebase.
+    """
+    if not area_code:
+        return "Không rõ"
+    from ai_agent.chatbot import DNHChatbot
+    val = str(area_code).strip().upper()
+    for region_key, markers in DNHChatbot._REGION_SQL_MARKERS.items():
+        if val in markers:
+            return DNHChatbot._REGION_NAMES_VI[region_key]
+    return str(area_code)
+
+
+def get_customer_regions_by_code(conn, customer_codes, channel_label):
+    """
+    Tra map {customer_code: tên miền} qua chain CityId -> dim_tinhthanhpho.AreaCode đã xác minh
+    (docs/dev_supabase_schema.sql): khách OTC tra qua dms_khachhang, khách ETC qua dmssx_khachhang.
+    Dùng 1 câu truy vấn IN theo lô (không query từng khách hàng riêng lẻ) để đỡ tải Supabase.
+    Trả dict rỗng nếu lỗi hoặc danh sách mã KH rỗng — gọi nơi dùng phải tự fallback (vd "Không rõ").
+    """
+    if not customer_codes:
+        return {}
+    from sqlalchemy import text, bindparam
+    table = "dms_khachhang" if channel_label == "OTC" else "dmssx_khachhang"
+    sql = text(f'''
+        SELECT k."Code" AS cc, t."AreaCode" AS area_code
+        FROM {table} k
+        LEFT JOIN dim_tinhthanhpho t ON k."CityId" = t."CityId"
+        WHERE k."Code" IN :codes
+    ''').bindparams(bindparam("codes", expanding=True))
+    try:
+        rows = conn.execute(sql, {"codes": tuple(customer_codes)}).fetchall()
+    except Exception as e:
+        print(f"[ALERTS][region_lookup] Lỗi tra vùng theo CityId ({table}): {e}")
+        return {}
+    return {r.cc: normalize_region_label(r.area_code) for r in rows}
+
 
 def run_smart_business_alerts():
     """
-    Quét và gửi cảnh báo thông minh dựa trên dữ liệu thực tế DNH (Nợ quá hạn, Cháy kho, KPI)
+    Quét và gửi cảnh báo thông minh (Nợ quá hạn, Cháy kho, KPI thấp) — đọc thẳng
+    receivable_detail/inventory/kpi_summary trên Supabase. Trước đây đọc qua file SQLite trung
+    gian dnh_intermediate.db, nhưng phát hiện file này bị đóng băng từ 02/07/2026 (task làm mới
+    DNH_ETL_AutoRefresh trỏ nhầm sang đường dẫn OneDrive cũ đã bỏ, chạy lỗi âm thầm mỗi đêm) —
+    nghĩa là cảnh báo cũ có thể đã báo sai/cũ nhiều ngày. Chuyển hẳn sang đọc Postgres cho khớp
+    với các trigger nhóm A-G khác trong file này, luôn phản ánh dữ liệu Bravo mới nhất.
     """
-    if not os.path.exists(LOCAL_DB_PATH):
-        print(f"[ALERTS] CSDL trung gian {LOCAL_DB_PATH} không tồn tại. Bỏ qua quét.")
+    from sqlalchemy import text
+    engine = _alert_engine()
+    if engine is None:
         return
-        
+
     try:
-        conn = sqlite3.connect(LOCAL_DB_PATH)
-        
-        # Lấy kỳ báo cáo mới nhất để tránh bị lặp đại lý từ các tháng trước
-        latest_period = get_latest_period(conn)
-        if not latest_period:
-            print("[ALERTS] Không tìm thấy kỳ báo cáo nào trong CSDL.")
-            conn.close()
-            return
-            
-        print(f"[ALERTS] Dang quet canh bao cho ky bao cao moi nhat: {latest_period}")
-        
-        # 1. CẢNH BÁO NỢ QUÁ HẠN KHUNG (Top Overdue Debts)
-        query_debt = """
-        SELECT period, customer_code, customer_name, total_overdue, balance_end,
-               overdue_1_15, overdue_15_30, overdue_30_45, overdue_gt_45
-        FROM receivable_detail
-        WHERE period = ? AND total_overdue > 10000000 -- Trên 10 triệu
-        ORDER BY total_overdue DESC
-        LIMIT 5;
-        """
-        df_debt = pd.read_sql(query_debt, conn, params=(latest_period,))
-        if not df_debt.empty:
-            alert_key = "smart_debt_overdue_top5"
-            top_overdue = df_debt.iloc[0]['total_overdue']
-            # Cooldown 6 tiếng
-            if should_send_alert(alert_key, cooldown_hours=6, current_value=str(top_overdue)):
-                rows = []
-                for _, r in df_debt.iterrows():
-                    overdue_fmt = format_vietnamese_money(r['total_overdue'])
-                    balance_fmt = format_vietnamese_money(r['balance_end'])
-                    days_overdue = get_overdue_days_str(conn, r)
-                    rows.append([str(r['customer_code']), r['customer_name'], overdue_fmt, balance_fmt, days_overdue])
-                    
-                send_alert_to_all_channels(
-                    alert_name="CẢNH BÁO NỢ QUÁ HẠN LỚN (TOP 5)",
-                    severity="CRITICAL",
-                    summary=f"Hệ thống phát hiện danh sách nhà thuốc/đại lý đang có nợ quá hạn lớn nhất ở mức báo động đỏ (Kỳ: {latest_period}).",
-                    table_headers=["Mã KH", "Tên Đại Lý", "Nợ Quá Hạn", "Tổng Nợ", "Số Ngày Nợ"],
-                    table_rows=rows,
-                    channels=("telegram", "teams")
-                )
-                record_alert_sent(alert_key, top_overdue)
-                
-        # 2. CẢNH BÁO CHÁY HÀNG TỒN KHO (Inventory Out-of-Stock Risk)
-        query_inv = """
-        SELECT item_code, item_name, closing_qty, outward_qty, months_to_sell
-        FROM inventory
-        WHERE months_to_sell > 0.0 AND months_to_sell <= 1.0 AND closing_qty > 0
-        ORDER BY months_to_sell ASC
-        LIMIT 5;
-        """
-        df_inv = pd.read_sql(query_inv, conn)
-        if not df_inv.empty:
-            alert_key = "smart_inventory_depletion_top5"
-            top_qty = df_inv.iloc[0]['closing_qty']
-            # Cooldown 12 tiếng
-            if should_send_alert(alert_key, cooldown_hours=12, current_value=str(top_qty)):
-                rows = []
-                for _, r in df_inv.iterrows():
-                    closing_qty = r['closing_qty']
-                    outward_qty = r['outward_qty']
-                    months_to_sell = r['months_to_sell']
-                    
-                    # Tính toán số ngày bán còn lại theo công thức chuẩn của người dùng:
-                    # Số ngày bán = Tồn kho / Số lượng bán trung bình mỗi ngày
-                    # Số lượng bán trung bình mỗi ngày = Số lượng 1 năm / 365 (làm tròn lên - ceil)
-                    if outward_qty is not None and outward_qty > 0:
-                        sales_per_day = math.ceil(outward_qty / 365)
-                        if sales_per_day > 0:
-                            days = math.ceil(closing_qty / sales_per_day)
-                            days_to_sell_fmt = f"Còn {days} ngày bán (Trung bình bán {sales_per_day} SKU/ngày)"
-                        else:
-                            days_to_sell_fmt = format_months_to_sell(months_to_sell)
-                    else:
-                        # Dự phòng nếu file mock/CSDL tạm chưa có số lượng bán 1 năm (outward_qty = 0)
-                        days_to_sell_fmt = format_months_to_sell(months_to_sell)
-                        
-                    rows.append([str(r['item_code']), r['item_name'], f"{r['closing_qty']:,.0f}".replace(',', '.'), days_to_sell_fmt])
-                    
-                send_alert_to_all_channels(
-                    alert_name="CẢNH BÁO NGUY CƠ ĐỨT HÀNG (TOP 5)",
-                    severity="WARNING",
-                    summary="Các mặt hàng sau có tốc độ bán quá nhanh và tồn kho chỉ đủ dùng trong dưới 1 tháng.",
-                    table_headers=["Mã SKU", "Tên Thuốc", "Tồn Kho Hiện Tại", "Dự Kiến Bán Hết"],
-                    table_rows=rows,
-                    channels=("telegram", "teams")
-                )
-                record_alert_sent(alert_key, top_qty)
-
-        # 3. CẢNH BÁO TIẾN ĐỘ KPI DOANH SỐ THẤP (Low sales target progress)
-        query_kpi = """
-        SELECT employee_code, employee_name, month_sale_target, month_sale_amount, month_sale_percent
-        FROM kpi_summary
-        WHERE month_sale_target > 10000000 AND month_sale_percent < 0.60 -- Dưới 60% chỉ tiêu
-        ORDER BY month_sale_percent ASC
-        LIMIT 5;
-        """
-        df_kpi = pd.read_sql(query_kpi, conn)
-        if not df_kpi.empty:
-            alert_key = "smart_kpi_low_progress_top5"
-            lowest_pct = df_kpi.iloc[0]['month_sale_percent']
-            # Cooldown 24 tiếng
-            if should_send_alert(alert_key, cooldown_hours=24, current_value=str(lowest_pct)):
-                rows = []
-                for _, r in df_kpi.iterrows():
-                    # Nhân 100 để đổi từ hệ số thập phân sang tỷ lệ phần trăm thực tế (Ví dụ: 0.1 -> 10.0%)
-                    real_pct = r['month_sale_percent'] * 100
-                    percent_fmt = f"{real_pct:.1f}%".replace('.', ',')
-                    target_fmt = format_vietnamese_money(r['month_sale_target'])
-                    amount_fmt = format_vietnamese_money(r['month_sale_amount'])
-                    rows.append([str(r['employee_code']), r['employee_name'], target_fmt, amount_fmt, percent_fmt])
-                    
-                send_alert_to_all_channels(
-                    alert_name="CẢNH BÁO TIẾN ĐỘ KPI TDV THẤP (TOP 5)",
-                    severity="WARNING",
-                    summary="Các Trình dược viên sau đang đạt dưới 60% chỉ tiêu doanh số tháng.",
-                    table_headers=["Mã TDV", "Tên TDV", "Chỉ Tiêu", "Doanh Số Đạt", "Đạt Được"],
-                    table_rows=rows,
-                    channels=("telegram", "teams")
-                )
-                record_alert_sent(alert_key, lowest_pct)
-
-        conn.close()
+        with engine.connect() as conn:
+            latest_period, _ = _two_latest_periods(conn)
     except Exception as e:
-        print(f"[ALERTS] Lỗi khi quét cảnh báo kinh doanh: {e}")
+        print(f"[ALERTS][smart] Lỗi khi lấy kỳ báo cáo mới nhất: {e}")
+        return
+
+    if not latest_period:
+        print("[ALERTS][smart] Không tìm thấy kỳ báo cáo nào trong receivable_detail.")
+        return
+
+    print(f"[ALERTS] Dang quet canh bao cho ky bao cao moi nhat: {latest_period}")
+
+    # 1. CẢNH BÁO NỢ QUÁ HẠN KHUNG (Top Overdue Debts)
+    try:
+        with engine.connect() as conn:
+            debt_rows = conn.execute(text('''
+                SELECT period, customer_code, customer_name, total_overdue, balance_end,
+                       overdue_1_15, overdue_15_30, overdue_30_45, overdue_gt_45, sales_channel
+                FROM receivable_detail
+                WHERE period = :p AND total_overdue > 10000000
+                ORDER BY total_overdue DESC
+                LIMIT 5
+            '''), {"p": latest_period}).fetchall()
+    except Exception as e:
+        print(f"[ALERTS][smart_debt] Lỗi truy vấn nợ quá hạn: {e}")
+        debt_rows = []
+
+    if debt_rows:
+        alert_key = "smart_debt_overdue_top5"
+        top_overdue = debt_rows[0].total_overdue
+        if should_send_alert(alert_key, cooldown_hours=6, current_value=str(top_overdue)):
+            rows = []
+            channels_seen = set()
+            for r in debt_rows:
+                overdue_fmt = format_vietnamese_money(r.total_overdue)
+                balance_fmt = format_vietnamese_money(r.balance_end)
+                days_overdue = estimate_overdue_days_str(
+                    r.period, r.overdue_1_15, r.overdue_15_30, r.overdue_30_45, r.overdue_gt_45)
+                channel_label = normalize_channel_label(r.sales_channel)
+                channels_seen.add(channel_label)
+                rows.append([str(r.customer_code), r.customer_name, channel_label, overdue_fmt, balance_fmt, days_overdue])
+
+            header_channel = channels_seen.pop() if len(channels_seen) == 1 else "OTC + ETC"
+            send_alert_to_all_channels(
+                alert_name="CẢNH BÁO NỢ QUÁ HẠN LỚN (TOP 5)",
+                severity="CRITICAL",
+                summary=f"Hệ thống phát hiện danh sách nhà thuốc/đại lý đang có nợ quá hạn lớn nhất ở mức báo động đỏ (Kỳ: {latest_period}).",
+                table_headers=["Mã KH", "Tên Đại Lý", "Kênh", "Nợ Quá Hạn", "Tổng Nợ", "Số Ngày Nợ"],
+                table_rows=rows,
+                channels=("teams",),
+                period=latest_period, channel=header_channel, region="Toàn quốc",
+                issue="Top 5 khách hàng/đại lý có nợ quá hạn lớn nhất vượt mức báo động đỏ"
+            )
+            record_alert_sent(alert_key, top_overdue)
+    else:
+        print("[ALERTS][smart_debt] Không có khách hàng nào nợ quá hạn vượt ngưỡng 10 triệu.")
+
+    # 2. CẢNH BÁO CHÁY HÀNG TỒN KHO (Inventory Out-of-Stock Risk)
+    try:
+        with engine.connect() as conn:
+            inv_rows = conn.execute(text('''
+                SELECT item_code, item_name, closing_qty, outward_qty, months_to_sell
+                FROM inventory
+                WHERE months_to_sell > 0.0 AND months_to_sell <= 1.0 AND closing_qty > 0
+                ORDER BY months_to_sell ASC
+                LIMIT 5
+            ''')).fetchall()
+    except Exception as e:
+        print(f"[ALERTS][smart_inventory] Lỗi truy vấn tồn kho (có thể thiếu cột outward_qty trên Supabase): {e}")
+        inv_rows = []
+
+    if inv_rows:
+        alert_key = "smart_inventory_depletion_top5"
+        top_qty = inv_rows[0].closing_qty
+        if should_send_alert(alert_key, cooldown_hours=12, current_value=str(top_qty)):
+            rows = []
+            for r in inv_rows:
+                closing_qty = r.closing_qty
+                outward_qty = r.outward_qty
+                months_to_sell = r.months_to_sell
+
+                # Số ngày bán = Tồn kho / Số lượng bán trung bình mỗi ngày
+                # Số lượng bán trung bình mỗi ngày = Số lượng 1 năm / 365 (làm tròn lên - ceil)
+                if outward_qty is not None and outward_qty > 0:
+                    sales_per_day = math.ceil(outward_qty / 365)
+                    if sales_per_day > 0:
+                        days = math.ceil(closing_qty / sales_per_day)
+                        days_to_sell_fmt = f"Còn {days} ngày bán (Trung bình bán {sales_per_day} SKU/ngày)"
+                    else:
+                        days_to_sell_fmt = format_months_to_sell(months_to_sell)
+                else:
+                    days_to_sell_fmt = format_months_to_sell(months_to_sell)
+
+                rows.append([str(r.item_code), r.item_name, f"{closing_qty:,.0f}".replace(',', '.'), days_to_sell_fmt])
+
+            send_alert_to_all_channels(
+                alert_name="CẢNH BÁO NGUY CƠ ĐỨT HÀNG (TOP 5)",
+                severity="WARNING",
+                summary="Các mặt hàng sau có tốc độ bán quá nhanh và tồn kho chỉ đủ dùng trong dưới 1 tháng.",
+                table_headers=["Mã SKU", "Tên Thuốc", "Tồn Kho Hiện Tại", "Dự Kiến Bán Hết"],
+                table_rows=rows,
+                channels=("teams",),
+                period=datetime.now().strftime("%d/%m/%Y"), region="Toàn quốc",
+                issue="Tồn kho sắp cạn (dưới 1 tháng bán) do tốc độ bán quá nhanh"
+            )
+            record_alert_sent(alert_key, top_qty)
+    else:
+        print("[ALERTS][smart_inventory] Không có mặt hàng nào sắp cạn (dưới 1 tháng bán).")
+
+    # 3. CẢNH BÁO TIẾN ĐỘ KPI DOANH SỐ THẤP (Low sales target progress)
+    try:
+        with engine.connect() as conn:
+            kpi_rows = conn.execute(text('''
+                SELECT employee_code, employee_name, area_code, month_sale_target, month_sale_amount, month_sale_percent
+                FROM kpi_summary
+                WHERE month_sale_target > 10000000 AND month_sale_percent < 0.60
+                ORDER BY month_sale_percent ASC
+                LIMIT 5
+            ''')).fetchall()
+    except Exception as e:
+        print(f"[ALERTS][smart_kpi] Lỗi truy vấn KPI thấp: {e}")
+        kpi_rows = []
+
+    if kpi_rows:
+        alert_key = "smart_kpi_low_progress_top5"
+        lowest_pct = kpi_rows[0].month_sale_percent
+        if should_send_alert(alert_key, cooldown_hours=24, current_value=str(lowest_pct)):
+            rows = []
+            regions_seen = set()
+            for r in kpi_rows:
+                real_pct = r.month_sale_percent * 100
+                percent_fmt = f"{real_pct:.1f}%".replace('.', ',')
+                target_fmt = format_vietnamese_money(r.month_sale_target)
+                amount_fmt = format_vietnamese_money(r.month_sale_amount)
+                region_label = normalize_region_label(r.area_code)
+                regions_seen.add(region_label)
+                rows.append([str(r.employee_code), r.employee_name, region_label, target_fmt, amount_fmt, percent_fmt])
+            header_region = regions_seen.pop() if len(regions_seen) == 1 else "Nhiều miền"
+
+            send_alert_to_all_channels(
+                alert_name="CẢNH BÁO TIẾN ĐỘ KPI TDV THẤP (TOP 5)",
+                severity="WARNING",
+                summary="Các Trình dược viên sau đang đạt dưới 60% chỉ tiêu doanh số tháng.",
+                table_headers=["Mã TDV", "Tên TDV", "Vùng", "Chỉ Tiêu", "Doanh Số Đạt", "Đạt Được"],
+                table_rows=rows,
+                channels=("teams",),
+                period=datetime.now().strftime("%m/%Y"), region=header_region,
+                issue="Trình dược viên đạt dưới 60% chỉ tiêu doanh số tháng"
+            )
+            record_alert_sent(alert_key, lowest_pct)
+    else:
+        print("[ALERTS][smart_kpi] Không có nhân sự nào đạt dưới 60% chỉ tiêu doanh số tháng.")
 
 def run_sales_kpi_insights_alert():
     """
-    Quét và gửi báo cáo phân tích doanh số, hiệu suất KPI theo kênh (OTC/ETC) và chức danh.
+    Quét và gửi báo cáo phân tích hiệu suất KPI doanh số theo chức danh (TP/PP/QLV/TDV/CTV/CS).
+
+    LƯU Ý: trước đây báo cáo này còn có phần chia theo kênh (OTC/ETC), nhưng phần đó dựa trên
+    dữ liệu suy luận không đáng tin cậy (xem docstring get_sales_and_kpi_analytics) nên đã bỏ —
+    chỉ còn phần so sánh theo chức danh, đọc thẳng kpi_summary trên Supabase.
     """
     from src.analytics import get_sales_and_kpi_analytics
-    
+
     data = get_sales_and_kpi_analytics()
     if "error" in data:
         print(f"[ALERTS] Không thể phân tích KPI doanh số: {data['error']}")
         return
-        
+
     alert_key = f"sales_kpi_insights_report_{data['latest_period']}"
     # Cooldown 12 tiếng để tránh spam báo cáo định kỳ
     if should_send_alert(alert_key, cooldown_hours=12, current_value="sent"):
         rows = []
-        
-        # 1. Kênh bán hàng (Phân phối, không phải con người)
-        for ch in data['channels']:
-            rows.append([
-                f"Kênh {ch['channel']}",
-                format_vietnamese_money(ch['target']),
-                format_vietnamese_money(ch['actual']),
-                f"{ch['percent']:.1f}%".replace('.', ',')
-            ])
-            
-        # 2. So sánh hiệu suất giữa các Trưởng phòng (TP)
+
+        # 1. So sánh hiệu suất giữa các Trưởng phòng (TP)
         if data['tps']:
             for r in data['tps']:
                 rows.append([
@@ -438,7 +484,7 @@ def run_sales_kpi_insights_alert():
                     f"{r['month_sale_percent']*100:.1f}%".replace('.', ',')
                 ])
                 
-        # 3. So sánh hiệu suất giữa các Phó phòng (PP)
+        # 2. So sánh hiệu suất giữa các Phó phòng (PP)
         if data['pps']:
             for r in data['pps']:
                 rows.append([
@@ -447,8 +493,8 @@ def run_sales_kpi_insights_alert():
                     format_vietnamese_money(r['month_sale_amount']),
                     f"{r['month_sale_percent']*100:.1f}%".replace('.', ',')
                 ])
-                
-        # 4. So sánh hiệu suất giữa các Quản lý vùng (QLV)
+
+        # 3. So sánh hiệu suất giữa các Quản lý vùng (QLV)
         if data['qlvs']:
             for r in data['qlvs']:
                 rows.append([
@@ -458,7 +504,7 @@ def run_sales_kpi_insights_alert():
                     f"{r['month_sale_percent']*100:.1f}%".replace('.', ',')
                 ])
                 
-        # 5. Top 3 TDV/CTV xuất sắc nhất
+        # 4. Top 3 TDV/CTV xuất sắc nhất
         for idx, r in enumerate(data['top_reps']):
             rows.append([
                 f"⭐ Top {idx+1} TDV: {r['employee_name']}",
@@ -466,8 +512,8 @@ def run_sales_kpi_insights_alert():
                 format_vietnamese_money(r['month_sale_amount']),
                 f"{r['month_sale_percent']*100:.1f}%".replace('.', ',')
             ])
-            
-        # 6. Top 3 TDV/CTV cần hỗ trợ
+
+        # 5. Top 3 TDV/CTV cần hỗ trợ
         for idx, r in enumerate(data['bottom_reps']):
             rows.append([
                 f"⚠️ Cần hỗ trợ #{idx+1}: {r['employee_name']} ({r['position_code']})",
@@ -475,14 +521,16 @@ def run_sales_kpi_insights_alert():
                 format_vietnamese_money(r['month_sale_amount']),
                 f"{r['month_sale_percent']*100:.1f}%".replace('.', ',')
             ])
-            
+
         send_alert_to_all_channels(
-            alert_name="BÁO CÁO PHÂN TÍCH DOANH SỐ & KPI",
+            alert_name="BÁO CÁO PHÂN TÍCH KPI THEO CHỨC DANH",
             severity="INFO",
-            summary=f"Báo cáo định kỳ phân tích hiệu suất thực hiện KPI doanh số theo Kênh phân phối và cấp bậc quản lý (TP/PP/QLV) vs nhân viên trực tiếp (TDV/CTV/CS) tại kỳ báo cáo {data['latest_period']}.",
+            summary=f"Báo cáo định kỳ so sánh hiệu suất thực hiện KPI doanh số theo cấp bậc quản lý (TP/PP/QLV) vs nhân viên trực tiếp (TDV/CTV/CS) — kỳ {data['latest_period']}.",
             table_headers=["Phân Loại / Nhân Sự", "KPI Mục Tiêu", "Doanh Số Đạt", "Tỷ Lệ Hoàn Thành"],
             table_rows=rows,
-            channels=("telegram", "teams")
+            channels=("teams",),
+            period=data['latest_period'], region="Toàn quốc",
+            issue="Báo cáo định kỳ hiệu suất KPI doanh số theo cấp bậc quản lý"
         )
         record_alert_sent(alert_key, "sent")
 
@@ -521,8 +569,24 @@ def _get_revenue_drop_threshold():
 
 def check_revenue_drop_alert():
     """
-    TRIGGER 4: Cảnh báo khi tổng doanh thu (OTC + ETC, loại trừ dòng khuyến mãi CTKM)
-    của tháng mới nhất giảm quá ngưỡng (mặc định 20%) so với tháng liền trước.
+    TRIGGER 4: Cảnh báo khi doanh thu (loại trừ dòng khuyến mãi CTKM) từ đầu tháng đến ngày dữ
+    liệu mới nhất giảm quá ngưỡng (mặc định 20%) so với ĐÚNG SỐ NGÀY tương ứng của tháng liền
+    trước — tính RIÊNG cho từng kênh OTC/ETC (không gộp trước khi so ngưỡng).
+
+    So sánh "cùng số ngày đầu kỳ" (apples-to-apples) thay vì tháng-hiện-tại-dở-dang vs
+    tháng-trước-trọn-vẹn: nếu không sẽ luôn báo sụt giảm giả ~80-95% vào đầu mỗi tháng chỉ vì
+    tháng mới có vài ngày dữ liệu so với tháng trước đủ ~30 ngày. Lỗi này phát hiện thực tế ngày
+    08/07/2026 (alert báo ETC "giảm 84.9%" chỉ vì mới có 8 ngày tháng 7 so với trọn tháng 6, không
+    phải sụt giảm kinh doanh thật). Khi tháng hiện tại đã đủ ngày (cuối tháng), công thức tự động
+    quay về đúng "tháng N trọn vẹn vs tháng N-1 trọn vẹn" như thiết kế ban đầu.
+
+    Mốc "hôm nay" lấy theo ngày LIỀN TRƯỚC ngày mới nhất có dữ liệu hóa đơn (không dùng
+    datetime.now(), KHÔNG dùng thẳng MAX(DocDate)) — xác minh thực tế 08/07/2026 (xem
+    check_daily_kpi_pace_alert): ngày mới nhất trong dữ liệu luôn CHƯA đồng bộ xong (TDV nhập liệu
+    suốt ngày, sync 5 lần/ngày chưa chắc bắt kịp cuối ngày — vd hôm đó ngày mới nhất chỉ có
+    16/~135 nhân viên phát sinh hóa đơn so với ngày liền trước có 135 người). Dùng thẳng ngày đó
+    làm mốc cuối kỳ sẽ khiến kỳ "tháng này" bị thiếu 1 ngày gần trọn vẹn, làm tỷ lệ sụt giảm lệch
+    lên — ngày liền trước chắc chắn đã đồng bộ trọn vẹn.
 
     LƯU Ý CÁCH TÍNH (cần DNH xác nhận theo MCNA_DNH_ProjectPlan_v3.docx):
       - Hiện triển khai so sánh THÁNG N vs THÁNG N-1 (month-over-month, kỳ liền kề).
@@ -531,6 +595,7 @@ def check_revenue_drop_alert():
     """
     try:
         from ai_agent.chatbot import _get_cloud_engine
+        from src.etl import _period_revenue, _prev_month_tuple
         from sqlalchemy import text
     except Exception as e:
         print(f"[ALERTS][revenue_drop] Không import được engine dữ liệu: {e}")
@@ -541,83 +606,81 @@ def check_revenue_drop_alert():
         print("[ALERTS][revenue_drop] Chưa cấu hình CLOUD_DB_URL — bỏ qua cảnh báo doanh thu giảm.")
         return
 
-    # Doanh thu theo tháng: gộp OTC (brv_hoadonct) + ETC (brvsx_hoadonct) qua CTE riêng rồi
-    # UNION ALL (đúng quy tắc join-per-channel trong chatbot), chỉ tính SL/doanh thu thực bán
-    # (loại dòng CTKM khuyến mãi), lấy 2 tháng gần nhất theo DocDate.
-    sql = text("""
-        WITH otc AS (
-            SELECT DATE_TRUNC('month', h."DocDate"::timestamp)::date AS m,
-                   SUM(CASE WHEN c."CTKM" IS NULL OR c."CTKM" = '' THEN c."Amount9" ELSE 0 END) AS rev
-            FROM brv_hoadonct c
-            JOIN brv_hoadonhdr h ON c."Stt" = h."Stt"
-            LEFT JOIN brv_trangthaiduyet d ON h."DocStatus" = d."DocStatusKey"
-            LEFT JOIN brv_trangthaihoadon e ON h."EInvoiceStatus" = e."EInvoiceStatusKey"
-            WHERE h."IsActive" = TRUE AND h."IsHC" = FALSE
-              AND (d."IsCancelled" IS NULL OR d."IsCancelled" = FALSE)
-              AND (e."IsCancelled" IS NULL OR e."IsCancelled" = FALSE)
-            GROUP BY 1
-        ),
-        etc AS (
-            SELECT DATE_TRUNC('month', h."DocDate"::timestamp)::date AS m,
-                   SUM(CASE WHEN c."CTKM" IS NULL OR c."CTKM" = '' THEN c."Amount9" ELSE 0 END) AS rev
-            FROM brvsx_hoadonct c
-            JOIN brvsx_hoadonhdr h ON c."Stt" = h."Stt"
-            LEFT JOIN brv_trangthaiduyet d ON h."DocStatus" = d."DocStatusKey"
-            LEFT JOIN brv_trangthaihoadon e ON h."EInvoiceStatus" = e."EInvoiceStatusKey"
-            WHERE h."IsActive" = TRUE
-              AND (d."IsCancelled" IS NULL OR d."IsCancelled" = FALSE)
-              AND (e."IsCancelled" IS NULL OR e."IsCancelled" = FALSE)
-            GROUP BY 1
-        ),
-        allm AS (
-            SELECT m, SUM(rev) AS rev
-            FROM (SELECT * FROM otc UNION ALL SELECT * FROM etc) x
-            GROUP BY m
-        )
-        SELECT m, rev FROM allm ORDER BY m DESC LIMIT 2
-    """)
-
     try:
         with engine.connect() as conn:
-            result = conn.execute(sql).fetchall()
+            overall_max_row = conn.execute(text('''
+                SELECT MAX(d) FROM (
+                    SELECT MAX("DocDate"::date) AS d FROM brv_hoadonhdr WHERE "IsActive"=TRUE
+                    UNION ALL
+                    SELECT MAX("DocDate"::date) FROM brvsx_hoadonhdr WHERE "IsActive"=TRUE
+                ) x
+            ''')).fetchone()
+            overall_max = overall_max_row[0] if overall_max_row else None
+            data_max_date = None
+            if overall_max:
+                complete_row = conn.execute(text('''
+                    SELECT MAX(d) FROM (
+                        SELECT MAX("DocDate"::date) AS d FROM brv_hoadonhdr WHERE "IsActive"=TRUE AND "DocDate"::date < :overall_max
+                        UNION ALL
+                        SELECT MAX("DocDate"::date) FROM brvsx_hoadonhdr WHERE "IsActive"=TRUE AND "DocDate"::date < :overall_max
+                    ) x
+                '''), {"overall_max": overall_max}).fetchone()
+                data_max_date = complete_row[0] if complete_row else None
+            if not data_max_date:
+                print("[ALERTS][revenue_drop] Chưa có dữ liệu hóa đơn để so sánh.")
+                return
+
+            cur_month_start = datetime(data_max_date.year, data_max_date.month, 1)
+            days_elapsed = (data_max_date - cur_month_start.date()).days + 1
+            cur_start = cur_month_start
+            cur_end = cur_month_start + timedelta(days=days_elapsed)
+
+            prev_year, prev_month = _prev_month_tuple(cur_month_start)
+            prev_start = datetime(prev_year, prev_month, 1)
+            # Chặn trên bằng đầu tháng hiện tại — nếu tháng trước ít ngày hơn số ngày đã trôi qua
+            # của tháng này (vd so ngày 31 với tháng 2) thì lấy trọn tháng trước, không tràn sang tháng sau nữa.
+            prev_end = min(prev_start + timedelta(days=days_elapsed), cur_month_start)
+
+            cur_otc, cur_etc, _ = _period_revenue(conn, cur_start, cur_end)
+            prev_otc, prev_etc, _ = _period_revenue(conn, prev_start, prev_end)
     except Exception as e:
         print(f"[ALERTS][revenue_drop] Lỗi truy vấn doanh thu: {e}")
         return
 
-    if len(result) < 2:
-        print("[ALERTS][revenue_drop] Chưa đủ 2 tháng dữ liệu để so sánh — bỏ qua.")
-        return
-
-    latest_month, latest_rev = result[0][0], result[0][1]
-    prev_month, prev_rev = result[1][0], result[1][1]
-
-    ratio = revenue_drop_ratio(prev_rev, latest_rev)
     threshold = _get_revenue_drop_threshold()
-    if ratio is None:
-        print("[ALERTS][revenue_drop] Không tính được tỷ lệ sụt giảm (doanh thu kỳ trước <= 0).")
-        return
+    by_channel = {"OTC": (cur_otc, prev_otc), "ETC": (cur_etc, prev_etc)}
+    period_desc = f"{cur_start.strftime('%d/%m')}-{data_max_date.strftime('%d/%m/%Y')}"
+    prev_period_desc = f"{prev_start.strftime('%d/%m')}-{(prev_end - timedelta(days=1)).strftime('%d/%m/%Y')}"
 
-    print(f"[ALERTS][revenue_drop] Tháng {latest_month} vs {prev_month}: tỷ lệ thay đổi = {ratio*100:.1f}% (ngưỡng cảnh báo giảm > {threshold*100:.0f}%).")
+    for channel_label, (latest_rev, prev_rev) in by_channel.items():
+        ratio = revenue_drop_ratio(prev_rev, latest_rev)
+        if ratio is None:
+            print(f"[ALERTS][revenue_drop][{channel_label}] Không tính được tỷ lệ sụt giảm (doanh thu kỳ trước <= 0).")
+            continue
 
-    if ratio > threshold:
-        alert_key = f"revenue_drop:{latest_month}"
-        if should_send_alert(alert_key, cooldown_hours=24, current_value=str(round(ratio, 4))):
-            drop_amount = float(prev_rev) - float(latest_rev)
-            send_alert_to_all_channels(
-                alert_name="CẢNH BÁO DOANH THU SỤT GIẢM MẠNH",
-                severity="CRITICAL",
-                summary=(f"Doanh thu tháng {latest_month.strftime('%m/%Y')} giảm "
-                         f"{ratio*100:.1f}% so với tháng {prev_month.strftime('%m/%Y')} "
-                         f"(vượt ngưỡng cảnh báo {threshold*100:.0f}%)."),
-                table_headers=["Kỳ", "Doanh thu (OTC+ETC, đã trừ KM)", "Chênh lệch"],
-                table_rows=[
-                    [prev_month.strftime('%m/%Y'), format_vietnamese_money(prev_rev), "—"],
-                    [latest_month.strftime('%m/%Y'), format_vietnamese_money(latest_rev),
-                     f"-{format_vietnamese_money(drop_amount)} ({ratio*100:.1f}%)"],
-                ],
-                channels=("telegram", "teams")
-            )
-            record_alert_sent(alert_key, str(round(ratio, 4)))
+        print(f"[ALERTS][revenue_drop][{channel_label}] {period_desc} vs {prev_period_desc}: tỷ lệ thay đổi = {ratio*100:.1f}% (ngưỡng cảnh báo giảm > {threshold*100:.0f}%).")
+
+        if ratio > threshold:
+            alert_key = f"revenue_drop:{channel_label}:{cur_month_start.strftime('%Y-%m')}"
+            if should_send_alert(alert_key, cooldown_hours=24, current_value=str(round(ratio, 4))):
+                drop_amount = float(prev_rev) - float(latest_rev)
+                send_alert_to_all_channels(
+                    alert_name=f"CẢNH BÁO DOANH THU SỤT GIẢM MẠNH ({channel_label})",
+                    severity="CRITICAL",
+                    summary=(f"Doanh thu kênh {channel_label} kỳ {period_desc} giảm "
+                             f"{ratio*100:.1f}% so với cùng số ngày kỳ {prev_period_desc} "
+                             f"(vượt ngưỡng cảnh báo {threshold*100:.0f}%)."),
+                    table_headers=["Kỳ", f"Doanh thu {channel_label} (đã trừ KM)", "Chênh lệch"],
+                    table_rows=[
+                        [prev_period_desc, format_vietnamese_money(prev_rev), "—"],
+                        [period_desc, format_vietnamese_money(latest_rev),
+                         f"-{format_vietnamese_money(drop_amount)} ({ratio*100:.1f}%)"],
+                    ],
+                    channels=("teams",),
+                    period=cur_month_start.strftime('%m/%Y'), channel=channel_label, region="Toàn quốc",
+                    issue=f"Doanh thu kênh {channel_label} giảm {ratio*100:.1f}% so với cùng số ngày kỳ trước"
+                )
+                record_alert_sent(alert_key, str(round(ratio, 4)))
 
 
 def _find_credit_limit_column(conn):
@@ -730,7 +793,9 @@ def check_credit_limit_exceeded_alert():
             summary="Các khách hàng sau có dư nợ hiện tại vượt hạn mức tín dụng được cấp.",
             table_headers=["Mã KH", "Tên Khách Hàng", "Dư Nợ", "Hạn Mức", "Vượt"],
             table_rows=rows,
-            channels=("telegram", "teams")
+            channels=("teams",),
+            period=latest_period, region="Toàn quốc",
+            issue="Khách hàng có dư nợ hiện tại vượt hạn mức tín dụng được cấp"
         )
         record_alert_sent(alert_key, str(top_over))
 
@@ -815,7 +880,11 @@ def return_rate(return_value, sales_value):
 # ---- Nhóm A: Công nợ / dòng tiền -------------------------------------------
 
 def check_company_overdue_ratio_alert():
-    """A3: Tỷ lệ nợ quá hạn / tổng dư nợ TOÀN CÔNG TY vượt ngưỡng (sức khỏe dòng tiền)."""
+    """
+    A3: Tỷ lệ nợ quá hạn / tổng dư nợ vượt ngưỡng (sức khỏe dòng tiền).
+    Tính RIÊNG cho từng kênh OTC/ETC (receivable_detail.sales_channel) thay vì gộp toàn công ty,
+    để bắt được ca 1 kênh có tỷ lệ quá hạn cao bị kênh kia che lấp khi gộp.
+    """
     from sqlalchemy import text
     engine = _alert_engine()
     if engine is None:
@@ -826,33 +895,48 @@ def check_company_overdue_ratio_alert():
             latest, _ = _two_latest_periods(conn)
             if not latest:
                 return
-            row = conn.execute(text(
-                "SELECT SUM(total_overdue), SUM(balance_end) FROM receivable_detail WHERE period=:p"
-            ), {"p": latest}).fetchone()
+            rows = conn.execute(text(
+                "SELECT sales_channel, SUM(total_overdue) AS overdue, SUM(balance_end) AS balance "
+                "FROM receivable_detail WHERE period=:p GROUP BY sales_channel"
+            ), {"p": latest}).fetchall()
     except Exception as e:
         print(f"[ALERTS][overdue_ratio] Lỗi: {e}")
         return
-    ratio = overdue_ratio(row[0], row[1])
-    if ratio is None:
-        return
-    print(f"[ALERTS][overdue_ratio] Kỳ {latest}: nợ quá hạn/tổng nợ = {ratio*100:.1f}% (ngưỡng {threshold*100:.0f}%).")
-    if ratio > threshold:
-        alert_key = f"company_overdue_ratio:{latest}"
-        if should_send_alert(alert_key, cooldown_hours=24, current_value=str(round(ratio, 4))):
-            send_alert_to_all_channels(
-                alert_name="CẢNH BÁO TỶ LỆ NỢ QUÁ HẠN TOÀN CÔNG TY CAO",
-                severity="CRITICAL",
-                summary=(f"Kỳ {latest}: tổng nợ quá hạn chiếm {ratio*100:.1f}% tổng dư nợ "
-                         f"(vượt ngưỡng {threshold*100:.0f}%) — dòng tiền đang bị nghẽn."),
-                table_headers=["Tổng dư nợ", "Nợ quá hạn", "Tỷ lệ quá hạn"],
-                table_rows=[[format_vietnamese_money(row[1]), format_vietnamese_money(row[0]), f"{ratio*100:.1f}%"]],
-                channels=("telegram", "teams")
-            )
-            record_alert_sent(alert_key, str(round(ratio, 4)))
+
+    by_channel = {}
+    for r in rows:
+        label = normalize_channel_label(r.sales_channel)
+        acc = by_channel.setdefault(label, [0, 0])
+        acc[0] += float(r.overdue or 0)
+        acc[1] += float(r.balance or 0)
+
+    for channel_label, (overdue_sum, balance_sum) in by_channel.items():
+        ratio = overdue_ratio(overdue_sum, balance_sum)
+        if ratio is None:
+            continue
+        print(f"[ALERTS][overdue_ratio][{channel_label}] Kỳ {latest}: nợ quá hạn/tổng nợ = {ratio*100:.1f}% (ngưỡng {threshold*100:.0f}%).")
+        if ratio > threshold:
+            alert_key = f"company_overdue_ratio:{channel_label}:{latest}"
+            if should_send_alert(alert_key, cooldown_hours=24, current_value=str(round(ratio, 4))):
+                send_alert_to_all_channels(
+                    alert_name=f"CẢNH BÁO TỶ LỆ NỢ QUÁ HẠN CAO ({channel_label})",
+                    severity="CRITICAL",
+                    summary=(f"Kỳ {latest}: tổng nợ quá hạn kênh {channel_label} chiếm {ratio*100:.1f}% tổng dư nợ kênh này "
+                             f"(vượt ngưỡng {threshold*100:.0f}%) — dòng tiền kênh {channel_label} đang bị nghẽn."),
+                    table_headers=["Tổng dư nợ", "Nợ quá hạn", "Tỷ lệ quá hạn"],
+                    table_rows=[[format_vietnamese_money(balance_sum), format_vietnamese_money(overdue_sum), f"{ratio*100:.1f}%"]],
+                    channels=("teams",),
+                    period=latest, channel=channel_label, region="Toàn quốc",
+                    issue=f"Tỷ lệ nợ quá hạn/tổng dư nợ kênh {channel_label} đạt {ratio*100:.1f}%, vượt ngưỡng an toàn"
+                )
+                record_alert_sent(alert_key, str(round(ratio, 4)))
 
 
 def check_overdue_customer_new_orders_alert():
-    """A2: Khách đang nợ quá hạn NHƯNG vẫn được lên đơn mới trong tháng gần nhất."""
+    """
+    A2: Khách đang nợ quá hạn NHƯNG vẫn được lên đơn mới trong tháng gần nhất.
+    Nhóm RIÊNG theo kênh của khoản nợ (receivable_detail.sales_channel) để gắn channel= đúng.
+    """
     from sqlalchemy import text
     engine = _alert_engine()
     if engine is None:
@@ -871,7 +955,7 @@ def check_overdue_customer_new_orders_alert():
                 return
             sql = text('''
                 WITH overdue_cust AS (
-                    SELECT customer_code, customer_name, total_overdue
+                    SELECT customer_code, customer_name, total_overdue, sales_channel
                     FROM receivable_detail
                     WHERE period = :p AND total_overdue > 10000000
                 ),
@@ -885,9 +969,9 @@ def check_overdue_customer_new_orders_alert():
                     GROUP BY "CustomerCode"
                 ),
                 recent_agg AS (SELECT cc, SUM(n) AS n, SUM(amt) AS amt FROM recent GROUP BY cc)
-                SELECT o.customer_code, o.customer_name, o.total_overdue, r.n, r.amt
+                SELECT o.customer_code, o.customer_name, o.total_overdue, o.sales_channel, r.n, r.amt
                 FROM overdue_cust o JOIN recent_agg r ON o.customer_code = r.cc
-                ORDER BY o.total_overdue DESC LIMIT 10
+                ORDER BY o.total_overdue DESC
             ''')
             rows = conn.execute(sql, {"p": latest, "since": since}).fetchall()
     except Exception as e:
@@ -896,19 +980,33 @@ def check_overdue_customer_new_orders_alert():
     if not rows:
         print("[ALERTS][overdue_new_orders] Không có khách quá hạn nào được lên đơn mới.")
         return
-    alert_key = "overdue_customer_new_orders"
-    top = rows[0][2]
-    if should_send_alert(alert_key, cooldown_hours=12, current_value=str(top)):
-        table = [[str(r[0]), r[1], format_vietnamese_money(r[2]), str(int(r[3])), format_vietnamese_money(r[4])] for r in rows]
-        send_alert_to_all_channels(
-            alert_name="CẢNH BÁO: KHÁCH NỢ QUÁ HẠN VẪN ĐƯỢC LÊN ĐƠN MỚI",
-            severity="CRITICAL",
-            summary="Các khách hàng đang nợ quá hạn lớn nhưng vẫn phát sinh đơn hàng mới — cần kiểm duyệt trước khi giao thêm.",
-            table_headers=["Mã KH", "Tên KH", "Nợ Quá Hạn", "Số Đơn Mới", "Giá Trị Đơn Mới"],
-            table_rows=table,
-            channels=("telegram", "teams")
-        )
-        record_alert_sent(alert_key, str(top))
+
+    by_channel = {}
+    for r in rows:
+        label = normalize_channel_label(r.sales_channel)
+        by_channel.setdefault(label, []).append(r)
+
+    for channel_label, channel_rows in by_channel.items():
+        channel_rows = channel_rows[:10]
+        alert_key = f"overdue_customer_new_orders:{channel_label}"
+        top = channel_rows[0].total_overdue
+        if should_send_alert(alert_key, cooldown_hours=12, current_value=str(top)):
+            with engine.connect() as rconn:
+                region_map = get_customer_regions_by_code(rconn, [r.customer_code for r in channel_rows], channel_label)
+            table = [[str(r.customer_code), region_map.get(r.customer_code, "Không rõ"), r.customer_name,
+                      format_vietnamese_money(r.total_overdue), str(int(r.n)), format_vietnamese_money(r.amt)]
+                     for r in channel_rows]
+            send_alert_to_all_channels(
+                alert_name=f"CẢNH BÁO: KHÁCH NỢ QUÁ HẠN VẪN ĐƯỢC LÊN ĐƠN MỚI ({channel_label})",
+                severity="CRITICAL",
+                summary=f"Các khách hàng kênh {channel_label} đang nợ quá hạn lớn nhưng vẫn phát sinh đơn hàng mới — cần kiểm duyệt trước khi giao thêm.",
+                table_headers=["Mã KH", "Vùng", "Tên KH", "Nợ Quá Hạn", "Số Đơn Mới", "Giá Trị Đơn Mới"],
+                table_rows=table,
+                channels=("teams",),
+                period=latest, channel=channel_label, region="Toàn quốc",
+                issue=f"Khách hàng kênh {channel_label} đang nợ quá hạn lớn nhưng vẫn phát sinh đơn hàng mới chưa được kiểm duyệt"
+            )
+            record_alert_sent(alert_key, str(top))
 
 
 def check_debt_aging_migration_alert():
@@ -952,7 +1050,9 @@ def check_debt_aging_migration_alert():
                      f"(kỳ trước {prev} chưa có) — nguy cơ nợ xấu, cần thu hồi gấp."),
             table_headers=["Mã KH", "Tên KH", "Nợ >45 ngày"],
             table_rows=table,
-            channels=("telegram", "teams")
+            channels=("teams",),
+            period=latest, region="Toàn quốc",
+            issue=f"Khách hàng lần đầu rơi vào nhóm nợ quá hạn >45 ngày (kỳ trước {prev} chưa có) — nguy cơ nợ xấu"
         )
         record_alert_sent(alert_key, str(top))
 
@@ -993,7 +1093,9 @@ def check_dead_stock_alert():
                      f"— vốn đang bị đọng, cân nhắc xả hàng/khuyến mãi."),
             table_headers=["Mã SKU", "Tên Hàng", "Tồn Kho", "Giá Trị Tồn", "Số Tháng Bán"],
             table_rows=table,
-            channels=("telegram", "teams")
+            channels=("teams",),
+            period=datetime.now().strftime("%d/%m/%Y"), region="Toàn quốc",
+            issue=f"Tồn kho bán chậm trên {dead_months:.0f} tháng, giá trị tồn đọng lớn — vốn bị đọng"
         )
         record_alert_sent(alert_key, str(top))
 
@@ -1035,7 +1137,16 @@ def check_near_expiry_alert():
 # ---- Nhóm C: Doanh thu / khách hàng ----------------------------------------
 
 def check_customer_churn_alert():
-    """C1: Khách lớn (tháng trước mua nhiều) nhưng tháng mới nhất rớt mạnh — nguy cơ mất khách."""
+    """
+    C1: Khách lớn (tháng trước mua nhiều) nhưng tháng mới nhất rớt mạnh — nguy cơ mất khách.
+    Tính RIÊNG top 10 cho từng kênh OTC/ETC (không gộp trước khi xếp hạng/so ngưỡng).
+
+    INNER JOIN với dms_khachhang/dmssx_khachhang để CHỈ tính khách hàng thật — xác nhận thực tế
+    (08/07/2026) rằng brv_hoadonhdr/brvsx_hoadonhdr chứa nhiều "CustomerCode" KHÔNG phải khách
+    hàng bán lẻ/ETC thật (mã nội bộ/công ty mẹ 'P000001', mã nhà cung cấp 'NCC*', mã chi phí nội
+    bộ 'I000001'/'I000002'...) — nếu không lọc sẽ hiện nhầm các mã này như "khách hàng lớn" cần
+    chăm sóc (đã thấy thực tế mã '1001136' 274 tỷ đồng/197 hóa đơn không khớp dim khách hàng nào).
+    """
     from sqlalchemy import text
     engine = _alert_engine()
     if engine is None:
@@ -1046,25 +1157,36 @@ def check_customer_churn_alert():
         with engine.connect() as conn:
             sql = text('''
                 WITH cm AS (
-                    SELECT "CustomerCode" AS cc, DATE_TRUNC('month',"DocDate"::timestamp)::date AS m, SUM("TotalAmount") AS rev
-                    FROM brv_hoadonhdr WHERE "IsActive"=TRUE AND "IsHC"=FALSE GROUP BY 1,2
+                    SELECT 'OTC' AS channel, h."CustomerCode" AS cc, k."Name" AS cname,
+                           DATE_TRUNC('month',h."DocDate"::timestamp)::date AS m, SUM(h."TotalAmount") AS rev
+                    FROM brv_hoadonhdr h
+                    JOIN dms_khachhang k ON h."CustomerCode" = k."Code"
+                    WHERE h."IsActive"=TRUE AND h."IsHC"=FALSE GROUP BY 1,2,3,4
                     UNION ALL
-                    SELECT "CustomerCode", DATE_TRUNC('month',"DocDate"::timestamp)::date, SUM("TotalAmount")
-                    FROM brvsx_hoadonhdr WHERE "IsActive"=TRUE GROUP BY 1,2
+                    SELECT 'ETC', h."CustomerCode", k."Name",
+                           DATE_TRUNC('month',h."DocDate"::timestamp)::date, SUM(h."TotalAmount")
+                    FROM brvsx_hoadonhdr h
+                    JOIN dmssx_khachhang k ON h."CustomerCode" = k."Code"
+                    WHERE h."IsActive"=TRUE GROUP BY 1,2,3,4
                 ),
-                agg AS (SELECT cc, m, SUM(rev) AS rev FROM cm GROUP BY cc, m),
-                mm AS (SELECT m FROM (SELECT DISTINCT m FROM agg ORDER BY m DESC LIMIT 2) t),
-                latest AS (SELECT MAX(m) AS m FROM mm),
-                prev AS (SELECT MIN(m) AS m FROM mm)
-                SELECT a.cc,
+                agg AS (SELECT channel, cc, cname, m, SUM(rev) AS rev FROM cm GROUP BY channel, cc, cname, m),
+                mranked AS (
+                    SELECT channel, m, ROW_NUMBER() OVER (PARTITION BY channel ORDER BY m DESC) AS rn
+                    FROM (SELECT DISTINCT channel, m FROM agg) d
+                ),
+                latest AS (SELECT channel, m FROM mranked WHERE rn = 1),
+                prevm AS (SELECT channel, m FROM mranked WHERE rn = 2)
+                SELECT a.channel, a.cc, a.cname,
                        COALESCE(cur.rev,0) AS cur_rev,
                        prevd.rev AS prev_rev
-                FROM (SELECT DISTINCT cc FROM agg) a
-                JOIN agg prevd ON prevd.cc=a.cc AND prevd.m=(SELECT m FROM prev)
-                LEFT JOIN agg cur ON cur.cc=a.cc AND cur.m=(SELECT m FROM latest)
+                FROM (SELECT DISTINCT channel, cc, cname FROM agg) a
+                JOIN prevm p ON p.channel = a.channel
+                JOIN agg prevd ON prevd.cc=a.cc AND prevd.channel=a.channel AND prevd.m=p.m
+                LEFT JOIN latest l ON l.channel=a.channel
+                LEFT JOIN agg cur ON cur.cc=a.cc AND cur.channel=a.channel AND cur.m=l.m
                 WHERE prevd.rev > :min_prev
                   AND (prevd.rev - COALESCE(cur.rev,0)) / prevd.rev > :drop
-                ORDER BY prevd.rev DESC LIMIT 10
+                ORDER BY a.channel, prevd.rev DESC
             ''')
             rows = conn.execute(sql, {"min_prev": min_prev, "drop": drop_pct}).fetchall()
     except Exception as e:
@@ -1073,28 +1195,44 @@ def check_customer_churn_alert():
     if not rows:
         print("[ALERTS][churn] Không có khách lớn nào rớt doanh số vượt ngưỡng.")
         return
-    alert_key = "customer_churn"
-    top = rows[0][0]
-    if should_send_alert(alert_key, cooldown_hours=24, current_value=str(top)):
-        table = []
-        for r in rows:
-            cur_rev = float(r[1]); prev_rev = float(r[2])
-            drop = (prev_rev - cur_rev) / prev_rev if prev_rev > 0 else 0
-            table.append([str(r[0]), format_vietnamese_money(prev_rev),
-                          format_vietnamese_money(cur_rev), f"-{drop*100:.0f}%"])
-        send_alert_to_all_channels(
-            alert_name="CẢNH BÁO KHÁCH HÀNG LỚN SỤT GIẢM (NGUY CƠ MẤT KHÁCH)",
-            severity="WARNING",
-            summary="Các khách hàng lớn sau có doanh số tháng mới nhất rớt mạnh so với tháng trước — cần chăm sóc ngay.",
-            table_headers=["Mã KH", "Doanh Số Tháng Trước", "Doanh Số Tháng Này", "Sụt Giảm"],
-            table_rows=table,
-            channels=("telegram", "teams")
-        )
-        record_alert_sent(alert_key, str(top))
+
+    for channel_label in ("OTC", "ETC"):
+        channel_rows = [r for r in rows if r.channel == channel_label][:10]
+        if not channel_rows:
+            continue
+        alert_key = f"customer_churn:{channel_label}"
+        top = channel_rows[0].cc
+        if should_send_alert(alert_key, cooldown_hours=24, current_value=str(top)):
+            with engine.connect() as rconn:
+                region_map = get_customer_regions_by_code(rconn, [r.cc for r in channel_rows], channel_label)
+            table = []
+            for r in channel_rows:
+                cur_rev = float(r.cur_rev); prev_rev = float(r.prev_rev)
+                drop = (prev_rev - cur_rev) / prev_rev if prev_rev > 0 else 0
+                table.append([str(r.cc), r.cname, region_map.get(r.cc, "Không rõ"), format_vietnamese_money(prev_rev),
+                              format_vietnamese_money(cur_rev), f"-{drop*100:.0f}%"])
+            send_alert_to_all_channels(
+                alert_name=f"CẢNH BÁO KHÁCH HÀNG LỚN SỤT GIẢM ({channel_label}) — NGUY CƠ MẤT KHÁCH",
+                severity="WARNING",
+                summary=f"Các khách hàng lớn kênh {channel_label} sau có doanh số tháng mới nhất rớt mạnh so với tháng trước — cần chăm sóc ngay.",
+                table_headers=["Mã KH", "Tên KH", "Vùng", "Doanh Số Tháng Trước", "Doanh Số Tháng Này", "Sụt Giảm"],
+                table_rows=table,
+                channels=("teams",),
+                period=datetime.now().strftime("%m/%Y"), channel=channel_label, region="Toàn quốc",
+                issue=f"Khách hàng lớn kênh {channel_label} có doanh số tháng mới nhất sụt giảm mạnh so với tháng trước — nguy cơ mất khách"
+            )
+            record_alert_sent(alert_key, str(top))
 
 
 def check_revenue_concentration_alert():
-    """C2: Rủi ro tập trung — top N khách chiếm > X% tổng doanh thu tháng mới nhất."""
+    """
+    C2: Rủi ro tập trung — top N khách chiếm > X% tổng doanh thu tháng mới nhất.
+    Tính RIÊNG cho từng kênh OTC/ETC (không gộp trước khi tính tỷ trọng).
+
+    INNER JOIN với dms_khachhang/dmssx_khachhang để CHỈ tính khách hàng thật trong cả tử số (top
+    N) lẫn mẫu số (tổng doanh thu kênh) — cùng lý do đã xác nhận thực tế ở check_customer_churn_alert
+    (mã nội bộ/NCC lẫn trong CustomerCode của brv_hoadonhdr/brvsx_hoadonhdr).
+    """
     from sqlalchemy import text
     engine = _alert_engine()
     if engine is None:
@@ -1105,44 +1243,52 @@ def check_revenue_concentration_alert():
         with engine.connect() as conn:
             sql = text('''
                 WITH cm AS (
-                    SELECT "CustomerCode" AS cc, SUM("TotalAmount") AS rev
-                    FROM brv_hoadonhdr
-                    WHERE "IsActive"=TRUE AND "IsHC"=FALSE
-                      AND DATE_TRUNC('month',"DocDate"::timestamp) = (SELECT DATE_TRUNC('month', MAX("DocDate"::date)) FROM brv_hoadonhdr WHERE "IsActive"=TRUE)
-                    GROUP BY 1
+                    SELECT 'OTC' AS channel, h."CustomerCode" AS cc, SUM(h."TotalAmount") AS rev
+                    FROM brv_hoadonhdr h
+                    JOIN dms_khachhang k ON h."CustomerCode" = k."Code"
+                    WHERE h."IsActive"=TRUE AND h."IsHC"=FALSE
+                      AND DATE_TRUNC('month',h."DocDate"::timestamp) = (SELECT DATE_TRUNC('month', MAX("DocDate"::date)) FROM brv_hoadonhdr WHERE "IsActive"=TRUE)
+                    GROUP BY 1,2
                     UNION ALL
-                    SELECT "CustomerCode", SUM("TotalAmount")
-                    FROM brvsx_hoadonhdr
-                    WHERE "IsActive"=TRUE
-                      AND DATE_TRUNC('month',"DocDate"::timestamp) = (SELECT DATE_TRUNC('month', MAX("DocDate"::date)) FROM brvsx_hoadonhdr WHERE "IsActive"=TRUE)
-                    GROUP BY 1
+                    SELECT 'ETC', h."CustomerCode", SUM(h."TotalAmount")
+                    FROM brvsx_hoadonhdr h
+                    JOIN dmssx_khachhang k ON h."CustomerCode" = k."Code"
+                    WHERE h."IsActive"=TRUE
+                      AND DATE_TRUNC('month',h."DocDate"::timestamp) = (SELECT DATE_TRUNC('month', MAX("DocDate"::date)) FROM brvsx_hoadonhdr WHERE "IsActive"=TRUE)
+                    GROUP BY 1,2
                 ),
-                agg AS (SELECT cc, SUM(rev) AS rev FROM cm GROUP BY cc)
-                SELECT
-                    (SELECT COALESCE(SUM(rev),0) FROM (SELECT rev FROM agg ORDER BY rev DESC LIMIT :n) t) AS top_sum,
-                    (SELECT COALESCE(SUM(rev),0) FROM agg) AS total_sum
+                agg AS (SELECT channel, cc, SUM(rev) AS rev FROM cm GROUP BY channel, cc)
+                SELECT channel,
+                    (SELECT COALESCE(SUM(rev),0) FROM (SELECT rev FROM agg a2 WHERE a2.channel=agg.channel ORDER BY rev DESC LIMIT :n) t) AS top_sum,
+                    (SELECT COALESCE(SUM(rev),0) FROM agg a3 WHERE a3.channel=agg.channel) AS total_sum
+                FROM agg GROUP BY channel
             ''')
-            row = conn.execute(sql, {"n": top_n}).fetchone()
+            rows = conn.execute(sql, {"n": top_n}).fetchall()
     except Exception as e:
         print(f"[ALERTS][concentration] Lỗi: {e}")
         return
-    ratio = concentration_ratio(row[0], row[1])
-    if ratio is None:
-        return
-    print(f"[ALERTS][concentration] Top {top_n} khách chiếm {ratio*100:.1f}% doanh thu (ngưỡng {threshold*100:.0f}%).")
-    if ratio > threshold:
-        alert_key = "revenue_concentration"
-        if should_send_alert(alert_key, cooldown_hours=48, current_value=str(round(ratio, 4))):
-            send_alert_to_all_channels(
-                alert_name="CẢNH BÁO RỦI RO TẬP TRUNG DOANH THU",
-                severity="WARNING",
-                summary=(f"Top {top_n} khách hàng chiếm {ratio*100:.1f}% tổng doanh thu tháng mới nhất "
-                         f"(vượt {threshold*100:.0f}%) — phụ thuộc quá nhiều vào ít khách, rủi ro nếu mất 1 khách."),
-                table_headers=[f"Doanh thu Top {top_n}", "Tổng doanh thu", "Tỷ trọng"],
-                table_rows=[[format_vietnamese_money(row[0]), format_vietnamese_money(row[1]), f"{ratio*100:.1f}%"]],
-                channels=("telegram", "teams")
-            )
-            record_alert_sent(alert_key, str(round(ratio, 4)))
+
+    for r in rows:
+        channel_label = r.channel
+        ratio = concentration_ratio(r.top_sum, r.total_sum)
+        if ratio is None:
+            continue
+        print(f"[ALERTS][concentration][{channel_label}] Top {top_n} khách chiếm {ratio*100:.1f}% doanh thu (ngưỡng {threshold*100:.0f}%).")
+        if ratio > threshold:
+            alert_key = f"revenue_concentration:{channel_label}"
+            if should_send_alert(alert_key, cooldown_hours=48, current_value=str(round(ratio, 4))):
+                send_alert_to_all_channels(
+                    alert_name=f"CẢNH BÁO RỦI RO TẬP TRUNG DOANH THU ({channel_label})",
+                    severity="WARNING",
+                    summary=(f"Top {top_n} khách hàng kênh {channel_label} chiếm {ratio*100:.1f}% tổng doanh thu kênh này tháng mới nhất "
+                             f"(vượt {threshold*100:.0f}%) — phụ thuộc quá nhiều vào ít khách, rủi ro nếu mất 1 khách."),
+                    table_headers=[f"Doanh thu Top {top_n}", "Tổng doanh thu", "Tỷ trọng"],
+                    table_rows=[[format_vietnamese_money(r.top_sum), format_vietnamese_money(r.total_sum), f"{ratio*100:.1f}%"]],
+                    channels=("teams",),
+                    period=datetime.now().strftime("%m/%Y"), channel=channel_label, region="Toàn quốc",
+                    issue=f"Top {top_n} khách hàng kênh {channel_label} chiếm {ratio*100:.1f}% tổng doanh thu kênh này — rủi ro tập trung quá cao"
+                )
+                record_alert_sent(alert_key, str(round(ratio, 4)))
 
 
 # ---- Nhóm E: Hàng trả về ---------------------------------------------------
@@ -1187,7 +1333,9 @@ def check_return_rate_alert():
                          f"(vượt {threshold*100:.0f}%) — nghi vấn chất lượng lô/quá hạn/sai đơn."),
                 table_headers=["Giá trị trả về", "Doanh số ETC", "Tỷ lệ trả"],
                 table_rows=[[format_vietnamese_money(row[0]), format_vietnamese_money(row[1]), f"{rate*100:.2f}%"]],
-                channels=("telegram", "teams")
+                channels=("teams",),
+                period=row[2].strftime('%m/%Y') if row[2] else None, channel="ETC", region="Toàn quốc",
+                issue=f"Tỷ lệ giá trị hàng trả về/doanh số ETC đạt {rate*100:.2f}%, vượt ngưỡng — nghi vấn chất lượng lô/quá hạn/sai đơn"
             )
             record_alert_sent(alert_key, str(round(rate, 4)))
 
@@ -1216,16 +1364,454 @@ def check_zero_sales_rep_alert():
         return
     alert_key = "zero_sales_rep"
     if should_send_alert(alert_key, cooldown_hours=24, current_value=str(len(rows))):
-        table = [[str(r[0]), r[1], str(r[2]), str(r[3]), format_vietnamese_money(r[4])] for r in rows]
+        regions_seen = set()
+        table = []
+        for r in rows:
+            region_label = normalize_region_label(r[2])
+            regions_seen.add(region_label)
+            table.append([str(r[0]), r[1], region_label, str(r[3]), format_vietnamese_money(r[4])])
+        header_region = regions_seen.pop() if len(regions_seen) == 1 else "Nhiều miền"
         send_alert_to_all_channels(
             alert_name="CẢNH BÁO NHÂN SỰ DOANH SỐ BẰNG 0",
             severity="WARNING",
             summary="Các nhân sự sau có chỉ tiêu nhưng doanh số kỳ này = 0 — cần kiểm tra tình trạng làm việc/địa bàn.",
             table_headers=["Mã NV", "Tên NV", "Vùng", "Chức danh", "Chỉ tiêu"],
             table_rows=table,
-            channels=("telegram", "teams")
+            channels=("teams",),
+            period=datetime.now().strftime("%m/%Y"), region=header_region,
+            issue="Nhân sự có chỉ tiêu doanh số nhưng đạt 0 trong kỳ — nghi ngờ nghỉ ngầm/vấn đề địa bàn"
         )
         record_alert_sent(alert_key, str(len(rows)))
+
+
+def kpi_sales_force_risk_reasons(position_code, month_pct, quarter_pct, year_pct,
+                                  risk_map, quarter_floor, year_floor):
+    """
+    Pure helper (unit-test được, không đụng DB): trả về list lý do vi phạm ngưỡng KPI
+    theo QĐ 0429-2/QĐ-HĐQT.25 (khối OTC miền Nam) cho 1 nhân sự. Rỗng nếu không vi phạm gì.
+    """
+    reasons = []
+    role_threshold = risk_map.get(position_code)
+    if role_threshold is not None and month_pct is not None and month_pct <= role_threshold:
+        reasons.append(
+            f"Nguy cơ chấm dứt HĐLĐ (tháng {month_pct*100:.0f}% <= {role_threshold*100:.0f}%, mới tính 1 tháng)")
+    if quarter_pct is not None and quarter_pct < quarter_floor:
+        reasons.append(f"Mất thưởng quý (quý {quarter_pct*100:.0f}% < {quarter_floor*100:.0f}%)")
+    if year_pct is not None and year_pct < year_floor:
+        reasons.append(f"Thưởng năm về sàn 0% (năm {year_pct*100:.0f}% < {year_floor*100:.0f}%)")
+    return reasons
+
+
+def check_kpi_sales_force_risk_alert():
+    """
+    F2: Cảnh báo rủi ro theo ngưỡng chính sách thu nhập OTC MIỀN NAM (QĐ 0429-2/QĐ-HĐQT.25):
+    nguy cơ chấm dứt HĐLĐ, mất thưởng quý, thưởng năm rơi về sàn — đọc thresholds.kpi_sales_force.
+
+    GIỚI HẠN CẦN BIẾT:
+      - Chính sách yêu cầu "2 tháng liên tiếp" dưới ngưỡng mới đủ điều kiện xem xét chấm dứt HĐLĐ,
+        nhưng kpi_summary chỉ là snapshot hiện tại (không lưu lịch sử theo tháng) -> hàm này chỉ
+        kiểm tra được THÁNG HIỆN TẠI, là cảnh báo sớm chứ KHÔNG phải xác nhận chính thức đủ điều
+        kiện chấm dứt HĐLĐ.
+      - Ánh xạ vai trò <-> position_code (CS = TDV chợ sỉ, TK = Trưởng kênh MT) suy luận từ số
+        lượng nhân viên thực tế (dim_nhanvien, AreaCode='MN'), chưa có bảng chú giải chính thức
+        từ HR.
+      - Lọc area_code LIKE 'MN%' vì đây là chính sách MIỀN NAM; tiền tố này là giả định dựa theo
+        quy ước quan sát được (dim_nhanvien.AreaCode='MN', kpi_summary.area_code='MB2' ở miền Bắc)
+        — sửa lại filter nếu DNH xác nhận tiền tố khác khi ETL đổ dữ liệu miền Nam vào bảng này.
+    """
+    from sqlalchemy import text
+    engine = _alert_engine()
+    if engine is None:
+        return
+
+    try:
+        cfg = load_config()['thresholds']['kpi_sales_force']
+        risk_map = {str(k): float(v) for k, v in cfg['contract_risk_pct'].items()}
+        quarter_floor = float(cfg['quarter_zero_bonus_pct'])
+        year_floor = float(cfg['year_floor_pct'])
+    except Exception as e:
+        print(f"[ALERTS][kpi_sales_force] Chưa cấu hình đủ thresholds.kpi_sales_force trong config.yaml: {e}")
+        return
+
+    try:
+        with engine.connect() as conn:
+            rows = conn.execute(text('''
+                SELECT employee_code, employee_name, area_code, position_code,
+                       month_sale_percent, quarter_sale_percent, year_sale_percent
+                FROM kpi_summary
+                WHERE position_code = ANY(:roles)
+                  AND area_code LIKE 'MN%'
+                  AND COALESCE(month_sale_target, 0) > 0
+            '''), {"roles": list(risk_map.keys())}).fetchall()
+    except Exception as e:
+        print(f"[ALERTS][kpi_sales_force] Lỗi truy vấn kpi_summary: {e}")
+        return
+
+    if not rows:
+        print("[ALERTS][kpi_sales_force] Không có dòng nào khớp (area_code LIKE 'MN%' + vai trò đã map) "
+              "— nhiều khả năng do kpi_summary chưa có dữ liệu miền Nam (gap dữ liệu đã biết).")
+        return
+
+    at_risk = []
+    for emp_code, emp_name, area, pos, m_pct, q_pct, y_pct in rows:
+        reasons = kpi_sales_force_risk_reasons(pos, m_pct, q_pct, y_pct, risk_map, quarter_floor, year_floor)
+        if reasons:
+            at_risk.append((emp_code, emp_name, area, pos, m_pct, q_pct, y_pct, "; ".join(reasons)))
+
+    if not at_risk:
+        print("[ALERTS][kpi_sales_force] Không nhân sự miền Nam nào vi phạm ngưỡng KPI hiện tại.")
+        return
+
+    at_risk.sort(key=lambda x: (x[4] if x[4] is not None else 1.0))
+    alert_key = "kpi_sales_force_risk"
+    current_value = f"{len(at_risk)}:{at_risk[0][0]}"
+    if should_send_alert(alert_key, cooldown_hours=24, current_value=current_value):
+        table = [[
+            str(emp_code), emp_name, pos,
+            f"{m_pct*100:.0f}%" if m_pct is not None else "—",
+            f"{q_pct*100:.0f}%" if q_pct is not None else "—",
+            f"{y_pct*100:.0f}%" if y_pct is not None else "—",
+            reason,
+        ] for emp_code, emp_name, area, pos, m_pct, q_pct, y_pct, reason in at_risk[:10]]
+        send_alert_to_all_channels(
+            alert_name="CẢNH BÁO RỦI RO KPI KHỐI OTC MIỀN NAM (QĐ 0429-2)",
+            severity="WARNING",
+            summary=(f"{len(at_risk)} nhân sự OTC miền Nam đang dưới ít nhất 1 ngưỡng KPI theo QĐ 0429-2. "
+                     f"Ngưỡng 'nguy cơ chấm dứt HĐLĐ' mới kiểm tra được THÁNG HIỆN TẠI, chưa xác nhận đủ "
+                     f"điều kiện chính thức '2 tháng liên tiếp' (thiếu lịch sử theo tháng)."),
+            table_headers=["Mã NV", "Tên NV", "Vai trò", "% Tháng", "% Quý", "% Năm", "Cảnh báo"],
+            table_rows=table,
+            channels=("teams",),
+            period=datetime.now().strftime("%m/%Y"), channel="OTC", region="Miền Nam",
+            issue=f"{len(at_risk)} nhân sự vi phạm ít nhất 1 ngưỡng KPI theo QĐ 0429-2 (nguy cơ chấm dứt HĐLĐ/mất thưởng)"
+        )
+        record_alert_sent(alert_key, current_value)
+
+
+def check_daily_kpi_pace_alert():
+    """
+    Nhịp KPI theo NGÀY của từng TDV: doanh số phát sinh TRONG NGÀY / chỉ tiêu THÁNG của chính TDV
+    đó — <3% Đỏ, 3%-<4% Vàng, >=4% Xanh (nhịp ~4%/ngày khớp đủ chỉ tiêu qua ~25 ngày làm việc).
+
+    LƯU Ý QUAN TRỌNG (phát hiện thực tế khi backtest 57 ngày làm việc 05-07/2026): doanh số bán
+    buôn dược phẩm đến theo TỪNG ĐƠN LỚN không đều, KHÔNG rải đều 1/25 chỉ tiêu mỗi ngày như giả
+    định ban đầu — trung bình 39.7/49 TDV (81%) đã ở mức Đỏ NGAY CẢ VÀO NGÀY KINH DOANH BÌNH
+    THƯỜNG (thấp nhất quan sát được: 23/49, cao nhất 49/49). Vì vậy ngưỡng ">=5 người Đỏ" gần như
+    LUÔN đúng — đã trao đổi lại và CHỐT: giữ nguyên ngưỡng 5 nhưng đổi bản chất từ "cảnh báo bất
+    thường" (WARNING) sang "báo cáo tóm tắt hàng ngày" (INFO, kèm đầy đủ số liệu Đỏ/Vàng/Xanh) —
+    không dùng ngưỡng số người Đỏ này để suy luận mức độ nghiêm trọng.
+
+    Chủ nhật LUÔN 100% Đỏ (10/10 Chủ nhật quan sát được đều 49/49 — công ty không kinh doanh ngày
+    này) nên KHÔNG chạy report vào Chủ nhật, tránh gửi 1 báo cáo vô nghĩa mỗi tuần.
+
+    GIỚI HẠN DỮ LIỆU (đã xác minh trực tiếp trên Supabase 08/07/2026):
+      - CHỈ khả thi kênh OTC — brvsx_hoadonhdr (ETC) không có cột nhân viên nào trên hóa đơn.
+      - Chỉ tính TDV bắc cầu được brv_hoadonhdr.EmpDMSCode -> dim_nhanvien.DMSId ->
+        dim_nhanvien.EmployeeCode -> kpi_summary.employee_code (50/58 TDV có chỉ tiêu hiện bắc
+        cầu được — verify trực tiếp, KHÔNG suy đoán; EmpDMSCode KHÔNG khớp thẳng employee_code).
+      - kpi_summary hiện 100% area_code miền Bắc (gap dữ liệu đã biết, xem flag
+        kpi_sales_force_risk_check) -> hàm này hiện chỉ áp dụng thực tế cho TDV miền Bắc, tự mở
+        rộng khi DNH bổ sung dữ liệu miền Nam vào kpi_summary, không cần sửa code.
+    """
+    from sqlalchemy import text
+    engine = _alert_engine()
+    if engine is None:
+        return
+
+    red_pct = float(_biz_threshold('kpi_pace_red_pct', 3.0))
+    yellow_pct = float(_biz_threshold('kpi_pace_yellow_pct', 4.0))
+    red_alert_count = int(_biz_threshold('kpi_pace_red_alert_count', 5))
+
+    try:
+        with engine.connect() as conn:
+            # Dùng ngày LIỀN TRƯỚC ngày mới nhất có dữ liệu (không phải MAX(DocDate) trực tiếp) —
+            # xác minh thực tế 08/07/2026: ngày mới nhất trong dữ liệu luôn chưa đồng bộ xong (TDV
+            # nhập liệu suốt ngày, sync 5 lần/ngày chưa chắc bắt kịp cuối ngày) — vd ngày mới nhất
+            # hôm đó chỉ có 16/~135 nhân viên phát sinh hóa đơn so với ngày liền trước có tới 135
+            # người. Nếu tính nhịp KPI trên ngày CHƯA xong sẽ luôn ra đỏ hàng loạt giả (đã thấy
+            # thực tế 49/49 TDV đỏ). Ngày liền trước chắc chắn đã đồng bộ trọn vẹn.
+            overall_max_row = conn.execute(text(
+                'SELECT MAX("DocDate"::date) FROM brv_hoadonhdr WHERE "IsActive"=TRUE'
+            )).fetchone()
+            overall_max = overall_max_row[0] if overall_max_row else None
+            if not overall_max:
+                print("[ALERTS][kpi_pace] Chưa có dữ liệu hóa đơn OTC để tính nhịp KPI.")
+                return
+
+            target_row = conn.execute(text(
+                'SELECT MAX("DocDate"::date) FROM brv_hoadonhdr WHERE "IsActive"=TRUE AND "DocDate"::date < :overall_max'
+            ), {"overall_max": overall_max}).fetchone()
+            target_day = target_row[0] if target_row else None
+            if not target_day:
+                print("[ALERTS][kpi_pace] Chưa đủ 2 ngày dữ liệu để xác định ngày đã đồng bộ xong — bỏ qua.")
+                return
+            if target_day.weekday() == 6:  # Chủ nhật — luôn 100% Đỏ (không kinh doanh), bỏ qua
+                print(f"[ALERTS][kpi_pace] Ngày {target_day} là Chủ nhật — không kinh doanh, bỏ qua report.")
+                return
+
+            rows = conn.execute(text('''
+                WITH daily_sales AS (
+                    SELECT n."EmployeeCode" AS employee_code,
+                           SUM(CASE WHEN c."CTKM" IS NULL OR c."CTKM" = '' THEN c."Amount9" ELSE 0 END) AS day_rev
+                    FROM brv_hoadonct c
+                    JOIN brv_hoadonhdr h ON c."Stt" = h."Stt"
+                    JOIN dim_nhanvien n ON h."EmpDMSCode" = n."DMSId"
+                    LEFT JOIN brv_trangthaiduyet d ON h."DocStatus" = d."DocStatusKey"
+                    LEFT JOIN brv_trangthaihoadon e ON h."EInvoiceStatus" = e."EInvoiceStatusKey"
+                    WHERE h."IsActive" = TRUE AND h."IsHC" = FALSE
+                      AND (d."IsCancelled" IS NULL OR d."IsCancelled" = FALSE)
+                      AND (e."IsCancelled" IS NULL OR e."IsCancelled" = FALSE)
+                      AND h."DocDate"::date = :target_day
+                    GROUP BY n."EmployeeCode"
+                )
+                SELECT k.employee_code, k.employee_name, k.area_code, k.month_sale_target,
+                       COALESCE(ds.day_rev, 0) AS day_rev
+                FROM kpi_summary k
+                LEFT JOIN daily_sales ds ON ds.employee_code = k.employee_code
+                WHERE k.position_code = 'TDV' AND COALESCE(k.month_sale_target,0) > 0
+            '''), {"target_day": target_day}).fetchall()
+    except Exception as e:
+        print(f"[ALERTS][kpi_pace] Lỗi truy vấn nhịp KPI ngày: {e}")
+        return
+
+    if not rows:
+        print("[ALERTS][kpi_pace] Không có TDV nào (position_code='TDV', có chỉ tiêu tháng) để tính nhịp KPI.")
+        return
+
+    reds, yellows, greens = [], [], []
+    for r in rows:
+        pct = (float(r.day_rev) / float(r.month_sale_target)) * 100 if r.month_sale_target else 0.0
+        if pct < red_pct:
+            reds.append((r, pct))
+        elif pct < yellow_pct:
+            yellows.append((r, pct))
+        else:
+            greens.append((r, pct))
+
+    print(f"[ALERTS][kpi_pace] Ngày {target_day}: Đỏ {len(reds)} / Vàng {len(yellows)} / Xanh {len(greens)} "
+          f"(tổng {len(rows)} TDV, ngưỡng gửi report: Đỏ >={red_alert_count}).")
+
+    if len(reds) < red_alert_count:
+        return
+
+    alert_key = f"kpi_daily_pace_red:{target_day}"
+    if should_send_alert(alert_key, cooldown_hours=20, current_value=str(len(reds))):
+        reds.sort(key=lambda x: x[1])
+        regions_seen = set()
+        table = []
+        for r, pct in reds[:15]:
+            region_label = normalize_region_label(r.area_code)
+            regions_seen.add(region_label)
+            table.append([str(r.employee_code), r.employee_name, region_label,
+                          format_vietnamese_money(r.day_rev), format_vietnamese_money(r.month_sale_target),
+                          f"{pct:.1f}%"])
+        header_region = regions_seen.pop() if len(regions_seen) == 1 else "Nhiều miền"
+        more_note = f" (hiển thị 15/{len(reds)} TDV mức Đỏ thấp nhất)" if len(reds) > 15 else ""
+        send_alert_to_all_channels(
+            alert_name="BÁO CÁO NHỊP KPI NGÀY (TDV)",
+            severity="INFO",
+            summary=(f"Nhịp KPI ngày {target_day.strftime('%d/%m/%Y')}: "
+                     f"Đỏ {len(reds)} · Vàng {len(yellows)} · Xanh {len(greens)} (/{len(rows)} TDV)."
+                     f"{more_note}"),
+            table_headers=["Mã TDV", "Tên TDV", "Vùng", "Doanh Số Ngày", "Chỉ Tiêu Tháng", "% Ngày"],
+            table_rows=table,
+            channels=("teams",),
+            period=target_day.strftime('%d/%m/%Y'), channel="OTC", region=header_region,
+            issue=(f"Đỏ {len(reds)} · Vàng {len(yellows)} · Xanh {len(greens)} — báo cáo tóm tắt nhịp "
+                   f"KPI ngày, không phải cảnh báo bất thường (xem ghi chú backtest trong docstring)")
+        )
+        record_alert_sent(alert_key, str(len(reds)))
+
+
+def check_kpi_milestone_drop_alert():
+    """
+    Mốc ngày 10 và ngày 20 hàng tháng: so doanh thu lũy kế đầu tháng -> ngày mốc của THÁNG NÀY với
+    trung bình cộng lũy kế cùng khoảng ngày đó của N tháng liền trước (mặc định 5 tháng) — cảnh
+    báo nếu giảm > ngưỡng (mặc định 5%). Kiểm tra CẢ 2 mức: (a) từng kênh OTC/ETC riêng biệt,
+    (b) từng cá nhân TDV (chỉ khả thi kênh OTC — xem giới hạn dữ liệu ở check_daily_kpi_pace_alert).
+
+    Mốc "hôm nay" lấy theo ngày LIỀN TRƯỚC ngày mới nhất có dữ liệu (không dùng datetime.now(),
+    KHÔNG dùng thẳng MAX(DocDate) — xác minh thực tế 08/07/2026 ở check_daily_kpi_pace_alert():
+    ngày mới nhất trong dữ liệu luôn chưa đồng bộ xong, dùng trực tiếp sẽ làm cả gate ngày 10/20
+    lẫn tổng lũy kế bị lệch/thiếu). Chỉ thực sự tính toán khi ngày đã đồng bộ xong đó ĐÚNG LÀ ngày
+    10 hoặc 20, các ngày khác bỏ qua ngay để không tốn query vô ích mỗi lần sync (5 lần/ngày).
+    """
+    from sqlalchemy import text
+    from src.etl import _period_revenue, _prev_month_tuple
+    engine = _alert_engine()
+    if engine is None:
+        return
+
+    lookback = int(_biz_threshold('kpi_milestone_lookback_months', 5))
+    drop_threshold = float(_biz_threshold('kpi_milestone_drop_pct', 0.05))
+    min_prev = float(_biz_threshold('kpi_milestone_min_prev', 10000000))
+
+    try:
+        with engine.connect() as conn:
+            overall_max_row = conn.execute(text('''
+                SELECT MAX(d) FROM (
+                    SELECT MAX("DocDate"::date) AS d FROM brv_hoadonhdr WHERE "IsActive"=TRUE
+                    UNION ALL
+                    SELECT MAX("DocDate"::date) FROM brvsx_hoadonhdr WHERE "IsActive"=TRUE
+                ) x
+            ''')).fetchone()
+            overall_max = overall_max_row[0] if overall_max_row else None
+            if not overall_max:
+                data_max_date = None
+            else:
+                complete_row = conn.execute(text('''
+                    SELECT MAX(d) FROM (
+                        SELECT MAX("DocDate"::date) AS d FROM brv_hoadonhdr WHERE "IsActive"=TRUE AND "DocDate"::date < :overall_max
+                        UNION ALL
+                        SELECT MAX("DocDate"::date) FROM brvsx_hoadonhdr WHERE "IsActive"=TRUE AND "DocDate"::date < :overall_max
+                    ) x
+                '''), {"overall_max": overall_max}).fetchone()
+                data_max_date = complete_row[0] if complete_row else None
+    except Exception as e:
+        print(f"[ALERTS][kpi_milestone] Lỗi lấy ngày dữ liệu mới nhất: {e}")
+        return
+
+    if not data_max_date:
+        print("[ALERTS][kpi_milestone] Chưa có dữ liệu hóa đơn.")
+        return
+
+    if data_max_date.day not in (10, 20):
+        print(f"[ALERTS][kpi_milestone] Ngày dữ liệu mới nhất ({data_max_date}) chưa tới mốc ngày 10/20 — bỏ qua.")
+        return
+
+    milestone_day = data_max_date.day
+    month_start = datetime(data_max_date.year, data_max_date.month, 1)
+
+    # 6 kỳ: kỳ hiện tại (idx 0) + N kỳ liền trước (idx 1..lookback), mỗi kỳ [start, start+milestone_day ngày)
+    periods = []
+    y, m = data_max_date.year, data_max_date.month
+    for i in range(lookback + 1):
+        p_start = datetime(y, m, 1)
+        p_end = p_start + timedelta(days=milestone_day)
+        periods.append((i, p_start, p_end))
+        y, m = _prev_month_tuple(p_start)
+
+    try:
+        with engine.connect() as conn:
+            # (a) Theo từng kênh — tái dùng _period_revenue (src/etl.py)
+            channel_series = {"OTC": [], "ETC": []}
+            for idx, p_start, p_end in periods:
+                otc_rev, etc_rev, _ = _period_revenue(conn, p_start, p_end)
+                channel_series["OTC"].append((idx, otc_rev))
+                channel_series["ETC"].append((idx, etc_rev))
+
+            # (b) Theo từng TDV — 1 câu SQL duy nhất, UNION ALL 6 khối gắn nhãn kỳ (1 round-trip)
+            union_blocks = []
+            params = {}
+            for idx, p_start, p_end in periods:
+                params[f"start_{idx}"] = p_start
+                params[f"end_{idx}"] = p_end
+                union_blocks.append(f'''
+                    SELECT {idx} AS period_idx, n."EmployeeCode" AS employee_code,
+                           SUM(CASE WHEN c."CTKM" IS NULL OR c."CTKM" = '' THEN c."Amount9" ELSE 0 END) AS rev
+                    FROM brv_hoadonct c
+                    JOIN brv_hoadonhdr h ON c."Stt" = h."Stt"
+                    JOIN dim_nhanvien n ON h."EmpDMSCode" = n."DMSId"
+                    LEFT JOIN brv_trangthaiduyet d ON h."DocStatus" = d."DocStatusKey"
+                    LEFT JOIN brv_trangthaihoadon e ON h."EInvoiceStatus" = e."EInvoiceStatusKey"
+                    WHERE h."IsActive" = TRUE AND h."IsHC" = FALSE
+                      AND (d."IsCancelled" IS NULL OR d."IsCancelled" = FALSE)
+                      AND (e."IsCancelled" IS NULL OR e."IsCancelled" = FALSE)
+                      AND h."DocDate"::timestamp >= :start_{idx} AND h."DocDate"::timestamp < :end_{idx}
+                    GROUP BY n."EmployeeCode"
+                ''')
+            tdv_sql = text('''
+                WITH tdv_periods AS (''' + " UNION ALL ".join(union_blocks) + '''
+                )
+                SELECT k.employee_code, k.employee_name, k.area_code, tp.period_idx, tp.rev
+                FROM kpi_summary k
+                JOIN tdv_periods tp ON tp.employee_code = k.employee_code
+                WHERE k.position_code = 'TDV' AND COALESCE(k.month_sale_target,0) > 0
+            ''')
+            tdv_rows = conn.execute(tdv_sql, params).fetchall()
+    except Exception as e:
+        print(f"[ALERTS][kpi_milestone] Lỗi truy vấn lũy kế mốc ngày {milestone_day}: {e}")
+        return
+
+    period_desc = f"01/{month_start.strftime('%m')} - {milestone_day}/{month_start.strftime('%m/%Y')}"
+
+    # (a) Theo từng kênh
+    for channel_label, series in channel_series.items():
+        series_sorted = sorted(series, key=lambda x: x[0])
+        cur_rev = series_sorted[0][1]
+        prev_revs = [rev for idx, rev in series_sorted[1:]]
+        if not prev_revs:
+            continue
+        avg_prev = sum(prev_revs) / len(prev_revs)
+        if avg_prev <= 0:
+            continue
+        drop = (avg_prev - cur_rev) / avg_prev
+        print(f"[ALERTS][kpi_milestone][{channel_label}] Lũy kế {period_desc}: {format_vietnamese_money(cur_rev)} "
+              f"vs TB {lookback} tháng trước {format_vietnamese_money(avg_prev)} ({drop*100:.1f}% thay đổi).")
+        if drop > drop_threshold:
+            alert_key = f"kpi_milestone_channel:{channel_label}:{milestone_day}:{month_start.strftime('%Y-%m')}"
+            if should_send_alert(alert_key, cooldown_hours=24, current_value=str(round(drop, 4))):
+                send_alert_to_all_channels(
+                    alert_name=f"CẢNH BÁO LŨY KẾ NGÀY {milestone_day} SỤT GIẢM ({channel_label})",
+                    severity="CRITICAL",
+                    summary=(f"Lũy kế doanh thu kênh {channel_label} {period_desc} đạt {format_vietnamese_money(cur_rev)}, "
+                             f"giảm {drop*100:.1f}% so với TB cộng cùng khoảng ngày của {lookback} tháng trước "
+                             f"({format_vietnamese_money(avg_prev)})."),
+                    table_headers=["Kỳ", f"Lũy kế {channel_label}"],
+                    table_rows=[
+                        [f"TB {lookback} tháng trước (đến ngày {milestone_day})", format_vietnamese_money(avg_prev)],
+                        [f"Tháng này (đến ngày {milestone_day})", format_vietnamese_money(cur_rev)],
+                    ],
+                    channels=("teams",),
+                    period=month_start.strftime('%m/%Y'), channel=channel_label, region="Toàn quốc",
+                    issue=f"Lũy kế đến ngày {milestone_day} kênh {channel_label} giảm {drop*100:.1f}% so với TB {lookback} tháng trước"
+                )
+                record_alert_sent(alert_key, str(round(drop, 4)))
+
+    # (b) Theo từng TDV (chỉ OTC — xem giới hạn dữ liệu)
+    by_emp = {}
+    for r in tdv_rows:
+        info = by_emp.setdefault(r.employee_code, {"name": r.employee_name, "area": r.area_code, "periods": {}})
+        info["periods"][r.period_idx] = float(r.rev)
+
+    dropped_tdv = []
+    for emp_code, info in by_emp.items():
+        cur_rev = info["periods"].get(0, 0.0)
+        prev_revs = [info["periods"][i] for i in range(1, lookback + 1) if i in info["periods"]]
+        if not prev_revs:
+            continue
+        avg_prev = sum(prev_revs) / len(prev_revs)
+        if avg_prev < min_prev:
+            continue
+        drop = (avg_prev - cur_rev) / avg_prev
+        if drop > drop_threshold:
+            dropped_tdv.append((emp_code, info["name"], info["area"], cur_rev, avg_prev, drop))
+
+    if dropped_tdv:
+        alert_key = f"kpi_milestone_tdv:{milestone_day}:{month_start.strftime('%Y-%m')}"
+        current_value = str(len(dropped_tdv))
+        if should_send_alert(alert_key, cooldown_hours=24, current_value=current_value):
+            dropped_tdv.sort(key=lambda x: -x[5])
+            regions_seen = set()
+            table = []
+            for emp_code, name, area, cur_rev, avg_prev, drop in dropped_tdv[:15]:
+                region_label = normalize_region_label(area)
+                regions_seen.add(region_label)
+                table.append([str(emp_code), name, region_label, format_vietnamese_money(cur_rev),
+                              format_vietnamese_money(avg_prev), f"-{drop*100:.1f}%"])
+            header_region = regions_seen.pop() if len(regions_seen) == 1 else "Nhiều miền"
+            send_alert_to_all_channels(
+                alert_name=f"CẢNH BÁO LŨY KẾ NGÀY {milestone_day} SỤT GIẢM (TỪNG TDV)",
+                severity="WARNING",
+                summary=(f"{len(dropped_tdv)} TDV có lũy kế doanh số {period_desc} giảm >{drop_threshold*100:.0f}% "
+                         f"so với TB {lookback} tháng trước cùng khoảng ngày."),
+                table_headers=["Mã TDV", "Tên TDV", "Vùng", "Lũy Kế Tháng Này", f"TB {lookback} Tháng Trước", "% Giảm"],
+                table_rows=table,
+                channels=("teams",),
+                period=month_start.strftime('%m/%Y'), channel="OTC", region=header_region,
+                issue=f"{len(dropped_tdv)} TDV có lũy kế đến ngày {milestone_day} giảm >{drop_threshold*100:.0f}% so với TB {lookback} tháng trước"
+            )
+            record_alert_sent(alert_key, current_value)
 
 
 # ---- Nhóm G: Meta-alert vận hành / chất lượng dữ liệu ----------------------
@@ -1257,7 +1843,9 @@ def check_data_sanity_ok():
                          f"Đã TẠM DỪNG gửi các cảnh báo nghiệp vụ để tránh báo sai."),
                 table_headers=["Bảng", "Số dòng"],
                 table_rows=[["receivable_detail", str(cust)], ["inventory", str(inv)]],
-                channels=("telegram", "teams")
+                channels=("teams",),
+                period=datetime.now().strftime("%d/%m/%Y %H:%M"), region="Toàn quốc (hệ thống)",
+                issue="Bảng công nợ hoặc tồn kho đang rỗng — nghi ETL lỗi, đã tạm dừng các cảnh báo nghiệp vụ"
             )
             record_alert_sent(alert_key, "zero")
         return False
@@ -1303,7 +1891,9 @@ def check_etl_freshness_alert():
                          f"(ngưỡng {stale_hours:.0f} giờ). Kiểm tra tiến trình ETL thượng nguồn."),
                 table_headers=["Mốc dữ liệu mới nhất", "Đã cũ"],
                 table_rows=[[str(last_sync), f"{age_hours:.1f} giờ"]],
-                channels=("telegram", "teams")
+                channels=("teams",),
+                period=datetime.now().strftime("%d/%m/%Y %H:%M"), region="Toàn quốc (hệ thống)",
+                issue=f"Dữ liệu hậu-ETL không được cập nhật đã {age_hours:.1f} giờ — nghi ETL thượng nguồn bị đứng"
             )
             record_alert_sent(alert_key, str(int(age_hours)))
 

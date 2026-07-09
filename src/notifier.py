@@ -10,6 +10,7 @@ from dotenv import load_dotenv
 from src.database import load_config
 import json
 import urllib.request
+from urllib.parse import quote
 
 # Đảm bảo terminal/log ghi nhận được tiếng Việt có dấu
 if hasattr(sys.stdout, 'reconfigure'):
@@ -111,6 +112,8 @@ DIGEST_EMAIL_TEMPLATE = """
         .data-table th { text-align: left; padding: 10px; background-color: #f1f5f9; border-bottom: 2px solid #e2e8f0; font-size: 12px; color: #475569; text-transform: uppercase; }
         .data-table td { padding: 12px 10px; border-bottom: 1px solid #f1f5f9; font-size: 13px; color: #334155; }
         .no-data { font-size: 13px; color: #64748b; font-style: italic; padding: 10px 0; }
+        .trend-up { color: #10b981; font-size: 13px; font-weight: 600; }
+        .trend-down { color: #ef4444; font-size: 13px; font-weight: 600; }
         .footer { background: #f8fafc; padding: 20px; text-align: center; font-size: 12px; color: #94a3b8; border-top: 1px solid #e2e8f0; }
     </style>
 </head>
@@ -119,92 +122,197 @@ DIGEST_EMAIL_TEMPLATE = """
         <div class="header">
             <h1>BÁO CÁO TỔNG HỢP HOẠT ĐỘNG {{ period_label|upper }}</h1>
             <p>{{ metrics.period_range or metrics.date }}</p>
+            {% if audience %}
+            <p style="margin: 8px 0 0 0; font-size: 13px; opacity: 0.9;">
+                Báo cáo dành cho: <strong>{{ audience }}</strong>{% if scope_label %} &bull; Phạm vi: {{ scope_label }}{% endif %}
+            </p>
+            {% endif %}
         </div>
-        
+
         <div class="content">
-            <!-- ERP KPI Section -->
-            <div class="section-title">Tổng Hợp Giao Dịch ERP</div>
+            {% if metrics.highlights %}
+            <!-- Điểm nổi bật Section — nối luồng cảnh báo thời gian thực với báo cáo định kỳ -->
+            <div class="section-title">Điểm Nổi Bật Trong Kỳ</div>
+            <ul style="margin: 0 0 10px 0; padding-left: 20px; font-size: 13px; color: #334155;">
+                {% for h in metrics.highlights %}
+                <li style="margin-bottom: 6px;"><strong>{{ h.alert_key }}</strong> — {{ h.sent_at }} (giá trị ghi nhận: {{ h.value }})</li>
+                {% endfor %}
+            </ul>
+            {% endif %}
+
+            <!-- Doanh thu Section -->
+            <div class="section-title">Doanh Thu (OTC + ETC)</div>
             <div class="grid">
                 <div class="col">
                     <div class="kpi-card">
-                        <div class="lbl">Tổng Đơn Hàng</div>
-                        <div class="val">{{ metrics.erp.total_orders }}</div>
+                        <div class="lbl">Doanh Thu OTC</div>
+                        <div class="val">{{ "{:,.0f}".format(metrics.revenue.otc) }} đ</div>
+                    </div>
+                </div>
+                <div class="col">
+                    <div class="kpi-card">
+                        <div class="lbl">Doanh Thu ETC</div>
+                        <div class="val">{{ "{:,.0f}".format(metrics.revenue.etc) }} đ</div>
                     </div>
                 </div>
                 <div class="col">
                     <div class="kpi-card success">
-                        <div class="lbl">Đơn Hoàn Thành</div>
-                        <div class="val">{{ metrics.erp.completed_orders }}</div>
-                    </div>
-                </div>
-                <div class="col">
-                    <div class="kpi-card failed">
-                        <div class="lbl">Đơn Bị Lỗi</div>
-                        <div class="val" style="color: #ef4444;">{{ metrics.erp.failed_orders }}</div>
+                        <div class="lbl">Tổng Doanh Thu</div>
+                        <div class="val" style="color: #10b981;">{{ "{:,.0f}".format(metrics.revenue.total) }} đ</div>
+                        {% if metrics.revenue.change_pct is not none %}
+                        <div class="{{ 'trend-up' if metrics.revenue.change_pct >= 0 else 'trend-down' }}">
+                            {{ "%+.1f"|format(metrics.revenue.change_pct) }}% so kỳ trước
+                        </div>
+                        {% else %}
+                        <div class="no-data">Chưa đủ dữ liệu kỳ trước</div>
+                        {% endif %}
                     </div>
                 </div>
                 <div class="col">
                     <div class="kpi-card">
-                        <div class="lbl">Doanh Thu</div>
-                        <div class="val" style="color: #10b981;">${{ "{:,.2f}".format(metrics.erp.total_revenue) }}</div>
+                        <div class="lbl">Số Hóa Đơn</div>
+                        <div class="val">{{ metrics.revenue.invoice_count }}</div>
                     </div>
                 </div>
             </div>
-            
-            <!-- CRM KPI Section -->
-            <div class="section-title">Tổng Hợp Support CRM</div>
+
+            <!-- Top khách hàng Section -->
+            <div class="section-title">Top 5 Khách Hàng Theo Doanh Thu</div>
             <div class="grid">
-                <div class="col">
-                    <div class="kpi-card">
-                        <div class="lbl">Tổng số ca</div>
-                        <div class="val">{{ metrics.crm.total_tickets }}</div>
-                    </div>
+                <div class="col" style="flex: 1; min-width: 280px;">
+                    <p style="font-size:12px; font-weight:700; color:#64748b; text-transform:uppercase; margin: 0 0 6px;">Kênh OTC</p>
+                    {% if metrics.top_customers_otc %}
+                    <table class="data-table">
+                        <thead><tr><th>Khách hàng</th><th>Doanh thu</th></tr></thead>
+                        <tbody>
+                            {% for c in metrics.top_customers_otc %}
+                            <tr><td>{{ c.name }}</td><td>{{ "{:,.0f}".format(c.revenue) }} đ</td></tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                    {% else %}
+                    <p class="no-data">Không có dữ liệu.</p>
+                    {% endif %}
                 </div>
-                <div class="col">
-                    <div class="kpi-card success">
-                        <div class="lbl">Đã Giải Quyết</div>
-                        <div class="val">{{ metrics.crm.resolved_tickets }}</div>
-                    </div>
-                </div>
-                <div class="col">
-                    <div class="kpi-card failed">
-                        <div class="lbl">Chưa Xử Lý (Open)</div>
-                        <div class="val" style="color: #ea580c;">{{ metrics.crm.open_tickets }}</div>
-                    </div>
-                </div>
-                <div class="col">
-                    <div class="kpi-card">
-                        <div class="lbl">Số ca Khẩn Cấp</div>
-                        <div class="val" style="color: #ef4444;">{{ metrics.crm.urgent_open }}</div>
-                    </div>
+                <div class="col" style="flex: 1; min-width: 280px;">
+                    <p style="font-size:12px; font-weight:700; color:#64748b; text-transform:uppercase; margin: 0 0 6px;">Kênh ETC</p>
+                    {% if metrics.top_customers_etc %}
+                    <table class="data-table">
+                        <thead><tr><th>Khách hàng</th><th>Doanh thu</th></tr></thead>
+                        <tbody>
+                            {% for c in metrics.top_customers_etc %}
+                            <tr><td>{{ c.name }}</td><td>{{ "{:,.0f}".format(c.revenue) }} đ</td></tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                    {% else %}
+                    <p class="no-data">Không có dữ liệu.</p>
+                    {% endif %}
                 </div>
             </div>
-            
-            <!-- Low Inventory List Section -->
-            <div class="section-title">Sản Phẩm Cần Nhập Hàng (Tồn < {{ low_limit }})</div>
-            {% if metrics.erp.low_inventory_count > 0 %}
+
+            {% if metrics.trend %}
+            <!-- Xu hướng trong kỳ Section — weekly: theo NGÀY, monthly: theo TUẦN -->
+            <div class="section-title">Xu Hướng Doanh Thu Trong Kỳ</div>
             <table class="data-table">
-                <thead>
-                    <tr>
-                        <th>Mã SKU</th>
-                        <th>Tên sản phẩm</th>
-                        <th>Số lượng còn</th>
-                    </tr>
-                </thead>
+                <thead><tr><th>Giai đoạn</th><th>Doanh thu</th></tr></thead>
                 <tbody>
-                    {% for item in metrics.erp.low_inventory_items %}
+                    {% for t in metrics.trend %}
+                    <tr><td>{{ t.label }}</td><td>{{ "{:,.0f}".format(t.revenue) }} đ</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            {% endif %}
+
+            {% if metrics.region_breakdown %}
+            <!-- Breakdown theo Vùng Section — chỉ hiện khi báo cáo KHÔNG lọc sẵn theo 1 vùng cụ thể -->
+            <div class="section-title">Doanh Thu Theo Vùng</div>
+            <table class="data-table">
+                <thead><tr><th>Vùng</th><th>Doanh thu</th></tr></thead>
+                <tbody>
+                    {% for r in metrics.region_breakdown %}
+                    <tr><td>{{ r.region }}</td><td>{{ "{:,.0f}".format(r.revenue) }} đ</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            {% endif %}
+
+            {% if metrics.kpi_summary %}
+            <!-- Tóm tắt KPI Section — kpi_summary là SNAPSHOT hiện tại, không lưu lịch sử theo kỳ -->
+            <div class="section-title">Tóm Tắt KPI Đội Ngũ (tính đến hiện tại)</div>
+            <div class="grid">
+                <div class="col">
+                    <div class="kpi-card success">
+                        <div class="lbl">Đạt Chỉ Tiêu</div>
+                        <div class="val" style="color: #10b981;">{{ metrics.kpi_summary.achieved_count }}/{{ metrics.kpi_summary.total_count }}</div>
+                    </div>
+                </div>
+                <div class="col">
+                    <div class="kpi-card">
+                        <div class="lbl">% Hoàn Thành Toàn Đội</div>
+                        <div class="val">{% if metrics.kpi_summary.team_pct is not none %}{{ "%.1f"|format(metrics.kpi_summary.team_pct) }}%{% else %}—{% endif %}</div>
+                    </div>
+                </div>
+                <div class="col">
+                    <div class="kpi-card">
+                        <div class="lbl">Tổng Doanh Số Đạt</div>
+                        <div class="val">{{ "{:,.0f}".format(metrics.kpi_summary.total_amount) }} đ</div>
+                    </div>
+                </div>
+            </div>
+            {% endif %}
+
+            {% if metrics.receivables %}
+            <!-- Công nợ Section (chỉ hiện khi dữ liệu còn mới — cùng tháng hoặc tháng liền trước kỳ báo cáo) -->
+            <div class="section-title">Công Nợ (Kỳ {{ metrics.receivables.period }})</div>
+            <div class="grid">
+                <div class="col">
+                    <div class="kpi-card failed">
+                        <div class="lbl">Nợ Quá Hạn</div>
+                        <div class="val" style="color: #ef4444;">{{ "{:,.0f}".format(metrics.receivables.total_overdue) }} đ</div>
+                    </div>
+                </div>
+                <div class="col">
+                    <div class="kpi-card">
+                        <div class="lbl">Tổng Dư Nợ</div>
+                        <div class="val">{{ "{:,.0f}".format(metrics.receivables.balance_end) }} đ</div>
+                    </div>
+                </div>
+            </div>
+            {% endif %}
+
+            <!-- Tồn kho Section -->
+            <div class="section-title">Tồn Kho</div>
+            <div class="grid">
+                <div class="col">
+                    <div class="kpi-card failed">
+                        <div class="lbl">Tồn Chết (&ge;12 tháng)</div>
+                        <div class="val" style="color: #ea580c;">{{ metrics.inventory.dead_stock_count }}</div>
+                    </div>
+                </div>
+                <div class="col">
+                    <div class="kpi-card failed">
+                        <div class="lbl">Sắp Hết Hàng (&le;1 tháng)</div>
+                        <div class="val" style="color: #ef4444;">{{ metrics.inventory.near_stockout_count }}</div>
+                    </div>
+                </div>
+            </div>
+            {% if metrics.inventory.dead_stock_items %}
+            <table class="data-table">
+                <thead><tr><th>Mã SKU</th><th>Tên hàng</th><th>Giá trị tồn</th><th>Số tháng bán</th></tr></thead>
+                <tbody>
+                    {% for item in metrics.inventory.dead_stock_items %}
                     <tr>
-                        <td><strong>{{ item.sku }}</strong></td>
+                        <td><strong>{{ item.item_code }}</strong></td>
                         <td>{{ item.item_name }}</td>
-                        <td style="color: #ef4444; font-weight: bold;">{{ item.quantity }}</td>
+                        <td>{{ "{:,.0f}".format(item.closing_value) }} đ</td>
+                        <td style="color: #ea580c; font-weight: bold;">{{ item.months_to_sell }} tháng</td>
                     </tr>
                     {% endfor %}
                 </tbody>
             </table>
-            {% else: %}
-            <p class="no-data">Không có sản phẩm nào dưới ngưỡng tồn kho tối thiểu. Rất tốt!</p>
             {% endif %}
-            
+
         </div>
         <div class="footer">
             Báo cáo tự động từ Pipeline ETL &bull; Vui lòng không trả lời trực tiếp email này.
@@ -214,24 +322,113 @@ DIGEST_EMAIL_TEMPLATE = """
 </html>
 """
 
-def send_email(subject, html_content):
+def send_email_via_sendgrid(subject, html_content, recipient_override=None):
     """
-    Gửi email bằng SMTP Outlook
+    Gửi email bằng SendGrid Web API v3 (Không sử dụng SMTP, tránh bị chặn bởi chính sách Office 365)
+    recipient_override: nếu truyền vào (list email không rỗng) thì gửi tới danh sách này thay vì
+    RECIPIENT_EMAILS/.env hay config.yaml — dùng cho báo cáo đã phân quyền theo audience
+    (xem main.py::_send_periodic_email_report).
     """
+    api_key = os.getenv("SENDGRID_API_KEY")
+    sender_email = os.getenv("SENDER_EMAIL")
+
+    # Đọc cấu hình
     config = load_config()
+    sender_name = config['email'].get('sender_name', 'Alerting System (SendGrid)')
+
+    if recipient_override:
+        recipient_emails = list(recipient_override)
+    else:
+        # Đọc danh sách email nhận
+        env_recipients = os.getenv("RECIPIENT_EMAILS")
+        if env_recipients:
+            recipient_emails = [email.strip() for email in env_recipients.split(',') if email.strip()]
+        else:
+            recipient_emails = config['email'].get('recipient_emails', [])
+    recipient_emails = [r for r in recipient_emails if r]
     
+    if not sender_email:
+        print("[WARNING] SENDER_EMAIL must be set in .env to send via SendGrid.")
+        return False
+        
+    if not recipient_emails:
+        print("[WARNING] No recipient emails configured.")
+        return False
+        
+    url = "https://api.sendgrid.com/v3/mail/send"
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json"
+    }
+    
+    personalizations = []
+    for email in recipient_emails:
+        personalizations.append({
+            "to": [{"email": email}]
+        })
+        
+    payload = {
+        "personalizations": personalizations,
+        "from": {
+            "email": sender_email,
+            "name": sender_name
+        },
+        "subject": subject,
+        "content": [
+            {
+                "type": "text/html",
+                "value": html_content
+            }
+        ]
+    }
+    
+    try:
+        data = json.dumps(payload).encode('utf-8')
+        req = urllib.request.Request(
+            url,
+            data=data,
+            headers=headers
+        )
+        with urllib.request.urlopen(req, timeout=15) as response:
+            print(f"[SENDGRID] Gui email thanh cong qua SendGrid API toi: {', '.join(recipient_emails)}")
+            return True
+    except Exception as e:
+        print(f"[SENDGRID] Loi gui mail qua SendGrid: {e}")
+        if hasattr(e, 'read'):
+            try:
+                print("Chi tiet loi SendGrid:", e.read().decode('utf-8'))
+            except Exception:
+                pass
+        return False
+
+def send_email(subject, html_content, recipient_override=None):
+    """
+    Gửi email báo cáo: Ưu tiên dùng SendGrid Web API nếu có API Key,
+    nếu không có sẽ tự động fallback sang SMTP Outlook truyền thống.
+    recipient_override: nếu truyền vào (list email không rỗng) thì gửi tới danh sách này thay vì
+    RECIPIENT_EMAILS/.env hay config.yaml — dùng cho báo cáo đã phân quyền theo audience
+    (xem main.py::_send_periodic_email_report).
+    """
+    if os.getenv("SENDGRID_API_KEY"):
+        return send_email_via_sendgrid(subject, html_content, recipient_override=recipient_override)
+
+    config = load_config()
+
     # Ưu tiên lấy cấu hình SMTP từ file .env cho bảo mật, nếu không có mới lấy từ config.yaml
     smtp_user = os.getenv("SMTP_USER") or config['email'].get('smtp_user')
     smtp_pass = os.getenv("SMTP_PASSWORD") or config['email'].get('smtp_password')
     sender_email = os.getenv("SENDER_EMAIL") or config['email'].get('sender_email') or smtp_user
-    
-    # Danh sách email nhận
-    env_recipients = os.getenv("RECIPIENT_EMAILS")
-    if env_recipients:
-        recipient_emails = [email.strip() for email in env_recipients.split(',') if email.strip()]
+
+    if recipient_override:
+        recipient_emails = list(recipient_override)
     else:
-        recipient_emails = config['email'].get('recipient_emails', [])
-        
+        # Danh sách email nhận
+        env_recipients = os.getenv("RECIPIENT_EMAILS")
+        if env_recipients:
+            recipient_emails = [email.strip() for email in env_recipients.split(',') if email.strip()]
+        else:
+            recipient_emails = config['email'].get('recipient_emails', [])
+
     # Loại bỏ các email trống
     recipient_emails = [r for r in recipient_emails if r]
     
@@ -244,8 +441,8 @@ def send_email(subject, html_content):
         print(f"[WARNING] No recipient emails configured. Cannot send email.")
         return False
         
-    smtp_server = config['email'].get('smtp_server', 'smtp.office365.com')
-    smtp_port = int(config['email'].get('smtp_port', 587))
+    smtp_server = os.getenv("SMTP_SERVER") or config['email'].get('smtp_server', 'smtp.office365.com')
+    smtp_port = int(os.getenv("SMTP_PORT") or config['email'].get('smtp_port', 587))
     use_tls = config['email'].get('use_tls', True)
     sender_name = config['email'].get('sender_name', 'Alerting System')
     
@@ -288,19 +485,20 @@ def build_alert_email(alert_name, severity, summary, table_headers, table_rows):
         timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     )
 
-def build_digest_email(metrics, period_label="Daily"):
+def build_digest_email(metrics, period_label="Daily", audience=None, scope_label=None):
     """
     Tạo nội dung HTML cho email báo cáo tổng hợp định kỳ.
     period_label: "Daily" / "Weekly" / "Monthly" (hiển thị trong tiêu đề email).
+    audience/scope_label: nhãn "Báo cáo dành cho: ..." — dùng cho báo cáo đã phân quyền theo
+    cấp quản lý (xem main.py::send_weekly_report/send_monthly_report). None -> không hiện nhãn
+    (giữ nguyên hành vi cũ cho các nơi gọi chưa truyền audience).
     """
-    config = load_config()
-    low_limit = config['thresholds']['erp']['low_inventory_limit']
-
     template = Template(DIGEST_EMAIL_TEMPLATE)
     return template.render(
         metrics=metrics,
-        low_limit=low_limit,
-        period_label=period_label
+        period_label=period_label,
+        audience=audience,
+        scope_label=scope_label,
     )
 
 def analyze_alert_with_gemini(alert_name, summary, table_headers, table_rows):
@@ -409,10 +607,36 @@ def _severity_to_card_style(severity):
         return "warning"    # vang
     return "good"           # xanh, dung cho INFO
 
-def _build_teams_adaptive_card(title, summary, severity, table_headers=None, table_rows=None):
+def _chatbot_deep_link(question):
+    """
+    URL dẫn thẳng vào web chatbot kèm sẵn câu hỏi (?q=...) — người bấm vào chỉ cần đăng nhập bằng
+    đúng tài khoản của mình, RBAC theo username (DNHChatbot._resolve_user_scope) sẽ tự giới hạn
+    đúng phạm vi vùng/kênh họ được xem, không cần nhúng thêm tham số phân quyền vào link.
+
+    CHATBOT_WEB_URL đọc từ .env, mặc định http://127.0.0.1:8000 (đúng địa chỉ chatbot đang chạy
+    hiện tại — backend/main.py chỉ bind 127.0.0.1, chưa có domain public). Link này CHỈ mở được từ
+    chính máy đang chạy backend cho tới khi có domain/tunnel public thật — điền CHATBOT_WEB_URL
+    trong .env khi đã deploy, không cần sửa code.
+    """
+    base = os.getenv("CHATBOT_WEB_URL", "http://127.0.0.1:8000").rstrip('/')
+    return f"{base}/?q={quote(question)}"
+
+
+def _build_teams_adaptive_card(title, summary, severity, table_headers=None, table_rows=None,
+                                period=None, channel=None, region=None, issue=None):
     """
     Dung Adaptive Card (schema 1.5) thay vi text Markdown tho, de Teams hien thi
     co mau theo severity (do=CRITICAL, vang=WARNING, xanh=INFO).
+
+    period/channel/region/issue la cac truong CO CAU TRUC moi (tuy chon, None thi bo qua) de
+    nguoi nhan biet NGAY: canh bao nay cua KY/NGAY nao, KENH OTC/ETC nao, KHU VUC mien nao, va
+    VAN DE cu the la gi — thay vi phai doc het doan van `summary` moi suy ra duoc.
+
+    KHÔNG còn vẽ bảng chi tiết (table_headers/table_rows) trong card — bảng dài gây rối mắt, nhất
+    là trên Teams mobile. Thay bằng 1 nút "Xem chi tiết trên Chatbot" dẫn tới _chatbot_deep_link()
+    kèm sẵn câu hỏi tương ứng (lấy từ issue, dự phòng title). table_headers/table_rows vẫn nhận
+    vào hàm — KHÔNG đổi chữ ký để không phải sửa lại toàn bộ các nơi gọi trong src/alerts.py — chỉ
+    không dùng để vẽ Table nữa (email vẫn hiển thị bảng bình thường, không đổi).
     """
     body = [
         {
@@ -423,34 +647,30 @@ def _build_teams_adaptive_card(title, summary, severity, table_headers=None, tab
                 {"type": "TextBlock", "text": f"🚨 {title}", "weight": "Bolder", "size": "Large", "wrap": True},
                 {"type": "TextBlock", "text": f"Mức độ: {severity}", "isSubtle": True, "size": "Small", "wrap": True}
             ]
-        },
-        {"type": "TextBlock", "text": summary, "wrap": True, "spacing": "Medium"}
+        }
     ]
 
-    if table_headers and table_rows:
-        columns = [{"width": 1} for _ in table_headers]
-        header_row = {
-            "type": "TableRow",
-            "cells": [
-                {"type": "TableCell", "items": [{"type": "TextBlock", "text": str(h), "weight": "Bolder", "wrap": True}]}
-                for h in table_headers
-            ]
-        }
-        data_rows = []
-        for row in table_rows:
-            data_rows.append({
-                "type": "TableRow",
-                "cells": [
-                    {"type": "TableCell", "items": [{"type": "TextBlock", "text": str(cell), "wrap": True}]}
-                    for cell in row
-                ]
-            })
+    facts = []
+    if period:
+        facts.append({"title": "📅 Kỳ / Ngày", "value": str(period)})
+    if channel:
+        facts.append({"title": "🏷️ Kênh", "value": str(channel)})
+    if region:
+        facts.append({"title": "📍 Khu vực", "value": str(region)})
+    if facts:
+        body.append({"type": "FactSet", "facts": facts, "spacing": "Medium"})
+
+    if issue:
         body.append({
-            "type": "Table",
-            "columns": columns,
-            "firstRowAsHeaders": True,
-            "rows": [header_row] + data_rows
+            "type": "TextBlock",
+            "text": f"⚠️ Vấn đề phát hiện: {issue}",
+            "weight": "Bolder",
+            "wrap": True,
+            "color": _severity_to_card_style(severity),
+            "spacing": "Medium" if not facts else "Small"
         })
+
+    body.append({"type": "TextBlock", "text": summary, "wrap": True, "spacing": "Small" if issue else "Medium"})
 
     body.append({
         "type": "TextBlock",
@@ -467,6 +687,15 @@ def _build_teams_adaptive_card(title, summary, severity, table_headers=None, tab
         "version": "1.5",
         "body": body
     }
+
+    chat_question = issue or title
+    if chat_question:
+        adaptive_card["actions"] = [{
+            "type": "Action.OpenUrl",
+            "title": "💬 Xem chi tiết trên Chatbot",
+            "url": _chatbot_deep_link(f"Cho tôi xem chi tiết: {chat_question}")
+        }]
+
     return {
         "type": "message",
         "attachments": [
@@ -477,17 +706,21 @@ def _build_teams_adaptive_card(title, summary, severity, table_headers=None, tab
         ]
     }
 
-def send_teams_alert(title, summary, table_headers=None, table_rows=None, severity="INFO"):
+def send_teams_alert(title, summary, table_headers=None, table_rows=None, severity="INFO",
+                      period=None, channel=None, region=None, issue=None, webhook_url_override=None):
     """
     Gửi tin nhắn cảnh báo qua Microsoft Teams Incoming Webhook dưới dạng Adaptive Card
     (phân màu theo severity thay vì text Markdown thô).
+    webhook_url_override: nếu truyền vào (không rỗng) thì gửi tới URL này thay vì
+    TEAMS_WEBHOOK_URL mặc định — dùng khi định tuyến theo audience (xem _resolve_teams_webhooks).
     """
-    webhook_url = os.getenv("TEAMS_WEBHOOK_URL")
+    webhook_url = webhook_url_override or os.getenv("TEAMS_WEBHOOK_URL")
     if not webhook_url:
         print("[WARNING] TEAMS_WEBHOOK_URL is not configured in .env. Skipping Teams alert.")
         return False
 
-    payload = _build_teams_adaptive_card(title, summary, severity, table_headers, table_rows)
+    payload = _build_teams_adaptive_card(title, summary, severity, table_headers, table_rows,
+                                          period=period, channel=channel, region=region, issue=issue)
 
     try:
         data = json.dumps(payload).encode('utf-8')
@@ -502,6 +735,57 @@ def send_teams_alert(title, summary, table_headers=None, table_rows=None, severi
     except Exception as e:
         print(f"[TEAMS] Loi gui Teams: {e}")
         return False
+
+
+def _resolve_teams_webhooks(region_label, channel_label):
+    """
+    Suy ra danh sách webhook Teams (URL, tên audience) cần gửi cho 1 alert có region_label/
+    channel_label (nhãn hiển thị, vd "Miền Bắc"/"OTC" — xem src/alerts.py::normalize_region_label/
+    normalize_channel_label), dựa trên config['report_recipients'] (Phần 3 — phân quyền theo cấp
+    quản lý, nguồn DUY NHẤT dùng chung cho email/Teams/chatbot).
+
+    Quy tắc khớp: 1 audience khớp alert nếu (audience.region rỗng HOẶC == vùng của alert) VÀ
+    (audience.channel rỗng HOẶC == kênh của alert). Audience region/channel đều rỗng (C-Level)
+    luôn khớp mọi alert. Alert có vùng/kênh KHÔNG xác định cụ thể (vd "Toàn quốc"/"Nhiều miền"/
+    "OTC + ETC") chỉ khớp các audience không giới hạn tương ứng — tránh gửi nhầm alert đa vùng/đa
+    kênh vào 1 webhook vùng/kênh cụ thể.
+
+    Mỗi audience khớp có teams_webhook riêng (đã điền) hoặc rỗng (CHƯA có Flow riêng -> dùng
+    chung TEAMS_WEBHOOK_URL mặc định). Trả về danh sách ĐÃ KHỬ TRÙNG theo URL, để không gửi lặp
+    khi nhiều audience còn trỏ chung 1 webhook (vd lúc chưa điền webhook riêng, tất cả audience
+    khớp cùng rơi về đúng 1 URL mặc định -> chỉ gửi 1 lần, y hệt hành vi cũ trước khi có Phần 3).
+    Nếu config chưa có report_recipients (môi trường cũ) -> trả về đúng 1 webhook mặc định.
+    """
+    default_webhook = os.getenv("TEAMS_WEBHOOK_URL")
+    try:
+        config = load_config()
+    except Exception:
+        config = {}
+    recipients = config.get('report_recipients') or []
+    if not recipients:
+        return [(default_webhook, None)] if default_webhook else []
+
+    from ai_agent.chatbot import DNHChatbot
+    region_key_by_label = {v: k for k, v in DNHChatbot._REGION_NAMES_VI.items()}
+    alert_region_key = region_key_by_label.get(region_label)
+    alert_channel_key = channel_label if channel_label in ("OTC", "ETC") else None
+
+    matched = []
+    seen_urls = set()
+    for r in recipients:
+        aud_region = r.get('region')
+        aud_channel = r.get('channel')
+        region_ok = (not aud_region) or (aud_region == alert_region_key)
+        channel_ok = (not aud_channel) or (aud_channel == alert_channel_key)
+        if not (region_ok and channel_ok):
+            continue
+        url = (r.get('teams_webhook') or '').strip() or default_webhook
+        if not url or url in seen_urls:
+            continue
+        seen_urls.add(url)
+        matched.append((url, r.get('audience')))
+
+    return matched
 
 def _send_with_retry(fn, *args, max_retries=2, delays=(3, 6), **kwargs):
     """
@@ -523,11 +807,17 @@ def _send_with_retry(fn, *args, max_retries=2, delays=(3, 6), **kwargs):
     return False
 
 def send_alert_to_all_channels(alert_name, severity, summary, table_headers=None, table_rows=None,
-                                channels=("email", "telegram", "teams")):
+                                channels=("email", "teams"), period=None, channel=None, region=None,
+                                issue=None):
     """
-    Gửi cảnh báo qua các kênh được chỉ định trong `channels` (mặc định cả 3: Email, Telegram, Teams).
+    Gửi cảnh báo qua các kênh được chỉ định trong `channels` (mặc định: Email, Teams).
     Dùng `channels` để định tuyến theo loại nội dung — vd. alert tức thời/daily digest chỉ đi
-    Telegram+Teams, báo cáo tuần/tháng chỉ đi Email (xem main.py/src/alerts.py).
+    Teams, báo cáo tuần/tháng chỉ đi Email (xem main.py/src/alerts.py). Kênh Telegram đã ngừng
+    dùng (chuyển hẳn qua web) — code gửi Telegram vẫn còn bên dưới nhưng không còn được gọi tới
+    vì không nơi nào truyền "telegram" vào `channels` nữa.
+
+    period/channel/region/issue: các trường có cấu trúc (tùy chọn) chỉ áp dụng cho card Teams —
+    xem _build_teams_adaptive_card. Không đổi định dạng Email/Telegram hiện có.
     """
     print(f"\n--- BAT DAU GUI CANH BAO: {alert_name} [{severity}] (kenh: {', '.join(channels)}) ---")
     any_sent = False
@@ -601,16 +891,26 @@ def send_alert_to_all_channels(alert_name, severity, summary, table_headers=None
         except Exception as e:
             print(f"[ERROR] Loi gui Telegram: {e}")
 
-    # 3. Gui qua Teams
+    # 3. Gui qua Teams — định tuyến theo audience khớp region/channel của alert (Phần 3 phân
+    #    quyền). Khi các audience còn trỏ chung 1 webhook mặc định (chưa điền Flow riêng),
+    #    _resolve_teams_webhooks tự khử trùng nên hành vi giống hệt "1 webhook chung" trước đây.
     if "teams" in channels:
         try:
             # Nếu có phân tích AI, đính kèm vào nội dung Teams
             teams_summary = summary
             if gemini_analysis:
                 teams_summary = f"{summary}\n\n💡 Phân tích AI: {gemini_analysis}"
-            teams_sent = _send_with_retry(send_teams_alert, alert_name, teams_summary, table_headers, table_rows, severity=severity)
-            if teams_sent:
-                any_sent = True
+            webhooks = _resolve_teams_webhooks(region, channel)
+            if not webhooks:
+                print("[WARNING] Không có webhook Teams nào khớp (kiểm tra TEAMS_WEBHOOK_URL/.env hoặc report_recipients).")
+            for webhook_url, audience in webhooks:
+                teams_sent = _send_with_retry(send_teams_alert, alert_name, teams_summary, table_headers, table_rows,
+                                               severity=severity, period=period, channel=channel, region=region,
+                                               issue=issue, webhook_url_override=webhook_url)
+                if teams_sent:
+                    any_sent = True
+                    if audience:
+                        print(f"[TEAMS] Đã gửi tới audience '{audience}'.")
         except Exception as e:
             print(f"[ERROR] Loi gui Teams: {e}")
 

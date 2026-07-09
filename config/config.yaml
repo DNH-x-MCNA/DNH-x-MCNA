@@ -1,7 +1,9 @@
 # Cấu hình hệ thống Pipeline ETL & Cảnh báo
 
-# Môi trường chạy: 'local' (sử dụng SQLite giả lập) hoặc 'production' (sử dụng SQL Server thật)
-environment: local
+# Môi trường chạy: 'local' (bật thêm bộ cảnh báo MOCK ERP/CRM giả lập, chỉ để dev test — KHÔNG
+# dùng khi đã có webhook Teams/Telegram thật vì mock sẽ gửi dữ liệu giả vào kênh thật) hoặc
+# 'production' (chỉ chạy cảnh báo nghiệp vụ thật đọc từ Supabase, tắt hẳn mock).
+environment: production
 
 # Cấu hình Cơ sở dữ liệu
 database:
@@ -27,6 +29,54 @@ email:
   recipient_emails:
     - "" # Email người nhận cảnh báo, ví dụ: user@example.com
 
+# Phân quyền theo cấp quản lý — NGUỒN DUY NHẤT định nghĩa 6 audience, dùng chung cho CẢ BA kênh:
+#   - Email báo cáo Weekly/Monthly (main.py::send_weekly_report/send_monthly_report, lặp qua
+#     danh sách này, gửi riêng từng audience). Daily digest KHÔNG đổi, vẫn gửi 1 bản chung tới
+#     email.recipient_emails ở trên.
+#   - Alert Teams thời gian thực (src/notifier.py::send_alert_to_all_channels) — mỗi alert có
+#     region=/channel= sẽ gửi tới webhook của MỌI audience khớp phạm vi (xem
+#     _resolve_teams_webhooks). teams_webhook để trống ("") = CHƯA có Flow/webhook riêng cho
+#     audience này -> tạm dùng chung TEAMS_WEBHOOK_URL trong .env (vẫn 1 webhook chung như cũ,
+#     không có tác dụng phân tách thật cho tới khi điền webhook riêng). Điền URL Power Automate
+#     riêng cho từng audience vào đây khi đã dựng xong Flow tương ứng — KHÔNG cần sửa code.
+#   - Chatbot (ai_agent/chatbot.py::_resolve_user_scope) — suy ra vùng/kênh hợp lệ từ chính danh
+#     sách audience này (không hard-code lại quy ước vùng/kênh ở nơi khác).
+# region: null (không lọc) hoặc "bac"/"nam"/"trung" — khớp đúng DNHChatbot._REGION_SQL_MARKERS.
+# channel: null (không lọc) hoặc "OTC"/"ETC".
+# emails: CHƯA có email thật cho từng manager — tạm route tất cả về 1 địa chỉ hiện có, điền
+# email thật vào đây khi có, KHÔNG cần sửa code (main.py/src/etl.py đã đọc thẳng danh sách này).
+report_recipients:
+  - audience: "C-Level (Toàn quốc)"
+    region: null
+    channel: null
+    emails: ["levietdang1902@outlook.com.vn"]
+    teams_webhook: ""
+  - audience: "Quản lý Miền Bắc"
+    region: "bac"
+    channel: null
+    emails: ["levietdang1902@outlook.com.vn"]
+    teams_webhook: ""
+  - audience: "Quản lý Miền Nam"
+    region: "nam"
+    channel: null
+    emails: ["levietdang1902@outlook.com.vn"]
+    teams_webhook: ""
+  - audience: "Quản lý Miền Trung"
+    region: "trung"
+    channel: null
+    emails: ["levietdang1902@outlook.com.vn"]
+    teams_webhook: ""
+  - audience: "Quản lý Kênh OTC"
+    region: null
+    channel: "OTC"
+    emails: ["levietdang1902@outlook.com.vn"]
+    teams_webhook: ""
+  - audience: "Quản lý Kênh ETC"
+    region: null
+    channel: "ETC"
+    emails: ["levietdang1902@outlook.com.vn"]
+    teams_webhook: ""
+
 # Cấu hình các ngưỡng cảnh báo (Warning Thresholds)
 thresholds:
   erp:
@@ -48,8 +98,57 @@ thresholds:
     return_rate_pct: 0.05         # Tỷ lệ giá trị hàng trả về / doanh số ETC vượt 5%
     etl_stale_hours: 3            # Meta-alert: dữ liệu (MAX SyncAt) không mới quá 3 giờ -> nghi ETL đứng
 
+    # Nhịp KPI theo NGÀY của từng TDV (doanh số phát sinh trong ngày / chỉ tiêu THÁNG của chính
+    # TDV đó) — chỉ khả thi kênh OTC (brvsx_hoadonhdr/ETC không có cột nhân viên trên hóa đơn).
+    # Xem check_daily_kpi_pace_alert()/check_kpi_milestone_drop_alert() trong src/alerts.py.
+    kpi_pace_red_pct: 3.0            # < 3% doanh số ngày/chỉ tiêu tháng -> Đỏ
+    kpi_pace_yellow_pct: 4.0         # 3% - <4% -> Vàng; >=4% -> Xanh
+    kpi_pace_red_alert_count: 5      # >= 5 TDV đỏ trong ngày -> gửi alert
+    kpi_milestone_drop_pct: 0.05     # giảm > 5% tại mốc ngày 10/20 so với TB 5 tháng trước -> alert
+    kpi_milestone_lookback_months: 5 # số tháng liền trước dùng để tính trung bình
+    kpi_milestone_min_prev: 10000000 # TB lũy kế 5 tháng trước phải > 10 triệu mới xét (tránh chia ~0)
+
+  # Ngưỡng KPI nhân sự khối kinh doanh OTC MIỀN NAM — trích từ QĐ 0429-2/QĐ-HĐQT.25 (5 phụ lục:
+  # TDV, TDV chợ sỉ, Trưởng kênh MT, Trưởng bộ phận, Trưởng phòng). position_code CS/TK suy luận
+  # từ số lượng nhân viên thực tế (dim_nhanvien, AreaCode='MN'), CHƯA có bảng chú giải chính thức
+  # từ HR — xác nhận lại trước khi coi các số dưới đây là cuối cùng.
+  kpi_sales_force:
+    contract_risk_pct:      # 2 tháng liên tiếp doanh số/target <= ngưỡng -> công ty có quyền chấm
+                             # dứt HĐLĐ. LƯU Ý: kpi_summary không lưu lịch sử theo tháng, nên code
+                             # chỉ kiểm tra được THÁNG HIỆN TẠI (cảnh báo sớm), CHƯA xác nhận đủ
+                             # điều kiện chính thức "2 tháng liên tiếp".
+      TDV: 0.65
+      CS: 0.65
+      TK: 0.60
+      TBP: 0.70
+      TP: 0.70
+    quarter_zero_bonus_pct: 0.80  # <80% quý/target quý -> hệ số thưởng quý = 0% (chung cả 5 vai trò)
+    year_floor_pct: 0.75          # <75% năm/target năm -> hệ số thưởng năm = 0%, mức sàn (chung cả 5 vai trò)
+
+# Bật/tắt các trigger đang bị DATA GAP (thiếu cột nguồn) — tắt để đỡ tốn 1 query Supabase mỗi
+# chu kỳ quét cho việc chỉ để in "chưa có dữ liệu". Bật lại (đổi thành true) ngay khi DNH bổ
+# sung cột nguồn tương ứng vào mart, KHÔNG cần sửa code.
+alert_feature_flags:
+  credit_limit_check: false   # cần cột hạn mức tín dụng trong dms_khachhang/receivable_detail
+  near_expiry_check: false    # cần cột ExpiryDate lô hàng (map lô -> hạn dùng) trong mart tồn kho
+  etl_freshness_check: false  # TẠM TẮT: đang trỏ CLOUD_DB_URL sang Supabase dev/test (snapshot
+                               # tĩnh, SyncAt không tăng) -> bật lại true khi đổi CLOUD_DB_URL về production
+  kpi_sales_force_risk_check: false  # TẠM TẮT: kpi_summary hiện 100% area_code='MB2' (miền Bắc),
+                                      # CHƯA có dòng nào miền Nam -> query lọc area_code LIKE 'MN%'
+                                      # nên sẽ luôn trả rỗng (an toàn, không báo nhầm ngưỡng miền Nam
+                                      # cho nhân sự miền Bắc). Bật true khi DNH bổ sung ETL nguồn miền
+                                      # Nam vào kpi_summary VÀ đã xác nhận legend position_code CS/TK.
+
 # Cấu hình Chu kỳ chạy (giây hoặc phút)
+# LƯU Ý: cảnh báo thời gian thực chính nay trigger ngay sau mỗi lần đồng bộ Bravo (xem
+# scripts/sync_from_bravo_to_supabase.py), không còn phụ thuộc chu kỳ poll dưới đây — vòng lặp
+# DNH_Realtime_Alerts (main.py) chỉ còn vai trò lưới an toàn dự phòng nên có thể để chu kỳ dài.
+# Báo cáo Daily/Weekly/Monthly cũng đã tách sang scheduled task riêng
+# (scripts/register_digest_schedule.bat: DNH_Daily_Digest_1745 17:45 hàng ngày,
+# DNH_Weekly_Report thứ Hai 17:45, DNH_Monthly_Report ngày 1 hàng tháng 17:45) — 2 dòng cấu hình
+# daily_digest_time/weekly_digest_day bên dưới không còn được main.py đọc nữa, giữ lại chỉ để
+# tham khảo giờ đang đăng ký trong Task Scheduler.
 scheduler:
-  etl_check_interval_seconds: 30  # Chạy check cảnh báo sau mỗi 30 giây (để dễ kiểm thử)
-  daily_digest_time: "17:30"      # Thời gian gửi báo cáo Daily (Teams/Telegram) + Weekly/Monthly (Email)
-  weekly_digest_day: "Monday"     # Ngày trong tuần gửi Báo cáo Tuần qua Email (tên tiếng Anh, khớp %A của Python)
+  etl_check_interval_seconds: 3600  # Quét dự phòng mỗi 1 giờ — lưới an toàn, không phải nguồn trigger chính
+  daily_digest_time: "17:45"        # Tham khảo — giờ thật đăng ký trong DNH_Daily_Digest_1745
+  weekly_digest_day: "Monday"       # Tham khảo — giờ thật đăng ký trong DNH_Weekly_Report
