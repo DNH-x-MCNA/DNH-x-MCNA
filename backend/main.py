@@ -1,6 +1,9 @@
 import os
 import sys
 import base64
+import json
+import secrets
+import time as _time_mod
 from fastapi import FastAPI, HTTPException, Header, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -29,31 +32,20 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# In-memory users for under 10 users permission control
-USERS = {
-    "admin": "dnh@admin2026",
-    "c_level": "dnh@clevel2026",
-    # Manager — giới hạn 1 chiều (miền HOẶC kênh). Nhận diện role qua token username, xem
-    # ai_agent/chatbot.py::_resolve_user_scope() — thêm role mới ở đây KHÔNG cần sửa chatbot.py,
-    # chỉ cần username chứa đúng 1 token miền (bac/nam/trung) và/hoặc 1 token kênh (otc/etc).
-    "manager_bac": "dnh@bac2026",
-    "manager_nam": "dnh@nam2026",
-    "manager_trung": "dnh@trung2026",
-    "manager_otc": "dnh@otc2026",
-    "manager_etc": "dnh@etc2026",
-    # QLV (Quản lý vùng)
-    "qlv_bac": "dnh@qlvbac2026",
-    "qlv_nam": "dnh@qlvnam2026",
-    "qlv_trung": "dnh@qlvtrung2026",
-    "qlv_otc": "dnh@qlvotc2026",
-    "qlv_etc": "dnh@qlvetc2026",
-    # Phó phòng (PP)
-    "pp_bac": "dnh@ppbac2026",
-    "pp_nam": "dnh@ppnam2026",
-    "pp_trung": "dnh@pptrung2026",
-    "pp_otc": "dnh@ppotc2026",
-    "pp_etc": "dnh@ppetc2026",
-}
+# USERS đọc từ .env (CHATBOT_USERS_JSON, JSON object {"username": "password", ...}) — KHÔNG còn
+# hardcode mật khẩu dạng chữ thường trong source code. Lý do: repo này đã PUBLIC trên GitHub (xác
+# nhận qua GitHub API 09/07/2026, HTTP 200 không cần đăng nhập) — mọi commit trước đó đã lộ nguyên
+# 17 mật khẩu cho bất kỳ ai đọc được repo. .env bị .gitignore, không commit — xem .env.example.
+# Cố tình FAIL FAST (không fallback về danh sách cũ) nếu thiếu biến này, tránh chạy ngầm với USERS
+# rỗng (khoá hết mọi người ra ngoài mà không rõ lý do) hoặc vô tình phục hồi lại mật khẩu cũ đã lộ.
+_users_json = os.getenv("CHATBOT_USERS_JSON", "").strip()
+if not _users_json:
+    raise RuntimeError(
+        "CHATBOT_USERS_JSON chua duoc cau hinh trong .env - xem .env.example. "
+        "Danh sach tai khoan/mat khau khong con hardcode trong source code nua (da tung lo tren "
+        "GitHub public) - phai set bien nay truoc khi chay backend."
+    )
+USERS = json.loads(_users_json)
 
 # Chatbot instance
 chatbot = DNHChatbot()
@@ -84,16 +76,29 @@ def get_latest_receivable_period(conn):
         raise HTTPException(status_code=500, detail="Khong tim thay ky bao cao nao trong receivable_detail.")
     return max(periods, key=_latest_period_key)
 
+# Session store — token ngẫu nhiên không đoán được (secrets.token_urlsafe), sinh MỖI LẦN đăng
+# nhập THÀNH CÔNG (đúng mật khẩu), hết hạn sau SESSION_TTL_SECONDS. Thay cho cơ chế cũ
+# "token_<username>" — bất kỳ ai đoán được 1 username hợp lệ (toàn tên vai trò dễ đoán như admin/
+# c_level/manager_bac) là vào thẳng full quyền, KHÔNG cần biết mật khẩu, token không bao giờ hết
+# hạn. Đây là lỗ hổng bypass xác thực hoàn toàn — nghiêm trọng hơn nữa từ khi web public qua
+# Cloudflare Tunnel 09/07/2026. Đánh đổi: session mất khi service restart (chấp nhận được, người
+# dùng chỉ cần đăng nhập lại — không lưu session ra file/DB cho bản vá lần này).
+SESSIONS = {}  # token -> {"username": str, "created_at": float}
+SESSION_TTL_SECONDS = 24 * 3600  # 24h — đủ 1 ngày làm việc, không quá dài nếu token bị lộ
+
 # Simple Authentication dependency
-def verify_token(authorization: Optional[str] = Header(None)):
+def verify_token(authorization: Optional[str] = Header(None)) -> str:
+    """Trả về username nếu token hợp lệ và chưa hết hạn, ngược lại raise 401."""
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Thieu token xac thuc")
-    token = authorization.split(" ")[1]
-    # Token hop le <=> username tuong ung con trong USERS (tu dong theo danh sach tai khoan,
-    # khong hard-code tung token rieng le - them tai khoan moi vao USERS la du).
-    if token.replace("token_", "", 1) not in USERS:
+    token = authorization.split(" ", 1)[1]
+    session = SESSIONS.get(token)
+    if session is None:
         raise HTTPException(status_code=401, detail="Token khong hop le hoac da het han")
-    return token
+    if _time_mod.time() - session["created_at"] > SESSION_TTL_SECONDS:
+        del SESSIONS[token]
+        raise HTTPException(status_code=401, detail="Token khong hop le hoac da het han")
+    return session["username"]
 
 def _display_role(username):
     """Nhãn vai trò hiển thị trên UI, suy ra từ token trong username — xem cùng quy ước với
@@ -110,8 +115,8 @@ def _display_role(username):
 @app.post("/api/auth/login")
 def login(req: LoginRequest):
     if req.username in USERS and USERS[req.username] == req.password:
-        # Return a simple mock token based on username
-        token = f"token_{req.username}"
+        token = secrets.token_urlsafe(32)
+        SESSIONS[token] = {"username": req.username, "created_at": _time_mod.time()}
         return {
             "success": True,
             "token": token,
@@ -126,9 +131,7 @@ class ChangePasswordRequest(BaseModel):
     confirm_password: str
 
 @app.post("/api/auth/change-password")
-def change_password(req: ChangePasswordRequest, token: str = Depends(verify_token)):
-    username = token.replace("token_", "", 1)
-
+def change_password(req: ChangePasswordRequest, username: str = Depends(verify_token)):
     # Kiểm tra mật khẩu cũ
     if USERS.get(username) != req.old_password:
         raise HTTPException(status_code=400, detail="Mật khẩu cũ không đúng")
@@ -146,7 +149,7 @@ def change_password(req: ChangePasswordRequest, token: str = Depends(verify_toke
     return {"success": True, "message": "Đổi mật khẩu thành công"}
 
 @app.get("/api/dashboard/stats")
-def get_stats(token: str = Depends(verify_token)):
+def get_stats(username: str = Depends(verify_token)):
     conn = get_cloud_connection()
     try:
         period = get_latest_receivable_period(conn)
@@ -188,7 +191,7 @@ def get_stats(token: str = Depends(verify_token)):
         conn.close()
 
 @app.get("/api/dashboard/charts")
-def get_charts(token: str = Depends(verify_token)):
+def get_charts(username: str = Depends(verify_token)):
     conn = get_cloud_connection()
     try:
         period = get_latest_receivable_period(conn)
@@ -254,7 +257,7 @@ def get_charts(token: str = Depends(verify_token)):
         conn.close()
 
 @app.get("/api/debt/alerts")
-def get_debt_alerts(token: str = Depends(verify_token)):
+def get_debt_alerts(username: str = Depends(verify_token)):
     """Tra ve khach hang co no qua han, sap xep giam dan theo total_overdue."""
     conn = get_cloud_connection()
     try:
@@ -290,7 +293,7 @@ def get_debt_alerts(token: str = Depends(verify_token)):
 
 
 @app.get("/api/inventory/summary")
-def get_inventory_summary(token: str = Depends(verify_token)):
+def get_inventory_summary(username: str = Depends(verify_token)):
     """Tra ve danh sach ton kho va phan loai rui ro theo months_to_sell."""
     conn = get_cloud_connection()
     try:
@@ -327,7 +330,7 @@ def get_inventory_summary(token: str = Depends(verify_token)):
 
 
 @app.get("/api/kpi/summary")
-def get_kpi_summary(token: str = Depends(verify_token)):
+def get_kpi_summary(username: str = Depends(verify_token)):
     """Tra ve bang tong hop KPI nhan vien."""
     conn = get_cloud_connection()
     try:
@@ -351,13 +354,16 @@ def get_kpi_summary(token: str = Depends(verify_token)):
         conn.close()
 
 @app.post("/api/chatbot/query")
-def chat_query(req: QueryRequest, token: str = Depends(verify_token)):
+def chat_query(req: QueryRequest, authorization: Optional[str] = Header(None), username: str = Depends(verify_token)):
     if not req.question:
         raise HTTPException(status_code=400, detail="Cau hoi khong duoc de trong")
 
     try:
-        username = token.replace("token_", "") if token else None
-        response_data = chatbot.ask(req.question, session_key=token, username=username)
+        # session_key = token phien dang nhap thuc te (da qua verify_token nen chac chan hop le) —
+        # dung de gom lich su hoi thoai theo tung LAN dang nhap, khong con dung "token_<username>"
+        # (chuoi co dinh, khong the phan biet 2 lan dang nhap khac nhau cua cung 1 nguoi).
+        session_token = authorization.split(" ", 1)[1]
+        response_data = chatbot.ask(req.question, session_key=session_token, username=username)
         # Chart is a local file on the server (matplotlib output). Inline it as
         # base64 so the browser can render it directly, same as the Telegram/Teams
         # bots do — no need for a separate static-file route to the scratch dir.
