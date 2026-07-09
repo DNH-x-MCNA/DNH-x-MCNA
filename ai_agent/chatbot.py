@@ -313,6 +313,16 @@ class DNHChatbot:
         # request/phiên bỏ qua Postgres, đi thẳng Bravo — không đợi timeout lặp lại vô ích.
         self._postgres_query_down_until = 0.0
 
+        # Cache kết quả DATA_QUERY (SQL sinh + data + answer) — tránh gọi lại LLM + query DB cho
+        # câu hỏi giống hệt hỏi lại trong vài phút (vd nhiều người cùng hỏi "doanh thu otc tháng 6"
+        # trong 1 buổi họp). Key PHẢI gồm scope_region/scope_channel — 2 user khác quyền hỏi CÙNG
+        # câu chữ vẫn phải ra 2 SQL/kết quả khác nhau (RBAC), tuyệt đối không dùng chung 1 entry.
+        # CHỈ cache/CHỈ đọc cache khi history_block rỗng (câu hỏi KHÔNG phải follow-up dựa vào hội
+        # thoại trước) — 1 câu hỏi giống hệt có thể mang nghĩa khác hẳn tuỳ ngữ cảnh hội thoại
+        # trước đó (vd "còn quý trước thì sao"), cache theo đúng chữ mà bỏ qua ngữ cảnh sẽ SAI.
+        self._query_cache = {}
+        self._QUERY_CACHE_TTL_SECONDS = 300
+
         # Conversation memory: session_key -> list[{"question","answer","ts"}]
         # In-memory/per-process, bounded, self-expiring after idle timeout.
         self._conversation_histories = {}
@@ -985,10 +995,11 @@ class DNHChatbot:
     # phép ở đâu cả, nhiều khả năng LLM quên lọc (không phải cố tình lọc SANG miền/kênh khác,
     # nên check "cấm mã lạ" phía trên không bắt được) -> phải chặn theo kiểu fail-closed, xem
     # đoạn "MỚI: fail-closed" trong ask().
-    # BRV_HTTDUDK/BRVSX_HTTDUDK (công nợ Bravo, thêm 09/07/2026): thêm vào đây để fail-closed
-    # cũng áp dụng — BRV_KhachHang KHÔNG có cột vùng miền trực tiếp (đã kiểm chứng), nên câu hỏi
-    # công nợ theo vùng miền của user bị giới hạn miền sẽ luôn bị từ chối an toàn (chưa hỗ trợ)
-    # cho tới khi xác nhận được join đúng sang dim_tinhthanhpho — KHÔNG phải lỗi, là chủ đích.
+    # BRV_HTTDUDK/BRVSX_HTTDUDK (công nợ Bravo, thêm 09/07/2026): thêm vào đây để fail-closed cũng
+    # áp dụng — BRV_KhachHang không có cột vùng miền trực tiếp nhưng JOIN được sang DMS_KhachHang
+    # qua Code rồi tới dim_tinhthanhpho (đã kiểm chứng khớp 99,99% dữ liệu thật, xem
+    # mart_layer_instruction nhánh bravo) — user bị giới hạn miền BẮT BUỘC SQL phải có JOIN này +
+    # mã miền được phép, nếu không sẽ bị chặn an toàn ở đây (không phải bug, là fail-closed đúng ý).
     _REGION_BEARING_TABLES = [
         "BRV_HOADONHDR", "BRV_HOADONCT", "BRVSX_HOADONHDR", "BRVSX_HOADONCT",
         "DIM_NHANVIEN", "KPI_SUMMARY", "RECEIVABLE_DETAIL", "DMS_KHACHHANG", "DMSSX_KHACHHANG",
@@ -1103,6 +1114,17 @@ class DNHChatbot:
         active_backend = self._resolve_active_backend()
         db_schema = get_db_schema(dialect=active_backend)
         history_block = self._get_history_block(session_key)
+
+        # Đọc cache DATA_QUERY nếu có — key gồm cả scope_region/scope_channel (an toàn RBAC) và
+        # CHỈ áp dụng khi không có lịch sử hội thoại (xem giải thích ở __init__, self._query_cache).
+        import time as _time
+        cache_key = (user_question.strip().lower(), scope_region, scope_channel, active_backend)
+        if not history_block and not self.is_mock:
+            cached = self._query_cache.get(cache_key)
+            if cached is not None and (_time.time() - cached["ts"]) < self._QUERY_CACHE_TTL_SECONDS:
+                result = dict(cached["result"])
+                self._remember_turn(session_key, user_question, result["answer"])
+                return result
 
         # 1. Phân loại ý định của câu hỏi (Intent Classification)
         intent = "DATA_QUERY"
@@ -1289,16 +1311,30 @@ Câu hỏi/Lời chào của người dùng: "{user_question}"
      ORDER BY [Còn nợ] DESC
    Kênh ETC dùng BRVSX_HTTDuDK/BRVSX_KhachHang, logic y hệt.
 
-   GIỚI HẠN CHƯA HỖ TRỢ (2 điểm, TỪ CHỐI lịch sự nếu câu hỏi cần, KHÔNG tự đoán/tự chế):
-     - TUỔI NỢ / BUCKET QUÁ HẠN (vd "nợ quá hạn 1-15 ngày", "nợ quá 45 ngày", "aging"): [DueDate]
-       trên 2 bảng này là SỐ NGÀY công nợ (payment term), KHÔNG PHẢI ngày — để tính quá hạn cần biết
-       "ngày cơ sở" (date basis: tính từ DocDate hay từ 1 mốc khác) — ĐÂY LÀ CÂU HỎI CHƯA ĐƯỢC DNH
-       XÁC NHẬN (open item, xem dnh-debt-aging-schema/dnh-project-context) — TUYỆT ĐỐI KHÔNG tự giả
-       định 1 công thức rồi tính, dùng đúng dạng SELECT N'...' từ chối (xem rule dialect bên dưới).
-     - VÙNG MIỀN: BRV_KhachHang/BRVSX_KhachHang KHÔNG có cột vùng miền (đã kiểm chứng) — câu hỏi
-       công nợ lọc theo MIỀN BẮC/TRUNG/NAM cụ thể thì từ chối lịch sự tương tự.
-   Câu hỏi công nợ KHÔNG bucket tuổi nợ, KHÔNG lọc vùng miền (theo khách hàng/tổng công ty/theo
-   kênh OTC hoặc ETC) vẫn trả lời bình thường theo 3 quy tắc a/b/c ở trên.
+   CÔNG NỢ THEO VÙNG MIỀN (Miền Bắc/Trung/Nam): BRV_KhachHang không có cột vùng miền trực tiếp,
+   nhưng JOIN được sang DMS_KhachHang qua CỘT [Code] (k.[Code] = dk.[Code] — ĐÃ KIỂM CHỨNG khớp
+   17.761/17.762 dòng thực tế, ~99,99%), rồi JOIN tiếp DMS_KhachHang -> DIM_TinhThanhPho như doanh
+   thu để lấy AreaCode. Ví dụ công nợ Miền Bắc kênh OTC:
+     SELECT SUM(h.[TotalAmount] - h.[PaidAmount]) AS [Công nợ Miền Bắc]
+     FROM [BRV_HTTDuDK] h
+     JOIN [BRV_KhachHang] k ON h.[CustomerId] = k.[Id]
+     JOIN [DMS_KhachHang] dk ON k.[Code] = dk.[Code]
+     JOIN [DIM_TinhThanhPho] t ON dk.[CityId] = t.[CityId]
+     WHERE h.[Account] LIKE '131%' AND (h.[TotalAmount] - h.[PaidAmount]) > 0 AND k.[IsCustomer] = 1
+       AND t.[AreaCode] IN ('MB', 'MB2')
+   Kênh ETC JOIN sang DMSSX_KhachHang (thay DMS_KhachHang) qua cùng cách. LƯU Ý BẢO MẬT: nếu người
+   hỏi bị giới hạn vùng miền (xem CRITICAL SECURITY RULE ở dưới nếu có), BẮT BUỘC luôn thêm JOIN +
+   filter AreaCode này vào MỌI câu hỏi công nợ, kể cả khi câu hỏi không nói rõ vùng miền — thiếu
+   filter này sẽ bị hệ thống an toàn tự chặn (không trả lời được), không phải lộ dữ liệu sai vùng.
+
+   GIỚI HẠN CHƯA HỖ TRỢ — TUỔI NỢ / BUCKET QUÁ HẠN (vd "nợ quá hạn 1-15 ngày", "nợ quá 45 ngày",
+   "aging"): TỪ CHỐI lịch sự, KHÔNG tự đoán/tự chế công thức. [DueDate] trên 2 bảng công nợ là SỐ
+   NGÀY công nợ (payment term), KHÔNG PHẢI ngày — để tính quá hạn cần biết "ngày cơ sở" (date basis:
+   tính từ DocDate hay từ 1 mốc khác), ĐÂY LÀ CÂU HỎI CHƯA ĐƯỢC DNH XÁC NHẬN (open item, xem
+   dnh-debt-aging-schema/dnh-project-context) — dùng đúng dạng SELECT N'...' từ chối (xem rule
+   dialect bên dưới).
+   Câu hỏi công nợ KHÔNG bucket tuổi nợ (theo khách hàng/tổng công ty/theo kênh/theo vùng miền) vẫn
+   trả lời bình thường theo quy tắc a/b/c ở trên (+ join vùng miền nếu cần).
 """
 
         # 'fact_tonghopkhachhang' thuộc mart đầy đủ (production), KHÔNG có ở bản dev hiện tại
@@ -2026,6 +2062,18 @@ CRITICAL RULES:
             "chart_path": chart_path,
             "mode": f"Live {self.model_type.upper()} API" if not self.is_mock else "Offline Mock Engine"
         }
+
+        # Ghi cache — chỉ khi KHÔNG có lỗi (không cache lỗi tạm thời như Bravo/Postgres timeout,
+        # tránh lặp lại lỗi đã qua trong 5 phút tới) và KHÔNG có lịch sử hội thoại (xem điều kiện
+        # đọc cache ở đầu ask(), self._query_cache). Dọn rác (entry hết hạn) mỗi lần ghi để cache
+        # không phình vô hạn qua thời gian chạy dài của service.
+        if not history_block and not self.is_mock and "error" not in query_result:
+            self._query_cache = {
+                k: v for k, v in self._query_cache.items()
+                if (_time.time() - v["ts"]) < self._QUERY_CACHE_TTL_SECONDS
+            }
+            self._query_cache[cache_key] = {"result": dict(result), "ts": _time.time()}
+
         self._remember_turn(session_key, user_question, result["answer"])
         return result
 
