@@ -52,13 +52,22 @@ _schema_cache = {}
 _schema_cache_time = {}
 _SCHEMA_CACHE_TTL_SECONDS = 300  # 5 phút — đủ mới, không cần fetch lại mỗi câu hỏi
 
-# 12 bảng THẬT SỰ tồn tại trên Bravo SQL Server (đã sync bởi scripts/sync_from_bravo_to_supabase.py)
-# — KHÔNG gồm fact_tonghopkhachhang/receivable_detail/inventory/kpi_summary (chỉ có trên Supabase,
-# xác nhận thực tế 09/07/2026 khi xây failover cho src/alerts.py/src/etl.py).
+# CHÍNH XÁC LÀ 99 bảng thật sự tồn tại trên Bravo (đã quét lại toàn bộ INFORMATION_SCHEMA.TABLES
+# 09/07/2026, sửa nhận định SAI trước đó nói chỉ có 12 bảng/thiếu công nợ-tồn kho-KPI). Danh sách
+# dưới đây chỉ là các bảng ĐÃ ĐƯỢC DẠY cho chatbot dùng (không phải toàn bộ 99 bảng có trên Bravo) —
+# mở rộng dần khi có nhu cầu + đã verify kỹ logic nghiệp vụ, tránh AI tự bịa cách dùng bảng lạ.
+# brv_httdudk/brvsx_httdudk + brv_khachhang/brvsx_khachhang (công nợ, thêm 09/07/2026) — xem
+# mart_layer_instruction nhánh active_backend=="bravo" để biết công thức tính đã kiểm chứng.
+# receivable_detail/inventory/kpi_summary/fact_tonghopkhachhang bên Supabase KHÔNG phải sync tự
+# động từ Bravo mỗi loại như nhau: fact_tonghopkhachhang LÀ 1-1 sync thật từ FACT_TongHopKhachHang
+# (có thể dùng thẳng, CHƯA làm trong lượt này); receivable_detail/inventory/kpi_summary lại là
+# import 1 LẦN từ Excel DNH gửi đầu dự án (KHÔNG tự động, đã cũ ~6 tháng) — không phải nguồn Bravo
+# thiếu, mà do chưa xây transformation logic tương đương trên Bravo cho 2 mảng còn lại (tồn kho/KPI).
 _BRAVO_TABLES = (
     'brv_hoadonhdr', 'brv_hoadonct', 'brvsx_hoadonhdr', 'brvsx_hoadonct',
     'brv_trangthaihoadon', 'brv_trangthaiduyet', 'dms_khachhang', 'dmssx_khachhang',
     'dim_tinhthanhpho', 'dim_nhanvien', 'brv_sanpham', 'brvsx_tralai',
+    'brv_httdudk', 'brvsx_httdudk', 'brv_khachhang', 'brvsx_khachhang',
 )
 
 def get_db_schema(dialect="postgres"):
@@ -87,7 +96,7 @@ def get_db_schema(dialect="postgres"):
                     schema_dict = {}
                     for r in cols:
                         schema_dict.setdefault(r[0], []).append(f"{r[1]} ({r[2]})")
-                    schema_text = "Dược Nam Hà central database schema (Bravo SQL Server — dự phòng, KHÔNG có công nợ/tồn kho/KPI):\n"
+                    schema_text = "Dược Nam Hà central database schema (Bravo SQL Server — nguồn chính, có công nợ, KHÔNG có tồn kho/KPI):\n"
                     for t, cols_str in schema_dict.items():
                         schema_text += f"- Table '{t}': Columns are {', '.join(cols_str)}\n"
                     _schema_cache["bravo"], _schema_cache_time["bravo"] = schema_text, now_ts
@@ -725,14 +734,14 @@ class DNHChatbot:
                 except Exception as e:
                     upstream_error = str(e)
                     # "Invalid object name" = bảng không tồn tại — gần như chắc chắn là câu hỏi
-                    # đụng receivable_detail/kpi_summary/inventory (3 bảng chỉ có trên Supabase,
-                    # KHÔNG có trên Bravo) dù system prompt đã được dặn tránh — trả thông báo rõ
-                    # ràng bằng tiếng Việt thay vì để lộ lỗi pyodbc thô cho người dùng cuối.
+                    # đụng kpi_summary/fact_tonghopkhachhang/inventory/mart_layer (chỉ có trên
+                    # Supabase, KHÔNG có trên Bravo) dù system prompt đã được dặn tránh — trả thông
+                    # báo rõ ràng bằng tiếng Việt thay vì để lộ lỗi pyodbc thô cho người dùng cuối.
                     if "invalid object name" in upstream_error.lower():
                         return {"error": (
-                            "Câu hỏi này cần dữ liệu công nợ/tồn kho/KPI — hiện KHÔNG có trên nguồn dữ liệu dự "
-                            "phòng (Bravo) đang dùng do Supabase tạm thời không kết nối được. Vui lòng thử lại "
-                            "sau khi Supabase hồi phục."
+                            "Câu hỏi này cần dữ liệu tồn kho/KPI/chỉ tiêu — hiện KHÔNG có trên nguồn Bravo đang "
+                            "dùng. Vui lòng thử lại sau khi Supabase kết nối được, hoặc hỏi lại theo hướng khác "
+                            "(vd công nợ, doanh thu, khách hàng vẫn trả lời được bình thường)."
                         )}
                     print(f"[Warning] Resilient Chatbot: Bravo query failed ({upstream_error}). Falling back to SQLite...")
 
@@ -968,17 +977,22 @@ class DNHChatbot:
     }
     _REGION_SQL_MARKERS = {"bac": ["MB", "MB2"], "nam": ["MN"], "trung": ["MT"]}  # mã miền, không quote — quote khi dùng
     _CHANNEL_SQL_MARKERS = {
-        "otc": ["BRV_HOADONHDR", "BRV_HOADONCT", "'OTC'"],
-        "etc": ["BRVSX_HOADONHDR", "BRVSX_HOADONCT", "'ETC'"],
+        "otc": ["BRV_HOADONHDR", "BRV_HOADONCT", "BRV_HTTDUDK", "BRV_KHACHHANG", "'OTC'"],
+        "etc": ["BRVSX_HOADONHDR", "BRVSX_HOADONCT", "BRVSX_HTTDUDK", "BRVSX_KHACHHANG", "'ETC'"],
     }
     # Bảng có dữ liệu TRỘN nhiều miền/nhiều kênh trong CÙNG 1 bảng (không phải bảng riêng theo
     # kênh như brv_*/brvsx_*) — nếu SQL đụng tới các bảng này mà KHÔNG thấy mã miền/kênh được
     # phép ở đâu cả, nhiều khả năng LLM quên lọc (không phải cố tình lọc SANG miền/kênh khác,
     # nên check "cấm mã lạ" phía trên không bắt được) -> phải chặn theo kiểu fail-closed, xem
     # đoạn "MỚI: fail-closed" trong ask().
+    # BRV_HTTDUDK/BRVSX_HTTDUDK (công nợ Bravo, thêm 09/07/2026): thêm vào đây để fail-closed
+    # cũng áp dụng — BRV_KhachHang KHÔNG có cột vùng miền trực tiếp (đã kiểm chứng), nên câu hỏi
+    # công nợ theo vùng miền của user bị giới hạn miền sẽ luôn bị từ chối an toàn (chưa hỗ trợ)
+    # cho tới khi xác nhận được join đúng sang dim_tinhthanhpho — KHÔNG phải lỗi, là chủ đích.
     _REGION_BEARING_TABLES = [
         "BRV_HOADONHDR", "BRV_HOADONCT", "BRVSX_HOADONHDR", "BRVSX_HOADONCT",
         "DIM_NHANVIEN", "KPI_SUMMARY", "RECEIVABLE_DETAIL", "DMS_KHACHHANG", "DMSSX_KHACHHANG",
+        "BRV_HTTDUDK", "BRVSX_HTTDUDK",
     ]
     _CHANNEL_SHARED_TABLES = ["RECEIVABLE_DETAIL", "KPI_SUMMARY"]
     _REGION_NAMES_VI = {"bac": "Miền Bắc", "nam": "Miền Nam", "trung": "Miền Trung"}
@@ -1246,10 +1260,45 @@ Câu hỏi/Lời chào của người dùng: "{user_question}"
 """
         elif active_backend == "bravo":
             mart_layer_instruction = """
-0. Đang dùng nguồn dữ liệu DỰ PHÒNG (Bravo SQL Server) — KHÔNG có 'mart_layer.mart_revenue_summary',
-   KHÔNG có 'receivable_detail' (công nợ), KHÔNG có 'inventory' (tồn kho). Doanh thu vẫn tính được
-   trực tiếp từ brv_hoadonhdr/brv_hoadonct/brvsx_hoadonhdr/brvsx_hoadonct như bình thường; câu hỏi
-   về công nợ/tồn kho thì từ chối lịch sự (xem rule dialect bên dưới), KHÔNG tự chế bảng.
+0. Đang dùng nguồn Bravo SQL Server (nguồn CHÍNH) — KHÔNG có 'mart_layer.mart_revenue_summary',
+   KHÔNG có 'inventory' (tồn kho — chưa hỗ trợ, từ chối lịch sự nếu được hỏi). Doanh thu tính trực
+   tiếp từ brv_hoadonhdr/brv_hoadonct/brvsx_hoadonhdr/brvsx_hoadonct như bình thường.
+
+   CÔNG NỢ (receivable_detail không tồn tại trên Bravo với TÊN này, nhưng dữ liệu THÔ có thật và
+   MỚI HƠN — đã kiểm chứng thực tế 09/07/2026): dùng 'BRV_HTTDuDK' (kênh OTC) / 'BRVSX_HTTDuDK'
+   (kênh ETC), JOIN với 'BRV_KhachHang'/'BRVSX_KhachHang' tương ứng qua CustomerId = Id. CHỈ trả lời
+   TỔNG SỐ CÒN NỢ (không bucket theo tuổi nợ — xem giới hạn bên dưới). 3 QUY TẮC BẮT BUỘC (đã verify
+   bằng dữ liệu thật, sai bất kỳ điểm nào cũng ra số SAI):
+     a. Số còn nợ = [TotalAmount] - [PaidAmount]. TUYỆT ĐỐI KHÔNG dùng cột IsOpenDue để lọc "còn nợ"
+        — đã xác nhận cột này không phản ánh đúng thực tế (luôn = 0 kể cả hóa đơn hôm nay, PaidAmount
+        = 0, rõ ràng còn nợ).
+     b. CHỈ lấy [Account] LIKE '131%' (tài khoản Phải thu khách hàng theo Thông tư 200). TUYỆT ĐỐI
+        KHÔNG gộp Account bắt đầu '331%' (Phải trả người bán — chiều ngược lại, không phải công nợ
+        phải thu).
+     c. LUÔN JOIN sang BRV_KhachHang/BRVSX_KhachHang rồi lọc k.[IsCustomer] = 1 — nếu bỏ qua bước
+        này, mã nội bộ của chính DNH ('P000001' kênh OTC, '1001136' kênh ETC — 2 mã này có
+        IsCustomer=0) sẽ bị tính vào công nợ, làm số bị thổi phồng gấp ~3-4 lần so với thực tế (đã
+        đo được: 418 tỷ sai vs 114 tỷ đúng khi thiếu filter này).
+   Ví dụ đúng — tổng công nợ theo khách hàng, kênh OTC:
+     SELECT k.[Code] AS [Mã KH], k.[Name] AS [Tên khách hàng],
+            SUM(h.[TotalAmount] - h.[PaidAmount]) AS [Còn nợ]
+     FROM [BRV_HTTDuDK] h
+     JOIN [BRV_KhachHang] k ON h.[CustomerId] = k.[Id]
+     WHERE h.[Account] LIKE '131%' AND (h.[TotalAmount] - h.[PaidAmount]) > 0 AND k.[IsCustomer] = 1
+     GROUP BY k.[Code], k.[Name]
+     ORDER BY [Còn nợ] DESC
+   Kênh ETC dùng BRVSX_HTTDuDK/BRVSX_KhachHang, logic y hệt.
+
+   GIỚI HẠN CHƯA HỖ TRỢ (2 điểm, TỪ CHỐI lịch sự nếu câu hỏi cần, KHÔNG tự đoán/tự chế):
+     - TUỔI NỢ / BUCKET QUÁ HẠN (vd "nợ quá hạn 1-15 ngày", "nợ quá 45 ngày", "aging"): [DueDate]
+       trên 2 bảng này là SỐ NGÀY công nợ (payment term), KHÔNG PHẢI ngày — để tính quá hạn cần biết
+       "ngày cơ sở" (date basis: tính từ DocDate hay từ 1 mốc khác) — ĐÂY LÀ CÂU HỎI CHƯA ĐƯỢC DNH
+       XÁC NHẬN (open item, xem dnh-debt-aging-schema/dnh-project-context) — TUYỆT ĐỐI KHÔNG tự giả
+       định 1 công thức rồi tính, dùng đúng dạng SELECT N'...' từ chối (xem rule dialect bên dưới).
+     - VÙNG MIỀN: BRV_KhachHang/BRVSX_KhachHang KHÔNG có cột vùng miền (đã kiểm chứng) — câu hỏi
+       công nợ lọc theo MIỀN BẮC/TRUNG/NAM cụ thể thì từ chối lịch sự tương tự.
+   Câu hỏi công nợ KHÔNG bucket tuổi nợ, KHÔNG lọc vùng miền (theo khách hàng/tổng công ty/theo
+   kênh OTC hoặc ETC) vẫn trả lời bình thường theo 3 quy tắc a/b/c ở trên.
 """
 
         # 'fact_tonghopkhachhang' thuộc mart đầy đủ (production), KHÔNG có ở bản dev hiện tại
@@ -1383,13 +1432,14 @@ Câu hỏi/Lời chào của người dùng: "{user_question}"
 9. For multi-month grouping in T-SQL, use DATEFROMPARTS(YEAR([DocDate]), MONTH([DocDate]), 1) to
    truncate to month-start, and GROUP BY it (tương đương DATE_TRUNC('month', ...) bên Postgres).
 10. ALWAYS default to adding 'TOP 100' for open-ended queries to prevent dumping thousands of records.
-11. Nguồn dữ liệu này (Bravo) là DỰ PHÒNG khi Supabase tạm lỗi — CHỈ có bảng hóa đơn/khách hàng/nhân
-    viên/sản phẩm. KHÔNG có bảng 'receivable_detail' (công nợ), 'kpi_summary'/'fact_tonghopkhachhang'
-    (KPI nhân viên/chỉ tiêu), 'inventory' (tồn kho), hay schema 'mart_layer'. Nếu câu hỏi CẦN các bảng
-    này: BẮT BUỘC vẫn trả về ĐÚNG 1 câu SELECT hợp lệ (câu trả lời CHỈ ĐƯỢC LÀ SQL, không được viết
-    văn xuôi thuần — văn xuôi sẽ bị hệ thống an toàn chặn và hiện lỗi khó hiểu cho người dùng) — dùng
-    đúng dạng:
-    SELECT N'Dữ liệu công nợ/tồn kho/KPI hiện không có trên nguồn dự phòng (Bravo SQL Server). Vui lòng thử lại khi Supabase hồi phục.' AS [Thông báo]
+11. Nguồn dữ liệu này (Bravo, nguồn CHÍNH từ 09/07/2026) có bảng hóa đơn/khách hàng/nhân viên/sản
+    phẩm VÀ công nợ (xem mục "CÔNG NỢ" ở hướng dẫn phía trên — BRV_HTTDuDK/BRVSX_HTTDuDK). KHÔNG có
+    'kpi_summary'/'fact_tonghopkhachhang' (KPI nhân viên/chỉ tiêu — chưa hỗ trợ trên nguồn này),
+    'inventory' (tồn kho — chưa hỗ trợ), hay schema 'mart_layer'. Nếu câu hỏi CẦN các bảng CHƯA HỖ
+    TRỢ này (KPI/tồn kho, KHÔNG phải công nợ): BẮT BUỘC vẫn trả về ĐÚNG 1 câu SELECT hợp lệ (câu trả
+    lời CHỈ ĐƯỢC LÀ SQL, không được viết văn xuôi thuần — văn xuôi sẽ bị hệ thống an toàn chặn và
+    hiện lỗi khó hiểu cho người dùng) — dùng đúng dạng:
+    SELECT N'Dữ liệu tồn kho/KPI hiện chưa hỗ trợ trên nguồn Bravo. Vui lòng thử lại khi Supabase kết nối được.' AS [Thông báo]
 """
         else:
             dialect_rules = """
@@ -1952,12 +2002,13 @@ CRITICAL RULES:
 
         # Banner — 3 mức theo active_backend: "postgres" = không banner; "bravo" = banner nhẹ, LUÔN
         # hiện khi dùng Bravo (nguồn CHÍNH từ 09/07/2026, không còn là fallback do lỗi — xem
-        # _resolve_active_backend), chỉ để nhắc thiếu công nợ/tồn kho/KPI, không suy diễn Supabase
-        # có lỗi hay không; "sqlite" = banner mạnh (cả Bravo lẫn Postgres đều không dùng được).
+        # _resolve_active_backend), chỉ để nhắc thiếu tồn kho/KPI (công nợ ĐÃ hỗ trợ từ 09/07/2026,
+        # xem mart_layer_instruction), không suy diễn Supabase có lỗi hay không; "sqlite" = banner
+        # mạnh (cả Bravo lẫn Postgres đều không dùng được).
         if active_backend == "bravo":
             answer = (
-                "ℹ️ <b>Dữ liệu trực tiếp từ Bravo</b> — số liệu hóa đơn/khách hàng chính xác, real-time, "
-                "nhưng KHÔNG có công nợ/tồn kho/KPI (các dữ liệu này chỉ có trên Supabase).\n\n" + answer
+                "ℹ️ <b>Dữ liệu trực tiếp từ Bravo</b> — số liệu hóa đơn/khách hàng/công nợ chính xác, "
+                "real-time, nhưng KHÔNG có tồn kho/KPI (chỉ có trên Supabase).\n\n" + answer
             )
         elif cloud_unreachable_fallback and active_backend == "sqlite":
             answer = (
