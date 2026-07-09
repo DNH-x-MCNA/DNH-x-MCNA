@@ -1,2 +1,8 @@
+[project]
+name = "dnh-portal"
+version = "1.0.0"
+description = "Dược Nam Hà Portal & AI Chatbot"
+requires-python = ">=3.9"
+
 [tool.vercel]
 entrypoint = "backend.main:app"
