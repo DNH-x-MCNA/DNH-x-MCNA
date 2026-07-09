@@ -32,9 +32,27 @@ app.add_middleware(
 # In-memory users for under 10 users permission control
 USERS = {
     "admin": "dnh@admin2026",
+    "c_level": "dnh@clevel2026",
+    # Manager — giới hạn 1 chiều (miền HOẶC kênh). Nhận diện role qua token username, xem
+    # ai_agent/chatbot.py::_resolve_user_scope() — thêm role mới ở đây KHÔNG cần sửa chatbot.py,
+    # chỉ cần username chứa đúng 1 token miền (bac/nam/trung) và/hoặc 1 token kênh (otc/etc).
     "manager_bac": "dnh@bac2026",
+    "manager_nam": "dnh@nam2026",
+    "manager_trung": "dnh@trung2026",
+    "manager_otc": "dnh@otc2026",
     "manager_etc": "dnh@etc2026",
-    "c_level": "dnh@clevel2026"
+    # QLV (Quản lý vùng)
+    "qlv_bac": "dnh@qlvbac2026",
+    "qlv_nam": "dnh@qlvnam2026",
+    "qlv_trung": "dnh@qlvtrung2026",
+    "qlv_otc": "dnh@qlvotc2026",
+    "qlv_etc": "dnh@qlvetc2026",
+    # Phó phòng (PP)
+    "pp_bac": "dnh@ppbac2026",
+    "pp_nam": "dnh@ppnam2026",
+    "pp_trung": "dnh@pptrung2026",
+    "pp_otc": "dnh@ppotc2026",
+    "pp_etc": "dnh@ppetc2026",
 }
 
 # Chatbot instance
@@ -71,10 +89,23 @@ def verify_token(authorization: Optional[str] = Header(None)):
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Thieu token xac thuc")
     token = authorization.split(" ")[1]
-    # Simple check for demo purposes
-    if token not in ["token_admin", "token_manager_bac", "token_manager_etc", "token_c_level"]:
+    # Token hop le <=> username tuong ung con trong USERS (tu dong theo danh sach tai khoan,
+    # khong hard-code tung token rieng le - them tai khoan moi vao USERS la du).
+    if token.replace("token_", "", 1) not in USERS:
         raise HTTPException(status_code=401, detail="Token khong hop le hoac da het han")
     return token
+
+def _display_role(username):
+    """Nhãn vai trò hiển thị trên UI, suy ra từ token trong username — xem cùng quy ước với
+    ai_agent/chatbot.py::_resolve_user_scope()."""
+    if username in ("c_level", "admin"):
+        return "C-Level"
+    tokens = username.replace('-', '_').split('_')
+    if "qlv" in tokens:
+        return "QLV"
+    if "pp" in tokens:
+        return "Phó phòng"
+    return "Manager"
 
 @app.post("/api/auth/login")
 def login(req: LoginRequest):
@@ -85,7 +116,7 @@ def login(req: LoginRequest):
             "success": True,
             "token": token,
             "username": req.username,
-            "role": "C-Level" if req.username == "c_level" or req.username == "admin" else "Manager"
+            "role": _display_role(req.username)
         }
     raise HTTPException(status_code=400, detail="Sai ten dang nhap hoac mat khau")
 
@@ -300,7 +331,8 @@ def chat_query(req: QueryRequest, token: str = Depends(verify_token)):
         raise HTTPException(status_code=400, detail="Cau hoi khong duoc de trong")
 
     try:
-        response_data = chatbot.ask(req.question, session_key=token)
+        username = token.replace("token_", "") if token else None
+        response_data = chatbot.ask(req.question, session_key=token, username=username)
         # Chart is a local file on the server (matplotlib output). Inline it as
         # base64 so the browser can render it directly, same as the Telegram/Teams
         # bots do — no need for a separate static-file route to the scratch dir.
@@ -322,4 +354,10 @@ app.mount("/", StaticFiles(directory=frontend_dir, html=True), name="static")
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="127.0.0.1", port=8000, reload=True)
+    # host="0.0.0.0" (không phải 127.0.0.1) để máy khác trong mạng nội bộ gọi vào được khi deploy
+    # lên 1 server dùng chung (vd để nút "Xem chi tiết trên Chatbot" trong card Teams hoạt động
+    # cho cả công ty, không chỉ từ máy đang chạy backend) — vẫn truy cập được qua localhost bình
+    # thường khi chạy dev trên máy cá nhân. reload=False vì đây là service chạy thường trực
+    # (qua NSSM), không cần tự nạp lại code mỗi khi file đổi như lúc code dev.
+    port = int(os.getenv("BACKEND_PORT", "8000"))
+    uvicorn.run("main:app", host="0.0.0.0", port=port, reload=False)

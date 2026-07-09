@@ -36,13 +36,27 @@ def _get_cloud_engine():
         max_overflow=5,
         pool_pre_ping=True,   # discard/replace stale pooled connections automatically
         pool_recycle=300,     # avoid Supabase/pgbouncer idle-connection kills
-        connect_args={'connect_timeout': 3}
+        connect_args={'connect_timeout': 10}  # đo thật: handshake tới pooler mất ~2.3-2.9s ngay
+                                               # cả khi rảnh (compute tier yếu) -> 3s cũ gần như
+                                               # luôn timeout khi có thêm tải, 10s mới có biên an toàn
     )
     _cloud_engine_url = db_url
     return _cloud_engine
 
-# Helper to get the database schema dynamically
+# Helper to get the database schema dynamically — cached theo process (giống _cloud_engine)
+# vì schema hầu như không đổi giữa các câu hỏi, nhưng trước đây bị fetch lại MỖI câu hỏi (~3.25s
+# đo thật mỗi lần), chiếm phần đáng kể trong tổng thời gian trả lời chatbot.
+_schema_cache = None
+_schema_cache_time = 0.0
+_SCHEMA_CACHE_TTL_SECONDS = 300  # 5 phút — đủ mới, không cần fetch lại mỗi câu hỏi
+
 def get_db_schema():
+    global _schema_cache, _schema_cache_time
+    import time as _time
+    now = _time.time()
+    if _schema_cache is not None and (now - _schema_cache_time) < _SCHEMA_CACHE_TTL_SECONDS:
+        return _schema_cache
+
     engine = _get_cloud_engine()
     if engine is not None:
         try:
@@ -56,8 +70,8 @@ def get_db_schema():
                     'kpi_summary'
                 )
                 query = text("""
-                    SELECT table_name, column_name, data_type 
-                    FROM information_schema.columns 
+                    SELECT table_name, column_name, data_type
+                    FROM information_schema.columns
                     WHERE table_schema = 'public' AND table_name IN :tables
                     ORDER BY table_name, ordinal_position
                 """)
@@ -66,10 +80,23 @@ def get_db_schema():
                 schema_dict = {}
                 for r in cols:
                     schema_dict.setdefault(r[0], []).append(f"{r[1]} ({r[2]})")
-                
+
+                # mart_layer.mart_revenue_summary — bảng riêng schema khác (không phải 'public'),
+                # query info_schema tự trả về RỖNG nếu schema/bảng chưa tồn tại (không lỗi), nên
+                # an toàn khi chưa chạy DDL tạo mart layer. Khi bảng thật sự tồn tại, tên hiển thị
+                # có tiền tố schema để LLM biết viết đúng "mart_layer.mart_revenue_summary".
+                mart_cols = conn.execute(text("""
+                    SELECT column_name, data_type FROM information_schema.columns
+                    WHERE table_schema = 'mart_layer' AND table_name = 'mart_revenue_summary'
+                    ORDER BY ordinal_position
+                """)).fetchall()
+                if mart_cols:
+                    schema_dict["mart_layer.mart_revenue_summary"] = [f"{r[0]} ({r[1]})" for r in mart_cols]
+
                 schema_text = "Dược Nam Hà central database schema:\n"
                 for t, cols_str in schema_dict.items():
                     schema_text += f"- Table '{t}': Columns are {', '.join(cols_str)}\n"
+                _schema_cache, _schema_cache_time = schema_text, now
                 return schema_text
         except Exception as e:
             print(f"[Warning] Failed to fetch schema from Supabase: {e}. Falling back to SQLite...")
@@ -89,8 +116,9 @@ def get_db_schema():
         columns = cursor.fetchall()
         cols_str = ", ".join([f"{c[1]} ({c[2]})" for c in columns])
         schema_text += f"- Table '{table}': Columns are {cols_str}\n"
-        
+
     conn.close()
+    _schema_cache, _schema_cache_time = schema_text, now
     return schema_text
 
 def _latest_period_key(period):
@@ -106,6 +134,74 @@ def _latest_period_key(period):
     except (ValueError, AttributeError):
         return (0, 0)
 
+# --- Chart styling helpers (bảng màu brand DNH + format tiền/số tiếng Việt) ---
+_CHART_GREEN = '#337337'
+_CHART_ORANGE = '#f15a25'
+_CHART_RED = '#c0392b'
+_CHART_SLATE = '#5b6b78'
+_CHART_TEAL = '#2f7e7a'
+_CHART_GOLD = '#c99a2e'
+_CHART_INK = '#26332e'
+_CHART_GRID = '#d8e0da'
+_CHART_PALETTE = [_CHART_GREEN, _CHART_ORANGE, _CHART_TEAL, _CHART_SLATE, _CHART_GOLD, '#8e6fb0']
+
+_MONEY_HINTS = ['amount', 'revenue', 'overdue', 'balance', 'paid', 'receivable', 'sales', 'budget',
+                'target', 'doanh thu', 'doanh số', 'doanh so', 'nợ', 'công nợ', 'cong no', 'giá trị',
+                'gia tri', 'tiền', 'tien', 'chỉ tiêu', 'chi tieu', 'thực đạt', 'thuc dat', 'dư nợ',
+                'du no', 'thanh toán', 'thanh toan']
+_BAD_HINTS = ['nợ', 'quá hạn', 'qua han', 'overdue', 'giảm', 'giam', 'chậm', 'cham', 'trả', 'debt',
+              'thiếu', 'thieu']
+
+def _is_money_col(name):
+    return any(h in (name or '').lower() for h in _MONEY_HINTS)
+
+def _is_bad_col(name):
+    return any(h in (name or '').lower() for h in _BAD_HINTS)
+
+def _fmt_time_label(lbl):
+    """'2026-06-01' -> 'T6/2026' (đầu tháng); '2026-06-22' -> '22/06' (tuần/ngày); khác giữ nguyên."""
+    import re as _re
+    s = str(lbl)
+    m = _re.match(r'(\d{4})-(\d{2})-(\d{2})', s)
+    if m:
+        y, mo, d = m.group(1), int(m.group(2)), int(m.group(3))
+        return f"T{mo}/{y}" if d == 1 else f"{d:02d}/{mo:02d}"
+    m = _re.match(r'(\d{4})-(\d{2})', s)
+    if m:
+        return f"T{int(m.group(2))}/{m.group(1)}"
+    return s if len(s) <= 18 else s[:18] + '...'
+
+
+def _fmt_time_labels(seq):
+    """Format cả dãy nhãn thời gian nhất quán: nếu dãy là ngày đầy đủ và KHÔNG phải toàn
+    mùng 1 (dữ liệu tuần/ngày) thì tất cả dùng dd/mm — tránh lẫn 'T6/2026' giữa '08/06'."""
+    import re as _re
+    vals = [str(s) for s in seq]
+    ms = [_re.match(r'(\d{4})-(\d{2})-(\d{2})', v) for v in vals]
+    if vals and all(ms) and any(int(m.group(3)) != 1 for m in ms):
+        return [f"{int(m.group(3)):02d}/{int(m.group(2)):02d}" for m in ms]
+    return [_fmt_time_label(v) for v in vals]
+
+
+def _fmt_chart_val(v, is_money=True):
+    """Format 1 giá trị cho chart: tiền -> tỷ/tr/đ; số đếm -> tỷ/M/K. Dấu thập phân kiểu VN (phẩy)."""
+    try:
+        v = float(v or 0)
+    except (TypeError, ValueError):
+        return str(v)
+    a = abs(v)
+    if is_money:
+        if a >= 1e9:   s = f"{v/1e9:.2f} tỷ"
+        elif a >= 1e6: s = f"{v/1e6:.0f} tr"
+        elif a >= 1e3: s = f"{v/1e3:.0f}K"
+        else:          s = f"{v:.0f} đ"
+    else:
+        if a >= 1e9:   s = f"{v/1e9:.2f} tỷ"
+        elif a >= 1e6: s = f"{v/1e6:.1f}M"
+        elif a >= 1e3: s = f"{v/1e3:.1f}K"
+        else:          s = f"{v:.0f}"
+    return s.replace('.', ',')
+
 class DNHChatbot:
     def __init__(self):
         self.anthropic_key = os.getenv("ANTHROPIC_API_KEY", "")
@@ -116,16 +212,24 @@ class DNHChatbot:
             self.client = anthropic.Anthropic(api_key=self.anthropic_key)
             self.is_mock = False
             self.model_type = "claude"
-            self.sql_model = "claude-opus-4-8"
-            self.summary_model = "claude-opus-4-8"
-            print("[Info] Running in Live Claude Mode.")
+            # Opus 4.8 là bậc lớn/chậm/đắt nhất — không hợp cho việc sinh SQL + tóm tắt lặp lại
+            # mỗi câu hỏi (mục tiêu hiện tại là GIẢM độ trễ). Sonnet 5 cân bằng tốc độ/chất lượng
+            # tốt hơn nhiều cho việc này, vẫn đủ mạnh để đọc schema nhiều bảng + luật nghiệp vụ.
+            self.sql_model = "claude-sonnet-5"
+            self.summary_model = "claude-sonnet-5"
+            print("[Info] Running in Live Claude Mode (claude-sonnet-5).")
         elif self.gemini_key:
             self.client = None
             self.is_mock = False
             self.model_type = "gemini"
+            # "gemini-2.0-flash" bị Google gỡ (404 "no longer available") dù vẫn hiện trong
+            # ListModels — theo yêu cầu, dùng đích danh "gemini-3.5-flash" (đã test gọi thật
+            # thành công 08/07/2026). Nếu sau này bản này cũng bị gỡ, kiểm tra lại bằng
+            # scratch/list_gemini_models.py + gọi thử generateContent thật trước khi đổi tiếp —
+            # KHÔNG chỉ tin ListModels vì đã có tiền lệ model hiện trong danh sách vẫn 404.
             self.sql_model = "gemini-3.5-flash"
             self.summary_model = "gemini-3.5-flash"
-            print("[Info] Running in Live Gemini 3.5 Mode.")
+            print("[Info] Running in Live Gemini Mode (gemini-3.5-flash).")
         elif self.openai_key:
             self.client = OpenAI(api_key=self.openai_key)
             self.is_mock = False
@@ -214,7 +318,10 @@ class DNHChatbot:
         try:
             from sqlalchemy import text
             with engine.connect() as conn:
-                conn.execute(text("SELECT 1 FROM regions LIMIT 1"))
+                # brv_hoadonhdr luôn có mặt (production lẫn dev) — "regions" là bảng của pipeline
+                # mock cũ (scripts/init_db.py), không thuộc schema thật brv_*/dms_* nên không dùng
+                # để health-check nữa (trước đây luôn fail khi CLOUD_DB_URL trỏ sang dev).
+                conn.execute(text("SELECT 1 FROM brv_hoadonhdr LIMIT 1"))
                 self._cloud_available_cached = True
                 return True
         except Exception as e:
@@ -224,7 +331,11 @@ class DNHChatbot:
             return False
 
     def _get_latest_dates(self):
-        """Retrieves the latest invoice date, month-end date, and receivable period dynamically."""
+        """Retrieves the earliest/latest invoice date, month-end date, and receivable period
+        dynamically. earliest_date dùng để tự động cảnh báo đúng "dữ liệu bắt đầu từ tháng nào"
+        thay vì hard-code — đã bắt được 1 case thật: rule cũ hard-code "chỉ có Q2 (T4-T6)" trong
+        khi dữ liệu thật đã có đủ từ tháng 1, khiến chatbot báo sai với người dùng."""
+        earliest_date = "2026-01-01"
         latest_date = "2026-06-30"
         latest_month_end = "2026-06-30"
         latest_period = "1_2026"
@@ -234,40 +345,58 @@ class DNHChatbot:
             try:
                 from sqlalchemy import text
                 with engine.connect() as conn:
-                    # Get max DocDate
-                    res1 = conn.execute(text('SELECT MAX("DocDate") FROM brv_hoadonhdr WHERE "IsActive" = TRUE'))
-                    row1 = res1.fetchone()
-                    if row1 and row1[0]:
-                        latest_date = str(row1[0]).split(' ')[0].split('T')[0]
+                    # 3 truy vấn tự try/except RIÊNG — 1 bảng thiếu (vd fact_tonghopkhachhang
+                    # chưa có ở dev, xem GHI CHÚ ở system prompt sinh SQL) không được làm mất
+                    # luôn 2 giá trị còn lại (trước đây cả 3 chung 1 try nên 1 lỗi -> mất sạch,
+                    # rồi còn rơi tiếp xuống SQLite fallback vốn cũng luôn lỗi -> tốn thời gian
+                    # vô ích trên MỌI câu hỏi).
+                    try:
+                        row1 = conn.execute(text('SELECT MIN("DocDate"), MAX("DocDate") FROM brv_hoadonhdr WHERE "IsActive" = TRUE')).fetchone()
+                        if row1 and row1[0]:
+                            earliest_date = str(row1[0]).split(' ')[0].split('T')[0]
+                        if row1 and row1[1]:
+                            latest_date = str(row1[1]).split(' ')[0].split('T')[0]
+                    except Exception as e:
+                        print(f"[Warning] Failed to fetch earliest/latest DocDate: {e}")
+                        conn.rollback()
 
-                    # Get max SaveDate
-                    res2 = conn.execute(text('SELECT MAX("SaveDate") FROM fact_tonghopkhachhang'))
-                    row2 = res2.fetchone()
-                    if row2 and row2[0]:
-                        latest_month_end = str(row2[0]).split(' ')[0].split('T')[0]
+                    try:
+                        row2 = conn.execute(text('SELECT MAX("SaveDate") FROM fact_tonghopkhachhang')).fetchone()
+                        if row2 and row2[0]:
+                            latest_month_end = str(row2[0]).split(' ')[0].split('T')[0]
+                    except Exception:
+                        # fact_tonghopkhachhang chưa có ở dev (bảng thuộc mart đầy đủ ở production) -> giữ mặc định.
+                        # BẮT BUỘC rollback: Postgres coi transaction đã "aborted" sau lỗi này, câu SAU trên
+                        # CÙNG connection sẽ bị từ chối luôn dù bản thân nó đúng, nếu không rollback trước.
+                        conn.rollback()
 
-                    # Get max Period from receivable_detail. 'period' is TEXT 'M_YYYY'
-                    # (not zero-padded), so a plain SQL MAX() sorts lexicographically and
-                    # picks e.g. '9_2025' over '1_2026' (month '9' beats any month
-                    # starting with '1'). Must fetch all distinct values and pick the
-                    # true (year, month) max in Python instead.
-                    res3 = conn.execute(text('SELECT DISTINCT period FROM receivable_detail'))
-                    periods = [r[0] for r in res3.fetchall() if r[0]]
-                    if periods:
-                        latest_period = max(periods, key=_latest_period_key)
-                return latest_date, latest_month_end, latest_period
+                    # Get max Period from receivable_detail. 'period' là TEXT 'M_YYYY'
+                    # (không đệm số 0), nên MAX() SQL thường sẽ sort theo lexicographic và
+                    # chọn nhầm vd '9_2025' thay vì '1_2026' (ký tự '9' > '1'). Phải lấy hết
+                    # rồi tự chọn true (year, month) max trong Python.
+                    try:
+                        periods = [r[0] for r in conn.execute(text("SELECT DISTINCT period FROM receivable_detail")).fetchall() if r[0]]
+                        if periods:
+                            latest_period = max(periods, key=_latest_period_key)
+                    except Exception as e:
+                        print(f"[Warning] Failed to fetch latest period: {e}")
+
+                return earliest_date, latest_date, latest_month_end, latest_period
             except Exception as e:
-                print(f"[Warning] Failed to fetch max dates from cloud: {e}")
+                print(f"[Warning] Failed to connect to cloud DB for max dates: {e}")
 
-        # Try local SQLite fallback
+        # Try local SQLite fallback — chỉ chạy khi cloud KHÔNG dùng được ở mức kết nối (engine
+        # None/is_mock/cloud_available=False), không còn bị kích hoạt chỉ vì 1 bảng phụ thiếu.
         if os.path.exists(DB_PATH):
             try:
                 conn = sqlite3.connect(DB_PATH)
                 cursor = conn.cursor()
-                cursor.execute('SELECT MAX(DocDate) FROM brv_hoadonhdr WHERE IsActive = 1')
+                cursor.execute('SELECT MIN(DocDate), MAX(DocDate) FROM brv_hoadonhdr WHERE IsActive = 1')
                 r1 = cursor.fetchone()
                 if r1 and r1[0]:
-                    latest_date = str(r1[0]).split(' ')[0].split('T')[0]
+                    earliest_date = str(r1[0]).split(' ')[0].split('T')[0]
+                if r1 and r1[1]:
+                    latest_date = str(r1[1]).split(' ')[0].split('T')[0]
                 cursor.execute('SELECT MAX(SaveDate) FROM fact_tonghopkhachhang')
                 r2 = cursor.fetchone()
                 if r2 and r2[0]:
@@ -281,7 +410,7 @@ class DNHChatbot:
             except Exception as e:
                 print(f"[Warning] Failed to fetch max dates from SQLite: {e}")
 
-        return latest_date, latest_month_end, latest_period
+        return earliest_date, latest_date, latest_month_end, latest_period
 
     def _call_gemini_rest(self, model, system_instruction, user_content, temperature=0.0):
         import urllib.request
@@ -313,7 +442,10 @@ class DNHChatbot:
             data=data,
             headers={'Content-Type': 'application/json'}
         )
-        with urllib.request.urlopen(req, timeout=30) as response:
+        # 60s (không phải 30s cũ) — đo thật: SQL-gen với prompt ~7200 ký tự thường mất ~10s
+        # nhưng có lúc vượt 30s (đã bắt được 1 lần timeout thật gây rơi về mock giữa hội thoại
+        # có ngữ cảnh) — 60s cho biên an toàn hơn nhiều so với độ trễ thực tế quan sát được.
+        with urllib.request.urlopen(req, timeout=60) as response:
             res = json.loads(response.read().decode('utf-8'))
             text = res['candidates'][0]['content']['parts'][0]['text']
             return text.strip()
@@ -452,19 +584,63 @@ class DNHChatbot:
             return res
 
         query_lower = strip_accents(query.lower())
-        
-        # 1. Tỷ lệ phần trăm doanh số kênh OTC/ETC (truy vấn bảng orders)
+
+        # 1. Tỷ lệ phần trăm doanh số kênh OTC/ETC (bảng hóa đơn thật, không dùng 'orders' đã deprecated)
         if ("otc" in query_lower or "etc" in query_lower) and ("doanh thu" in query_lower or "doanh so" in query_lower) and ("chiem" in query_lower or "ty le" in query_lower or "phan tram" in query_lower or "%" in query_lower):
-            if "otc" in query_lower:
-                return "SELECT SUM(CASE WHEN segment = 'OTC' THEN total_amount ELSE 0 END) as otc_amount, SUM(total_amount) as total_amount, (SUM(CASE WHEN segment = 'OTC' THEN total_amount ELSE 0 END) * 100.0 / SUM(total_amount)) as otc_percent FROM orders;"
-            else:
-                return "SELECT SUM(CASE WHEN segment = 'ETC' THEN total_amount ELSE 0 END) as etc_amount, SUM(total_amount) as total_amount, (SUM(CASE WHEN segment = 'ETC' THEN total_amount ELSE 0 END) * 100.0 / SUM(total_amount)) as etc_percent FROM orders;"
-        
-        # 2. Doanh thu/Doanh số theo kênh OTC/ETC (truy vấn bảng orders)
+            return """
+                WITH otc AS (SELECT COALESCE(SUM("TotalAmount"),0) AS v FROM brv_hoadonhdr WHERE "IsActive"=TRUE AND "IsHC"=FALSE),
+                     etc AS (SELECT COALESCE(SUM("TotalAmount"),0) AS v FROM brvsx_hoadonhdr WHERE "IsActive"=TRUE)
+                SELECT otc.v AS otc_amount, etc.v AS etc_amount, (otc.v + etc.v) AS total_amount,
+                       (otc.v * 100.0 / NULLIF(otc.v + etc.v, 0)) AS otc_pct,
+                       (etc.v * 100.0 / NULLIF(otc.v + etc.v, 0)) AS etc_pct
+                FROM otc, etc
+            """
+
+        # 2. Doanh thu/Doanh số theo kênh OTC/ETC (bảng hóa đơn thật)
         if "otc" in query_lower and ("doanh thu" in query_lower or "doanh so" in query_lower):
-            return "SELECT SUM(total_amount) as otc_amount FROM orders WHERE segment = 'OTC';"
+            return 'SELECT COALESCE(SUM("TotalAmount"),0) AS otc_amount FROM brv_hoadonhdr WHERE "IsActive"=TRUE AND "IsHC"=FALSE'
         elif "etc" in query_lower and ("doanh thu" in query_lower or "doanh so" in query_lower):
-            return "SELECT SUM(total_amount) as etc_amount FROM orders WHERE segment = 'ETC';"
+            return 'SELECT COALESCE(SUM("TotalAmount"),0) AS etc_amount FROM brvsx_hoadonhdr WHERE "IsActive"=TRUE'
+
+        # 2b. Top khách hàng doanh thu cao nhất (đặt trước nhánh doanh thu chung để ưu tiên khớp)
+        if ("khach hang" in query_lower or "dai ly" in query_lower or "nha thuoc" in query_lower) and \
+           ("doanh thu" in query_lower or "doanh so" in query_lower or "mua nhieu" in query_lower) and \
+           not any(w in query_lower for w in ["giam", "roi bo", "mat khach", "sut giam"]):
+            return """
+                WITH cm AS (
+                    SELECT h."CustomerCode" AS cc, SUM(h."TotalAmount") AS rev
+                    FROM brv_hoadonhdr h WHERE h."IsActive"=TRUE AND h."IsHC"=FALSE GROUP BY 1
+                    UNION ALL
+                    SELECT h."CustomerCode", SUM(h."TotalAmount")
+                    FROM brvsx_hoadonhdr h WHERE h."IsActive"=TRUE GROUP BY 1
+                )
+                SELECT k."Code" AS customer_code, k."Name" AS customer_name, SUM(cm.rev) AS revenue_amount
+                FROM cm JOIN dms_khachhang k ON cm.cc = k."Code"
+                GROUP BY 1,2 ORDER BY revenue_amount DESC LIMIT 10
+            """
+
+        # 2c. Khách hàng sụt giảm / có nguy cơ rời bỏ (so tháng gần nhất với tháng liền trước)
+        if ("khach hang" in query_lower or "dai ly" in query_lower) and \
+           any(w in query_lower for w in ["giam", "roi bo", "mat khach", "sut giam", "churn"]):
+            return """
+                WITH cm AS (
+                    SELECT "CustomerCode" AS cc, DATE_TRUNC('month',"DocDate"::timestamp)::date AS m, SUM("TotalAmount") AS rev
+                    FROM brv_hoadonhdr WHERE "IsActive"=TRUE AND "IsHC"=FALSE GROUP BY 1,2
+                    UNION ALL
+                    SELECT "CustomerCode", DATE_TRUNC('month',"DocDate"::timestamp)::date, SUM("TotalAmount")
+                    FROM brvsx_hoadonhdr WHERE "IsActive"=TRUE GROUP BY 1,2
+                ),
+                agg AS (SELECT cc, m, SUM(rev) AS rev FROM cm GROUP BY cc, m),
+                mm AS (SELECT m FROM (SELECT DISTINCT m FROM agg ORDER BY m DESC LIMIT 2) t),
+                latest AS (SELECT MAX(m) AS m FROM mm), prev AS (SELECT MIN(m) AS m FROM mm)
+                SELECT k."Name" AS customer_name, prevd.rev AS prev_revenue, COALESCE(cur.rev,0) AS current_revenue
+                FROM (SELECT DISTINCT cc FROM agg) a
+                JOIN agg prevd ON prevd.cc=a.cc AND prevd.m=(SELECT m FROM prev)
+                LEFT JOIN agg cur ON cur.cc=a.cc AND cur.m=(SELECT m FROM latest)
+                JOIN dms_khachhang k ON a.cc = k."Code"
+                WHERE prevd.rev > 50000000 AND (prevd.rev - COALESCE(cur.rev,0)) / prevd.rev > 0.3
+                ORDER BY prevd.rev DESC LIMIT 10
+            """
 
         # 3. Doanh thu theo vung mien / nhan vien (dung kpi_summary)
         if "doanh thu" in query_lower or "doanh so" in query_lower or "kpi" in query_lower:
@@ -573,7 +749,65 @@ class DNHChatbot:
         "quên đi", "bắt đầu lại"
     }
 
-    def ask(self, user_question, session_key=None):
+    # Phân quyền theo miền/kênh — tổng quát hóa theo token trong username (phân tách bằng '_'),
+    # KHÔNG hard-code từng role riêng lẻ. Cho phép thêm tài khoản mới (vd 'qlv_etc_bac',
+    # 'pp_otc_nam'...) chỉ bằng cách thêm vào USERS dict (backend/main.py), không cần sửa code
+    # ở đây — username chỉ cần chứa đúng 1 token miền (bac/nam/trung) và/hoặc 1 token kênh (otc/etc).
+    _REGION_KEYWORDS = {
+        "bac": ["miền bắc", "mien bac", "mb", "hà nội", "ha noi", "hải phòng", "hai phong"],
+        "nam": ["miền nam", "mien nam", "mn", "hồ chí minh", "ho chi minh", "hcm",
+                "sài gòn", "sai gon", "cần thơ", "can tho", "đông nam bộ", "dong nam bo"],
+        "trung": ["miền trung", "mien trung", "mt", "đà nẵng", "da nang",
+                  "tây nguyên", "tay nguyen"],
+    }
+    _CHANNEL_KEYWORDS = {
+        "otc": ["otc", "nhà thuốc", "nha thuoc", "quầy thuốc", "quay thuoc",
+                "bán lẻ", "ban le", "nhà thuốc tư nhân", "nha thuoc tu nhan"],
+        "etc": ["etc", "bệnh viện", "benh vien", "thầu", "thau", "đấu thầu", "dau thau"],
+    }
+    _REGION_SQL_MARKERS = {"bac": ["MB", "MB2"], "nam": ["MN"], "trung": ["MT"]}  # mã miền, không quote — quote khi dùng
+    _CHANNEL_SQL_MARKERS = {
+        "otc": ["BRV_HOADONHDR", "BRV_HOADONCT", "'OTC'"],
+        "etc": ["BRVSX_HOADONHDR", "BRVSX_HOADONCT", "'ETC'"],
+    }
+    # Bảng có dữ liệu TRỘN nhiều miền/nhiều kênh trong CÙNG 1 bảng (không phải bảng riêng theo
+    # kênh như brv_*/brvsx_*) — nếu SQL đụng tới các bảng này mà KHÔNG thấy mã miền/kênh được
+    # phép ở đâu cả, nhiều khả năng LLM quên lọc (không phải cố tình lọc SANG miền/kênh khác,
+    # nên check "cấm mã lạ" phía trên không bắt được) -> phải chặn theo kiểu fail-closed, xem
+    # đoạn "MỚI: fail-closed" trong ask().
+    _REGION_BEARING_TABLES = [
+        "BRV_HOADONHDR", "BRV_HOADONCT", "BRVSX_HOADONHDR", "BRVSX_HOADONCT",
+        "DIM_NHANVIEN", "KPI_SUMMARY", "RECEIVABLE_DETAIL", "DMS_KHACHHANG", "DMSSX_KHACHHANG",
+    ]
+    _CHANNEL_SHARED_TABLES = ["RECEIVABLE_DETAIL", "KPI_SUMMARY"]
+    _REGION_NAMES_VI = {"bac": "Miền Bắc", "nam": "Miền Nam", "trung": "Miền Trung"}
+    _CHANNEL_NAMES_VI = {"otc": "OTC (Nhà thuốc)", "etc": "ETC (Bệnh viện/Thầu)"}
+
+    @staticmethod
+    def _resolve_user_scope(user_key):
+        """Suy ra (region, channel) mà user CHỈ được phép truy vấn, từ token trong username
+        (vd 'qlv_etc_bac' -> region='bac', channel='etc'). None nếu không có token tương ứng
+        (vd admin/c_level -> region=None, channel=None -> không giới hạn gì).
+
+        Danh sách vùng/kênh HỢP LỆ đọc từ config['report_recipients'] (config/config.yaml) —
+        cùng 1 nguồn audience duy nhất dùng chung cho cả phân quyền gửi báo cáo Email (Phần 3 kế
+        hoạch báo cáo) lẫn phân quyền câu hỏi Chatbot ở đây, tránh định nghĩa lại quy ước vùng/kênh
+        ở 2 nơi khác nhau trong codebase. Nếu report_recipients chưa cấu hình (vd môi trường cũ),
+        fallback về đúng danh sách cứng trước đây để không phá vỡ hành vi hiện tại."""
+        try:
+            from src.database import load_config
+            recipients = load_config().get('report_recipients') or []
+        except Exception:
+            recipients = []
+        valid_regions = sorted({r['region'] for r in recipients if r.get('region')}) or ["bac", "nam", "trung"]
+        valid_channels = sorted({str(r['channel']).lower() for r in recipients if r.get('channel')}) or ["otc", "etc"]
+
+        tokens = user_key.replace('-', '_').split('_')
+        region = next((r for r in valid_regions if r in tokens), None)
+        channel = next((c for c in valid_channels if c in tokens), None)
+        return region, channel
+
+    def ask(self, user_question, session_key=None, username=None):
         """Translates natural language question to SQL, runs it, and formats response."""
         if user_question.strip() == "admin_restart_bot_process":
             # Acknowledge the update to Telegram to break the infinite restart loop
@@ -601,6 +835,43 @@ class DNHChatbot:
                 print(f"[Error acknowledging restart update]: {e}")
                 
             os._exit(0)
+
+        # Resolve user role/scope based on session_key or username — tổng quát theo token miền
+        # (bac/nam/trung) + kênh (otc/etc) trong username, KHÔNG hard-code từng role riêng lẻ.
+        user_key = str(username or session_key or "").lower()
+        scope_region, scope_channel = self._resolve_user_scope(user_key)
+        if "admin" in user_key.replace('-', '_').split('_'):
+            user_role = "admin"
+        elif scope_region or scope_channel:
+            user_role = user_key
+        else:
+            user_role = "c_level"  # mặc định: admin/c_level/không nhận diện được -> không giới hạn
+
+        # 0. Role-based query interception (Pre-check) — áp cả 2 chiều (miền + kênh) độc lập,
+        # 1 tài khoản có thể vừa bị giới hạn miền vừa bị giới hạn kênh (vd 'qlv_etc_bac')
+        q_clean = user_question.lower().strip()
+        if scope_region:
+            restricted_regions = [kw for r in self._REGION_KEYWORDS if r != scope_region for kw in self._REGION_KEYWORDS[r]]
+            if any(r in q_clean for r in restricted_regions):
+                return {
+                    "question": user_question,
+                    "sql": "",
+                    "data": [],
+                    "columns": [],
+                    "answer": f"Anh/Chị chỉ được truy vấn dữ liệu thuộc {self._REGION_NAMES_VI[scope_region]}. Vui lòng điều chỉnh câu hỏi cho phù hợp.",
+                    "mode": "Security Restriction"
+                }
+        if scope_channel:
+            other_channel = "etc" if scope_channel == "otc" else "otc"
+            if any(c in q_clean for c in self._CHANNEL_KEYWORDS[other_channel]):
+                return {
+                    "question": user_question,
+                    "sql": "",
+                    "data": [],
+                    "columns": [],
+                    "answer": f"Anh/Chị chỉ được truy vấn dữ liệu thuộc kênh {self._CHANNEL_NAMES_VI[scope_channel]}. Vui lòng điều chỉnh câu hỏi cho phù hợp.",
+                    "mode": "Security Restriction"
+                }
 
         if user_question.strip().lower() in self._RESET_CONVERSATION_PHRASES:
             if session_key and session_key in self._conversation_histories:
@@ -744,11 +1015,99 @@ Câu hỏi/Lời chào của người dùng: "{user_question}"
         cloud_db_url = os.getenv("CLOUD_DB_URL", "")
         
         # Get dynamic date context from the database to avoid hardcoding date boundaries
-        latest_date_str, latest_month_end_str, latest_period = self._get_latest_dates()
+        earliest_date_str, latest_date_str, latest_month_end_str, latest_period = self._get_latest_dates()
         parts = latest_date_str.split('-')
         latest_year = parts[0] if len(parts) > 0 else "2026"
         latest_month = parts[1] if len(parts) > 1 else "06"
         latest_q_start = f"{latest_year}-04-01"
+
+        # Mart layer (mart_layer.mart_revenue_summary) — bảng tổng hợp sẵn doanh thu theo
+        # ngày/kênh (xem docs/mart_revenue_summary_design.md), tạo ra để tránh full table scan
+        # trên brv_hoadonhdr/brv_hoadonct hàng triệu dòng mỗi câu hỏi doanh thu (nguyên nhân gây
+        # Postgres statement timeout trên hạ tầng hiện tại). Kiểm tra động — bảng có thể CHƯA
+        # được tạo (chưa chạy DDL) nên chỉ ưu tiên dùng khi ĐÃ xác nhận tồn tại thật trong schema.
+        has_mart_revenue_summary = "Table 'mart_layer.mart_revenue_summary'" in db_schema
+        mart_layer_instruction = ""
+        if has_mart_revenue_summary:
+            mart_layer_instruction = """
+0. ƯU TIÊN MART LAYER cho câu hỏi DOANH THU TỔNG HỢP theo kỳ (hôm nay/tuần/tháng/quý/năm, theo
+   kênh OTC/ETC, có/không so sánh giữa các kỳ) — dùng 'mart_layer.mart_revenue_summary' (cột:
+   report_date date, channel text ('OTC'/'ETC'), revenue numeric, invoice_count int) THAY VÌ quét
+   brv_hoadonhdr/brv_hoadonct/brvsx_hoadonhdr/brvsx_hoadonct — bảng mart đã tổng hợp sẵn 1
+   dòng/ngày/kênh nên cực nhanh, tránh timeout. Ví dụ:
+     SELECT channel AS "Kênh", SUM(revenue) AS "Doanh thu"
+     FROM mart_layer.mart_revenue_summary
+     WHERE report_date >= '2026-04-01' AND report_date < '2026-05-01'
+     GROUP BY channel
+   CHỈ quay lại bảng raw (brv_hoadonhdr/ct, brvsx_hoadonhdr/ct) khi câu hỏi cần chi tiết mà mart
+   layer KHÔNG có — theo khách hàng cụ thể, sản phẩm, nhân viên, hoặc từng hóa đơn riêng lẻ.
+"""
+
+        # 'fact_tonghopkhachhang' thuộc mart đầy đủ (production), KHÔNG có ở bản dev hiện tại
+        # (đã xác nhận: information_schema không trả về cột nào cho bảng này khi CLOUD_DB_URL trỏ
+        # dev). Trước đây system prompt LUÔN LUÔN chỉ định TDV/QLV/CS/CTV/TK phải dùng bảng này
+        # -> sinh SQL đúng cú pháp nhưng CHẮC CHẮN lỗi khi chạy trên dev (bảng không tồn tại).
+        # Kiểm tra động thay vì hard-code — khi CLOUD_DB_URL trỏ production (có bảng này) thì
+        # dùng hướng dẫn chi tiết gốc; khi trỏ dev thì tự chuyển hướng dẫn sang kpi_summary
+        # (đã kiểm chứng có dữ liệu thật cho cả TDV/QLV/CS, không chỉ TP/PP/TBP như tài liệu cũ
+        # giả định).
+        has_fact_tonghopkhachhang = "Table 'fact_tonghopkhachhang'" in db_schema
+        if has_fact_tonghopkhachhang:
+            kpi_tdv_instruction = f"""   - Với TDV/QLV/CS/CTV/TK, tiếp tục dùng 'fact_tonghopkhachhang' (actual sales = 'Amount_Cus', target = 'MonthSaleTarget', employee code = 'EmployeeCode', region = 'AreaCode' / 'AreaCode2').
+   - Join with 'dim_nhanvien' on EmployeeCode = EmployeeCode to get employee details (like employee name: 'Name', position: 'PositionCode').
+   - IMPORTANT DEDUP RULES:
+     * dim_nhanvien has 'IsDuplicate' column. ALWAYS filter: (n."IsDuplicate" IS NULL OR n."IsDuplicate" = 0) to exclude duplicate employee records.
+     * fact_tonghopkhachhang has one row PER CUSTOMER per employee per month. MonthSaleTarget is repeated on every row for the same employee.
+     * To get the correct target: SELECT DISTINCT "EmployeeCode", "SaveDate", "MonthSaleTarget" FROM fact_tonghopkhachhang
+     * To get the correct actual total: SUM("Amount_Cus") grouped by EmployeeCode.
+   - Position codes:
+     * 'TDV' or 'Trình dược viên' -> dim_nhanvien."PositionCode" = 'TDV' (dùng fact_tonghopkhachhang)
+     * 'QLV' or 'Quản lý vùng' -> dim_nhanvien."PositionCode" = 'QLV' (dùng fact_tonghopkhachhang)
+     * 'TP' or 'Trưởng phòng' -> kpi_summary.position_code = 'TP' (dùng kpi_summary, xem CRITICAL ở trên — KHÔNG dùng fact_tonghopkhachhang)
+     * 'PP' or 'Phó phòng' -> kpi_summary.position_code = 'PP' (dùng kpi_summary)
+     * 'TBP' or 'Trưởng bộ phận' -> kpi_summary.position_code = 'TBP' (dùng kpi_summary)
+   - When the user asks about KPI or nhân viên without specifying position, DEFAULT to TDV (Trình dược viên) since they are the primary salesforce.
+   - SaveDate is the month-end date stored as TEXT: '{latest_month_end_str}T00:00:00' for the latest month. The LATEST period is '{latest_month_end_str}T00:00:00'.
+   - Example to get Top TDV by KPI completion (correct dedup):
+     WITH tdv_actual AS (
+       SELECT f."EmployeeCode", SUM(f."Amount_Cus") AS total_actual
+       FROM fact_tonghopkhachhang f
+       JOIN dim_nhanvien n ON f."EmployeeCode" = n."EmployeeCode"
+       WHERE n."PositionCode" = 'TDV'
+         AND (n."IsDuplicate" IS NULL OR n."IsDuplicate" = 0)
+         AND f."SaveDate" = '{latest_month_end_str}T00:00:00'
+       GROUP BY f."EmployeeCode"
+     ),
+     tdv_target AS (
+       SELECT DISTINCT f."EmployeeCode", f."MonthSaleTarget"
+       FROM fact_tonghopkhachhang f
+       JOIN dim_nhanvien n ON f."EmployeeCode" = n."EmployeeCode"
+       WHERE n."PositionCode" = 'TDV'
+         AND (n."IsDuplicate" IS NULL OR n."IsDuplicate" = 0)
+         AND f."SaveDate" = '{latest_month_end_str}T00:00:00'
+         AND f."MonthSaleTarget" IS NOT NULL
+     )
+     SELECT n."Name", a."EmployeeCode", a.total_actual, t."MonthSaleTarget" AS target,
+            ROUND((a.total_actual / t."MonthSaleTarget" * 100)::numeric, 1) AS pct
+     FROM tdv_actual a
+     JOIN dim_nhanvien n ON a."EmployeeCode" = n."EmployeeCode"
+     JOIN tdv_target t ON a."EmployeeCode" = t."EmployeeCode"
+     WHERE t."MonthSaleTarget" > 0
+     ORDER BY pct DESC
+     LIMIT 5"""
+        else:
+            kpi_tdv_instruction = """   - 'fact_tonghopkhachhang' KHÔNG tồn tại trong nguồn dữ liệu đang kết nối hiện tại (không thấy trong schema ở trên) — TUYỆT ĐỐI KHÔNG được sinh SQL tham chiếu tới bảng này, sẽ luôn lỗi khi chạy.
+   - Với TDV/QLV/CS/CTV/TK, dùng 'kpi_summary' (đã kiểm chứng có dữ liệu thật cho các position_code này, không chỉ TP/PP/TBP) — CÙNG cách truy vấn như hướng dẫn TP ở trên: filter position_code, dùng month_sale_target/month_sale_amount/month_sale_percent (hoặc quarter_/year_ tương ứng).
+   - Position codes: TDV/QLV/CS/CTV/TK/TP/PP/TBP — tất cả đều dùng kpi_summary.position_code, KHÔNG có ngoại lệ nào cần fact_tonghopkhachhang.
+   - When the user asks about KPI or nhân viên without specifying position, DEFAULT to TDV (Trình dược viên) since they are the primary salesforce.
+   - LƯU Ý DỮ LIỆU: kpi_summary hiện có thể chưa đầy đủ cho mọi nhân sự (dữ liệu nhập tay/đồng bộ theo kỳ) — nếu kết quả trả về ít dòng hơn số lượng nhân sự cấp đó thực tế có, đừng coi là lỗi truy vấn, hãy nêu rõ trong câu trả lời rằng dữ liệu hệ thống hiện chỉ ghi nhận được từng đó người.
+   - Example Top TDV theo KPI:
+     SELECT employee_name, month_sale_target, month_sale_amount,
+            ROUND((month_sale_percent * 100)::numeric, 2) AS "Tỉ lệ đạt KPI (%)"
+     FROM kpi_summary
+     WHERE position_code = 'TDV'
+     ORDER BY month_sale_percent DESC
+     LIMIT 5"""
 
         db_dialect = "PostgreSQL"
         # Cloud is configured but unreachable right now (DNS/network failure) — distinct from
@@ -768,7 +1127,24 @@ Câu hỏi/Lời chào của người dùng: "{user_question}"
 3. Make sure to use SQL functions that are compatible with PostgreSQL (e.g. COALESCE, NOW(), CURRENT_DATE, ILIKE for case-insensitive search, etc.).
 4. VERY IMPORTANT: Use 'ILIKE' instead of 'LIKE' for case-insensitive search on text columns. Since values in the database (like CityName, Name, item_name) may be stored without Vietnamese tone marks, when filtering Vietnamese text, you MUST search for BOTH the accented and unaccented versions using OR. For example: (t."CityName" ILIKE '%Bắc%' OR t."CityName" ILIKE '%Bac%') or (n."Name" ILIKE '%Tùng%' OR n."Name" ILIKE '%Tung%').
 5. VERY IMPORTANT: In PostgreSQL, the ROUND(value, decimals) function requires the first argument to be explicitly cast to numeric, e.g. ROUND(expression::numeric, 2). Otherwise, it will fail with "function round(double precision, integer) does not exist".
-6. VERY IMPORTANT: In the DNH database, date columns like 'DocDate' or 'SaveDate' are stored as TEXT (VARCHAR). In PostgreSQL, you MUST explicitly cast them to timestamp or date when using date/time functions like DATE_TRUNC or when doing date comparisons. For example: DATE_TRUNC('month', "DocDate"::timestamp), DATE_TRUNC('day', "DocDate"::timestamp), or WHERE "DocDate"::date >= '2026-04-01'. Failure to do so will cause PostgreSQL crash error: "function date_trunc(unknown, text) does not exist".
+6. VERY IMPORTANT — SARGABLE date filtering (BẮT BUỘC để tận dụng INDEX có sẵn trên DocDate,
+   tránh full table scan gây PostgreSQL statement timeout — đây là sự cố THẬT đã xảy ra trên hạ
+   tầng hiện tại, không phải lý thuyết): Date columns like 'DocDate'/'SaveDate' are stored as TEXT
+   in ISO format ('YYYY-MM-DDTHH:MM:SS'), which sorts correctly as plain STRING comparison
+   (lexicographic order = chronological order for ISO strings).
+   - For WHERE-clause range/equality filtering (the vast majority of queries), compare DIRECTLY
+     against the TEXT column WITHOUT any ::date/::timestamp cast — casting the column breaks the
+     existing index (PostgreSQL cannot use a plain index when the indexed column itself is cast),
+     forcing a full table scan. Use a RANGE for "on day X" instead of casting to compare equality:
+       ĐÚNG (sargable, dùng được index): WHERE h."DocDate" >= '2026-04-01' AND h."DocDate" < '2026-05-01'
+       ĐÚNG cho "đúng ngày X": WHERE h."DocDate" >= '2026-07-07' AND h."DocDate" < '2026-07-08'
+       SAI (phá index, full scan, có thể timeout): WHERE h."DocDate"::date >= '2026-04-01' hoặc h."DocDate"::date = '2026-07-07'
+   - ONLY cast to timestamp/date when you genuinely need a date FUNCTION with no sargable text
+     equivalent — e.g. DATE_TRUNC('month', "DocDate"::timestamp) purely for GROUP BY/display
+     month-bucketing. Even then, ALSO add a sargable range filter in WHERE (not just rely on the
+     cast) whenever the query already knows the relevant date range, so the planner can use the
+     index to narrow rows BEFORE the expensive cast/grouping runs on a small subset instead of
+     the whole table. Failure to do so will cause PostgreSQL crash error: "function date_trunc(unknown, text) does not exist" if you forget the cast entirely inside an actual date function — nhưng KHÔNG cast trong WHERE filter thuần túy.
 7. Do not use SQLite specific functions like strftime. Use standard Postgres date/time operators and intervals.
 8. ALWAYS wrap case-sensitive table and column names in double quotes if they contain uppercase letters (e.g. "TotalAmount", "DocStatus", "EInvoiceStatus", "IsActive", "CustomerCode", "EmployeeCode", "MonthSaleTarget", "Amount_Cus", "Amount_CT", "SaveDate"). For example: h."TotalAmount", f."MonthSaleTarget".
 """
@@ -787,14 +1163,57 @@ Câu hỏi/Lời chào của người dùng: "{user_question}"
 3. Make sure to use SQL functions that are compatible with SQLite (e.g. COALESCE, IFNULL, strftime, etc.).
 """
 
+        # System prompt injection for role scope restriction — tổng quát theo scope_region/scope_channel
+        # (xem _resolve_user_scope) thay vì hard-code từng role, để thêm role mới không cần sửa đây.
+        role_system_instruction = ""
+        if scope_region:
+            allowed_list = "', '".join(self._REGION_SQL_MARKERS[scope_region])
+            other_codes = ", ".join(
+                f"'{m}'" for r in self._REGION_KEYWORDS if r != scope_region for m in self._REGION_SQL_MARKERS[r]
+            )
+            role_system_instruction += f"""
+=== CRITICAL SECURITY RULE (VÙNG MIỀN) ===
+You are generating SQL for a manager scoped to {self._REGION_NAMES_VI[scope_region]} only.
+You MUST restrict all data queries to region code(s) '{allowed_list}'.
+1. For invoice headers/customer data, you MUST join with dim_tinhthanhpho t and filter: t."AreaCode" IN ('{allowed_list}') or area_code IN ('{allowed_list}').
+2. For KPI/targets summary, you MUST filter AreaCode/area_code IN ('{allowed_list}').
+3. For client/receivable lists, filter AreaCode/AreaCode2 IN ('{allowed_list}') or join and filter.
+Under no circumstances should you query or return data for other region codes ({other_codes}).
+==============================
+"""
+        if scope_channel == "otc":
+            role_system_instruction += """
+=== CRITICAL SECURITY RULE (KÊNH) ===
+You are generating SQL for a manager scoped to the OTC channel only.
+1. Do NOT query ETC tables 'brvsx_hoadonhdr' or 'brvsx_hoadonct'.
+2. ONLY query OTC tables 'brv_hoadonhdr', 'brv_hoadonct'.
+3. If querying tables containing multiple channels (like 'receivable_detail' or 'kpi_summary'), you MUST explicitly filter: sales_channel = 'OTC' or similar.
+Under no circumstances should you query or return ETC data.
+==============================
+"""
+        elif scope_channel == "etc":
+            role_system_instruction += """
+=== CRITICAL SECURITY RULE (KÊNH) ===
+You are generating SQL for the ETC Channel Manager (Manager kênh ETC).
+You MUST restrict all queries to the ETC channel only.
+1. Do NOT query OTC tables 'brv_hoadonhdr' or 'brv_hoadonct'.
+2. ONLY query ETC tables 'brvsx_hoadonhdr', 'brvsx_hoadonct', 'receivable_etc', 'fact_kehoachtongetc'.
+3. If querying tables containing multiple channels (like 'receivable_detail' or 'kpi_summary'), you MUST explicitly filter: sales_channel = 'ETC' or similar.
+Under no circumstances should you query or return OTC data.
+==============================
+"""
+
         system_prompt = f"""
 You are an expert SQL Generator for Duoc Nam Ha (DNH) commercial data warehouse.
 Your task is to convert the user's Vietnamese natural language query into a single valid {db_dialect} query.
+
+{role_system_instruction}
 
 Here is the database schema:
 {db_schema}
 
 Key Business Logic & Tables & Strict Mapping Rules:
+{mart_layer_instruction}
 1. Doanh thu thực tế (Actual Sales/Revenue):
    - Do NOT query the 'orders' or 'invoices' tables. They are mock/deprecated tables.
    - For general "doanh thu" or "doanh số" (without specifying OTC or ETC), they want the combined total of BOTH OTC and ETC. You MUST use a UNION ALL of both 'brv_hoadonhdr' (OTC) and 'brvsx_hoadonhdr' (ETC).
@@ -919,48 +1338,7 @@ Key Business Logic & Tables & Strict Mapping Rules:
        WHERE position_code = 'TP'
        ORDER BY month_sale_percent DESC
      * LƯU Ý DỮ LIỆU: 'kpi_summary' hiện có thể chưa đầy đủ cho mọi Trưởng phòng/Phó phòng (dữ liệu nhập tay từ báo cáo Excel định kỳ, không đồng bộ tự động như fact_tonghopkhachhang) — nếu kết quả trả về ít dòng hơn số lượng nhân sự cấp đó thực tế có, đừng coi là lỗi truy vấn, hãy nêu rõ trong câu trả lời rằng dữ liệu hệ thống hiện chỉ ghi nhận được từng đó người.
-   - Với TDV/QLV/CS/CTV/TK, tiếp tục dùng 'fact_tonghopkhachhang' (actual sales = 'Amount_Cus', target = 'MonthSaleTarget', employee code = 'EmployeeCode', region = 'AreaCode' / 'AreaCode2').
-   - Join with 'dim_nhanvien' on EmployeeCode = EmployeeCode to get employee details (like employee name: 'Name', position: 'PositionCode').
-   - IMPORTANT DEDUP RULES:
-     * dim_nhanvien has 'IsDuplicate' column. ALWAYS filter: (n."IsDuplicate" IS NULL OR n."IsDuplicate" = 0) to exclude duplicate employee records.
-     * fact_tonghopkhachhang has one row PER CUSTOMER per employee per month. MonthSaleTarget is repeated on every row for the same employee.
-     * To get the correct target: SELECT DISTINCT "EmployeeCode", "SaveDate", "MonthSaleTarget" FROM fact_tonghopkhachhang
-     * To get the correct actual total: SUM("Amount_Cus") grouped by EmployeeCode.
-   - Position codes:
-     * 'TDV' or 'Trình dược viên' -> dim_nhanvien."PositionCode" = 'TDV' (dùng fact_tonghopkhachhang)
-     * 'QLV' or 'Quản lý vùng' -> dim_nhanvien."PositionCode" = 'QLV' (dùng fact_tonghopkhachhang)
-     * 'TP' or 'Trưởng phòng' -> kpi_summary.position_code = 'TP' (dùng kpi_summary, xem CRITICAL ở trên — KHÔNG dùng fact_tonghopkhachhang)
-     * 'PP' or 'Phó phòng' -> kpi_summary.position_code = 'PP' (dùng kpi_summary)
-     * 'TBP' or 'Trưởng bộ phận' -> kpi_summary.position_code = 'TBP' (dùng kpi_summary)
-   - When the user asks about KPI or nhân viên without specifying position, DEFAULT to TDV (Trình dược viên) since they are the primary salesforce.
-   - SaveDate is the month-end date stored as TEXT: '{latest_month_end_str}T00:00:00' for the latest month. The LATEST period is '{latest_month_end_str}T00:00:00'.
-   - Example to get Top TDV by KPI completion (correct dedup):
-     WITH tdv_actual AS (
-       SELECT f."EmployeeCode", SUM(f."Amount_Cus") AS total_actual
-       FROM fact_tonghopkhachhang f
-       JOIN dim_nhanvien n ON f."EmployeeCode" = n."EmployeeCode"
-       WHERE n."PositionCode" = 'TDV'
-         AND (n."IsDuplicate" IS NULL OR n."IsDuplicate" = 0)
-         AND f."SaveDate" = '{latest_month_end_str}T00:00:00'
-       GROUP BY f."EmployeeCode"
-     ),
-     tdv_target AS (
-       SELECT DISTINCT f."EmployeeCode", f."MonthSaleTarget"
-       FROM fact_tonghopkhachhang f
-       JOIN dim_nhanvien n ON f."EmployeeCode" = n."EmployeeCode"
-       WHERE n."PositionCode" = 'TDV'
-         AND (n."IsDuplicate" IS NULL OR n."IsDuplicate" = 0)
-         AND f."SaveDate" = '{latest_month_end_str}T00:00:00'
-         AND f."MonthSaleTarget" IS NOT NULL
-     )
-     SELECT n."Name", a."EmployeeCode", a.total_actual, t."MonthSaleTarget" AS target,
-            ROUND((a.total_actual / t."MonthSaleTarget" * 100)::numeric, 1) AS pct
-     FROM tdv_actual a
-     JOIN dim_nhanvien n ON a."EmployeeCode" = n."EmployeeCode"
-     JOIN tdv_target t ON a."EmployeeCode" = t."EmployeeCode"
-     WHERE t."MonthSaleTarget" > 0
-     ORDER BY pct DESC
-     LIMIT 5
+{kpi_tdv_instruction}
 
 5. Sản phẩm (Products) & Top bán chạy:
    - Query product details by joining 'brv_hoadonct' (for OTC) or 'brvsx_hoadonct' (for ETC) with 'brv_sanpham' on ItemCode = Code.
@@ -1063,6 +1441,7 @@ Key Business Logic & Tables & Strict Mapping Rules:
    - CÔNG NỢ ("khách nào nợ nhiều nhất", "rủi ro công nợ", "nợ xấu"): luôn thêm cột "Tỷ lệ quá hạn (%)" = ROUND((total_overdue / NULLIF(balance_end, 0) * 100)::numeric, 1). Khách nợ lớn nhưng tỷ lệ quá hạn thấp khác hẳn khách nợ nhỏ nhưng 100% đã quá hạn — bảng phải cho thấy điều đó.
    - TOP SẢN PHẨM BÁN CHẠY: ngoài 4 cột ở mục 5, thêm "TB bán/ngày" = SL Thực bán / (DATE '{latest_date_str}' - DATE '{latest_q_start}' + 1) và "Tỷ lệ KM (%)" = ROUND((SL Khuyến mãi / NULLIF(Tổng SL, 0) * 100)::numeric, 1) — tỷ lệ khuyến mãi cao cho thấy doanh số "ảo" nhờ hàng tặng.
    - KPI NHÂN VIÊN: ngoài % đạt chỉ tiêu, luôn thêm cột "Còn thiếu" = GREATEST(target - actual, 0) để thấy khoảng cách tuyệt đối phải bù (0 nếu đã vượt chỉ tiêu).
+   - DOANH THU CHUNG THEO THỜI GIAN (người dùng hỏi "doanh thu" theo tuần/tháng mà KHÔNG chỉ rõ kênh): BẮT BUỘC trả về TÁCH RIÊNG 2 cột "Doanh thu OTC" và "Doanh thu ETC" (mỗi kênh 1 cột, từ CTE riêng theo quy tắc mục 5) thay vì gộp thành 1 cột "Doanh thu" duy nhất — giao diện sẽ vẽ biểu đồ cụm so sánh 2 kênh theo từng kỳ. Chỉ gộp 1 cột khi người dùng nói rõ "tổng doanh thu".
    - DOANH THU NHIỀU THÁNG (so sánh theo tháng): luôn thêm cột "% so với tháng trước" dùng window function LAG:
      ROUND(((rev - LAG(rev) OVER (ORDER BY month)) / NULLIF(LAG(rev) OVER (ORDER BY month), 0) * 100)::numeric, 1) AS "% so với tháng trước"
      (bọc aggregate trong CTE/subquery trước rồi mới áp LAG ở SELECT ngoài để tránh lồng aggregate + window sai cú pháp).
@@ -1088,28 +1467,93 @@ VERY IMPORTANT — Vietnamese Column Labels (BẮT BUỘC): EVERY column in the 
         if self.is_mock:
             sql_query = self._generate_mock_sql(user_question)
         else:
-            try:
-                sql_user_prompt = user_question
-                if history_block:
-                    sql_user_prompt = (
-                        f'{history_block}\n'
-                        f'Câu hỏi HIỆN TẠI cần chuyển thành SQL (dùng lịch sử ở trên chỉ để hiểu ngữ cảnh/tham chiếu, '
-                        f'ví dụ câu hỏi ngắn như "1" hay "còn tháng khác thì sao" ám chỉ nội dung đã hỏi trước đó): "{user_question}"'
-                    )
-                sql_query = self._call_ai(
-                    model=self.sql_model,
-                    system_prompt=system_prompt,
-                    user_prompt=sql_user_prompt,
-                    temperature=0.0
+            sql_user_prompt = user_question
+            if history_block:
+                sql_user_prompt = (
+                    f'{history_block}\n'
+                    f'Câu hỏi HIỆN TẠI cần chuyển thành SQL (dùng lịch sử ở trên chỉ để hiểu ngữ cảnh/tham chiếu, '
+                    f'ví dụ câu hỏi ngắn như "1" hay "còn tháng khác thì sao" ám chỉ nội dung đã hỏi trước đó): "{user_question}"'
                 )
-                if sql_query.startswith("```"):
-                    sql_query = sql_query.replace("```sql", "").replace("```", "").strip()
-            except Exception as e:
-                print(f"[Error calling OpenAI API]: {e}")
+            # Thử tối đa 2 lần trước khi rơi về mock. Đã bắt được thật: lỗi timeout/mạng NHẤT
+            # THỜI ở lần gọi AI đầu khiến 1 câu hỏi ngắn phụ thuộc lịch sử hội thoại (vd "quý 1
+            # và quý 2 cơ") rơi thẳng về _generate_mock_sql() — hàm này KHÔNG biết gì về lịch sử
+            # hội thoại, nên đoán bừa sang chủ đề khác hẳn. Người dùng thấy câu trả lời trông
+            # bình thường (không có dấu hiệu lỗi) nên hiểu lầm là AI "trả lời sai"/"quên ngữ
+            # cảnh", trong khi thực chất là AI bị lỗi tạm thời rồi bị thay bằng bản dự phòng.
+            sql_query = None
+            last_error = None
+            for attempt in range(2):
+                try:
+                    sql_query = self._call_ai(
+                        model=self.sql_model,
+                        system_prompt=system_prompt,
+                        user_prompt=sql_user_prompt,
+                        temperature=0.0
+                    )
+                    if sql_query.startswith("```"):
+                        sql_query = sql_query.replace("```sql", "").replace("```", "").strip()
+                    break
+                except Exception as e:
+                    last_error = e
+                    print(f"[Warning] Lỗi gọi AI sinh SQL (lần {attempt + 1}/2): {e}")
+            if sql_query is None:
+                print(f"[Error] AI sinh SQL thất bại sau 2 lần thử, rơi về mock (KHÔNG có ngữ cảnh hội thoại): {last_error}")
                 sql_query = self._generate_mock_sql(user_question)
 
-        # Run the query
-        query_result = self._execute_sql(sql_query)
+        # Post-check Security Validation on generated SQL query
+        sql_clean = sql_query.upper()
+        unauthorized = False
+        unauthorized_reason = ""
+        
+        # Chặn theo miền/kênh — tổng quát theo scope_region/scope_channel (đã suy ra từ username
+        # ở đầu hàm ask()), cả 2 chiều độc lập nhau (1 role có thể bị giới hạn cả miền lẫn kênh).
+        #
+        # QUAN TRỌNG: đây KHÔNG phải RLS (Row-Level Security) thật ở tầng Postgres — vẫn là
+        # kiểm tra chuỗi trên SQL text, không phải enforce ở tầng DB. RLS thật cần role Postgres
+        # riêng (không phải role hiện tại — role owner/connection pooler mặc định BYPASS RLS) +
+        # policy trên từng bảng + set session variable mỗi request — đổi cả cách quản lý kết nối
+        # (xung đột với _get_cloud_engine() dùng pool dùng chung, xem dnh-project-context). Việc
+        # đó là hạ tầng lớn, không làm trong lượt này — đây là bản heuristic tốt hơn, không phải
+        # thay thế hoàn toàn.
+        if scope_region:
+            other_markers = [m for r in self._REGION_KEYWORDS if r != scope_region for m in self._REGION_SQL_MARKERS[r]]
+            if any(f"'{m}'" in sql_clean for m in other_markers):
+                unauthorized = True
+                unauthorized_reason = f"Anh/Chị không có quyền truy vấn dữ liệu ngoài {self._REGION_NAMES_VI[scope_region]}."
+
+            # MỚI — fail-closed: check cũ ở trên chỉ bắt được khi SQL CÓ nhắc mã miền khác. Nếu
+            # LLM đơn giản QUÊN lọc miền (SQL đụng bảng nhiều-miền nhưng không có mã miền nào cả)
+            # thì check cũ không bắt được -> lộ dữ liệu toàn công ty. Bắt buộc phải thấy CHÍNH mã
+            # miền được phép ở đâu đó khi SQL đụng các bảng này, không thì từ chối (an toàn hơn
+            # là đoán/tự sửa SQL).
+            if not unauthorized:
+                touches_region_table = any(t in sql_clean for t in self._REGION_BEARING_TABLES)
+                own_marker_present = any(f"'{m}'" in sql_clean for m in self._REGION_SQL_MARKERS[scope_region])
+                if touches_region_table and not own_marker_present:
+                    unauthorized = True
+                    unauthorized_reason = f"Không xác định được SQL có lọc đúng theo {self._REGION_NAMES_VI[scope_region]} hay không — từ chối để đảm bảo an toàn dữ liệu. Anh/Chị vui lòng hỏi lại cụ thể hơn (vd nêu rõ tên miền trong câu hỏi)."
+
+        if scope_channel:
+            other_channel = "etc" if scope_channel == "otc" else "otc"
+            if any(m in sql_clean for m in self._CHANNEL_SQL_MARKERS[other_channel]):
+                unauthorized = True
+                unauthorized_reason = f"Anh/Chị không có quyền truy vấn dữ liệu ngoài kênh {self._CHANNEL_NAMES_VI[scope_channel]}."
+
+            # MỚI — fail-closed tương tự, riêng cho bảng DÙNG CHUNG cả 2 kênh (receivable_detail/
+            # kpi_summary không tách bảng riêng theo kênh như brv_*/brvsx_*, nên chỉ chặn "bảng
+            # kênh kia" ở trên là chưa đủ — còn phải chặn cả trường hợp không lọc gì trên bảng gộp).
+            if not unauthorized:
+                touches_shared_table = any(t in sql_clean for t in self._CHANNEL_SHARED_TABLES)
+                own_channel_marker_present = f"'{scope_channel.upper()}'" in sql_clean
+                if touches_shared_table and not own_channel_marker_present:
+                    unauthorized = True
+                    unauthorized_reason = f"Không xác định được SQL có lọc đúng theo kênh {self._CHANNEL_NAMES_VI[scope_channel]} hay không (bảng dùng chung nhiều kênh) — từ chối để đảm bảo an toàn dữ liệu. Anh/Chị vui lòng hỏi lại cụ thể hơn."
+
+        if unauthorized:
+            query_result = {"error": unauthorized_reason}
+        else:
+            # Run the query
+            query_result = self._execute_sql(sql_query)
         
         # Format textual answer
         answer = ""
@@ -1144,10 +1588,6 @@ VERY IMPORTANT — Vietnamese Column Labels (BẮT BUỘC): EVERY column in the 
                     llm_rows = llm_rows[:100]
                     is_truncated_for_llm = True
 
-                # Parse intent using our fast heuristic visual intent parser first
-                parsed_intent = self._parse_data_intent(user_question)
-                intent_type = parsed_intent.get("intent", "Single_Value")
-                
                 # Mặc định LUÔN trả lời đơn giản/trực tiếp — chỉ mở rộng thành khung đầy đủ
                 # Thực trạng-Nguyên nhân-Giải pháp khi câu hỏi TRỰC TIẾP hỏi "tại sao"/"như thế nào"
                 # (không còn phụ thuộc số dòng kết quả — trước đây multi-row vẫn tự bị áp khung đầy
@@ -1158,16 +1598,29 @@ VERY IMPORTANT — Vietnamese Column Labels (BẮT BUỘC): EVERY column in the 
                     "làm sao", "lam sao", "nguyên nhân", "nguyen nhan", "giải pháp", "giai phap"
                 ])
 
-                framework_directive = ""
-                if not wants_deep_analysis:
-                    framework_directive = """5. Direct Response (KHÔNG dùng khung "Thực trạng - Nguyên nhân - Giải pháp"): Người dùng chỉ hỏi số liệu/thông tin, KHÔNG hỏi "tại sao" hay "như thế nào". Chỉ trả lời đúng cái được hỏi — trình bày số liệu/kết quả trực tiếp, ngắn gọn, chuyên nghiệp, TỐI ĐA 2-3 CÂU. TUYỆT ĐỐI KHÔNG tự thêm phần phân tích nguyên nhân hay đề xuất giải pháp khi không được hỏi. TUYỆT ĐỐI KHÔNG liệt kê nhiều mục theo từng nhóm/bullet point kiểu "Nhóm A: ...", "Nhóm B: ..." hay nêu tên từng dòng dữ liệu một — bảng dữ liệu chi tiết (Top 10) đã hiển thị riêng ở giao diện, câu trả lời chỉ cần nêu con số tổng hợp nổi bật nhất (ví dụ tổng số lượng, giá trị cao nhất) và tối đa 1 ví dụ tiêu biểu, rồi dẫn người dùng xem bảng bên dưới để biết chi tiết."""
+                # Parse intent using our fast heuristic visual intent parser first (không gọi AI,
+                # vẫn cần chạy trong CẢ 2 nhánh dưới đây vì phần vẽ biểu đồ phía sau dùng tới).
+                parsed_intent = self._parse_data_intent(user_question)
+                intent_type = parsed_intent.get("intent", "Single_Value")
+
+                # Fast path — kết quả 1 dòng, ít cột, không cần phân tích sâu: tự ghép câu bằng
+                # code thay vì gọi AI lần 2 (đo thật: ~4-10s mỗi lần) chỉ để diễn giải vài con số
+                # tổng hợp đơn giản. KHÔNG áp dụng cho case nhiều dòng/cần phân tích MoM-target/
+                # "tại sao" — những case đó vẫn qua AI như cũ để giữ chất lượng câu trả lời.
+                if (len(llm_rows) == 1 and not wants_deep_analysis and not is_truncated_for_llm
+                        and len(query_result.get("columns", [])) <= 6):
+                    answer = self._quick_format_single_row(query_result.get("columns", []), llm_rows[0])
                 else:
-                    framework_directive = """5. Executive Response Framework (Thực trạng - Nguyên nhân - Giải pháp): Người dùng có hỏi "tại sao"/"như thế nào" nên PHẢI trình bày đủ 3 phần theo thứ tự (dùng thẻ <b> làm tiêu đề):
+                    framework_directive = ""
+                    if not wants_deep_analysis:
+                        framework_directive = """5. Direct Response (KHÔNG dùng khung "Thực trạng - Nguyên nhân - Giải pháp"): Người dùng chỉ hỏi số liệu/thông tin, KHÔNG hỏi "tại sao" hay "như thế nào". Chỉ trả lời đúng cái được hỏi — trình bày số liệu/kết quả trực tiếp, ngắn gọn, chuyên nghiệp, TỐI ĐA 2-3 CÂU. TUYỆT ĐỐI KHÔNG tự thêm phần phân tích nguyên nhân hay đề xuất giải pháp khi không được hỏi. TUYỆT ĐỐI KHÔNG liệt kê nhiều mục theo từng nhóm/bullet point kiểu "Nhóm A: ...", "Nhóm B: ..." hay nêu tên từng dòng dữ liệu một — bảng dữ liệu chi tiết (Top 10) đã hiển thị riêng ở giao diện, câu trả lời chỉ cần nêu con số tổng hợp nổi bật nhất (ví dụ tổng số lượng, giá trị cao nhất) và tối đa 1 ví dụ tiêu biểu, rồi dẫn người dùng xem bảng bên dưới để biết chi tiết."""
+                    else:
+                        framework_directive = """5. Executive Response Framework (Thực trạng - Nguyên nhân - Giải pháp): Người dùng có hỏi "tại sao"/"như thế nào" nên PHẢI trình bày đủ 3 phần theo thứ tự (dùng thẻ <b> làm tiêu đề):
    - <b>Thực trạng:</b> Trình bày trực tiếp các con số cốt lõi (Hero Metrics) dưới dạng in đậm (dùng thẻ <b>). Không cần liệt kê lại bảng dữ liệu chi tiết (đã hiển thị riêng ở giao diện), chỉ nêu con số tổng hợp.
    - <b>Nguyên nhân:</b> Phân tích sâu sắc và bóc tách nguyên nhân dựa trên số liệu thực tế từ kết quả truy vấn.
    - <b>Giải pháp:</b> Đề xuất các kiến nghị hành động cụ thể, phân vai rõ ràng cho các phòng ban."""
 
-                summary_prompt = f"""
+                    summary_prompt = f"""
 You are the executive AI Chatbot assistant for Duoc Nam Ha.
 Your task is to summarize the SQL query results for C-level executives in a clean, professional, and natural Vietnamese tone.
 
@@ -1190,23 +1643,29 @@ CRITICAL RULES:
 
 6. Formatting Guard: NEVER use markdown bold syntax like `**text**` or `*text*`. If you want to bold a word or number, ALWAYS use HTML tags like `<b>text</b>` or `<strong>text</strong>` — cả web UI lẫn Telegram đều render trực tiếp `answer` dưới dạng HTML, markdown thô sẽ hiện dấu sao thô.
 
-7. Data Boundary Transparency (CRITICAL): The database only contains invoice data from {latest_q_start} to {latest_date_str} (3 months: April, May, June {latest_year}). January, February, and March {latest_year} data do NOT exist. If the user asked for '6 tháng đầu năm {latest_year}', 'H1 {latest_year}', 'nửa đầu năm', or any period that includes Jan-Mar {latest_year}, you MUST prominently warn the user in your response with this EXACT note at the beginning:
-⚠️ <b>Lưu ý quan trọng về dữ liệu:</b> Hệ thống hiện chỉ có dữ liệu hóa đơn từ tháng 04/{latest_year} đến {latest_month}/{latest_year} (Q2/{latest_year}). Dữ liệu tháng 1, 2, 3 năm {latest_year} chưa được tải vào CSDL, do đó kết quả bên dưới chỉ phản ánh <b>3 tháng (Q2/{latest_year})</b>, KHÔNG phải 6 tháng đầu năm đầy đủ.
-Then present the numbers clearly labeled as "Q2/{latest_year} (Tháng 4-{int(latest_month)})" not "6 tháng đầu năm".
+7. Data Boundary Transparency (CRITICAL): The invoice data actually available right now spans from {earliest_date_str} to {latest_date_str} (kiểm tra động mỗi lần, KHÔNG giả định cố định — dữ liệu có thể đã được nạp thêm theo thời gian). If {earliest_date_str} is January 1st of its year, the FULL year is already available from the start — do NOT show any data-boundary warning in that case, even if the user asks for "cả năm"/"6 tháng đầu năm"/"từ đầu năm". ONLY if the user's question implies a period starting BEFORE {earliest_date_str} (i.e. {earliest_date_str} is genuinely later than Jan 1st of the relevant year), you MUST prominently warn at the beginning of your response using the REAL range above — do NOT invent or reuse any specific month range from memory, always state {earliest_date_str} to {latest_date_str} exactly:
+⚠️ <b>Lưu ý quan trọng về dữ liệu:</b> Hệ thống hiện chỉ có dữ liệu hóa đơn từ {earliest_date_str} đến {latest_date_str}. Dữ liệu trước {earliest_date_str} chưa được tải vào CSDL, do đó kết quả bên dưới chỉ phản ánh giai đoạn thực có dữ liệu, KHÔNG phải toàn bộ khoảng thời gian được hỏi.
 """
-                try:
-                    answer = self._call_ai(
-                        model=self.summary_model,
-                        system_prompt="You are a helpful assistant for data analysis.",
-                        user_prompt=summary_prompt
-                    )
-                    # Convert any accidental markdown bold to HTML bold to ensure rendering
-                    answer = re.sub(r'\*\*(.*?)\*\*', r'<b>\1</b>', answer)
-                except Exception as e:
-                    answer = self._format_heuristically(query_result.get("columns", []), query_result.get("rows", []), user_question)
+                    try:
+                        answer = self._call_ai(
+                            model=self.summary_model,
+                            system_prompt="You are a helpful assistant for data analysis.",
+                            user_prompt=summary_prompt
+                        )
+                        # Convert any accidental markdown bold to HTML bold to ensure rendering
+                        answer = re.sub(r'\*\*(.*?)\*\*', r'<b>\1</b>', answer)
+                    except Exception as e:
+                        answer = self._format_heuristically(query_result.get("columns", []), query_result.get("rows", []), user_question)
 
         chart_path = None
-        if not "error" in query_result and query_result.get("rows") and len(query_result["rows"]) >= 1:
+        # Chỉ vẽ biểu đồ khi người dùng CHỦ ĐỘNG yêu cầu (vẽ/biểu đồ/đồ thị/chart...).
+        # Câu hỏi dữ liệu thông thường chỉ trả lời + bảng, không tự sinh chart.
+        # So khớp bằng cụm từ có dấu/không dấu rõ nghĩa — tránh substring mơ hồ (bài học bug "hi ").
+        wants_chart = any(k in q_lower for k in [
+            "biểu đồ", "bieu do", "đồ thị", "do thi", "chart", "graph",
+            "vẽ", "trực quan", "truc quan", "visualize", "visual hóa", "minh họa", "minh hoa"
+        ])
+        if wants_chart and not "error" in query_result and query_result.get("rows") and len(query_result["rows"]) >= 1:
             try:
                 # 2. Run deterministic Rule Engine
                 visual_type = "KPI_Card"
@@ -1214,8 +1673,13 @@ Then present the numbers clearly labeled as "Q2/{latest_year} (Tháng 4-{int(lat
                 num_rows = len(query_result["rows"])
                 columns_lower = [c.lower() for c in query_result.get("columns", [])]
                 
-                # Detect if data looks like a time series (has a month/date/time column)
-                time_cols = [c for c in columns_lower if any(k in c for k in ['month', 'date', 'thang', 'ngay', 'week', 'quarter', 'year', 'sale_date', 'saledate', 'tu_ngay', 'time', 'period'])]
+                # Detect if data looks like a time series (has a month/date/time column).
+                # Cột tiếng Việt ("Tuần", "Tháng", "Quý", "Kỳ", "Năm") so bằng STARTSWITH — nếu so
+                # substring sẽ khớp nhầm cột phái sinh như "Số tháng bán"/"% so với tháng trước".
+                _vn_time_starts = ('tuần', 'tuan', 'tháng', 'thang', 'quý', 'quy ', 'kỳ', 'năm', 'ngày', 'ngay')
+                time_cols = [c for c in columns_lower
+                             if any(k in c for k in ['month', 'date', 'week', 'quarter', 'year', 'sale_date', 'saledate', 'tu_ngay', 'time', 'period'])
+                             or c.startswith(_vn_time_starts)]
                 
                 # If there are no time columns in the results, it cannot be a Trend/time-series chart
                 if not time_cols and intent_type == "Trend":
@@ -1271,6 +1735,42 @@ Then present the numbers clearly labeled as "Q2/{latest_year} (Tháng 4-{int(lat
         }
         self._remember_turn(session_key, user_question, result["answer"])
         return result
+
+    def _quick_format_single_row(self, columns, row):
+        """Ghép câu nhanh cho kết quả CHỈ 1 dòng, không gọi AI — dùng khi câu hỏi rõ ràng chỉ cần
+        vài con số tổng hợp (vd 'doanh thu hôm nay bao nhiêu'), tiết kiệm ~4-10s gọi AI lần 2 chỉ
+        để diễn giải. Tên cột đã được AI sinh SQL alias sang tiếng Việt sẵn (AS "Tên tiếng Việt"),
+        nên chỉ cần format giá trị, không cần dịch tên cột như _format_heuristically()."""
+        if not row:
+            return "Hiện tại chưa có dữ liệu cho truy vấn này"
+
+        def _fmt_val(col, val):
+            if val is None:
+                return "—"
+            col_lower = (col or "").lower()
+            if _is_money_col(col_lower):
+                try:
+                    v = float(val)
+                    if abs(v) >= 1_000_000_000:
+                        return f"{v / 1_000_000_000:.2f} tỷ đ".replace('.', ',')
+                    elif abs(v) >= 1_000_000:
+                        return f"{v / 1_000_000:.1f} triệu đ".replace('.', ',')
+                    else:
+                        return f"{v:,.0f} đ".replace(',', '.')
+                except (ValueError, TypeError):
+                    return str(val)
+            if any(k in col_lower for k in ['%', 'percent', 'pct', 'tỷ lệ', 'ty le']):
+                try:
+                    v = float(val)
+                    if abs(v) <= 2.0:
+                        v *= 100
+                    return f"{v:.1f}%".replace('.', ',')
+                except (ValueError, TypeError):
+                    return str(val)
+            return str(val)
+
+        parts = [f"{col}: <b>{_fmt_val(col, row.get(col))}</b>" for col in columns]
+        return ", ".join(parts) + "."
 
     def _format_heuristically(self, columns, rows, question):
         if not rows:
@@ -1399,17 +1899,27 @@ Then present the numbers clearly labeled as "Q2/{latest_year} (Tháng 4-{int(lat
         sns.set_theme(style="whitegrid")
         matplotlib.rcParams['font.family'] = 'Segoe UI'
         matplotlib.rcParams['font.size'] = 10
-        colors = ['#1a365d', '#319795', '#d69e2e', '#e53e3e', '#3182ce', '#38a169']
+        matplotlib.rcParams['axes.edgecolor'] = _CHART_GRID
+        matplotlib.rcParams['axes.titlecolor'] = _CHART_INK
+        matplotlib.rcParams['text.color'] = _CHART_INK
+        matplotlib.rcParams['axes.labelcolor'] = _CHART_INK
+        matplotlib.rcParams['xtick.color'] = _CHART_SLATE
+        matplotlib.rcParams['ytick.color'] = _CHART_SLATE
+        colors = _CHART_PALETTE
         
-        # Unified identification of true metrics vs category/dimension columns
+        # Unified identification of true metrics vs category/dimension columns.
+        # QUAN TRỌNG: cột mã/code (ví dụ "Mã sản phẩm" = '74260010030') là chuỗi số nên float()
+        # thành công và dễ bị nhầm là SỐ ĐO rồi bị đem vẽ chart (bug: biểu đồ vẽ theo mã sản phẩm
+        # thay vì số lượng). Phải loại các cột mã/id theo TÊN — kể cả tiếng Việt ('mã', 'sku').
+        _code_hints = ['id', 'code', 'symbol', 'number', 'stt', 'mã', 'sku']
         numeric_cols = []
         cat_cols = []
         for col in columns:
             col_lower = col.lower()
-            if any(k in col_lower for k in ['id', 'code', 'symbol', 'number', 'stt']):
+            if any(k in col_lower for k in _code_hints):
                 cat_cols.append(col)
                 continue
-                
+
             val = rows[0].get(col)
             if val is not None:
                 try:
@@ -1419,12 +1929,48 @@ Then present the numbers clearly labeled as "Q2/{latest_year} (Tháng 4-{int(lat
                     cat_cols.append(col)
             else:
                 cat_cols.append(col)
-                
+
         if not numeric_cols:
             return None
-            
+
         num_col = numeric_cols[0]
         cat_col = cat_cols[0] if cat_cols else columns[0]
+
+        # Tách chỉ số CHÍNH (doanh thu/số lượng...) khỏi chỉ số PHỤ dạng tỷ lệ/phái sinh
+        # ("% so với tháng trước", "Tỷ lệ KM (%)", "TB bán/ngày"...) — chỉ số phụ không vẽ
+        # thành cột cùng trục với tiền, chỉ có thể làm đường % trên trục thứ 2.
+        _aux_hints = ['%', 'tỷ lệ', 'ty le', 'percent', 'pct', 'rate', 'tb ', '/ngày', '/ngay',
+                      'so với', 'so voi', 'tăng trưởng', 'tang truong', 'còn lại', 'con lai', 'số tháng', 'so thang']
+        primary_metrics = [c for c in numeric_cols if not any(h in c.lower() for h in _aux_hints)]
+        aux_pct_cols = [c for c in numeric_cols
+                        if any(h in c.lower() for h in ['%', 'tỷ lệ', 'ty le', 'percent', 'pct', 'rate'])]
+        if primary_metrics:
+            num_col = primary_metrics[0]
+
+        # Kết quả có >= 2 chỉ số chính (vd Doanh thu OTC + Doanh thu ETC theo tuần) mà loại chart
+        # được chọn chỉ vẽ 1 chỉ số -> nâng cấp thành biểu đồ CỤM để không bỏ rơi chỉ số còn lại.
+        if len(primary_metrics) >= 2 and visual_type in ("Bar_Chart", "Horizontal_Bar_Chart", "Line_Chart"):
+            visual_type = "Line_and_Stacked_Column_Chart"
+
+        # Ngữ cảnh style: tiền hay số đếm; chỉ số "xấu" (nợ/quá hạn) tô đỏ, còn lại xanh brand + cam nhấn.
+        _money = _is_money_col(num_col)
+        _bad = _is_bad_col(num_col)
+        _base_color = _CHART_SLATE if _bad else _CHART_GREEN
+        _hi_color = _CHART_RED if _bad else _CHART_ORANGE
+
+        # Chọn 1 cột NHÃN mô tả (tên KH/sản phẩm/nhân viên) thay vì ghép cả mã + đơn vị vào nhãn.
+        _name_hints = ['tên', 'ten', 'name', 'khách', 'khach', 'sản phẩm', 'san pham',
+                       'mặt hàng', 'mat hang', 'nhân viên', 'nhan vien', 'đại lý', 'dai ly',
+                       'product', 'customer', 'employee']
+        _unit_hints = ['đơn vị', 'don vi', 'unit']
+        # Loại cột mã/code TRƯỚC (một cột mã không bao giờ là nhãn), rồi mới ưu tiên cột tên.
+        # Nếu không loại trước, hint 'sản phẩm' khớp nhầm cả "Mã sản phẩm" lẫn "Tên sản phẩm".
+        _noncode_cats = [c for c in cat_cols if not any(s in c.lower() for s in _code_hints)]
+        label_col = next((c for c in _noncode_cats if any(h in c.lower() for h in _name_hints)), None)
+        if label_col is None:
+            label_col = next((c for c in _noncode_cats if not any(u in c.lower() for u in _unit_hints)), None)
+        if label_col is None:
+            label_col = _noncode_cats[0] if _noncode_cats else cat_col
         
         fig, ax = None, None
         
@@ -1432,37 +1978,29 @@ Then present the numbers clearly labeled as "Q2/{latest_year} (Tháng 4-{int(lat
             metric_name = "Chỉ số"
             metric_value = "0"
             
+            def _kpi_fmt(colname, num_val):
+                cl = colname.lower()
+                if any(k in cl for k in ['percent', 'pct', 'rate', 'tỷ lệ', 'ty le', '(%)', 'hoàn thành', 'hoan thanh']):
+                    v = num_val * 100 if abs(num_val) <= 2.0 else num_val
+                    return f"{v:.1f}%".replace('.', ',')
+                if _is_money_col(colname):
+                    a = abs(num_val)
+                    if a >= 1_000_000_000:
+                        return f"{num_val*1e-9:.2f} tỷ đ".replace('.', ',')
+                    elif a >= 1_000_000:
+                        return f"{num_val*1e-6:.1f} triệu đ".replace('.', ',')
+                    else:
+                        return f"{num_val:,.0f} đ".replace(',', '.')
+                return f"{num_val:,.0f}".replace(',', '.')
+
             if cat_cols and numeric_cols:
                 metric_name = str(rows[0].get(cat_cols[0], "Chỉ số"))
                 num_val = float(rows[0].get(numeric_cols[0], 0))
-                col_name_lower = numeric_cols[0].lower()
-                if any(k in col_name_lower for k in ['amount', 'revenue', 'overdue', 'balance', 'paid', 'receivable']):
-                    if num_val >= 1_000_000_000:
-                        metric_value = f"{num_val*1e-9:.2f} tỷ đ".replace('.', ',')
-                    elif num_val >= 1_000_000:
-                        metric_value = f"{num_val*1e-6:.1f} triệu đ".replace('.', ',')
-                    else:
-                        metric_value = f"{num_val:,.0f} đ".replace(',', '.')
-                elif any(k in col_name_lower for k in ['percent', 'pct', 'rate']):
-                    if num_val <= 2.0:
-                        metric_value = f"{num_val*100:.1f}%".replace('.', ',')
-                    else:
-                        metric_value = f"{num_val:.1f}%".replace('.', ',')
-                else:
-                    metric_value = f"{num_val:,.0f}".replace(',', '.')
+                metric_value = _kpi_fmt(numeric_cols[0], num_val)
             elif numeric_cols:
-                metric_name = numeric_cols[0].replace('_', ' ').title()
+                metric_name = numeric_cols[0]
                 num_val = float(rows[0].get(numeric_cols[0], 0))
-                col_name_lower = numeric_cols[0].lower()
-                if any(k in col_name_lower for k in ['amount', 'revenue', 'overdue', 'balance', 'paid', 'receivable', 'sales']):
-                    if num_val >= 1_000_000_000:
-                        metric_value = f"{num_val*1e-9:.2f} tỷ đ".replace('.', ',')
-                    elif num_val >= 1_000_000:
-                        metric_value = f"{num_val*1e-6:.1f} triệu đ".replace('.', ',')
-                    else:
-                        metric_value = f"{num_val:,.0f} đ".replace(',', '.')
-                else:
-                    metric_value = f"{num_val:,.0f}".replace(',', '.')
+                metric_value = _kpi_fmt(numeric_cols[0], num_val)
                 
             fig, ax = plt.subplots(figsize=(4, 2.5), dpi=150)
             fig.patch.set_facecolor('#f8f9fa')
@@ -1475,8 +2013,8 @@ Then present the numbers clearly labeled as "Q2/{latest_year} (Tháng 4-{int(lat
             ax.add_patch(rect)
             
             # Draw text with high zorder
-            ax.text(0.5, 0.7, metric_name, fontsize=12, fontweight='bold', color='#4a5568', ha='center', va='center', zorder=5)
-            ax.text(0.5, 0.4, metric_value, fontsize=20, fontweight='bold', color='#1a365d', ha='center', va='center', zorder=5)
+            ax.text(0.5, 0.7, metric_name, fontsize=12, fontweight='bold', color=_CHART_SLATE, ha='center', va='center', zorder=5)
+            ax.text(0.5, 0.4, metric_value, fontsize=22, fontweight='bold', color=(_CHART_RED if _bad else _CHART_GREEN), ha='center', va='center', zorder=5)
             
             target_cols = [c for c in columns if 'target' in c.lower() or 'chi_tieu' in c.lower()]
             if target_cols and len(numeric_cols) > 1:
@@ -1491,103 +2029,87 @@ Then present the numbers clearly labeled as "Q2/{latest_year} (Tháng 4-{int(lat
             labels = [l[:25] + '...' if len(l) > 25 else l for l in labels]
             values = [float(r.get(num_col, 0) or 0) for r in plot_rows]
             
-            fig, ax = plt.subplots(figsize=(8, 5), dpi=150)
-            sns.lineplot(x=labels, y=values, marker='o', linewidth=2.5, color='#3182ce', ax=ax, errorbar=None)
-            ax.fill_between(labels, values, alpha=0.15, color='#3182ce')
+            fig, ax = plt.subplots(figsize=(8.5, 5), dpi=150)
+            sns.lineplot(x=labels, y=values, marker='o', linewidth=2.6, color=_CHART_GREEN, markerfacecolor=_CHART_ORANGE, ax=ax, errorbar=None)
+            ax.fill_between(labels, values, alpha=0.12, color=_CHART_GREEN)
             ax.set_xticks(range(len(labels)))
-            ax.set_xticklabels(labels, rotation=45, ha='right')
-            ax.set_title(f"Biểu đồ Xu hướng ({num_col.replace('_',' ').title()})", fontweight='bold', fontsize=12, pad=15)
-            ax.grid(True, linestyle='--', alpha=0.5)
+            ax.set_xticklabels(labels, rotation=20, ha='right')
+            ax.set_title(f"Xu hướng {num_col}", fontweight='bold', fontsize=13, pad=14, loc='left')
+            ax.grid(True, linestyle='--', alpha=0.35, color=_CHART_GRID)
 
         elif visual_type == "Bar_Chart":
             plot_rows = rows[:12]
             # Try to find the category/time label column among actual columns
             _time_keywords = ['month', 'date', 'thang', 'ngay', 'week', 'quarter', 'year', 'sale_date', 'saledate', 'period', 'time']
-            actual_label_col = next((c for c in columns if any(k in c.lower() for k in _time_keywords)), cat_col)
-            raw_labels = [str(r.get(actual_label_col, '')) for r in plot_rows]
-            # Format date labels nicely (e.g. 2026-04-01 00:00:00+00:00 → T4/2026)
-            import re as _re
-            formatted_labels = []
-            for lbl in raw_labels:
-                m = _re.match(r'(\d{4})-(\d{2})', str(lbl))
-                if m:
-                    formatted_labels.append(f"T{int(m.group(2))}/{m.group(1)}")
-                else:
-                    short = str(lbl)[:18]
-                    formatted_labels.append(short + '...' if len(str(lbl)) > 18 else short)
+            actual_label_col = next((c for c in columns if any(k in c.lower() for k in _time_keywords)), label_col)
+            formatted_labels = _fmt_time_labels([r.get(actual_label_col, '') for r in plot_rows])
             values = [float(r.get(num_col, 0) or 0) for r in plot_rows]
             max_val = max(values) if values else 1
-            
+
             fig, ax = plt.subplots(figsize=(9, 5.5), dpi=150)
-            bar_colors = ['#e53e3e' if v == max_val else '#2b6cb0' for v in values]
-            bars = ax.bar(range(len(formatted_labels)), values, color=bar_colors, edgecolor='white', linewidth=1.2, width=0.6)
-            
+            bar_colors = [_hi_color if v == max_val else _base_color for v in values]
+            bars = ax.bar(range(len(formatted_labels)), values, color=bar_colors, edgecolor='white', linewidth=1.2, width=0.62)
+
             # Value labels on top of bars
             for bar, val in zip(bars, values):
-                if val >= 1_000_000_000:
-                    lbl_text = f"{val/1e9:.2f} tỷ".replace('.', ',')
-                elif val >= 1_000_000:
-                    lbl_text = f"{val/1e6:.1f}M".replace('.', ',')
-                else:
-                    lbl_text = f"{val:,.0f}"
-                ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + max_val * 0.015,
-                        lbl_text, ha='center', va='bottom', fontsize=9, fontweight='bold', color='#2d3748')
-            
+                ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + max_val * 0.02,
+                        _fmt_chart_val(val, _money), ha='center', va='bottom', fontsize=9.5, fontweight='bold', color=_CHART_INK)
+
             ax.set_xticks(range(len(formatted_labels)))
-            ax.set_xticklabels(formatted_labels, rotation=30, ha='right', fontsize=10)
-            ax.set_title(f"Doanh thu theo thời gian", fontweight='bold', fontsize=12, pad=15)
-            ax.grid(True, linestyle='--', alpha=0.4, axis='y')
+            ax.set_xticklabels(formatted_labels, rotation=20, ha='right', fontsize=10)
+            ax.set_ylim(0, max_val * 1.16)
+            ax.set_title(f"{num_col} theo thời gian", fontweight='bold', fontsize=13, pad=14, loc='left')
+            ax.grid(True, linestyle='--', alpha=0.35, axis='y', color=_CHART_GRID)
+            ax.grid(False, axis='x')
             ax.set_axisbelow(True)
 
         elif visual_type == "Line_and_Stacked_Column_Chart":
-            if len(numeric_cols) < 2:
+            # Cột = các chỉ số CHÍNH cùng loại (tối đa 3, vd Doanh thu OTC / ETC / Tổng);
+            # đường % (nếu có cột tỷ lệ) vẽ trên trục thứ 2. Giữ nguyên thứ tự dòng từ SQL
+            # (chuỗi thời gian đã ORDER BY thời gian, không sắp lại theo giá trị).
+            bar_cols = (primary_metrics if len(primary_metrics) >= 2 else numeric_cols)[:3]
+            if len(bar_cols) < 2:
                 return None
-                
+
             plot_rows = rows[:15]
-            if len(cat_cols) > 1:
-                labels = [" - ".join([str(r.get(c, '')) for c in cat_cols if r.get(c) is not None]) for r in plot_rows]
-            else:
-                labels = [str(r.get(cat_col, '')) for r in plot_rows]
-            labels = [l[:25] + '...' if len(l) > 25 else l for l in labels]
-            
-            fig, ax = plt.subplots(figsize=(8, 5), dpi=150)
+            labels = _fmt_time_labels([r.get(label_col, '') for r in plot_rows])
+
+            fig, ax = plt.subplots(figsize=(9, 5.2), dpi=150)
             x = np.arange(len(labels))
-            width = 0.35
-            
-            col1 = numeric_cols[0]
-            col2 = numeric_cols[1]
-            val1 = [float(r.get(col1, 0) or 0) for r in plot_rows]
-            val2 = [float(r.get(col2, 0) or 0) for r in plot_rows]
-            
-            ax.bar(x - width/2, val1, width, label=col1.replace('_',' ').title(), color='#3182ce', alpha=0.9, edgecolor='white')
-            ax.bar(x + width/2, val2, width, label=col2.replace('_',' ').title(), color='#38a169', alpha=0.9, edgecolor='white')
-            
-            if len(numeric_cols) >= 3:
-                col3 = numeric_cols[2]
-                val3 = [float(r.get(col3, 0) or 0) for r in plot_rows]
-                if any(v <= 2.0 for v in val3):
+            n_bars = len(bar_cols)
+            width = 0.78 / n_bars
+            _bar_palette = [_CHART_GREEN, _CHART_ORANGE, _CHART_SLATE]
+
+            for i, col in enumerate(bar_cols):
+                vals = [float(r.get(col, 0) or 0) for r in plot_rows]
+                offset = (i - (n_bars - 1) / 2) * width
+                ax.bar(x + offset, vals, width, label=col, color=_bar_palette[i % 3], alpha=0.95, edgecolor='white')
+
+            line_col = next((c for c in aux_pct_cols if c not in bar_cols), None)
+            if line_col:
+                val3 = [float(r.get(line_col, 0) or 0) for r in plot_rows]
+                if all(abs(v) <= 2.0 for v in val3):
                     val3 = [v * 100 for v in val3]
                 ax2 = ax.twinx()
-                ax2.plot(x, val3, color='#e53e3e', marker='s', linewidth=2.5, label=col3.replace('_',' ').title())
-                ax2.set_ylabel(f"{col3.replace('_',' ').title()} (%)")
+                ax2.plot(x, val3, color=_CHART_INK, marker='o', linewidth=2.2, linestyle='--', label=line_col)
+                ax2.set_ylabel(f"{line_col}")
                 ax2.grid(False)
-                
                 lines, labels_l = ax.get_legend_handles_labels()
                 lines2, labels_l2 = ax2.get_legend_handles_labels()
-                ax.legend(lines + lines2, labels_l + labels_l2, loc='upper left')
+                ax.legend(lines + lines2, labels_l + labels_l2, loc='best', frameon=False)
             else:
-                ax.legend(loc='upper left')
-                
+                ax.legend(loc='best', frameon=False)
+
             ax.set_xticks(x)
-            ax.set_xticklabels(labels, rotation=45, ha='right')
-            ax.set_title(f"So sánh Đa chỉ số theo {cat_col.replace('_',' ').title()}", fontweight='bold', fontsize=12, pad=15)
+            ax.set_xticklabels(labels, rotation=15, ha='right')
+            ax.set_title(" vs ".join(bar_cols[:2]) + (" ..." if n_bars > 2 else ""), fontweight='bold', fontsize=13, pad=14, loc='left')
+            ax.grid(True, linestyle='--', alpha=0.35, axis='y', color=_CHART_GRID)
+            ax.grid(False, axis='x')
+            ax.set_axisbelow(True)
 
         elif visual_type == "Pie_Chart":
             plot_rows = rows[:15]
-            if len(cat_cols) > 1:
-                labels = [" - ".join([str(r.get(c, '')) for c in cat_cols if r.get(c) is not None]) for r in plot_rows]
-            else:
-                labels = [str(r.get(cat_col, '')) for r in plot_rows]
+            labels = [str(r.get(label_col, '')) for r in plot_rows]
             values = [float(r.get(num_col, 0) or 0) for r in plot_rows]
             
             pie_data = [(l, v) for l, v in zip(labels, values) if v > 0]
@@ -1595,11 +2117,13 @@ Then present the numbers clearly labeled as "Q2/{latest_year} (Tháng 4-{int(lat
             fig, ax = plt.subplots(figsize=(8, 5), dpi=150)
             if pie_data:
                 p_labels, p_values = zip(*pie_data)
-                pie_colors = sns.color_palette("muted", len(p_labels))
-                ax.pie(p_values, labels=p_labels, autopct='%1.1f%%', startangle=90, colors=pie_colors, 
-                       wedgeprops={'edgecolor': 'white', 'linewidth': 1.5})
+                pie_colors = [_CHART_PALETTE[i % len(_CHART_PALETTE)] for i in range(len(p_labels))]
+                wedges, _t, _a = ax.pie(p_values, labels=p_labels, autopct='%1.1f%%', startangle=90, colors=pie_colors,
+                       pctdistance=0.78, wedgeprops={'edgecolor': 'white', 'linewidth': 2})
+                for a in _a:
+                    a.set_color('white'); a.set_fontweight('bold'); a.set_fontsize(10)
                 ax.axis('equal')
-                ax.set_title(f"Cơ cấu tỷ lệ ({num_col.replace('_',' ').title()})", fontweight='bold', fontsize=12, pad=15)
+                ax.set_title(f"Cơ cấu {num_col}", fontweight='bold', fontsize=13, pad=14)
             else:
                 sns.barplot(x=labels, y=values, color='#3182ce', alpha=0.9, ax=ax)
                 ax.set_xticks(range(len(labels)))
@@ -1607,36 +2131,29 @@ Then present the numbers clearly labeled as "Q2/{latest_year} (Tháng 4-{int(lat
 
         elif visual_type == "Horizontal_Bar_Chart":
             sorted_rows = sorted(rows, key=lambda x: float(x.get(num_col, 0) or 0), reverse=True)[:15]
-            if len(cat_cols) > 1:
-                labels = [" - ".join([str(r.get(c, '')) for c in cat_cols if r.get(c) is not None]) for r in sorted_rows]
-            else:
-                labels = [str(r.get(cat_col, '')) for r in sorted_rows]
+            labels = [str(r.get(label_col, '')) for r in sorted_rows]
             labels = [l[:25] + '...' if len(l) > 25 else l for l in labels]
             values = [float(r.get(num_col, 0) or 0) for r in sorted_rows]
             max_val = max(values) if values else 1
-            
-            fig, ax = plt.subplots(figsize=(9, 5.5), dpi=150)
-            # Use corporate blue for standard bars, highlight maximum bar in red
-            bar_colors = ['#e53e3e' if v == max_val else '#2b6cb0' for v in values]
-            bars = ax.barh(range(len(labels)), values, color=bar_colors, edgecolor='white', height=0.6)
-            
+
+            fig, ax = plt.subplots(figsize=(9.5, 5.8), dpi=150)
+            # Cột thường màu brand (hoặc slate nếu là chỉ số "xấu"), cột cao nhất tô màu nhấn
+            bar_colors = [_hi_color if v == max_val else _base_color for v in values]
+            bars = ax.barh(range(len(labels)), values, color=bar_colors, edgecolor='white', height=0.66)
+
             ax.set_yticks(range(len(labels)))
-            ax.set_yticklabels(labels, fontsize=10, fontweight='bold', color='#2d3748')
+            ax.set_yticklabels(labels, fontsize=10, fontweight='bold', color=_CHART_INK)
             ax.invert_yaxis()  # Top-down ranking
-            
+
             # Value labels at the end of bars
             for bar, val in zip(bars, values):
-                if val >= 1_000_000_000:
-                    lbl_text = f" {val/1e9:.2f} tỷ".replace('.', ',')
-                elif val >= 1_000_000:
-                    lbl_text = f" {val/1e6:.1f}M".replace('.', ',')
-                else:
-                    lbl_text = f" {val:,.0f}"
                 ax.text(bar.get_width() + max_val * 0.015, bar.get_y() + bar.get_height()/2,
-                        lbl_text, ha='left', va='center', fontsize=9, fontweight='bold', color='#2d3748')
-            
-            ax.set_title(f"Bảng xếp hạng ({num_col.replace('_',' ').title()})", fontweight='bold', fontsize=12, pad=15)
-            ax.grid(True, linestyle='--', alpha=0.4, axis='x')
+                        ' ' + _fmt_chart_val(val, _money), ha='left', va='center', fontsize=9.5, fontweight='bold', color=_CHART_INK)
+
+            ax.set_xlim(0, max_val * 1.18)
+            ax.set_title(f"Xếp hạng theo {num_col}", fontweight='bold', fontsize=13, pad=14, loc='left')
+            ax.grid(True, linestyle='--', alpha=0.35, axis='x', color=_CHART_GRID)
+            ax.grid(False, axis='y')
             ax.set_axisbelow(True)
 
         elif visual_type == "Waterfall_Chart":
@@ -1672,22 +2189,20 @@ Then present the numbers clearly labeled as "Q2/{latest_year} (Tháng 4-{int(lat
         if ax is not None:
             ax.spines['top'].set_visible(False)
             ax.spines['right'].set_visible(False)
-            
-            def format_y_ticks(x, pos):
-                if abs(x) >= 1_000_000_000:
-                    return f'{x*1e-9:.1f}B'
-                elif abs(x) >= 1_000_000:
-                    return f'{x*1e-6:.1f}M'
-                elif abs(x) >= 1_000:
-                    return f'{x*1e-3:.1f}K'
-                return str(x)
-                
-            if visual_type != "Pie_Chart" and visual_type != "KPI_Card":
-                from matplotlib.ticker import FuncFormatter
-                if visual_type == "Horizontal_Bar_Chart":
-                    ax.xaxis.set_major_formatter(FuncFormatter(format_y_ticks))
-                else:
-                    ax.yaxis.set_major_formatter(FuncFormatter(format_y_ticks))
+            ax.spines['left'].set_color(_CHART_GRID)
+            ax.spines['bottom'].set_color(_CHART_GRID)
+
+            from matplotlib.ticker import FuncFormatter
+            _tick_fmt = FuncFormatter(lambda x, pos: _fmt_chart_val(x, _money))
+
+            # Bar/HBar đã có nhãn giá trị trên từng cột → bỏ nhãn trục giá trị cho gọn (tránh trùng lặp,
+            # tránh "50.0B" tiếng Anh). Các loại khác giữ trục nhưng format kiểu VN (tỷ/tr/M).
+            if visual_type == "Horizontal_Bar_Chart":
+                ax.set_xticks([])
+            elif visual_type == "Bar_Chart":
+                ax.set_yticks([])
+            elif visual_type not in ("Pie_Chart", "KPI_Card"):
+                ax.yaxis.set_major_formatter(_tick_fmt)
                     
             plt.tight_layout()
             

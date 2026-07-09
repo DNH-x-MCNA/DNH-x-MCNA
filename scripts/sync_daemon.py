@@ -1,7 +1,6 @@
 import time
 import os
 import sys
-import threading
 import urllib.request
 import urllib.error
 import json
@@ -158,11 +157,10 @@ def main():
     print(" Dich vu chay nen de giu du lieu luon cap nhat va phat alert.")
     print("=" * 60)
     
-    # Khởi chạy bot chat Telegram trong luồng riêng biệt
+    # Đã chuyển hẳn kênh chat sang web — không còn chạy bot Telegram (start_telegram_bot_thread
+    # vẫn giữ nguyên code bên trên phòng khi cần dùng lại, chỉ không gọi start() nữa).
     load_dotenv()
-    bot_thread = threading.Thread(target=start_telegram_bot_thread, daemon=True)
-    bot_thread.start()
-    
+
     # Luu moc thoi gian cua lan dong bo cuoi (epoch time)
     last_sync = {
         "fast": 0.0,    # Dong bo nhanh (moi 1 phut) - Danh cho Doanh so/Don hang

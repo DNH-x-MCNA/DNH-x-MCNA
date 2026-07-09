@@ -10,7 +10,12 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from src.alerts import revenue_drop_ratio, overdue_ratio, concentration_ratio, return_rate
+from src.alerts import (
+    revenue_drop_ratio, overdue_ratio, concentration_ratio, return_rate,
+    kpi_sales_force_risk_reasons,
+)
+
+RISK_MAP = {"TDV": 0.65, "CS": 0.65, "TK": 0.60, "TBP": 0.70, "TP": 0.70}
 
 
 def test_revenue_drop_fires_above_threshold():
@@ -70,6 +75,50 @@ def test_return_rate_basic_and_zero_guard():
     assert abs(return_rate(5.0, 100.0) - 0.05) < 1e-9
     assert return_rate(5.0, 0.0) is None             # doanh số 0 -> None (không chia)
     assert return_rate(None, 100.0) is None
+
+
+def test_kpi_risk_fires_at_or_below_role_threshold():
+    # TDV, ngưỡng 65% -> đúng bằng ngưỡng cũng phải bắn ("<=", không phải "<")
+    reasons = kpi_sales_force_risk_reasons("TDV", 0.65, 0.90, 0.90, RISK_MAP, 0.80, 0.75)
+    assert any("chấm dứt HĐLĐ" in r for r in reasons)
+
+
+def test_kpi_risk_silent_above_role_threshold():
+    reasons = kpi_sales_force_risk_reasons("TDV", 0.66, 0.90, 0.90, RISK_MAP, 0.80, 0.75)
+    assert not any("chấm dứt HĐLĐ" in r for r in reasons)
+
+
+def test_kpi_risk_uses_role_specific_threshold():
+    # 0.62 dưới ngưỡng TK (0.60)? Không -> không bắn cho TK; nhưng bắn cho TDV/CS (ngưỡng 0.65)
+    assert kpi_sales_force_risk_reasons("TK", 0.62, 0.90, 0.90, RISK_MAP, 0.80, 0.75) == []
+    reasons = kpi_sales_force_risk_reasons("TDV", 0.62, 0.90, 0.90, RISK_MAP, 0.80, 0.75)
+    assert any("chấm dứt HĐLĐ" in r for r in reasons)
+
+
+def test_kpi_risk_quarter_and_year_floor():
+    reasons = kpi_sales_force_risk_reasons("TP", 0.90, 0.79, 0.74, RISK_MAP, 0.80, 0.75)
+    assert any("thưởng quý" in r for r in reasons)
+    assert any("sàn 0%" in r for r in reasons)
+
+
+def test_kpi_risk_no_reasons_when_all_healthy():
+    assert kpi_sales_force_risk_reasons("TP", 0.90, 0.85, 0.80, RISK_MAP, 0.80, 0.75) == []
+
+
+def test_kpi_risk_unmapped_position_code_skips_contract_check():
+    # QLV không nằm trong 5 vai trò của QĐ 0429-2 -> không có ngưỡng chấm dứt HĐLĐ, không crash
+    reasons = kpi_sales_force_risk_reasons("QLV", 0.10, 0.90, 0.90, RISK_MAP, 0.80, 0.75)
+    assert reasons == []
+
+
+def test_kpi_risk_none_values_do_not_crash():
+    reasons = kpi_sales_force_risk_reasons("TDV", None, None, None, RISK_MAP, 0.80, 0.75)
+    assert reasons == []
+
+
+def test_kpi_risk_all_three_reasons_combine():
+    reasons = kpi_sales_force_risk_reasons("TBP", 0.50, 0.50, 0.50, RISK_MAP, 0.80, 0.75)
+    assert len(reasons) == 3
 
 
 if __name__ == '__main__':

@@ -1,14 +1,19 @@
+import os
+import sqlite3
 import pandas as pd
 from datetime import datetime, timedelta
 from src.database import get_db_engines, load_config
+
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+STATE_DB_PATH = os.path.join(PROJECT_ROOT, 'data', 'alerts_state.db')
 
 def get_low_inventory(erp_engine, limit):
     """
     Trích xuất các sản phẩm có tồn kho thấp dưới ngưỡng limit
     """
     query = """
-        SELECT sku, item_name, quantity, updated_at 
-        FROM inventory 
+        SELECT sku, item_name, quantity, updated_at
+        FROM inventory
         WHERE quantity < :limit
     """
     # Sử dụng pandas.read_sql với parameter bind
@@ -20,12 +25,12 @@ def get_recent_failed_orders(erp_engine, lookback_hours):
     Trích xuất danh sách và số lượng đơn hàng lỗi trong khoảng thời gian lookback
     """
     lookback_time = datetime.now() - timedelta(hours=lookback_hours)
-    
-    # Do SQLite và SQL Server có cú pháp so sánh ngày khác nhau, 
+
+    # Do SQLite và SQL Server có cú pháp so sánh ngày khác nhau,
     # ta có thể dùng định dạng ISO string hoặc parameter binding chuẩn để SQLAlchemy xử lý
     query = """
-        SELECT id, customer_id, amount, order_date, status 
-        FROM orders 
+        SELECT id, customer_id, amount, order_date, status
+        FROM orders
         WHERE status = 'Failed' AND order_date >= :lookback_time
     """
     df = pd.read_sql(query, erp_engine, params={"lookback_time": lookback_time})
@@ -36,120 +41,488 @@ def get_unresolved_urgent_tickets(crm_engine):
     Trích xuất danh sách support ticket ưu tiên Urgent chưa giải quyết
     """
     query = """
-        SELECT id, customer_id, priority, status, created_at 
-        FROM support_tickets 
+        SELECT id, customer_id, priority, status, created_at
+        FROM support_tickets
         WHERE priority = 'Urgent' AND status = 'Open'
     """
     df = pd.read_sql(query, crm_engine)
     return df
 
-def get_digest_metrics(start_dt, end_dt, period_label):
-    """
-    Tổng hợp dữ liệu trong khoảng [start_dt, end_dt) phục vụ digest định kỳ
-    (dùng chung cho daily/weekly/monthly — xem get_daily_digest_metrics() etc. bên dưới).
-    """
-    erp_engine, crm_engine = get_db_engines()
+def _region_markers(region):
+    """region: None hoặc 'bac'/'nam'/'trung' -> danh sách mã AreaCode tương ứng, dùng chung quy
+    ước với DNHChatbot._REGION_SQL_MARKERS (nguồn chuẩn duy nhất cho mapping vùng/mã)."""
+    if not region:
+        return None
+    from ai_agent.chatbot import DNHChatbot
+    return DNHChatbot._REGION_SQL_MARKERS.get(region)
 
-    # 1. ERP - Số lượng và doanh thu đơn hàng hoàn thành trong kỳ
-    orders_query = """
-        SELECT status, amount
-        FROM orders
-        WHERE order_date >= :start_dt AND order_date < :end_dt
-    """
-    df_orders = pd.read_sql(orders_query, erp_engine, params={"start_dt": start_dt, "end_dt": end_dt})
+def _region_label(area_code):
+    """Map area_code thô sang tên miền tiếng Việt — bản sao gọn của
+    src/alerts.py::normalize_region_label, tách riêng để tránh vòng lặp import (alerts.py đã
+    import từ etl.py). Cả 2 đều đọc từ cùng 1 nguồn DNHChatbot._REGION_SQL_MARKERS/_REGION_NAMES_VI."""
+    if not area_code:
+        return "Không rõ"
+    from ai_agent.chatbot import DNHChatbot
+    val = str(area_code).strip().upper()
+    for region_key, markers in DNHChatbot._REGION_SQL_MARKERS.items():
+        if val in markers:
+            return DNHChatbot._REGION_NAMES_VI[region_key]
+    return str(area_code)
 
-    if not df_orders.empty:
-        total_orders = len(df_orders)
-        completed_orders = len(df_orders[df_orders['status'] == 'Completed'])
-        failed_orders = len(df_orders[df_orders['status'] == 'Failed'])
-        total_revenue = df_orders[df_orders['status'] == 'Completed']['amount'].sum()
+def _period_revenue(conn, start_dt, end_dt, region=None):
+    """Doanh thu OTC+ETC thuần trong [start_dt, end_dt) — loại CTKM khuyến mãi + chứng từ hủy
+    (đúng quy tắc đã dùng ở check_revenue_drop_alert). region: None (không lọc) hoặc
+    'bac'/'nam'/'trung' — lọc theo AreaCode qua chain CityId -> dim_tinhthanhpho.
+    Trả (otc_rev, etc_rev, invoice_count)."""
+    from sqlalchemy import text, bindparam
+    markers = _region_markers(region)
+    params = {"start_dt": start_dt, "end_dt": end_dt}
+
+    otc_region_join, etc_region_join, region_where = "", "", ""
+    if markers:
+        otc_region_join = 'JOIN dms_khachhang rk ON h."CustomerCode" = rk."Code" JOIN dim_tinhthanhpho rt ON rk."CityId" = rt."CityId"'
+        etc_region_join = 'JOIN dmssx_khachhang rk ON h."CustomerCode" = rk."Code" JOIN dim_tinhthanhpho rt ON rk."CityId" = rt."CityId"'
+        region_where = ' AND rt."AreaCode" IN :region_markers'
+        params["region_markers"] = tuple(markers)
+
+    otc_sql = text(f'''
+        SELECT COALESCE(SUM(CASE WHEN c."CTKM" IS NULL OR c."CTKM" = '' THEN c."Amount9" ELSE 0 END), 0),
+               COUNT(DISTINCT h."Stt")
+        FROM brv_hoadonct c
+        JOIN brv_hoadonhdr h ON c."Stt" = h."Stt"
+        {otc_region_join}
+        LEFT JOIN brv_trangthaiduyet d ON h."DocStatus" = d."DocStatusKey"
+        LEFT JOIN brv_trangthaihoadon e ON h."EInvoiceStatus" = e."EInvoiceStatusKey"
+        WHERE h."IsActive" = TRUE AND h."IsHC" = FALSE
+          AND (d."IsCancelled" IS NULL OR d."IsCancelled" = FALSE)
+          AND (e."IsCancelled" IS NULL OR e."IsCancelled" = FALSE)
+          AND h."DocDate"::timestamp >= :start_dt AND h."DocDate"::timestamp < :end_dt
+          {region_where}
+    ''')
+    if markers:
+        otc_sql = otc_sql.bindparams(bindparam("region_markers", expanding=True))
+    otc_row = conn.execute(otc_sql, params).fetchone()
+
+    etc_sql = text(f'''
+        SELECT COALESCE(SUM(CASE WHEN c."CTKM" IS NULL OR c."CTKM" = '' THEN c."Amount9" ELSE 0 END), 0),
+               COUNT(DISTINCT h."Stt")
+        FROM brvsx_hoadonct c
+        JOIN brvsx_hoadonhdr h ON c."Stt" = h."Stt"
+        {etc_region_join}
+        LEFT JOIN brv_trangthaiduyet d ON h."DocStatus" = d."DocStatusKey"
+        LEFT JOIN brv_trangthaihoadon e ON h."EInvoiceStatus" = e."EInvoiceStatusKey"
+        WHERE h."IsActive" = TRUE
+          AND (d."IsCancelled" IS NULL OR d."IsCancelled" = FALSE)
+          AND (e."IsCancelled" IS NULL OR e."IsCancelled" = FALSE)
+          AND h."DocDate"::timestamp >= :start_dt AND h."DocDate"::timestamp < :end_dt
+          {region_where}
+    ''')
+    if markers:
+        etc_sql = etc_sql.bindparams(bindparam("region_markers", expanding=True))
+    etc_row = conn.execute(etc_sql, params).fetchone()
+
+    return float(otc_row[0]), float(etc_row[0]), int(otc_row[1]) + int(etc_row[1])
+
+
+def _revenue_by_region(conn, start_dt, end_dt, channel=None):
+    """Breakdown doanh thu theo VÙNG (Bắc/Nam/Trung) trong [start_dt, end_dt) — chỉ gọi cho
+    weekly/monthly (không tính hàng ngày, tốn thêm query join). channel=None -> cả 2 kênh."""
+    from sqlalchemy import text
+    parts = []
+    if channel is None or channel == "OTC":
+        parts.append('''
+            SELECT rt."AreaCode" AS area_code,
+                   SUM(CASE WHEN c."CTKM" IS NULL OR c."CTKM" = '' THEN c."Amount9" ELSE 0 END) AS rev
+            FROM brv_hoadonct c
+            JOIN brv_hoadonhdr h ON c."Stt" = h."Stt"
+            JOIN dms_khachhang rk ON h."CustomerCode" = rk."Code"
+            JOIN dim_tinhthanhpho rt ON rk."CityId" = rt."CityId"
+            LEFT JOIN brv_trangthaiduyet d ON h."DocStatus" = d."DocStatusKey"
+            LEFT JOIN brv_trangthaihoadon e ON h."EInvoiceStatus" = e."EInvoiceStatusKey"
+            WHERE h."IsActive" = TRUE AND h."IsHC" = FALSE
+              AND (d."IsCancelled" IS NULL OR d."IsCancelled" = FALSE)
+              AND (e."IsCancelled" IS NULL OR e."IsCancelled" = FALSE)
+              AND h."DocDate"::timestamp >= :start_dt AND h."DocDate"::timestamp < :end_dt
+            GROUP BY rt."AreaCode"
+        ''')
+    if channel is None or channel == "ETC":
+        parts.append('''
+            SELECT rt."AreaCode" AS area_code,
+                   SUM(CASE WHEN c."CTKM" IS NULL OR c."CTKM" = '' THEN c."Amount9" ELSE 0 END) AS rev
+            FROM brvsx_hoadonct c
+            JOIN brvsx_hoadonhdr h ON c."Stt" = h."Stt"
+            JOIN dmssx_khachhang rk ON h."CustomerCode" = rk."Code"
+            JOIN dim_tinhthanhpho rt ON rk."CityId" = rt."CityId"
+            LEFT JOIN brv_trangthaiduyet d ON h."DocStatus" = d."DocStatusKey"
+            LEFT JOIN brv_trangthaihoadon e ON h."EInvoiceStatus" = e."EInvoiceStatusKey"
+            WHERE h."IsActive" = TRUE
+              AND (d."IsCancelled" IS NULL OR d."IsCancelled" = FALSE)
+              AND (e."IsCancelled" IS NULL OR e."IsCancelled" = FALSE)
+              AND h."DocDate"::timestamp >= :start_dt AND h."DocDate"::timestamp < :end_dt
+            GROUP BY rt."AreaCode"
+        ''')
+    if not parts:
+        return []
+    from sqlalchemy import text as _text
+    union_sql = _text(f'''
+        SELECT area_code, SUM(rev) AS rev FROM ({" UNION ALL ".join(parts)}) x
+        GROUP BY area_code ORDER BY rev DESC
+    ''')
+    try:
+        rows = conn.execute(union_sql, {"start_dt": start_dt, "end_dt": end_dt}).fetchall()
+    except Exception as e:
+        print(f"[DIGEST] Lỗi truy vấn breakdown vùng: {e}")
+        return []
+    return [{"region": _region_label(r.area_code), "revenue": round(float(r.rev or 0), 2)} for r in rows]
+
+
+def _revenue_trend(conn, start_dt, end_dt, granularity, region=None, channel=None):
+    """Xu hướng doanh thu trong kỳ: 'weekly' -> theo TỪNG NGÀY (7 điểm), 'monthly' -> theo TỪNG
+    TUẦN (4-5 điểm). Chạy thêm N truy vấn _period_revenue nhỏ — chấp nhận được vì weekly/monthly
+    chỉ chạy 1 lần/tuần hoặc 1 lần/tháng (không nằm trong luồng cảnh báo tần suất cao 5 lần/ngày)."""
+    buckets = []
+    if granularity == "weekly":
+        cur = start_dt
+        while cur < end_dt:
+            nxt = cur + timedelta(days=1)
+            buckets.append((cur, nxt, cur.strftime("%a %d/%m")))
+            cur = nxt
+    elif granularity == "monthly":
+        cur = start_dt
+        while cur < end_dt:
+            nxt = min(cur + timedelta(days=7), end_dt)
+            buckets.append((cur, nxt, f"{cur.strftime('%d/%m')}-{(nxt - timedelta(days=1)).strftime('%d/%m')}"))
+            cur = nxt
     else:
-        total_orders = 0
-        completed_orders = 0
-        failed_orders = 0
-        total_revenue = 0.0
+        return []
 
-    # 2. ERP - Danh sách tồn kho thấp hiện tại (snapshot tại thời điểm chạy)
-    config = load_config()
-    inv_limit = config['thresholds']['erp']['low_inventory_limit']
-    df_low_inv = get_low_inventory(erp_engine, inv_limit)
+    trend = []
+    for b_start, b_end, label in buckets:
+        otc_rev, etc_rev, _ = _period_revenue(conn, b_start, b_end, region=region)
+        if channel == "OTC":
+            total = otc_rev
+        elif channel == "ETC":
+            total = etc_rev
+        else:
+            total = otc_rev + etc_rev
+        trend.append({"label": label, "revenue": round(total, 2)})
+    return trend
 
-    # 3. CRM - Tổng hợp ticket trong kỳ
-    tickets_query = """
-        SELECT priority, status
-        FROM support_tickets
-        WHERE (created_at >= :start_dt AND created_at < :end_dt)
-           OR (updated_at >= :start_dt AND updated_at < :end_dt)
-    """
-    df_tickets = pd.read_sql(tickets_query, crm_engine, params={"start_dt": start_dt, "end_dt": end_dt})
 
-    total_tickets = len(df_tickets)
-    resolved_tickets = len(df_tickets[df_tickets['status'] == 'Resolved'])
-    open_tickets = len(df_tickets[df_tickets['status'] != 'Resolved'])
-
-    urgent_open = len(df_tickets[(df_tickets['status'] != 'Resolved') & (df_tickets['priority'] == 'Urgent')])
-    high_open = len(df_tickets[(df_tickets['status'] != 'Resolved') & (df_tickets['priority'] == 'High')])
-
+def _kpi_summary(conn, region=None):
+    """Tóm tắt KPI toàn đội từ kpi_summary — LƯU Ý: bảng này là SNAPSHOT hiện tại, không lưu
+    lịch sử theo kỳ (xem ghi chú trong config.yaml), nên số liệu luôn là "tính đến hiện tại",
+    không thực sự bó hẹp trong [start_dt, end_dt) của báo cáo tuần/tháng."""
+    from sqlalchemy import text, bindparam
+    markers = _region_markers(region)
+    where = 'month_sale_target > 0'
+    params = {}
+    if markers:
+        where += ' AND area_code IN :region_markers'
+        params["region_markers"] = tuple(markers)
+    sql = text(f'''
+        SELECT COUNT(*) FILTER (WHERE month_sale_percent >= 1.0) AS achieved,
+               COUNT(*) AS total,
+               COALESCE(SUM(month_sale_target),0) AS total_target,
+               COALESCE(SUM(month_sale_amount),0) AS total_amount
+        FROM kpi_summary WHERE {where}
+    ''')
+    if markers:
+        sql = sql.bindparams(bindparam("region_markers", expanding=True))
+    try:
+        row = conn.execute(sql, params).fetchone()
+    except Exception as e:
+        print(f"[DIGEST] Lỗi truy vấn tóm tắt KPI: {e}")
+        return None
+    if not row or not row[1]:
+        return None
+    achieved, total, total_target, total_amount = row
+    team_pct = (float(total_amount) / float(total_target)) if total_target else None
     return {
-        "date": end_dt.strftime("%d/%m/%Y"),
-        "period_range": period_label,
-        "erp": {
-            "total_orders": total_orders,
-            "completed_orders": completed_orders,
-            "failed_orders": failed_orders,
-            "total_revenue": round(total_revenue, 2),
-            "low_inventory_count": len(df_low_inv),
-            "low_inventory_items": df_low_inv.to_dict(orient='records')
-        },
-        "crm": {
-            "total_tickets": total_tickets,
-            "resolved_tickets": resolved_tickets,
-            "open_tickets": open_tickets,
-            "urgent_open": urgent_open,
-            "high_open": high_open
-        }
+        "achieved_count": int(achieved or 0),
+        "total_count": int(total or 0),
+        "team_pct": round(team_pct * 100, 1) if team_pct is not None else None,
+        "total_target": round(float(total_target), 2),
+        "total_amount": round(float(total_amount), 2),
     }
 
+
+def _get_period_highlights(start_dt, end_dt):
+    """"Điểm nổi bật trong kỳ": các cảnh báo nghiệp vụ đã THỰC SỰ fire trong [start_dt, end_dt),
+    đọc từ data/alerts_state.db (bảng sent_alerts, ghi bởi src/alerts.py::record_alert_sent) —
+    nối luồng cảnh báo thời gian thực với báo cáo định kỳ thành 1 câu chuyện liền mạch."""
+    if not os.path.exists(STATE_DB_PATH):
+        return []
+    try:
+        conn = sqlite3.connect(STATE_DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT alert_key, last_sent_at, last_value FROM sent_alerts "
+            "WHERE last_sent_at >= ? AND last_sent_at < ? ORDER BY last_sent_at DESC",
+            (start_dt.strftime("%Y-%m-%d %H:%M:%S"), end_dt.strftime("%Y-%m-%d %H:%M:%S"))
+        )
+        rows = cursor.fetchall()
+        conn.close()
+    except Exception as e:
+        print(f"[DIGEST] Lỗi đọc điểm nổi bật từ alerts_state.db: {e}")
+        return []
+    return [{"alert_key": r[0], "sent_at": r[1], "value": r[2]} for r in rows]
+
+
+def _month_tuple(dt):
+    return (dt.year, dt.month)
+
+
+def _prev_month_tuple(dt):
+    return (dt.year - 1, 12) if dt.month == 1 else (dt.year, dt.month - 1)
+
+
+def get_digest_metrics(start_dt, end_dt, period_label, granularity=None, region=None, channel=None):
+    """
+    Tổng hợp dữ liệu THẬT (Supabase: brv_*/brvsx_*/receivable_detail/inventory/kpi_summary)
+    trong khoảng [start_dt, end_dt) phục vụ digest định kỳ (dùng chung cho daily/weekly/monthly).
+
+    granularity: None (Daily — giữ nguyên hành vi/cấu trúc cũ) hoặc "weekly"/"monthly" (bật thêm
+    trend theo ngày/tuần, breakdown vùng, tóm tắt KPI, điểm nổi bật — xem Phần 2 kế hoạch báo cáo).
+    region/channel: lọc phạm vi báo cáo theo audience (Phần 3 — phân quyền gửi theo cấp quản lý).
+      - region: None hoặc 'bac'/'nam'/'trung'. channel: None hoặc 'OTC'/'ETC'.
+      - Áp dụng cho doanh thu/top khách hàng/tóm tắt KPI. Công nợ và tồn kho GIỮ NGUYÊN không lọc
+        (tồn kho không có chiều vùng/kênh; công nợ theo vùng cần join thêm qua sales_channon vẫn
+        chưa xác nhận định dạng gốc — để nguyên toàn công ty, tránh suy đoán sai).
+    """
+    from ai_agent.chatbot import _get_cloud_engine
+    from sqlalchemy import text, bindparam
+
+    empty = {
+        "date": start_dt.strftime("%d/%m/%Y"),
+        "period_range": period_label,
+        "revenue": {"otc": 0.0, "etc": 0.0, "total": 0.0, "invoice_count": 0,
+                    "prev_total": 0.0, "change_pct": None},
+        "top_customers_otc": [], "top_customers_etc": [],
+        "receivables": None,
+        "inventory": {"dead_stock_count": 0, "near_stockout_count": 0, "dead_stock_items": []},
+    }
+
+    engine = _get_cloud_engine()
+    if engine is None:
+        return empty
+
+    config = load_config()
+    dead_months = float(config['thresholds']['business'].get('dead_stock_months', 12.0))
+    dead_min_value = float(config['thresholds']['business'].get('dead_stock_min_value', 50000000))
+    region_markers = _region_markers(region)
+
+    with engine.connect() as conn:
+        # 1. Doanh thu kỳ này + kỳ liền trước (cùng độ dài) để so sánh tăng/giảm — theo đúng
+        #    phạm vi region/channel của audience đang xem báo cáo.
+        otc_rev, etc_rev, invoice_count = _period_revenue(conn, start_dt, end_dt, region=region)
+        period_len = end_dt - start_dt
+        prev_otc_rev, prev_etc_rev, _ = _period_revenue(conn, start_dt - period_len, start_dt, region=region)
+        if channel == "OTC":
+            etc_rev = prev_etc_rev = 0.0
+        elif channel == "ETC":
+            otc_rev = prev_otc_rev = 0.0
+        total_rev = otc_rev + etc_rev
+        prev_total_rev = prev_otc_rev + prev_etc_rev
+        change_pct = ((total_rev - prev_total_rev) / prev_total_rev) if prev_total_rev > 0 else None
+
+        # 2. Top 5 khách hàng theo doanh thu — tách riêng OTC/ETC vì 2 kênh có KHÔNG GIAN MÃ
+        #    khách hàng khác nhau (dms_khachhang vs dmssx_khachhang), không gộp chung được.
+        #    JOIN thường (không phải LEFT JOIN) để tự loại các mã chuyển kho nội bộ giữa chi
+        #    nhánh (vd '1001136','P000001'...) — các mã này cố ý không có trong dim khách hàng
+        #    (xem docs/dev_supabase_schema.sql), không phải khách hàng thật nên không được lên
+        #    danh sách "top khách hàng" gửi cho quản lý.
+        top_otc, top_etc = [], []
+        if channel != "ETC":
+            otc_region_join, otc_region_where = "", ""
+            otc_params = {"start_dt": start_dt, "end_dt": end_dt}
+            if region_markers:
+                otc_region_join = 'JOIN dim_tinhthanhpho rt ON k."CityId" = rt."CityId"'
+                otc_region_where = ' AND rt."AreaCode" IN :region_markers'
+                otc_params["region_markers"] = tuple(region_markers)
+            top_otc_sql = text(f'''
+                SELECT h."CustomerCode", k."Name",
+                       SUM(CASE WHEN c."CTKM" IS NULL OR c."CTKM" = '' THEN c."Amount9" ELSE 0 END) AS rev
+                FROM brv_hoadonct c
+                JOIN brv_hoadonhdr h ON c."Stt" = h."Stt"
+                JOIN dms_khachhang k ON h."CustomerCode" = k."Code"
+                {otc_region_join}
+                LEFT JOIN brv_trangthaiduyet d ON h."DocStatus" = d."DocStatusKey"
+                LEFT JOIN brv_trangthaihoadon e ON h."EInvoiceStatus" = e."EInvoiceStatusKey"
+                WHERE h."IsActive" = TRUE AND h."IsHC" = FALSE
+                  AND (d."IsCancelled" IS NULL OR d."IsCancelled" = FALSE)
+                  AND (e."IsCancelled" IS NULL OR e."IsCancelled" = FALSE)
+                  AND h."DocDate"::timestamp >= :start_dt AND h."DocDate"::timestamp < :end_dt
+                  {otc_region_where}
+                GROUP BY h."CustomerCode", k."Name"
+                ORDER BY rev DESC LIMIT 5
+            ''')
+            if region_markers:
+                top_otc_sql = top_otc_sql.bindparams(bindparam("region_markers", expanding=True))
+            top_otc = conn.execute(top_otc_sql, otc_params).fetchall()
+
+        if channel != "OTC":
+            etc_region_join, etc_region_where = "", ""
+            etc_params = {"start_dt": start_dt, "end_dt": end_dt}
+            if region_markers:
+                etc_region_join = 'JOIN dim_tinhthanhpho rt ON k."CityId" = rt."CityId"'
+                etc_region_where = ' AND rt."AreaCode" IN :region_markers'
+                etc_params["region_markers"] = tuple(region_markers)
+            top_etc_sql = text(f'''
+                SELECT h."CustomerCode", k."Name",
+                       SUM(CASE WHEN c."CTKM" IS NULL OR c."CTKM" = '' THEN c."Amount9" ELSE 0 END) AS rev
+                FROM brvsx_hoadonct c
+                JOIN brvsx_hoadonhdr h ON c."Stt" = h."Stt"
+                JOIN dmssx_khachhang k ON h."CustomerCode" = k."Code"
+                {etc_region_join}
+                LEFT JOIN brv_trangthaiduyet d ON h."DocStatus" = d."DocStatusKey"
+                LEFT JOIN brv_trangthaihoadon e ON h."EInvoiceStatus" = e."EInvoiceStatusKey"
+                WHERE h."IsActive" = TRUE
+                  AND (d."IsCancelled" IS NULL OR d."IsCancelled" = FALSE)
+                  AND (e."IsCancelled" IS NULL OR e."IsCancelled" = FALSE)
+                  AND h."DocDate"::timestamp >= :start_dt AND h."DocDate"::timestamp < :end_dt
+                  {etc_region_where}
+                GROUP BY h."CustomerCode", k."Name"
+                ORDER BY rev DESC LIMIT 5
+            ''')
+            if region_markers:
+                top_etc_sql = top_etc_sql.bindparams(bindparam("region_markers", expanding=True))
+            top_etc = conn.execute(top_etc_sql, etc_params).fetchall()
+
+        # 3. Công nợ — CHỈ hiển thị nếu kỳ mới nhất còn "tươi" (cùng tháng hoặc tháng liền
+        #    trước so với ngày cuối của kỳ báo cáo). Nếu dữ liệu công nợ đã cũ hơn (như hiện tại
+        #    đang dừng ở 1_2026) thì bỏ hẳn section này thay vì hiện số gây hiểu nhầm.
+        #    KHÔNG lọc region/channel ở đây (xem docstring hàm) — luôn hiển thị toàn công ty.
+        periods = [r[0] for r in conn.execute(text("SELECT DISTINCT period FROM receivable_detail")).fetchall() if r[0]]
+        receivables = None
+        if periods:
+            from ai_agent.chatbot import _latest_period_key
+            latest_period = max(periods, key=_latest_period_key)
+            month_str, year_str = latest_period.split('_')
+            latest_tuple = (int(year_str), int(month_str))
+            report_last_day = end_dt - timedelta(days=1)
+            if latest_tuple in (_month_tuple(report_last_day), _prev_month_tuple(report_last_day)):
+                deb_row = conn.execute(text(
+                    'SELECT COALESCE(SUM(total_overdue),0), COALESCE(SUM(balance_end),0) '
+                    'FROM receivable_detail WHERE period = :p'
+                ), {"p": latest_period}).fetchone()
+                receivables = {
+                    "total_overdue": round(float(deb_row[0]), 2),
+                    "balance_end": round(float(deb_row[1]), 2),
+                    "period": latest_period,
+                }
+            # else: dữ liệu công nợ quá cũ so với kỳ báo cáo -> để None, KHÔNG hiển thị
+
+        # 4. Tồn kho — tình trạng hiện tại (snapshot, không theo kỳ [start_dt,end_dt)) + top 5
+        #    mặt hàng tồn chết cụ thể (không chỉ đếm số lượng). Không có chiều vùng/kênh (đã xác
+        #    nhận trong docs/dev_supabase_schema.sql) nên không lọc region/channel.
+        inv_row = conn.execute(text('''
+            SELECT
+                COUNT(*) FILTER (WHERE months_to_sell >= :dead_months AND closing_value > :dead_min_value),
+                COUNT(*) FILTER (WHERE months_to_sell > 0 AND months_to_sell <= 1.0 AND closing_qty > 0)
+            FROM inventory
+        '''), {"dead_months": dead_months, "dead_min_value": dead_min_value}).fetchone()
+        dead_stock_count = int(inv_row[0] or 0)
+        near_stockout_count = int(inv_row[1] or 0)
+
+        dead_items = conn.execute(text('''
+            SELECT item_code, item_name, closing_value, months_to_sell
+            FROM inventory
+            WHERE months_to_sell >= :dead_months AND closing_value > :dead_min_value
+            ORDER BY closing_value DESC LIMIT 5
+        '''), {"dead_months": dead_months, "dead_min_value": dead_min_value}).fetchall()
+
+        # 5. Phần mở rộng CHỈ cho weekly/monthly (không đổi hành vi/tải truy vấn của daily).
+        trend, region_breakdown, kpi_summary = [], [], None
+        if granularity in ("weekly", "monthly"):
+            trend = _revenue_trend(conn, start_dt, end_dt, granularity, region=region, channel=channel)
+            if region is None:
+                region_breakdown = _revenue_by_region(conn, start_dt, end_dt, channel=channel)
+            kpi_summary = _kpi_summary(conn, region=region)
+
+    highlights = _get_period_highlights(start_dt, end_dt) if granularity in ("weekly", "monthly") else []
+
+    result = {
+        "date": start_dt.strftime("%d/%m/%Y"),
+        "period_range": period_label,
+        "revenue": {
+            "otc": round(otc_rev, 2),
+            "etc": round(etc_rev, 2),
+            "total": round(total_rev, 2),
+            "invoice_count": invoice_count,
+            "prev_total": round(prev_total_rev, 2),
+            "change_pct": round(change_pct * 100, 1) if change_pct is not None else None,
+        },
+        "top_customers_otc": [{"code": r[0], "name": r[1], "revenue": round(float(r[2]), 2)} for r in top_otc],
+        "top_customers_etc": [{"code": r[0], "name": r[1], "revenue": round(float(r[2]), 2)} for r in top_etc],
+        "receivables": receivables,
+        "inventory": {
+            "dead_stock_count": dead_stock_count,
+            "near_stockout_count": near_stockout_count,
+            "dead_stock_items": [
+                {"item_code": r[0], "item_name": r[1], "closing_value": round(float(r[2]), 2), "months_to_sell": round(float(r[3]), 1)}
+                for r in dead_items
+            ],
+        },
+    }
+    if granularity in ("weekly", "monthly"):
+        result["trend"] = trend
+        result["region_breakdown"] = region_breakdown
+        result["kpi_summary"] = kpi_summary
+        result["highlights"] = highlights
+    return result
+
 def get_daily_digest_metrics():
-    """Tổng hợp dữ liệu trong ngày phục vụ Daily Digest (Teams/Telegram)."""
+    """Tổng hợp dữ liệu trong ngày phục vụ Daily Digest (Email)."""
     today_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
     today_end = today_start + timedelta(days=1)
     return get_digest_metrics(today_start, today_end, today_start.strftime("%d/%m/%Y"))
 
-def get_weekly_digest_metrics():
-    """Tổng hợp dữ liệu 7 ngày gần nhất phục vụ Weekly Report (Email)."""
-    today_end = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
-    week_start = today_end - timedelta(days=7)
-    label = f"Tuần {week_start.strftime('%d/%m/%Y')} - {(today_end - timedelta(days=1)).strftime('%d/%m/%Y')}"
-    return get_digest_metrics(week_start, today_end, label)
+def get_weekly_digest_metrics(region=None, channel=None):
+    """Tổng hợp dữ liệu TUẦN TRƯỚC đã kết thúc trọn vẹn (thứ 2 - chủ nhật) phục vụ Weekly
+    Report (Email). KHÔNG phải "7 ngày gần nhất" tính lùi từ hôm nay — vd. nếu hôm nay là thứ
+    Ba thì tuần trước = thứ 2 tuần trước tới chủ nhật vừa rồi, không bao gồm 2 ngày của tuần này.
+    region/channel: lọc phạm vi báo cáo theo audience (xem get_digest_metrics)."""
+    today_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    this_monday = today_start - timedelta(days=today_start.weekday())  # weekday(): Thứ 2 = 0
+    week_start = this_monday - timedelta(days=7)
+    week_end = this_monday  # exclusive — tức là hết Chủ nhật tuần trước
+    label = f"Tuần {week_start.strftime('%d/%m/%Y')} - {(week_end - timedelta(days=1)).strftime('%d/%m/%Y')}"
+    return get_digest_metrics(week_start, week_end, label, granularity="weekly", region=region, channel=channel)
 
-def get_monthly_digest_metrics():
-    """Tổng hợp dữ liệu từ đầu tháng hiện tại phục vụ Monthly Report (Email)."""
+def get_monthly_digest_metrics(region=None, channel=None):
+    """Tổng hợp dữ liệu THÁNG TRƯỚC đã kết thúc trọn vẹn phục vụ Monthly Report (Email).
+    KHÔNG phải "từ đầu tháng hiện tại đến hôm nay" — nếu gửi đúng ngày 1 hàng tháng (lịch chạy
+    thật của DNH_Monthly_Report) thì cách tính cũ chỉ có ~1 ngày dữ liệu, gần như rỗng. Sửa
+    thành đúng pattern get_weekly_digest_metrics() đang làm cho tuần.
+    region/channel: lọc phạm vi báo cáo theo audience (xem get_digest_metrics)."""
     now = datetime.now()
-    month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-    today_end = now.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
-    label = f"Tháng {month_start.strftime('%m/%Y')} ({month_start.strftime('%d/%m')} - {(today_end - timedelta(days=1)).strftime('%d/%m/%Y')})"
-    return get_digest_metrics(month_start, today_end, label)
+    this_month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    prev_year, prev_month = _prev_month_tuple(this_month_start)
+    month_start = this_month_start.replace(year=prev_year, month=prev_month)
+    month_end = this_month_start  # exclusive — hết ngày cuối tháng trước
+    label = f"Tháng {month_start.strftime('%m/%Y')} ({month_start.strftime('%d/%m')} - {(month_end - timedelta(days=1)).strftime('%d/%m/%Y')})"
+    return get_digest_metrics(month_start, month_end, label, granularity="monthly", region=region, channel=channel)
 
 if __name__ == '__main__':
     # Chạy thử kiểm tra việc trích xuất
     erp_eng, crm_eng = get_db_engines()
     config = load_config()
-    
+
     print("--- Kiêm tra dữ liệu ERP ---")
     limit = config['thresholds']['erp']['low_inventory_limit']
     lookback = config['thresholds']['erp']['failed_orders_lookback_hours']
-    
+
     print(f"Sản phẩm tồn kho thấp (ngưỡng < {limit}):")
     print(get_low_inventory(erp_eng, limit))
-    
+
     print(f"\nĐơn hàng lỗi gần đây (lookback {lookback}h):")
     print(get_recent_failed_orders(erp_eng, lookback))
-    
+
     print("\n--- Kiểm tra dữ liệu CRM ---")
     print("Tickets Urgent chưa giải quyết:")
     print(get_unresolved_urgent_tickets(crm_eng))
-    
+
     print("\n--- Báo cáo tổng hợp Daily Digest Metrics ---")
     import pprint
     pprint.pprint(get_daily_digest_metrics())

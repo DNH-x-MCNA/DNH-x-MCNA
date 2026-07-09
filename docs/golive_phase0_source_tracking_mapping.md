@@ -1,60 +1,59 @@
-# Go-Live Phase 0 — Bảng ánh xạ cột tracking cho incremental sync (BẢN SƠ BỘ)
+# Go-Live Phase 0 — Bảng ánh xạ cột tracking cho incremental sync (HOÀN THIỆN)
 
-> **Trạng thái: SƠ BỘ — cần Đăng review trước khi sang Phase 2.**
+> **Trạng thái: đã khảo sát đầy đủ 42 bảng + index thực tế. Còn 1 việc: Đăng review & duyệt.**
 
-## Kiến trúc dữ liệu thực tế (đã xác nhận)
+## Kiến trúc dữ liệu (đã chốt tạm)
 
 ```
-Bravo (OTC) / DMS (ETC)   →   [ETL trên máy chủ vật lý riêng]   →   Dữ liệu HẬU-ETL đã xử lý
-   (nguồn ERP/CRM thô)          (xử lý, chuẩn hóa)                    (nằm trên máy chủ đó)
-                                                                              │
-                                                                     Supabase = VIEW của lớp
-                                                                     dữ liệu hậu-ETL này
+Bravo (OTC) / Bravo SX (ETC) / DMS   →   [ETL bên thứ ba, ~1 giờ/lần]   →   Lớp hậu-ETL   →   Supabase (view)
 ```
 
-**Hệ quả quan trọng:** Supabase KHÔNG phải "mirror thô có thể lệch nguồn" — nó là **VIEW của
-lớp dữ liệu hậu-ETL đã qua xử lý**. Do đó các cột `CreatedAt / ModifiedAt / SyncAt / Id`
-quan sát được **chính là cột tracking thật của lớp dữ liệu mà incremental sync sẽ đọc**, dùng
-được trực tiếp cho Phase 2. Lớp Bravo/DMS thô nằm BÊN DƯỚI lớp này và đã có ETL riêng lo —
-incremental sync ở Phase 2 làm việc với **lớp hậu-ETL** (qua view Supabase / máy chủ hậu-ETL),
-KHÔNG cần động tới Bravo/DMS thô.
+Supabase là **VIEW của lớp hậu-ETL đã xử lý** (không phải mirror thô Bravo/DMS). Cột
+`CreatedAt/ModifiedAt/SyncAt/Id` trên bảng raw là cột tracking thật của lớp này. **Quyết định
+go-live: giữ tạm lớp hậu-ETL làm nguồn**, không dựng SQL Server on-prem song song.
 
-Toàn bộ business logic (chatbot, các cảnh báo Phase 1) đọc đúng lớp hậu-ETL này — dữ liệu đã
-xử lý, đúng để tính doanh thu/công nợ/tồn kho.
+## Bảng ánh xạ cột tracking + trạng thái index
 
-## Bảng ánh xạ (lớp dữ liệu hậu-ETL, quan sát qua Supabase view)
-
-| Bảng (lớp hậu-ETL) | Cột tracking khả dụng | Kiểu | Ghi chú |
+| Bảng (số dòng) | Cột tracking | Đã index? | Chiến lược incremental |
 |---|---|---|---|
-| `brv_hoadonhdr` (HĐ OTC - header) | `DocDate`, `SaveDate` (TEXT `YYYY-MM-DDTHH:MM:SS`), `Id` | text / bigint | `DocDate`/`SaveDate` lưu dạng TEXT — incremental cần so sánh `::date`/`::timestamp`. Nên incremental theo `Id` tăng dần cho chắc. |
-| `brv_hoadonct` (HĐ OTC - chi tiết) | `Id` (bigint), `CreatedAt`, `ModifiedAt`, `SyncAt` (timestamp) | bigint / timestamp | ✅ Có đủ cột tracking. `Id` tăng dần → incremental theo `Id`; `ModifiedAt` để bắt dòng cũ bị cập nhật. |
-| `brvsx_hoadonhdr` (HĐ ETC - header) | `DocDate`, `SaveDate`, `Id` | text / bigint | Tương tự `brv_hoadonhdr`. |
-| `brvsx_hoadonct` (HĐ ETC - chi tiết) | `Id`, `CreatedAt`, `ModifiedAt`, `SyncAt` | bigint / timestamp | ✅ Có đủ cột tracking. Tương tự `brv_hoadonct`. |
-| `dms_khachhang` / `dmssx_khachhang` (khách hàng) | `Code`, (kiểm tra thêm `ModifiedAt` khi mạng ổn) | text | Bảng biến động chậm — full-scan giới hạn chấp nhận được. **KHÔNG có cột hạn mức tín dụng** (đã kiểm tra, xem mục dưới). |
-| `fact_tonghopkhachhang` (tổng hợp KH/KPI) | `SaveDate` (mốc kỳ), `EmployeeCode` | text | `SaveDate` là mốc chốt kỳ, rebuild theo kỳ. |
-| `brv_sanpham` (sản phẩm) | `Id`, `Code`, `CreatedAt`, `ModifiedAt`, `SyncAt` | bigint / timestamp | ✅ Có đủ cột tracking. Biến động chậm. |
-| `receivable_detail` (mart) | `period` (TEXT `M_YYYY`) | text | Không có timestamp dòng. Dùng logic kỳ (`_latest_period_key`), rebuild theo kỳ. |
-| `inventory` (mart) | *(không có cột tracking)* | — | Bảng snapshot, rebuild toàn bộ mỗi kỳ. Full-scan chấp nhận được vì nhỏ (~211 dòng). |
-| `kpi_summary` (mart) | *(kiểm tra thêm khi mạng ổn)* | — | Bảng snapshot theo kỳ, rebuild. |
+| `brv_hoadonhdr` (25.557) | `Id`, `SyncAt`, `ModifiedAt`, `DocDate` | ❌ (chỉ CustomerCode, Stt) | Theo `Id` — **cần thêm index `Id`/`SyncAt`** |
+| `brv_hoadonct` (187.065) | `Id`, `SyncAt`, `ModifiedAt` | ❌ (chỉ ItemCode, Stt) | Theo `Id` — cần index; đây cũng là bảng dùng cho **watermark** `MAX(SyncAt)` |
+| `brv_donhang` (26.671) | `Id` (PK), `SyncAt`, `ModifiedAt` | ✅ `Id` (PK) | Theo `Id` — hiệu quả sẵn |
+| `brv_donhangct` (193.217) | `Id`, `SyncAt`, `ModifiedAt` | ❌ (chỉ BizDocId, ItemCode) | Theo `Id` — cần index |
+| `brv_khachhang` (40.094) | `Id`, `ModifiedAt`, `DueDate` | ❌ (không có index nào) | Biến động chậm → full-scan giới hạn OK |
+| `brv_sanpham` (382) | `Id` (PK), `SyncAt`, `ModifiedAt` | ✅ `Id` (PK) | Nhỏ → full-scan OK |
+| `brvsx_hoadonhdr` (2.448) | `Id`, `SyncAt`, `ModifiedAt`, `DocDate` | ❌ (chỉ CustomerCode) | Theo `Id` — nhỏ, chấp nhận |
+| `brvsx_hoadonct` (9.919) | `Id`, `SyncAt`, `ModifiedAt` | ❌ (chỉ ItemCode, Stt) | Theo `Id` — nhỏ, chấp nhận |
+| `brvsx_thekholot` (35.709) | `Id`, `SyncAt`, `ModifiedAt`, `ItemLotCode` | ❌ (không có index nào) | Theo `Id` — cân nhắc index nếu dùng nhiều |
+| `brvsx_tralai` (18) | `Id`, `SyncAt`, `ModifiedAt`, `ExpiryDate` | ❌ (không có index nào) | Tí hon → full-scan OK |
+| `dms_khachhang` (47.412) | `Id`, `SyncAt`, `ModifiedAt`, `Code` | ✅ `Code`, `CityId` (❌ Id/SyncAt) | Biến động chậm → full-scan giới hạn OK |
+| `dmssx_khachhang` (39.967) | `Id` (PK), `SyncAt`, `ModifiedAt` | ✅ `Id` (PK), Code | Theo `Id` — hiệu quả sẵn |
+| `dmssx_donhanghdr` (37.406) | `Id`, `SyncAt`, `ModifiedAt`, `DocDate` | ❌ (không có index nào) | Theo `Id` — cần index nếu incremental |
+| `fact_tonghopkhachhang` (38.249) | `Id` (PK), `SaveDate`, `CreatedAt` | ✅ `Id` (PK), `SaveDate`, EmployeeCode | Theo `SaveDate` (mốc kỳ) — index sẵn ✅ |
+| `receivable_detail` (165.102) — mart | `period` (không có tracking dòng) | ❌ **không index nào** | Rebuild theo kỳ; **cần index `period`** (xem dưới) |
+| `inventory` (211) — mart | *(không có)* | ❌ | Snapshot nhỏ → rebuild toàn bộ OK |
+| `kpi_summary` (58) — mart | *(không có)* | ❌ | Snapshot nhỏ → rebuild OK |
 
-## Phát hiện quan trọng cho Phase 1.2b (credit limit)
+## Phát hiện & khuyến nghị
 
-Đã kiểm tra `information_schema` trên Supabase: **KHÔNG tìm thấy cột hạn mức tín dụng**
-(pattern `%credit%limit%`, `%hanmuc%`) trong `dms_khachhang`, `dmssx_khachhang`,
-`receivable_detail`. → **Đây là GAP DỮ LIỆU, không phải gap code.** Hàm
-`check_credit_limit_exceeded_alert()` đã viết phòng thủ: tự dò cột lúc chạy, no-op + log
-rõ nếu chưa có; tự kích hoạt khi DNH đưa cột hạn mức vào mart.
+1. **Cột tracking hầu như chưa có index.** `Id`/`SyncAt`/`ModifiedAt` chỉ được index (qua PK) ở
+   4 bảng (`brv_donhang`, `brv_sanpham`, `dmssx_khachhang`, `fact_tonghopkhachhang`). Các bảng
+   hóa đơn lớn (`brv_hoadonhdr/ct`) chỉ index cột join (CustomerCode/ItemCode/Stt).
+   → **Nếu về sau làm incremental sync thật**, phải thêm index trên cột tracking trước, nếu không
+   query delta mỗi 5-10 phút sẽ seq-scan chậm. Với kiến trúc đã chốt (watermark `MAX(SyncAt)` mỗi
+   ~1 giờ) thì seq-scan chấp nhận được — **chưa bắt buộc thêm index cho tracking**.
 
-**Cần hỏi DNH:** hạn mức tín dụng từng khách hàng lưu ở đâu trong Bravo/DMS, có thể đưa
-vào staging/mart không?
+2. **⭐ Mart thiếu index `period` (`receivable_detail` 165k):** dashboard + alert query
+   `WHERE period = ...` liên tục nhưng bảng không có index nào → seq-scan 165k dòng mỗi lần.
+   **LƯU Ý QUAN TRỌNG:** `receivable_detail` là bảng bị **rebuild/replace khi đồng bộ** (theo
+   header `scripts/add_supabase_indexes.sql`), nên **KHÔNG được thêm index vào script thủ công đó**
+   — sẽ bị xóa ở lần replace kế tiếp. Cách đúng: hoặc (a) thêm `CREATE INDEX ... (period)` vào
+   **cuối routine rebuild** mart, hoặc (b) đổi rebuild từ DROP+recreate sang **TRUNCATE + append**
+   (giữ nguyên schema/index). Cần xác nhận routine nào đang tạo `receivable_detail` (ETL bên thứ ba
+   hay `sync_daemon.py`) trước khi sửa.
 
-## Việc còn phải làm để hoàn tất Phase 0
+3. `inventory`/`kpi_summary` nhỏ (≤211 dòng) → không cần index.
 
-1. Kiểm tra nốt cột tracking của `dms_khachhang`/`dmssx_khachhang`/`kpi_summary` khi kết nối
-   Supabase ổn định (hiện mạng máy local tới Supabase đang chập chờn, một số query timeout).
-2. Xác nhận cột tracking (`Id`, `ModifiedAt`, `SyncAt`) trên lớp hậu-ETL đã có **index** chưa
-   — nếu chưa, incremental query mỗi 5-10 phút sẽ chậm; tạo index (đọc-only, an toàn).
-3. Chốt với DNH: đích go-live là giữ lớp hậu-ETL hiện tại (view Supabase / máy chủ hậu-ETL)
-   hay đẩy tiếp sang SQL Server on-prem 3-layer như plan mô tả — quyết định này ảnh hưởng
-   Phase 2/3.
-4. Đăng review & duyệt bảng mapping trước khi bắt đầu Phase 2 (incremental sync).
+## Còn lại để đóng Phase 0
+- [ ] **Đăng review & duyệt** bảng mapping này (cổng con người, không tự làm được).
+- [ ] (Tùy chọn) Thêm index `receivable_detail(period)` — cải thiện tốc độ dashboard/alert ngay.

@@ -1,12 +1,63 @@
-const API_BASE = "http://127.0.0.1:8000";
+// Rỗng = gọi API cùng origin với trang đang mở (backend/main.py mount frontend/ ngay tại "/").
+// KHÔNG hard-code "127.0.0.1:8000" — khi deploy lên máy dùng chung, "127.0.0.1" trong trình
+// duyệt của người khác luôn trỏ về CHÍNH máy họ, không phải máy chạy backend, làm login/gọi API
+// luôn thất bại. Để rỗng thì fetch(`${API_BASE}/api/...`) tự thành "/api/..." — trình duyệt tự
+// resolve đúng theo địa chỉ trang đang mở, dùng được cả khi chạy dev (127.0.0.1) lẫn khi deploy.
+const API_BASE = "";
 let authToken = localStorage.getItem("dnh_token") || "";
 let currentRole = localStorage.getItem("dnh_role") || "";
 let currentUsername = localStorage.getItem("dnh_username") || "";
 
-// Chart instances
-let chartQuarterly = null;
-let chartRegional = null;
-let chartSegment = null;
+// Câu hỏi có sẵn từ link ngoài (vd nút "Xem chi tiết trên Chatbot" trong card Teams,
+// ?q=<câu hỏi đã encode> — xem src/notifier.py::_chatbot_deep_link). Tự hỏi luôn sau khi đăng
+// nhập/vào app, không bắt người dùng gõ lại — RBAC vẫn theo đúng tài khoản họ tự đăng nhập.
+let pendingQuestion = new URLSearchParams(window.location.search).get("q") || "";
+
+// ---- Lưu lịch sử chat để F5/tải lại trang không mất hội thoại ----
+// Lưu theo từng user vào localStorage; khôi phục vào DOM khi vào app.
+let chatHistory = [];
+let chatRestored = false;
+const CHAT_MAX_ENTRIES = 50;
+
+function chatKey() { return "dnh_chat_" + (currentUsername || "guest"); }
+
+function saveChat() {
+    if (chatHistory.length > CHAT_MAX_ENTRIES) chatHistory = chatHistory.slice(-CHAT_MAX_ENTRIES);
+    try {
+        localStorage.setItem(chatKey(), JSON.stringify(chatHistory));
+    } catch (e) {
+        // Vượt quota (thường do ảnh biểu đồ base64) → bỏ ảnh ở các lượt cũ rồi thử lại
+        chatHistory = chatHistory.map(en => {
+            if (en.kind === "bot" && en.data && en.data.chart_base64) {
+                const d = Object.assign({}, en.data); delete d.chart_base64;
+                return Object.assign({}, en, { data: d });
+            }
+            return en;
+        });
+        try { localStorage.setItem(chatKey(), JSON.stringify(chatHistory)); }
+        catch (e2) {
+            chatHistory = chatHistory.slice(-15);
+            try { localStorage.setItem(chatKey(), JSON.stringify(chatHistory)); } catch (e3) {}
+        }
+    }
+}
+
+function clearChatHistory() {
+    chatHistory = [];
+    try { localStorage.removeItem(chatKey()); } catch (e) {}
+}
+
+function restoreChat() {
+    if (chatRestored) return;
+    chatRestored = true;
+    try { chatHistory = JSON.parse(localStorage.getItem(chatKey()) || "[]"); }
+    catch (e) { chatHistory = []; }
+    chatHistory.forEach(en => {
+        if (en.kind === "user") appendMessage(en.text, "user");
+        else if (en.kind === "botText") appendMessage(en.text, "bot");
+        else if (en.kind === "bot" && en.data) appendBotResponse(en.data);
+    });
+}
 
 // DOM Elements
 const loginScreen = document.getElementById("login-screen");
@@ -18,24 +69,41 @@ const userRole = document.getElementById("user-role");
 const btnLogout = document.getElementById("btn-logout");
 
 // Views
-const viewDashboard = document.getElementById("view-dashboard");
-const viewDebt = document.getElementById("view-debt");
 const viewChatbot = document.getElementById("view-chatbot");
 const pageTitle = document.getElementById("page-title");
 
 // Menu items
-const menuDashboard = document.getElementById("menu-dashboard");
-const menuDebt = document.getElementById("menu-debt");
 const menuChatbot = document.getElementById("menu-chatbot");
 
 // On Load
 document.addEventListener("DOMContentLoaded", () => {
+    // Khôi phục giao diện Sáng/Tối đã lưu
+    const savedTheme = localStorage.getItem("dnh_theme") || "light";
+    const themeToggle = document.getElementById("theme-toggle");
+    if (savedTheme === "dark") {
+        document.body.classList.add("dark-theme");
+        if (themeToggle) themeToggle.innerHTML = '<i class="fa-solid fa-sun"></i>';
+    } else {
+        if (themeToggle) themeToggle.innerHTML = '<i class="fa-solid fa-moon"></i>';
+    }
+
     if (authToken) {
         showApp();
     } else {
         showLogin();
     }
 });
+
+// Theme Switcher Event Listener
+const themeToggle = document.getElementById("theme-toggle");
+if (themeToggle) {
+    themeToggle.addEventListener("click", () => {
+        document.body.classList.toggle("dark-theme");
+        const isDark = document.body.classList.contains("dark-theme");
+        localStorage.setItem("dnh_theme", isDark ? "dark" : "light");
+        themeToggle.innerHTML = isDark ? '<i class="fa-solid fa-sun"></i>' : '<i class="fa-solid fa-moon"></i>';
+    });
+}
 
 // Login Form Submit
 loginForm.addEventListener("submit", async (e) => {
@@ -81,6 +149,14 @@ btnLogout.addEventListener("click", () => {
     localStorage.removeItem("dnh_token");
     localStorage.removeItem("dnh_role");
     localStorage.removeItem("dnh_username");
+    // KHÔNG xoá lịch sử chat đã lưu
+    chatRestored = false;
+    chatHistory = [];
+    if (typeof chatMessagesBox !== "undefined" && chatMessagesBox) {
+        while (chatMessagesBox.children.length > 1) {
+            chatMessagesBox.removeChild(chatMessagesBox.lastChild);
+        }
+    }
     showLogin();
 });
 
@@ -95,39 +171,32 @@ function showApp() {
     
     userDisplayName.innerText = currentUsername.toUpperCase();
     userRole.innerText = currentRole;
-    
-    // Default load dashboard
-    switchView("dashboard");
+
+    // Khôi phục lịch sử chat đã lưu
+    restoreChat();
+
+    // Default load chatbot view directly
+    switchView("chatbot");
+
+    // Nếu vào app kèm sẵn câu hỏi từ link ngoài -> tự hỏi luôn. Xoá param khỏi URL sau khi dùng
+    // để F5/tải lại trang không hỏi lặp lại câu cũ.
+    if (pendingQuestion) {
+        submitChatQuestion(pendingQuestion);
+        pendingQuestion = "";
+        const url = new URL(window.location.href);
+        url.searchParams.delete("q");
+        window.history.replaceState({}, "", url);
+    }
 }
 
 // Navigation Logic
-menuDashboard.addEventListener("click", (e) => { e.preventDefault(); switchView("dashboard"); });
-menuDebt.addEventListener("click", (e) => { e.preventDefault(); switchView("debt"); });
 menuChatbot.addEventListener("click", (e) => { e.preventDefault(); switchView("chatbot"); });
 
 function switchView(viewName) {
-    // Update active menu class
-    [menuDashboard, menuDebt, menuChatbot].forEach(item => item.classList.remove("active"));
-    
-    // Hide all views
-    viewDashboard.style.display = "none";
-    viewDebt.style.display = "none";
-    viewChatbot.style.display = "none";
-    
-    if (viewName === "dashboard") {
-        menuDashboard.classList.add("active");
-        viewDashboard.style.display = "block";
-        pageTitle.innerText = "Dashboard Tổng Quan";
-        loadDashboardData();
-    } else if (viewName === "debt") {
-        menuDebt.classList.add("active");
-        viewDebt.style.display = "block";
-        pageTitle.innerText = "Hạn Mức Công Nợ Cảnh Báo";
-        loadDebtData();
-    } else if (viewName === "chatbot") {
+    if (viewName === "chatbot") {
         menuChatbot.classList.add("active");
         viewChatbot.style.display = "block";
-        pageTitle.innerText = "AI Chatbot Truy Vấn Tự Nhiên";
+        pageTitle.innerText = "AI Chatbot Trợ Lý Phân Tích Dữ Liệu Dược Nam Hà";
     }
 }
 
@@ -136,160 +205,6 @@ function formatVND(amount) {
     return new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(amount);
 }
 
-// LOAD DASHBOARD DATA
-async function loadDashboardData() {
-    try {
-        // Fetch stats card data
-        const statsRes = await fetch(`${API_BASE}/api/dashboard/stats`, {
-            headers: { "Authorization": `Bearer ${authToken}` }
-        });
-        if (!statsRes.ok) throw new Error("Could not load stats");
-        const stats = await statsRes.json();
-        
-        document.getElementById("stat-revenue").innerText = formatVND(stats.total_receivable);
-        document.getElementById("stat-orders").innerText = formatVND(stats.total_overdue);
-        document.getElementById("stat-customers").innerText = stats.total_customers.toLocaleString();
-        document.getElementById("stat-contracts").innerText = stats.total_inventory_items.toLocaleString();
-        
-        // Fetch chart data
-        const chartRes = await fetch(`${API_BASE}/api/dashboard/charts`, {
-            headers: { "Authorization": `Bearer ${authToken}` }
-        });
-        if (!chartRes.ok) throw new Error("Could not load charts");
-        const charts = await chartRes.json();
-        
-        renderCharts(charts);
-    } catch (err) {
-        console.error("Dashboard error:", err);
-    }
-}
-
-function renderCharts(data) {
-    // 1. Phai thu theo kenh (Bar)
-    const labelsQuarterly = data.receivable_by_channel.map(item => item.sales_channel || "Khác");
-    const revenuesQuarterly = data.receivable_by_channel.map(item => item.total_balance);
-    
-    if (chartQuarterly) chartQuarterly.destroy();
-    chartQuarterly = new Chart(document.getElementById("chart-quarterly"), {
-        type: 'bar',
-        data: {
-            labels: labelsQuarterly,
-            datasets: [{
-                label: 'Tổng nợ phải thu (VND)',
-                data: revenuesQuarterly,
-                backgroundColor: ['#8b5cf6', '#3b82f6', '#10b981'],
-                borderRadius: 6
-            }]
-        },
-        options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            plugins: { legend: { display: false } },
-            scales: {
-                y: { grid: { color: 'rgba(255, 255, 255, 0.05)' }, ticks: { color: '#94a3b8' } },
-                x: { grid: { display: false }, ticks: { color: '#94a3b8' } }
-            }
-        }
-    });
-
-    // 2. Doanh so KPI theo vung (Doughnut)
-    const labelsRegional = data.kpi_by_region.map(item => item.area_code === 'MN' ? 'Miền Nam' : (item.area_code === 'MB' ? 'Miền Bắc' : (item.area_code === 'MB2' ? 'Miền Bắc 2' : item.area_code)));
-    const revenuesRegional = data.kpi_by_region.map(item => item.total_month_sale);
-    
-    if (chartRegional) chartRegional.destroy();
-    chartRegional = new Chart(document.getElementById("chart-regional"), {
-        type: 'doughnut',
-        data: {
-            labels: labelsRegional,
-            datasets: [{
-                data: revenuesRegional,
-                backgroundColor: ['#3b82f6', '#10b981', '#ec4899', '#f59e0b'],
-                borderWidth: 0
-            }]
-        },
-        options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            plugins: {
-                legend: { position: 'bottom', labels: { color: '#94a3b8', font: { family: 'Outfit' } } }
-            }
-        }
-    });
-
-    // 3. Tuoi no qua han (Bar)
-    const labelsSegment = data.overdue_aging.map(item => item.bucket);
-    const revenuesSegment = data.overdue_aging.map(item => item.amount);
-    
-    if (chartSegment) chartSegment.destroy();
-    chartSegment = new Chart(document.getElementById("chart-segment"), {
-        type: 'bar',
-        data: {
-            labels: labelsSegment,
-            datasets: [{
-                label: 'Số tiền quá hạn',
-                data: revenuesSegment,
-                backgroundColor: ['#ec4899', '#ef4444', '#f59e0b', '#dc2626'],
-                borderRadius: 6
-            }]
-        },
-        options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            plugins: { legend: { display: false } },
-            scales: {
-                y: { grid: { color: 'rgba(255, 255, 255, 0.05)' }, ticks: { color: '#94a3b8' } },
-                x: { grid: { display: false }, ticks: { color: '#94a3b8' } }
-            }
-        }
-    });
-}
-
-// LOAD DEBT ALERTS
-async function loadDebtData() {
-    const tableBody = document.querySelector("#debt-alerts-table tbody");
-    tableBody.innerHTML = `<tr><td colspan="7" style="text-align: center;"><i class="fa-solid fa-spinner fa-spin"></i> Đang tải dữ liệu cảnh báo...</td></tr>`;
-    
-    try {
-        const response = await fetch(`${API_BASE}/api/debt/alerts`, {
-            headers: { "Authorization": `Bearer ${authToken}` }
-        });
-        if (!response.ok) throw new Error("Could not load debt alerts");
-        const data = await response.json();
-        
-        tableBody.innerHTML = "";
-        
-        if (data.alerts.length === 0) {
-            tableBody.innerHTML = `<tr><td colspan="7" style="text-align: center; color: var(--success);"><i class="fa-solid fa-circle-check"></i> Không có khách hàng nào nợ quá hạn!</td></tr>`;
-            return;
-        }
-        
-        data.alerts.forEach(alert => {
-            let badgeText = "Quá hạn nợ";
-            let badgeClass = "danger";
-            
-            let breakdown = [];
-            if (alert.overdue_1_15 > 0) breakdown.push(`1-15d: ${formatVND(alert.overdue_1_15)}`);
-            if (alert.overdue_15_30 > 0) breakdown.push(`15-30d: ${formatVND(alert.overdue_15_30)}`);
-            if (alert.overdue_30_45 > 0) breakdown.push(`30-45d: ${formatVND(alert.overdue_30_45)}`);
-            if (alert.overdue_gt_45 > 0) breakdown.push(`>45d: ${formatVND(alert.overdue_gt_45)}`);
-            let breakdownStr = breakdown.join(" | ") || "N/A";
-            
-            const tr = document.createElement("tr");
-            tr.innerHTML = `
-                <td><strong>${alert.customer_code}</strong></td>
-                <td>${alert.customer_name}</td>
-                <td>${alert.sales_channel || 'OTC'}</td>
-                <td style="font-weight:500;">${formatVND(alert.balance_end)}</td>
-                <td style="color: var(--danger); font-weight:600;">${formatVND(alert.total_overdue)}</td>
-                <td style="font-size:12px; color:#94a3b8; font-family: monospace;">${breakdownStr}</td>
-                <td><span class="badge ${badgeClass}">${badgeText}</span></td>
-            `;
-            tableBody.appendChild(tr);
-        });
-    } catch (err) {
-        tableBody.innerHTML = `<tr><td colspan="7" style="text-align: center; color: var(--danger);"><i class="fa-solid fa-circle-exclamation"></i> Lỗi: ${err.message}</td></tr>`;
-    }
-}
 
 // CHATBOT INTERACTION
 const chatForm = document.getElementById("chat-form");
@@ -315,12 +230,14 @@ suggestBtns.forEach(btn => {
 });
 
 async function submitChatQuestion(question) {
-    // Append user message
+    // Append user message + lưu lịch sử
     appendMessage(question, "user");
-    
+    chatHistory.push({ kind: "user", text: question });
+    saveChat();
+
     // Append loader placeholder
     const loaderId = appendLoader();
-    
+
     try {
         const response = await fetch(`${API_BASE}/api/chatbot/query`, {
             method: "POST",
@@ -340,9 +257,17 @@ async function submitChatQuestion(question) {
         
         // Update AI mode badge
         aiModeBadge.innerText = data.mode;
-        
+
         // Append response
         appendBotResponse(data);
+
+        // Lệnh reset hội thoại (backend trả mode "System") -> xoá luôn lịch sử đã lưu
+        if (data.mode === "System") {
+            clearChatHistory();
+        } else {
+            chatHistory.push({ kind: "bot", data: data });
+            saveChat();
+        }
     } catch (err) {
         removeLoader(loaderId);
         appendMessage(`Lỗi: ${err.message}`, "bot");
