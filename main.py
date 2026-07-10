@@ -6,7 +6,7 @@ from datetime import datetime
 from dotenv import load_dotenv
 from src.database import get_db_engines, load_config
 from src.etl import get_daily_digest_metrics, get_weekly_digest_metrics, get_monthly_digest_metrics
-from src.notifier import build_digest_email, send_email, send_alert_to_all_channels
+from src.notifier import build_digest_email, send_email, send_alert_to_all_channels, flush_critical_teams_queue
 from src.alerts import (
     run_alert_checks,               # bản MOCK (ERP/CRM giả lập) — chỉ dùng ở môi trường 'local'
     run_smart_business_alerts,      # cảnh báo thật: nợ quá hạn / cháy kho / KPI thấp
@@ -83,6 +83,11 @@ def run_all_alert_checks(config, erp_engine=None, crm_engine=None):
     if str(config.get('environment', 'local')).lower() == 'local' and erp_engine is not None and crm_engine is not None:
         print("[ALERTS] (môi trường 'local') Chạy thêm bộ MOCK ERP/CRM để dev test...")
         run_alert_checks(erp_engine, crm_engine)
+
+    # Gửi hết card CRITICAL đã gom trong hàng đợi (xem src/notifier.py::flush_critical_teams_queue)
+    # — BẮT BUỘC gọi ở CUỐI, sau khi TẤT CẢ check_*_alert() ở trên đã chạy xong, để gộp đúng mọi
+    # alert CRITICAL phát hiện được trong CÙNG 1 chu kỳ quét thành 1 card duy nhất/webhook.
+    flush_critical_teams_queue()
 
 load_dotenv()
 

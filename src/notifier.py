@@ -876,6 +876,96 @@ def _send_with_retry(fn, *args, max_retries=2, delays=(3, 6), **kwargs):
     print(f"[RETRY] {fn.__name__} that bai sau {max_retries} lan thu lai: {last_exception}")
     return False
 
+# Hàng đợi gộp card CRITICAL — thêm 10/07/2026 theo yêu cầu tiếp theo sau bộ lọc CRITICAL-only:
+# thay vì mỗi alert CRITICAL bắn 1 card Teams riêng (vẫn có thể dồn 3-5 card cùng lúc nếu 1 chu kỳ
+# quét phát hiện nhiều vấn đề nghiêm trọng cùng lúc), GOM lại và gửi 1 card DUY NHẤT liệt kê tất cả
+# vào cuối chu kỳ quét (xem flush_critical_teams_queue(), gọi từ main.py::run_all_alert_checks
+# sau khi mọi check_*_alert() đã chạy xong). Gom theo TỪNG webhook riêng (không phải gộp mù 1 card
+# chung cho tất cả) — nếu sau này report_recipients có Flow Teams riêng theo vùng/kênh, mỗi audience
+# vẫn chỉ nhận đúng phần alert liên quan tới mình, không lẫn card của audience khác.
+_pending_critical_teams_alerts = []
+
+def flush_critical_teams_queue():
+    """Gửi TẤT CẢ alert CRITICAL đang chờ trong hàng đợi (xem _pending_critical_teams_alerts) —
+    gộp thành 1 card duy nhất CHO MỖI webhook đích, rồi xoá sạch hàng đợi. Gọi 1 LẦN ở CUỐI mỗi chu
+    kỳ quét (main.py::run_all_alert_checks), KHÔNG gọi giữa chừng — gọi sớm sẽ gộp thiếu."""
+    global _pending_critical_teams_alerts
+    if not _pending_critical_teams_alerts:
+        return
+    by_webhook = {}
+    for item in _pending_critical_teams_alerts:
+        for webhook_url, audience in item["webhooks"]:
+            group = by_webhook.setdefault(webhook_url, {"audience": audience, "alerts": []})
+            group["alerts"].append(item)
+    for webhook_url, group in by_webhook.items():
+        payload = _build_teams_consolidated_card(group["alerts"])
+        try:
+            data = json.dumps(payload).encode('utf-8')
+            req = urllib.request.Request(webhook_url.strip(), data=data, headers={'Content-Type': 'application/json'})
+            with urllib.request.urlopen(req, timeout=10) as response:
+                print(f"[TEAMS] Da gui card gop ({len(group['alerts'])} canh bao) toi audience '{group['audience'] or 'mac dinh'}'.")
+        except Exception as e:
+            print(f"[TEAMS] Loi gui card gop toi audience '{group['audience'] or 'mac dinh'}': {e}")
+    _pending_critical_teams_alerts = []
+
+def _build_teams_consolidated_card(alerts):
+    """1 Adaptive Card liệt kê NHIỀU alert CRITICAL cùng lúc (xem flush_critical_teams_queue) —
+    mỗi alert 1 mục riêng (tên + facts ngày/kênh/vùng + vấn đề), thay vì mỗi alert 1 card riêng."""
+    body = [
+        {
+            "type": "Container",
+            "style": "attention",
+            "bleed": True,
+            "items": [
+                {"type": "TextBlock", "text": f"🚨 {len(alerts)} cảnh báo nghiêm trọng", "weight": "Bolder", "size": "Large", "wrap": True},
+                {"type": "TextBlock", "text": f"Phát hiện lúc {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", "isSubtle": True, "size": "Small", "wrap": True}
+            ]
+        }
+    ]
+    for i, a in enumerate(alerts, 1):
+        facts = []
+        if a.get("period"):
+            facts.append({"title": "📅 Kỳ / Ngày", "value": str(a["period"])})
+        if a.get("channel"):
+            facts.append({"title": "🏷️ Kênh", "value": str(a["channel"])})
+        if a.get("region"):
+            facts.append({"title": "📍 Khu vực", "value": str(a["region"])})
+        item_items = [{"type": "TextBlock", "text": f"{i}. {a['alert_name']}", "weight": "Bolder", "wrap": True}]
+        if facts:
+            item_items.append({"type": "FactSet", "facts": facts, "spacing": "Small"})
+        item_items.append({"type": "TextBlock", "text": a.get("issue") or a["summary"], "wrap": True, "spacing": "Small"})
+        body.append({"type": "Container", "items": item_items, "spacing": "Medium", "separator": True})
+
+    body.append({
+        "type": "TextBlock",
+        "text": f"Hệ thống Giám sát DWH Dược Nam Hà (DNH) • {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+        "isSubtle": True,
+        "size": "Small",
+        "spacing": "Medium",
+        "wrap": True
+    })
+
+    adaptive_card = {
+        "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+        "type": "AdaptiveCard",
+        "version": "1.5",
+        "body": body,
+        "actions": [{
+            "type": "Action.OpenUrl",
+            "title": "💬 Mở Chatbot DNH",
+            "url": _chatbot_deep_link()
+        }]
+    }
+    return {
+        "type": "message",
+        "attachments": [
+            {
+                "contentType": "application/vnd.microsoft.card.adaptive",
+                "content": adaptive_card
+            }
+        ]
+    }
+
 def send_alert_to_all_channels(alert_name, severity, summary, table_headers=None, table_rows=None,
                                 channels=("email", "teams"), period=None, channel=None, region=None,
                                 issue=None, require_critical_for_teams=True):
@@ -976,9 +1066,31 @@ def send_alert_to_all_channels(alert_name, severity, summary, table_headers=None
     #    _resolve_teams_webhooks tự khử trùng nên hành vi giống hệt "1 webhook chung" trước đây.
     if "teams" in channels and require_critical_for_teams and severity != "CRITICAL":
         print(f"[TEAMS] Bỏ qua gửi Teams cho '{alert_name}' (severity={severity}, chỉ CRITICAL mới gửi Teams).")
-    elif "teams" in channels:
+    elif "teams" in channels and require_critical_for_teams:
+        # CRITICAL + đang ở chế độ lọc alert nghiệp vụ mặc định -> ĐƯA VÀO HÀNG ĐỢI thay vì gửi
+        # ngay (xem flush_critical_teams_queue() — gộp nhiều alert CRITICAL cùng chu kỳ quét
+        # thành 1 card, thêm 10/07/2026 theo yêu cầu tiếp theo sau bộ lọc CRITICAL-only).
         try:
-            # Nếu có phân tích AI, đính kèm vào nội dung Teams
+            teams_summary = summary
+            if gemini_analysis:
+                teams_summary = f"{summary}\n\n💡 Phân tích AI: {gemini_analysis}"
+            webhooks = _resolve_teams_webhooks(region, channel)
+            if not webhooks:
+                print("[WARNING] Không có webhook Teams nào khớp (kiểm tra TEAMS_WEBHOOK_URL/.env hoặc report_recipients).")
+            else:
+                _pending_critical_teams_alerts.append({
+                    "alert_name": alert_name, "summary": teams_summary,
+                    "period": period, "channel": channel, "region": region, "issue": issue,
+                    "webhooks": webhooks,
+                })
+                any_sent = True
+                print(f"[TEAMS] Đã đưa '{alert_name}' vào hàng đợi gộp card (gửi cuối chu kỳ quét).")
+        except Exception as e:
+            print(f"[ERROR] Loi dua vao hang doi Teams: {e}")
+    elif "teams" in channels:
+        # require_critical_for_teams=False (vd Daily Digest) -> gửi NGAY như cũ, không qua hàng
+        # đợi (không có nguy cơ dồn card vì đây là các lần gửi đơn lẻ, không nằm trong 1 chu kỳ quét).
+        try:
             teams_summary = summary
             if gemini_analysis:
                 teams_summary = f"{summary}\n\n💡 Phân tích AI: {gemini_analysis}"
