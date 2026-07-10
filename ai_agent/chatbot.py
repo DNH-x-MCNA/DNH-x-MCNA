@@ -1257,7 +1257,20 @@ Câu hỏi/Lời chào của người dùng: "{user_question}"
         parts = latest_date_str.split('-')
         latest_year = parts[0] if len(parts) > 0 else "2026"
         latest_month = parts[1] if len(parts) > 1 else "06"
-        latest_q_start = f"{latest_year}-04-01"
+        # latest_q_start: mốc bắt đầu cửa sổ 90 ngày gần nhất (dùng để tính "TB bán/ngày" cho tồn
+        # kho — mục 7) — TRƯỚC ĐÂY hardcode cứng "{latest_year}-04-01" (giả định dữ liệu chỉ có từ
+        # Q2), SAI vì Bravo thực tế có dữ liệu nhiều năm (xác nhận thực tế 10/07/2026) — hardcode
+        # này còn khiến "CRITICAL DATA BOUNDARY" (mục 8) cảnh báo sai "chỉ có dữ liệu Q2" dù tháng
+        # 1-3 hoặc năm trước vẫn có dữ liệu thật. Tách 2 khái niệm: earliest_date_str (đã có, TRUE
+        # earliest data — dùng cho cảnh báo boundary) khác với latest_q_start (cửa sổ rolling 90
+        # ngày gần nhất tính TỪ latest_date_str — chỉ dùng riêng cho TB bán/ngày, KHÔNG dùng để suy
+        # ra "dữ liệu bắt đầu từ đâu").
+        try:
+            import datetime as _datetime_mod
+            _latest_dt = _datetime_mod.datetime.strptime(latest_date_str, "%Y-%m-%d")
+            latest_q_start = (_latest_dt - _datetime_mod.timedelta(days=89)).strftime("%Y-%m-%d")
+        except ValueError:
+            latest_q_start = earliest_date_str
 
         # Mart layer (mart_layer.mart_revenue_summary) — bảng tổng hợp sẵn doanh thu theo
         # ngày/kênh (xem docs/mart_revenue_summary_design.md), tạo ra để tránh full table scan
@@ -1739,8 +1752,11 @@ Key Business Logic & Tables & Strict Mapping Rules:
    - Mặt hàng có total_qty_sold = 0 (chưa bán trong kỳ) sẽ có "Số ngày tồn kho còn lại" = NULL (không chia được cho 0) — nêu rõ trong câu trả lời là "chưa phát sinh bán trong kỳ, không ước tính được" thay vì bỏ qua hoặc báo lỗi.
 
 8. Date Queries & Date-based KPIs (Doanh thu theo thời gian & KPI lũy kế):
-   - CRITICAL DATA BOUNDARY: The invoice data in the database ONLY spans from '{latest_q_start}' to '{latest_date_str}' (3 months: April, May, June {latest_year}). Data for January, February, March {latest_year} and any months before April {latest_year} DO NOT EXIST in the database.
-   - VERY IMPORTANT: When user asks for '6 tháng đầu năm {latest_year}', '6 months', 'H1 {latest_year}', 'nửa đầu năm', etc. — the database ONLY has Q2 data (Apr-Jun). Your SQL must ONLY query the available date range '{latest_q_start}' to '{latest_date_str}'. You MUST add a comment in your SQL: -- NOTE: Only Q2 data (Apr-Jun {latest_year}) available. Jan-Mar data not in DB.
+   - DATA BOUNDARY: dữ liệu hóa đơn thực tế trải dài từ {earliest_date_str} đến {latest_date_str} — kiểm
+     tra ĐỘNG mỗi lần (đã xác nhận thực tế 10/07/2026: Bravo có dữ liệu NHIỀU NĂM, KHÔNG chỉ Q2 như
+     nhận định cũ trước đây — TUYỆT ĐỐI KHÔNG giả định "chỉ có tháng 4-6" hay bất kỳ khoảng cố định
+     nào). Nếu câu hỏi cần khoảng thời gian TRƯỚC {earliest_date_str}, xem rule "Data Boundary
+     Transparency" ở mục 7 bên dưới để biết cách cảnh báo đúng.
    - MANDATORY MONTHLY BREAKDOWN: When a user asks about revenue over a MULTI-MONTH period (e.g., '6 tháng', 'cả năm', 'theo tháng', 'Q2', 'quý 2', 'so sánh tháng X và tháng Y', etc.), you MUST return results GROUPED BY MONTH (not a single total). This produces multiple rows — one per month — so the chart can show each month separately. Use DATE_TRUNC('month', h."DocDate"::timestamp) AS "month" in the SELECT and GROUP BY clause. Example:
      SELECT DATE_TRUNC('month', h."DocDate"::timestamp) AS "month",
             SUM(otc.amount + etc.amount) AS "total_revenue"
