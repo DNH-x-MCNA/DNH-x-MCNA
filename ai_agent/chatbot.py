@@ -1314,7 +1314,7 @@ Câu hỏi/Lời chào của người dùng: "{user_question}"
             SUM(h.[TotalAmount] - h.[PaidAmount]) AS [Còn nợ]
      FROM [BRV_HTTDuDK] h
      JOIN [BRV_KhachHang] k ON h.[CustomerId] = k.[Id]
-     WHERE h.[Account] LIKE '131%' AND (h.[TotalAmount] - h.[PaidAmount]) > 0 AND k.[IsCustomer] = 1
+     WHERE h.[Account] LIKE '131%' AND (h.[TotalAmount] - h.[PaidAmount]) > 0 AND k.[IsCustomer] = 1 AND k.[Code] <> 'NCC100122'
      GROUP BY k.[Code], k.[Name],
             CASE
               WHEN DATEDIFF(DAY, DATEADD(DAY, h.[DueDate], h.[DocDate]), GETDATE()) <= 0 THEN N'Trong hạn'
@@ -1369,16 +1369,20 @@ Câu hỏi/Lời chào của người dùng: "{user_question}"
      b. CHỈ lấy [Account] LIKE '131%' (tài khoản Phải thu khách hàng theo Thông tư 200). TUYỆT ĐỐI
         KHÔNG gộp Account bắt đầu '331%' (Phải trả người bán — chiều ngược lại, không phải công nợ
         phải thu).
-     c. LUÔN JOIN sang BRV_KhachHang/BRVSX_KhachHang rồi lọc k.[IsCustomer] = 1 — nếu bỏ qua bước
-        này, mã nội bộ của chính DNH ('P000001' kênh OTC, '1001136' kênh ETC — 2 mã này có
-        IsCustomer=0) sẽ bị tính vào công nợ, làm số bị thổi phồng gấp ~3-4 lần so với thực tế (đã
-        đo được: 418 tỷ sai vs 114 tỷ đúng khi thiếu filter này).
+     c. LUÔN JOIN sang BRV_KhachHang/BRVSX_KhachHang rồi lọc k.[IsCustomer] = 1 VÀ k.[Code] <>
+        'NCC100122' — nếu bỏ qua k.[IsCustomer]=1, mã nội bộ của chính DNH ('P000001' kênh OTC,
+        '1001136' kênh ETC — 2 mã này có IsCustomer=0) sẽ bị tính vào công nợ, làm số bị thổi phồng
+        gấp ~3-4 lần so với thực tế (đã đo được: 418 tỷ sai vs 114 tỷ đúng khi thiếu filter này).
+        RIÊNG 'NCC100122' (Công ty CP Chứng khoán Ngân hàng Công thương VN) có IsCustomer=1 trong dữ
+        liệu nguồn nhưng THỰC RA là nhà cung cấp/đối tác tài chính, KHÔNG phải khách hàng dược phẩm
+        — xác nhận với DNH 10/07/2026, loại trừ RIÊNG bằng tên mã cụ thể (không phải trường hợp hệ
+        thống lặp lại như P000001/1001136, không cần filter tổng quát khác).
    Ví dụ đúng — tổng công nợ theo khách hàng, kênh OTC:
      SELECT k.[Code] AS [Mã KH], k.[Name] AS [Tên khách hàng],
             SUM(h.[TotalAmount] - h.[PaidAmount]) AS [Còn nợ]
      FROM [BRV_HTTDuDK] h
      JOIN [BRV_KhachHang] k ON h.[CustomerId] = k.[Id]
-     WHERE h.[Account] LIKE '131%' AND (h.[TotalAmount] - h.[PaidAmount]) > 0 AND k.[IsCustomer] = 1
+     WHERE h.[Account] LIKE '131%' AND (h.[TotalAmount] - h.[PaidAmount]) > 0 AND k.[IsCustomer] = 1 AND k.[Code] <> 'NCC100122'
      GROUP BY k.[Code], k.[Name]
      ORDER BY [Còn nợ] DESC
    Kênh ETC dùng BRVSX_HTTDuDK/BRVSX_KhachHang, logic y hệt.
@@ -1392,7 +1396,7 @@ Câu hỏi/Lời chào của người dùng: "{user_question}"
      JOIN [BRV_KhachHang] k ON h.[CustomerId] = k.[Id]
      JOIN [DMS_KhachHang] dk ON k.[Code] = dk.[Code]
      JOIN [DIM_TinhThanhPho] t ON dk.[CityId] = t.[CityId]
-     WHERE h.[Account] LIKE '131%' AND (h.[TotalAmount] - h.[PaidAmount]) > 0 AND k.[IsCustomer] = 1
+     WHERE h.[Account] LIKE '131%' AND (h.[TotalAmount] - h.[PaidAmount]) > 0 AND k.[IsCustomer] = 1 AND k.[Code] <> 'NCC100122'
        AND t.[AreaCode] IN ('MB', 'MB2')
    Kênh ETC JOIN sang DMSSX_KhachHang (thay DMS_KhachHang) qua cùng cách. LƯU Ý BẢO MẬT: nếu người
    hỏi bị giới hạn vùng miền (xem CRITICAL SECURITY RULE ở dưới nếu có), BẮT BUỘC luôn thêm JOIN +
