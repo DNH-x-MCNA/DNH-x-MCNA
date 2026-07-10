@@ -18,11 +18,11 @@ CONFIG_PATH = os.path.join(PROJECT_ROOT, 'config', 'config.yaml')
 _bravo_engine = None
 _fast_cloud_engine = None
 _fast_cloud_engine_url = None
-_supabase_down_until = None  # time.monotonic() mốc hết "circuit breaker" — None = chưa ghi nhận lỗi
+_bravo_down_until = None  # time.monotonic() mốc hết "circuit breaker" — None = chưa ghi nhận lỗi
 _CIRCUIT_BREAKER_SECONDS = 120  # trong 1 lần build report/alert (thường vài chục giây), 1 lần lỗi
-                                 # là đủ tín hiệu — 120s đủ dài để không thử lại Postgres vô ích
+                                 # là đủ tín hiệu — 120s đủ dài để không thử lại Bravo vô ích
                                  # nhiều lần trong CÙNG 1 lần chạy, nhưng đủ ngắn để lần chạy SAU
-                                 # (sync Bravo kế tiếp, ~vài chục phút sau) tự thử lại Postgres.
+                                 # (vài chục phút sau) tự thử lại Bravo.
 
 
 def _get_bravo_engine():
@@ -89,9 +89,10 @@ def _get_fast_cloud_engine():
 
 def run_with_failover(pg_fn, mssql_fn, label=""):
     """
-    Thử pg_fn(conn) trên Supabase (engine "fast", bail sớm nếu nghẽn); bất kỳ lỗi nào (mất kết
-    nối, statement timeout...) -> log rõ + thử mssql_fn(conn) trên Bravo SQL Server trực tiếp.
-    Trả kết quả của bên thành công (None nếu cả 2 đều không dùng được).
+    Thử mssql_fn(conn) trên Bravo SQL Server trực tiếp TRƯỚC (nguồn "sự thật" tức thời, đổi ưu
+    tiên 10/07/2026 theo yêu cầu — trước đó ưu tiên Supabase); bất kỳ lỗi nào (mất kết nối, Bravo
+    tạm không truy cập được...) -> log rõ + thử pg_fn(conn) trên Supabase (engine "fast", bail sớm
+    nếu nghẽn) làm dự phòng. Trả kết quả của bên thành công (None nếu cả 2 đều không dùng được).
 
     pg_fn/mssql_fn: callable(conn) -> kết quả bất kỳ (row/list row/scalar...) — mỗi bên tự viết
     câu SQL đúng dialect của mình (Postgres vs T-SQL khác cú pháp: TRUE/FALSE vs 1/0, DATE_TRUNC
@@ -101,38 +102,38 @@ def run_with_failover(pg_fn, mssql_fn, label=""):
     receivable_detail/kpi_summary/inventory (chỉ có trên Supabase, không có gì để fallback).
 
     Circuit breaker: 1 hàm digest/alert thường gọi hàm này NHIỀU LẦN liên tiếp (vd trend 7 ngày =
-    7 lần) — nếu để mỗi lần đều tự thử+chờ timeout Postgres riêng thì 1 lần build report có thể
-    mất vài phút khi Supabase đang down (xác nhận thực tế 09/07/2026). Sau 1 lần pg_fn thất bại,
-    nhớ lại "Supabase đang down" trong _CIRCUIT_BREAKER_SECONDS giây tới -> các lần gọi sau trong
-    cửa sổ đó bỏ qua thẳng Bravo, không thử lại Postgres vô ích.
+    7 lần) — nếu để mỗi lần đều tự thử+chờ timeout Bravo riêng thì 1 lần build report có thể mất
+    vài phút khi Bravo đang không truy cập được. Sau 1 lần mssql_fn thất bại, nhớ lại "Bravo đang
+    down" trong _CIRCUIT_BREAKER_SECONDS giây tới -> các lần gọi sau trong cửa sổ đó bỏ qua thẳng
+    Supabase, không thử lại Bravo vô ích.
     """
-    global _supabase_down_until
+    global _bravo_down_until
     import time
     now = time.monotonic()
-    skip_pg = _supabase_down_until is not None and now < _supabase_down_until
+    skip_bravo = _bravo_down_until is not None and now < _bravo_down_until
 
-    if not skip_pg:
-        engine = _get_fast_cloud_engine()
-        if engine is not None:
+    if not skip_bravo:
+        bravo_engine = _get_bravo_engine()
+        if bravo_engine is not None:
             try:
-                with engine.connect() as conn:
-                    result = pg_fn(conn)
-                _supabase_down_until = None  # thành công -> xoá trạng thái down (nếu có)
+                with bravo_engine.connect() as conn:
+                    result = mssql_fn(conn)
+                _bravo_down_until = None  # thành công -> xoá trạng thái down (nếu có)
                 return result
             except Exception as e:
-                print(f"[DB][{label}] Supabase lỗi/timeout ({e}) — chuyển sang Bravo trực tiếp.")
-                _supabase_down_until = now + _CIRCUIT_BREAKER_SECONDS
+                print(f"[DB][{label}] Bravo lỗi/không truy cập được ({e}) — chuyển sang Supabase dự phòng.")
+                _bravo_down_until = now + _CIRCUIT_BREAKER_SECONDS
         else:
-            print(f"[DB][{label}] Chưa cấu hình CLOUD_DB_URL — thử thẳng Bravo.")
+            print(f"[DB][{label}] Chưa cấu hình BRAVO_SQL_* — thử thẳng Supabase.")
     else:
-        print(f"[DB][{label}] Supabase mới báo lỗi gần đây — bỏ qua, dùng thẳng Bravo (tự thử lại Postgres sau {_CIRCUIT_BREAKER_SECONDS}s).")
+        print(f"[DB][{label}] Bravo mới báo lỗi gần đây — bỏ qua, dùng thẳng Supabase (tự thử lại Bravo sau {_CIRCUIT_BREAKER_SECONDS}s).")
 
-    bravo_engine = _get_bravo_engine()
-    if bravo_engine is None:
-        print(f"[DB][{label}] Không có Bravo engine để fallback — bỏ qua.")
+    engine = _get_fast_cloud_engine()
+    if engine is None:
+        print(f"[DB][{label}] Không có Supabase engine để fallback — bỏ qua.")
         return None
-    with bravo_engine.connect() as conn:
-        return mssql_fn(conn)
+    with engine.connect() as conn:
+        return pg_fn(conn)
 
 def load_config():
     if not os.path.exists(CONFIG_PATH):
