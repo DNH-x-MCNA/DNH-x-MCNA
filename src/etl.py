@@ -653,16 +653,18 @@ def get_weekly_digest_metrics(region=None, channel=None):
     return get_digest_metrics(week_start, week_end, label, granularity="weekly", region=region, channel=channel)
 
 def get_monthly_digest_metrics(region=None, channel=None):
-    """Tổng hợp dữ liệu THÁNG TRƯỚC đã kết thúc trọn vẹn phục vụ Monthly Report (Email).
-    KHÔNG phải "từ đầu tháng hiện tại đến hôm nay" — nếu gửi đúng ngày 1 hàng tháng (lịch chạy
-    thật của DNH_Monthly_Report) thì cách tính cũ chỉ có ~1 ngày dữ liệu, gần như rỗng. Sửa
-    thành đúng pattern get_weekly_digest_metrics() đang làm cho tuần.
+    """Tổng hợp dữ liệu THÁNG ĐANG CHẠY (chứa ngày gọi hàm) phục vụ Monthly Report (Email).
+    10/07/2026: đổi lịch DNH_Monthly_Report từ "ngày 1 tháng sau" sang "ngày cuối tháng, 17h45"
+    (xem scripts/register_digest_schedule.bat) để báo cáo tháng vừa xong được gửi SỚM HƠN 1 ngày
+    — ĐÁNH ĐỔI: thiếu vài giờ cuối ngày cuối tháng (17h45 → 24h), chấp nhận được theo yêu cầu.
+    TRƯỚC ĐÂY hàm này tính "tháng TRƯỚC tháng chứa ngày gọi" (đúng khi lịch chạy là ngày 1 tháng
+    sau) — giữ nguyên logic cũ trong khi đổi lịch chạy sẽ khiến báo cáo bị TRỄ THÊM 1 THÁNG (vd
+    gửi 31/7 mà vẫn nói về tháng 6), nên phải sửa cả 2 cùng lúc, không chỉ đổi lịch schtasks.
     region/channel: lọc phạm vi báo cáo theo audience (xem get_digest_metrics)."""
     now = datetime.now()
-    this_month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-    prev_year, prev_month = _prev_month_tuple(this_month_start)
-    month_start = this_month_start.replace(year=prev_year, month=prev_month)
-    month_end = this_month_start  # exclusive — hết ngày cuối tháng trước
+    month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    next_year, next_month = (month_start.year + 1, 1) if month_start.month == 12 else (month_start.year, month_start.month + 1)
+    month_end = month_start.replace(year=next_year, month=next_month)  # exclusive — hết ngày cuối tháng này
     label = f"Tháng {month_start.strftime('%m/%Y')} ({month_start.strftime('%d/%m')} - {(month_end - timedelta(days=1)).strftime('%d/%m/%Y')})"
     return get_digest_metrics(month_start, month_end, label, granularity="monthly", region=region, channel=channel)
 
