@@ -109,9 +109,11 @@ def _digest_table(metrics):
 
 def send_daily_digest():
     """
-    Trích xuất dữ liệu tổng hợp trong ngày và gửi qua Email (Outlook) —
-    quy tắc kênh: ALERT nghiệp vụ (src/alerts.py) đi Teams, mọi REPORT (daily/weekly/monthly)
-    đi Outlook. Daily Digest là report nên chỉ gửi Email, không gửi Teams.
+    Trích xuất dữ liệu tổng hợp trong ngày và gửi qua Teams —
+    quy tắc kênh: ALERT nghiệp vụ (src/alerts.py) và Daily Digest đi Teams (cần ngắn gọn, xem
+    nhanh); Weekly/Monthly Report đi Outlook (báo cáo dài, đọc kỹ không cần đọc ngay). Đổi từ
+    Email sang Teams 10/07/2026 theo yêu cầu — trước đó Daily Digest từng đi Email, nay khớp với
+    ghi chú kênh đã có sẵn trong send_alert_to_all_channels().
     """
     print(f"[{datetime.now()}] Đang chuẩn bị báo cáo Daily Digest...")
     try:
@@ -123,10 +125,10 @@ def send_daily_digest():
             summary=f"Tổng hợp hoạt động ERP/CRM ngày {metrics['date']}.",
             table_headers=headers,
             table_rows=rows,
-            channels=("email",)
+            channels=("teams",)
         )
         if sent:
-            print(f"[{datetime.now()}] Báo cáo Daily Digest đã gửi thành công (Email).")
+            print(f"[{datetime.now()}] Báo cáo Daily Digest đã gửi thành công (Teams).")
         else:
             print(f"[{datetime.now()}] Gửi báo cáo Daily Digest thất bại.")
         return sent
