@@ -537,13 +537,54 @@ def get_digest_metrics(start_dt, end_dt, period_label, granularity=None, region=
     if channel != "OTC":
         top_etc = _top_customers(start_dt, end_dt, "ETC", region_markers)
 
-    # 3+4. Công nợ + tồn kho — CHỈ có trên Supabase (receivable_detail/inventory KHÔNG tồn tại
-    #    trên Bravo), không có đường fallback. Dùng engine "fast" (timeout ngắn) + try/except
-    #    RIÊNG cho phần này để nếu Supabase down thì chỉ 2 mục này trống/ẩn (đúng như UI đã xử lý
-    #    sẵn), KHÔNG kéo sập toàn bộ get_digest_metrics() như trước (đã xác nhận thực tế
-    #    09/07/2026: dùng engine.connect() thường không có timeout ngắn khiến cả hàm treo nhiều
-    #    phút khi Supabase mất kết nối, dù phần doanh thu/top khách hàng đã failover xong).
+    # 3. Công nợ — ưu tiên TỨC THỜI từ Bravo (get_bravo_receivables_snapshot, 10/07/2026), dự
+    #    phòng receivable_detail (Supabase) nếu Bravo lỗi. Bravo không có khái niệm "kỳ" (luôn
+    #    tức thời) nên bỏ hẳn bước kiểm tra độ mới của kỳ khi dùng Bravo — chỉ áp dụng khi rơi
+    #    xuống nhánh dự phòng Supabase.
     receivables = None
+    try:
+        from src.alerts import get_bravo_receivables_snapshot
+        snap = get_bravo_receivables_snapshot()
+        total_overdue = sum(
+            float(r.overdue_1_15 or 0) + float(r.overdue_15_30 or 0) + float(r.overdue_30_45 or 0) + float(r.overdue_gt_45 or 0)
+            for r in snap)
+        balance_end = sum(float(r.balance_end or 0) for r in snap)
+        receivables = {
+            "total_overdue": round(total_overdue, 2),
+            "balance_end": round(balance_end, 2),
+            "period": f"Tức thời (đến {datetime.now().strftime('%d/%m/%Y %H:%M')})",
+        }
+    except Exception as e:
+        print(f"[DIGEST] Bravo lỗi ({e}) — dự phòng Supabase receivable_detail.")
+        try:
+            fast_engine = _get_fast_cloud_engine()
+            if fast_engine is not None:
+                with fast_engine.connect() as conn:
+                    periods = [r[0] for r in conn.execute(text("SELECT DISTINCT period FROM receivable_detail")).fetchall() if r[0]]
+                    if periods:
+                        from ai_agent.chatbot import _latest_period_key
+                        latest_period = max(periods, key=_latest_period_key)
+                        month_str, year_str = latest_period.split('_')
+                        latest_tuple = (int(year_str), int(month_str))
+                        report_last_day = end_dt - timedelta(days=1)
+                        if latest_tuple in (_month_tuple(report_last_day), _prev_month_tuple(report_last_day)):
+                            deb_row = conn.execute(text(
+                                'SELECT COALESCE(SUM(total_overdue),0), COALESCE(SUM(balance_end),0) '
+                                'FROM receivable_detail WHERE period = :p'
+                            ), {"p": latest_period}).fetchone()
+                            receivables = {
+                                "total_overdue": round(float(deb_row[0]), 2),
+                                "balance_end": round(float(deb_row[1]), 2),
+                                "period": latest_period,
+                            }
+                        # else: dữ liệu công nợ quá cũ so với kỳ báo cáo -> để None, KHÔNG hiển thị
+        except Exception as e2:
+            print(f"[DIGEST] Lỗi cả 2 nguồn khi lấy công nợ: {e2}")
+
+    # 4. Tồn kho — VẪN Supabase (chưa verify công thức Bravo BRV_TheKho/TonKhoDK khớp số liệu thật
+    #    — xem docstring check_dead_stock_alert trong src/alerts.py, cùng lý do). KPI đội — ưu
+    #    tiên Bravo (TDV/QLV, get_bravo_kpi_tdv_snapshot), dự phòng kpi_summary (Supabase, đủ mọi
+    #    chức danh) nếu Bravo lỗi.
     dead_stock_count = near_stockout_count = 0
     dead_items = []
     kpi_summary = None
@@ -551,25 +592,6 @@ def get_digest_metrics(start_dt, end_dt, period_label, granularity=None, region=
     if fast_engine is not None:
         try:
             with fast_engine.connect() as conn:
-                periods = [r[0] for r in conn.execute(text("SELECT DISTINCT period FROM receivable_detail")).fetchall() if r[0]]
-                if periods:
-                    from ai_agent.chatbot import _latest_period_key
-                    latest_period = max(periods, key=_latest_period_key)
-                    month_str, year_str = latest_period.split('_')
-                    latest_tuple = (int(year_str), int(month_str))
-                    report_last_day = end_dt - timedelta(days=1)
-                    if latest_tuple in (_month_tuple(report_last_day), _prev_month_tuple(report_last_day)):
-                        deb_row = conn.execute(text(
-                            'SELECT COALESCE(SUM(total_overdue),0), COALESCE(SUM(balance_end),0) '
-                            'FROM receivable_detail WHERE period = :p'
-                        ), {"p": latest_period}).fetchone()
-                        receivables = {
-                            "total_overdue": round(float(deb_row[0]), 2),
-                            "balance_end": round(float(deb_row[1]), 2),
-                            "period": latest_period,
-                        }
-                    # else: dữ liệu công nợ quá cũ so với kỳ báo cáo -> để None, KHÔNG hiển thị
-
                 inv_row = conn.execute(text('''
                     SELECT
                         COUNT(*) FILTER (WHERE months_to_sell >= :dead_months AND closing_value > :dead_min_value),
@@ -585,12 +607,35 @@ def get_digest_metrics(start_dt, end_dt, period_label, granularity=None, region=
                     WHERE months_to_sell >= :dead_months AND closing_value > :dead_min_value
                     ORDER BY closing_value DESC LIMIT 5
                 '''), {"dead_months": dead_months, "dead_min_value": dead_min_value}).fetchall()
-
-                if granularity in ("weekly", "monthly"):
-                    kpi_summary = _kpi_summary(conn, region=region)
         except Exception as e:
-            print(f"[DIGEST] Supabase lỗi/timeout khi lấy công nợ/tồn kho/KPI (không có Bravo để "
-                  f"fallback — 3 bảng này chỉ có trên Supabase) — bỏ trống mục này: {e}")
+            print(f"[DIGEST] Supabase lỗi/timeout khi lấy tồn kho (chưa có Bravo để fallback) — bỏ trống mục này: {e}")
+
+    if granularity in ("weekly", "monthly"):
+        try:
+            from src.alerts import get_bravo_kpi_tdv_snapshot
+            snap = get_bravo_kpi_tdv_snapshot(position_codes=('TDV', 'QLV'))
+            markers = _region_markers(region)
+            if markers:
+                snap = [r for r in snap if r.area_code in markers]
+            snap = [r for r in snap if r.month_sale_target > 0]
+            if snap:
+                achieved = sum(1 for r in snap if (r.month_sale_percent or 0) >= 1.0)
+                total_target = sum(r.month_sale_target for r in snap)
+                total_amount = sum(r.month_sale_amount for r in snap)
+                team_pct = (total_amount / total_target) if total_target else None
+                kpi_summary = {
+                    "achieved_count": achieved, "total_count": len(snap),
+                    "team_pct": round(team_pct * 100, 1) if team_pct is not None else None,
+                    "total_target": round(total_target, 2), "total_amount": round(total_amount, 2),
+                }
+        except Exception as e:
+            print(f"[DIGEST] Bravo lỗi khi lấy KPI đội ({e}) — dự phòng Supabase kpi_summary.")
+            if fast_engine is not None:
+                try:
+                    with fast_engine.connect() as conn:
+                        kpi_summary = _kpi_summary(conn, region=region)
+                except Exception as e2:
+                    print(f"[DIGEST] Lỗi cả 2 nguồn khi lấy KPI đội: {e2}")
 
     # 5. Phần mở rộng CHỈ cho weekly/monthly (không đổi hành vi/tải truy vấn của daily). Trend +
     #    region_breakdown tự failover nội bộ (xem _revenue_trend/_revenue_by_region).
