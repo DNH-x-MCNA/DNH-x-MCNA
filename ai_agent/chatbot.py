@@ -1838,12 +1838,22 @@ Key Business Logic & Tables & Strict Mapping Rules:
      b. KÊNH OTC/ETC: nếu số liệu liên quan doanh thu/công nợ/đơn hàng theo kênh, PHẢI ghi rõ tên
         kênh trong cả SQL (cột riêng hoặc alias rõ ràng) lẫn câu trả lời — không viết chung chung
         "doanh thu" khi thực ra chỉ 1 kênh, và không gộp 2 kênh mà không nói rõ đã gộp.
-     c. VÙNG MIỀN: SELECT PHẢI có 1 cột literal alias "Vùng" (hoặc "Phạm vi") với giá trị CHÍNH XÁC
-        là chuỗi "{_region_label_for_answer}" (Postgres: N'{_region_label_for_answer}' AS "Vùng" /
-        T-SQL: N'{_region_label_for_answer}' AS [Vùng]) — đã tính sẵn theo đúng quyền của người hỏi,
-        KHÔNG tự suy luận/đổi khác. Câu trả lời văn xuôi cũng phải nhắc lại cụm từ này. Nếu người hỏi
-        bị giới hạn vùng miền, việc này còn xác nhận rõ với người xem rằng số liệu CHỈ thuộc vùng đó,
-        không phải toàn công ty — tránh hiểu nhầm.
+     c. VÙNG MIỀN — 2 trường hợp KHÁC NHAU, chọn đúng, KHÔNG áp dụng nhầm:
+        - Câu hỏi liệt kê NHIỀU đối tượng (nhân viên/khách hàng/hóa đơn...) mà MỖI đối tượng có vùng
+          miền RIÊNG (join được tới AreaCode/dim_tinhthanhpho...): cột "Vùng" PHẢI lấy vùng THẬT của
+          TỪNG dòng (map AreaCode 'MB'/'MT'/'MN' sang "Miền Bắc"/"Miền Trung"/"Miền Nam"), TUYỆT ĐỐI
+          KHÔNG lặp lại 1 giá trị cố định cho mọi dòng — đã xác nhận lỗi thực tế 10/07/2026: hỏi "Top
+          10 nhân viên KPI cao nhất" ra 10 dòng đều ghi "Toàn quốc" giống hệt nhau, vô nghĩa, trong
+          khi mỗi nhân viên thực ra thuộc 1 vùng cụ thể có sẵn trong dữ liệu — PHẢI sửa thành vùng
+          thật của từng người.
+        - Câu hỏi CHỈ hỏi 1 số tổng hợp DUY NHẤT (vd "tổng doanh thu hôm nay", không liệt kê theo
+          từng người/khách) — dùng cột literal alias "Vùng" với giá trị CHÍNH XÁC là chuỗi
+          "{_region_label_for_answer}" (Postgres: N'{_region_label_for_answer}' AS "Vùng" / T-SQL:
+          N'{_region_label_for_answer}' AS [Vùng]) — đã tính sẵn theo đúng quyền người hỏi. Trường
+          hợp người hỏi bị giới hạn vùng miền, LUÔN dùng cách này (kể cả khi liệt kê nhiều dòng) vì
+          toàn bộ kết quả đã bị lọc về đúng 1 vùng đó rồi.
+        Câu trả lời văn xuôi phải nhắc lại vùng miền tương ứng (vùng thật của người/khách nổi bật
+        nhất nếu là trường hợp liệt kê, hoặc cụm từ cố định nếu là số tổng hợp).
    - CÔNG NỢ ("khách nào nợ nhiều nhất", "rủi ro công nợ", "nợ xấu"): luôn thêm cột "Tỷ lệ quá hạn (%)" = ROUND((total_overdue / NULLIF(balance_end, 0) * 100)::numeric, 1). Khách nợ lớn nhưng tỷ lệ quá hạn thấp khác hẳn khách nợ nhỏ nhưng 100% đã quá hạn — bảng phải cho thấy điều đó.
    - TOP SẢN PHẨM BÁN CHẠY: ngoài 4 cột ở mục 5, thêm "TB bán/ngày" = SL Thực bán / (DATE '{latest_date_str}' - DATE '{latest_q_start}' + 1) và "Tỷ lệ KM (%)" = ROUND((SL Khuyến mãi / NULLIF(Tổng SL, 0) * 100)::numeric, 1) — tỷ lệ khuyến mãi cao cho thấy doanh số "ảo" nhờ hàng tặng.
    - KPI NHÂN VIÊN: ngoài % đạt chỉ tiêu, luôn thêm cột "Còn thiếu" = GREATEST(target - actual, 0) để thấy khoảng cách tuyệt đối phải bù (0 nếu đã vượt chỉ tiêu).
