@@ -1747,7 +1747,20 @@ Key Business Logic & Tables & Strict Mapping Rules:
      ... GROUP BY DATE_TRUNC('month', h."DocDate"::timestamp)
      ORDER BY "month"
    - VERY IMPORTANT — GROUP BY / SELECT EXPRESSION MUST MATCH EXACTLY: PostgreSQL requires every non-aggregated SELECT expression to appear VERBATIM in GROUP BY. NEVER mix two different date functions between SELECT and GROUP BY — e.g. do NOT write `SELECT TO_CHAR(h."DocDate"::timestamp, 'MM-YYYY') ... GROUP BY DATE_TRUNC('month', h."DocDate"::timestamp)`, this WILL fail with "column must appear in the GROUP BY clause". If you need a formatted month label (e.g. 'MM-YYYY') in SELECT, GROUP BY that exact same TO_CHAR(...) expression — do not swap in DATE_TRUNC for GROUP BY. Prefer grouping/ordering by DATE_TRUNC('month', h."DocDate"::timestamp) as a plain column (not reformatted with TO_CHAR) unless the user explicitly needs a text label; this also sorts chronologically correctly, unlike a formatted 'MM-YYYY' string.
-   - Do NOT use CURRENT_DATE or NOW() for filters since the database does not contain July {latest_year} data.
+   - "HÔM NAY"/"today": filter DocDate = CURRENT_DATE (Postgres) hoặc CAST(GETDATE() AS DATE) (T-SQL/Bravo)
+     — dùng ĐỒNG HỒ THẬT của server, KHÔNG dùng MAX(DocDate). Nếu hôm nay chưa có hóa đơn nào (business
+     day chưa xong), kết quả 0 là ĐÚNG, không tự lùi sang ngày khác.
+   - "HÔM QUA"/"yesterday": filter DocDate = CURRENT_DATE - 1 (Postgres) hoặc
+     CAST(DATEADD(day, -1, GETDATE()) AS DATE) (T-SQL/Bravo) — CŨNG dùng đồng hồ thật.
+     TUYỆT ĐỐI KHÔNG tính bằng MAX(DocDate) - 1 ngày — đã xác nhận lỗi thực tế 10/07/2026: hôm đó
+     MAX(DocDate) đã chính là 09/07 (= hôm qua thật), nhưng AI tự trừ thêm 1 ngày nữa ra 08/07 (hôm
+     kia), trả lời sai 1 ngày. Lý do sai: MAX(DocDate) thường ĐÃ XẤP XỈ "hôm qua" rồi (vì hôm nay dữ
+     liệu có thể chưa nhập xong lúc đang hỏi) — trừ thêm 1 ngày nữa là sai kép.
+   - Nguyên tắc chung: MỌI mốc thời gian có nghĩa LỊCH THỰC (hôm nay/hôm qua/tuần này/tháng này) phải
+     neo vào đồng hồ thật (CURRENT_DATE/GETDATE()), KHÔNG neo vào MAX(DocDate) — 2 khái niệm khác nhau
+     và có thể lệch nhau nếu dữ liệu hôm nay chưa nhập xong. CHỈ riêng "N ngày/tháng GẦN NHẤT" (rolling
+     window trên dữ liệu SẴN CÓ, xem rule ngay dưới) mới neo vào MAX(DocDate) — vì mục đích của nó là
+     lấy N đơn vị thời gian gần nhất CÓ DỮ LIỆU, khác hẳn khái niệm lịch thực ở trên.
    - For '7 ngày gần nhất' (last 7 days): Base the query on the maximum date in the database: (SELECT MAX("DocDate"::date) FROM brv_hoadonhdr) (which is '{latest_date_str}'). Filter for dates between MAX(date) - INTERVAL '6 days' and MAX(date):
      WHERE h."DocDate"::date >= (SELECT MAX("DocDate"::date) FROM brv_hoadonhdr WHERE "IsActive" = TRUE) - INTERVAL '6 days'
    - For 'doanh thu theo tháng' (monthly revenue): Group and sum the total revenue by month using DATE_TRUNC('month', h."DocDate"::timestamp) or similar casting:
