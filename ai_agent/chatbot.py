@@ -60,14 +60,16 @@ _SCHEMA_CACHE_TTL_SECONDS = 300  # 5 phút — đủ mới, không cần fetch l
 # mart_layer_instruction nhánh active_backend=="bravo" để biết công thức tính đã kiểm chứng.
 # receivable_detail/inventory/kpi_summary/fact_tonghopkhachhang bên Supabase KHÔNG phải sync tự
 # động từ Bravo mỗi loại như nhau: fact_tonghopkhachhang LÀ 1-1 sync thật từ FACT_TongHopKhachHang
-# (có thể dùng thẳng, CHƯA làm trong lượt này); receivable_detail/inventory/kpi_summary lại là
-# import 1 LẦN từ Excel DNH gửi đầu dự án (KHÔNG tự động, đã cũ ~6 tháng) — không phải nguồn Bravo
-# thiếu, mà do chưa xây transformation logic tương đương trên Bravo cho 2 mảng còn lại (tồn kho/KPI).
+# (đã BẬT dùng thẳng 10/07/2026, chỉ cho TDV/QLV — xem kpi_tdv_instruction nhánh bravo);
+# receivable_detail/inventory/kpi_summary lại là import 1 LẦN từ Excel DNH gửi đầu dự án (KHÔNG tự
+# động, đã cũ ~6 tháng) — không phải nguồn Bravo thiếu, mà do chưa xây transformation logic tương
+# đương trên Bravo cho phần còn lại (tồn kho, KPI TP/PP/TBP/CS/CTV/TK).
 _BRAVO_TABLES = (
     'brv_hoadonhdr', 'brv_hoadonct', 'brvsx_hoadonhdr', 'brvsx_hoadonct',
     'brv_trangthaihoadon', 'brv_trangthaiduyet', 'dms_khachhang', 'dmssx_khachhang',
     'dim_tinhthanhpho', 'dim_nhanvien', 'brv_sanpham', 'brvsx_tralai',
     'brv_httdudk', 'brvsx_httdudk', 'brv_khachhang', 'brvsx_khachhang',
+    'fact_tonghopkhachhang',
 )
 
 def get_db_schema(dialect="postgres"):
@@ -1004,6 +1006,11 @@ class DNHChatbot:
         "BRV_HOADONHDR", "BRV_HOADONCT", "BRVSX_HOADONHDR", "BRVSX_HOADONCT",
         "DIM_NHANVIEN", "KPI_SUMMARY", "RECEIVABLE_DETAIL", "DMS_KHACHHANG", "DMSSX_KHACHHANG",
         "BRV_HTTDUDK", "BRVSX_HTTDUDK",
+        # FACT_TONGHOPKHACHHANG (KPI TDV/QLV trên Bravo, thêm 10/07/2026): có sẵn cột AreaCode/
+        # AreaCode2 trực tiếp — PHÁT HIỆN thiếu ở đây khi thêm tính năng, dù role_system_instruction
+        # đã dặn chung "KPI/targets summary phải filter AreaCode" — fail-closed vẫn cần liệt kê tên
+        # bảng cụ thể mới bắt được, không tự suy luận từ text mô tả chung.
+        "FACT_TONGHOPKHACHHANG",
     ]
     _CHANNEL_SHARED_TABLES = ["RECEIVABLE_DETAIL", "KPI_SUMMARY"]
     _REGION_NAMES_VI = {"bac": "Miền Bắc", "nam": "Miền Nam", "trung": "Miền Trung"}
@@ -1403,12 +1410,44 @@ Câu hỏi/Lời chào của người dùng: "{user_question}"
      ORDER BY pct DESC
      LIMIT 5"""
         elif active_backend == "bravo":
-            kpi_tdv_instruction = """   - Đang dùng nguồn dữ liệu DỰ PHÒNG (Bravo SQL Server, vì Supabase tạm không kết nối được).
-   - CẢ 'fact_tonghopkhachhang' LẪN 'kpi_summary' ĐỀU KHÔNG tồn tại trên nguồn dự phòng này (chỉ có
-     trên Supabase) — TUYỆT ĐỐI KHÔNG sinh SQL tham chiếu tới 2 bảng này, sẽ luôn lỗi khi chạy.
-   - Nếu câu hỏi cần dữ liệu KPI/chỉ tiêu/nhân sự: BẮT BUỘC vẫn trả về ĐÚNG 1 câu SELECT hợp lệ (vì
-     câu trả lời CHỈ ĐƯỢC LÀ SQL, không được viết văn xuôi thuần) — dùng đúng dạng:
-     SELECT N'Dữ liệu KPI hiện không có trên nguồn dự phòng (Bravo SQL Server). Vui lòng thử lại khi Supabase hồi phục.' AS [Thông báo]
+            kpi_tdv_instruction = """   - KPI TDV/QLV dùng nguồn Bravo (nguồn CHÍNH) — 'FACT_TongHopKhachHang' TỒN TẠI THẬT trên Bravo (đã
+     kiểm chứng thực tế 10/07/2026: đây CHÍNH LÀ bảng gốc mà 'fact_tonghopkhachhang' bên Supabase
+     đồng bộ 1-1 từ đó, KHÔNG phải bảng khác — dữ liệu trên Bravo còn MỚI HƠN, cập nhật gần real-time
+     thay vì theo lịch đồng bộ). CHỈ dùng được cho TDV/QLV — 'kpi_summary' (cho TP/PP/TBP/CS/CTV/TK)
+     KHÔNG tồn tại trên Bravo, các vị trí đó vẫn phải từ chối (xem bên dưới).
+   - QUY TẮC BẮT BUỘC cho TDV/QLV trên Bravo:
+     a. Actual = SUM([Amount_Cus]), Target = [MonthSaleTarget], mã NV = [EmployeeCode], vùng =
+        [AreaCode]/[AreaCode2] — GIỐNG HỆT tên cột bên Postgres, chỉ khác cú pháp T-SQL.
+     b. [SaveDate] là kiểu DATE GỐC (không phải TEXT như bên Postgres) — ĐỪNG ép kiểu, và KHÔNG dùng
+        1 tháng cố định: dùng (SELECT MAX([SaveDate]) FROM [FACT_TongHopKhachHang]) làm mốc kỳ mới
+        nhất (đã xác nhận: đây là snapshot theo kỳ, có thể là giữa tháng đang chạy chứ không chỉ
+        cuối tháng — MAX(SaveDate) luôn lấy đúng bản mới nhất, không hardcode ngày cụ thể).
+     c. JOIN với [DIM_NhanVien] qua [EmployeeCode], lọc ([IsDuplicate] IS NULL OR [IsDuplicate] = 0)
+        để loại nhân viên trùng — GIỐNG quy tắc Postgres.
+     d. MỖI khách hàng/dòng lặp lại target — PHẢI SELECT DISTINCT EmployeeCode + MonthSaleTarget
+        trước khi SUM, tránh cộng trùng target (giống hệt cảnh báo bên Postgres).
+   Ví dụ đúng — Top TDV theo % hoàn thành chỉ tiêu tháng:
+     WITH tdv_actual AS (
+       SELECT [EmployeeCode], SUM([Amount_Cus]) AS [TotalActual]
+       FROM [FACT_TongHopKhachHang]
+       WHERE [SaveDate] = (SELECT MAX([SaveDate]) FROM [FACT_TongHopKhachHang])
+       GROUP BY [EmployeeCode]
+     ),
+     tdv_target AS (
+       SELECT DISTINCT [EmployeeCode], [MonthSaleTarget]
+       FROM [FACT_TongHopKhachHang]
+       WHERE [SaveDate] = (SELECT MAX([SaveDate]) FROM [FACT_TongHopKhachHang]) AND [MonthSaleTarget] IS NOT NULL
+     )
+     SELECT TOP 5 n.[Name], a.[EmployeeCode], a.[TotalActual], t.[MonthSaleTarget],
+            ROUND(a.[TotalActual] * 100.0 / NULLIF(t.[MonthSaleTarget], 0), 1) AS [PctHoanThanh]
+     FROM tdv_actual a
+     JOIN [DIM_NhanVien] n ON a.[EmployeeCode] = n.[EmployeeCode]
+     JOIN tdv_target t ON a.[EmployeeCode] = t.[EmployeeCode]
+     WHERE n.[PositionCode] = 'TDV' AND (n.[IsDuplicate] IS NULL OR n.[IsDuplicate] = 0) AND t.[MonthSaleTarget] > 0
+     ORDER BY [PctHoanThanh] DESC
+   - TP/PP/TBP/CS/CTV/TK: 'kpi_summary' KHÔNG có trên Bravo — nếu câu hỏi cần KPI của các vị trí này,
+     BẮT BUỘC trả về ĐÚNG 1 câu SELECT hợp lệ (câu trả lời CHỈ ĐƯỢC LÀ SQL) dùng đúng dạng:
+     SELECT N'Dữ liệu KPI vị trí này hiện chưa hỗ trợ trên nguồn Bravo. Vui lòng thử lại khi Supabase kết nối được.' AS [Thông báo]
      TUYỆT ĐỐI KHÔNG trả lời bằng câu văn thường (không phải SELECT) — sẽ bị hệ thống an toàn chặn
      và hiện lỗi khó hiểu cho người dùng."""
         else:
