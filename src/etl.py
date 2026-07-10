@@ -390,13 +390,12 @@ def _revenue_trend(start_dt, end_dt, granularity, region=None, channel=None):
     trend = []
     for b_start, b_end, label in buckets:
         otc_rev, etc_rev, _ = _period_revenue(b_start, b_end, region=region)
-        if channel == "OTC":
-            total = otc_rev
-        elif channel == "ETC":
-            total = etc_rev
-        else:
-            total = otc_rev + etc_rev
-        trend.append({"label": label, "revenue": round(total, 2)})
+        trend.append({
+            "label": label,
+            "revenue": round(otc_rev + etc_rev, 2),
+            "otc": round(otc_rev, 2),
+            "etc": round(etc_rev, 2)
+        })
     return trend
 
 
