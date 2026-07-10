@@ -878,7 +878,7 @@ def _send_with_retry(fn, *args, max_retries=2, delays=(3, 6), **kwargs):
 
 def send_alert_to_all_channels(alert_name, severity, summary, table_headers=None, table_rows=None,
                                 channels=("email", "teams"), period=None, channel=None, region=None,
-                                issue=None):
+                                issue=None, require_critical_for_teams=True):
     """
     Gửi cảnh báo qua các kênh được chỉ định trong `channels` (mặc định: Email, Teams).
     Dùng `channels` để định tuyến theo loại nội dung — vd. alert tức thời/daily digest chỉ đi
@@ -888,6 +888,13 @@ def send_alert_to_all_channels(alert_name, severity, summary, table_headers=None
 
     period/channel/region/issue: các trường có cấu trúc (tùy chọn) chỉ áp dụng cho card Teams —
     xem _build_teams_adaptive_card. Không đổi định dạng Email/Telegram hiện có.
+
+    require_critical_for_teams (mặc định True, thêm 10/07/2026): chống nhiễu — CHỈ severity
+    CRITICAL mới thực sự bắn Teams, WARNING/INFO vẫn được LOG (_log_alert_severity, không đổi)
+    nhưng không chủ động đẩy thông báo. Áp dụng cho alert nghiệp vụ THỜI GIAN THỰC (src/alerts.py)
+    — nơi nhiều loại cảnh báo có thể cùng trigger 1 lúc sau 1 chu kỳ quét, từng gây dồn 5-6 card
+    cùng lúc. Daily Digest (main.py) KHÔNG bị ảnh hưởng — gửi 1 lần/ngày theo lịch cố định, không
+    có hiện tượng dồn dập nên chủ động truyền require_critical_for_teams=False để bỏ qua bộ lọc.
     """
     print(f"\n--- BAT DAU GUI CANH BAO: {alert_name} [{severity}] (kenh: {', '.join(channels)}) ---")
     _log_alert_severity(alert_name, severity)
@@ -967,7 +974,9 @@ def send_alert_to_all_channels(alert_name, severity, summary, table_headers=None
     # 3. Gui qua Teams — định tuyến theo audience khớp region/channel của alert (Phần 3 phân
     #    quyền). Khi các audience còn trỏ chung 1 webhook mặc định (chưa điền Flow riêng),
     #    _resolve_teams_webhooks tự khử trùng nên hành vi giống hệt "1 webhook chung" trước đây.
-    if "teams" in channels:
+    if "teams" in channels and require_critical_for_teams and severity != "CRITICAL":
+        print(f"[TEAMS] Bỏ qua gửi Teams cho '{alert_name}' (severity={severity}, chỉ CRITICAL mới gửi Teams).")
+    elif "teams" in channels:
         try:
             # Nếu có phân tích AI, đính kèm vào nội dung Teams
             teams_summary = summary
