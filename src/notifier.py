@@ -136,11 +136,11 @@ DIGEST_EMAIL_TEMPLATE = """
         .header p { margin: 5px 0 0 0; font-size: 14px; opacity: 0.9; }
         .content { padding: 24px; }
         .section-title { font-size: 16px; font-weight: 700; color: #1e3a8a; margin-top: 24px; margin-bottom: 12px; border-bottom: 2px solid #e2e8f0; padding-bottom: 6px; text-transform: uppercase; letter-spacing: 0.5px; }
-        .grid { display: flex; flex-wrap: wrap; margin: -8px; }
-        .col { flex: 1; min-width: 130px; padding: 8px; }
-        .kpi-card { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 16px; text-align: center; }
-        .kpi-card .val { font-size: 22px; font-weight: 700; color: #1e293b; margin: 5px 0; }
-        .kpi-card .lbl { font-size: 12px; color: #64748b; font-weight: 600; text-transform: uppercase; }
+        .grid { display: block; width: 100%; margin: -8px 0; }
+        .col { display: inline-block; vertical-align: top; box-sizing: border-box; }
+        .kpi-card { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 16px; text-align: center; height: 100%; box-sizing: border-box; }
+        .kpi-card .val { font-size: 20px; font-weight: 700; color: #1e293b; margin: 5px 0; }
+        .kpi-card .lbl { font-size: 11px; color: #64748b; font-weight: 600; text-transform: uppercase; }
         .kpi-card.failed { border-left: 4px solid #ef4444; }
         .kpi-card.success { border-left: 4px solid #10b981; }
         .data-table { width: 100%; border-collapse: collapse; margin-top: 10px; margin-bottom: 20px; }
@@ -170,32 +170,52 @@ DIGEST_EMAIL_TEMPLATE = """
                 🔴 Kỳ này có ít nhất 1 cảnh báo mức CRITICAL — xem chi tiết ở mục "Điểm Nổi Bật Trong Kỳ" bên dưới.
             </div>
             {% endif %}
+
             {% if metrics.highlights %}
             <!-- Điểm nổi bật Section — nối luồng cảnh báo thời gian thực với báo cáo định kỳ -->
             <div class="section-title">Điểm Nổi Bật Trong Kỳ</div>
-            <ul style="margin: 0 0 10px 0; padding-left: 20px; font-size: 13px; color: #334155;">
+            <ul style="margin: 0 0 20px 0; padding-left: 20px; font-size: 13px; color: #334155;">
                 {% for h in metrics.highlights %}
                 <li style="margin-bottom: 6px;"><strong>{{ h.alert_key }}</strong> — {{ h.sent_at }} (giá trị ghi nhận: {{ h.value }})</li>
                 {% endfor %}
             </ul>
             {% endif %}
 
+            {% if metrics.ai_analysis %}
+            <!-- AI Insight Section -->
+            <div style="margin-top: 20px; padding: 18px; background: #f0f7ff; border-left: 4px solid #3b82f6; border-radius: 8px; margin-bottom: 20px;">
+                <strong style="color: #1e3a8a; font-size: 14px; display: block; margin-bottom: 8px;">🧠 PHÂN TÍCH THÔNG MINH (AI GEMINI):</strong>
+                <div style="font-size: 13px; color: #2d3748; line-height: 1.6;">
+                    {{ metrics.ai_analysis | safe }}
+                </div>
+            </div>
+            {% endif %}
+
             <!-- Doanh thu Section -->
             <div class="section-title">Doanh Thu (OTC + ETC)</div>
             <div class="grid">
-                <div class="col">
+                <!--[if mso]>
+                <table role="presentation" width="100%" style="border-collapse: collapse; border: 0;"><tr><td width="25%" valign="top" style="padding: 8px;">
+                <![endif]-->
+                <div class="col" style="width: 100%; max-width: 145px; padding: 8px;">
                     <div class="kpi-card">
                         <div class="lbl">Doanh Thu OTC</div>
                         <div class="val">{{ "{:,.0f}".format(metrics.revenue.otc) }} đ</div>
                     </div>
                 </div>
-                <div class="col">
+                <!--[if mso]>
+                </td><td width="25%" valign="top" style="padding: 8px;">
+                <![endif]-->
+                <div class="col" style="width: 100%; max-width: 145px; padding: 8px;">
                     <div class="kpi-card">
                         <div class="lbl">Doanh Thu ETC</div>
                         <div class="val">{{ "{:,.0f}".format(metrics.revenue.etc) }} đ</div>
                     </div>
                 </div>
-                <div class="col">
+                <!--[if mso]>
+                </td><td width="25%" valign="top" style="padding: 8px;">
+                <![endif]-->
+                <div class="col" style="width: 100%; max-width: 145px; padding: 8px;">
                     <div class="kpi-card success">
                         <div class="lbl">Tổng Doanh Thu</div>
                         <div class="val" style="color: #10b981;">{{ "{:,.0f}".format(metrics.revenue.total) }} đ</div>
@@ -208,18 +228,27 @@ DIGEST_EMAIL_TEMPLATE = """
                         {% endif %}
                     </div>
                 </div>
-                <div class="col">
+                <!--[if mso]>
+                </td><td width="25%" valign="top" style="padding: 8px;">
+                <![endif]-->
+                <div class="col" style="width: 100%; max-width: 145px; padding: 8px;">
                     <div class="kpi-card">
                         <div class="lbl">Số Hóa Đơn</div>
                         <div class="val">{{ metrics.revenue.invoice_count }}</div>
                     </div>
                 </div>
+                <!--[if mso]>
+                </td></tr></table>
+                <![endif]-->
             </div>
 
             <!-- Top khách hàng Section -->
             <div class="section-title">Top 5 Khách Hàng Theo Doanh Thu</div>
             <div class="grid">
-                <div class="col" style="flex: 1; min-width: 280px;">
+                <!--[if mso]>
+                <table role="presentation" width="100%" style="border-collapse: collapse; border: 0;"><tr><td width="50%" valign="top" style="padding: 8px;">
+                <![endif]-->
+                <div class="col" style="width: 100%; max-width: 290px; padding: 8px;">
                     <p style="font-size:12px; font-weight:700; color:#64748b; text-transform:uppercase; margin: 0 0 6px;">Kênh OTC</p>
                     {% if metrics.top_customers_otc %}
                     <table class="data-table">
@@ -234,7 +263,10 @@ DIGEST_EMAIL_TEMPLATE = """
                     <p class="no-data">Không có dữ liệu.</p>
                     {% endif %}
                 </div>
-                <div class="col" style="flex: 1; min-width: 280px;">
+                <!--[if mso]>
+                </td><td width="50%" valign="top" style="padding: 8px;">
+                <![endif]-->
+                <div class="col" style="width: 100%; max-width: 290px; padding: 8px;">
                     <p style="font-size:12px; font-weight:700; color:#64748b; text-transform:uppercase; margin: 0 0 6px;">Kênh ETC</p>
                     {% if metrics.top_customers_etc %}
                     <table class="data-table">
@@ -249,11 +281,21 @@ DIGEST_EMAIL_TEMPLATE = """
                     <p class="no-data">Không có dữ liệu.</p>
                     {% endif %}
                 </div>
+                <!--[if mso]>
+                </td></tr></table>
+                <![endif]-->
             </div>
 
             {% if metrics.trend %}
             <!-- Xu hướng trong kỳ Section — weekly: theo NGÀY, monthly: theo TUẦN -->
             <div class="section-title">Xu Hướng Doanh Thu Trong Kỳ</div>
+            
+            {% if trend_chart_svg %}
+            <div style="margin-bottom: 20px; text-align: center;">
+                {{ trend_chart_svg | safe }}
+            </div>
+            {% endif %}
+
             <table class="data-table">
                 <thead><tr><th>Giai đoạn</th><th>Doanh thu</th></tr></thead>
                 <tbody>
@@ -281,24 +323,36 @@ DIGEST_EMAIL_TEMPLATE = """
             <!-- Tóm tắt KPI Section — kpi_summary là SNAPSHOT hiện tại, không lưu lịch sử theo kỳ -->
             <div class="section-title">Tóm Tắt KPI Đội Ngũ (tính đến hiện tại)</div>
             <div class="grid">
-                <div class="col">
+                <!--[if mso]>
+                <table role="presentation" width="100%" style="border-collapse: collapse; border: 0;"><tr><td width="33.3%" valign="top" style="padding: 8px;">
+                <![endif]-->
+                <div class="col" style="width: 100%; max-width: 190px; padding: 8px;">
                     <div class="kpi-card success">
                         <div class="lbl">Đạt Chỉ Tiêu</div>
                         <div class="val" style="color: #10b981;">{{ metrics.kpi_summary.achieved_count }}/{{ metrics.kpi_summary.total_count }}</div>
                     </div>
                 </div>
-                <div class="col">
+                <!--[if mso]>
+                </td><td width="33.3%" valign="top" style="padding: 8px;">
+                <![endif]-->
+                <div class="col" style="width: 100%; max-width: 190px; padding: 8px;">
                     <div class="kpi-card">
                         <div class="lbl">% Hoàn Thành Toàn Đội</div>
                         <div class="val">{% if metrics.kpi_summary.team_pct is not none %}{{ "%.1f"|format(metrics.kpi_summary.team_pct) }}%{% else %}—{% endif %}</div>
                     </div>
                 </div>
-                <div class="col">
+                <!--[if mso]>
+                </td><td width="33.3%" valign="top" style="padding: 8px;">
+                <![endif]-->
+                <div class="col" style="width: 100%; max-width: 190px; padding: 8px;">
                     <div class="kpi-card">
                         <div class="lbl">Tổng Doanh Số Đạt</div>
                         <div class="val">{{ "{:,.0f}".format(metrics.kpi_summary.total_amount) }} đ</div>
                     </div>
                 </div>
+                <!--[if mso]>
+                </td></tr></table>
+                <![endif]-->
             </div>
             {% endif %}
 
@@ -306,36 +360,54 @@ DIGEST_EMAIL_TEMPLATE = """
             <!-- Công nợ Section (chỉ hiện khi dữ liệu còn mới — cùng tháng hoặc tháng liền trước kỳ báo cáo) -->
             <div class="section-title">Công Nợ (Kỳ {{ metrics.receivables.period }})</div>
             <div class="grid">
-                <div class="col">
+                <!--[if mso]>
+                <table role="presentation" width="100%" style="border-collapse: collapse; border: 0;"><tr><td width="50%" valign="top" style="padding: 8px;">
+                <![endif]-->
+                <div class="col" style="width: 100%; max-width: 290px; padding: 8px;">
                     <div class="kpi-card failed">
                         <div class="lbl">Nợ Quá Hạn</div>
                         <div class="val" style="color: #ef4444;">{{ "{:,.0f}".format(metrics.receivables.total_overdue) }} đ</div>
                     </div>
                 </div>
-                <div class="col">
+                <!--[if mso]>
+                </td><td width="50%" valign="top" style="padding: 8px;">
+                <![endif]-->
+                <div class="col" style="width: 100%; max-width: 290px; padding: 8px;">
                     <div class="kpi-card">
                         <div class="lbl">Tổng Dư Nợ</div>
                         <div class="val">{{ "{:,.0f}".format(metrics.receivables.balance_end) }} đ</div>
                     </div>
                 </div>
+                <!--[if mso]>
+                </td></tr></table>
+                <![endif]-->
             </div>
             {% endif %}
 
             <!-- Tồn kho Section -->
             <div class="section-title">Tồn Kho</div>
             <div class="grid">
-                <div class="col">
+                <!--[if mso]>
+                <table role="presentation" width="100%" style="border-collapse: collapse; border: 0;"><tr><td width="50%" valign="top" style="padding: 8px;">
+                <![endif]-->
+                <div class="col" style="width: 100%; max-width: 290px; padding: 8px;">
                     <div class="kpi-card failed">
                         <div class="lbl">Tồn Chết (&ge;12 tháng)</div>
                         <div class="val" style="color: #ea580c;">{{ metrics.inventory.dead_stock_count }}</div>
                     </div>
                 </div>
-                <div class="col">
+                <!--[if mso]>
+                </td><td width="50%" valign="top" style="padding: 8px;">
+                <![endif]-->
+                <div class="col" style="width: 100%; max-width: 290px; padding: 8px;">
                     <div class="kpi-card failed">
                         <div class="lbl">Sắp Hết Hàng (&le;1 tháng)</div>
                         <div class="val" style="color: #ef4444;">{{ metrics.inventory.near_stockout_count }}</div>
                     </div>
                 </div>
+                <!--[if mso]>
+                </td></tr></table>
+                <![endif]-->
             </div>
             {% if metrics.inventory.dead_stock_items %}
             <table class="data-table">
@@ -550,6 +622,210 @@ def build_alert_email(alert_name, severity, summary, table_headers, table_rows):
         timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     )
 
+def build_svg_clustered_chart(trend_data):
+    if not trend_data:
+        return ""
+    
+    # Dimensions
+    view_width = 600
+    view_height = 220
+    margin_left = 65
+    margin_right = 20
+    margin_top = 30
+    margin_bottom = 35
+    
+    chart_width = view_width - margin_left - margin_right
+    chart_height = view_height - margin_top - margin_bottom
+    
+    # Calculate limits
+    max_val = 1.0
+    for x in trend_data:
+        otc = float(x.get("otc") or 0)
+        etc = float(x.get("etc") or 0)
+        total = float(x.get("revenue") or (otc + etc))
+        max_val = max(max_val, otc, etc, total)
+    
+    # Round max_val to nice number with headroom
+    max_val = max_val * 1.15
+    
+    # Smart helper for formatting Y-axis labels
+    def format_y_label(val):
+        if val >= 1_000_000_000:
+            return f"{val / 1_000_000_000:.1f} tỷ"
+        elif val >= 1_000_000:
+            return f"{val / 1_000_000:.0f} tr"
+        elif val >= 1_000:
+            return f"{val / 1_000:.0f} k"
+        return f"{val:.0f}"
+
+    svg = []
+    svg.append(f'<svg width="100%" height="{view_height}" viewBox="0 0 {view_width} {view_height}" xmlns="http://www.w3.org/2000/svg" style="background:#ffffff; border: 1px solid #e2e8f0; border-radius:12px; font-family:\'Segoe UI\', Tahoma, Geneva, Verdana, sans-serif;">')
+    
+    # Define gradients and styles
+    svg.append("""
+    <defs>
+        <linearGradient id="otcGrad" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stop-color="#3b82f6" stop-opacity="0.85"/>
+            <stop offset="100%" stop-color="#2563eb" stop-opacity="0.95"/>
+        </linearGradient>
+        <linearGradient id="etcGrad" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stop-color="#10b981" stop-opacity="0.85"/>
+            <stop offset="100%" stop-color="#059669" stop-opacity="0.95"/>
+        </linearGradient>
+    </defs>
+    """)
+
+    # Title & Legend
+    svg.append(f'<text x="20" y="25" font-size="12" font-weight="700" fill="#1e293b">XU HƯỚNG DOANH THU OTC VS ETC</text>')
+    # Legend boxes
+    svg.append('<rect x="360" y="15" width="12" height="12" rx="2" fill="url(#otcGrad)"/>')
+    svg.append('<text x="377" y="25" font-size="10" font-weight="600" fill="#64748b">OTC</text>')
+    svg.append('<rect x="420" y="15" width="12" height="12" rx="2" fill="url(#etcGrad)"/>')
+    svg.append('<text x="437" y="25" font-size="10" font-weight="600" fill="#64748b">ETC</text>')
+    svg.append('<line x1="480" y1="21" x2="500" y2="21" stroke="#ea580c" stroke-width="2" stroke-dasharray="2"/>')
+    svg.append('<text x="507" y="25" font-size="10" font-weight="600" fill="#64748b">Tổng</text>')
+
+    # Draw Y grid lines & labels (4 levels: 0%, 33%, 66%, 100%)
+    for i in range(4):
+        pct = i / 3.0
+        y = margin_top + chart_height - (pct * chart_height)
+        val = pct * max_val
+        svg.append(f'<line x1="{margin_left}" y1="{y}" x2="{view_width - margin_right}" y2="{y}" stroke="#f1f5f9" stroke-width="1"/>')
+        svg.append(f'<text x="{margin_left - 8}" y="{y + 3}" font-size="9" fill="#94a3b8" text-anchor="end">{format_y_label(val)}</text>')
+
+    # Calculate points for line chart (Total) and bars
+    n_points = len(trend_data)
+    group_width = chart_width / max(n_points, 1)
+    
+    line_points = []
+    
+    for i, x in enumerate(trend_data):
+        otc_val = float(x.get("otc") or 0)
+        etc_val = float(x.get("etc") or 0)
+        total_val = float(x.get("revenue") or (otc_val + etc_val))
+        label = x.get("label") or ""
+        
+        group_x = margin_left + i * group_width
+        
+        # Draw Bars
+        # Bar width = 28% of group width each
+        bar_w = max(group_width * 0.28, 4)
+        gap = max(group_width * 0.04, 1)
+        
+        otc_h = (otc_val / max_val) * chart_height
+        otc_y = margin_top + chart_height - otc_h
+        otc_x = group_x + (group_width - 2*bar_w - gap) / 2
+        
+        etc_h = (etc_val / max_val) * chart_height
+        etc_y = margin_top + chart_height - etc_h
+        etc_x = otc_x + bar_w + gap
+        
+        if otc_h > 0:
+            svg.append(f'<rect x="{otc_x}" y="{otc_y}" width="{bar_w}" height="{otc_h}" rx="2" fill="url(#otcGrad)"/>')
+        if etc_h > 0:
+            svg.append(f'<rect x="{etc_x}" y="{etc_y}" width="{bar_w}" height="{etc_h}" rx="2" fill="url(#etcGrad)"/>')
+            
+        # Line point (Total)
+        total_h = (total_val / max_val) * chart_height
+        total_y = margin_top + chart_height - total_h
+        center_x = group_x + group_width / 2
+        line_points.append((center_x, total_y, total_val))
+        
+        # X-axis label
+        svg.append(f'<text x="{center_x}" y="{view_height - 12}" font-size="9" font-weight="600" fill="#64748b" text-anchor="middle">{label}</text>')
+
+    # Draw Total line & circles
+    if len(line_points) > 1:
+        path_d = []
+        for idx, (px, py, _) in enumerate(line_points):
+            if idx == 0:
+                path_d.append(f"M {px} {py}")
+            else:
+                path_d.append(f"L {px} {py}")
+        svg.append(f'<path d="{" ".join(path_d)}" fill="none" stroke="#ea580c" stroke-width="2" stroke-dasharray="3" stroke-linejoin="round" stroke-linecap="round"/>')
+        
+    for px, py, pval in line_points:
+        svg.append(f'<circle cx="{px}" cy="{py}" r="3" fill="#ea580c"/>')
+        if pval > 0:
+            svg.append(f'<text x="{px}" y="{py - 6}" font-size="8" font-weight="700" fill="#7c2d12" text-anchor="middle">{format_y_label(pval)}</text>')
+
+    # Draw baseline axis
+    svg.append(f'<line x1="{margin_left}" y1="{view_height - margin_bottom}" x2="{view_width - margin_right}" y2="{view_height - margin_bottom}" stroke="#e2e8f0" stroke-width="1.5"/>')
+    
+    svg.append("</svg>")
+    return "\n".join(svg)
+
+def analyze_digest_with_gemini(period_label, metrics):
+    """
+    Sử dụng Gemini API để phân tích dữ liệu báo cáo định kỳ (Weekly/Monthly) và đưa ra tư vấn.
+    """
+    api_key = os.getenv("GEMINI_API_KEY")
+    if not api_key:
+        return ""
+        
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key}"
+    
+    # Chuẩn bị dữ liệu tóm tắt
+    summary_data = {
+        "Kỳ báo cáo": period_label,
+        "Doanh thu OTC": f"{metrics['revenue']['otc']:,.0f} đ",
+        "Doanh thu ETC": f"{metrics['revenue']['etc']:,.0f} đ",
+        "Tổng doanh thu": f"{metrics['revenue']['total']:,.0f} đ",
+        "Tăng trưởng doanh thu": f"{metrics['revenue']['change_pct']}%" if metrics['revenue']['change_pct'] is not None else "N/A",
+        "Số hóa đơn": metrics['revenue']['invoice_count'],
+        "Sản phẩm tồn chết": metrics['inventory']['dead_stock_count'],
+        "Sản phẩm sắp hết hàng": metrics['inventory']['near_stockout_count'],
+    }
+    if metrics.get('receivables'):
+        summary_data["Nợ quá hạn"] = f"{metrics['receivables']['total_overdue']:,.0f} đ"
+        summary_data["Tổng dư nợ"] = f"{metrics['receivables']['balance_end']:,.0f} đ"
+
+    # Top khách hàng OTC/ETC
+    top_otc = ", ".join([f"{c['name']} ({c['revenue']:,.0f} đ)" for c in metrics.get('top_customers_otc', [])])
+    top_etc = ", ".join([f"{c['name']} ({c['revenue']:,.0f} đ)" for c in metrics.get('top_customers_etc', [])])
+    
+    prompt = f"""
+Bạn là một chuyên gia phân tích dữ liệu kinh doanh và công nợ tài chính cao cấp tại công ty Dược phẩm Nam Hà (DNH).
+Hãy phân tích dữ liệu báo cáo tổng hợp {period_label} sau và đưa ra nhận xét bằng tiếng Việt dưới cấu trúc 3 phần rõ ràng, xuống dòng hợp lý (KHÔNG dùng markdown table):
+- **🎯 Điểm cốt lõi**: Tóm tắt ngắn gọn tình hình kinh doanh/công nợ (1-2 câu).
+- **🔍 Điểm nóng (Outliers)**: Chỉ ra các điểm bất thường tiêu cực (sụt giảm doanh số, nợ quá hạn tăng, tồn kho chết/sắp hết hàng) cần lưu ý.
+- **🛠️ Hành động đề xuất**: 2 hành động cụ thể để xử lý các vấn đề trên.
+
+Số liệu tổng hợp:
+{json.dumps(summary_data, ensure_ascii=False, indent=2)}
+
+Top khách hàng OTC: {top_otc}
+Top khách hàng ETC: {top_etc}
+"""
+    
+    payload = {
+        "contents": [
+            {
+                "parts": [
+                    {"text": prompt}
+                ]
+            }
+        ]
+    }
+    
+    try:
+        data = json.dumps(payload).encode('utf-8')
+        req = urllib.request.Request(
+            url,
+            data=data,
+            headers={'Content-Type': 'application/json'}
+        )
+        with urllib.request.urlopen(req, timeout=15) as response:
+            res_json = json.loads(response.read().decode('utf-8'))
+            text = res_json['candidates'][0]['content']['parts'][0]['text']
+            
+            # Convert simple markdown bullet points or newlines to HTML line breaks for email
+            formatted_text = text.replace('\n', '<br>')
+            return formatted_text
+    except Exception as e:
+        print(f"[GEMINI] Lỗi phân tích digest: {e}")
+        return ""
+
 def build_digest_email(metrics, period_label="Daily", audience=None, scope_label=None):
     """
     Tạo nội dung HTML cho email báo cáo tổng hợp định kỳ.
@@ -558,6 +834,10 @@ def build_digest_email(metrics, period_label="Daily", audience=None, scope_label
     cấp quản lý (xem main.py::send_weekly_report/send_monthly_report). None -> không hiện nhãn
     (giữ nguyên hành vi cũ cho các nơi gọi chưa truyền audience).
     """
+    trend_chart_svg = ""
+    if metrics.get("trend"):
+        trend_chart_svg = build_svg_clustered_chart(metrics["trend"])
+
     template = Template(DIGEST_EMAIL_TEMPLATE)
     return template.render(
         metrics=metrics,
@@ -565,6 +845,7 @@ def build_digest_email(metrics, period_label="Daily", audience=None, scope_label
         audience=audience,
         scope_label=scope_label,
         chatbot_url=_chatbot_deep_link(),
+        trend_chart_svg=trend_chart_svg,
     )
 
 def analyze_alert_with_gemini(alert_name, summary, table_headers, table_rows):
@@ -576,7 +857,7 @@ def analyze_alert_with_gemini(alert_name, summary, table_headers, table_rows):
         print("[WARNING] GEMINI_API_KEY is not configured in .env. Skipping Gemini analysis.")
         return ""
         
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key}"
     
     # Chuẩn bị dữ liệu bảng dưới dạng văn bản Markdown
     table_text = ""
@@ -588,11 +869,10 @@ def analyze_alert_with_gemini(alert_name, summary, table_headers, table_rows):
         
     prompt = f"""
 Bạn là một chuyên gia phân tích dữ liệu kinh doanh và công nợ tài chính cao cấp tại công ty Dược phẩm Nam Hà (DNH).
-Hãy phân tích dữ liệu cảnh báo sau và viết một đoạn nhận xét ngắn gọn, sắc bén (khoảng 3-4 câu) bằng tiếng Việt có dấu.
-Đoạn phân tích cần:
-1. Nêu bật vấn đề nghiêm trọng nhất hoặc các mã khách hàng/mã hàng đáng lo ngại từ dữ liệu.
-2. Đưa ra 1 khuyến nghị hành động cụ thể cho bộ phận kinh doanh hoặc kế toán (ví dụ: siết nợ, nhập thêm nguyên liệu, thúc đẩy TDV...).
-3. Giọng điệu chuyên nghiệp, ngắn gọn, phù hợp để gửi tin nhắn thông báo nhanh.
+Hãy phân tích dữ liệu cảnh báo sau và viết nhận xét bằng tiếng Việt dưới cấu trúc 3 phần rõ ràng, xuống dòng hợp lý:
+- **🎯 Điểm cốt lõi**: Tóm tắt ngắn gọn tình hình (1-2 câu).
+- **🔍 Điểm nóng (Outliers)**: Chỉ ra các điểm bất thường tiêu cực (mã khách hàng, mặt hàng, hoặc nhân sự) nổi cộm nhất cần lưu ý.
+- **🛠️ Hành động đề xuất**: 2 hành động cụ thể có thể thực hiện ngay để xử lý vấn đề.
 
 Thông tin cảnh báo:
 - Tên cảnh báo: {alert_name}
@@ -693,7 +973,7 @@ def _chatbot_deep_link(question=None):
 
 
 def _build_teams_adaptive_card(title, summary, severity, table_headers=None, table_rows=None,
-                                period=None, channel=None, region=None, issue=None):
+                                period=None, channel=None, region=None, issue=None, ai_analysis=None):
     """
     Dung Adaptive Card (schema 1.5) thay vi text Markdown tho, de Teams hien thi
     co mau theo severity (do=CRITICAL, vang=WARNING, xanh=INFO).
@@ -742,6 +1022,78 @@ def _build_teams_adaptive_card(title, summary, severity, table_headers=None, tab
 
     body.append({"type": "TextBlock", "text": summary, "wrap": True, "spacing": "Small" if issue else "Medium"})
 
+    # 1. AI Gemini Insight Container
+    if ai_analysis:
+        body.append({
+            "type": "Container",
+            "style": "accent",
+            "spacing": "Medium",
+            "items": [
+                {
+                    "type": "TextBlock",
+                    "text": "🧠 PHÂN TÍCH THÔNG MINH (AI GEMINI)",
+                    "weight": "Bolder",
+                    "color": "accent"
+                },
+                {
+                    "type": "TextBlock",
+                    "text": ai_analysis,
+                    "wrap": True,
+                    "fontType": "Monospace",
+                    "size": "Small"
+                }
+            ]
+        })
+
+    # 2. Compact Table Container using Action.ToggleVisibility
+    has_details = table_headers and table_rows
+    if has_details:
+        facts_list = []
+        code_idx = None
+        name_idx = None
+        for idx, h in enumerate(table_headers):
+            hl = h.lower()
+            if ("mã" in hl or "sku" in hl or "code" in hl) and code_idx is None:
+                code_idx = idx
+            if ("tên" in hl or "name" in hl or "đại lý" in hl or "nhân sự" in hl) and name_idx is None:
+                name_idx = idx
+        
+        # Fallbacks
+        if code_idx is None:
+            code_idx = 0
+        if name_idx is None:
+            name_idx = 1 if len(table_headers) > 1 else 0
+
+        for row in table_rows[:5]:
+            if len(table_headers) == 2:
+                key = str(row[0])
+                val = str(row[1])
+            else:
+                key = f"{row[code_idx]} - {row[name_idx]}" if code_idx != name_idx else str(row[code_idx])
+                other_vals = [str(row[i]) for i in range(len(row)) if i not in (code_idx, name_idx)]
+                val = " | ".join(other_vals)
+            facts_list.append({"title": key, "value": val})
+
+        body.append({
+            "type": "Container",
+            "id": "compactTableDetails",
+            "isVisible": False,
+            "spacing": "Medium",
+            "items": [
+                {
+                    "type": "TextBlock",
+                    "text": "📋 Chi tiết danh sách (tối đa 5 dòng):",
+                    "weight": "Bolder",
+                    "size": "Small"
+                },
+                {
+                    "type": "FactSet",
+                    "facts": facts_list,
+                    "spacing": "Small"
+                }
+            ]
+        })
+
     body.append({
         "type": "TextBlock",
         "text": f"Hệ thống Giám sát DWH Dược Nam Hà (DNH) • {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
@@ -758,13 +1110,34 @@ def _build_teams_adaptive_card(title, summary, severity, table_headers=None, tab
         "body": body
     }
 
+    # Actions list
+    actions = []
+    if has_details:
+        actions.append({
+            "type": "Action.ToggleVisibility",
+            "title": "👁️ Xem nhanh danh sách",
+            "targetElements": ["compactTableDetails"]
+        })
+
+    # Hotline Call Button for debt-related issues
+    is_debt = any(w in title.lower() or w in str(issue or "").lower() for w in ("nợ", "overdue", "credit", "limit", "hạn mức"))
+    if is_debt:
+        actions.append({
+            "type": "Action.OpenUrl",
+            "title": "📞 Gọi Hotline DNH (1900 636433)",
+            "url": "tel:1900636433"
+        })
+
     chat_question = issue or title
     if chat_question:
-        adaptive_card["actions"] = [{
+        actions.append({
             "type": "Action.OpenUrl",
-            "title": "💬 Xem chi tiết trên Chatbot",
+            "title": "💬 Hỏi Chatbot DNH",
             "url": _chatbot_deep_link(f"Cho tôi xem chi tiết: {chat_question}")
-        }]
+        })
+
+    if actions:
+        adaptive_card["actions"] = actions
 
     return {
         "type": "message",
@@ -777,7 +1150,8 @@ def _build_teams_adaptive_card(title, summary, severity, table_headers=None, tab
     }
 
 def send_teams_alert(title, summary, table_headers=None, table_rows=None, severity="INFO",
-                      period=None, channel=None, region=None, issue=None, webhook_url_override=None):
+                      period=None, channel=None, region=None, issue=None, webhook_url_override=None,
+                      ai_analysis=None):
     """
     Gửi tin nhắn cảnh báo qua Microsoft Teams Incoming Webhook dưới dạng Adaptive Card
     (phân màu theo severity thay vì text Markdown thô).
@@ -790,7 +1164,8 @@ def send_teams_alert(title, summary, table_headers=None, table_rows=None, severi
         return False
 
     payload = _build_teams_adaptive_card(title, summary, severity, table_headers, table_rows,
-                                          period=period, channel=channel, region=region, issue=issue)
+                                          period=period, channel=channel, region=region, issue=issue,
+                                          ai_analysis=ai_analysis)
 
     try:
         data = json.dumps(payload).encode('utf-8')
@@ -933,7 +1308,90 @@ def _build_teams_consolidated_card(alerts):
         item_items = [{"type": "TextBlock", "text": f"{i}. {a['alert_name']}", "weight": "Bolder", "wrap": True}]
         if facts:
             item_items.append({"type": "FactSet", "facts": facts, "spacing": "Small"})
-        item_items.append({"type": "TextBlock", "text": a.get("issue") or a["summary"], "wrap": True, "spacing": "Small"})
+        
+        main_summary = a.get("summary") or ""
+        ai_part = a.get("ai_analysis") or ""
+        item_items.append({"type": "TextBlock", "text": a.get("issue") or main_summary, "wrap": True, "spacing": "Small"})
+
+        # AI analysis box inside list if present
+        if ai_part:
+            item_items.append({
+                "type": "Container",
+                "style": "accent",
+                "spacing": "Small",
+                "items": [
+                    {"type": "TextBlock", "text": "🧠 PHÂN TÍCH THÔNG MINH (AI GEMINI)", "weight": "Bolder", "color": "accent", "size": "Small"},
+                    {"type": "TextBlock", "text": ai_part, "wrap": True, "size": "Small", "fontType": "Monospace"}
+                ]
+            })
+
+        # Compact Table Toggle inside list if headers & rows present
+        table_headers = a.get("table_headers")
+        table_rows = a.get("table_rows")
+        item_actions = []
+
+        if table_headers and table_rows:
+            facts_list = []
+            code_idx = None
+            name_idx = None
+            for idx, h in enumerate(table_headers):
+                hl = h.lower()
+                if ("mã" in hl or "sku" in hl or "code" in hl) and code_idx is None:
+                    code_idx = idx
+                if ("tên" in hl or "name" in hl or "đại lý" in hl or "nhân sự" in hl) and name_idx is None:
+                    name_idx = idx
+            
+            # Fallbacks
+            if code_idx is None:
+                code_idx = 0
+            if name_idx is None:
+                name_idx = 1 if len(table_headers) > 1 else 0
+
+            for row in table_rows[:5]:
+                if len(table_headers) == 2:
+                    key = str(row[0])
+                    val = str(row[1])
+                else:
+                    key = f"{row[code_idx]} - {row[name_idx]}" if code_idx != name_idx else str(row[code_idx])
+                    other_vals = [str(row[i]) for i in range(len(row)) if i not in (code_idx, name_idx)]
+                    val = " | ".join(other_vals)
+                facts_list.append({"title": key, "value": val})
+
+            toggle_id = f"compactTable_{i}"
+            item_items.append({
+                "type": "Container",
+                "id": toggle_id,
+                "isVisible": False,
+                "spacing": "Small",
+                "items": [
+                    {"type": "TextBlock", "text": "📋 Chi tiết danh sách (tối đa 5 dòng):", "weight": "Bolder", "size": "Small"},
+                    {"type": "FactSet", "facts": facts_list, "spacing": "Small"}
+                ]
+            })
+            item_actions.append({
+                "type": "Action.ToggleVisibility",
+                "title": "👁️ Xem nhanh danh sách",
+                "targetElements": [toggle_id]
+            })
+
+        # Phone action if related to debt
+        is_debt = any(w in a["alert_name"].lower() or w in str(a.get("issue") or "").lower() for w in ("nợ", "overdue", "credit", "limit", "hạn mức"))
+        if is_debt:
+            item_actions.append({
+                "type": "Action.OpenUrl",
+                "title": "📞 Gọi Hotline DNH",
+                "url": "tel:1900636433"
+            })
+
+
+
+        if item_actions:
+            item_items.append({
+                "type": "ActionSet",
+                "actions": item_actions,
+                "spacing": "Small"
+            })
+
         body.append({"type": "Container", "items": item_items, "spacing": "Medium", "separator": True})
 
     body.append({
@@ -990,11 +1448,7 @@ def send_alert_to_all_channels(alert_name, severity, summary, table_headers=None
     _log_alert_severity(alert_name, severity)
     any_sent = False
 
-    # Gọi Gemini AI phân tích dữ liệu cảnh báo nếu có API Key
     gemini_analysis = ""
-    if os.getenv("GEMINI_API_KEY"):
-        print("[GEMINI] Dang phan tich du lieu bang AI...")
-        gemini_analysis = analyze_alert_with_gemini(alert_name, summary, table_headers, table_rows)
 
     # 1. Gui qua Email
     if "email" in channels:
@@ -1071,17 +1525,15 @@ def send_alert_to_all_channels(alert_name, severity, summary, table_headers=None
         # ngay (xem flush_critical_teams_queue() — gộp nhiều alert CRITICAL cùng chu kỳ quét
         # thành 1 card, thêm 10/07/2026 theo yêu cầu tiếp theo sau bộ lọc CRITICAL-only).
         try:
-            teams_summary = summary
-            if gemini_analysis:
-                teams_summary = f"{summary}\n\n💡 Phân tích AI: {gemini_analysis}"
             webhooks = _resolve_teams_webhooks(region, channel)
             if not webhooks:
                 print("[WARNING] Không có webhook Teams nào khớp (kiểm tra TEAMS_WEBHOOK_URL/.env hoặc report_recipients).")
             else:
                 _pending_critical_teams_alerts.append({
-                    "alert_name": alert_name, "summary": teams_summary,
+                    "alert_name": alert_name, "summary": summary,
                     "period": period, "channel": channel, "region": region, "issue": issue,
-                    "webhooks": webhooks,
+                    "webhooks": webhooks, "ai_analysis": gemini_analysis,
+                    "table_headers": table_headers, "table_rows": table_rows
                 })
                 any_sent = True
                 print(f"[TEAMS] Đã đưa '{alert_name}' vào hàng đợi gộp card (gửi cuối chu kỳ quét).")
@@ -1091,16 +1543,13 @@ def send_alert_to_all_channels(alert_name, severity, summary, table_headers=None
         # require_critical_for_teams=False (vd Daily Digest) -> gửi NGAY như cũ, không qua hàng
         # đợi (không có nguy cơ dồn card vì đây là các lần gửi đơn lẻ, không nằm trong 1 chu kỳ quét).
         try:
-            teams_summary = summary
-            if gemini_analysis:
-                teams_summary = f"{summary}\n\n💡 Phân tích AI: {gemini_analysis}"
             webhooks = _resolve_teams_webhooks(region, channel)
             if not webhooks:
                 print("[WARNING] Không có webhook Teams nào khớp (kiểm tra TEAMS_WEBHOOK_URL/.env hoặc report_recipients).")
             for webhook_url, audience in webhooks:
-                teams_sent = _send_with_retry(send_teams_alert, alert_name, teams_summary, table_headers, table_rows,
+                teams_sent = _send_with_retry(send_teams_alert, alert_name, summary, table_headers, table_rows,
                                                severity=severity, period=period, channel=channel, region=region,
-                                               issue=issue, webhook_url_override=webhook_url)
+                                               issue=issue, webhook_url_override=webhook_url, ai_analysis=gemini_analysis)
                 if teams_sent:
                     any_sent = True
                     if audience:
