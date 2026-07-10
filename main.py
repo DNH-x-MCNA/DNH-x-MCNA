@@ -125,7 +125,13 @@ def send_daily_digest():
             summary=f"Tổng hợp hoạt động ERP/CRM ngày {metrics['date']}.",
             table_headers=headers,
             table_rows=rows,
-            channels=("teams",)
+            channels=("teams",),
+            # get_daily_digest_metrics() không lọc theo vùng/kênh (không nhận tham số region/channel
+            # như bản weekly/monthly) — luôn là toàn công ty, cả 2 kênh gộp chung, nên gắn nhãn cố
+            # định thay vì để trống (thêm 10/07/2026, trước đó card Teams thiếu hẳn 3 mục này).
+            period=metrics['date'],
+            channel="OTC + ETC (gộp)",
+            region="Toàn quốc",
         )
         if sent:
             print(f"[{datetime.now()}] Báo cáo Daily Digest đã gửi thành công (Teams).")
