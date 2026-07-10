@@ -132,6 +132,11 @@ def send_daily_digest():
             period=metrics['date'],
             channel="OTC + ETC (gộp)",
             region="Toàn quốc",
+            # Daily Digest gửi 1 lần/ngày theo lịch cố định (17h45), KHÔNG có hiện tượng dồn nhiều
+            # card cùng lúc như alert nghiệp vụ thời gian thực — bỏ qua bộ lọc "chỉ CRITICAL mới
+            # gửi Teams" (mặc định của send_alert_to_all_channels, thêm 10/07/2026) để severity
+            # INFO của Daily Digest vẫn gửi Teams bình thường như đã đổi trước đó trong ngày.
+            require_critical_for_teams=False,
         )
         if sent:
             print(f"[{datetime.now()}] Báo cáo Daily Digest đã gửi thành công (Teams).")
