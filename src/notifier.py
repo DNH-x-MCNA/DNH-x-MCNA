@@ -181,16 +181,6 @@ DIGEST_EMAIL_TEMPLATE = """
             </ul>
             {% endif %}
 
-            {% if metrics.ai_analysis %}
-            <!-- AI Insight Section -->
-            <div style="margin-top: 20px; padding: 18px; background: #f0f7ff; border-left: 4px solid #3b82f6; border-radius: 8px; margin-bottom: 20px;">
-                <strong style="color: #1e3a8a; font-size: 14px; display: block; margin-bottom: 8px;">🧠 PHÂN TÍCH THÔNG MINH (AI GEMINI):</strong>
-                <div style="font-size: 13px; color: #2d3748; line-height: 1.6;">
-                    {{ metrics.ai_analysis | safe }}
-                </div>
-            </div>
-            {% endif %}
-
             <!-- Doanh thu Section -->
             <div class="section-title">Doanh Thu (OTC + ETC)</div>
             <div class="grid">
@@ -755,77 +745,6 @@ def build_svg_clustered_chart(trend_data):
     svg.append("</svg>")
     return "\n".join(svg)
 
-def analyze_digest_with_gemini(period_label, metrics):
-    """
-    Sử dụng Gemini API để phân tích dữ liệu báo cáo định kỳ (Weekly/Monthly) và đưa ra tư vấn.
-    """
-    api_key = os.getenv("GEMINI_API_KEY")
-    if not api_key:
-        return ""
-        
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key}"
-    
-    # Chuẩn bị dữ liệu tóm tắt
-    summary_data = {
-        "Kỳ báo cáo": period_label,
-        "Doanh thu OTC": f"{metrics['revenue']['otc']:,.0f} đ",
-        "Doanh thu ETC": f"{metrics['revenue']['etc']:,.0f} đ",
-        "Tổng doanh thu": f"{metrics['revenue']['total']:,.0f} đ",
-        "Tăng trưởng doanh thu": f"{metrics['revenue']['change_pct']}%" if metrics['revenue']['change_pct'] is not None else "N/A",
-        "Số hóa đơn": metrics['revenue']['invoice_count'],
-        "Sản phẩm tồn chết": metrics['inventory']['dead_stock_count'],
-        "Sản phẩm sắp hết hàng": metrics['inventory']['near_stockout_count'],
-    }
-    if metrics.get('receivables'):
-        summary_data["Nợ quá hạn"] = f"{metrics['receivables']['total_overdue']:,.0f} đ"
-        summary_data["Tổng dư nợ"] = f"{metrics['receivables']['balance_end']:,.0f} đ"
-
-    # Top khách hàng OTC/ETC
-    top_otc = ", ".join([f"{c['name']} ({c['revenue']:,.0f} đ)" for c in metrics.get('top_customers_otc', [])])
-    top_etc = ", ".join([f"{c['name']} ({c['revenue']:,.0f} đ)" for c in metrics.get('top_customers_etc', [])])
-    
-    prompt = f"""
-Bạn là một chuyên gia phân tích dữ liệu kinh doanh và công nợ tài chính cao cấp tại công ty Dược phẩm Nam Hà (DNH).
-Hãy phân tích dữ liệu báo cáo tổng hợp {period_label} sau và đưa ra nhận xét bằng tiếng Việt dưới cấu trúc 3 phần rõ ràng, xuống dòng hợp lý (KHÔNG dùng markdown table):
-- **🎯 Điểm cốt lõi**: Tóm tắt ngắn gọn tình hình kinh doanh/công nợ (1-2 câu).
-- **🔍 Điểm nóng (Outliers)**: Chỉ ra các điểm bất thường tiêu cực (sụt giảm doanh số, nợ quá hạn tăng, tồn kho chết/sắp hết hàng) cần lưu ý.
-- **🛠️ Hành động đề xuất**: 2 hành động cụ thể để xử lý các vấn đề trên.
-
-Số liệu tổng hợp:
-{json.dumps(summary_data, ensure_ascii=False, indent=2)}
-
-Top khách hàng OTC: {top_otc}
-Top khách hàng ETC: {top_etc}
-"""
-    
-    payload = {
-        "contents": [
-            {
-                "parts": [
-                    {"text": prompt}
-                ]
-            }
-        ]
-    }
-    
-    try:
-        data = json.dumps(payload).encode('utf-8')
-        req = urllib.request.Request(
-            url,
-            data=data,
-            headers={'Content-Type': 'application/json'}
-        )
-        with urllib.request.urlopen(req, timeout=15) as response:
-            res_json = json.loads(response.read().decode('utf-8'))
-            text = res_json['candidates'][0]['content']['parts'][0]['text']
-            
-            # Convert simple markdown bullet points or newlines to HTML line breaks for email
-            formatted_text = text.replace('\n', '<br>')
-            return formatted_text
-    except Exception as e:
-        print(f"[GEMINI] Lỗi phân tích digest: {e}")
-        return ""
-
 def build_digest_email(metrics, period_label="Daily", audience=None, scope_label=None):
     """
     Tạo nội dung HTML cho email báo cáo tổng hợp định kỳ.
@@ -838,19 +757,6 @@ def build_digest_email(metrics, period_label="Daily", audience=None, scope_label
     if metrics.get("trend"):
         trend_chart_svg = build_svg_clustered_chart(metrics["trend"])
 
-    # Gọi Gemini phân tích digest — bị rớt mất trong lần tái cấu trúc UI/UX 10/07/2026 (template
-    # đã có sẵn section {% if metrics.ai_analysis %} nhưng không nơi nào set khoá này), phát hiện
-    # + sửa lại khi kiểm thử. metrics là dict thường (không phải Bunch/attr-access) nên gán trực
-    # tiếp key mới vào, Jinja đọc metrics.ai_analysis vẫn hoạt động bình thường với dict.
-    if os.getenv("GEMINI_API_KEY"):
-        try:
-            metrics["ai_analysis"] = analyze_digest_with_gemini(period_label, metrics)
-        except Exception as e:
-            print(f"[GEMINI] Lỗi phân tích digest: {e}")
-            metrics["ai_analysis"] = ""
-    else:
-        metrics["ai_analysis"] = ""
-
     template = Template(DIGEST_EMAIL_TEMPLATE)
     return template.render(
         metrics=metrics,
@@ -860,65 +766,6 @@ def build_digest_email(metrics, period_label="Daily", audience=None, scope_label
         chatbot_url=_chatbot_deep_link(),
         trend_chart_svg=trend_chart_svg,
     )
-
-def analyze_alert_with_gemini(alert_name, summary, table_headers, table_rows):
-    """
-    Sử dụng Gemini API để phân tích dữ liệu cảnh báo và đưa ra nhận xét, đề xuất kinh doanh bằng tiếng Việt.
-    """
-    api_key = os.getenv("GEMINI_API_KEY")
-    if not api_key:
-        print("[WARNING] GEMINI_API_KEY is not configured in .env. Skipping Gemini analysis.")
-        return ""
-        
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key}"
-    
-    # Chuẩn bị dữ liệu bảng dưới dạng văn bản Markdown
-    table_text = ""
-    if table_headers and table_rows:
-        table_text = " | ".join(table_headers) + "\n"
-        table_text += " | ".join(["---"] * len(table_headers)) + "\n"
-        for row in table_rows:
-            table_text += " | ".join([str(cell) for cell in row]) + "\n"
-        
-    prompt = f"""
-Bạn là một chuyên gia phân tích dữ liệu kinh doanh và công nợ tài chính cao cấp tại công ty Dược phẩm Nam Hà (DNH).
-Hãy phân tích dữ liệu cảnh báo sau và viết nhận xét bằng tiếng Việt dưới cấu trúc 3 phần rõ ràng, xuống dòng hợp lý:
-- **🎯 Điểm cốt lõi**: Tóm tắt ngắn gọn tình hình (1-2 câu).
-- **🔍 Điểm nóng (Outliers)**: Chỉ ra các điểm bất thường tiêu cực (mã khách hàng, mặt hàng, hoặc nhân sự) nổi cộm nhất cần lưu ý.
-- **🛠️ Hành động đề xuất**: 2 hành động cụ thể có thể thực hiện ngay để xử lý vấn đề.
-
-Thông tin cảnh báo:
-- Tên cảnh báo: {alert_name}
-- Mô tả: {summary}
-
-Dữ liệu chi tiết:
-{table_text}
-"""
-    
-    payload = {
-        "contents": [
-            {
-                "parts": [
-                    {"text": prompt}
-                ]
-            }
-        ]
-    }
-    
-    try:
-        data = json.dumps(payload).encode('utf-8')
-        req = urllib.request.Request(
-            url,
-            data=data,
-            headers={'Content-Type': 'application/json'}
-        )
-        with urllib.request.urlopen(req, timeout=15) as response:
-            res = json.loads(response.read().decode('utf-8'))
-            text = res['candidates'][0]['content']['parts'][0]['text']
-            return text.strip()
-    except Exception as e:
-        print(f"[GEMINI] Loi phan tich Gemini: {e}")
-        return ""
 
 def send_telegram_alert(text):
     """
@@ -986,7 +833,7 @@ def _chatbot_deep_link(question=None):
 
 
 def _build_teams_adaptive_card(title, summary, severity, table_headers=None, table_rows=None,
-                                period=None, channel=None, region=None, issue=None, ai_analysis=None):
+                                period=None, channel=None, region=None, issue=None):
     """
     Dung Adaptive Card (schema 1.5) thay vi text Markdown tho, de Teams hien thi
     co mau theo severity (do=CRITICAL, vang=WARNING, xanh=INFO).
@@ -1035,30 +882,7 @@ def _build_teams_adaptive_card(title, summary, severity, table_headers=None, tab
 
     body.append({"type": "TextBlock", "text": summary, "wrap": True, "spacing": "Small" if issue else "Medium"})
 
-    # 1. AI Gemini Insight Container
-    if ai_analysis:
-        body.append({
-            "type": "Container",
-            "style": "accent",
-            "spacing": "Medium",
-            "items": [
-                {
-                    "type": "TextBlock",
-                    "text": "🧠 PHÂN TÍCH THÔNG MINH (AI GEMINI)",
-                    "weight": "Bolder",
-                    "color": "accent"
-                },
-                {
-                    "type": "TextBlock",
-                    "text": ai_analysis,
-                    "wrap": True,
-                    "fontType": "Monospace",
-                    "size": "Small"
-                }
-            ]
-        })
-
-    # 2. Compact Table Container using Action.ToggleVisibility
+    # Compact Table Container using Action.ToggleVisibility
     has_details = table_headers and table_rows
     if has_details:
         facts_list = []
@@ -1163,8 +987,7 @@ def _build_teams_adaptive_card(title, summary, severity, table_headers=None, tab
     }
 
 def send_teams_alert(title, summary, table_headers=None, table_rows=None, severity="INFO",
-                      period=None, channel=None, region=None, issue=None, webhook_url_override=None,
-                      ai_analysis=None):
+                      period=None, channel=None, region=None, issue=None, webhook_url_override=None):
     """
     Gửi tin nhắn cảnh báo qua Microsoft Teams Incoming Webhook dưới dạng Adaptive Card
     (phân màu theo severity thay vì text Markdown thô).
@@ -1177,8 +1000,7 @@ def send_teams_alert(title, summary, table_headers=None, table_rows=None, severi
         return False
 
     payload = _build_teams_adaptive_card(title, summary, severity, table_headers, table_rows,
-                                          period=period, channel=channel, region=region, issue=issue,
-                                          ai_analysis=ai_analysis)
+                                          period=period, channel=channel, region=region, issue=issue)
 
     try:
         data = json.dumps(payload).encode('utf-8')
@@ -1323,20 +1145,7 @@ def _build_teams_consolidated_card(alerts):
             item_items.append({"type": "FactSet", "facts": facts, "spacing": "Small"})
         
         main_summary = a.get("summary") or ""
-        ai_part = a.get("ai_analysis") or ""
         item_items.append({"type": "TextBlock", "text": a.get("issue") or main_summary, "wrap": True, "spacing": "Small"})
-
-        # AI analysis box inside list if present
-        if ai_part:
-            item_items.append({
-                "type": "Container",
-                "style": "accent",
-                "spacing": "Small",
-                "items": [
-                    {"type": "TextBlock", "text": "🧠 PHÂN TÍCH THÔNG MINH (AI GEMINI)", "weight": "Bolder", "color": "accent", "size": "Small"},
-                    {"type": "TextBlock", "text": ai_part, "wrap": True, "size": "Small", "fontType": "Monospace"}
-                ]
-            })
 
         # Compact Table Toggle inside list if headers & rows present
         table_headers = a.get("table_headers")
@@ -1461,33 +1270,11 @@ def send_alert_to_all_channels(alert_name, severity, summary, table_headers=None
     _log_alert_severity(alert_name, severity)
     any_sent = False
 
-    # Gọi Gemini phân tích 1 LẦN, dùng chung cho cả Email/Teams — bị rớt mất lệnh gọi này trong
-    # lần tái cấu trúc UI/UX 10/07/2026 (gemini_analysis từng bị hardcode rỗng, phát hiện + sửa
-    # lại khi kiểm thử), khiến cả 2 kênh mất hẳn phần "Phân tích thông minh (AI Gemini)".
-    gemini_analysis = ""
-    if os.getenv("GEMINI_API_KEY"):
-        try:
-            gemini_analysis = analyze_alert_with_gemini(alert_name, summary, table_headers, table_rows)
-        except Exception as e:
-            print(f"[GEMINI] Lỗi phân tích alert: {e}")
-
     # 1. Gui qua Email
     if "email" in channels:
         try:
             subject = f"[{severity}] {alert_name}"
             html_content = build_alert_email(alert_name, severity, summary, table_headers, table_rows)
-            # Thêm phân tích Gemini vào email nếu có
-            if gemini_analysis:
-                # Chèn phân tích vào trước thẻ kết thúc của class content
-                insert_idx = html_content.find("</div>\n        <div class=\"footer\">")
-                if insert_idx != -1:
-                    ai_html = f"""
-                    <div style="margin-top: 20px; padding: 15px; background: #f0f7ff; border-left: 4px solid #3b82f6; border-radius: 6px;">
-                        <strong style="color: #1e3a8a; font-size: 14px;">💡 PHÂN TÍCH THÔNG MINH (AI GEMINI):</strong>
-                        <p style="margin: 5px 0 0 0; font-size: 13px; color: #2d3748; line-height: 1.5; font-style: italic;">{gemini_analysis}</p>
-                    </div>
-                    """
-                    html_content = html_content[:insert_idx] + ai_html + html_content[insert_idx:]
 
             email_sent = _send_with_retry(
                 send_email, subject, html_content,
@@ -1523,11 +1310,6 @@ def send_alert_to_all_channels(alert_name, severity, summary, table_headers=None
                         telegram_text += f"   • {escape_html(header)}: <b>{escape_html(row[col_idx])}</b>\n"
                 telegram_text += "\n━━━━━━━━━━━━━━━━━━━━━\n\n"
 
-            if gemini_analysis:
-                telegram_text += f"💡 <b>PHÂN TÍCH THÔNG MINH (AI GEMINI):</b>\n"
-                telegram_text += f"<i>{escape_html(gemini_analysis)}</i>\n\n"
-                telegram_text += f"━━━━━━━━━━━━━━━━━━━━━\n"
-
             telegram_text += "🤖 <i>Hệ thống Giám sát DWH Dược Nam Hà (DNH)</i>"
 
             telegram_sent = _send_with_retry(send_telegram_alert, telegram_text)
@@ -1553,7 +1335,7 @@ def send_alert_to_all_channels(alert_name, severity, summary, table_headers=None
                 _pending_critical_teams_alerts.append({
                     "alert_name": alert_name, "summary": summary,
                     "period": period, "channel": channel, "region": region, "issue": issue,
-                    "webhooks": webhooks, "ai_analysis": gemini_analysis,
+                    "webhooks": webhooks,
                     "table_headers": table_headers, "table_rows": table_rows
                 })
                 any_sent = True
@@ -1570,7 +1352,7 @@ def send_alert_to_all_channels(alert_name, severity, summary, table_headers=None
             for webhook_url, audience in webhooks:
                 teams_sent = _send_with_retry(send_teams_alert, alert_name, summary, table_headers, table_rows,
                                                severity=severity, period=period, channel=channel, region=region,
-                                               issue=issue, webhook_url_override=webhook_url, ai_analysis=gemini_analysis)
+                                               issue=issue, webhook_url_override=webhook_url)
                 if teams_sent:
                     any_sent = True
                     if audience:
