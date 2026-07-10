@@ -1535,6 +1535,10 @@ Under no circumstances should you query or return OTC data.
 ==============================
 """
 
+        # Dùng trong rule "LUÔN LÀM RÕ 3 THỨ" (mục 9 bên dưới) — nhãn vùng miền hiển thị SẴN cho AI
+        # chèn thẳng vào câu trả lời, tránh AI phải tự suy luận/quên khai báo phạm vi vùng miền.
+        _region_label_for_answer = self._REGION_NAMES_VI.get(scope_region, "Toàn quốc (không giới hạn vùng miền)")
+
         system_prompt = f"""
 You are an expert SQL Generator for Duoc Nam Ha (DNH) commercial data warehouse.
 Your task is to convert the user's Vietnamese natural language query into a single valid {db_dialect} query.
@@ -1786,6 +1790,21 @@ Key Business Logic & Tables & Strict Mapping Rules:
 
 9. Chỉ số phái sinh BẮT BUỘC (Derived Metrics — cùng nguyên tắc với mục 7 Tồn kho):
    Nguyên tắc chung: con số thô gần như vô nghĩa với người quản lý — mọi câu hỏi dạng xếp hạng/đánh giá/so sánh PHẢI kèm thêm cột phái sinh giúp diễn giải con số đó. Cụ thể theo từng nhóm:
+   - LUÔN LÀM RÕ 3 THỨ SAU TRONG CÂU TRẢ LỜI (bắt buộc từ 10/07/2026, áp dụng MỌI câu hỏi, không có
+     ngoại lệ — người xem KHÔNG được phải đoán):
+     a. NGÀY THÁNG NĂM CỤ THỂ: câu hỏi có liên quan thời gian (hôm nay/hôm qua/1 ngày cụ thể/tuần/
+        tháng/quý/năm) — SQL PHẢI có cột ngày/kỳ rõ ràng trong SELECT (alias "Ngày"/"Kỳ"/"Tháng" tuỳ
+        ngữ cảnh, định dạng DD/MM/YYYY khi là 1 ngày cụ thể), KHÔNG được chỉ lọc ở WHERE mà giấu đi
+        — câu trả lời văn xuôi cũng PHẢI nhắc lại ngày/kỳ đó bằng chữ, không chỉ dựa vào bảng dữ liệu.
+     b. KÊNH OTC/ETC: nếu số liệu liên quan doanh thu/công nợ/đơn hàng theo kênh, PHẢI ghi rõ tên
+        kênh trong cả SQL (cột riêng hoặc alias rõ ràng) lẫn câu trả lời — không viết chung chung
+        "doanh thu" khi thực ra chỉ 1 kênh, và không gộp 2 kênh mà không nói rõ đã gộp.
+     c. VÙNG MIỀN: SELECT PHẢI có 1 cột literal alias "Vùng" (hoặc "Phạm vi") với giá trị CHÍNH XÁC
+        là chuỗi "{_region_label_for_answer}" (Postgres: N'{_region_label_for_answer}' AS "Vùng" /
+        T-SQL: N'{_region_label_for_answer}' AS [Vùng]) — đã tính sẵn theo đúng quyền của người hỏi,
+        KHÔNG tự suy luận/đổi khác. Câu trả lời văn xuôi cũng phải nhắc lại cụm từ này. Nếu người hỏi
+        bị giới hạn vùng miền, việc này còn xác nhận rõ với người xem rằng số liệu CHỈ thuộc vùng đó,
+        không phải toàn công ty — tránh hiểu nhầm.
    - CÔNG NỢ ("khách nào nợ nhiều nhất", "rủi ro công nợ", "nợ xấu"): luôn thêm cột "Tỷ lệ quá hạn (%)" = ROUND((total_overdue / NULLIF(balance_end, 0) * 100)::numeric, 1). Khách nợ lớn nhưng tỷ lệ quá hạn thấp khác hẳn khách nợ nhỏ nhưng 100% đã quá hạn — bảng phải cho thấy điều đó.
    - TOP SẢN PHẨM BÁN CHẠY: ngoài 4 cột ở mục 5, thêm "TB bán/ngày" = SL Thực bán / (DATE '{latest_date_str}' - DATE '{latest_q_start}' + 1) và "Tỷ lệ KM (%)" = ROUND((SL Khuyến mãi / NULLIF(Tổng SL, 0) * 100)::numeric, 1) — tỷ lệ khuyến mãi cao cho thấy doanh số "ảo" nhờ hàng tặng.
    - KPI NHÂN VIÊN: ngoài % đạt chỉ tiêu, luôn thêm cột "Còn thiếu" = GREATEST(target - actual, 0) để thấy khoảng cách tuyệt đối phải bù (0 nếu đã vượt chỉ tiêu).
@@ -1983,6 +2002,11 @@ CRITICAL RULES:
 
 2. BLUF (Bottom Line Up Front): Always present the most critical overall number (Hero Metric) on the very first line of the answer. E.g. "Doanh số OTC đạt <b>4,28 tỷ đ</b>, hoàn thành <b>95%</b> chỉ tiêu." Do not use polite greetings or introduction phrases.
 
+2b. LUÔN LÀM RÕ 3 THỨ (bắt buộc từ 10/07/2026, không ngoại lệ): nếu query results có cột ngày/kỳ,
+    kênh (OTC/ETC), hoặc "Vùng"/"Phạm vi" — PHẢI nhắc lại rõ ràng bằng chữ trong câu trả lời (ngày cụ
+    thể định dạng DD/MM/YYYY, tên kênh, và cụm từ vùng miền y hệt giá trị trong cột "Vùng"/"Phạm vi")
+    — người xem KHÔNG được phải tự suy luận hay mở bảng dữ liệu mới biết những thứ này.
+
 3. KHÔNG chèn bảng dữ liệu (Markdown table) vào trong câu trả lời văn bản, kể cả khi kết quả có nhiều dòng — giao diện đã tự hiển thị bảng dữ liệu riêng từ kết quả truy vấn gốc (cột `data`/`columns`), chèn thêm bảng trong `answer` sẽ bị lặp. Chỉ viết văn xuôi ngắn gọn nêu con số/kết luận nổi bật.
 
 4. Contextualization: Always contextualize numbers by comparing them MoM, YoY, or against Target (if targets exist in data). Format money in VND using 'tỷ đ' hoặc 'triệu đ' (e.g., '12,5 tỷ đ', '350 triệu đ', '250.000 đ') and percentages using '%'.
@@ -2065,17 +2089,11 @@ CRITICAL RULES:
         if not wants_full_list and len(table_rows) > 10:
             table_rows = table_rows[:10]
 
-        # Banner — 3 mức theo active_backend: "postgres" = không banner; "bravo" = banner nhẹ, LUÔN
-        # hiện khi dùng Bravo (nguồn CHÍNH từ 09/07/2026, không còn là fallback do lỗi — xem
-        # _resolve_active_backend), chỉ để nhắc thiếu tồn kho/KPI (công nợ ĐÃ hỗ trợ từ 09/07/2026,
-        # xem mart_layer_instruction), không suy diễn Supabase có lỗi hay không; "sqlite" = banner
-        # mạnh (cả Bravo lẫn Postgres đều không dùng được).
-        if active_backend == "bravo":
-            answer = (
-                "ℹ️ <b>Dữ liệu trực tiếp từ Bravo</b> — số liệu hóa đơn/khách hàng/công nợ chính xác, "
-                "real-time, nhưng KHÔNG có tồn kho/KPI (chỉ có trên Supabase).\n\n" + answer
-            )
-        elif cloud_unreachable_fallback and active_backend == "sqlite":
+        # Banner — CHỈ còn 1 mức: "sqlite" = banner mạnh (cả Bravo lẫn Postgres đều không dùng
+        # được, dữ liệu offline có thể cũ/thiếu). Banner "bravo" (nhắc nguồn dữ liệu + thiếu tồn
+        # kho/KPI) đã BỎ theo yêu cầu 10/07/2026 — Bravo giờ là nguồn CHÍNH dùng thường xuyên, banner
+        # lặp lại mỗi câu trả lời gây rối mắt hơn là hữu ích.
+        if cloud_unreachable_fallback and active_backend == "sqlite":
             answer = (
                 "⚠️ <b>Không kết nối được CSDL chính (Supabase)</b> tại thời điểm này — câu trả lời dưới đây "
                 "dùng dữ liệu offline dự phòng, có thể THIẾU bảng dữ liệu hoặc KHÔNG khớp với câu hỏi. "
