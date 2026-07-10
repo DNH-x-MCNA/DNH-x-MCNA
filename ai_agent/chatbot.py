@@ -1279,6 +1279,58 @@ Câu hỏi/Lời chào của người dùng: "{user_question}"
         except ValueError:
             latest_q_start = earliest_date_str
 
+        # debt_aging.date_basis (config/config.yaml) — "ngày cơ sở" tính tuổi nợ CHƯA được DNH xác
+        # nhận chính thức (xem skill dnh-debt-aging-schema), đọc từ config theo đúng yêu cầu KHÔNG
+        # hardcode — đổi 1 dòng trong config.yaml khi có xác nhận thật, KHÔNG cần sửa code này.
+        try:
+            from src.database import load_config
+            _debt_aging_cfg = load_config().get("debt_aging") or {}
+        except Exception:
+            _debt_aging_cfg = {}
+        _debt_aging_date_basis = _debt_aging_cfg.get("date_basis", "doc_date_plus_term")
+        _debt_aging_provisional = _debt_aging_cfg.get("provisional", True)
+
+        if _debt_aging_date_basis == "doc_date_plus_term":
+            _aging_instruction = """
+   TUỔI NỢ / BUCKET QUÁ HẠN (vd "nợ quá hạn 1-15 ngày", "nợ quá 45 ngày", "aging") — ĐÃ BẬT TẠM
+   THỜI theo cấu hình debt_aging.date_basis="doc_date_plus_term" (config/config.yaml). CÔNG THỨC
+   (TẠM THỜI, CHƯA được DNH xác nhận chính thức, xem skill dnh-debt-aging-schema): hạn thanh toán =
+   DATEADD(DAY, h.[DueDate], h.[DocDate]) (h.[DueDate] là SỐ NGÀY công nợ, KHÔNG PHẢI ngày). Số
+   ngày quá hạn = DATEDIFF(DAY, DATEADD(DAY, h.[DueDate], h.[DocDate]), GETDATE()). Bucket:
+   1-15/15-30/30-45/>45 ngày quá hạn (khớp định nghĩa receivable_detail cũ bên Supabase).
+   BẮT BUỘC — mọi câu trả lời có bucket/tuổi nợ PHẢI mở đầu bằng banner này (nối vào ĐẦU answer,
+   TRƯỚC phần trả lời chính, KHÔNG được bỏ qua):
+   ⚠️ <b>Số liệu tuổi nợ dưới đây tính theo giả định TẠM THỜI</b> (ngày cơ sở = ngày hóa đơn + số
+   ngày công nợ), CHƯA được DNH xác nhận chính thức — có thể thay đổi khi có xác nhận.
+   Ví dụ đúng — bucket tuổi nợ theo khách hàng, kênh OTC:
+     SELECT k.[Code] AS [Mã KH], k.[Name] AS [Tên khách hàng],
+            CASE
+              WHEN DATEDIFF(DAY, DATEADD(DAY, h.[DueDate], h.[DocDate]), GETDATE()) <= 0 THEN N'Trong hạn'
+              WHEN DATEDIFF(DAY, DATEADD(DAY, h.[DueDate], h.[DocDate]), GETDATE()) BETWEEN 1 AND 15 THEN N'Quá hạn 1-15 ngày'
+              WHEN DATEDIFF(DAY, DATEADD(DAY, h.[DueDate], h.[DocDate]), GETDATE()) BETWEEN 16 AND 30 THEN N'Quá hạn 15-30 ngày'
+              WHEN DATEDIFF(DAY, DATEADD(DAY, h.[DueDate], h.[DocDate]), GETDATE()) BETWEEN 31 AND 45 THEN N'Quá hạn 30-45 ngày'
+              ELSE N'Quá hạn >45 ngày'
+            END AS [Bucket tuổi nợ],
+            SUM(h.[TotalAmount] - h.[PaidAmount]) AS [Còn nợ]
+     FROM [BRV_HTTDuDK] h
+     JOIN [BRV_KhachHang] k ON h.[CustomerId] = k.[Id]
+     WHERE h.[Account] LIKE '131%' AND (h.[TotalAmount] - h.[PaidAmount]) > 0 AND k.[IsCustomer] = 1
+     GROUP BY k.[Code], k.[Name],
+            CASE
+              WHEN DATEDIFF(DAY, DATEADD(DAY, h.[DueDate], h.[DocDate]), GETDATE()) <= 0 THEN N'Trong hạn'
+              WHEN DATEDIFF(DAY, DATEADD(DAY, h.[DueDate], h.[DocDate]), GETDATE()) BETWEEN 1 AND 15 THEN N'Quá hạn 1-15 ngày'
+              WHEN DATEDIFF(DAY, DATEADD(DAY, h.[DueDate], h.[DocDate]), GETDATE()) BETWEEN 16 AND 30 THEN N'Quá hạn 15-30 ngày'
+              WHEN DATEDIFF(DAY, DATEADD(DAY, h.[DueDate], h.[DocDate]), GETDATE()) BETWEEN 31 AND 45 THEN N'Quá hạn 30-45 ngày'
+              ELSE N'Quá hạn >45 ngày'
+            END
+     ORDER BY [Còn nợ] DESC
+   Kênh ETC dùng BRVSX_HTTDuDK/BRVSX_KhachHang, logic y hệt."""
+        else:
+            _aging_instruction = """
+   TUỔI NỢ / BUCKET QUÁ HẠN: date_basis cấu hình không nhận diện được — TỪ CHỐI lịch sự, dùng đúng
+   dạng SELECT N'Dữ liệu tuổi nợ hiện chưa hỗ trợ (date_basis cấu hình không hợp lệ).' AS [Thông báo],
+   KHÔNG tự đoán công thức khác."""
+
         # Mart layer (mart_layer.mart_revenue_summary) — bảng tổng hợp sẵn doanh thu theo
         # ngày/kênh (xem docs/mart_revenue_summary_design.md), tạo ra để tránh full table scan
         # trên brv_hoadonhdr/brv_hoadonct hàng triệu dòng mỗi câu hỏi doanh thu (nguyên nhân gây
@@ -1347,14 +1399,9 @@ Câu hỏi/Lời chào của người dùng: "{user_question}"
    filter AreaCode này vào MỌI câu hỏi công nợ, kể cả khi câu hỏi không nói rõ vùng miền — thiếu
    filter này sẽ bị hệ thống an toàn tự chặn (không trả lời được), không phải lộ dữ liệu sai vùng.
 
-   GIỚI HẠN CHƯA HỖ TRỢ — TUỔI NỢ / BUCKET QUÁ HẠN (vd "nợ quá hạn 1-15 ngày", "nợ quá 45 ngày",
-   "aging"): TỪ CHỐI lịch sự, KHÔNG tự đoán/tự chế công thức. [DueDate] trên 2 bảng công nợ là SỐ
-   NGÀY công nợ (payment term), KHÔNG PHẢI ngày — để tính quá hạn cần biết "ngày cơ sở" (date basis:
-   tính từ DocDate hay từ 1 mốc khác), ĐÂY LÀ CÂU HỎI CHƯA ĐƯỢC DNH XÁC NHẬN (open item, xem
-   dnh-debt-aging-schema/dnh-project-context) — dùng đúng dạng SELECT N'...' từ chối (xem rule
-   dialect bên dưới).
+{_aging_instruction}
    Câu hỏi công nợ KHÔNG bucket tuổi nợ (theo khách hàng/tổng công ty/theo kênh/theo vùng miền) vẫn
-   trả lời bình thường theo quy tắc a/b/c ở trên (+ join vùng miền nếu cần).
+   trả lời bình thường theo quy tắc a/b/c ở trên (+ join vùng miền nếu cần), KHÔNG cần banner tạm thời.
 """
 
         # 'fact_tonghopkhachhang' thuộc mart đầy đủ (production), KHÔNG có ở bản dev hiện tại
@@ -2147,6 +2194,20 @@ CRITICAL RULES:
                 "⚠️ <b>Không kết nối được CSDL chính (Supabase)</b> tại thời điểm này — câu trả lời dưới đây "
                 "dùng dữ liệu offline dự phòng, có thể THIẾU bảng dữ liệu hoặc KHÔNG khớp với câu hỏi. "
                 "Vui lòng kiểm tra kết nối mạng/DNS rồi thử lại để có số liệu chính xác.\n\n" + answer
+            )
+
+        # Banner tuổi nợ TẠM THỜI — ép bằng CODE (dò trực tiếp trong SQL đã sinh ra), KHÔNG phụ
+        # thuộc AI có nhớ chèn hay không (đã xác nhận thực tế 10/07/2026: câu hỏi nhiều dòng đi qua
+        # LLM tóm tắt riêng — summary_prompt — không nhận được chỉ dẫn banner từ system_prompt sinh
+        # SQL, nên banner bị thiếu dù đã dặn). "DueDate" + "DATEDIFF" cùng xuất hiện trong SQL là
+        # dấu hiệu chắc chắn của công thức tuổi nợ tạm thời (xem _aging_instruction, date_basis
+        # doc_date_plus_term) — không có false positive nào khác dùng đúng 2 từ khoá này cùng lúc.
+        if (active_backend == "bravo" and _debt_aging_provisional
+                and "DueDate" in sql_query and "DATEDIFF" in sql_query.upper()):
+            answer = (
+                "⚠️ <b>Số liệu tuổi nợ dưới đây tính theo giả định TẠM THỜI</b> (ngày cơ sở = ngày hóa "
+                "đơn + số ngày công nợ), CHƯA được DNH xác nhận chính thức — có thể thay đổi khi có "
+                "xác nhận.\n\n" + answer
             )
 
         result = {
