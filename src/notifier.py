@@ -838,6 +838,19 @@ def build_digest_email(metrics, period_label="Daily", audience=None, scope_label
     if metrics.get("trend"):
         trend_chart_svg = build_svg_clustered_chart(metrics["trend"])
 
+    # Gọi Gemini phân tích digest — bị rớt mất trong lần tái cấu trúc UI/UX 10/07/2026 (template
+    # đã có sẵn section {% if metrics.ai_analysis %} nhưng không nơi nào set khoá này), phát hiện
+    # + sửa lại khi kiểm thử. metrics là dict thường (không phải Bunch/attr-access) nên gán trực
+    # tiếp key mới vào, Jinja đọc metrics.ai_analysis vẫn hoạt động bình thường với dict.
+    if os.getenv("GEMINI_API_KEY"):
+        try:
+            metrics["ai_analysis"] = analyze_digest_with_gemini(period_label, metrics)
+        except Exception as e:
+            print(f"[GEMINI] Lỗi phân tích digest: {e}")
+            metrics["ai_analysis"] = ""
+    else:
+        metrics["ai_analysis"] = ""
+
     template = Template(DIGEST_EMAIL_TEMPLATE)
     return template.render(
         metrics=metrics,
@@ -1448,7 +1461,15 @@ def send_alert_to_all_channels(alert_name, severity, summary, table_headers=None
     _log_alert_severity(alert_name, severity)
     any_sent = False
 
+    # Gọi Gemini phân tích 1 LẦN, dùng chung cho cả Email/Teams — bị rớt mất lệnh gọi này trong
+    # lần tái cấu trúc UI/UX 10/07/2026 (gemini_analysis từng bị hardcode rỗng, phát hiện + sửa
+    # lại khi kiểm thử), khiến cả 2 kênh mất hẳn phần "Phân tích thông minh (AI Gemini)".
     gemini_analysis = ""
+    if os.getenv("GEMINI_API_KEY"):
+        try:
+            gemini_analysis = analyze_alert_with_gemini(alert_name, summary, table_headers, table_rows)
+        except Exception as e:
+            print(f"[GEMINI] Lỗi phân tích alert: {e}")
 
     # 1. Gui qua Email
     if "email" in channels:
