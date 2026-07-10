@@ -11,8 +11,9 @@ if hasattr(sys.stdout, 'reconfigure'):
 if hasattr(sys.stderr, 'reconfigure'):
     sys.stderr.reconfigure(encoding='utf-8')
 
-# Nạp cấu hình từ D:\DNH\.env
-load_dotenv(r"D:\DNH\.env")
+# Nạp cấu hình từ .env ở thư mục gốc project — tính theo vị trí file này (không hardcode ổ đĩa/máy
+# cụ thể), để chạy đúng trên bất kỳ máy nào project được deploy tới (vd máy 24), không chỉ D:\DNH.
+load_dotenv(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), '.env'))
 
 # 1. Cấu hình Kết nối SQL Server Nguồn (Chỉ đọc) — đọc từ .env, KHÔNG hardcode mật khẩu
 _bravo_server = os.getenv("BRAVO_SQL_SERVER", "")
