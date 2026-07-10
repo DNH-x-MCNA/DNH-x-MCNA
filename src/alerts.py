@@ -81,6 +81,79 @@ def record_alert_sent(alert_key, current_value):
     conn.commit()
     conn.close()
 
+def _init_debt_aging_snapshot_db():
+    """
+    Bảng snapshot công nợ nội bộ (SQLite, cùng file alerts_state.db) — thêm 10/07/2026 để
+    check_debt_aging_migration_alert (A1: khách MỚI rơi vào nhóm nợ >45 ngày) hết phụ thuộc
+    receivable_detail (Supabase, vốn có snapshot theo kỳ THÁNG sẵn) khi chuyển hẳn sang Bravo.
+
+    Bravo (get_bravo_receivables_snapshot) chỉ có ledger SỐNG, không tự lưu lịch sử — nên PHẢI tự
+    ghi lại 1 bản chụp (snapshot_date, customer_code) -> overdue_gt_45 MỖI LẦN hàm cảnh báo chạy
+    (ghi đè trong cùng ngày, không nhân bản). Cần TÍCH LŨY vài tuần dữ liệu trước khi có đủ "kỳ
+    trước" để so sánh — trước lúc đó hàm sẽ tự báo "chưa đủ lịch sử" thay vì báo sai/trống im lặng.
+    """
+    os.makedirs(STATE_DB_DIR, exist_ok=True)
+    conn = sqlite3.connect(STATE_DB_PATH)
+    conn.execute('''
+        CREATE TABLE IF NOT EXISTS debt_aging_snapshot (
+            snapshot_date TEXT NOT NULL,
+            customer_code TEXT NOT NULL,
+            customer_name TEXT,
+            overdue_gt_45 REAL NOT NULL,
+            PRIMARY KEY (snapshot_date, customer_code)
+        )
+    ''')
+    conn.commit()
+    conn.close()
+
+
+def _save_debt_aging_snapshot(rows):
+    """
+    Ghi/ghi đè bản chụp công nợ >45 ngày HÔM NAY từ `rows` (list customer_code/customer_name/
+    overdue_gt_45 — xem get_bravo_receivables_snapshot, đã gộp OTC+ETC theo khách hàng ở nơi gọi).
+    Idempotent trong ngày — gọi nhiều lần/ngày (5 lần sync) chỉ ghi đè, không nhân bản dòng.
+    """
+    _init_debt_aging_snapshot_db()
+    today = datetime.now().strftime("%Y-%m-%d")
+    conn = sqlite3.connect(STATE_DB_PATH)
+    conn.executemany('''
+        INSERT INTO debt_aging_snapshot (snapshot_date, customer_code, customer_name, overdue_gt_45)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(snapshot_date, customer_code) DO UPDATE SET
+            customer_name = excluded.customer_name,
+            overdue_gt_45 = excluded.overdue_gt_45
+    ''', [(today, code, name, amt) for code, name, amt in rows])
+    conn.commit()
+    conn.close()
+
+
+def _get_debt_aging_snapshot(snapshot_date):
+    """Trả {customer_code: (customer_name, overdue_gt_45)} cho đúng snapshot_date ('YYYY-MM-DD')."""
+    _init_debt_aging_snapshot_db()
+    conn = sqlite3.connect(STATE_DB_PATH)
+    cur = conn.execute(
+        'SELECT customer_code, customer_name, overdue_gt_45 FROM debt_aging_snapshot WHERE snapshot_date = ?',
+        (snapshot_date,))
+    result = {code: (name, amt) for code, name, amt in cur.fetchall()}
+    conn.close()
+    return result
+
+
+def _find_prev_month_snapshot_date(today_str):
+    """Ngày snapshot GẦN NHẤT thuộc tháng liền trước today_str ('YYYY-MM-DD') — None nếu chưa có."""
+    _init_debt_aging_snapshot_db()
+    today = datetime.strptime(today_str, "%Y-%m-%d")
+    prev_year, prev_month = (today.year, today.month - 1) if today.month > 1 else (today.year - 1, 12)
+    prefix = f"{prev_year:04d}-{prev_month:02d}-"
+    conn = sqlite3.connect(STATE_DB_PATH)
+    cur = conn.execute(
+        "SELECT MAX(snapshot_date) FROM debt_aging_snapshot WHERE snapshot_date LIKE ?",
+        (prefix + '%',))
+    row = cur.fetchone()
+    conn.close()
+    return row[0] if row and row[0] else None
+
+
 def clear_alert_state(alert_key):
     """
     Xóa trạng thái cảnh báo khi chỉ số đã trở lại bình thường (để cảnh báo lại ngay lập tức nếu lỗi tái diễn)
@@ -412,6 +485,97 @@ def get_bravo_kpi_tdv_snapshot(position_codes=('TDV',)):
         result.append(types.SimpleNamespace(
             employee_code=r.employee_code, employee_name=r.employee_name, area_code=r.area_code,
             month_sale_target=target, month_sale_amount=amount, month_sale_percent=pct))
+    return result
+
+
+def get_bravo_kpi_quarter_year_snapshot(position_codes):
+    """
+    Tái tạo % QUÝ và % NĂM từ lịch sử SNAPSHOT HÀNG THÁNG trên FACT_TongHopKhachHang (Bravo,
+    10/07/2026) — bảng không có cột quý/năm riêng, nhưng giữ 1 bản ghi mỗi tháng (SaveDate =
+    ngày làm việc cuối tháng, hoặc hôm nay cho tháng đang chạy) từ 01/2025 tới nay.
+
+    XÁC NHẬN THỰC TẾ trước khi dùng: [MonthSaleTarget]/[Amount_Cus] là số THÁNG, dao động lên
+    xuống theo từng tháng (KHÔNG cộng dồn) — vd 1 NV: 880tr/900tr/968tr/830tr/1010tr/923tr qua
+    6 tháng liên tiếp, không phải chuỗi tăng dần. [YearSaleTarget] NGƯỢC LẠI đã là số CỘNG DỒN
+    theo năm (2.6 tỷ tháng 1 -> 11.8 tỷ tháng 7, luôn tăng) — không được cộng dồn thêm lần nữa.
+    => % quý = tổng Amount_Cus các tháng trong quý / tổng MonthSaleTarget các tháng đó.
+    => % năm = tổng Amount_Cus các tháng từ đầu năm / YearSaleTarget tại snapshot MỚI NHẤT.
+
+    RỦI RO CẦN BIẾT (khác hẳn công nợ/KPI tháng đã verify được số thật): KHÔNG có số liệu "sự
+    thật đã biết" nào để đối chiếu (không giống công nợ — đã so khớp được với số liệu quan sát
+    trước đó). "Quý" ở đây là quý dương lịch (Q1=T1-3...) — CHƯA xác nhận đây có đúng là cách
+    DNH tự định nghĩa quý trong chính sách QĐ 0429-2 hay không. CHỈ dùng cho cảnh báo SỚM, không
+    dùng làm căn cứ chính thức cho quyết định nhân sự (giống tinh thần banner công nợ tạm thời).
+
+    Trả dict {employee_code: SimpleNamespace(employee_code, employee_name, area_code,
+    quarter_sale_percent, year_sale_percent)}. Raise exception nếu Bravo không truy cập được.
+    """
+    from sqlalchemy import text
+    import types
+    from src.database import _get_bravo_engine
+    engine = _get_bravo_engine()
+    if engine is None:
+        raise RuntimeError("Không có Bravo engine (thiếu BRAVO_SQL_* trong .env)")
+    pos_ph = ",".join(f"'{p}'" for p in position_codes)
+
+    def _sum_for_dates(conn, dates):
+        if not dates:
+            return {}
+        date_ph = ",".join(f"'{d.strftime('%Y-%m-%d')}'" for d in dates)
+        sql = text(f'''
+            WITH tgt AS (
+                SELECT DISTINCT [SaveDate], [EmployeeCode], [AreaCode], [MonthSaleTarget]
+                FROM [FACT_TongHopKhachHang] WHERE [SaveDate] IN ({date_ph})
+            ),
+            act AS (
+                SELECT [SaveDate], [EmployeeCode], SUM([Amount_Cus]) AS amt
+                FROM [FACT_TongHopKhachHang] WHERE [SaveDate] IN ({date_ph})
+                GROUP BY [SaveDate], [EmployeeCode]
+            )
+            SELECT n.[EmployeeCode] AS employee_code, n.[Name] AS employee_name,
+                   MAX(t.[AreaCode]) AS area_code,
+                   SUM(t.[MonthSaleTarget]) AS total_target, SUM(ISNULL(a.amt, 0)) AS total_actual
+            FROM tgt t
+            JOIN [DIM_NhanVien] n ON t.[EmployeeCode] = n.[EmployeeCode]
+            LEFT JOIN act a ON a.[SaveDate] = t.[SaveDate] AND a.[EmployeeCode] = t.[EmployeeCode]
+            WHERE n.[PositionCode] IN ({pos_ph}) AND (n.[IsDuplicate] IS NULL OR n.[IsDuplicate] = 0)
+            GROUP BY n.[EmployeeCode], n.[Name]
+        ''')
+        rows = conn.execute(sql).fetchall()
+        return {r.employee_code: (r.employee_name, r.area_code, float(r.total_target or 0), float(r.total_actual or 0))
+                for r in rows}
+
+    with engine.connect() as conn:
+        raw_dates = [r[0] for r in conn.execute(text("SELECT DISTINCT [SaveDate] FROM [FACT_TongHopKhachHang]")).fetchall()]
+        parsed = [d if hasattr(d, "year") else datetime.strptime(str(d)[:10], "%Y-%m-%d").date() for d in raw_dates]
+        if not parsed:
+            return {}
+        parsed.sort()
+        latest = parsed[-1]
+        by_month = {}
+        for d in parsed:
+            by_month[(d.year, d.month)] = d  # sort tăng dần -> luôn giữ bản MỚI NHẤT trong tháng đó
+        quarter_start_month = ((latest.month - 1) // 3) * 3 + 1
+        quarter_dates = [dt for (y, m), dt in by_month.items() if y == latest.year and quarter_start_month <= m <= latest.month]
+        year_dates = [dt for (y, m), dt in by_month.items() if y == latest.year and m <= latest.month]
+
+        quarter_map = _sum_for_dates(conn, quarter_dates)
+        year_actual_map = _sum_for_dates(conn, year_dates)
+        year_target_row = conn.execute(text('''
+            SELECT DISTINCT [EmployeeCode], [YearSaleTarget]
+            FROM [FACT_TongHopKhachHang] WHERE [SaveDate] = :latest
+        '''), {"latest": latest.strftime("%Y-%m-%d")}).fetchall()
+        year_target_map = {r[0]: float(r[1] or 0) for r in year_target_row}
+
+    result = {}
+    for emp_code, (name, area, q_target, q_actual) in quarter_map.items():
+        q_pct = (q_actual / q_target) if q_target > 0 else None
+        y_actual = year_actual_map.get(emp_code, (name, area, 0, 0))[3]
+        y_target = year_target_map.get(emp_code, 0)
+        y_pct = (y_actual / y_target) if y_target > 0 else None
+        result[emp_code] = types.SimpleNamespace(
+            employee_code=emp_code, employee_name=name, area_code=area,
+            quarter_sale_percent=q_pct, year_sale_percent=y_pct)
     return result
 
 
@@ -844,31 +1008,25 @@ def check_revenue_drop_alert():
         print(f"[ALERTS][revenue_drop] Không import được engine dữ liệu: {e}")
         return
 
-    engine = _get_cloud_engine()
-    if engine is None:
-        print("[ALERTS][revenue_drop] Chưa cấu hình CLOUD_DB_URL — bỏ qua cảnh báo doanh thu giảm.")
-        return
-
     try:
-        with engine.connect() as conn:
-            data_max_date = _last_complete_data_day()
-            if not data_max_date:
-                print("[ALERTS][revenue_drop] Chưa có dữ liệu hóa đơn để so sánh.")
-                return
+        data_max_date = _last_complete_data_day()
+        if not data_max_date:
+            print("[ALERTS][revenue_drop] Chưa có dữ liệu hóa đơn để so sánh.")
+            return
 
-            cur_month_start = datetime(data_max_date.year, data_max_date.month, 1)
-            days_elapsed = (data_max_date - cur_month_start.date()).days + 1
-            cur_start = cur_month_start
-            cur_end = cur_month_start + timedelta(days=days_elapsed)
+        cur_month_start = datetime(data_max_date.year, data_max_date.month, 1)
+        days_elapsed = (data_max_date - cur_month_start.date()).days + 1
+        cur_start = cur_month_start
+        cur_end = cur_month_start + timedelta(days=days_elapsed)
 
-            prev_year, prev_month = _prev_month_tuple(cur_month_start)
-            prev_start = datetime(prev_year, prev_month, 1)
-            # Chặn trên bằng đầu tháng hiện tại — nếu tháng trước ít ngày hơn số ngày đã trôi qua
-            # của tháng này (vd so ngày 31 với tháng 2) thì lấy trọn tháng trước, không tràn sang tháng sau nữa.
-            prev_end = min(prev_start + timedelta(days=days_elapsed), cur_month_start)
+        prev_year, prev_month = _prev_month_tuple(cur_month_start)
+        prev_start = datetime(prev_year, prev_month, 1)
+        # Chặn trên bằng đầu tháng hiện tại — nếu tháng trước ít ngày hơn số ngày đã trôi qua
+        # của tháng này (vd so ngày 31 với tháng 2) thì lấy trọn tháng trước, không tràn sang tháng sau nữa.
+        prev_end = min(prev_start + timedelta(days=days_elapsed), cur_month_start)
 
-            cur_otc, cur_etc, _ = _period_revenue(cur_start, cur_end)
-            prev_otc, prev_etc, _ = _period_revenue(prev_start, prev_end)
+        cur_otc, cur_etc, _ = _period_revenue(cur_start, cur_end)
+        prev_otc, prev_etc, _ = _period_revenue(prev_start, prev_end)
     except Exception as e:
         print(f"[ALERTS][revenue_drop] Lỗi truy vấn doanh thu: {e}")
         return
@@ -1302,56 +1460,89 @@ def check_debt_aging_migration_alert():
     """
     A1: Khách MỚI rơi vào nhóm nợ >45 ngày ở kỳ này (kỳ trước chưa có) — nợ xấu hình thành.
 
-    CHỦ ĐỘNG GIỮ SUPABASE (không chuyển Bravo-first như 3 cảnh báo công nợ khác, 10/07/2026):
-    hàm này so sánh 2 KỲ (period-over-period) — cần snapshot tuổi nợ ĐÃ LƯU LẠI của kỳ trước để
-    đối chiếu. Bravo chỉ có ledger SỐNG (get_bravo_receivables_snapshot() luôn là số liệu TỨC THỜI,
-    không lưu lịch sử theo kỳ) — không có cách tái tạo "kỳ trước" từ Bravo mà không tự xây thêm cơ
-    chế lưu snapshot định kỳ riêng (việc lớn hơn hẳn phạm vi đổi ưu tiên nguồn dữ liệu). receivable_
-    detail (Supabase) vẫn được đồng bộ đều 5 lần/ngày nên vẫn phản ánh đúng biến động, chỉ khác là
-    đọc qua Supabase thay vì thẳng Bravo.
+    ƯU TIÊN BRAVO (10/07/2026): Bravo chỉ có ledger SỐNG (get_bravo_receivables_snapshot() luôn là
+    số liệu TỨC THỜI, không tự lưu lịch sử) — nên hàm này tự XÂY snapshot nội bộ (SQLite, xem
+    _save_debt_aging_snapshot/_find_prev_month_snapshot_date): mỗi lần chạy tự chụp lại tình trạng
+    nợ >45 ngày HÔM NAY, rồi so với bản chụp gần nhất thuộc THÁNG TRƯỚC đã tích lũy được.
+
+    GIỚI HẠN GIAI ĐOẠN ĐẦU: vừa triển khai nên CHƯA có dữ liệu tháng trước để so sánh — những tuần
+    đầu sẽ tự dự phòng đọc receivable_detail (Supabase, đã có sẵn lịch sử) cho tới khi snapshot nội
+    bộ tích đủ ít nhất 1 tháng, sau đó tự chuyển hẳn sang dùng snapshot Bravo, không cần sửa code.
     """
     from sqlalchemy import text
-    engine = _alert_engine()
-    if engine is None:
-        return
+
+    rows = []
+    latest_label = None
+    prev_label = None
     try:
-        with engine.connect() as conn:
-            latest, prev = _two_latest_periods(conn)
-            if not latest or not prev:
-                print("[ALERTS][aging_migration] Chưa đủ 2 kỳ để so sánh.")
-                return
-            sql = text('''
-                SELECT c.customer_code, c.customer_name, c.overdue_gt_45,
-                       COALESCE(p.overdue_gt_45, 0) AS prev_gt45
-                FROM receivable_detail c
-                LEFT JOIN receivable_detail p
-                       ON c.customer_code = p.customer_code AND p.period = :prev
-                WHERE c.period = :latest
-                  AND c.overdue_gt_45 > 10000000
-                  AND COALESCE(p.overdue_gt_45, 0) = 0
-                ORDER BY c.overdue_gt_45 DESC LIMIT 10
-            ''')
-            rows = conn.execute(sql, {"latest": latest, "prev": prev}).fetchall()
+        snap = get_bravo_receivables_snapshot()
+        by_customer = {}
+        for r in snap:
+            name, amt = by_customer.get(r.customer_code, (r.customer_name, 0.0))
+            by_customer[r.customer_code] = (name, amt + float(r.overdue_gt_45 or 0))
+        today_str = datetime.now().strftime("%Y-%m-%d")
+        _save_debt_aging_snapshot([(code, name, amt) for code, (name, amt) in by_customer.items()])
+
+        prev_date = _find_prev_month_snapshot_date(today_str)
+        if not prev_date:
+            raise RuntimeError("Chưa tích lũy đủ snapshot tháng trước (tính năng mới triển khai)")
+        prev_snap = _get_debt_aging_snapshot(prev_date)
+        latest_label = f"Tức thời (đến {datetime.now().strftime('%d/%m/%Y %H:%M')})"
+        prev_label = prev_date
+        for code, (name, amt) in by_customer.items():
+            if amt <= 10000000:
+                continue
+            prev_amt = prev_snap.get(code, (None, 0.0))[1]
+            if prev_amt == 0:
+                rows.append((code, name, amt))
+        rows.sort(key=lambda r: r[2], reverse=True)
+        rows = rows[:10]
     except Exception as e:
-        print(f"[ALERTS][aging_migration] Lỗi: {e}")
-        return
+        print(f"[ALERTS][aging_migration] Bravo lỗi/chưa đủ lịch sử ({e}) — dự phòng Supabase receivable_detail.")
+        engine = _alert_engine()
+        if engine is None:
+            return
+        try:
+            with engine.connect() as conn:
+                latest, prev = _two_latest_periods(conn)
+                if not latest or not prev:
+                    print("[ALERTS][aging_migration] Chưa đủ 2 kỳ để so sánh.")
+                    return
+                latest_label, prev_label = latest, prev
+                sql = text('''
+                    SELECT c.customer_code, c.customer_name, c.overdue_gt_45,
+                           COALESCE(p.overdue_gt_45, 0) AS prev_gt45
+                    FROM receivable_detail c
+                    LEFT JOIN receivable_detail p
+                           ON c.customer_code = p.customer_code AND p.period = :prev
+                    WHERE c.period = :latest
+                      AND c.overdue_gt_45 > 10000000
+                      AND COALESCE(p.overdue_gt_45, 0) = 0
+                    ORDER BY c.overdue_gt_45 DESC LIMIT 10
+                ''')
+                db_rows = conn.execute(sql, {"latest": latest, "prev": prev}).fetchall()
+                rows = [(r[0], r[1], r[2]) for r in db_rows]
+        except Exception as e2:
+            print(f"[ALERTS][aging_migration] Lỗi cả 2 nguồn: {e2}")
+            return
+
     if not rows:
         print("[ALERTS][aging_migration] Không có khách mới rơi vào nhóm >45 ngày.")
         return
-    alert_key = f"aging_migration_gt45:{latest}"
+    alert_key = f"aging_migration_gt45:{latest_label}"
     top = rows[0][2]
     if should_send_alert(alert_key, cooldown_hours=24, current_value=str(top)):
         table = [[str(r[0]), r[1], format_vietnamese_money(r[2])] for r in rows]
         send_alert_to_all_channels(
             alert_name="CẢNH BÁO NỢ CHUYỂN NHÓM XẤU (>45 NGÀY)",
             severity="CRITICAL",
-            summary=(f"Kỳ {latest}: các khách sau LẦN ĐẦU rơi vào nhóm nợ quá hạn >45 ngày "
-                     f"(kỳ trước {prev} chưa có) — nguy cơ nợ xấu, cần thu hồi gấp."),
+            summary=(f"Kỳ {latest_label}: các khách sau LẦN ĐẦU rơi vào nhóm nợ quá hạn >45 ngày "
+                     f"(kỳ trước {prev_label} chưa có) — nguy cơ nợ xấu, cần thu hồi gấp."),
             table_headers=["Mã KH", "Tên KH", "Nợ >45 ngày"],
             table_rows=table,
             channels=("teams",),
-            period=latest, region="Toàn quốc",
-            issue=f"Khách hàng lần đầu rơi vào nhóm nợ quá hạn >45 ngày (kỳ trước {prev} chưa có) — nguy cơ nợ xấu"
+            period=latest_label, region="Toàn quốc",
+            issue=f"Khách hàng lần đầu rơi vào nhóm nợ quá hạn >45 ngày (kỳ trước {prev_label} chưa có) — nguy cơ nợ xấu"
         )
         record_alert_sent(alert_key, str(top))
 
@@ -1853,10 +2044,14 @@ def check_kpi_sales_force_risk_alert():
     F2: Cảnh báo rủi ro theo ngưỡng chính sách thu nhập OTC MIỀN NAM (QĐ 0429-2/QĐ-HĐQT.25):
     nguy cơ chấm dứt HĐLĐ, mất thưởng quý, thưởng năm rơi về sàn — đọc thresholds.kpi_sales_force.
 
-    CHỦ ĐỘNG GIỮ SUPABASE (không chuyển Bravo-first, 10/07/2026): hàm cần quarter_sale_percent
-    (mất thưởng quý) — kiểm tra schema FACT_TongHopKhachHang trên Bravo (nguồn KPI TDV/QLV duy nhất
-    ở đó) xác nhận CHỈ có MonthSaleTarget/YearSaleTarget, KHÔNG có cột quý nào — không có cách suy
-    ra "% quý" đáng tin cậy từ Bravo. Giữ nguyên đọc kpi_summary (Supabase).
+    ƯU TIÊN BRAVO (10/07/2026): FACT_TongHopKhachHang không có cột quý riêng, nhưng giữ lịch sử
+    snapshot HÀNG THÁNG (01/2025 tới nay) — đủ để TÁI TẠO % quý/năm bằng cách cộng dồn các tháng
+    liên quan (xem get_bravo_kpi_quarter_year_snapshot). RỦI RO CAO HƠN các cảnh báo công nợ/KPI
+    tháng đã chuyển: KHÔNG có số liệu quý/năm "đã biết đúng" nào để đối chiếu (khác công nợ, đã so
+    khớp được với số liệu quan sát trước đó) — dùng cho cảnh báo SỚM, KHÔNG dùng làm căn cứ chính
+    thức cho quyết định chấm dứt HĐLĐ mà không xác nhận lại với DNH. Bravo lỗi thì dự phòng
+    kpi_summary (Supabase) như cũ. CHỈ áp dụng TDV/QLV/CS/TK có trên Bravo — vai trò nào trong
+    risk_map KHÔNG có trên Bravo (nếu có) sẽ tự vắng mặt khỏi kết quả Bravo, không crash.
 
     GIỚI HẠN CẦN BIẾT:
       - Chính sách yêu cầu "2 tháng liên tiếp" dưới ngưỡng mới đủ điều kiện xem xét chấm dứt HĐLĐ,
@@ -1871,9 +2066,6 @@ def check_kpi_sales_force_risk_alert():
         — sửa lại filter nếu DNH xác nhận tiền tố khác khi ETL đổ dữ liệu miền Nam vào bảng này.
     """
     from sqlalchemy import text
-    engine = _alert_engine()
-    if engine is None:
-        return
 
     try:
         cfg = load_config()['thresholds']['kpi_sales_force']
@@ -1884,24 +2076,57 @@ def check_kpi_sales_force_risk_alert():
         print(f"[ALERTS][kpi_sales_force] Chưa cấu hình đủ thresholds.kpi_sales_force trong config.yaml: {e}")
         return
 
+    rows = []
+    kpi_force_data_day = None
     try:
-        with engine.connect() as conn:
-            rows = conn.execute(text('''
-                SELECT employee_code, employee_name, area_code, position_code,
-                       month_sale_percent, quarter_sale_percent, year_sale_percent
-                FROM kpi_summary
-                WHERE position_code = ANY(:roles)
-                  AND area_code LIKE 'MN%'
-                  AND COALESCE(month_sale_target, 0) > 0
-            '''), {"roles": list(risk_map.keys())}).fetchall()
-            kpi_force_data_day = _last_complete_data_day()
+        roles = tuple(risk_map.keys())
+        month_snap = {r.employee_code: r for r in get_bravo_kpi_tdv_snapshot(position_codes=roles)}
+        qy_snap = get_bravo_kpi_quarter_year_snapshot(roles)
+        # position_code không có sẵn trong 2 snapshot trên (đều đã filter theo roles rồi) — dò lại
+        # qua DIM_NhanVien 1 lần để gắn đúng position_code cho từng dòng kết quả.
+        from src.database import _get_bravo_engine
+        bravo_engine = _get_bravo_engine()
+        pos_ph = ",".join(f"'{p}'" for p in roles)
+        with bravo_engine.connect() as conn:
+            pos_rows = conn.execute(text(f'''
+                SELECT [EmployeeCode], [PositionCode] FROM [DIM_NhanVien]
+                WHERE [PositionCode] IN ({pos_ph}) AND ([IsDuplicate] IS NULL OR [IsDuplicate] = 0)
+            ''')).fetchall()
+        pos_map = {r[0]: r[1] for r in pos_rows}
+        kpi_force_data_day = datetime.now()
+        for emp_code, m in month_snap.items():
+            area = m.area_code or ""
+            if not area.upper().startswith("MN"):
+                continue
+            pos = pos_map.get(emp_code)
+            if pos not in risk_map:
+                continue
+            qy = qy_snap.get(emp_code)
+            rows.append((emp_code, m.employee_name, area, pos, m.month_sale_percent,
+                          qy.quarter_sale_percent if qy else None, qy.year_sale_percent if qy else None))
     except Exception as e:
-        print(f"[ALERTS][kpi_sales_force] Lỗi truy vấn kpi_summary: {e}")
-        return
+        print(f"[ALERTS][kpi_sales_force] Bravo lỗi ({e}) — dự phòng Supabase kpi_summary.")
+        engine = _alert_engine()
+        if engine is None:
+            return
+        try:
+            with engine.connect() as conn:
+                rows = conn.execute(text('''
+                    SELECT employee_code, employee_name, area_code, position_code,
+                           month_sale_percent, quarter_sale_percent, year_sale_percent
+                    FROM kpi_summary
+                    WHERE position_code = ANY(:roles)
+                      AND area_code LIKE 'MN%'
+                      AND COALESCE(month_sale_target, 0) > 0
+                '''), {"roles": list(risk_map.keys())}).fetchall()
+                kpi_force_data_day = _last_complete_data_day()
+        except Exception as e2:
+            print(f"[ALERTS][kpi_sales_force] Lỗi cả 2 nguồn: {e2}")
+            return
 
     if not rows:
         print("[ALERTS][kpi_sales_force] Không có dòng nào khớp (area_code LIKE 'MN%' + vai trò đã map) "
-              "— nhiều khả năng do kpi_summary chưa có dữ liệu miền Nam (gap dữ liệu đã biết).")
+              "— nhiều khả năng do chưa có dữ liệu miền Nam khớp vai trò (gap dữ liệu đã biết).")
         return
 
     at_risk = []
@@ -1956,81 +2181,145 @@ def check_daily_kpi_pace_alert():
     Chủ nhật LUÔN 100% Đỏ (10/10 Chủ nhật quan sát được đều 49/49 — công ty không kinh doanh ngày
     này) nên KHÔNG chạy report vào Chủ nhật, tránh gửi 1 báo cáo vô nghĩa mỗi tuần.
 
-    CHỦ ĐỘNG GIỮ SUPABASE (không chuyển Bravo-first, 10/07/2026): query nhiều JOIN phức tạp
-    (brv_hoadonct + brv_hoadonhdr + dim_nhanvien + trạng thái duyệt/hóa đơn điện tử, loại trừ dòng
-    CTKM) — khác hẳn quy mô 1 câu SELECT đơn giản như các cảnh báo công nợ/KPI tháng đã chuyển.
-    Cần dịch cẩn thận sang T-SQL + tự test lại (không phải chỉ đổi nguồn) — để riêng, chưa làm
-    trong đợt đổi ưu tiên này để không vội vàng với cảnh báo chạy hàng ngày.
+    ƯU TIÊN BRAVO (10/07/2026): query nhiều JOIN đã dịch sang T-SQL (brv_hoadonct/hoadonhdr/
+    dim_nhanvien/trạng thái duyệt/hóa đơn điện tử), chỉ tiêu tháng lấy qua FACT_TongHopKhachHang
+    (giống get_bravo_kpi_tdv_snapshot) — đã kiểm chứng bảng/cột tồn tại + chạy thật trước khi ghép.
+    Bravo lỗi thì dự phòng nguyên vẹn logic Supabase cũ.
 
-    GIỚI HẠN DỮ LIỆU (đã xác minh trực tiếp trên Supabase 08/07/2026):
+    GIỚI HẠN DỮ LIỆU (đã xác minh trực tiếp trên Supabase 08/07/2026, ÁP DỤNG CHO NHÁNH DỰ PHÒNG
+    SUPABASE — nhánh Bravo chính KHÔNG còn bị giới hạn miền Bắc, xem bên dưới):
       - CHỈ khả thi kênh OTC — brvsx_hoadonhdr (ETC) không có cột nhân viên nào trên hóa đơn.
       - Chỉ tính TDV bắc cầu được brv_hoadonhdr.EmpDMSCode -> dim_nhanvien.DMSId ->
         dim_nhanvien.EmployeeCode -> kpi_summary.employee_code (50/58 TDV có chỉ tiêu hiện bắc
         cầu được — verify trực tiếp, KHÔNG suy đoán; EmpDMSCode KHÔNG khớp thẳng employee_code).
       - kpi_summary hiện 100% area_code miền Bắc (gap dữ liệu đã biết, xem flag
-        kpi_sales_force_risk_check) -> hàm này hiện chỉ áp dụng thực tế cho TDV miền Bắc, tự mở
-        rộng khi DNH bổ sung dữ liệu miền Nam vào kpi_summary, không cần sửa code.
+        kpi_sales_force_risk_check) -> nhánh dự phòng này chỉ áp dụng thực tế cho TDV miền Bắc.
+
+    CẢI THIỆN KHI DÙNG BRAVO (10/07/2026): FACT_TongHopKhachHang có đủ TDV mọi miền (không chỉ
+    Bắc) — xác nhận thực tế chạy ra 146 TDV đủ Bắc/Trung/Nam, nhiều hơn hẳn 50 TDV giới hạn miền
+    Bắc của nhánh Supabase cũ. Giới hạn "chỉ OTC" vẫn còn (ETC vẫn không có cột nhân viên trên Bravo).
     """
     from sqlalchemy import text
-    engine = _alert_engine()
-    if engine is None:
-        return
+    import types
 
     red_pct = float(_biz_threshold('kpi_pace_red_pct', 3.0))
     yellow_pct = float(_biz_threshold('kpi_pace_yellow_pct', 4.0))
     red_alert_count = int(_biz_threshold('kpi_pace_red_alert_count', 5))
 
+    target_day = None
+    rows = []
     try:
-        with engine.connect() as conn:
-            # Dùng ngày LIỀN TRƯỚC ngày mới nhất có dữ liệu (không phải MAX(DocDate) trực tiếp) —
-            # xác minh thực tế 08/07/2026: ngày mới nhất trong dữ liệu luôn chưa đồng bộ xong (TDV
-            # nhập liệu suốt ngày, sync 5 lần/ngày chưa chắc bắt kịp cuối ngày) — vd ngày mới nhất
-            # hôm đó chỉ có 16/~135 nhân viên phát sinh hóa đơn so với ngày liền trước có tới 135
-            # người. Nếu tính nhịp KPI trên ngày CHƯA xong sẽ luôn ra đỏ hàng loạt giả (đã thấy
-            # thực tế 49/49 TDV đỏ). Ngày liền trước chắc chắn đã đồng bộ trọn vẹn.
+        from src.database import _get_bravo_engine
+        bravo_engine = _get_bravo_engine()
+        if bravo_engine is None:
+            raise RuntimeError("Không có Bravo engine")
+        with bravo_engine.connect() as conn:
+            # Dùng ngày LIỀN TRƯỚC ngày mới nhất có dữ liệu — cùng lý do đã ghi ở bản Supabase cũ
+            # (ngày mới nhất luôn có thể chưa đồng bộ xong).
             overall_max_row = conn.execute(text(
-                'SELECT MAX("DocDate"::date) FROM brv_hoadonhdr WHERE "IsActive"=TRUE'
+                'SELECT MAX([DocDate]) FROM [BRV_HoaDonHdr] WHERE [IsActive]=1'
             )).fetchone()
             overall_max = overall_max_row[0] if overall_max_row else None
             if not overall_max:
                 print("[ALERTS][kpi_pace] Chưa có dữ liệu hóa đơn OTC để tính nhịp KPI.")
                 return
+            overall_max_str = overall_max.strftime("%Y-%m-%d") if hasattr(overall_max, "strftime") else str(overall_max)
 
             target_row = conn.execute(text(
-                'SELECT MAX("DocDate"::date) FROM brv_hoadonhdr WHERE "IsActive"=TRUE AND "DocDate"::date < :overall_max'
-            ), {"overall_max": overall_max}).fetchone()
-            target_day = target_row[0] if target_row else None
-            if not target_day:
+                'SELECT MAX([DocDate]) FROM [BRV_HoaDonHdr] WHERE [IsActive]=1 AND [DocDate] < :overall_max'
+            ), {"overall_max": overall_max_str}).fetchone()
+            target_raw = target_row[0] if target_row else None
+            if not target_raw:
                 print("[ALERTS][kpi_pace] Chưa đủ 2 ngày dữ liệu để xác định ngày đã đồng bộ xong — bỏ qua.")
                 return
+            target_day = target_raw if hasattr(target_raw, "strftime") else datetime.strptime(str(target_raw)[:10], "%Y-%m-%d").date()
             if target_day.weekday() == 6:  # Chủ nhật — luôn 100% Đỏ (không kinh doanh), bỏ qua
                 print(f"[ALERTS][kpi_pace] Ngày {target_day} là Chủ nhật — không kinh doanh, bỏ qua report.")
                 return
+            target_day_str = target_day.strftime("%Y-%m-%d")
 
-            rows = conn.execute(text('''
+            bravo_rows = conn.execute(text('''
                 WITH daily_sales AS (
-                    SELECT n."EmployeeCode" AS employee_code,
-                           SUM(CASE WHEN c."CTKM" IS NULL OR c."CTKM" = '' THEN c."Amount9" ELSE 0 END) AS day_rev
-                    FROM brv_hoadonct c
-                    JOIN brv_hoadonhdr h ON c."Stt" = h."Stt"
-                    JOIN dim_nhanvien n ON h."EmpDMSCode" = n."DMSId"
-                    LEFT JOIN brv_trangthaiduyet d ON h."DocStatus" = d."DocStatusKey"
-                    LEFT JOIN brv_trangthaihoadon e ON h."EInvoiceStatus" = e."EInvoiceStatusKey"
-                    WHERE h."IsActive" = TRUE AND h."IsHC" = FALSE
-                      AND (d."IsCancelled" IS NULL OR d."IsCancelled" = FALSE)
-                      AND (e."IsCancelled" IS NULL OR e."IsCancelled" = FALSE)
-                      AND h."DocDate"::date = :target_day
-                    GROUP BY n."EmployeeCode"
+                    SELECT n.[EmployeeCode] AS employee_code,
+                           SUM(CASE WHEN c.[CTKM] IS NULL OR c.[CTKM] = '' THEN c.[Amount9] ELSE 0 END) AS day_rev
+                    FROM [BRV_HoaDonCt] c
+                    JOIN [BRV_HoaDonHdr] h ON c.[Stt] = h.[Stt]
+                    JOIN [DIM_NhanVien] n ON h.[EmpDMSCode] = n.[DMSId]
+                    LEFT JOIN [BRV_TrangThaiDuyet] d ON h.[DocStatus] = d.[DocStatusKey]
+                    LEFT JOIN [BRV_TrangThaiHoaDon] e ON h.[EInvoiceStatus] = e.[EInvoiceStatusKey]
+                    WHERE h.[IsActive] = 1 AND h.[IsHC] = 0
+                      AND (d.[IsCancelled] IS NULL OR d.[IsCancelled] = 0)
+                      AND (e.[IsCancelled] IS NULL OR e.[IsCancelled] = 0)
+                      AND h.[DocDate] = :target_day
+                    GROUP BY n.[EmployeeCode]
+                ),
+                tdv_target AS (
+                    SELECT DISTINCT [EmployeeCode], [AreaCode], [MonthSaleTarget]
+                    FROM [FACT_TongHopKhachHang]
+                    WHERE [SaveDate] = (SELECT MAX([SaveDate]) FROM [FACT_TongHopKhachHang])
                 )
-                SELECT k.employee_code, k.employee_name, k.area_code, k.month_sale_target,
-                       COALESCE(ds.day_rev, 0) AS day_rev
-                FROM kpi_summary k
-                LEFT JOIN daily_sales ds ON ds.employee_code = k.employee_code
-                WHERE k.position_code = 'TDV' AND COALESCE(k.month_sale_target,0) > 0
-            '''), {"target_day": target_day}).fetchall()
+                SELECT n.[EmployeeCode] AS employee_code, n.[Name] AS employee_name, t.[AreaCode] AS area_code,
+                       t.[MonthSaleTarget] AS month_sale_target, ISNULL(ds.day_rev, 0) AS day_rev
+                FROM tdv_target t
+                JOIN [DIM_NhanVien] n ON t.[EmployeeCode] = n.[EmployeeCode]
+                LEFT JOIN daily_sales ds ON ds.employee_code = t.[EmployeeCode]
+                WHERE n.[PositionCode] = 'TDV' AND (n.[IsDuplicate] IS NULL OR n.[IsDuplicate] = 0)
+                  AND t.[MonthSaleTarget] > 0
+            '''), {"target_day": target_day_str}).fetchall()
+        rows = [types.SimpleNamespace(
+            employee_code=r.employee_code, employee_name=r.employee_name, area_code=r.area_code,
+            month_sale_target=float(r.month_sale_target or 0), day_rev=float(r.day_rev or 0))
+            for r in bravo_rows]
     except Exception as e:
-        print(f"[ALERTS][kpi_pace] Lỗi truy vấn nhịp KPI ngày: {e}")
-        return
+        print(f"[ALERTS][kpi_pace] Bravo lỗi ({e}) — dự phòng Supabase.")
+        engine = _alert_engine()
+        if engine is None:
+            return
+        try:
+            with engine.connect() as conn:
+                overall_max_row = conn.execute(text(
+                    'SELECT MAX("DocDate"::date) FROM brv_hoadonhdr WHERE "IsActive"=TRUE'
+                )).fetchone()
+                overall_max = overall_max_row[0] if overall_max_row else None
+                if not overall_max:
+                    print("[ALERTS][kpi_pace] Chưa có dữ liệu hóa đơn OTC để tính nhịp KPI.")
+                    return
+
+                target_row = conn.execute(text(
+                    'SELECT MAX("DocDate"::date) FROM brv_hoadonhdr WHERE "IsActive"=TRUE AND "DocDate"::date < :overall_max'
+                ), {"overall_max": overall_max}).fetchone()
+                target_day = target_row[0] if target_row else None
+                if not target_day:
+                    print("[ALERTS][kpi_pace] Chưa đủ 2 ngày dữ liệu để xác định ngày đã đồng bộ xong — bỏ qua.")
+                    return
+                if target_day.weekday() == 6:
+                    print(f"[ALERTS][kpi_pace] Ngày {target_day} là Chủ nhật — không kinh doanh, bỏ qua report.")
+                    return
+
+                rows = conn.execute(text('''
+                    WITH daily_sales AS (
+                        SELECT n."EmployeeCode" AS employee_code,
+                               SUM(CASE WHEN c."CTKM" IS NULL OR c."CTKM" = '' THEN c."Amount9" ELSE 0 END) AS day_rev
+                        FROM brv_hoadonct c
+                        JOIN brv_hoadonhdr h ON c."Stt" = h."Stt"
+                        JOIN dim_nhanvien n ON h."EmpDMSCode" = n."DMSId"
+                        LEFT JOIN brv_trangthaiduyet d ON h."DocStatus" = d."DocStatusKey"
+                        LEFT JOIN brv_trangthaihoadon e ON h."EInvoiceStatus" = e."EInvoiceStatusKey"
+                        WHERE h."IsActive" = TRUE AND h."IsHC" = FALSE
+                          AND (d."IsCancelled" IS NULL OR d."IsCancelled" = FALSE)
+                          AND (e."IsCancelled" IS NULL OR e."IsCancelled" = FALSE)
+                          AND h."DocDate"::date = :target_day
+                        GROUP BY n."EmployeeCode"
+                    )
+                    SELECT k.employee_code, k.employee_name, k.area_code, k.month_sale_target,
+                           COALESCE(ds.day_rev, 0) AS day_rev
+                    FROM kpi_summary k
+                    LEFT JOIN daily_sales ds ON ds.employee_code = k.employee_code
+                    WHERE k.position_code = 'TDV' AND COALESCE(k.month_sale_target,0) > 0
+                '''), {"target_day": target_day}).fetchall()
+        except Exception as e2:
+            print(f"[ALERTS][kpi_pace] Lỗi cả 2 nguồn: {e2}")
+            return
 
     if not rows:
         print("[ALERTS][kpi_pace] Không có TDV nào (position_code='TDV', có chỉ tiêu tháng) để tính nhịp KPI.")
@@ -2139,14 +2428,67 @@ def check_kpi_milestone_drop_alert():
 
     try:
         with engine.connect() as conn:
-            # (a) Theo từng kênh — tái dùng _period_revenue (src/etl.py)
+            # (a) Theo từng kênh — tái dùng _period_revenue (src/etl.py), ĐÃ tự Bravo-first qua
+            # run_with_failover() (đổi ưu tiên chung ở src/database.py) — không cần sửa gì thêm.
             channel_series = {"OTC": [], "ETC": []}
             for idx, p_start, p_end in periods:
                 otc_rev, etc_rev, _ = _period_revenue(p_start, p_end)
                 channel_series["OTC"].append((idx, otc_rev))
                 channel_series["ETC"].append((idx, etc_rev))
 
-            # (b) Theo từng TDV — 1 câu SQL duy nhất, UNION ALL 6 khối gắn nhãn kỳ (1 round-trip)
+        # (b) Theo từng TDV — ưu tiên Bravo (T-SQL, FACT_TongHopKhachHang cho danh sách TDV +
+        # dịch cùng query brv_hoadonct/hoadonhdr/dim_nhanvien như check_daily_kpi_pace_alert,
+        # 10/07/2026); Bravo lỗi thì dự phòng nguyên vẹn logic Supabase cũ.
+        import types
+        tdv_rows = []
+        try:
+            from src.database import _get_bravo_engine
+            bravo_engine = _get_bravo_engine()
+            if bravo_engine is None:
+                raise RuntimeError("Không có Bravo engine")
+            union_blocks = []
+            params = {}
+            for idx, p_start, p_end in periods:
+                params[f"start_{idx}"] = p_start.strftime("%Y-%m-%d")
+                params[f"end_{idx}"] = p_end.strftime("%Y-%m-%d")
+                union_blocks.append(f'''
+                    SELECT {idx} AS period_idx, n.[EmployeeCode] AS employee_code,
+                           SUM(CASE WHEN c.[CTKM] IS NULL OR c.[CTKM] = '' THEN c.[Amount9] ELSE 0 END) AS rev
+                    FROM [BRV_HoaDonCt] c
+                    JOIN [BRV_HoaDonHdr] h ON c.[Stt] = h.[Stt]
+                    JOIN [DIM_NhanVien] n ON h.[EmpDMSCode] = n.[DMSId]
+                    LEFT JOIN [BRV_TrangThaiDuyet] d ON h.[DocStatus] = d.[DocStatusKey]
+                    LEFT JOIN [BRV_TrangThaiHoaDon] e ON h.[EInvoiceStatus] = e.[EInvoiceStatusKey]
+                    WHERE h.[IsActive] = 1 AND h.[IsHC] = 0
+                      AND (d.[IsCancelled] IS NULL OR d.[IsCancelled] = 0)
+                      AND (e.[IsCancelled] IS NULL OR e.[IsCancelled] = 0)
+                      AND h.[DocDate] >= :start_{idx} AND h.[DocDate] < :end_{idx}
+                    GROUP BY n.[EmployeeCode]
+                ''')
+            tdv_sql = text('''
+                WITH tdv_periods AS (''' + " UNION ALL ".join(union_blocks) + '''
+                ),
+                tdv_target AS (
+                    SELECT DISTINCT [EmployeeCode], [AreaCode], [MonthSaleTarget]
+                    FROM [FACT_TongHopKhachHang]
+                    WHERE [SaveDate] = (SELECT MAX([SaveDate]) FROM [FACT_TongHopKhachHang])
+                )
+                SELECT n.[EmployeeCode] AS employee_code, n.[Name] AS employee_name, t.[AreaCode] AS area_code,
+                       tp.period_idx, tp.rev
+                FROM tdv_target t
+                JOIN [DIM_NhanVien] n ON t.[EmployeeCode] = n.[EmployeeCode]
+                JOIN tdv_periods tp ON tp.employee_code = t.[EmployeeCode]
+                WHERE n.[PositionCode] = 'TDV' AND (n.[IsDuplicate] IS NULL OR n.[IsDuplicate] = 0)
+                  AND t.[MonthSaleTarget] > 0
+            ''')
+            with bravo_engine.connect() as bconn:
+                raw_rows = bconn.execute(tdv_sql, params).fetchall()
+            tdv_rows = [types.SimpleNamespace(
+                employee_code=r.employee_code, employee_name=r.employee_name, area_code=r.area_code,
+                period_idx=r.period_idx, rev=float(r.rev or 0))
+                for r in raw_rows]
+        except Exception as e:
+            print(f"[ALERTS][kpi_milestone] Bravo lỗi ({e}) — dự phòng Supabase cho phần TDV.")
             union_blocks = []
             params = {}
             for idx, p_start, p_end in periods:
@@ -2174,7 +2516,12 @@ def check_kpi_milestone_drop_alert():
                 JOIN tdv_periods tp ON tp.employee_code = k.employee_code
                 WHERE k.position_code = 'TDV' AND COALESCE(k.month_sale_target,0) > 0
             ''')
-            tdv_rows = conn.execute(tdv_sql, params).fetchall()
+            try:
+                with engine.connect() as conn2:
+                    tdv_rows = conn2.execute(tdv_sql, params).fetchall()
+            except Exception as e2:
+                print(f"[ALERTS][kpi_milestone] Lỗi cả 2 nguồn cho phần TDV: {e2}")
+                tdv_rows = []
     except Exception as e:
         print(f"[ALERTS][kpi_milestone] Lỗi truy vấn lũy kế mốc ngày {milestone_day}: {e}")
         return
