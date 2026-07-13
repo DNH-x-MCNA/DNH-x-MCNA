@@ -405,7 +405,7 @@ DIGEST_EMAIL_TEMPLATE = """
                 <tbody>
                     {% for item in metrics.inventory.dead_stock_items %}
                     <tr>
-                        <td><strong>{{ item.item_code }}</strong></td>
+                        <td><strong>{{ item.item_code }} ({% if item.channel %}{{ item.channel }}{% else %}—{% endif %})</strong></td>
                         <td>{{ item.item_name }}</td>
                         <td>{{ "{:,.0f}".format(item.closing_value) }} đ</td>
                         <td style="color: #ea580c; font-weight: bold;">{{ item.months_to_sell }} tháng</td>

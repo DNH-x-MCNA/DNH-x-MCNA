@@ -66,6 +66,8 @@ TABLE_PRIMARY_KEYS = {
     "dim_targetvungmien": ["Id"],
     "fact_kehoachtongetc": ["Id"],
     "fact_tonghopkhachhang": ["Id"],
+    # Thêm 13/07/2026 — bảng inventory tính từ Bravo TheKhoLot + TonKhoDK, tách OTC/ETC
+    "inventory": ["item_code", "channel"],
 }
 
 def get_sql_server_connection():
@@ -159,6 +161,138 @@ def upsert_to_supabase(table_name, df, pg_engine, key_columns):
         except:
             pass
         raise ex
+
+def sync_inventory_from_bravo(dry_run=False):
+    """
+    Tính toán bảng inventory (tồn kho) từ dữ liệu thô Bravo:
+      - BRV_TheKhoLot + BRV_TonKhoDK + BRV_SanPham  (OTC)
+      - BRVSX_TheKhoLot + BRVSX_TonKhoDK + BRVSX_SanPham  (ETC)
+    rồi UPSERT lên Supabase bảng `inventory` (PK = item_code + channel).
+
+    Công thức:
+      opening_qty  = SUM(TonKhoDK.Quantity) cho năm tài chính hiện tại
+      inward_qty   = SUM(TheKhoLot.ReceiptQuantity) cho năm tài chính hiện tại
+      outward_qty  = SUM(TheKhoLot.IssueQuantity) cho năm tài chính hiện tại
+      closing_qty  = opening_qty + inward_qty - outward_qty
+      months_to_sell = closing_qty / (outward_qty / months_elapsed)  [0 nếu không bán]
+      closing_value  = 0  (tạm — BRV_TonKhoDK.Amount phần lớn = 0, chờ DNH xác nhận nguồn)
+
+    Tách riêng OTC / ETC thành 2 dòng (cùng item_code có thể xuất hiện ở cả 2 kênh).
+    dry_run=True chỉ in kết quả, không upsert.
+    """
+    print("\n" + "=" * 60)
+    print("ĐỒNG BỘ TỒN KHO: BRAVO -> SUPABASE (inventory)")
+    print("=" * 60)
+
+    fiscal_year = str(datetime.now().year)
+    # Số tháng đã trôi qua từ đầu năm (dùng tính avg_monthly_sales)
+    now = datetime.now()
+    months_elapsed = (now.month - 1) + now.day / 30.0  # xấp xỉ, đủ chính xác cho months_to_sell
+    if months_elapsed < 0.5:
+        months_elapsed = 0.5  # tránh chia 0 đầu tháng 1
+
+    sql_conn = get_sql_server_connection()
+
+    # Cấu hình 2 kênh: (channel_label, SanPham_table, TonKhoDK_table, TheKhoLot_table, year_col)
+    channel_configs = [
+        ("OTC", "BRV_SanPham", "BRV_TonKhoDK", "BRV_TheKhoLot", "FiscalYear"),
+        ("ETC", "BRVSX_SanPham", "BRVSX_TonKhoDK", "BRVSX_TheKhoLot", "FiscalYear"),
+    ]
+
+    all_rows = []
+    for channel, sp_tbl, dk_tbl, tk_tbl, yr_col in channel_configs:
+        # BRVSX_TonKhoDK dùng cột "Year" thay vì "FiscalYear"
+        # Kiểm tra tên cột thực tế
+        cursor = sql_conn.cursor()
+        cursor.execute(f"SELECT TOP 1 * FROM [{dk_tbl}]")
+        dk_cols = [col[0] for col in cursor.description]
+        cursor.close()
+        actual_yr_col = "FiscalYear" if "FiscalYear" in dk_cols else "Year"
+
+        query = f"""
+            SELECT s.Code AS item_code, s.Name AS item_name, s.Unit AS unit,
+                ISNULL(dk.open_qty, 0) AS opening_qty,
+                ISNULL(tk.total_receipt, 0) AS inward_qty,
+                ISNULL(tk.total_issue, 0) AS outward_qty
+            FROM [{sp_tbl}] s
+            LEFT JOIN (
+                SELECT ItemId, SUM(Quantity) AS open_qty
+                FROM [{dk_tbl}] WHERE [{actual_yr_col}] = ?
+                GROUP BY ItemId
+            ) dk ON dk.ItemId = s.Id
+            LEFT JOIN (
+                SELECT ItemId,
+                    SUM(ReceiptQuantity) AS total_receipt,
+                    SUM(IssueQuantity) AS total_issue
+                FROM [{tk_tbl}] WHERE FiscalYear = ?
+                GROUP BY ItemId
+            ) tk ON tk.ItemId = s.Id
+            WHERE ISNULL(dk.open_qty, 0) + ISNULL(tk.total_receipt, 0) + ISNULL(tk.total_issue, 0) > 0
+        """
+        df = pd.read_sql(query, sql_conn, params=[fiscal_year, fiscal_year])
+        df["channel"] = channel
+        print(f"  [{channel}] Đọc {len(df):,} mặt hàng có biến động năm {fiscal_year} từ Bravo.")
+        all_rows.append(df)
+
+    if not all_rows:
+        print("  -> Không có dữ liệu tồn kho nào từ Bravo.")
+        try:
+            sql_conn.close()
+        except:
+            pass
+        return
+
+    df_all = pd.concat(all_rows, ignore_index=True)
+
+    # Tính closing_qty, months_to_sell
+    df_all["closing_qty"] = df_all["opening_qty"] + df_all["inward_qty"] - df_all["outward_qty"]
+    df_all["closing_value"] = 0.0  # tạm — chờ DNH xác nhận nguồn giá trị tồn kho
+
+    def calc_months_to_sell(row):
+        if row["closing_qty"] <= 0:
+            return 0.0
+        if row["outward_qty"] <= 0:
+            return 9999.0  # không bán được -> tồn vĩnh viễn
+        avg_monthly = row["outward_qty"] / months_elapsed
+        if avg_monthly <= 0:
+            return 9999.0
+        return round(row["closing_qty"] / avg_monthly, 2)
+
+    df_all["months_to_sell"] = df_all.apply(calc_months_to_sell, axis=1)
+    df_all["warehouse"] = None  # gộp tất cả kho, không phân biệt
+
+    # Chỉ giữ các cột đúng schema inventory
+    inventory_cols = ["item_code", "item_name", "unit", "opening_qty", "inward_qty",
+                      "outward_qty", "closing_qty", "closing_value", "months_to_sell",
+                      "warehouse", "channel"]
+    df_final = df_all[inventory_cols].copy()
+
+    # Làm sạch
+    df_final = clean_dataframe(df_final)
+
+    print(f"  -> Tổng cộng {len(df_final):,} dòng inventory (OTC + ETC tách riêng).")
+    stats = df_final.groupby("channel").agg(
+        count=("item_code", "count"),
+        has_stock=("closing_qty", lambda x: (x > 0).sum()),
+        near_stockout=("months_to_sell", lambda x: ((x > 0) & (x <= 1.0)).sum()),
+    )
+    for ch, row in stats.iterrows():
+        print(f"     {ch}: {row['count']} mặt hàng, {row['has_stock']} còn tồn, {row['near_stockout']} sắp hết")
+
+    if dry_run:
+        print("  [DRY RUN] Không upsert. Mẫu 5 dòng đầu:")
+        print(df_final.head().to_string(index=False))
+    else:
+        pg_engine = get_supabase_engine()
+        key_cols = TABLE_PRIMARY_KEYS["inventory"]
+        upsert_to_supabase("inventory", df_final, pg_engine, key_cols)
+
+    try:
+        sql_conn.close()
+    except:
+        pass
+    print("  -> Hoàn thành đồng bộ tồn kho!")
+
 
 def run_sync():
     print("=" * 60)
@@ -331,4 +465,5 @@ def run_alert_checks_after_sync():
 
 if __name__ == "__main__":
     run_sync()
+    sync_inventory_from_bravo()
     run_alert_checks_after_sync()

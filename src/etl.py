@@ -591,21 +591,36 @@ def get_digest_metrics(start_dt, end_dt, period_label, granularity=None, region=
     if fast_engine is not None:
         try:
             with fast_engine.connect() as conn:
-                inv_row = conn.execute(text('''
+                # Filter inventory by channel if specified
+                channel_clause = ""
+                if channel in ("OTC", "ETC"):
+                    channel_clause = " WHERE channel = :channel"
+                
+                q_count = f'''
                     SELECT
                         COUNT(*) FILTER (WHERE months_to_sell >= :dead_months AND closing_value > :dead_min_value),
                         COUNT(*) FILTER (WHERE months_to_sell > 0 AND months_to_sell <= 1.0 AND closing_qty > 0)
                     FROM inventory
-                '''), {"dead_months": dead_months, "dead_min_value": dead_min_value}).fetchone()
+                    {channel_clause}
+                '''
+                
+                q_items = f'''
+                    SELECT item_code, item_name, closing_value, months_to_sell, channel
+                    FROM inventory
+                    WHERE months_to_sell >= :dead_months AND closing_value > :dead_min_value
+                    {"AND channel = :channel" if channel in ("OTC", "ETC") else ""}
+                    ORDER BY closing_value DESC LIMIT 5
+                '''
+                
+                params = {"dead_months": dead_months, "dead_min_value": dead_min_value}
+                if channel in ("OTC", "ETC"):
+                    params["channel"] = channel
+
+                inv_row = conn.execute(text(q_count), params).fetchone()
                 dead_stock_count = int(inv_row[0] or 0)
                 near_stockout_count = int(inv_row[1] or 0)
 
-                dead_items = conn.execute(text('''
-                    SELECT item_code, item_name, closing_value, months_to_sell
-                    FROM inventory
-                    WHERE months_to_sell >= :dead_months AND closing_value > :dead_min_value
-                    ORDER BY closing_value DESC LIMIT 5
-                '''), {"dead_months": dead_months, "dead_min_value": dead_min_value}).fetchall()
+                dead_items = conn.execute(text(q_items), params).fetchall()
         except Exception as e:
             print(f"[DIGEST] Supabase lỗi/timeout khi lấy tồn kho (chưa có Bravo để fallback) — bỏ trống mục này: {e}")
 
@@ -665,7 +680,7 @@ def get_digest_metrics(start_dt, end_dt, period_label, granularity=None, region=
             "dead_stock_count": dead_stock_count,
             "near_stockout_count": near_stockout_count,
             "dead_stock_items": [
-                {"item_code": r[0], "item_name": r[1], "closing_value": round(float(r[2]), 2), "months_to_sell": round(float(r[3]), 1)}
+                {"item_code": r[0], "item_name": r[1], "closing_value": round(float(r[2]), 2), "months_to_sell": round(float(r[3]), 1), "channel": r[4]}
                 for r in dead_items
             ],
         },

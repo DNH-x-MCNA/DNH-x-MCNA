@@ -755,19 +755,23 @@ def run_smart_business_alerts():
         print("[ALERTS][smart_debt] Không có khách hàng nào nợ quá hạn vượt ngưỡng 10 triệu.")
 
     # 2. CẢNH BÁO CHÁY HÀNG TỒN KHO (Inventory Out-of-Stock Risk)
+    inv_rows = []
     try:
         with engine.connect() as conn:
-            inv_rows = conn.execute(text('''
-                SELECT item_code, item_name, closing_qty, outward_qty, months_to_sell
-                FROM inventory
-                WHERE months_to_sell > 0.0 AND months_to_sell <= 1.0 AND closing_qty > 0
-                ORDER BY months_to_sell ASC
-                LIMIT 5
-            ''')).fetchall()
+            if not _supabase_table_exists(conn, "inventory"):
+                print("[ALERTS][smart_inventory] Bảng 'inventory' chưa có dữ liệu (chờ Excel/DNH) — bỏ qua.")
+            else:
+                inv_rows = conn.execute(text('''
+                    SELECT item_code, item_name, closing_qty, outward_qty, months_to_sell, channel
+                    FROM inventory
+                    WHERE months_to_sell > 0.0 AND months_to_sell <= 1.0 AND closing_qty > 0
+                    ORDER BY months_to_sell ASC
+                    LIMIT 5
+                ''')).fetchall()
     except Exception as e:
-        print(f"[ALERTS][smart_inventory] Lỗi truy vấn tồn kho (có thể thiếu cột outward_qty trên Supabase): {e}")
+        print(f"[ALERTS][smart_inventory] Lỗi truy vấn tồn kho (có thể thiếu cột outward_qty hoặc channel trên Supabase): {e}")
         inv_rows = []
-
+ 
     if inv_rows:
         alert_key = "smart_inventory_depletion_top5"
         top_qty = inv_rows[0].closing_qty
@@ -777,7 +781,8 @@ def run_smart_business_alerts():
                 closing_qty = r.closing_qty
                 outward_qty = r.outward_qty
                 months_to_sell = r.months_to_sell
-
+                channel = r.channel or "Không rõ"
+ 
                 # Số ngày bán = Tồn kho / Số lượng bán trung bình mỗi ngày
                 # Số lượng bán trung bình mỗi ngày = Số lượng 1 năm / 365 (làm tròn lên - ceil)
                 if outward_qty is not None and outward_qty > 0:
@@ -789,14 +794,14 @@ def run_smart_business_alerts():
                         days_to_sell_fmt = format_months_to_sell(months_to_sell)
                 else:
                     days_to_sell_fmt = format_months_to_sell(months_to_sell)
-
-                rows.append([str(r.item_code), r.item_name, f"{closing_qty:,.0f}".replace(',', '.'), days_to_sell_fmt])
-
+ 
+                rows.append([str(r.item_code), channel, r.item_name, f"{closing_qty:,.0f}".replace(',', '.'), days_to_sell_fmt])
+ 
             send_alert_to_all_channels(
                 alert_name="CẢNH BÁO NGUY CƠ ĐỨT HÀNG (TOP 5)",
                 severity="WARNING",
                 summary="Các mặt hàng sau có tốc độ bán quá nhanh và tồn kho chỉ đủ dùng trong dưới 1 tháng.",
-                table_headers=["Mã SKU", "Tên Thuốc", "Tồn Kho Hiện Tại", "Dự Kiến Bán Hết"],
+                table_headers=["Mã SKU", "Kênh", "Tên Thuốc", "Tồn Kho Hiện Tại", "Dự Kiến Bán Hết"],
                 table_rows=rows,
                 channels=("teams",),
                 period=datetime.now().strftime("%d/%m/%Y"), region="Toàn quốc",
@@ -1215,6 +1220,19 @@ def _alert_engine():
         return None
 
 
+def _supabase_table_exists(conn, table_name):
+    """
+    True nếu bảng tồn tại trong schema public trên Supabase (Postgres). Dùng to_regclass — trả
+    NULL thay vì NÉM LỖI khi bảng vắng, nên KHÔNG làm bẩn log bằng stack trace UndefinedTable mỗi
+    chu kỳ quét (5 lần/ngày) cho các bảng đang CHỦ ĐỘNG để trống (vd 'inventory' chờ dữ liệu
+    Excel/DNH — xem docstring check_dead_stock_alert). Giữ log sạch để lỗi THẬT không bị chôn vùi.
+    """
+    from sqlalchemy import text
+    return conn.execute(
+        text("SELECT to_regclass('public.' || :t)"), {"t": table_name}
+    ).scalar() is not None
+
+
 def _two_latest_periods(conn):
     """Trả (latest, previous) period của receivable_detail theo đúng thứ tự thời gian."""
     from sqlalchemy import text
@@ -1578,8 +1596,11 @@ def check_dead_stock_alert():
     min_value = float(_biz_threshold('dead_stock_min_value', 50000000))
     try:
         with engine.connect() as conn:
+            if not _supabase_table_exists(conn, "inventory"):
+                print("[ALERTS][dead_stock] Bảng 'inventory' chưa có dữ liệu (chờ Excel/DNH) — bỏ qua.")
+                return
             rows = conn.execute(text('''
-                SELECT item_code, item_name, unit, closing_qty, closing_value, months_to_sell
+                SELECT item_code, item_name, unit, closing_qty, closing_value, months_to_sell, channel
                 FROM inventory
                 WHERE months_to_sell >= :m AND closing_value > :v
                 ORDER BY closing_value DESC LIMIT 10
@@ -1591,16 +1612,16 @@ def check_dead_stock_alert():
         print("[ALERTS][dead_stock] Không có mặt hàng tồn chết vượt ngưỡng.")
         return
     alert_key = "dead_stock_top10"
-    top = rows[0][4]
+    top = rows[0].closing_value
     if should_send_alert(alert_key, cooldown_hours=24, current_value=str(top)):
-        table = [[str(r[0]), r[1], f"{r[3]:,.0f}".replace(',', '.'),
-                  format_vietnamese_money(r[4]), f"{r[5]:.1f} tháng"] for r in rows]
+        table = [[str(r.item_code), r.channel or "Không rõ", r.item_name, f"{r.closing_qty:,.0f}".replace(',', '.'),
+                  format_vietnamese_money(r.closing_value), f"{r.months_to_sell:.1f} tháng"] for r in rows]
         send_alert_to_all_channels(
             alert_name="CẢNH BÁO TỒN KHO CHẾT / BÁN CHẬM",
             severity="WARNING",
             summary=(f"Các mặt hàng sau tồn kho đủ bán trên {dead_months:.0f} tháng và giá trị tồn lớn "
                      f"— vốn đang bị đọng, cân nhắc xả hàng/khuyến mãi."),
-            table_headers=["Mã SKU", "Tên Hàng", "Tồn Kho", "Giá Trị Tồn", "Số Tháng Bán"],
+            table_headers=["Mã SKU", "Kênh", "Tên Hàng", "Tồn Kho", "Giá Trị Tồn", "Số Tháng Bán"],
             table_rows=table,
             channels=("teams",),
             period=datetime.now().strftime("%d/%m/%Y"), region="Toàn quốc",
@@ -2637,20 +2658,26 @@ def check_data_sanity_ok():
     try:
         with engine.connect() as conn:
             cust = conn.execute(text("SELECT COUNT(*) FROM receivable_detail")).fetchone()[0]
-            inv = conn.execute(text("SELECT COUNT(*) FROM inventory")).fetchone()[0]
+            # 'inventory' có thể CHỦ ĐỘNG để trống (chờ Excel/DNH — xem check_dead_stock_alert).
+            # Chỉ đếm nếu bảng THỰC SỰ tồn tại; bảng chưa dựng -> inv=None, KHÔNG coi là ETL lỗi
+            # (tránh làm guard "mù" toàn bộ chỉ vì 1 bảng đã biết là tạm vắng — hành vi cũ: query
+            # ném UndefinedTable -> except -> return True -> guard bị bỏ qua HOÀN TOÀN).
+            inv = conn.execute(text("SELECT COUNT(*) FROM inventory")).fetchone()[0] \
+                if _supabase_table_exists(conn, "inventory") else None
     except Exception as e:
         print(f"[ALERTS][data_sanity] Không kiểm tra được (bỏ qua guard): {e}")
         return True
     if cust == 0 or inv == 0:
+        inv_display = str(inv) if inv is not None else "N/A (bảng chưa dựng)"
         alert_key = "data_sanity_zero"
         if should_send_alert(alert_key, cooldown_hours=6, current_value="zero"):
             send_alert_to_all_channels(
                 alert_name="CẢNH BÁO HỆ THỐNG: DỮ LIỆU BẤT THƯỜNG (RỖNG)",
                 severity="CRITICAL",
-                summary=(f"Bảng công nợ ({cust} dòng) hoặc tồn kho ({inv} dòng) đang rỗng — nghi ETL lỗi. "
+                summary=(f"Bảng công nợ ({cust} dòng) hoặc tồn kho ({inv_display} dòng) đang rỗng — nghi ETL lỗi. "
                          f"Đã TẠM DỪNG gửi các cảnh báo nghiệp vụ để tránh báo sai."),
                 table_headers=["Bảng", "Số dòng"],
-                table_rows=[["receivable_detail", str(cust)], ["inventory", str(inv)]],
+                table_rows=[["receivable_detail", str(cust)], ["inventory", inv_display]],
                 channels=("teams",),
                 period=datetime.now().strftime("%d/%m/%Y %H:%M"), region="Toàn quốc (hệ thống)",
                 issue="Bảng công nợ hoặc tồn kho đang rỗng — nghi ETL lỗi, đã tạm dừng các cảnh báo nghiệp vụ"
