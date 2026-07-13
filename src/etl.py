@@ -544,13 +544,32 @@ def get_digest_metrics(start_dt, end_dt, period_label, granularity=None, region=
     try:
         from src.alerts import get_bravo_receivables_snapshot
         snap = get_bravo_receivables_snapshot()
+        
+        otc_snap = [r for r in snap if r.sales_channel == 'OTC']
+        etc_snap = [r for r in snap if r.sales_channel == 'ETC']
+        
         total_overdue = sum(
             float(r.overdue_1_15 or 0) + float(r.overdue_15_30 or 0) + float(r.overdue_30_45 or 0) + float(r.overdue_gt_45 or 0)
             for r in snap)
         balance_end = sum(float(r.balance_end or 0) for r in snap)
+        
+        otc_overdue = sum(
+            float(r.overdue_1_15 or 0) + float(r.overdue_15_30 or 0) + float(r.overdue_30_45 or 0) + float(r.overdue_gt_45 or 0)
+            for r in otc_snap)
+        otc_balance = sum(float(r.balance_end or 0) for r in otc_snap)
+        
+        etc_overdue = sum(
+            float(r.overdue_1_15 or 0) + float(r.overdue_15_30 or 0) + float(r.overdue_30_45 or 0) + float(r.overdue_gt_45 or 0)
+            for r in etc_snap)
+        etc_balance = sum(float(r.balance_end or 0) for r in etc_snap)
+        
         receivables = {
             "total_overdue": round(total_overdue, 2),
             "balance_end": round(balance_end, 2),
+            "otc_overdue": round(otc_overdue, 2),
+            "otc_balance": round(otc_balance, 2),
+            "etc_overdue": round(etc_overdue, 2),
+            "etc_balance": round(etc_balance, 2),
             "period": f"Tức thời (đến {datetime.now().strftime('%d/%m/%Y %H:%M')})",
         }
     except Exception as e:
@@ -567,13 +586,29 @@ def get_digest_metrics(start_dt, end_dt, period_label, granularity=None, region=
                         latest_tuple = (int(year_str), int(month_str))
                         report_last_day = end_dt - timedelta(days=1)
                         if latest_tuple in (_month_tuple(report_last_day), _prev_month_tuple(report_last_day)):
+                            # Total
                             deb_row = conn.execute(text(
                                 'SELECT COALESCE(SUM(total_overdue),0), COALESCE(SUM(balance_end),0) '
                                 'FROM receivable_detail WHERE period = :p'
                             ), {"p": latest_period}).fetchone()
+                            # OTC
+                            otc_row = conn.execute(text(
+                                "SELECT COALESCE(SUM(total_overdue),0), COALESCE(SUM(balance_end),0) "
+                                "FROM receivable_detail WHERE period = :p AND (sales_channel = 'OTC' OR sales_channel = '0')"
+                            ), {"p": latest_period}).fetchone()
+                            # ETC
+                            etc_row = conn.execute(text(
+                                "SELECT COALESCE(SUM(total_overdue),0), COALESCE(SUM(balance_end),0) "
+                                "FROM receivable_detail WHERE period = :p AND sales_channel = 'ETC'"
+                            ), {"p": latest_period}).fetchone()
+                            
                             receivables = {
                                 "total_overdue": round(float(deb_row[0]), 2),
                                 "balance_end": round(float(deb_row[1]), 2),
+                                "otc_overdue": round(float(otc_row[0]), 2),
+                                "otc_balance": round(float(otc_row[1]), 2),
+                                "etc_overdue": round(float(etc_row[0]), 2),
+                                "etc_balance": round(float(etc_row[1]), 2),
                                 "period": latest_period,
                             }
                         # else: dữ liệu công nợ quá cũ so với kỳ báo cáo -> để None, KHÔNG hiển thị

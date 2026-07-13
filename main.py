@@ -107,9 +107,12 @@ def _digest_table(metrics):
         ["Mặt hàng sắp hết hàng", str(metrics['inventory']['near_stockout_count'])],
     ]
     if metrics['receivables']:
-        rows.append([f"Nợ quá hạn (kỳ {metrics['receivables']['period']})",
-                     format_vietnamese_money(metrics['receivables']['total_overdue'])])
-        rows.append(["Tổng dư nợ", format_vietnamese_money(metrics['receivables']['balance_end'])])
+        period = metrics['receivables']['period']
+        rows.append([f"Nợ quá hạn OTC (kỳ {period})", format_vietnamese_money(metrics['receivables'].get('otc_overdue'))])
+        rows.append(["Dư nợ OTC", format_vietnamese_money(metrics['receivables'].get('otc_balance'))])
+        rows.append(["Nợ quá hạn ETC", format_vietnamese_money(metrics['receivables'].get('etc_overdue'))])
+        rows.append(["Dư nợ ETC", format_vietnamese_money(metrics['receivables'].get('etc_balance'))])
+        rows.append(["Tổng dư nợ toàn công ty", format_vietnamese_money(metrics['receivables']['balance_end'])])
         
     # Thêm phần tổng hợp các cảnh báo trong ngày và trạng thái xử lý
     if metrics.get("alerts_summary"):
