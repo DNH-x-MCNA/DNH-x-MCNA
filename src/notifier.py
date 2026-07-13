@@ -819,16 +819,17 @@ def _severity_to_card_style(severity):
 
 def _chatbot_deep_link(question=None):
     """
-    URL dẫn vào web chatbot — nếu có `question` thì kèm sẵn câu hỏi (?q=...), người bấm vào chỉ
-    cần đăng nhập bằng đúng tài khoản của mình, RBAC theo username (DNHChatbot._resolve_user_scope)
-    sẽ tự giới hạn đúng phạm vi vùng/kênh họ được xem, không cần nhúng thêm tham số phân quyền vào
-    link. `question=None` -> trả về link trần (dùng cho nút "Mở Chatbot" chung trong báo cáo định
-    kỳ, vốn không có 1 câu hỏi cụ thể duy nhất để prefill).
+    URL dẫn vào web chatbot — nếu có `question` thì kèm sẵn câu hỏi (?q=...). `question=None` ->
+    trả về link trần (dùng cho nút "Mở Chatbot" chung trong báo cáo định kỳ, vốn không có 1 câu
+    hỏi cụ thể duy nhất để prefill). Đây là NGUỒN DUY NHẤT sinh link chatbot cho toàn bộ 3 nút
+    (Teams alert, Teams digest, email Weekly/Monthly) — đổi CHATBOT_WEB_URL trong .env là đổi
+    được cả 3 chỗ, không cần sửa code từng nơi.
 
-    CHATBOT_WEB_URL đọc từ .env, mặc định http://127.0.0.1:8000 (đúng địa chỉ chatbot đang chạy
-    hiện tại — backend/main.py chỉ bind 127.0.0.1, chưa có domain public). Link này CHỈ mở được từ
-    chính máy đang chạy backend cho tới khi có domain/tunnel public thật — điền CHATBOT_WEB_URL
-    trong .env khi đã deploy, không cần sửa code.
+    13/07/2026: đổi sang chatbot do người khác phụ trách, deploy tại https://dnh-bot.vercel.app —
+    không còn tự host backend/main.py trong repo này qua Cloudflare Tunnel/máy 24 nữa (approach cũ,
+    RBAC theo DNHChatbot._resolve_user_scope, để tham khảo nếu quay lại self-host). CHƯA xác nhận
+    chatbot mới có prefill câu hỏi từ `?q=` hay RBAC theo tài khoản giống hệt không — đó là code
+    của người khác (frontend/app.js trong repo này là frontend CŨ, không còn phục vụ nữa).
     """
     base = os.getenv("CHATBOT_WEB_URL", "http://127.0.0.1:8000").rstrip('/')
     if question:
