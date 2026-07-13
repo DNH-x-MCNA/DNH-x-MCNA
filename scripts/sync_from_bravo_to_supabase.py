@@ -255,7 +255,14 @@ def run_sync():
             upsert_to_supabase(dest_table, df_cleaned, pg_engine, key_cols)
             
         except Exception as e:
-            print(f"  -> [THẤT BẠI] Lỗi khi xử lý bảng '{dest_table}': {e}")
+            # SQLAlchemy tự in kèm CẢ câu SQL lẫn TOÀN BỘ tham số bind khi lỗi xảy ra trên câu
+            # upsert hàng loạt (vd 2000 dòng/chunk) -> str(e) có thể dài hàng chục nghìn ký tự,
+            # tràn terminal, không dán lại được để debug. Cắt ngắn, chỉ giữ phần đầu đủ để biết
+            # loại lỗi (vd OperationalError/timeout) — xác nhận thực tế 13/07/2026.
+            err_text = str(e)
+            if len(err_text) > 500:
+                err_text = err_text[:500] + f"... (cắt bớt, dài {len(err_text)} ký tự)"
+            print(f"  -> [THẤT BẠI] Lỗi khi xử lý bảng '{dest_table}': {err_text}")
 
     try:
         sql_conn.close()
