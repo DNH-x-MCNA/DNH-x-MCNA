@@ -162,6 +162,9 @@ DIGEST_EMAIL_TEMPLATE = """
                 Báo cáo dành cho: <strong>{{ audience }}</strong>{% if scope_label %} &bull; Phạm vi: {{ scope_label }}{% endif %}
             </p>
             {% endif %}
+            {% if metrics.updated_at %}
+            <p style="margin: 4px 0 0 0; font-size: 12px; opacity: 0.75;">Dữ liệu cập nhật lúc {{ metrics.updated_at }}</p>
+            {% endif %}
         </div>
 
         <div class="content">
@@ -176,7 +179,7 @@ DIGEST_EMAIL_TEMPLATE = """
             <div class="section-title">Điểm Nổi Bật Trong Kỳ</div>
             <ul style="margin: 0 0 20px 0; padding-left: 20px; font-size: 13px; color: #334155;">
                 {% for h in metrics.highlights %}
-                <li style="margin-bottom: 6px;"><strong>{{ h.alert_key }}</strong> — {{ h.sent_at }} (giá trị ghi nhận: {{ h.value }})</li>
+                <li style="margin-bottom: 6px;"><strong>{{ h.label }}</strong> — {{ h.sent_at_display }} (giá trị: {{ h.value_display }})</li>
                 {% endfor %}
             </ul>
             {% endif %}
@@ -223,8 +226,9 @@ DIGEST_EMAIL_TEMPLATE = """
                 <![endif]-->
                 <div class="col" style="width: 100%; max-width: 145px; padding: 8px;">
                     <div class="kpi-card">
-                        <div class="lbl">Số Hóa Đơn</div>
-                        <div class="val">{{ metrics.revenue.invoice_count }}</div>
+                        <div class="lbl">Số Hóa Đơn (OTC/ETC)</div>
+                        <div class="val">{{ metrics.revenue.otc_invoice_count }} / {{ metrics.revenue.etc_invoice_count }}</div>
+                        <div class="no-data">Tổng: {{ metrics.revenue.invoice_count }}</div>
                     </div>
                 </div>
                 <!--[if mso]>

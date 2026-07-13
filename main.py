@@ -6,7 +6,7 @@ from datetime import datetime
 from dotenv import load_dotenv
 from src.database import get_db_engines, load_config
 from src.etl import get_daily_digest_metrics, get_weekly_digest_metrics, get_monthly_digest_metrics
-from src.notifier import build_digest_email, send_email, send_alert_to_all_channels, flush_critical_teams_queue
+from src.notifier import build_digest_email, send_email, flush_critical_teams_queue, send_teams_alert
 from src.alerts import (
     run_alert_checks,               # bản MOCK (ERP/CRM giả lập) — chỉ dùng ở môi trường 'local'
     run_smart_business_alerts,      # cảnh báo thật: nợ quá hạn / cháy kho / KPI thấp
@@ -102,7 +102,9 @@ def _digest_table(metrics):
         ["Doanh thu OTC", format_vietnamese_money(metrics['revenue']['otc'])],
         ["Doanh thu ETC", format_vietnamese_money(metrics['revenue']['etc'])],
         ["Tổng doanh thu", f"{format_vietnamese_money(metrics['revenue']['total'])} ({change_str})"],
-        ["Số hóa đơn", str(metrics['revenue']['invoice_count'])],
+        ["Số hóa đơn OTC", str(metrics['revenue']['otc_invoice_count'])],
+        ["Số hóa đơn ETC", str(metrics['revenue']['etc_invoice_count'])],
+        ["Tổng số hóa đơn", str(metrics['revenue']['invoice_count'])],
         ["Mặt hàng tồn chết", str(metrics['inventory']['dead_stock_count'])],
         ["Mặt hàng sắp hết hàng", str(metrics['inventory']['near_stockout_count'])],
     ]
@@ -131,38 +133,59 @@ def send_daily_digest():
     nhanh); Weekly/Monthly Report đi Outlook (báo cáo dài, đọc kỹ không cần đọc ngay). Đổi từ
     Email sang Teams 10/07/2026 theo yêu cầu — trước đó Daily Digest từng đi Email, nay khớp với
     ghi chú kênh đã có sẵn trong send_alert_to_all_channels().
+
+    13/07/2026: đổi từ gửi 1 bản chung (không lọc region/channel -> chỉ khớp audience "C-Level
+    Toàn quốc", 5 audience còn lại không nhận được Daily Digest) sang lặp qua report_recipients
+    (giống _send_periodic_email_report của Weekly/Monthly) — mỗi audience nhận đúng phạm vi dữ
+    liệu của mình. Gửi TRỰC TIẾP tới đúng teams_webhook của từng audience (send_teams_alert +
+    webhook_url_override) thay vì qua send_alert_to_all_channels/_resolve_teams_webhooks — cơ chế
+    đó tự fan-out theo region/channel KHỚP nên nếu gọi lặp sẽ khiến C-Level nhận trùng cả 6 bản
+    (audience không giới hạn vùng/kênh luôn khớp mọi lần gọi).
     """
     print(f"[{datetime.now()}] Đang chuẩn bị báo cáo Daily Digest...")
-    try:
-        metrics = get_daily_digest_metrics()
-        headers, rows = _digest_table(metrics)
-        sent = send_alert_to_all_channels(
-            alert_name=f"BÁO CÁO TỔNG HỢP HÀNG NGÀY ({metrics['date']})",
-            severity="INFO",
-            summary=f"Tổng hợp hoạt động ERP/CRM ngày {metrics['date']}.",
-            table_headers=headers,
-            table_rows=rows,
-            channels=("teams",),
-            # get_daily_digest_metrics() không lọc theo vùng/kênh (không nhận tham số region/channel
-            # như bản weekly/monthly) — luôn là toàn công ty, cả 2 kênh gộp chung, nên gắn nhãn cố
-            # định thay vì để trống (thêm 10/07/2026, trước đó card Teams thiếu hẳn 3 mục này).
-            period=metrics['date'],
-            channel="OTC + ETC (gộp)",
-            region="Toàn quốc",
-            # Daily Digest gửi 1 lần/ngày theo lịch cố định (17h45), KHÔNG có hiện tượng dồn nhiều
-            # card cùng lúc như alert nghiệp vụ thời gian thực — bỏ qua bộ lọc "chỉ CRITICAL mới
-            # gửi Teams" (mặc định của send_alert_to_all_channels, thêm 10/07/2026) để severity
-            # INFO của Daily Digest vẫn gửi Teams bình thường như đã đổi trước đó trong ngày.
-            require_critical_for_teams=False,
-        )
-        if sent:
-            print(f"[{datetime.now()}] Báo cáo Daily Digest đã gửi thành công (Teams).")
-        else:
-            print(f"[{datetime.now()}] Gửi báo cáo Daily Digest thất bại.")
-        return sent
-    except Exception as e:
-        print(f"[{datetime.now()}] Lỗi khi tạo/gửi báo cáo Daily: {e}")
-        return False
+    from ai_agent.chatbot import DNHChatbot
+
+    config = load_config()
+    recipients = config.get('report_recipients') or []
+    if not recipients:
+        print(f"[{datetime.now()}] Chưa cấu hình report_recipients — gửi Daily Digest bản không lọc (hành vi cũ).")
+        recipients = [{"audience": None, "region": None, "channel": None, "teams_webhook": None}]
+
+    overall_ok = True
+    for r in recipients:
+        audience = r.get('audience')
+        region = r.get('region')
+        channel = r.get('channel')
+        webhook = (r.get('teams_webhook') or '').strip() or None
+        try:
+            metrics = get_daily_digest_metrics(region=region, channel=channel)
+            headers, rows = _digest_table(metrics)
+            region_label = DNHChatbot._REGION_NAMES_VI.get(region, region) if region else "Toàn quốc"
+            title = f"BÁO CÁO TỔNG HỢP HÀNG NGÀY ({metrics['date']})" + (f" — {audience}" if audience else "")
+            summary = (
+                f"Tổng hợp hoạt động ERP/CRM ngày {metrics['date']}."
+                f" Dữ liệu cập nhật lúc {metrics.get('updated_at', 'N/A')}."
+            )
+            sent = send_teams_alert(
+                title=title,
+                summary=summary,
+                table_headers=headers,
+                table_rows=rows,
+                severity="INFO",
+                period=metrics['date'],
+                channel=channel or "OTC + ETC (gộp)",
+                region=region_label,
+                webhook_url_override=webhook,
+            )
+            if sent:
+                print(f"[{datetime.now()}] Daily Digest cho '{audience or 'mặc định'}' đã gửi thành công.")
+            else:
+                print(f"[{datetime.now()}] Gửi Daily Digest cho '{audience or 'mặc định'}' thất bại.")
+                overall_ok = False
+        except Exception as e:
+            print(f"[{datetime.now()}] Lỗi khi tạo/gửi Daily Digest cho '{audience or 'mặc định'}': {e}")
+            overall_ok = False
+    return overall_ok
 
 def _scope_label(region, channel):
     """Nhãn phạm vi hiển thị trong email — dùng chung tên miền tiếng Việt đã kiểm chứng."""

@@ -1042,8 +1042,8 @@ def check_revenue_drop_alert():
         # của tháng này (vd so ngày 31 với tháng 2) thì lấy trọn tháng trước, không tràn sang tháng sau nữa.
         prev_end = min(prev_start + timedelta(days=days_elapsed), cur_month_start)
 
-        cur_otc, cur_etc, _ = _period_revenue(cur_start, cur_end)
-        prev_otc, prev_etc, _ = _period_revenue(prev_start, prev_end)
+        cur_otc, cur_etc, _, _ = _period_revenue(cur_start, cur_end)
+        prev_otc, prev_etc, _, _ = _period_revenue(prev_start, prev_end)
     except Exception as e:
         print(f"[ALERTS][revenue_drop] Lỗi truy vấn doanh thu: {e}")
         return
@@ -2472,7 +2472,7 @@ def check_kpi_milestone_drop_alert():
             # run_with_failover() (đổi ưu tiên chung ở src/database.py) — không cần sửa gì thêm.
             channel_series = {"OTC": [], "ETC": []}
             for idx, p_start, p_end in periods:
-                otc_rev, etc_rev, _ = _period_revenue(p_start, p_end)
+                otc_rev, etc_rev, _, _ = _period_revenue(p_start, p_end)
                 channel_series["OTC"].append((idx, otc_rev))
                 channel_series["ETC"].append((idx, etc_rev))
 
