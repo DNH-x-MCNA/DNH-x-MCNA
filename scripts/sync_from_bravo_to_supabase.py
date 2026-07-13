@@ -168,6 +168,21 @@ def run_sync():
     sql_conn = get_sql_server_connection()
     pg_engine = get_supabase_engine()
 
+    # Cửa sổ trượt "từ ngày 1 tháng TRƯỚC tới hiện tại" (tối thiểu ~30 ngày nếu hôm nay là đầu
+    # tháng, tối đa ~62 ngày nếu hôm nay là cuối tháng) — đổi từ lọc cả năm (YEAR(x)=2026) sang đây
+    # 13/07/2026 để giảm dung lượng Supabase sau sự cố đầy đĩa hôm nay (brv_hoadonct riêng đã
+    # 226MB chỉ tính năm nay). Tính ĐỘNG mỗi lần chạy (không hardcode năm/tháng) bằng công thức
+    # T-SQL chuẩn: DATEADD(MONTH, DATEDIFF(MONTH, 0, GETDATE()) - 1, 0) = ngày 1 của tháng liền
+    # trước tháng hiện tại.
+    #
+    # ĐÁNH ĐỔI CẦN BIẾT: các luồng cảnh báo/báo cáo CHÍNH đã Bravo-first (run_with_failover) không
+    # bị ảnh hưởng — luôn đọc Bravo trực tiếp, không phụ thuộc cửa sổ này. CHỈ ảnh hưởng đường DỰ
+    # PHÒNG Supabase khi Bravo tạm không truy cập được — riêng check_kpi_milestone_drop_alert
+    # (src/alerts.py, cần so sánh lũy kế tới 5 tháng trước) sẽ dự phòng THIẾU dữ liệu nếu đúng lúc
+    # đó Bravo cũng đang down — rủi ro hẹp (2 sự cố trùng lúc), đã cân nhắc và chấp nhận.
+    ROLLING_WINDOW_DOCDATE = "DocDate >= DATEADD(MONTH, DATEDIFF(MONTH, 0, GETDATE()) - 1, 0)"
+    ROLLING_WINDOW_SAVEDATE = "SaveDate >= DATEADD(MONTH, DATEDIFF(MONTH, 0, GETDATE()) - 1, 0)"
+
     # Định nghĩa cấu hình các bảng đồng bộ
     sync_config = [
         # --- Danh mục (Lấy toàn bộ) ---
@@ -178,50 +193,49 @@ def run_sync():
         {"src": "dbo.DIM_TinhThanhPho", "dest": "dim_tinhthanhpho", "filter": None},
         {"src": "dbo.BRV_TrangThaiHoaDon", "dest": "brv_trangthaihoadon", "filter": None},
         {"src": "dbo.BRV_TrangThaiDuyet", "dest": "brv_trangthaiduyet", "filter": None},
-        
-        # --- Giao dịch (Lọc từ 2026) ---
+
+        # --- Giao dịch (cửa sổ trượt ~30-62 ngày gần nhất — xem ghi chú ROLLING_WINDOW_* ở trên) ---
         {
-            "src": "dbo.BRV_HoaDonHdr", 
-            "dest": "brv_hoadonhdr", 
-            "filter": "YEAR(DocDate) = 2026"
+            "src": "dbo.BRV_HoaDonHdr",
+            "dest": "brv_hoadonhdr",
+            "filter": ROLLING_WINDOW_DOCDATE
         },
         {
-            "src": "dbo.BRV_HoaDonCt", 
-            "dest": "brv_hoadonct", 
-            "filter": "Stt IN (SELECT Stt FROM dbo.BRV_HoaDonHdr WHERE YEAR(DocDate) = 2026)"
+            "src": "dbo.BRV_HoaDonCt",
+            "dest": "brv_hoadonct",
+            "filter": f"Stt IN (SELECT Stt FROM dbo.BRV_HoaDonHdr WHERE {ROLLING_WINDOW_DOCDATE})"
         },
         {
-            "src": "dbo.BRVSX_HoaDonHdr", 
-            "dest": "brvsx_hoadonhdr", 
-            "filter": "YEAR(DocDate) = 2026"
+            "src": "dbo.BRVSX_HoaDonHdr",
+            "dest": "brvsx_hoadonhdr",
+            "filter": ROLLING_WINDOW_DOCDATE
         },
         {
-            "src": "dbo.BRVSX_HoaDonCt", 
-            "dest": "brvsx_hoadonct", 
-            "filter": "Stt IN (SELECT Stt FROM dbo.BRVSX_HoaDonHdr WHERE YEAR(DocDate) = 2026)"
+            "src": "dbo.BRVSX_HoaDonCt",
+            "dest": "brvsx_hoadonct",
+            "filter": f"Stt IN (SELECT Stt FROM dbo.BRVSX_HoaDonHdr WHERE {ROLLING_WINDOW_DOCDATE})"
         },
         {
             "src": "dbo.BRVSX_TraLai",
             "dest": "brvsx_tralai",
-            "filter": "YEAR(DocDate) = 2026"
+            "filter": ROLLING_WINDOW_DOCDATE
         },
 
-        # --- Thêm 08/07/2026: chỉ tiêu vùng/ETC + KPI chi tiết theo khách hàng (lọc năm 2026 để
-        # tiết kiệm dung lượng Supabase — hạn mức 500MB, còn dư ~108MB lúc thêm 3 bảng này) ---
+        # --- Thêm 08/07/2026: chỉ tiêu vùng/ETC + KPI chi tiết theo khách hàng ---
         {
             "src": "dbo.DIM_TargetVungMien",
             "dest": "dim_targetvungmien",
-            "filter": "YEAR(DocDate) = 2026"
+            "filter": ROLLING_WINDOW_DOCDATE
         },
         {
             "src": "dbo.FACT_KeHoachTongETC",
             "dest": "fact_kehoachtongetc",
-            "filter": "YEAR(DocDate) = 2026"
+            "filter": ROLLING_WINDOW_DOCDATE
         },
         {
             "src": "dbo.FACT_TongHopKhachHang",
             "dest": "fact_tonghopkhachhang",
-            "filter": "YEAR(SaveDate) = 2026"
+            "filter": ROLLING_WINDOW_SAVEDATE
         }
     ]
 
