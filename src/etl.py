@@ -693,11 +693,155 @@ def get_digest_metrics(start_dt, end_dt, period_label, granularity=None, region=
         result["has_critical"] = has_critical
     return result
 
+def _get_today_alerts_status(start_dt, end_dt):
+    """
+    Lấy danh sách các alert đã từng bắn trong ngày hôm nay, và kiểm tra xem
+    hiện tại trạng thái của chỉ số đó đã quay về mức an toàn chưa (Đã giải quyết).
+    """
+    from sqlalchemy import text
+    if not os.path.exists(STATE_DB_PATH):
+        return []
+        
+    # 1. Đọc lịch sử các alert đã gửi hôm nay
+    today_str = start_dt.strftime("%Y-%m-%d %H:%M:%S")
+    fired_alerts = set()
+    try:
+        conn = sqlite3.connect(STATE_DB_PATH)
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT DISTINCT alert_name FROM alert_severity_log WHERE sent_at >= ?",
+            (today_str,)
+        )
+        for r in cur.fetchall():
+            fired_alerts.add(r[0])
+        conn.close()
+    except Exception as e:
+        print(f"[DIGEST] Không đọc được alert_severity_log: {e}")
+        return []
+        
+    if not fired_alerts:
+        return []
+        
+    # 2. Khởi động các check để xem còn vi phạm không
+    config = load_config()
+    results = []
+    
+    # 2.1 Tỷ lệ nợ quá hạn
+    overdue_alerts = [a for a in fired_alerts if "NỢ QUÁ HẠN" in a.upper() or "NỢ QUÁ HẠN LỚN" in a.upper()]
+    if overdue_alerts:
+        try:
+            from src.alerts import get_bravo_receivables_snapshot
+            snap = get_bravo_receivables_snapshot()
+            limit = config['thresholds']['business']['overdue_ratio_pct']
+            
+            # Check OTC
+            if any("OTC" in a.upper() or "NỢ QUÁ HẠN LỚN" in a.upper() for a in overdue_alerts):
+                sub_snap = [r for r in snap if r.sales_channel == 'OTC']
+                overdue = sum(float(r.overdue_1_15 or 0) + float(r.overdue_15_30 or 0) + float(r.overdue_30_45 or 0) + float(r.overdue_gt_45 or 0) for r in sub_snap)
+                total = sum(float(r.balance_end or 0) for r in sub_snap)
+                ratio = (overdue / total) if total > 0 else 0
+                results.append({
+                    "name": "Tỷ lệ nợ quá hạn OTC",
+                    "active": ratio > limit
+                })
+            # Check ETC
+            if any("ETC" in a.upper() or "NỢ QUÁ HẠN LỚN" in a.upper() for a in overdue_alerts):
+                sub_snap = [r for r in snap if r.sales_channel == 'ETC']
+                overdue = sum(float(r.overdue_1_15 or 0) + float(r.overdue_15_30 or 0) + float(r.overdue_30_45 or 0) + float(r.overdue_gt_45 or 0) for r in sub_snap)
+                total = sum(float(r.balance_end or 0) for r in sub_snap)
+                ratio = (overdue / total) if total > 0 else 0
+                results.append({
+                    "name": "Tỷ lệ nợ quá hạn ETC",
+                    "active": ratio > limit
+                })
+        except Exception as e:
+            print(f"[DIGEST] Lỗi check nợ quá hạn: {e}")
+            
+    # 2.2 Nguy cơ đứt hàng (cháy kho)
+    if any("ĐỨT HÀNG" in a.upper() or "TỒN KHO THẤP" in a.upper() for a in fired_alerts):
+        try:
+            from src.database import _get_fast_cloud_engine
+            fast_engine = _get_fast_cloud_engine()
+            if fast_engine is not None:
+                with fast_engine.connect() as conn:
+                    cnt = conn.execute(text("SELECT COUNT(*) FROM inventory WHERE months_to_sell > 0.0 AND months_to_sell <= 1.0 AND closing_qty > 0")).scalar()
+                results.append({
+                    "name": "Nguy cơ đứt hàng",
+                    "active": cnt > 0
+                })
+        except Exception as e:
+            print(f"[DIGEST] Lỗi check đứt hàng: {e}")
+            
+    # 2.3 Khách nợ quá hạn vẫn lên đơn mới
+    if any("ĐƠN MỚI" in a.upper() for a in fired_alerts):
+        try:
+            conn = sqlite3.connect(STATE_DB_PATH)
+            cur = conn.cursor()
+            cur.execute("SELECT COUNT(*) FROM sent_alerts WHERE alert_key LIKE 'overdue_customer_new_orders%'")
+            cnt = cur.fetchone()[0]
+            conn.close()
+            results.append({
+                "name": "Khách quá hạn lên đơn mới",
+                "active": cnt > 0
+            })
+        except Exception as e:
+            print(f"[DIGEST] Lỗi check nợ lên đơn mới: {e}")
+            
+    # 2.4 Nhịp KPI TDV đỏ
+    if any("KPI TDV THẤP" in a.upper() or "NHỊP KPI" in a.upper() for a in fired_alerts):
+        try:
+            from src.alerts import get_bravo_kpi_tdv_snapshot
+            kpi_snap = get_bravo_kpi_tdv_snapshot(position_codes=('TDV',))
+            limit_alert = config['thresholds']['business']['kpi_pace_red_alert_count']
+            red_cnt = sum(1 for r in kpi_snap if r.month_sale_target > 0 and (r.month_sale_percent or 0) < 0.03)
+            results.append({
+                "name": "Nhịp KPI TDV ở mức Đỏ",
+                "active": red_cnt >= limit_alert
+            })
+        except Exception as e:
+            print(f"[DIGEST] Lỗi check kpi pace: {e}")
+
+    # 2.5 Đơn hàng lỗi (Failed Orders)
+    if any("GIAO DỊCH LỖI" in a.upper() for a in fired_alerts):
+        try:
+            erp_engine, _ = get_db_engines()
+            if erp_engine:
+                limit = config['thresholds']['erp']['failed_orders_limit']
+                lookback = config['thresholds']['erp']['failed_orders_lookback_hours']
+                lookback_time = datetime.now() - timedelta(hours=lookback)
+                with erp_engine.connect() as conn:
+                    cnt = conn.execute(text("SELECT COUNT(*) FROM orders WHERE status = 'Failed' AND order_date >= :t"), {"t": lookback_time}).scalar()
+                results.append({
+                    "name": "Đơn hàng lỗi (ERP)",
+                    "active": cnt > limit
+                })
+        except Exception as e:
+            print(f"[DIGEST] Lỗi check failed orders: {e}")
+
+    # 2.6 Quá tải ticket (CRM Urgent)
+    if any("QUÁ TẢI KHÁCH HÀNG" in a.upper() or "TICKET" in a.upper() for a in fired_alerts):
+        try:
+            _, crm_engine = get_db_engines()
+            if crm_engine:
+                limit = config['thresholds']['crm']['unresolved_urgent_tickets_limit']
+                with crm_engine.connect() as conn:
+                    cnt = conn.execute(text("SELECT COUNT(*) FROM support_tickets WHERE priority = 'Urgent' AND status = 'Open'")).scalar()
+                results.append({
+                    "name": "Ticket khẩn cấp chưa xử lý",
+                    "active": cnt > limit
+                })
+        except Exception as e:
+            print(f"[DIGEST] Lỗi check crm tickets: {e}")
+            
+    return results
+
 def get_daily_digest_metrics():
     """Tổng hợp dữ liệu trong ngày phục vụ Daily Digest (Email)."""
     today_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
     today_end = today_start + timedelta(days=1)
-    return get_digest_metrics(today_start, today_end, today_start.strftime("%d/%m/%Y"))
+    metrics = get_digest_metrics(today_start, today_end, today_start.strftime("%d/%m/%Y"))
+    metrics["alerts_summary"] = _get_today_alerts_status(today_start, today_end)
+    return metrics
 
 def get_weekly_digest_metrics(region=None, channel=None):
     """Tổng hợp dữ liệu TUẦN TRƯỚC đã kết thúc trọn vẹn (thứ 2 - chủ nhật) phục vụ Weekly
