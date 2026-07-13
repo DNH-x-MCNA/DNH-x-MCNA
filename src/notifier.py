@@ -901,7 +901,7 @@ def _build_teams_adaptive_card(title, summary, severity, table_headers=None, tab
         if name_idx is None:
             name_idx = 1 if len(table_headers) > 1 else 0
 
-        for row in table_rows[:5]:
+        for row in table_rows:
             if len(table_headers) == 2:
                 key = str(row[0])
                 val = str(row[1])
@@ -919,7 +919,7 @@ def _build_teams_adaptive_card(title, summary, severity, table_headers=None, tab
             "items": [
                 {
                     "type": "TextBlock",
-                    "text": "📋 Chi tiết danh sách (tối đa 5 dòng):",
+                    "text": "📋 Chi tiết danh sách:",
                     "weight": "Bolder",
                     "size": "Small"
                 },
