@@ -182,6 +182,10 @@ def run_sync():
     # đó Bravo cũng đang down — rủi ro hẹp (2 sự cố trùng lúc), đã cân nhắc và chấp nhận.
     ROLLING_WINDOW_DOCDATE = "DocDate >= DATEADD(MONTH, DATEDIFF(MONTH, 0, GETDATE()) - 1, 0)"
     ROLLING_WINDOW_SAVEDATE = "SaveDate >= DATEADD(MONTH, DATEDIFF(MONTH, 0, GETDATE()) - 1, 0)"
+    # Vế Postgres tương đương, dùng để XOÁ dữ liệu CŨ đã có sẵn trên Supabase từ trước (khi còn
+    # lọc cả năm) — chỉ đổi filter đọc thôi KHÔNG tự dọn dữ liệu cũ đã tồn tại, phải tự xoá thêm
+    # mới thật sự giảm dung lượng. "purge" chạy SAU upsert, trên pg_engine (Postgres/Supabase).
+    PG_WINDOW_START = "DATE_TRUNC('month', CURRENT_DATE) - INTERVAL '1 month'"
 
     # Định nghĩa cấu hình các bảng đồng bộ
     sync_config = [
@@ -198,44 +202,54 @@ def run_sync():
         {
             "src": "dbo.BRV_HoaDonHdr",
             "dest": "brv_hoadonhdr",
-            "filter": ROLLING_WINDOW_DOCDATE
+            "filter": ROLLING_WINDOW_DOCDATE,
+            "purge": f'DELETE FROM brv_hoadonhdr WHERE "DocDate"::date < {PG_WINDOW_START}'
         },
         {
             "src": "dbo.BRV_HoaDonCt",
             "dest": "brv_hoadonct",
-            "filter": f"Stt IN (SELECT Stt FROM dbo.BRV_HoaDonHdr WHERE {ROLLING_WINDOW_DOCDATE})"
+            "filter": f"Stt IN (SELECT Stt FROM dbo.BRV_HoaDonHdr WHERE {ROLLING_WINDOW_DOCDATE})",
+            # Chạy SAU khi brv_hoadonhdr đã purge — xoá luôn các dòng chi tiết mồ côi (Stt không
+            # còn tồn tại ở bảng hóa đơn đã bị dọn), vì brv_hoadonct không có cột ngày riêng.
+            "purge": 'DELETE FROM brv_hoadonct WHERE "Stt" NOT IN (SELECT "Stt" FROM brv_hoadonhdr)'
         },
         {
             "src": "dbo.BRVSX_HoaDonHdr",
             "dest": "brvsx_hoadonhdr",
-            "filter": ROLLING_WINDOW_DOCDATE
+            "filter": ROLLING_WINDOW_DOCDATE,
+            "purge": f'DELETE FROM brvsx_hoadonhdr WHERE "DocDate"::date < {PG_WINDOW_START}'
         },
         {
             "src": "dbo.BRVSX_HoaDonCt",
             "dest": "brvsx_hoadonct",
-            "filter": f"Stt IN (SELECT Stt FROM dbo.BRVSX_HoaDonHdr WHERE {ROLLING_WINDOW_DOCDATE})"
+            "filter": f"Stt IN (SELECT Stt FROM dbo.BRVSX_HoaDonHdr WHERE {ROLLING_WINDOW_DOCDATE})",
+            "purge": 'DELETE FROM brvsx_hoadonct WHERE "Stt" NOT IN (SELECT "Stt" FROM brvsx_hoadonhdr)'
         },
         {
             "src": "dbo.BRVSX_TraLai",
             "dest": "brvsx_tralai",
-            "filter": ROLLING_WINDOW_DOCDATE
+            "filter": ROLLING_WINDOW_DOCDATE,
+            "purge": f'DELETE FROM brvsx_tralai WHERE "DocDate"::date < {PG_WINDOW_START}'
         },
 
         # --- Thêm 08/07/2026: chỉ tiêu vùng/ETC + KPI chi tiết theo khách hàng ---
         {
             "src": "dbo.DIM_TargetVungMien",
             "dest": "dim_targetvungmien",
-            "filter": ROLLING_WINDOW_DOCDATE
+            "filter": ROLLING_WINDOW_DOCDATE,
+            "purge": f'DELETE FROM dim_targetvungmien WHERE "DocDate"::date < {PG_WINDOW_START}'
         },
         {
             "src": "dbo.FACT_KeHoachTongETC",
             "dest": "fact_kehoachtongetc",
-            "filter": ROLLING_WINDOW_DOCDATE
+            "filter": ROLLING_WINDOW_DOCDATE,
+            "purge": f'DELETE FROM fact_kehoachtongetc WHERE "DocDate"::date < {PG_WINDOW_START}'
         },
         {
             "src": "dbo.FACT_TongHopKhachHang",
             "dest": "fact_tonghopkhachhang",
-            "filter": ROLLING_WINDOW_SAVEDATE
+            "filter": ROLLING_WINDOW_SAVEDATE,
+            "purge": f'DELETE FROM fact_tonghopkhachhang WHERE "SaveDate"::date < {PG_WINDOW_START}'
         }
     ]
 
@@ -267,7 +281,15 @@ def run_sync():
             df_cleaned = clean_dataframe(df)
             key_cols = TABLE_PRIMARY_KEYS.get(dest_table, [])
             upsert_to_supabase(dest_table, df_cleaned, pg_engine, key_cols)
-            
+
+            # 5. Dọn dữ liệu NGOÀI cửa sổ trượt đã có sẵn trên Supabase (nếu bảng này có khai báo
+            # "purge") — chỉ đổi filter đọc ở trên không tự xoá dữ liệu cũ đã tồn tại từ trước.
+            purge_sql = item.get("purge")
+            if purge_sql:
+                with pg_engine.begin() as pg_conn:
+                    result = pg_conn.execute(text(purge_sql))
+                print(f"  -> Đã dọn {result.rowcount:,} dòng ngoài cửa sổ trượt khỏi '{dest_table}'.")
+
         except Exception as e:
             # SQLAlchemy tự in kèm CẢ câu SQL lẫn TOÀN BỘ tham số bind khi lỗi xảy ra trên câu
             # upsert hàng loạt (vd 2000 dòng/chunk) -> str(e) có thể dài hàng chục nghìn ký tự,
