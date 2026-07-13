@@ -647,11 +647,19 @@ def _month_period_label(month_start, data_day=None):
     Nhãn "Kỳ / Ngày" rõ ràng cho card Teams/email: tháng lấy từ DỮ LIỆU THẬT (không phải giờ máy
     chạy job) + ngày dữ liệu đã đồng bộ trọn vẹn gần nhất (nếu biết) — tránh nhãn mơ hồ kiểu chỉ
     "MM/YYYY" hoặc lệch ngày do dùng thẳng datetime.now().
+
+    month_start/data_day có thể là CHUỖI 'YYYY-MM-DD' thay vì date/datetime khi tới từ nhánh Bravo
+    (driver ODBC cũ "SQL Server" trả cột date dạng chuỗi — xác nhận thực tế 13/07/2026, cùng lỗi
+    đã sửa ở nhiều nơi khác trong file này). Ép kiểu tường minh trước khi gọi .strftime().
     """
     if month_start is None:
         return datetime.now().strftime("%m/%Y")
+    if not hasattr(month_start, "strftime"):
+        month_start = datetime.strptime(str(month_start)[:10], "%Y-%m-%d")
     label = month_start.strftime("%m/%Y")
     if data_day:
+        if not hasattr(data_day, "strftime"):
+            data_day = datetime.strptime(str(data_day)[:10], "%Y-%m-%d")
         label += f" (dữ liệu cập nhật đến ngày {data_day.strftime('%d/%m/%Y')})"
     return label
 
@@ -1946,6 +1954,13 @@ def check_return_rate_alert():
     if rate > threshold:
         alert_key = "etc_return_rate"
         if should_send_alert(alert_key, cooldown_hours=24, current_value=str(round(rate, 4))):
+            # row[2] (mốc tháng) có thể là chuỗi 'YYYY-MM-DD' khi run_with_failover trả về từ
+            # nhánh Bravo (driver ODBC cũ trả cột date dạng chuỗi, không phải datetime.date gốc —
+            # xác nhận thực tế 13/07/2026, cùng lỗi đã sửa ở _last_complete_data_day và nơi khác).
+            m_val = row[2]
+            if m_val and not hasattr(m_val, "strftime"):
+                m_val = datetime.strptime(str(m_val)[:10], "%Y-%m-%d")
+            period_m = m_val.strftime('%m/%Y') if m_val else None
             send_alert_to_all_channels(
                 alert_name="CẢNH BÁO TỶ LỆ HÀNG TRẢ VỀ CAO (ETC)",
                 severity="WARNING",
@@ -1954,7 +1969,7 @@ def check_return_rate_alert():
                 table_headers=["Giá trị trả về", "Doanh số ETC", "Tỷ lệ trả"],
                 table_rows=[[format_vietnamese_money(row[0]), format_vietnamese_money(row[1]), f"{rate*100:.2f}%"]],
                 channels=("teams",),
-                period=row[2].strftime('%m/%Y') if row[2] else None, channel="ETC", region="Toàn quốc",
+                period=period_m, channel="ETC", region="Toàn quốc",
                 issue=f"Tỷ lệ giá trị hàng trả về/doanh số ETC đạt {rate*100:.2f}%, vượt ngưỡng — nghi vấn chất lượng lô/quá hạn/sai đơn"
             )
             record_alert_sent(alert_key, str(round(rate, 4)))
