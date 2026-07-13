@@ -176,6 +176,8 @@ def run_alert_checks(erp_engine, crm_engine):
     df_low_inv = get_low_inventory(erp_engine, low_inv_limit)
     
     if not df_low_inv.empty:
+        rows_to_alert = []
+        alert_keys_to_record = []
         for idx, row in df_low_inv.iterrows():
             sku = row['sku']
             item_name = row['item_name']
@@ -184,18 +186,20 @@ def run_alert_checks(erp_engine, crm_engine):
             alert_key = f"low_inventory:{sku}"
             # Cooldown 4 tiếng đối với cảnh báo tồn kho của từng sản phẩm
             if should_send_alert(alert_key, cooldown_hours=4, current_value=qty):
-                if send_alert_to_all_channels(
-                    alert_name="CANH BAO TON KHO THAP",
-                    severity="WARNING",
-                    summary=f"San pham '{item_name}' (SKU: {sku}) hien chi con {qty} san pham trong kho (Nguong canh bao: < {low_inv_limit}).",
-                    table_headers=["Ma SKU", "Ten San Pham", "Ton Kho Hien Tai", "Thoi Gian Cap Nhat"],
-                    table_rows=[[sku, item_name, str(qty), str(row['updated_at'])]],
-                    channels=("teams",)
-                ):
+                rows_to_alert.append([sku, item_name, str(qty), str(row['updated_at'])])
+                alert_keys_to_record.append((alert_key, qty))
+                
+        if rows_to_alert:
+            if send_alert_to_all_channels(
+                alert_name="CANH BAO TON KHO THAP",
+                severity="WARNING",
+                summary=f"Phat hien {len(rows_to_alert)} san pham co ton kho thap duoi nguong cho phep (Nguong canh bao: < {low_inv_limit}).",
+                table_headers=["Ma SKU", "Ten San Pham", "Ton Kho Hien Tai", "Thoi Gian Cap Nhat"],
+                table_rows=rows_to_alert,
+                channels=("teams",)
+            ):
+                for alert_key, qty in alert_keys_to_record:
                     record_alert_sent(alert_key, qty)
-    else:
-        # Nếu không còn sản phẩm nào tồn kho thấp, xóa sạch trạng thái để kích hoạt cảnh báo tức thì khi có lỗi sau này
-        pass
 
     # 2. KIỂM TRA GIAO DỊCH LỖI (ERP)
     failed_limit = config['thresholds']['erp']['failed_orders_limit']
