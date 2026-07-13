@@ -74,9 +74,16 @@ def get_sql_server_connection():
 
 def get_supabase_engine():
     from sqlalchemy.pool import NullPool
+    # connect_timeout/statement_timeout: KHÔNG có timeout nào trước đây -> nếu Supabase phản hồi
+    # chậm/quá tải (đã xác nhận thực tế 13/07/2026: sự cố đầy đĩa khiến kết nối treo im lặng),
+    # script đứng vô thời hạn ở bảng đó thay vì báo lỗi + chuyển bảng tiếp theo như try/except
+    # trong run_sync() đã thiết kế. Cùng giá trị connect_timeout với src/database.py::
+    # _get_fast_cloud_engine (5s) để nhất quán; statement_timeout để cao hơn (60s) vì đây là
+    # upsert hàng loạt (chunksize=2000), có thể lâu hơn 1 câu SELECT cảnh báo thông thường.
     return create_engine(
         db_url,
-        poolclass=NullPool
+        poolclass=NullPool,
+        connect_args={"connect_timeout": 5, "options": "-c statement_timeout=60000"},
     )
 
 def fetch_table_schema_columns(sql_conn, schema, table_name):
