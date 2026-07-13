@@ -6,9 +6,3 @@ python-dotenv
 jinja2
 schedule
 anthropic
-seaborn
-fastapi
-uvicorn
-pydantic
-openai
-psycopg2-binary
