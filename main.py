@@ -110,6 +110,15 @@ def _digest_table(metrics):
         rows.append([f"Nợ quá hạn (kỳ {metrics['receivables']['period']})",
                      format_vietnamese_money(metrics['receivables']['total_overdue'])])
         rows.append(["Tổng dư nợ", format_vietnamese_money(metrics['receivables']['balance_end'])])
+        
+    # Thêm phần tổng hợp các cảnh báo trong ngày và trạng thái xử lý
+    if metrics.get("alerts_summary"):
+        rows.append(["━━━━━━━━━━━━━━━━━━━━━", "━━━━━━━━━━━━━━━━━━━━━"])
+        rows.append(["CẢNH BÁO PHÁT SINH HÔM NAY", "TRẠNG THÁI HIỆN TẠI"])
+        for alert in metrics["alerts_summary"]:
+            status_str = "🔴 Chưa xử lý" if alert["active"] else "🟢 Đã giải quyết"
+            rows.append([f"• {alert['name']}", status_str])
+            
     return headers, rows
 
 def send_daily_digest():
