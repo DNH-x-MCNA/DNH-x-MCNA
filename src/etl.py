@@ -879,14 +879,17 @@ def get_daily_digest_metrics():
     return metrics
 
 def get_weekly_digest_metrics(region=None, channel=None):
-    """Tổng hợp dữ liệu TUẦN TRƯỚC đã kết thúc trọn vẹn (thứ 2 - chủ nhật) phục vụ Weekly
-    Report (Email). KHÔNG phải "7 ngày gần nhất" tính lùi từ hôm nay — vd. nếu hôm nay là thứ
-    Ba thì tuần trước = thứ 2 tuần trước tới chủ nhật vừa rồi, không bao gồm 2 ngày của tuần này.
+    """Tổng hợp dữ liệu TUẦN ĐANG CHẠY (thứ 2 tới hiện tại) phục vụ Weekly Report (Email).
+    13/07/2026: đổi từ "tuần TRƯỚC đã kết thúc trọn vẹn" sang tuần hiện tại — lịch chạy
+    DNH_Weekly_Report là thứ Bảy 17:45 (scripts/register_digest_schedule.bat), nghĩa là tuần
+    hiện tại (thứ 2 - hiện tại) CHƯA hết Chủ Nhật; logic cũ lùi thêm 1 tuần nữa để lấy tuần
+    "đã kết thúc trọn vẹn", khiến báo cáo trễ tới gần 2 tuần so với thời điểm gửi (vd gửi 11/07
+    mà báo cáo tuần 29/06-05/07). ĐÁNH ĐỔI (giống Monthly Report): thiếu dữ liệu chiều/tối thứ
+    Bảy và cả ngày Chủ Nhật của tuần — chấp nhận được để đổi lấy báo cáo tươi hơn nhiều.
     region/channel: lọc phạm vi báo cáo theo audience (xem get_digest_metrics)."""
     today_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-    this_monday = today_start - timedelta(days=today_start.weekday())  # weekday(): Thứ 2 = 0
-    week_start = this_monday - timedelta(days=7)
-    week_end = this_monday  # exclusive — tức là hết Chủ nhật tuần trước
+    week_start = today_start - timedelta(days=today_start.weekday())  # weekday(): Thứ 2 = 0
+    week_end = week_start + timedelta(days=7)  # exclusive — hết Chủ nhật tuần này (kể cả nếu chưa tới)
     label = f"Tuần {week_start.strftime('%d/%m/%Y')} - {(week_end - timedelta(days=1)).strftime('%d/%m/%Y')}"
     return get_digest_metrics(week_start, week_end, label, granularity="weekly", region=region, channel=channel)
 
