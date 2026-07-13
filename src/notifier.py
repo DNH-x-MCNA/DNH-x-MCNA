@@ -914,7 +914,7 @@ def _build_teams_adaptive_card(title, summary, severity, table_headers=None, tab
         body.append({
             "type": "Container",
             "id": "compactTableDetails",
-            "isVisible": False,
+            "isVisible": True,
             "spacing": "Medium",
             "items": [
                 {
@@ -952,7 +952,7 @@ def _build_teams_adaptive_card(title, summary, severity, table_headers=None, tab
     if has_details:
         actions.append({
             "type": "Action.ToggleVisibility",
-            "title": "👁️ Xem nhanh danh sách",
+            "title": "👁️ Thu gọn / Hiện chi tiết",
             "targetElements": ["compactTableDetails"]
         })
 
