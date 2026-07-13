@@ -73,7 +73,8 @@ def _period_revenue(start_dt, end_dt, region=None):
     """Doanh thu OTC+ETC thuần trong [start_dt, end_dt) — loại CTKM khuyến mãi + chứng từ hủy
     (đúng quy tắc đã dùng ở check_revenue_drop_alert). region: None (không lọc) hoặc
     'bac'/'nam'/'trung' — lọc theo AreaCode qua chain CityId -> dim_tinhthanhpho.
-    Trả (otc_rev, etc_rev, invoice_count).
+    Trả (otc_rev, etc_rev, otc_invoice_count, etc_invoice_count) — tách riêng số hóa đơn từng
+    kênh (13/07/2026, trước đó gộp chung 1 số duy nhất, không rõ ràng khi xem báo cáo).
 
     JOIN dms_khachhang/dmssx_khachhang LUÔN bắt buộc (kể cả khi region=None) — trước 09/07/2026
     chỉ JOIN khi có lọc vùng, khiến mã nội bộ/chuyển kho không phải khách hàng thật (vd '1001136',
@@ -143,7 +144,7 @@ def _period_revenue(start_dt, end_dt, region=None):
         if markers:
             etc_sql = etc_sql.bindparams(bindparam("region_markers", expanding=True))
         etc_row = conn.execute(etc_sql, params).fetchone()
-        return float(otc_row[0]), float(etc_row[0]), int(otc_row[1]) + int(etc_row[1])
+        return float(otc_row[0]), float(etc_row[0]), int(otc_row[1]), int(etc_row[1])
 
     def _mssql(conn):
         region_join, region_where = "", ""
@@ -188,7 +189,7 @@ def _period_revenue(start_dt, end_dt, region=None):
         if markers:
             etc_sql = etc_sql.bindparams(bindparam("region_markers", expanding=True))
         etc_row = conn.execute(etc_sql, params).fetchone()
-        return float(otc_row[0]), float(etc_row[0]), int(otc_row[1]) + int(etc_row[1])
+        return float(otc_row[0]), float(etc_row[0]), int(otc_row[1]), int(etc_row[1])
 
     result = run_with_failover(_pg, _mssql, label="period_revenue")
     return result if result is not None else (0.0, 0.0, 0)
@@ -370,7 +371,13 @@ def _top_customers(start_dt, end_dt, channel_label, region_markers=None):
 def _revenue_trend(start_dt, end_dt, granularity, region=None, channel=None):
     """Xu hướng doanh thu trong kỳ: 'weekly' -> theo TỪNG NGÀY (7 điểm), 'monthly' -> theo TỪNG
     TUẦN (4-5 điểm). Chạy thêm N truy vấn _period_revenue nhỏ — chấp nhận được vì weekly/monthly
-    chỉ chạy 1 lần/tuần hoặc 1 lần/tháng (không nằm trong luồng cảnh báo tần suất cao 5 lần/ngày)."""
+    chỉ chạy 1 lần/tuần hoặc 1 lần/tháng (không nằm trong luồng cảnh báo tần suất cao 5 lần/ngày).
+
+    13/07/2026: kẹp end_dt tại hết hôm nay — get_weekly/monthly_digest_metrics giờ dùng kỳ ĐANG
+    CHẠY (chưa hết), nếu không kẹp thì vòng lặp bucket vẽ cả các ngày TƯƠNG LAI (không có dữ liệu,
+    toàn số 0), khiến biểu đồ rối/vô nghĩa (vd gửi thứ 2 mà vẽ luôn cả thứ 3 - chủ nhật trống)."""
+    today_end = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
+    end_dt = min(end_dt, today_end)
     buckets = []
     if granularity == "weekly":
         cur = start_dt
@@ -389,7 +396,7 @@ def _revenue_trend(start_dt, end_dt, granularity, region=None, channel=None):
 
     trend = []
     for b_start, b_end, label in buckets:
-        otc_rev, etc_rev, _ = _period_revenue(b_start, b_end, region=region)
+        otc_rev, etc_rev, _, _ = _period_revenue(b_start, b_end, region=region)
         trend.append({
             "label": label,
             "revenue": round(otc_rev + etc_rev, 2),
@@ -437,10 +444,104 @@ def _kpi_summary(conn, region=None):
     }
 
 
+# Tên tiếng Việt + kiểu định dạng giá trị cho từng loại alert_key (prefix trước dấu ":" đầu
+# tiên) — dùng để "dịch" các dòng "Điểm Nổi Bật Trong Kỳ" từ key/số thô sang câu chữ đọc được.
+# Kiểu giá trị: money (tiền VNĐ) | ratio/percent (0-1 -> %) | qty (số lượng) | count (số nguyên)
+# | hours (giờ) | customer (mã khách hàng) | status (chuỗi trạng thái) | raw (giữ nguyên).
+_HIGHLIGHT_LABELS = {
+    "low_inventory": ("Tồn kho thấp", "qty"),
+    "failed_orders_peak": ("Đơn hàng lỗi/hủy tăng đột biến", "count"),
+    "crm_urgent_overload": ("Ticket CRM khẩn cấp quá tải", "count"),
+    "smart_debt_overdue_top5": ("Top 5 khách nợ quá hạn cao nhất", "money"),
+    "smart_inventory_depletion_top5": ("Top 5 mặt hàng sắp cạn kho", "qty"),
+    "smart_kpi_low_progress_top5": ("Top 5 KPI tiến độ thấp nhất", "ratio"),
+    "sales_kpi_insights_report": ("Báo cáo phân tích KPI doanh số đã gửi", "status"),
+    "revenue_drop": ("Doanh thu sụt giảm bất thường", "ratio"),
+    "credit_limit_exceeded_top10": ("Top 10 khách vượt hạn mức tín dụng", "money"),
+    "company_overdue_ratio": ("Tỷ lệ nợ quá hạn toàn công ty", "percent"),
+    "overdue_customer_new_orders": ("Khách quá hạn vẫn phát sinh đơn mới (tổng giá trị đơn)", "money"),
+    "aging_migration_gt45": ("Nợ mới chuyển nhóm quá hạn > 45 ngày", "money"),
+    "dead_stock_top10": ("Top 10 tồn kho chết (giá trị)", "money"),
+    "customer_churn": ("Khách hàng lớn sụt giảm/rời bỏ", "customer"),
+    "revenue_concentration": ("Rủi ro tập trung doanh thu", "percent"),
+    "etc_return_rate": ("Tỷ lệ hàng trả về ETC cao", "percent"),
+    "zero_sales_rep": ("Số nhân sự có doanh số bằng 0", "count"),
+    "kpi_sales_force_risk": ("Số nhân sự rủi ro KPI", "count"),
+    "kpi_daily_pace_red": ("Số TDV có nhịp KPI ngày mức Đỏ", "count"),
+    "kpi_milestone_channel": ("Mốc KPI kênh giảm so TB 5 tháng trước", "percent"),
+    "kpi_milestone_tdv": ("Số TDV giảm KPI so TB 5 tháng trước", "count"),
+    "data_sanity_zero": ("Dữ liệu rỗng/bất thường — đã chặn cảnh báo", "status"),
+    "etl_stale": ("ETL nghi đứng (dữ liệu không mới)", "hours"),
+}
+
+def _format_highlight_date_part(part):
+    """Nếu 1 mảnh suffix của alert_key là ngày/tháng (YYYY-MM-DD, YYYY-MM, hoặc "M_YYYY" — định
+    dạng period dùng ở receivable_detail/check_debt_aging_migration_alert), đổi sang định dạng
+    Việt Nam (DD/MM/YYYY hoặc MM/YYYY) — các mảnh khác (mã kênh OTC/ETC, SKU...) giữ nguyên."""
+    for fmt_in, fmt_out in (("%Y-%m-%d", "%d/%m/%Y"), ("%Y-%m", "%m/%Y")):
+        try:
+            return datetime.strptime(part, fmt_in).strftime(fmt_out)
+        except ValueError:
+            continue
+    if "_" in part:
+        month_str, _, year_str = part.partition("_")
+        if month_str.isdigit() and year_str.isdigit() and len(year_str) == 4:
+            return f"{int(month_str):02d}/{year_str}"
+    return part
+
+def _format_highlight_value(value, value_type):
+    try:
+        if value_type == "money":
+            from src.alerts import format_vietnamese_money
+            return format_vietnamese_money(float(value))
+        if value_type in ("ratio", "percent"):
+            return f"{float(value) * 100:.1f}%"
+        if value_type == "qty":
+            return f"{float(value):,.0f}".replace(",", ".")
+        if value_type == "count":
+            return f"{int(float(value)):,}".replace(",", ".")
+        if value_type == "hours":
+            return f"{int(float(value))} giờ"
+        if value_type == "customer":
+            return f"Mã KH {value}"
+        if value_type == "status":
+            return {"sent": "Đã gửi", "zero": "Không phát hiện bất thường"}.get(str(value), str(value))
+    except (ValueError, TypeError):
+        pass
+    return str(value)
+
+def _humanize_highlight(alert_key, sent_at, value):
+    """Dịch 1 dòng sent_alerts thô (alert_key/sent_at/value) sang câu chữ đọc được cho email —
+    xem _HIGHLIGHT_LABELS. Trước 13/07/2026, "Điểm Nổi Bật Trong Kỳ" hiển thị thẳng alert_key kỹ
+    thuật (vd "smart_debt_overdue_top5") và timestamp/số thô, không ai đọc hiểu được."""
+    # sales_kpi_insights_report nối kỳ báo cáo bằng "_" (không phải ":" như các key khác)
+    if alert_key.startswith("sales_kpi_insights_report_"):
+        prefix = "sales_kpi_insights_report"
+        parts = [alert_key[len("sales_kpi_insights_report_"):]]
+    else:
+        segments = alert_key.split(":")
+        prefix, parts = segments[0], segments[1:]
+
+    label, value_type = _HIGHLIGHT_LABELS.get(prefix, (prefix, "raw"))
+    formatted_parts = [_format_highlight_date_part(p) for p in parts]
+    suffix = f" ({', '.join(formatted_parts)})" if formatted_parts else ""
+
+    try:
+        sent_at_display = datetime.strptime(str(sent_at).split(".")[0], "%Y-%m-%d %H:%M:%S").strftime("%H:%M %d/%m/%Y")
+    except ValueError:
+        sent_at_display = str(sent_at)
+
+    return {
+        "label": label + suffix,
+        "sent_at_display": sent_at_display,
+        "value_display": _format_highlight_value(value, value_type),
+    }
+
 def _get_period_highlights(start_dt, end_dt):
     """"Điểm nổi bật trong kỳ": các cảnh báo nghiệp vụ đã THỰC SỰ fire trong [start_dt, end_dt),
     đọc từ data/alerts_state.db (bảng sent_alerts, ghi bởi src/alerts.py::record_alert_sent) —
-    nối luồng cảnh báo thời gian thực với báo cáo định kỳ thành 1 câu chuyện liền mạch."""
+    nối luồng cảnh báo thời gian thực với báo cáo định kỳ thành 1 câu chuyện liền mạch. Mỗi dòng
+    được "dịch" qua _humanize_highlight() sang tên tiếng Việt + giá trị định dạng đúng kiểu."""
     if not os.path.exists(STATE_DB_PATH):
         return []
     try:
@@ -456,7 +557,7 @@ def _get_period_highlights(start_dt, end_dt):
     except Exception as e:
         print(f"[DIGEST] Lỗi đọc điểm nổi bật từ alerts_state.db: {e}")
         return []
-    return [{"alert_key": r[0], "sent_at": r[1], "value": r[2]} for r in rows]
+    return [_humanize_highlight(r[0], r[1], r[2]) for r in rows]
 
 
 def _period_has_critical(start_dt, end_dt):
@@ -516,13 +617,16 @@ def get_digest_metrics(start_dt, end_dt, period_label, granularity=None, region=
     # 1. Doanh thu kỳ này + kỳ liền trước (cùng độ dài) để so sánh tăng/giảm — theo đúng phạm vi
     #    region/channel của audience đang xem báo cáo. Tự failover Supabase -> Bravo nội bộ (xem
     #    _period_revenue) nên KHÔNG cần mở connection ở đây nữa.
-    otc_rev, etc_rev, invoice_count = _period_revenue(start_dt, end_dt, region=region)
+    otc_rev, etc_rev, otc_invoice_count, etc_invoice_count = _period_revenue(start_dt, end_dt, region=region)
     period_len = end_dt - start_dt
-    prev_otc_rev, prev_etc_rev, _ = _period_revenue(start_dt - period_len, start_dt, region=region)
+    prev_otc_rev, prev_etc_rev, _, _ = _period_revenue(start_dt - period_len, start_dt, region=region)
     if channel == "OTC":
         etc_rev = prev_etc_rev = 0.0
+        etc_invoice_count = 0
     elif channel == "ETC":
         otc_rev = prev_otc_rev = 0.0
+        otc_invoice_count = 0
+    invoice_count = otc_invoice_count + etc_invoice_count
     total_rev = otc_rev + etc_rev
     prev_total_rev = prev_otc_rev + prev_etc_rev
     change_pct = ((total_rev - prev_total_rev) / prev_total_rev) if prev_total_rev > 0 else None
@@ -700,11 +804,14 @@ def get_digest_metrics(start_dt, end_dt, period_label, granularity=None, region=
     result = {
         "date": start_dt.strftime("%d/%m/%Y"),
         "period_range": period_label,
+        "updated_at": datetime.now().strftime("%H:%M %d/%m/%Y"),
         "revenue": {
             "otc": round(otc_rev, 2),
             "etc": round(etc_rev, 2),
             "total": round(total_rev, 2),
             "invoice_count": invoice_count,
+            "otc_invoice_count": otc_invoice_count,
+            "etc_invoice_count": etc_invoice_count,
             "prev_total": round(prev_total_rev, 2),
             "change_pct": round(change_pct * 100, 1) if change_pct is not None else None,
         },
@@ -870,11 +977,15 @@ def _get_today_alerts_status(start_dt, end_dt):
             
     return results
 
-def get_daily_digest_metrics():
-    """Tổng hợp dữ liệu trong ngày phục vụ Daily Digest (Email)."""
+def get_daily_digest_metrics(region=None, channel=None):
+    """Tổng hợp dữ liệu trong ngày phục vụ Daily Digest (Teams).
+    13/07/2026: thêm region/channel (trước đó luôn None — chỉ có 1 bản toàn công ty gửi cho
+    audience C-Level, 5 audience còn lại không nhận Daily Digest). Xem send_daily_digest()
+    trong main.py — giờ lặp qua report_recipients, gọi hàm này riêng cho từng audience.
+    region/channel: lọc phạm vi báo cáo theo audience (xem get_digest_metrics)."""
     today_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
     today_end = today_start + timedelta(days=1)
-    metrics = get_digest_metrics(today_start, today_end, today_start.strftime("%d/%m/%Y"))
+    metrics = get_digest_metrics(today_start, today_end, today_start.strftime("%d/%m/%Y"), region=region, channel=channel)
     metrics["alerts_summary"] = _get_today_alerts_status(today_start, today_end)
     return metrics
 
