@@ -51,7 +51,14 @@ def _get_bravo_engine():
         query={"driver": "SQL Server", "TrustServerCertificate": "yes"},
     )
     try:
-        _bravo_engine = create_engine(url, connect_args={"timeout": 10})
+        # 14/07/2026: thêm pool_pre_ping=True — từ khi nhiều hàm doanh thu/công nợ đổi sang gọi
+        # thẳng Bravo (bỏ failover Postgres, xem docstring _period_revenue trong src/etl.py), số
+        # lượng query Bravo mỗi chu kỳ quét tăng đáng kể, gặp thực tế lỗi "Communication link
+        # failure" (kết nối cũ trong pool đã bị rớt do timeout mạng/server, SQLAlchemy vẫn đưa ra
+        # dùng lại mà không kiểm tra trước). pool_pre_ping tự ping nhẹ trước khi dùng 1 connection
+        # lấy từ pool, tự âm thầm mở lại nếu đã chết — Postgres engine (_get_fast_cloud_engine)
+        # đã có sẵn tuỳ chọn này, Bravo engine trước đó thiếu.
+        _bravo_engine = create_engine(url, connect_args={"timeout": 10}, pool_pre_ping=True)
     except Exception as e:
         print(f"[DB][bravo] Không tạo được engine Bravo: {e}")
         return None
