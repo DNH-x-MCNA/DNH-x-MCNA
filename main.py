@@ -97,7 +97,8 @@ def _digest_table(metrics):
     email HTML đầy đủ hơn thì xem build_digest_email/DIGEST_EMAIL_TEMPLATE)."""
     headers = ["Chỉ số", "Giá trị"]
     change_pct = metrics['revenue']['change_pct']
-    change_str = f"{change_pct:+.1f}% so kỳ trước" if change_pct is not None else "chưa đủ dữ liệu kỳ trước"
+    prev_label = metrics['revenue'].get('prev_period_label', '')
+    change_str = f"{change_pct:+.1f}% so kỳ {prev_label}" if change_pct is not None else "chưa đủ dữ liệu kỳ trước"
     rows = [
         ["Doanh thu OTC", format_vietnamese_money(metrics['revenue']['otc'])],
         ["Doanh thu ETC", format_vietnamese_money(metrics['revenue']['etc'])],
@@ -108,21 +109,10 @@ def _digest_table(metrics):
         ["Mặt hàng tồn chết", str(metrics['inventory']['dead_stock_count'])],
         ["Mặt hàng sắp hết hàng", str(metrics['inventory']['near_stockout_count'])],
     ]
-    if metrics['receivables']:
-        period = metrics['receivables']['period']
-        rows.append([f"Nợ quá hạn OTC (kỳ {period})", format_vietnamese_money(metrics['receivables'].get('otc_overdue'))])
-        rows.append(["Dư nợ OTC", format_vietnamese_money(metrics['receivables'].get('otc_balance'))])
-        rows.append(["Nợ quá hạn ETC", format_vietnamese_money(metrics['receivables'].get('etc_overdue'))])
-        rows.append(["Dư nợ ETC", format_vietnamese_money(metrics['receivables'].get('etc_balance'))])
-        rows.append(["Tổng dư nợ toàn công ty", format_vietnamese_money(metrics['receivables']['balance_end'])])
-        
-    # Thêm phần tổng hợp các cảnh báo trong ngày và trạng thái xử lý
-    if metrics.get("alerts_summary"):
-        rows.append(["━━━━━━━━━━━━━━━━━━━━━", "━━━━━━━━━━━━━━━━━━━━━"])
-        rows.append(["CẢNH BÁO PHÁT SINH HÔM NAY", "TRẠNG THÁI HIỆN TẠI"])
-        for alert in metrics["alerts_summary"]:
-            status_str = "🔴 Chưa xử lý" if alert["active"] else "🟢 Đã giải quyết"
-            rows.append([f"• {alert['name']}", status_str])
+    # 14/07/2026: bỏ hẳn khối công nợ chi tiết (5 dòng Nợ quá hạn/Dư nợ OTC/ETC/Tổng) và mục
+    # "Cảnh báo phát sinh hôm nay" — Daily Digest chỉ còn doanh thu + tồn kho, ngắn gọn xem nhanh.
+    # Cảnh báo nợ quá hạn nghiêm trọng (vượt ngưỡng) vẫn tự bắn CARD RIÊNG qua Teams khi phát sinh
+    # (check_company_overdue_ratio_alert trong src/alerts.py, không phụ thuộc Daily Digest này).
             
     return headers, rows
 
@@ -223,12 +213,13 @@ def _send_periodic_email_report(get_metrics_fn, period_label, report_title):
             metrics = get_metrics_fn(region=region, channel=channel)
             scope = _scope_label(region, channel)
             subject_suffix = f" ({audience})" if audience else ""
-            has_critical = metrics.get("has_critical")
-            subject_prefix = "🔴 " if has_critical else "📊 "
-            subject = f"{subject_prefix}{report_title}{subject_suffix} — {metrics.get('period_range', metrics['date'])}"
+            # 13/07/2026: bỏ emoji 🔴/📊 ở tiêu đề + Outlook Importance:High — báo cáo ĐỊNH KỲ
+            # không cần "hét" mức khẩn cấp giống alert thời gian thực (Teams đã lo việc đó); vẫn
+            # giữ banner text nhắc nhở trong nội dung (xem metrics.has_critical trong template)
+            # để người đọc biết cần xem kỹ mục "Điểm Nổi Bật", chỉ không dùng màu/cờ gắt nữa.
+            subject = f"{report_title}{subject_suffix} — {metrics.get('period_range', metrics['date'])}"
             html_content = build_digest_email(metrics, period_label=period_label, audience=audience, scope_label=scope)
-            importance = "high" if has_critical else None
-            if send_email(subject, html_content, recipient_override=emails or None, importance=importance):
+            if send_email(subject, html_content, recipient_override=emails or None, importance=None):
                 print(f"[{datetime.now()}] {report_title} cho '{audience or 'mặc định'}' đã gửi thành công.")
             else:
                 print(f"[{datetime.now()}] Gửi {report_title} cho '{audience or 'mặc định'}' thất bại.")
