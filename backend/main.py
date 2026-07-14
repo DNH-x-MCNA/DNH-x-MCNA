@@ -1,0 +1,162 @@
+# -*- coding: utf-8 -*-
+"""FastAPI backend cho AI Chatbot DNH - Phase 2."""
+import os
+from fastapi import Depends, FastAPI, HTTPException, Header
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+
+
+def load_env():
+    env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+    if os.path.exists(env_path):
+        for line in open(env_path, encoding="utf-8"):
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                k, v = line.split("=", 1)
+                os.environ.setdefault(k.strip(), v.strip())
+load_env()
+
+from nl2sql import ask  # noqa: E402  (phai load_env truoc khi import - nl2sql doc ANTHROPIC_API_KEY luc goi ham)
+from conversation_memory import load_history, clear_session  # noqa: E402
+import auth  # noqa: E402
+
+auth.init_schema()
+
+app = FastAPI(title="DNH AI Chatbot API")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:3000",
+        "https://dnh-bot.vercel.app",
+    ],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+BACKEND_API_KEY = os.environ.get("BACKEND_API_KEY")
+
+
+def require_api_key(x_api_key: str = Header(default=None)):
+    """Chan cac request khong kem dung API key (danh cho frontend Vercel qua tunnel cong khai) -
+    hang rao co ban chong bot/scan tu dong, KHONG thay the cho kiem soat truy cap that (vd Cloudflare
+    Access theo email DNH) neu can gioi han chi nhan vien cong ty duoc dung."""
+    if BACKEND_API_KEY and x_api_key != BACKEND_API_KEY:
+        raise HTTPException(401, "Thieu hoac sai API key")
+
+
+def require_user(authorization: str = Header(default=None)) -> dict:
+    """Xac thuc nguoi dung qua session token (Authorization: Bearer <token>) - day la lop bao mat
+    THAT (khac API key chi la hang rao chong bot). Tra ve dict {id,username,name,role,scope_value}."""
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(401, "Chua dang nhap")
+    token = authorization[len("Bearer "):]
+    user = auth.get_user_by_session(token)
+    if not user:
+        raise HTTPException(401, "Phien dang nhap khong hop le hoac da het han")
+    return user
+
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+
+class LoginResponse(BaseModel):
+    token: str
+    name: str | None
+    role: str
+    scope_value: str | None
+
+
+class UserInfo(BaseModel):
+    username: str
+    name: str | None
+    role: str
+    scope_value: str | None
+
+
+class ChatRequest(BaseModel):
+    question: str
+    session_id: str = "default"  # 1 session = 1 phien chat webapp, dung de nho ngu canh
+
+
+class ChatResponse(BaseModel):
+    answer: str
+    sql_used: list[str]
+    columns: list[str] | None = None
+    rows: list | None = None
+    row_count: int | None = None
+
+
+class HistoryMessage(BaseModel):
+    role: str
+    content: str
+
+
+@app.get("/health")
+def health():
+    return {"status": "ok"}
+
+
+@app.post("/auth/login", response_model=LoginResponse, dependencies=[Depends(require_api_key)])
+def login(req: LoginRequest):
+    user = auth.verify_login(req.username, req.password)
+    if not user:
+        raise HTTPException(401, "Tai khoan hoac mat khau khong dung")
+    token = auth.create_session(user["id"])
+    return LoginResponse(token=token, name=user["name"], role=user["role"], scope_value=user["scope_value"])
+
+
+@app.post("/auth/logout", dependencies=[Depends(require_api_key)])
+def logout(authorization: str = Header(default=None)):
+    if authorization and authorization.startswith("Bearer "):
+        auth.delete_session(authorization[len("Bearer "):])
+    return {"status": "logged_out"}
+
+
+@app.get("/auth/me", response_model=UserInfo, dependencies=[Depends(require_api_key)])
+def me(user: dict = Depends(require_user)):
+    return UserInfo(username=user["username"], name=user["name"], role=user["role"], scope_value=user["scope_value"])
+
+
+@app.get("/history/{session_id}", response_model=list[HistoryMessage], dependencies=[Depends(require_api_key)])
+def get_history(session_id: str, user: dict = Depends(require_user)):
+    """Lay lai lich su hoi thoai cua 1 session - de frontend hien thi lai khi mo lai trang."""
+    return [HistoryMessage(**m) for m in load_history(session_id, max_turns=20)]
+
+
+@app.post("/clear/{session_id}", dependencies=[Depends(require_api_key)])
+def clear(session_id: str, user: dict = Depends(require_user)):
+    """Xoa lich su hoi thoai cua 1 session - bat dau cuoc chat moi."""
+    clear_session(session_id)
+    return {"status": "cleared"}
+
+
+@app.post("/chat", response_model=ChatResponse, dependencies=[Depends(require_api_key)])
+def chat(req: ChatRequest, user: dict = Depends(require_user)):
+    if not req.question or not req.question.strip():
+        raise HTTPException(400, "Cau hoi khong duoc de trong")
+    try:
+        # TODO (giai doan 2): truyen user["role"]/user["scope_value"] vao ask() de gioi han du lieu
+        # theo vung/QLV cho regional_director/qlv - hien tai CHUA enforce, chi moi co lop dang nhap.
+        result = ask(req.question, session_id=req.session_id)
+    except Exception as e:
+        raise HTTPException(500, f"Loi he thong: {str(e)[:300]}")
+
+    lr = result.get("last_result") or {}
+    # last_result co 2 dang: ket qua tool bao cao chuan ({"ok","result"}) hoac raw SQL ({"ok","columns","rows","row_count"}).
+    # Chi tra ve columns/rows/row_count khi la dang raw SQL (co du 3 truong nay).
+    is_raw_sql = lr.get("ok") and "columns" in lr
+    return ChatResponse(
+        answer=result["answer"],
+        sql_used=result["sql_used"],
+        columns=lr.get("columns") if is_raw_sql else None,
+        rows=lr.get("rows") if is_raw_sql else None,
+        row_count=lr.get("row_count") if is_raw_sql else None,
+    )
+
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)

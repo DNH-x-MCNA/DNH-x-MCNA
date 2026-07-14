@@ -33,6 +33,8 @@ yarn-error.log*
 
 # env files (can opt-in for committing if needed)
 .env*
+!.env.example
+!**/.env.example
 
 # vercel
 .vercel
@@ -42,3 +44,9 @@ yarn-error.log*
 next-env.d.ts
 
 .vercel
+
+# backend (Python) - khong commit du lieu/DB/log, chi commit code
+backend/__pycache__/
+backend/*.db
+backend/logs/
+backend/*.txt

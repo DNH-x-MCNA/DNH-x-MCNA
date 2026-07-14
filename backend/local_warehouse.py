@@ -1,0 +1,129 @@
+# -*- coding: utf-8 -*-
+"""
+Kho du lieu LOCAL (SQLite) - ban sao co index cua du lieu Bravo, dong bo dinh ky qua sync_warehouse.py.
+Muc dich: tra loi chatbot nhanh (<=10s) ma khong can goi Bravo qua VPN cho moi cau hoi - Bravo van la
+nguon SU THAT goc (chi doc), kho nay chi la ban sao CO THE CU vai chuc phut, dung cho truy van
+thong ke/so sanh lich su. Cau hoi can du lieu "ngay bay gio" van co the can fallback ve Bravo song.
+
+KHONG bao gio ghi/sua gi tren Bravo - kho nay hoan toan tach biet, chi doc (SELECT) tu Bravo roi
+chep vao file SQLite rieng cua du an.
+"""
+import os, sqlite3, datetime as dt
+
+DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "warehouse.db")
+
+SCHEMA = """
+-- employee_code (tu EmpDMSCode2 tren Bravo) - CHI dung tin cay cho nhan vien CA NHAN (vd "tungtx",
+-- "DNH00832"...). Ma khu vuc/quan ly vung (MBKV*, ASM*, MN*...) KHONG xuat hien truc tiep tren hoa
+-- don nen se khong co/khong dung duoc qua cot nay - xem employee_kpi() (snapshot thang) cho nhom do.
+-- created_at = CreatedAt tren Bravo (thoi diem BAN GHI THUC SU duoc tao trong he thong, KHAC voi
+-- doc_date la ngay chung tu tren hoa don - co the bi chon/sua tay). Dung de phat hien "chay don don
+-- KPI": tao hang loat hoa don CreatedAt dồn vao 1 ngay (thuong cuoi ky) nhung DocDate rai rac truoc do.
+CREATE TABLE IF NOT EXISTS vhoadon_otc (
+    doc_date TEXT NOT NULL, customer_code TEXT, item_code TEXT,
+    amount9 REAL, quantity REAL, unit_price REAL, stt TEXT, city_id INTEGER, employee_code TEXT,
+    created_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_otc_docdate ON vhoadon_otc(doc_date);
+CREATE INDEX IF NOT EXISTS idx_otc_customer ON vhoadon_otc(customer_code);
+CREATE INDEX IF NOT EXISTS idx_otc_item ON vhoadon_otc(item_code);
+CREATE INDEX IF NOT EXISTS idx_otc_city ON vhoadon_otc(city_id);
+CREATE INDEX IF NOT EXISTS idx_otc_employee ON vhoadon_otc(employee_code, doc_date);
+
+CREATE TABLE IF NOT EXISTS vhoadon_etc (
+    doc_date TEXT NOT NULL, customer_code TEXT, item_code TEXT,
+    amount9 REAL, quantity REAL, unit_price REAL, stt TEXT, employee_code TEXT,
+    created_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_etc_docdate ON vhoadon_etc(doc_date);
+CREATE INDEX IF NOT EXISTS idx_etc_customer ON vhoadon_etc(customer_code);
+CREATE INDEX IF NOT EXISTS idx_etc_item ON vhoadon_etc(item_code);
+CREATE INDEX IF NOT EXISTS idx_etc_employee ON vhoadon_etc(employee_code, doc_date);
+
+-- LUU Y: Bravo co mot so ma bi trung (vd DIM_NhanVien.IsDuplicate) nen KHONG dat PRIMARY KEY/UNIQUE
+-- cho cac cot ma o day - chi danh index thuong de tra cuu nhanh, tranh loi khi dong bo gap ma trung.
+CREATE TABLE IF NOT EXISTS dim_tinhthanhpho (city_id INTEGER, city_name TEXT, area_code TEXT);
+CREATE INDEX IF NOT EXISTS idx_dtp_cityid ON dim_tinhthanhpho(city_id);
+CREATE TABLE IF NOT EXISTS dim_targetvungmien (area_code TEXT, channel_code TEXT, amount REAL, doc_date TEXT);
+CREATE INDEX IF NOT EXISTS idx_tvm_docdate ON dim_targetvungmien(doc_date);
+CREATE TABLE IF NOT EXISTS fact_kehoachtongetc (doc_date TEXT, amount REAL, item_group TEXT);
+-- id_code = DMSSX_KhachHang.Id (id noi bo cua DMS, khac customer_code). ETC KHONG co cot gan NV
+-- phu trach truc tiep tren khach hang (khac OTC) - EmpDMSCode2 tren hoa don van la nguon duy nhat.
+CREATE TABLE IF NOT EXISTS dmssx_khachhang (code TEXT, name TEXT, city_id INTEGER, id_code INTEGER, kenh_bh TEXT);
+CREATE INDEX IF NOT EXISTS idx_dmssx_code ON dmssx_khachhang(code);
+-- emp_code = EmpDMSCode1 (ma NV DMS duoc GAN de phu trach khach hang nay - khac EmpDMSCode2 tren
+-- hoa don la NV THUC TE ban hang; 2 ma co the khac nhau).
+CREATE TABLE IF NOT EXISTS dms_khachhang (code TEXT, name TEXT, city_id INTEGER, id_code INTEGER, emp_code TEXT, kenh_bh TEXT);
+CREATE INDEX IF NOT EXISTS idx_dms_code ON dms_khachhang(code);
+-- position_code: TDV=Trinh duoc vien, QLV=Quan ly vung, CTV/CS/TP/PP/TBP/TK = cac vai tro khac
+-- (xem dim_chucvu de dich sang ten tieng Viet). area_code: MB/MT/MN.
+CREATE TABLE IF NOT EXISTS dim_nhanvien (employee_code TEXT, name TEXT, is_duplicate INTEGER, position_code TEXT, area_code TEXT);
+CREATE INDEX IF NOT EXISTS idx_dnv_code ON dim_nhanvien(employee_code);
+CREATE TABLE IF NOT EXISTS dim_chucvu (position_code TEXT, description TEXT);
+CREATE INDEX IF NOT EXISTS idx_dcv_code ON dim_chucvu(position_code);
+CREATE TABLE IF NOT EXISTS brv_sanpham (code TEXT, name TEXT, group_code TEXT, unit TEXT);
+CREATE INDEX IF NOT EXISTS idx_bsp_code ON brv_sanpham(code);
+CREATE TABLE IF NOT EXISTS brvsx_tralai (doc_date TEXT, amount9 REAL, is_active INTEGER, stt TEXT, customer_code TEXT);
+CREATE INDEX IF NOT EXISTS idx_tralai_docdate ON brvsx_tralai(doc_date);
+
+CREATE TABLE IF NOT EXISTS fact_tonghopkhachhang (
+    employee_code TEXT, customer_code TEXT, amount_ct REAL,
+    month_sale_target REAL, save_date TEXT, is_nc INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_ftk_savedate ON fact_tonghopkhachhang(save_date);
+CREATE INDEX IF NOT EXISTS idx_ftk_employee ON fact_tonghopkhachhang(employee_code);
+
+CREATE TABLE IF NOT EXISTS sync_meta (
+    table_name TEXT PRIMARY KEY,
+    last_synced_at TEXT,
+    earliest_synced_date TEXT,
+    latest_synced_date TEXT
+);
+"""
+
+
+def get_conn() -> sqlite3.Connection:
+    conn = sqlite3.connect(DB_PATH, timeout=30)
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA foreign_keys=OFF")
+    return conn
+
+
+def init_schema():
+    conn = get_conn()
+    try:
+        conn.executescript(SCHEMA)
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_sync_meta(table_name: str):
+    conn = get_conn()
+    try:
+        r = conn.execute("SELECT last_synced_at, earliest_synced_date, latest_synced_date "
+                          "FROM sync_meta WHERE table_name=?", (table_name,)).fetchone()
+        return r if r else (None, None, None)
+    finally:
+        conn.close()
+
+
+def set_sync_meta(table_name: str, earliest: str, latest: str):
+    conn = get_conn()
+    try:
+        conn.execute(
+            "INSERT INTO sync_meta (table_name, last_synced_at, earliest_synced_date, latest_synced_date) "
+            "VALUES (?, ?, ?, ?) ON CONFLICT(table_name) DO UPDATE SET "
+            "last_synced_at=excluded.last_synced_at, "
+            "earliest_synced_date=MIN(COALESCE(earliest_synced_date, excluded.earliest_synced_date), excluded.earliest_synced_date), "
+            "latest_synced_date=MAX(COALESCE(latest_synced_date, excluded.latest_synced_date), excluded.latest_synced_date)",
+            (table_name, dt.datetime.now().isoformat(), earliest, latest),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+if __name__ == "__main__":
+    init_schema()
+    print(f"Schema da tao/xac nhan tai: {DB_PATH}")
