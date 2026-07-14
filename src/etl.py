@@ -50,24 +50,40 @@ def get_unresolved_urgent_tickets(crm_engine):
 
 def _region_markers(region):
     """region: None hoặc 'bac'/'nam'/'trung' -> danh sách mã AreaCode tương ứng, dùng chung quy
-    ước với DNHChatbot._REGION_SQL_MARKERS (nguồn chuẩn duy nhất cho mapping vùng/mã)."""
+    ước với src/region_map.py::REGION_SQL_MARKERS (nguồn chuẩn duy nhất cho mapping vùng/mã)."""
     if not region:
         return None
-    from ai_agent.chatbot import DNHChatbot
-    return DNHChatbot._REGION_SQL_MARKERS.get(region)
+    from src.region_map import REGION_SQL_MARKERS
+    return REGION_SQL_MARKERS.get(region)
 
 def _region_label(area_code):
     """Map area_code thô sang tên miền tiếng Việt — bản sao gọn của
     src/alerts.py::normalize_region_label, tách riêng để tránh vòng lặp import (alerts.py đã
-    import từ etl.py). Cả 2 đều đọc từ cùng 1 nguồn DNHChatbot._REGION_SQL_MARKERS/_REGION_NAMES_VI."""
+    import từ etl.py). Cả 2 đều đọc từ cùng 1 nguồn src/region_map.py::REGION_SQL_MARKERS/REGION_NAMES_VI."""
     if not area_code:
         return "Không rõ"
-    from ai_agent.chatbot import DNHChatbot
+    from src.region_map import REGION_SQL_MARKERS, REGION_NAMES_VI
     val = str(area_code).strip().upper()
-    for region_key, markers in DNHChatbot._REGION_SQL_MARKERS.items():
+    for region_key, markers in REGION_SQL_MARKERS.items():
         if val in markers:
-            return DNHChatbot._REGION_NAMES_VI[region_key]
+            return REGION_NAMES_VI[region_key]
     return str(area_code)
+
+def _latest_period_key(period):
+    """Sort key cho receivable_detail.period (text 'M_YYYY', không đệm số 0).
+
+    So sánh chuỗi thuần là sai ở đây: '9_2025' > '1_2026' theo thứ tự chữ (tháng '9' thắng mọi
+    tháng bắt đầu bằng '1'), nên 1 câu SQL MAX(period) đơn giản sẽ âm thầm chọn nhầm kỳ cũ mỗi khi
+    kỳ mới nhất bắt đầu bằng số 1.
+
+    14/07/2026: chuyển từ ai_agent/chatbot.py sang đây — src/alerts.py trước đó import thẳng hàm
+    này từ file chatbot, khiến service báo cáo/cảnh báo phụ thuộc runtime vào 1 file thuộc phần
+    chatbot."""
+    try:
+        month_str, year_str = str(period).split('_')
+        return (int(year_str), int(month_str))
+    except (ValueError, AttributeError):
+        return (0, 0)
 
 def _period_revenue(start_dt, end_dt, region=None):
     """Doanh thu OTC+ETC thuần trong [start_dt, end_dt). region: None (không lọc) hoặc
@@ -632,7 +648,6 @@ def get_digest_metrics(start_dt, end_dt, period_label, granularity=None, region=
                 with fast_engine.connect() as conn:
                     periods = [r[0] for r in conn.execute(text("SELECT DISTINCT period FROM receivable_detail")).fetchall() if r[0]]
                     if periods:
-                        from ai_agent.chatbot import _latest_period_key
                         latest_period = max(periods, key=_latest_period_key)
                         month_str, year_str = latest_period.split('_')
                         latest_tuple = (int(year_str), int(month_str))

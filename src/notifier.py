@@ -913,8 +913,8 @@ def _resolve_teams_webhooks(region_label, channel_label):
     if not recipients:
         return [(default_webhook, None)] if default_webhook else []
 
-    from ai_agent.chatbot import DNHChatbot
-    region_key_by_label = {v: k for k, v in DNHChatbot._REGION_NAMES_VI.items()}
+    from src.region_map import REGION_NAMES_VI
+    region_key_by_label = {v: k for k, v in REGION_NAMES_VI.items()}
     alert_region_key = region_key_by_label.get(region_label)
     alert_channel_key = channel_label if channel_label in ("OTC", "ETC") else None
 

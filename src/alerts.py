@@ -332,16 +332,16 @@ def normalize_channel_label(raw_channel):
 def normalize_region_label(area_code):
     """
     Map area_code thô (vd 'MB', 'MB2', 'MN', 'MT') sang tên miền tiếng Việt — dùng lại đúng bảng
-    ánh xạ đã kiểm chứng trong DNHChatbot (_REGION_SQL_MARKERS/_REGION_NAMES_VI), không định
+    ánh xạ đã kiểm chứng trong src/region_map.py (REGION_SQL_MARKERS/REGION_NAMES_VI), không định
     nghĩa lại quy ước mã miền ở 2 nơi khác nhau trong codebase.
     """
     if not area_code:
         return "Không rõ"
-    from ai_agent.chatbot import DNHChatbot
+    from src.region_map import REGION_SQL_MARKERS, REGION_NAMES_VI
     val = str(area_code).strip().upper()
-    for region_key, markers in DNHChatbot._REGION_SQL_MARKERS.items():
+    for region_key, markers in REGION_SQL_MARKERS.items():
         if val in markers:
-            return DNHChatbot._REGION_NAMES_VI[region_key]
+            return REGION_NAMES_VI[region_key]
     return str(area_code)
 
 
@@ -1089,7 +1089,7 @@ def check_revenue_drop_alert():
         mốc thời gian — nhưng dữ liệu hiện chỉ có Q2/2026 nên YoY chưa tính được.
     """
     try:
-        from ai_agent.chatbot import _get_cloud_engine
+        from src.database import _get_cloud_engine
         from src.etl import _period_revenue, _prev_month_tuple
         from sqlalchemy import text
     except Exception as e:
@@ -1189,7 +1189,7 @@ def check_credit_limit_exceeded_alert():
     cần sửa code khung này (chỉ hoàn thiện phần liệt kê nếu cần).
     """
     try:
-        from ai_agent.chatbot import _get_cloud_engine
+        from src.database import _get_cloud_engine
         from sqlalchemy import text
     except Exception as e:
         print(f"[ALERTS][credit_limit] Không import được engine dữ liệu: {e}")
@@ -1225,7 +1225,7 @@ def check_credit_limit_exceeded_alert():
             if not periods:
                 return
             try:
-                from ai_agent.chatbot import _latest_period_key
+                from src.etl import _latest_period_key
                 latest_period = max(periods, key=_latest_period_key)
             except Exception:
                 latest_period = max(periods)
@@ -1288,7 +1288,7 @@ def _biz_threshold(key, default):
 def _alert_engine():
     """Cloud engine dùng chung của chatbot (lớp hậu-ETL). None nếu chưa cấu hình."""
     try:
-        from ai_agent.chatbot import _get_cloud_engine
+        from src.database import _get_cloud_engine
         return _get_cloud_engine()
     except Exception as e:
         print(f"[ALERTS] Không lấy được engine dữ liệu: {e}")
@@ -1311,7 +1311,7 @@ def _supabase_table_exists(conn, table_name):
 def _two_latest_periods(conn):
     """Trả (latest, previous) period của receivable_detail theo đúng thứ tự thời gian."""
     from sqlalchemy import text
-    from ai_agent.chatbot import _latest_period_key
+    from src.etl import _latest_period_key
     periods = [r[0] for r in conn.execute(text("SELECT DISTINCT period FROM receivable_detail")).fetchall() if r[0]]
     if not periods:
         return None, None

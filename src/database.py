@@ -73,8 +73,8 @@ def _get_bravo_engine():
 
 def _get_fast_cloud_engine():
     """
-    Engine Postgres RIÊNG (không dùng chung cache với ai_agent.chatbot._get_cloud_engine() —
-    tránh đổi hành vi timeout của pool đang phục vụ chatbot sống) trỏ cùng CLOUD_DB_URL nhưng có
+    Engine Postgres RIÊNG (không dùng chung cache với _get_cloud_engine() ở dưới — tránh đổi hành
+    vi timeout của pool đang phục vụ chatbot sống) trỏ cùng CLOUD_DB_URL nhưng có
     connect_timeout=5s + statement_timeout=15s (qua psycopg2 "options") — để khi Supabase hết IO
     budget/nghẽn thì BAIL SỚM (15s) thay vì đợi Supabase tự huỷ statement sau 90-150s+ như quan sát
     thực tế 09/07/2026, rồi mới chuyển sang Bravo qua run_with_failover().
@@ -98,6 +98,46 @@ def _get_fast_cloud_engine():
     )
     _fast_cloud_engine_url = db_url
     return _fast_cloud_engine
+
+
+_cloud_engine = None
+_cloud_engine_url = None
+
+
+def _get_cloud_engine():
+    """
+    Engine Postgres của CHATBOT (ai_agent/chatbot.py) — tách riêng khỏi _get_fast_cloud_engine() ở
+    trên dù cùng trỏ CLOUD_DB_URL, để KHÔNG dùng chung cache/pool: chatbot cần connect_timeout dài
+    hơn (10s, đo thật handshake tới pooler mất ~2.3-2.9s ngay cả khi rảnh) và pool_size lớn hơn
+    (nhiều người chat đồng thời) so với engine "fast" phục vụ report/alert (bail sớm 5s, pool nhỏ).
+
+    14/07/2026: chuyển hẳn định nghĩa từ ai_agent/chatbot.py sang đây — service báo cáo/cảnh báo
+    (src/alerts.py, src/analytics.py) trước đó import thẳng hàm này từ file chatbot, khiến service
+    phụ thuộc runtime vào 1 file thuộc phần chatbot. chatbot.py giờ import ngược lại từ đây, hành vi
+    (pool_size/pool_recycle/connect_timeout) giữ nguyên không đổi.
+    """
+    global _cloud_engine, _cloud_engine_url
+    cloud_db_url = os.getenv("CLOUD_DB_URL", "")
+    if not cloud_db_url:
+        return None
+
+    db_url = cloud_db_url.strip()
+    if db_url.startswith("postgres://"):
+        db_url = db_url.replace("postgres://", "postgresql://", 1)
+
+    if _cloud_engine is not None and _cloud_engine_url == db_url:
+        return _cloud_engine
+
+    _cloud_engine = create_engine(
+        db_url,
+        pool_size=5,
+        max_overflow=5,
+        pool_pre_ping=True,
+        pool_recycle=300,
+        connect_args={'connect_timeout': 10},
+    )
+    _cloud_engine_url = db_url
+    return _cloud_engine
 
 
 def run_with_failover(pg_fn, mssql_fn, label=""):
