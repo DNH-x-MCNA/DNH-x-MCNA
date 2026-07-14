@@ -169,8 +169,11 @@ DIGEST_EMAIL_TEMPLATE = """
 
         <div class="content">
             {% if metrics.has_critical %}
-            <div style="background: #fef2f2; border: 1px solid #fecaca; border-left: 4px solid #ef4444; border-radius: 8px; padding: 12px 16px; margin-bottom: 20px; font-size: 13px; color: #991b1b; font-weight: 600;">
-                🔴 Kỳ này có ít nhất 1 cảnh báo mức CRITICAL — xem chi tiết ở mục "Điểm Nổi Bật Trong Kỳ" bên dưới.
+            <!-- 13/07/2026: đổi từ banner đỏ gắt sang tông trung tính — báo cáo định kỳ không
+            cần "hét" mức khẩn cấp giống alert thời gian thực (Teams đã lo việc đó ngay lúc phát
+            sinh), chỉ cần nhắc người đọc xem kỹ mục Điểm Nổi Bật. -->
+            <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-left: 4px solid #94a3b8; border-radius: 8px; padding: 12px 16px; margin-bottom: 20px; font-size: 13px; color: #475569;">
+                Kỳ này có cảnh báo mức nghiêm trọng — xem chi tiết ở mục "Điểm Nổi Bật Trong Kỳ" bên dưới.
             </div>
             {% endif %}
 
@@ -214,7 +217,7 @@ DIGEST_EMAIL_TEMPLATE = """
                         <div class="val" style="color: #10b981;">{{ "{:,.0f}".format(metrics.revenue.total) }} đ</div>
                         {% if metrics.revenue.change_pct is not none %}
                         <div class="{{ 'trend-up' if metrics.revenue.change_pct >= 0 else 'trend-down' }}">
-                            {{ "%+.1f"|format(metrics.revenue.change_pct) }}% so kỳ trước
+                            {{ "%+.1f"|format(metrics.revenue.change_pct) }}% so kỳ {{ metrics.revenue.prev_period_label }}
                         </div>
                         {% else %}
                         <div class="no-data">Chưa đủ dữ liệu kỳ trước</div>
@@ -281,14 +284,12 @@ DIGEST_EMAIL_TEMPLATE = """
             </div>
 
             {% if metrics.trend %}
-            <!-- Xu hướng trong kỳ Section — weekly: theo NGÀY, monthly: theo TUẦN -->
+            <!-- Xu hướng trong kỳ Section — weekly: theo NGÀY, monthly: theo TUẦN.
+            13/07/2026: bỏ hẳn biểu đồ SVG — Outlook Desktop (dùng engine Word để render HTML
+            email) không hỗ trợ thẻ <svg>, khiến nội dung chữ bên trong (tiêu đề/legend/trục/nhãn
+            giá trị) tràn ra thành 1 dòng chữ dồn cục, không đọc được. Giữ lại bảng dữ liệu thuần
+            HTML bên dưới — render đúng trên mọi client email. -->
             <div class="section-title">Xu Hướng Doanh Thu Trong Kỳ</div>
-            
-            {% if trend_chart_svg %}
-            <div style="margin-bottom: 20px; text-align: center;">
-                {{ trend_chart_svg | safe }}
-            </div>
-            {% endif %}
 
             <table class="data-table">
                 <thead><tr><th>Giai đoạn</th><th>Doanh thu</th></tr></thead>
@@ -616,139 +617,6 @@ def build_alert_email(alert_name, severity, summary, table_headers, table_rows):
         timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     )
 
-def build_svg_clustered_chart(trend_data):
-    if not trend_data:
-        return ""
-    
-    # Dimensions
-    view_width = 600
-    view_height = 220
-    margin_left = 65
-    margin_right = 20
-    margin_top = 30
-    margin_bottom = 35
-    
-    chart_width = view_width - margin_left - margin_right
-    chart_height = view_height - margin_top - margin_bottom
-    
-    # Calculate limits
-    max_val = 1.0
-    for x in trend_data:
-        otc = float(x.get("otc") or 0)
-        etc = float(x.get("etc") or 0)
-        total = float(x.get("revenue") or (otc + etc))
-        max_val = max(max_val, otc, etc, total)
-    
-    # Round max_val to nice number with headroom
-    max_val = max_val * 1.15
-    
-    # Smart helper for formatting Y-axis labels
-    def format_y_label(val):
-        if val >= 1_000_000_000:
-            return f"{val / 1_000_000_000:.1f} tỷ"
-        elif val >= 1_000_000:
-            return f"{val / 1_000_000:.0f} tr"
-        elif val >= 1_000:
-            return f"{val / 1_000:.0f} k"
-        return f"{val:.0f}"
-
-    svg = []
-    svg.append(f'<svg width="100%" height="{view_height}" viewBox="0 0 {view_width} {view_height}" xmlns="http://www.w3.org/2000/svg" style="background:#ffffff; border: 1px solid #e2e8f0; border-radius:12px; font-family:\'Segoe UI\', Tahoma, Geneva, Verdana, sans-serif;">')
-    
-    # Define gradients and styles
-    svg.append("""
-    <defs>
-        <linearGradient id="otcGrad" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stop-color="#3b82f6" stop-opacity="0.85"/>
-            <stop offset="100%" stop-color="#2563eb" stop-opacity="0.95"/>
-        </linearGradient>
-        <linearGradient id="etcGrad" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stop-color="#10b981" stop-opacity="0.85"/>
-            <stop offset="100%" stop-color="#059669" stop-opacity="0.95"/>
-        </linearGradient>
-    </defs>
-    """)
-
-    # Title & Legend
-    svg.append(f'<text x="20" y="25" font-size="12" font-weight="700" fill="#1e293b">XU HƯỚNG DOANH THU OTC VS ETC</text>')
-    # Legend boxes
-    svg.append('<rect x="360" y="15" width="12" height="12" rx="2" fill="url(#otcGrad)"/>')
-    svg.append('<text x="377" y="25" font-size="10" font-weight="600" fill="#64748b">OTC</text>')
-    svg.append('<rect x="420" y="15" width="12" height="12" rx="2" fill="url(#etcGrad)"/>')
-    svg.append('<text x="437" y="25" font-size="10" font-weight="600" fill="#64748b">ETC</text>')
-    svg.append('<line x1="480" y1="21" x2="500" y2="21" stroke="#ea580c" stroke-width="2" stroke-dasharray="2"/>')
-    svg.append('<text x="507" y="25" font-size="10" font-weight="600" fill="#64748b">Tổng</text>')
-
-    # Draw Y grid lines & labels (4 levels: 0%, 33%, 66%, 100%)
-    for i in range(4):
-        pct = i / 3.0
-        y = margin_top + chart_height - (pct * chart_height)
-        val = pct * max_val
-        svg.append(f'<line x1="{margin_left}" y1="{y}" x2="{view_width - margin_right}" y2="{y}" stroke="#f1f5f9" stroke-width="1"/>')
-        svg.append(f'<text x="{margin_left - 8}" y="{y + 3}" font-size="9" fill="#94a3b8" text-anchor="end">{format_y_label(val)}</text>')
-
-    # Calculate points for line chart (Total) and bars
-    n_points = len(trend_data)
-    group_width = chart_width / max(n_points, 1)
-    
-    line_points = []
-    
-    for i, x in enumerate(trend_data):
-        otc_val = float(x.get("otc") or 0)
-        etc_val = float(x.get("etc") or 0)
-        total_val = float(x.get("revenue") or (otc_val + etc_val))
-        label = x.get("label") or ""
-        
-        group_x = margin_left + i * group_width
-        
-        # Draw Bars
-        # Bar width = 28% of group width each
-        bar_w = max(group_width * 0.28, 4)
-        gap = max(group_width * 0.04, 1)
-        
-        otc_h = (otc_val / max_val) * chart_height
-        otc_y = margin_top + chart_height - otc_h
-        otc_x = group_x + (group_width - 2*bar_w - gap) / 2
-        
-        etc_h = (etc_val / max_val) * chart_height
-        etc_y = margin_top + chart_height - etc_h
-        etc_x = otc_x + bar_w + gap
-        
-        if otc_h > 0:
-            svg.append(f'<rect x="{otc_x}" y="{otc_y}" width="{bar_w}" height="{otc_h}" rx="2" fill="url(#otcGrad)"/>')
-        if etc_h > 0:
-            svg.append(f'<rect x="{etc_x}" y="{etc_y}" width="{bar_w}" height="{etc_h}" rx="2" fill="url(#etcGrad)"/>')
-            
-        # Line point (Total)
-        total_h = (total_val / max_val) * chart_height
-        total_y = margin_top + chart_height - total_h
-        center_x = group_x + group_width / 2
-        line_points.append((center_x, total_y, total_val))
-        
-        # X-axis label
-        svg.append(f'<text x="{center_x}" y="{view_height - 12}" font-size="9" font-weight="600" fill="#64748b" text-anchor="middle">{label}</text>')
-
-    # Draw Total line & circles
-    if len(line_points) > 1:
-        path_d = []
-        for idx, (px, py, _) in enumerate(line_points):
-            if idx == 0:
-                path_d.append(f"M {px} {py}")
-            else:
-                path_d.append(f"L {px} {py}")
-        svg.append(f'<path d="{" ".join(path_d)}" fill="none" stroke="#ea580c" stroke-width="2" stroke-dasharray="3" stroke-linejoin="round" stroke-linecap="round"/>')
-        
-    for px, py, pval in line_points:
-        svg.append(f'<circle cx="{px}" cy="{py}" r="3" fill="#ea580c"/>')
-        if pval > 0:
-            svg.append(f'<text x="{px}" y="{py - 6}" font-size="8" font-weight="700" fill="#7c2d12" text-anchor="middle">{format_y_label(pval)}</text>')
-
-    # Draw baseline axis
-    svg.append(f'<line x1="{margin_left}" y1="{view_height - margin_bottom}" x2="{view_width - margin_right}" y2="{view_height - margin_bottom}" stroke="#e2e8f0" stroke-width="1.5"/>')
-    
-    svg.append("</svg>")
-    return "\n".join(svg)
-
 def build_digest_email(metrics, period_label="Daily", audience=None, scope_label=None):
     """
     Tạo nội dung HTML cho email báo cáo tổng hợp định kỳ.
@@ -757,10 +625,6 @@ def build_digest_email(metrics, period_label="Daily", audience=None, scope_label
     cấp quản lý (xem main.py::send_weekly_report/send_monthly_report). None -> không hiện nhãn
     (giữ nguyên hành vi cũ cho các nơi gọi chưa truyền audience).
     """
-    trend_chart_svg = ""
-    if metrics.get("trend"):
-        trend_chart_svg = build_svg_clustered_chart(metrics["trend"])
-
     template = Template(DIGEST_EMAIL_TEMPLATE)
     return template.render(
         metrics=metrics,
@@ -768,7 +632,6 @@ def build_digest_email(metrics, period_label="Daily", audience=None, scope_label
         audience=audience,
         scope_label=scope_label,
         chatbot_url=_chatbot_deep_link(),
-        trend_chart_svg=trend_chart_svg,
     )
 
 def send_telegram_alert(text):

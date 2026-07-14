@@ -70,129 +70,70 @@ def _region_label(area_code):
     return str(area_code)
 
 def _period_revenue(start_dt, end_dt, region=None):
-    """Doanh thu OTC+ETC thuần trong [start_dt, end_dt) — loại CTKM khuyến mãi + chứng từ hủy
-    (đúng quy tắc đã dùng ở check_revenue_drop_alert). region: None (không lọc) hoặc
-    'bac'/'nam'/'trung' — lọc theo AreaCode qua chain CityId -> dim_tinhthanhpho.
+    """Doanh thu OTC+ETC thuần trong [start_dt, end_dt). region: None (không lọc) hoặc
+    'bac'/'nam'/'trung' — lọc theo AreaCode qua CityId -> DIM_TinhThanhPho.
     Trả (otc_rev, etc_rev, otc_invoice_count, etc_invoice_count) — tách riêng số hóa đơn từng
     kênh (13/07/2026, trước đó gộp chung 1 số duy nhất, không rõ ràng khi xem báo cáo).
 
-    JOIN dms_khachhang/dmssx_khachhang LUÔN bắt buộc (kể cả khi region=None) — trước 09/07/2026
-    chỉ JOIN khi có lọc vùng, khiến mã nội bộ/chuyển kho không phải khách hàng thật (vd '1001136',
-    'P000001') vẫn được cộng vào tổng doanh thu. Phát hiện thực tế: '1001136'+'P000001' chiếm 72%
-    "doanh thu ETC" báo cáo tuần 29/06-05/07/2026 ở lần gửi thử đầu tiên qua Bravo trước khi vá —
-    cùng loại mã giả đã xác nhận và lọc ở check_customer_churn_alert/_top_customers.
+    14/07/2026: đổi hẳn sang query THẲNG 2 view gốc Bravo (dbo.vHoaDonTotal cho OTC,
+    dbo.vHoaDonETCTotal cho ETC) thay vì tự ráp lại logic từ bảng thô — xác nhận thực tế:
+    công thức tự ráp trước đó (JOIN brv_hoadonct/brv_hoadonhdr + loại CTKM/hủy) lệch ETC ~4%/ngày
+    so với 2 view này, vì view gốc còn TRỪ hàng trả lại (BRVSX_TraLai), lọc theo trạng thái đã ghi
+    thẻ kho (Post_TheKho=1), loại thêm 1 số mã khách hàng cụ thể, và CỘNG THÊM nhóm chứng từ "HC"
+    (đọc từ BRV_HoaDonHCCt/BRVSX_HoaDonHCCt — 2 bảng CHƯA được đồng bộ sang Supabase) cùng ~10
+    trường hợp đặc biệt hardcode theo mã khách hàng — quá phức tạp và rủi ro để tự dịch lại đúng
+    100%, nên dùng thẳng view đã được xác nhận là nguồn đúng của DNH.
 
-    Tự failover Supabase (Postgres) -> Bravo SQL Server trực tiếp qua run_with_failover() khi
-    Supabase timeout/mất kết nối — KHÔNG còn nhận `conn` từ ngoài (tự chọn nguồn/kết nối), vì 2
-    nguồn cần 2 câu SQL khác dialect (Postgres vs T-SQL). Đã xác nhận thực tế trên Bravo (09/07/2026):
-    DocDate là kiểu date thật (không cần cast), IsActive/IsHC/IsCancelled là bit, tên cột/bảng
-    giữ nguyên y hệt Supabase (sync không đổi tên cột) — chỉ prefix schema "dbo." khác.
+    HỆ QUẢ: bỏ hẳn failover Postgres/Supabase cho hàm này — 2 view trên CHỈ tồn tại ở Bravo, không
+    có bản tương đương bên Supabase. Nếu Bravo mất kết nối, hàm raise lỗi (không âm thầm trả số
+    liệu Postgres cũ/gần đúng) — ưu tiên "báo lỗi rõ ràng" hơn "hiện số có thể sai" cho con số quan
+    trọng nhất của mọi báo cáo. Các hàm gọi _period_revenue nên tự try/except nếu cần chạy tiếp dù
+    thiếu doanh thu (đã áp dụng ở get_digest_metrics/_revenue_trend qua đường try/except sẵn có).
     """
     from sqlalchemy import text, bindparam
-    from src.database import run_with_failover
+    from src.database import _get_bravo_engine
+
+    engine = _get_bravo_engine()
+    if engine is None:
+        raise RuntimeError(
+            "Chưa cấu hình BRAVO_SQL_* trong .env — không còn nguồn nào khác cho doanh thu "
+            "(đã bỏ failover Postgres, xem docstring _period_revenue)."
+        )
+
     markers = _region_markers(region)
     params = {"start_dt": start_dt, "end_dt": end_dt}
+    # OTC (vHoaDonTotal) KHÔNG lộ sẵn CityId trong cột output -> join thêm qua CustomerCode.
+    # ETC (vHoaDonETCTotal) ĐÃ lộ sẵn CityId -> join thẳng DIM_TinhThanhPho, không cần thêm bảng.
+    otc_region_join, etc_region_join, region_where = "", "", ""
     if markers:
+        otc_region_join = "JOIN dbo.DMS_KhachHang k ON v.CustomerCode = k.Code JOIN dbo.DIM_TinhThanhPho rt ON k.CityId = rt.CityId"
+        etc_region_join = "JOIN dbo.DIM_TinhThanhPho rt ON v.CityId = rt.CityId"
+        region_where = " AND rt.AreaCode IN :region_markers"
         params["region_markers"] = tuple(markers)
 
-    def _pg(conn):
-        # JOIN dms_khachhang/dmssx_khachhang LUÔN bắt buộc (không chỉ khi lọc vùng) — đúng pattern
-        # đã dùng ở _top_customers/_revenue_by_region/check_customer_churn_alert: brv_hoadonhdr
-        # chứa nhiều "CustomerCode" KHÔNG phải khách hàng thật (mã nội bộ/chuyển kho '1001136', mã
-        # công ty mẹ 'P000001'...) — thiếu JOIN này khiến tổng doanh thu bị thổi phồng bởi các mã
-        # giả (xác nhận thực tế 09/07/2026: '1001136'+'P000001' chiếm 72% doanh thu ETC báo cáo
-        # tuần 29/06-05/07 trong lần test đầu, trước khi vá).
-        region_join, region_where = "", ""
-        if markers:
-            region_join = 'JOIN dim_tinhthanhpho rt ON k."CityId" = rt."CityId"'
-            region_where = ' AND rt."AreaCode" IN :region_markers'
+    otc_sql = text(f'''
+        SELECT COALESCE(SUM(v.Amount9), 0), COUNT(DISTINCT v.Stt)
+        FROM dbo.vHoaDonTotal v
+        {otc_region_join}
+        WHERE v.DocDate >= :start_dt AND v.DocDate < :end_dt
+        {region_where}
+    ''')
+    etc_sql = text(f'''
+        SELECT COALESCE(SUM(v.Amount9), 0), COUNT(DISTINCT v.Stt)
+        FROM dbo.vHoaDonETCTotal v
+        {etc_region_join}
+        WHERE v.DocDate >= :start_dt AND v.DocDate < :end_dt
+        {region_where}
+    ''')
+    if markers:
+        otc_sql = otc_sql.bindparams(bindparam("region_markers", expanding=True))
+        etc_sql = etc_sql.bindparams(bindparam("region_markers", expanding=True))
 
-        otc_sql = text(f'''
-            SELECT COALESCE(SUM(CASE WHEN c."CTKM" IS NULL OR c."CTKM" = '' THEN c."Amount9" ELSE 0 END), 0),
-                   COUNT(DISTINCT h."Stt")
-            FROM brv_hoadonct c
-            JOIN brv_hoadonhdr h ON c."Stt" = h."Stt"
-            JOIN dms_khachhang k ON h."CustomerCode" = k."Code"
-            {region_join}
-            LEFT JOIN brv_trangthaiduyet d ON h."DocStatus" = d."DocStatusKey"
-            LEFT JOIN brv_trangthaihoadon e ON h."EInvoiceStatus" = e."EInvoiceStatusKey"
-            WHERE h."IsActive" = TRUE AND h."IsHC" = FALSE
-              AND (d."IsCancelled" IS NULL OR d."IsCancelled" = FALSE)
-              AND (e."IsCancelled" IS NULL OR e."IsCancelled" = FALSE)
-              AND h."DocDate"::timestamp >= :start_dt AND h."DocDate"::timestamp < :end_dt
-              {region_where}
-        ''')
-        if markers:
-            otc_sql = otc_sql.bindparams(bindparam("region_markers", expanding=True))
+    with engine.connect() as conn:
         otc_row = conn.execute(otc_sql, params).fetchone()
-
-        etc_sql = text(f'''
-            SELECT COALESCE(SUM(CASE WHEN c."CTKM" IS NULL OR c."CTKM" = '' THEN c."Amount9" ELSE 0 END), 0),
-                   COUNT(DISTINCT h."Stt")
-            FROM brvsx_hoadonct c
-            JOIN brvsx_hoadonhdr h ON c."Stt" = h."Stt"
-            JOIN dmssx_khachhang k ON h."CustomerCode" = k."Code"
-            {region_join}
-            LEFT JOIN brv_trangthaiduyet d ON h."DocStatus" = d."DocStatusKey"
-            LEFT JOIN brv_trangthaihoadon e ON h."EInvoiceStatus" = e."EInvoiceStatusKey"
-            WHERE h."IsActive" = TRUE
-              AND (d."IsCancelled" IS NULL OR d."IsCancelled" = FALSE)
-              AND (e."IsCancelled" IS NULL OR e."IsCancelled" = FALSE)
-              AND h."DocDate"::timestamp >= :start_dt AND h."DocDate"::timestamp < :end_dt
-              {region_where}
-        ''')
-        if markers:
-            etc_sql = etc_sql.bindparams(bindparam("region_markers", expanding=True))
         etc_row = conn.execute(etc_sql, params).fetchone()
-        return float(otc_row[0]), float(etc_row[0]), int(otc_row[1]), int(etc_row[1])
 
-    def _mssql(conn):
-        region_join, region_where = "", ""
-        if markers:
-            region_join = 'JOIN dbo.DIM_TinhThanhPho rt ON k."CityId" = rt."CityId"'
-            region_where = ' AND rt."AreaCode" IN :region_markers'
-
-        otc_sql = text(f'''
-            SELECT COALESCE(SUM(CASE WHEN c."CTKM" IS NULL OR c."CTKM" = '' THEN c."Amount9" ELSE 0 END), 0),
-                   COUNT(DISTINCT h."Stt")
-            FROM dbo.BRV_HoaDonCt c
-            JOIN dbo.BRV_HoaDonHdr h ON c."Stt" = h."Stt"
-            JOIN dbo.DMS_KhachHang k ON h."CustomerCode" = k."Code"
-            {region_join}
-            LEFT JOIN dbo.BRV_TrangThaiDuyet d ON h."DocStatus" = d."DocStatusKey"
-            LEFT JOIN dbo.BRV_TrangThaiHoaDon e ON h."EInvoiceStatus" = e."EInvoiceStatusKey"
-            WHERE h."IsActive" = 1 AND h."IsHC" = 0
-              AND (d."IsCancelled" IS NULL OR d."IsCancelled" = 0)
-              AND (e."IsCancelled" IS NULL OR e."IsCancelled" = 0)
-              AND h."DocDate" >= :start_dt AND h."DocDate" < :end_dt
-              {region_where}
-        ''')
-        if markers:
-            otc_sql = otc_sql.bindparams(bindparam("region_markers", expanding=True))
-        otc_row = conn.execute(otc_sql, params).fetchone()
-
-        etc_sql = text(f'''
-            SELECT COALESCE(SUM(CASE WHEN c."CTKM" IS NULL OR c."CTKM" = '' THEN c."Amount9" ELSE 0 END), 0),
-                   COUNT(DISTINCT h."Stt")
-            FROM dbo.BRVSX_HoaDonCt c
-            JOIN dbo.BRVSX_HoaDonHdr h ON c."Stt" = h."Stt"
-            JOIN dbo.DMSSX_KhachHang k ON h."CustomerCode" = k."Code"
-            {region_join}
-            LEFT JOIN dbo.BRV_TrangThaiDuyet d ON h."DocStatus" = d."DocStatusKey"
-            LEFT JOIN dbo.BRV_TrangThaiHoaDon e ON h."EInvoiceStatus" = e."EInvoiceStatusKey"
-            WHERE h."IsActive" = 1
-              AND (d."IsCancelled" IS NULL OR d."IsCancelled" = 0)
-              AND (e."IsCancelled" IS NULL OR e."IsCancelled" = 0)
-              AND h."DocDate" >= :start_dt AND h."DocDate" < :end_dt
-              {region_where}
-        ''')
-        if markers:
-            etc_sql = etc_sql.bindparams(bindparam("region_markers", expanding=True))
-        etc_row = conn.execute(etc_sql, params).fetchone()
-        return float(otc_row[0]), float(etc_row[0]), int(otc_row[1]), int(etc_row[1])
-
-    result = run_with_failover(_pg, _mssql, label="period_revenue")
-    return result if result is not None else (0.0, 0.0, 0)
+    return float(otc_row[0]), float(etc_row[0]), int(otc_row[1]), int(etc_row[1])
 
 
 def _revenue_by_region(start_dt, end_dt, channel=None):
@@ -489,6 +430,34 @@ def _format_highlight_date_part(part):
             return f"{int(month_str):02d}/{year_str}"
     return part
 
+def _is_date_like_segment(part):
+    """True nếu 1 mảnh suffix của alert_key là ngày/tháng nhận dạng được (xem
+    _format_highlight_date_part) — dùng để loại các mảnh NGÀY khỏi khóa gộp nhóm trong
+    _get_period_highlights, để "Tỷ lệ nợ quá hạn... (OTC, 11/07)" và "...(OTC, 12/07)" được coi
+    là CÙNG 1 loại cảnh báo (chỉ khác ngày) thay vì liệt kê riêng từng ngày."""
+    for fmt_in in ("%Y-%m-%d", "%Y-%m"):
+        try:
+            datetime.strptime(part, fmt_in)
+            return True
+        except ValueError:
+            continue
+    if "_" in part:
+        month_str, _, year_str = part.partition("_")
+        if month_str.isdigit() and year_str.isdigit() and len(year_str) == 4:
+            return True
+    return False
+
+def _highlight_group_key(alert_key):
+    """Khóa gộp nhóm cho 1 alert_key — bỏ các mảnh NGÀY (xem _is_date_like_segment), giữ lại
+    prefix + các mảnh khác (kênh OTC/ETC, mã SKU...). 2 alert_key cùng khóa gộp -> coi là CÙNG
+    1 loại cảnh báo lặp lại theo ngày, chỉ giữ lần gần nhất (xem _get_period_highlights)."""
+    if alert_key.startswith("sales_kpi_insights_report_"):
+        return "sales_kpi_insights_report"
+    segments = alert_key.split(":")
+    prefix, parts = segments[0], segments[1:]
+    kept = [p for p in parts if not _is_date_like_segment(p)]
+    return ":".join([prefix] + kept)
+
 def _format_highlight_value(value, value_type):
     try:
         if value_type == "money":
@@ -537,11 +506,18 @@ def _humanize_highlight(alert_key, sent_at, value):
         "value_display": _format_highlight_value(value, value_type),
     }
 
+_HIGHLIGHTS_MAX_ROWS = 15  # xem _get_period_highlights — trần số dòng hiển thị sau khi đã gộp nhóm
+
 def _get_period_highlights(start_dt, end_dt):
     """"Điểm nổi bật trong kỳ": các cảnh báo nghiệp vụ đã THỰC SỰ fire trong [start_dt, end_dt),
     đọc từ data/alerts_state.db (bảng sent_alerts, ghi bởi src/alerts.py::record_alert_sent) —
     nối luồng cảnh báo thời gian thực với báo cáo định kỳ thành 1 câu chuyện liền mạch. Mỗi dòng
-    được "dịch" qua _humanize_highlight() sang tên tiếng Việt + giá trị định dạng đúng kiểu."""
+    được "dịch" qua _humanize_highlight() sang tên tiếng Việt + giá trị định dạng đúng kiểu.
+
+    14/07/2026: gộp theo _highlight_group_key() (bỏ mảnh NGÀY khỏi alert_key) — trước đó các cảnh
+    báo lặp lại theo ngày (vd "Tỷ lệ nợ quá hạn... (OTC)" tự bắn mỗi sáng) liệt kê riêng TỪNG NGÀY
+    trong kỳ báo cáo Monthly, có thể ra 40-50 dòng cho 1 kỳ — chỉ giữ lần gần nhất mỗi nhóm, rồi
+    giới hạn tối đa _HIGHLIGHTS_MAX_ROWS dòng (ưu tiên mới nhất, đã ORDER BY last_sent_at DESC)."""
     if not os.path.exists(STATE_DB_PATH):
         return []
     try:
@@ -557,7 +533,18 @@ def _get_period_highlights(start_dt, end_dt):
     except Exception as e:
         print(f"[DIGEST] Lỗi đọc điểm nổi bật từ alerts_state.db: {e}")
         return []
-    return [_humanize_highlight(r[0], r[1], r[2]) for r in rows]
+
+    seen_groups = set()
+    deduped = []
+    for r in rows:
+        group_key = _highlight_group_key(r[0])
+        if group_key in seen_groups:
+            continue
+        seen_groups.add(group_key)
+        deduped.append(r)
+        if len(deduped) >= _HIGHLIGHTS_MAX_ROWS:
+            break
+    return [_humanize_highlight(r[0], r[1], r[2]) for r in deduped]
 
 
 def _period_has_critical(start_dt, end_dt):
@@ -609,6 +596,15 @@ def get_digest_metrics(start_dt, end_dt, period_label, granularity=None, region=
     from sqlalchemy import text
     from src.database import _get_fast_cloud_engine
 
+    # 13/07/2026: kẹp end_dt tại hết hôm nay ngay từ đầu hàm. Từ khi get_weekly/monthly_digest_metrics
+    # dùng kỳ ĐANG CHẠY (chưa hết tuần/tháng), end_dt truyền vào có thể là ngày TƯƠNG LAI — phát
+    # hiện thực tế: 1 chứng từ ETC ngày 18/07/2026 (tương lai) đã có sẵn trong hệ thống khiến "Tổng
+    # Doanh Thu" cao hơn hẳn tổng bảng "Xu Hướng Doanh Thu Trong Kỳ" (đã kẹp ở _revenue_trend) — 2
+    # con số trong CÙNG 1 báo cáo lệch nhau. Kẹp 1 lần ở đây áp dụng nhất quán cho MỌI phần dùng
+    # end_dt bên dưới (doanh thu, top khách hàng, breakdown vùng, kỳ so sánh liền trước).
+    today_end = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
+    end_dt = min(end_dt, today_end)
+
     config = load_config()
     dead_months = float(config['thresholds']['business'].get('dead_stock_months', 12.0))
     dead_min_value = float(config['thresholds']['business'].get('dead_stock_min_value', 50000000))
@@ -619,7 +615,8 @@ def get_digest_metrics(start_dt, end_dt, period_label, granularity=None, region=
     #    _period_revenue) nên KHÔNG cần mở connection ở đây nữa.
     otc_rev, etc_rev, otc_invoice_count, etc_invoice_count = _period_revenue(start_dt, end_dt, region=region)
     period_len = end_dt - start_dt
-    prev_otc_rev, prev_etc_rev, _, _ = _period_revenue(start_dt - period_len, start_dt, region=region)
+    prev_start, prev_end = start_dt - period_len, start_dt
+    prev_otc_rev, prev_etc_rev, _, _ = _period_revenue(prev_start, prev_end, region=region)
     if channel == "OTC":
         etc_rev = prev_etc_rev = 0.0
         etc_invoice_count = 0
@@ -814,6 +811,10 @@ def get_digest_metrics(start_dt, end_dt, period_label, granularity=None, region=
             "etc_invoice_count": etc_invoice_count,
             "prev_total": round(prev_total_rev, 2),
             "change_pct": round(change_pct * 100, 1) if change_pct is not None else None,
+            # 14/07/2026: nhãn ngày cụ thể của "kỳ trước" — "so kỳ trước" đơn thuần không rõ là so
+            # với gì (kỳ trước = cùng ĐỘ DÀI ngày ngay trước start_dt, không nhất thiết là "tháng
+            # trước"/"tuần trước" trọn vẹn, nhất là khi kỳ hiện tại đang chạy dở/chưa hết).
+            "prev_period_label": f"{prev_start.strftime('%d/%m')}-{(prev_end - timedelta(days=1)).strftime('%d/%m/%Y')}",
         },
         "top_customers_otc": [{"code": r[0], "name": r[1], "revenue": round(float(r[2]), 2)} for r in top_otc],
         "top_customers_etc": [{"code": r[0], "name": r[1], "revenue": round(float(r[2]), 2)} for r in top_etc],
@@ -835,148 +836,6 @@ def get_digest_metrics(start_dt, end_dt, period_label, granularity=None, region=
         result["has_critical"] = has_critical
     return result
 
-def _get_today_alerts_status(start_dt, end_dt):
-    """
-    Lấy danh sách các alert đã từng bắn trong ngày hôm nay, và kiểm tra xem
-    hiện tại trạng thái của chỉ số đó đã quay về mức an toàn chưa (Đã giải quyết).
-    """
-    from sqlalchemy import text
-    if not os.path.exists(STATE_DB_PATH):
-        return []
-        
-    # 1. Đọc lịch sử các alert đã gửi hôm nay
-    today_str = start_dt.strftime("%Y-%m-%d %H:%M:%S")
-    fired_alerts = set()
-    try:
-        conn = sqlite3.connect(STATE_DB_PATH)
-        cur = conn.cursor()
-        cur.execute(
-            "SELECT DISTINCT alert_name FROM alert_severity_log WHERE sent_at >= ?",
-            (today_str,)
-        )
-        for r in cur.fetchall():
-            fired_alerts.add(r[0])
-        conn.close()
-    except Exception as e:
-        print(f"[DIGEST] Không đọc được alert_severity_log: {e}")
-        return []
-        
-    if not fired_alerts:
-        return []
-        
-    # 2. Khởi động các check để xem còn vi phạm không
-    config = load_config()
-    results = []
-    
-    # 2.1 Tỷ lệ nợ quá hạn
-    overdue_alerts = [a for a in fired_alerts if "NỢ QUÁ HẠN" in a.upper() or "NỢ QUÁ HẠN LỚN" in a.upper()]
-    if overdue_alerts:
-        try:
-            from src.alerts import get_bravo_receivables_snapshot
-            snap = get_bravo_receivables_snapshot()
-            limit = config['thresholds']['business']['overdue_ratio_pct']
-            
-            # Check OTC
-            if any("OTC" in a.upper() or "NỢ QUÁ HẠN LỚN" in a.upper() for a in overdue_alerts):
-                sub_snap = [r for r in snap if r.sales_channel == 'OTC']
-                overdue = sum(float(r.overdue_1_15 or 0) + float(r.overdue_15_30 or 0) + float(r.overdue_30_45 or 0) + float(r.overdue_gt_45 or 0) for r in sub_snap)
-                total = sum(float(r.balance_end or 0) for r in sub_snap)
-                ratio = (overdue / total) if total > 0 else 0
-                results.append({
-                    "name": "Tỷ lệ nợ quá hạn OTC",
-                    "active": ratio > limit
-                })
-            # Check ETC
-            if any("ETC" in a.upper() or "NỢ QUÁ HẠN LỚN" in a.upper() for a in overdue_alerts):
-                sub_snap = [r for r in snap if r.sales_channel == 'ETC']
-                overdue = sum(float(r.overdue_1_15 or 0) + float(r.overdue_15_30 or 0) + float(r.overdue_30_45 or 0) + float(r.overdue_gt_45 or 0) for r in sub_snap)
-                total = sum(float(r.balance_end or 0) for r in sub_snap)
-                ratio = (overdue / total) if total > 0 else 0
-                results.append({
-                    "name": "Tỷ lệ nợ quá hạn ETC",
-                    "active": ratio > limit
-                })
-        except Exception as e:
-            print(f"[DIGEST] Lỗi check nợ quá hạn: {e}")
-            
-    # 2.2 Nguy cơ đứt hàng (cháy kho)
-    if any("ĐỨT HÀNG" in a.upper() or "TỒN KHO THẤP" in a.upper() for a in fired_alerts):
-        try:
-            from src.database import _get_fast_cloud_engine
-            fast_engine = _get_fast_cloud_engine()
-            if fast_engine is not None:
-                with fast_engine.connect() as conn:
-                    cnt = conn.execute(text("SELECT COUNT(*) FROM inventory WHERE months_to_sell > 0.0 AND months_to_sell <= 1.0 AND closing_qty > 0")).scalar()
-                results.append({
-                    "name": "Nguy cơ đứt hàng",
-                    "active": cnt > 0
-                })
-        except Exception as e:
-            print(f"[DIGEST] Lỗi check đứt hàng: {e}")
-            
-    # 2.3 Khách nợ quá hạn vẫn lên đơn mới
-    if any("ĐƠN MỚI" in a.upper() for a in fired_alerts):
-        try:
-            conn = sqlite3.connect(STATE_DB_PATH)
-            cur = conn.cursor()
-            cur.execute("SELECT COUNT(*) FROM sent_alerts WHERE alert_key LIKE 'overdue_customer_new_orders%'")
-            cnt = cur.fetchone()[0]
-            conn.close()
-            results.append({
-                "name": "Khách quá hạn lên đơn mới",
-                "active": cnt > 0
-            })
-        except Exception as e:
-            print(f"[DIGEST] Lỗi check nợ lên đơn mới: {e}")
-            
-    # 2.4 Nhịp KPI TDV đỏ
-    if any("KPI TDV THẤP" in a.upper() or "NHỊP KPI" in a.upper() for a in fired_alerts):
-        try:
-            from src.alerts import get_bravo_kpi_tdv_snapshot
-            kpi_snap = get_bravo_kpi_tdv_snapshot(position_codes=('TDV',))
-            limit_alert = config['thresholds']['business']['kpi_pace_red_alert_count']
-            red_cnt = sum(1 for r in kpi_snap if r.month_sale_target > 0 and (r.month_sale_percent or 0) < 0.03)
-            results.append({
-                "name": "Nhịp KPI TDV ở mức Đỏ",
-                "active": red_cnt >= limit_alert
-            })
-        except Exception as e:
-            print(f"[DIGEST] Lỗi check kpi pace: {e}")
-
-    # 2.5 Đơn hàng lỗi (Failed Orders)
-    if any("GIAO DỊCH LỖI" in a.upper() for a in fired_alerts):
-        try:
-            erp_engine, _ = get_db_engines()
-            if erp_engine:
-                limit = config['thresholds']['erp']['failed_orders_limit']
-                lookback = config['thresholds']['erp']['failed_orders_lookback_hours']
-                lookback_time = datetime.now() - timedelta(hours=lookback)
-                with erp_engine.connect() as conn:
-                    cnt = conn.execute(text("SELECT COUNT(*) FROM orders WHERE status = 'Failed' AND order_date >= :t"), {"t": lookback_time}).scalar()
-                results.append({
-                    "name": "Đơn hàng lỗi (ERP)",
-                    "active": cnt > limit
-                })
-        except Exception as e:
-            print(f"[DIGEST] Lỗi check failed orders: {e}")
-
-    # 2.6 Quá tải ticket (CRM Urgent)
-    if any("QUÁ TẢI KHÁCH HÀNG" in a.upper() or "TICKET" in a.upper() for a in fired_alerts):
-        try:
-            _, crm_engine = get_db_engines()
-            if crm_engine:
-                limit = config['thresholds']['crm']['unresolved_urgent_tickets_limit']
-                with crm_engine.connect() as conn:
-                    cnt = conn.execute(text("SELECT COUNT(*) FROM support_tickets WHERE priority = 'Urgent' AND status = 'Open'")).scalar()
-                results.append({
-                    "name": "Ticket khẩn cấp chưa xử lý",
-                    "active": cnt > limit
-                })
-        except Exception as e:
-            print(f"[DIGEST] Lỗi check crm tickets: {e}")
-            
-    return results
-
 def get_daily_digest_metrics(region=None, channel=None):
     """Tổng hợp dữ liệu trong ngày phục vụ Daily Digest (Teams).
     13/07/2026: thêm region/channel (trước đó luôn None — chỉ có 1 bản toàn công ty gửi cho
@@ -985,9 +844,7 @@ def get_daily_digest_metrics(region=None, channel=None):
     region/channel: lọc phạm vi báo cáo theo audience (xem get_digest_metrics)."""
     today_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
     today_end = today_start + timedelta(days=1)
-    metrics = get_digest_metrics(today_start, today_end, today_start.strftime("%d/%m/%Y"), region=region, channel=channel)
-    metrics["alerts_summary"] = _get_today_alerts_status(today_start, today_end)
-    return metrics
+    return get_digest_metrics(today_start, today_end, today_start.strftime("%d/%m/%Y"), region=region, channel=channel)
 
 def get_weekly_digest_metrics(region=None, channel=None):
     """Tổng hợp dữ liệu TUẦN ĐANG CHẠY (thứ 2 tới hiện tại) phục vụ Weekly Report (Email).
