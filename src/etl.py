@@ -159,7 +159,15 @@ def _revenue_by_region(start_dt, end_dt, channel=None):
     14/07/2026: đổi sang query view gốc Bravo (vHoaDonTotal/vHoaDonETCTotal), cùng lý do và cách
     làm với _period_revenue — công thức tự ráp cũ (JOIN bảng thô + loại CTKM/hủy) dùng chung
     logic với _period_revenue nên chắc chắn dính đúng lỗi tương tự (thiếu trừ hàng trả lại...).
-    Không còn failover Postgres (view chỉ có ở Bravo, xem docstring _period_revenue)."""
+    Không còn failover Postgres (view chỉ có ở Bravo, xem docstring _period_revenue).
+
+    14/07/2026: đổi JOIN -> LEFT JOIN — xác nhận thực tế có khách hàng phát sinh hóa đơn nhưng
+    KHÔNG tồn tại trong DMS_KhachHang/BRV_KhachHang (DMSId='0', dữ liệu "mồ côi" phía DNH, vd
+    HCM13508 — lệch đúng 3.962.720đ so với số DNH báo cho OTC Miền Nam 2025). Dùng JOIN thường sẽ
+    ÂM THẦM LOẠI các khách này khỏi breakdown vùng (không có dòng "Không rõ" nào xuất hiện, tổng
+    breakdown thấp hơn tổng doanh thu thật) — LEFT JOIN + _region_label(None) đảm bảo khoản này
+    luôn hiện thành dòng "Không rõ" trong báo cáo, phát hiện sớm thay vì chỉ lộ ra khi đối chiếu
+    tay với số của DNH."""
     from sqlalchemy import text
     from src.database import _get_bravo_engine
 
@@ -174,8 +182,8 @@ def _revenue_by_region(start_dt, end_dt, channel=None):
         parts.append('''
             SELECT rt.AreaCode AS area_code, SUM(v.Amount9) AS rev
             FROM dbo.vHoaDonTotal v
-            JOIN dbo.DMS_KhachHang k ON v.CustomerCode = k.Code
-            JOIN dbo.DIM_TinhThanhPho rt ON k.CityId = rt.CityId
+            LEFT JOIN dbo.DMS_KhachHang k ON v.CustomerCode = k.Code
+            LEFT JOIN dbo.DIM_TinhThanhPho rt ON k.CityId = rt.CityId
             WHERE v.DocDate >= :start_dt AND v.DocDate < :end_dt
             GROUP BY rt.AreaCode
         ''')
@@ -183,7 +191,7 @@ def _revenue_by_region(start_dt, end_dt, channel=None):
         parts.append('''
             SELECT rt.AreaCode AS area_code, SUM(v.Amount9) AS rev
             FROM dbo.vHoaDonETCTotal v
-            JOIN dbo.DIM_TinhThanhPho rt ON v.CityId = rt.CityId
+            LEFT JOIN dbo.DIM_TinhThanhPho rt ON v.CityId = rt.CityId
             WHERE v.DocDate >= :start_dt AND v.DocDate < :end_dt
             GROUP BY rt.AreaCode
         ''')
