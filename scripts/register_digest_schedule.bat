@@ -13,13 +13,13 @@ set PYTHON_PATH=C:\Users\Admin\AppData\Local\Programs\Python\Python312\python.ex
 set MAIN_PATH=D:\DNH\main.py
 
 schtasks /create /tn "DNH_Daily_Digest_1745" /tr "\"%PYTHON_PATH%\" \"%MAIN_PATH%\" --send-daily" /sc weekly /d MON,TUE,WED,THU,FRI /st 17:45 /ru SYSTEM /rl HIGHEST /f
-schtasks /create /tn "DNH_Weekly_Report" /tr "\"%PYTHON_PATH%\" \"%MAIN_PATH%\" --send-weekly" /sc weekly /d SAT /st 17:45 /ru SYSTEM /rl HIGHEST /f
+schtasks /create /tn "DNH_Weekly_Report" /tr "\"%PYTHON_PATH%\" \"%MAIN_PATH%\" --send-weekly" /sc weekly /d SAT /st 15:00 /ru SYSTEM /rl HIGHEST /f
 schtasks /create /tn "DNH_Monthly_Report" /tr "\"%PYTHON_PATH%\" \"%MAIN_PATH%\" --send-monthly" /sc monthly /mo LASTDAY /m * /st 17:45 /ru SYSTEM /rl HIGHEST /f
 
 echo.
 echo ============================================================
 echo Da dang ky 3 task: DNH_Daily_Digest_1745 (Thu Hai - Thu Sau, 17:45),
-echo DNH_Weekly_Report (thu Bay 17:45), DNH_Monthly_Report (ngay cuoi thang 17:45).
+echo DNH_Weekly_Report (thu Bay 15:00), DNH_Monthly_Report (ngay cuoi thang 17:45).
 echo Kiem tra: schtasks /query /fo LIST /tn "DNH_Daily_Digest_1745"
 echo ============================================================
 pause
