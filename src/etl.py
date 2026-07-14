@@ -659,6 +659,14 @@ def get_digest_metrics(start_dt, end_dt, period_label, granularity=None, region=
         except Exception as e2:
             print(f"[DIGEST] Lỗi cả 2 nguồn khi lấy công nợ: {e2}")
 
+    # 14/07/2026: khi báo cáo đã lọc theo 1 kênh cụ thể (audience "Quản lý Kênh OTC/ETC"),
+    # total_overdue/balance_end (2 field hiển thị chính trong email — mục "Công Nợ") phải đúng
+    # PHẠM VI kênh đó, không phải tổng công ty — cả 2 nhánh (Bravo/Supabase) đều đã tính sẵn
+    # otc_overdue/etc_overdue/otc_balance/etc_balance, chỉ cần chọn đúng cặp thay cho tổng.
+    if receivables and channel in ("OTC", "ETC"):
+        receivables["total_overdue"] = receivables[f"{channel.lower()}_overdue"]
+        receivables["balance_end"] = receivables[f"{channel.lower()}_balance"]
+
     # 4. Tồn kho — VẪN Supabase (chưa verify công thức Bravo BRV_TheKho/TonKhoDK khớp số liệu thật
     #    — xem docstring check_dead_stock_alert trong src/alerts.py, cùng lý do). KPI đội — ưu
     #    tiên Bravo (TDV/QLV, get_bravo_kpi_tdv_snapshot), dự phòng kpi_summary (Supabase, đủ mọi
@@ -703,7 +711,12 @@ def get_digest_metrics(start_dt, end_dt, period_label, granularity=None, region=
         except Exception as e:
             print(f"[DIGEST] Supabase lỗi/timeout khi lấy tồn kho (chưa có Bravo để fallback) — bỏ trống mục này: {e}")
 
-    if granularity in ("weekly", "monthly"):
+    # 14/07/2026: bỏ qua hẳn mục KPI đội khi báo cáo lọc riêng kênh ETC — kpi_summary/TDV/QLV
+    # BẢN CHẤT chỉ có ở OTC (nhân viên bán hàng field-force; brvsx_hoadonhdr/ETC không có cột
+    # nhân viên trên hóa đơn, xác nhận thực tế trong docstring check_daily_kpi_pace_alert), nên
+    # hiện "164 TDV/QLV" cho audience "Quản lý Kênh ETC" là dữ liệu hoàn toàn không liên quan tới
+    # họ. channel=None (toàn công ty)/channel="OTC" vẫn hiện như cũ (đúng phạm vi sẵn có).
+    if granularity in ("weekly", "monthly") and channel != "ETC":
         try:
             from src.alerts import get_bravo_kpi_tdv_snapshot
             snap = get_bravo_kpi_tdv_snapshot(position_codes=('TDV', 'QLV'))
