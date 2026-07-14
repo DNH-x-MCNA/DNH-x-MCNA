@@ -165,11 +165,18 @@ def _revenue_by_region(start_dt, end_dt, channel=None):
     KHÔNG tồn tại trong DMS_KhachHang/BRV_KhachHang (DMSId='0', dữ liệu "mồ côi" phía DNH, vd
     HCM13508 — lệch đúng 3.962.720đ so với số DNH báo cho OTC Miền Nam 2025). Dùng JOIN thường sẽ
     ÂM THẦM LOẠI các khách này khỏi breakdown vùng (không có dòng "Không rõ" nào xuất hiện, tổng
-    breakdown thấp hơn tổng doanh thu thật) — LEFT JOIN + _region_label(None) đảm bảo khoản này
-    luôn hiện thành dòng "Không rõ" trong báo cáo, phát hiện sớm thay vì chỉ lộ ra khi đối chiếu
-    tay với số của DNH."""
+    breakdown thấp hơn tổng doanh thu thật) — LEFT JOIN đảm bảo khoản này luôn được tính vào, không
+    mất khỏi tổng.
+
+    14/07/2026 (tiếp): với khách "mồ côi" (area_code NULL từ đường JOIN chính), thử suy luận vùng
+    qua tiền tố mã khách hàng (src/region_map.py::region_from_customer_code — vd 'HCM13508' -> MN,
+    đã kiểm chứng khớp 100% với số DNH báo cho trường hợp HCM13508). Chỉ khách nào tiền tố KHÔNG
+    nằm trong bảng đã kiểm chứng mới thực sự rơi vào "Không rõ" — nhờ vậy GROUP BY phải chuyển từ
+    theo AreaCode (gộp sẵn trong SQL) sang theo CustomerCode (gộp ở Python sau khi suy luận vùng),
+    tốn thêm 1 chút nhưng vẫn nhẹ vì hàm này chỉ gọi cho weekly/monthly."""
     from sqlalchemy import text
     from src.database import _get_bravo_engine
+    from src.region_map import region_from_customer_code
 
     engine = _get_bravo_engine()
     if engine is None:
@@ -180,34 +187,40 @@ def _revenue_by_region(start_dt, end_dt, channel=None):
     parts = []
     if channel is None or channel == "OTC":
         parts.append('''
-            SELECT rt.AreaCode AS area_code, SUM(v.Amount9) AS rev
+            SELECT v.CustomerCode AS customer_code, rt.AreaCode AS area_code, SUM(v.Amount9) AS rev
             FROM dbo.vHoaDonTotal v
             LEFT JOIN dbo.DMS_KhachHang k ON v.CustomerCode = k.Code
             LEFT JOIN dbo.DIM_TinhThanhPho rt ON k.CityId = rt.CityId
             WHERE v.DocDate >= :start_dt AND v.DocDate < :end_dt
-            GROUP BY rt.AreaCode
+            GROUP BY v.CustomerCode, rt.AreaCode
         ''')
     if channel is None or channel == "ETC":
         parts.append('''
-            SELECT rt.AreaCode AS area_code, SUM(v.Amount9) AS rev
+            SELECT v.CustomerCode AS customer_code, rt.AreaCode AS area_code, SUM(v.Amount9) AS rev
             FROM dbo.vHoaDonETCTotal v
             LEFT JOIN dbo.DIM_TinhThanhPho rt ON v.CityId = rt.CityId
             WHERE v.DocDate >= :start_dt AND v.DocDate < :end_dt
-            GROUP BY rt.AreaCode
+            GROUP BY v.CustomerCode, rt.AreaCode
         ''')
     if not parts:
         return []
     union_sql = text(f'''
-        SELECT area_code, SUM(rev) AS rev FROM ({" UNION ALL ".join(parts)}) x
-        GROUP BY area_code ORDER BY rev DESC
+        SELECT customer_code, area_code, SUM(rev) AS rev FROM ({" UNION ALL ".join(parts)}) x
+        GROUP BY customer_code, area_code
     ''')
     try:
         with engine.connect() as conn:
-            rows = conn.execute(union_sql, {"start_dt": start_dt, "end_dt": end_dt}).fetchall()
+            raw_rows = conn.execute(union_sql, {"start_dt": start_dt, "end_dt": end_dt}).fetchall()
     except Exception as e:
         print(f"[DIGEST] Lỗi truy vấn breakdown vùng: {e}")
         return []
-    return [{"region": _region_label(r.area_code), "revenue": round(float(r.rev or 0), 2)} for r in rows]
+
+    agg = {}
+    for r in raw_rows:
+        area = r.area_code or region_from_customer_code(r.customer_code)
+        agg[area] = agg.get(area, 0.0) + float(r.rev or 0)
+    return [{"region": _region_label(area), "revenue": round(rev, 2)}
+            for area, rev in sorted(agg.items(), key=lambda x: -x[1])]
 
 
 def _top_customers(start_dt, end_dt, channel_label, region_markers=None):
