@@ -139,174 +139,93 @@ def _period_revenue(start_dt, end_dt, region=None):
 def _revenue_by_region(start_dt, end_dt, channel=None):
     """Breakdown doanh thu theo VÙNG (Bắc/Nam/Trung) trong [start_dt, end_dt) — chỉ gọi cho
     weekly/monthly (không tính hàng ngày, tốn thêm query join). channel=None -> cả 2 kênh.
-    Tự failover Supabase -> Bravo qua run_with_failover() (xem _period_revenue)."""
+
+    14/07/2026: đổi sang query view gốc Bravo (vHoaDonTotal/vHoaDonETCTotal), cùng lý do và cách
+    làm với _period_revenue — công thức tự ráp cũ (JOIN bảng thô + loại CTKM/hủy) dùng chung
+    logic với _period_revenue nên chắc chắn dính đúng lỗi tương tự (thiếu trừ hàng trả lại...).
+    Không còn failover Postgres (view chỉ có ở Bravo, xem docstring _period_revenue)."""
     from sqlalchemy import text
-    from src.database import run_with_failover
+    from src.database import _get_bravo_engine
 
-    def _pg(conn):
-        parts = []
-        if channel is None or channel == "OTC":
-            parts.append('''
-                SELECT rt."AreaCode" AS area_code,
-                       SUM(CASE WHEN c."CTKM" IS NULL OR c."CTKM" = '' THEN c."Amount9" ELSE 0 END) AS rev
-                FROM brv_hoadonct c
-                JOIN brv_hoadonhdr h ON c."Stt" = h."Stt"
-                JOIN dms_khachhang rk ON h."CustomerCode" = rk."Code"
-                JOIN dim_tinhthanhpho rt ON rk."CityId" = rt."CityId"
-                LEFT JOIN brv_trangthaiduyet d ON h."DocStatus" = d."DocStatusKey"
-                LEFT JOIN brv_trangthaihoadon e ON h."EInvoiceStatus" = e."EInvoiceStatusKey"
-                WHERE h."IsActive" = TRUE AND h."IsHC" = FALSE
-                  AND (d."IsCancelled" IS NULL OR d."IsCancelled" = FALSE)
-                  AND (e."IsCancelled" IS NULL OR e."IsCancelled" = FALSE)
-                  AND h."DocDate"::timestamp >= :start_dt AND h."DocDate"::timestamp < :end_dt
-                GROUP BY rt."AreaCode"
-            ''')
-        if channel is None or channel == "ETC":
-            parts.append('''
-                SELECT rt."AreaCode" AS area_code,
-                       SUM(CASE WHEN c."CTKM" IS NULL OR c."CTKM" = '' THEN c."Amount9" ELSE 0 END) AS rev
-                FROM brvsx_hoadonct c
-                JOIN brvsx_hoadonhdr h ON c."Stt" = h."Stt"
-                JOIN dmssx_khachhang rk ON h."CustomerCode" = rk."Code"
-                JOIN dim_tinhthanhpho rt ON rk."CityId" = rt."CityId"
-                LEFT JOIN brv_trangthaiduyet d ON h."DocStatus" = d."DocStatusKey"
-                LEFT JOIN brv_trangthaihoadon e ON h."EInvoiceStatus" = e."EInvoiceStatusKey"
-                WHERE h."IsActive" = TRUE
-                  AND (d."IsCancelled" IS NULL OR d."IsCancelled" = FALSE)
-                  AND (e."IsCancelled" IS NULL OR e."IsCancelled" = FALSE)
-                  AND h."DocDate"::timestamp >= :start_dt AND h."DocDate"::timestamp < :end_dt
-                GROUP BY rt."AreaCode"
-            ''')
-        if not parts:
-            return []
-        union_sql = text(f'''
-            SELECT area_code, SUM(rev) AS rev FROM ({" UNION ALL ".join(parts)}) x
-            GROUP BY area_code ORDER BY rev DESC
+    engine = _get_bravo_engine()
+    if engine is None:
+        raise RuntimeError(
+            "Chưa cấu hình BRAVO_SQL_* trong .env — không còn nguồn nào khác cho breakdown vùng."
+        )
+
+    parts = []
+    if channel is None or channel == "OTC":
+        parts.append('''
+            SELECT rt.AreaCode AS area_code, SUM(v.Amount9) AS rev
+            FROM dbo.vHoaDonTotal v
+            JOIN dbo.DMS_KhachHang k ON v.CustomerCode = k.Code
+            JOIN dbo.DIM_TinhThanhPho rt ON k.CityId = rt.CityId
+            WHERE v.DocDate >= :start_dt AND v.DocDate < :end_dt
+            GROUP BY rt.AreaCode
         ''')
-        rows = conn.execute(union_sql, {"start_dt": start_dt, "end_dt": end_dt}).fetchall()
-        return [{"region": _region_label(r.area_code), "revenue": round(float(r.rev or 0), 2)} for r in rows]
-
-    def _mssql(conn):
-        parts = []
-        if channel is None or channel == "OTC":
-            parts.append('''
-                SELECT rt."AreaCode" AS area_code,
-                       SUM(CASE WHEN c."CTKM" IS NULL OR c."CTKM" = '' THEN c."Amount9" ELSE 0 END) AS rev
-                FROM dbo.BRV_HoaDonCt c
-                JOIN dbo.BRV_HoaDonHdr h ON c."Stt" = h."Stt"
-                JOIN dbo.DMS_KhachHang rk ON h."CustomerCode" = rk."Code"
-                JOIN dbo.DIM_TinhThanhPho rt ON rk."CityId" = rt."CityId"
-                LEFT JOIN dbo.BRV_TrangThaiDuyet d ON h."DocStatus" = d."DocStatusKey"
-                LEFT JOIN dbo.BRV_TrangThaiHoaDon e ON h."EInvoiceStatus" = e."EInvoiceStatusKey"
-                WHERE h."IsActive" = 1 AND h."IsHC" = 0
-                  AND (d."IsCancelled" IS NULL OR d."IsCancelled" = 0)
-                  AND (e."IsCancelled" IS NULL OR e."IsCancelled" = 0)
-                  AND h."DocDate" >= :start_dt AND h."DocDate" < :end_dt
-                GROUP BY rt."AreaCode"
-            ''')
-        if channel is None or channel == "ETC":
-            parts.append('''
-                SELECT rt."AreaCode" AS area_code,
-                       SUM(CASE WHEN c."CTKM" IS NULL OR c."CTKM" = '' THEN c."Amount9" ELSE 0 END) AS rev
-                FROM dbo.BRVSX_HoaDonCt c
-                JOIN dbo.BRVSX_HoaDonHdr h ON c."Stt" = h."Stt"
-                JOIN dbo.DMSSX_KhachHang rk ON h."CustomerCode" = rk."Code"
-                JOIN dbo.DIM_TinhThanhPho rt ON rk."CityId" = rt."CityId"
-                LEFT JOIN dbo.BRV_TrangThaiDuyet d ON h."DocStatus" = d."DocStatusKey"
-                LEFT JOIN dbo.BRV_TrangThaiHoaDon e ON h."EInvoiceStatus" = e."EInvoiceStatusKey"
-                WHERE h."IsActive" = 1
-                  AND (d."IsCancelled" IS NULL OR d."IsCancelled" = 0)
-                  AND (e."IsCancelled" IS NULL OR e."IsCancelled" = 0)
-                  AND h."DocDate" >= :start_dt AND h."DocDate" < :end_dt
-                GROUP BY rt."AreaCode"
-            ''')
-        if not parts:
-            return []
-        union_sql = text(f'''
-            SELECT area_code, SUM(rev) AS rev FROM ({" UNION ALL ".join(parts)}) x
-            GROUP BY area_code ORDER BY rev DESC
+    if channel is None or channel == "ETC":
+        parts.append('''
+            SELECT rt.AreaCode AS area_code, SUM(v.Amount9) AS rev
+            FROM dbo.vHoaDonETCTotal v
+            JOIN dbo.DIM_TinhThanhPho rt ON v.CityId = rt.CityId
+            WHERE v.DocDate >= :start_dt AND v.DocDate < :end_dt
+            GROUP BY rt.AreaCode
         ''')
-        rows = conn.execute(union_sql, {"start_dt": start_dt, "end_dt": end_dt}).fetchall()
-        return [{"region": _region_label(r.area_code), "revenue": round(float(r.rev or 0), 2)} for r in rows]
-
+    if not parts:
+        return []
+    union_sql = text(f'''
+        SELECT area_code, SUM(rev) AS rev FROM ({" UNION ALL ".join(parts)}) x
+        GROUP BY area_code ORDER BY rev DESC
+    ''')
     try:
-        result = run_with_failover(_pg, _mssql, label="revenue_by_region")
+        with engine.connect() as conn:
+            rows = conn.execute(union_sql, {"start_dt": start_dt, "end_dt": end_dt}).fetchall()
     except Exception as e:
         print(f"[DIGEST] Lỗi truy vấn breakdown vùng: {e}")
         return []
-    return result if result is not None else []
+    return [{"region": _region_label(r.area_code), "revenue": round(float(r.rev or 0), 2)} for r in rows]
 
 
 def _top_customers(start_dt, end_dt, channel_label, region_markers=None):
     """Top 5 khách hàng theo doanh thu trong [start_dt, end_dt) cho 1 kênh (OTC hoặc ETC) —
     dùng cho get_digest_metrics(). Trả list row (CustomerCode, Name, rev). Tự failover
     Supabase -> Bravo qua run_with_failover() (xem _period_revenue)."""
+    # 14/07/2026: đổi sang query view gốc Bravo (vHoaDonTotal/vHoaDonETCTotal), cùng lý do và
+    # cách làm với _period_revenue — công thức tự ráp cũ dùng chung logic (JOIN bảng thô + loại
+    # CTKM/hủy) nên chắc chắn dính đúng lỗi tương tự (thiếu trừ hàng trả lại...). Không còn
+    # failover Postgres (view chỉ có ở Bravo, xem docstring _period_revenue).
     from sqlalchemy import text, bindparam
-    from src.database import run_with_failover
+    from src.database import _get_bravo_engine
+
+    engine = _get_bravo_engine()
+    if engine is None:
+        raise RuntimeError(
+            "Chưa cấu hình BRAVO_SQL_* trong .env — không còn nguồn nào khác cho top khách hàng."
+        )
+
+    view = "dbo.vHoaDonTotal" if channel_label == "OTC" else "dbo.vHoaDonETCTotal"
+    kh_table = "dbo.DMS_KhachHang" if channel_label == "OTC" else "dbo.DMSSX_KhachHang"
     params = {"start_dt": start_dt, "end_dt": end_dt}
+    region_join, region_where = "", ""
     if region_markers:
+        region_join = "JOIN dbo.DIM_TinhThanhPho rt ON k.CityId = rt.CityId"
+        region_where = " AND rt.AreaCode IN :region_markers"
         params["region_markers"] = tuple(region_markers)
 
-    def _pg(conn):
-        ct, hdr, kh = ("brv_hoadonct", "brv_hoadonhdr", "dms_khachhang") if channel_label == "OTC" \
-            else ("brvsx_hoadonct", "brvsx_hoadonhdr", "dmssx_khachhang")
-        region_join, region_where = "", ""
-        if region_markers:
-            region_join = 'JOIN dim_tinhthanhpho rt ON k."CityId" = rt."CityId"'
-            region_where = ' AND rt."AreaCode" IN :region_markers'
-        hc_cond = 'AND h."IsHC" = FALSE ' if channel_label == "OTC" else ''
-        sql = text(f'''
-            SELECT h."CustomerCode", k."Name",
-                   SUM(CASE WHEN c."CTKM" IS NULL OR c."CTKM" = '' THEN c."Amount9" ELSE 0 END) AS rev
-            FROM {ct} c
-            JOIN {hdr} h ON c."Stt" = h."Stt"
-            JOIN {kh} k ON h."CustomerCode" = k."Code"
-            {region_join}
-            LEFT JOIN brv_trangthaiduyet d ON h."DocStatus" = d."DocStatusKey"
-            LEFT JOIN brv_trangthaihoadon e ON h."EInvoiceStatus" = e."EInvoiceStatusKey"
-            WHERE h."IsActive" = TRUE {hc_cond}
-              AND (d."IsCancelled" IS NULL OR d."IsCancelled" = FALSE)
-              AND (e."IsCancelled" IS NULL OR e."IsCancelled" = FALSE)
-              AND h."DocDate"::timestamp >= :start_dt AND h."DocDate"::timestamp < :end_dt
-              {region_where}
-            GROUP BY h."CustomerCode", k."Name"
-            ORDER BY rev DESC LIMIT 5
-        ''')
-        if region_markers:
-            sql = sql.bindparams(bindparam("region_markers", expanding=True))
+    sql = text(f'''
+        SELECT TOP 5 v.CustomerCode, k.Name, SUM(v.Amount9) AS rev
+        FROM {view} v
+        JOIN {kh_table} k ON v.CustomerCode = k.Code
+        {region_join}
+        WHERE v.DocDate >= :start_dt AND v.DocDate < :end_dt
+        {region_where}
+        GROUP BY v.CustomerCode, k.Name
+        ORDER BY rev DESC
+    ''')
+    if region_markers:
+        sql = sql.bindparams(bindparam("region_markers", expanding=True))
+    with engine.connect() as conn:
         return conn.execute(sql, params).fetchall()
-
-    def _mssql(conn):
-        ct, hdr, kh = ("dbo.BRV_HoaDonCt", "dbo.BRV_HoaDonHdr", "dbo.DMS_KhachHang") if channel_label == "OTC" \
-            else ("dbo.BRVSX_HoaDonCt", "dbo.BRVSX_HoaDonHdr", "dbo.DMSSX_KhachHang")
-        region_join, region_where = "", ""
-        if region_markers:
-            region_join = 'JOIN dbo.DIM_TinhThanhPho rt ON k."CityId" = rt."CityId"'
-            region_where = ' AND rt."AreaCode" IN :region_markers'
-        hc_cond = 'AND h."IsHC" = 0 ' if channel_label == "OTC" else ''
-        sql = text(f'''
-            SELECT TOP 5 h."CustomerCode", k."Name",
-                   SUM(CASE WHEN c."CTKM" IS NULL OR c."CTKM" = '' THEN c."Amount9" ELSE 0 END) AS rev
-            FROM {ct} c
-            JOIN {hdr} h ON c."Stt" = h."Stt"
-            JOIN {kh} k ON h."CustomerCode" = k."Code"
-            {region_join}
-            LEFT JOIN dbo.BRV_TrangThaiDuyet d ON h."DocStatus" = d."DocStatusKey"
-            LEFT JOIN dbo.BRV_TrangThaiHoaDon e ON h."EInvoiceStatus" = e."EInvoiceStatusKey"
-            WHERE h."IsActive" = 1 {hc_cond}
-              AND (d."IsCancelled" IS NULL OR d."IsCancelled" = 0)
-              AND (e."IsCancelled" IS NULL OR e."IsCancelled" = 0)
-              AND h."DocDate" >= :start_dt AND h."DocDate" < :end_dt
-              {region_where}
-            GROUP BY h."CustomerCode", k."Name"
-            ORDER BY rev DESC
-        ''')
-        if region_markers:
-            sql = sql.bindparams(bindparam("region_markers", expanding=True))
-        return conn.execute(sql, params).fetchall()
-
-    result = run_with_failover(_pg, _mssql, label=f"top_customers_{channel_label}")
-    return result if result is not None else []
 
 
 def _revenue_trend(start_dt, end_dt, granularity, region=None, channel=None):
