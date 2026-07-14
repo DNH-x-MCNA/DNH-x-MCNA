@@ -399,7 +399,7 @@ WITH Receivables AS (
     LEFT JOIN [DMS_KhachHang] d ON k.[DMSId] = d.[Id]
     LEFT JOIN [DIM_TinhThanhPho] rt ON d.[CityId] = rt.[CityId]
     WHERE h.[Account] LIKE '131%' AND (h.[TotalAmount] - h.[PaidAmount]) > 0
-      AND k.[IsCustomer] = 1 AND k.[Code] <> 'NCC100122'
+      AND k.[IsCustomer] = 1 AND k.[Code] NOT IN ('NCC100122', 'TEST00', 'TESt001')
     UNION ALL
     SELECT k.[Code], k.[Name], N'ETC',
            rt.[AreaCode],
@@ -410,7 +410,7 @@ WITH Receivables AS (
     LEFT JOIN [DMSSX_KhachHang] d ON k.[DMSId] = d.[Id]
     LEFT JOIN [DIM_TinhThanhPho] rt ON d.[CityId] = rt.[CityId]
     WHERE h.[Account] LIKE '131%' AND (h.[TotalAmount] - h.[PaidAmount]) > 0
-      AND k.[IsCustomer] = 1 AND k.[Code] <> 'NCC100122'
+      AND k.[IsCustomer] = 1 AND k.[Code] NOT IN ('NCC100122', 'TEST00', 'TESt001')
 )
 SELECT customer_code, customer_name, sales_channel, area_code,
     SUM(amount) AS balance_end,
@@ -433,7 +433,11 @@ def get_bravo_receivables_snapshot():
     """
     Snapshot công nợ THEO KHÁCH HÀNG tính TRỰC TIẾP, TỨC THỜI từ Bravo (BRV_HTTDuDK/BRVSX_HTTDuDK)
     — dùng chung công thức đã kiểm chứng bên chatbot (TotalAmount-PaidAmount, Account LIKE '131%',
-    IsCustomer=1, loại NCC100122, DueDate = DocDate + số ngày công nợ).
+    IsCustomer=1, DueDate = DocDate + số ngày công nợ). Loại thêm bằng tay NCC100122/TEST00/TESt001
+    — 3 mã bị Bravo đánh dấu NHẦM IsCustomer=1 dù không phải khách hàng thật (nhà cung cấp/bản ghi
+    test) — xác nhận 14/07/2026 qua đối chiếu dữ liệu: CustomerType KHÔNG phải cờ thật/giả (97,9%
+    nhóm CustomerType=2 là khách "QUẦY THUỐC..." có thật), IsCustomer mới là cờ đúng nhưng thỉnh
+    thoảng vẫn có bản ghi bị gán sai — xem mục 5 trong docs/Cau_hoi_can_DNH_chot_truoc_hop_16-07.md.
 
     LƯU Ý QUAN TRỌNG: đây là công thức TẠM THỜI, ngày cơ sở tính tuổi nợ CHƯA được DNH xác nhận
     chính thức (xem config/config.yaml::debt_aging, đã từng gây tranh chấp hợp đồng trước đây) —
@@ -470,7 +474,7 @@ WITH Receivables AS (
     FROM [BRV_HTTDuDK] h
     JOIN [BRV_KhachHang] k ON h.[CustomerId] = k.[Id]
     WHERE h.[Account] LIKE '131%' AND (h.[TotalAmount] - h.[PaidAmount]) > 0
-      AND k.[IsCustomer] = 1 AND k.[Code] <> 'NCC100122'
+      AND k.[IsCustomer] = 1 AND k.[Code] NOT IN ('NCC100122', 'TEST00', 'TESt001')
     UNION ALL
     SELECT k.[Code], k.[Name],
            (h.[TotalAmount] - h.[PaidAmount]),
@@ -478,7 +482,7 @@ WITH Receivables AS (
     FROM [BRVSX_HTTDuDK] h
     JOIN [BRVSX_KhachHang] k ON h.[CustomerId] = k.[Id]
     WHERE h.[Account] LIKE '131%' AND (h.[TotalAmount] - h.[PaidAmount]) > 0
-      AND k.[IsCustomer] = 1 AND k.[Code] <> 'NCC100122'
+      AND k.[IsCustomer] = 1 AND k.[Code] NOT IN ('NCC100122', 'TEST00', 'TESt001')
 )
 SELECT customer_code, customer_name,
     SUM(CASE WHEN overdue_days > 45 THEN amount ELSE 0 END) AS overdue_gt_45
