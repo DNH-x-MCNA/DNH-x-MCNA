@@ -588,7 +588,15 @@ def get_digest_metrics(start_dt, end_dt, period_label, granularity=None, region=
     try:
         from src.alerts import get_bravo_receivables_snapshot
         snap = get_bravo_receivables_snapshot()
-        
+        # 14/07/2026: lọc theo vùng NGAY TỪ ĐẦU (trước khi tách kênh) — trước đó công nợ luôn
+        # tính TOÀN CÔNG TY dù báo cáo đã lọc vùng (audience "Quản lý Miền Bắc/Nam/Trung"), vì
+        # chưa xác nhận được cách join khách hàng -> vùng cho công nợ. Đã xác nhận thực tế: join
+        # qua DMSId khớp 99,6% (OTC)/95,9% (ETC) khách hàng, tổng 4 vùng (gồm "Không rõ" cho phần
+        # không khớp) cộng lại khớp CHÍNH XÁC tổng công ty — xem docstring
+        # get_bravo_receivables_snapshot. Lọc ở đây áp dụng luôn cho total/otc/etc bên dưới.
+        if region_markers:
+            snap = [r for r in snap if r.area_code in region_markers]
+
         otc_snap = [r for r in snap if r.sales_channel == 'OTC']
         etc_snap = [r for r in snap if r.sales_channel == 'ETC']
         
@@ -630,22 +638,30 @@ def get_digest_metrics(start_dt, end_dt, period_label, granularity=None, region=
                         latest_tuple = (int(year_str), int(month_str))
                         report_last_day = end_dt - timedelta(days=1)
                         if latest_tuple in (_month_tuple(report_last_day), _prev_month_tuple(report_last_day)):
-                            # Total
-                            deb_row = conn.execute(text(
-                                'SELECT COALESCE(SUM(total_overdue),0), COALESCE(SUM(balance_end),0) '
-                                'FROM receivable_detail WHERE period = :p'
-                            ), {"p": latest_period}).fetchone()
-                            # OTC
-                            otc_row = conn.execute(text(
-                                "SELECT COALESCE(SUM(total_overdue),0), COALESCE(SUM(balance_end),0) "
-                                "FROM receivable_detail WHERE period = :p AND (sales_channel = 'OTC' OR sales_channel = '0')"
-                            ), {"p": latest_period}).fetchone()
-                            # ETC
-                            etc_row = conn.execute(text(
-                                "SELECT COALESCE(SUM(total_overdue),0), COALESCE(SUM(balance_end),0) "
-                                "FROM receivable_detail WHERE period = :p AND sales_channel = 'ETC'"
-                            ), {"p": latest_period}).fetchone()
-                            
+                            # 14/07/2026: lọc theo vùng qua JOIN dms_khachhang/dmssx_khachhang (theo
+                            # đúng kênh, xem comment schema — customer_code là không gian mã hỗn hợp)
+                            # -> dim_tinhthanhpho, cùng cách đã kiểm chứng ở nhánh Bravo phía trên.
+                            from sqlalchemy import bindparam
+                            params_rd = {"p": latest_period}
+                            otc_join = etc_join = region_where = ""
+                            if region_markers:
+                                otc_join = 'JOIN dms_khachhang k ON rd.customer_code = k."Code" JOIN dim_tinhthanhpho rt ON k."CityId" = rt."CityId"'
+                                etc_join = 'JOIN dmssx_khachhang k ON rd.customer_code = k."Code" JOIN dim_tinhthanhpho rt ON k."CityId" = rt."CityId"'
+                                region_where = ' AND rt."AreaCode" IN :region_markers'
+                                params_rd["region_markers"] = tuple(region_markers)
+
+                            def _rd_sql(extra_join, channel_where):
+                                s = text(
+                                    f'SELECT COALESCE(SUM(rd.total_overdue),0), COALESCE(SUM(rd.balance_end),0) '
+                                    f'FROM receivable_detail rd {extra_join} '
+                                    f'WHERE rd.period = :p AND {channel_where} {region_where}'
+                                )
+                                return s.bindparams(bindparam("region_markers", expanding=True)) if region_markers else s
+
+                            otc_row = conn.execute(_rd_sql(otc_join, "(rd.sales_channel = 'OTC' OR rd.sales_channel = '0')"), params_rd).fetchone()
+                            etc_row = conn.execute(_rd_sql(etc_join, "rd.sales_channel = 'ETC'"), params_rd).fetchone()
+                            deb_row = (float(otc_row[0]) + float(etc_row[0]), float(otc_row[1]) + float(etc_row[1]))
+
                             receivables = {
                                 "total_overdue": round(float(deb_row[0]), 2),
                                 "balance_end": round(float(deb_row[1]), 2),
