@@ -128,7 +128,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     log.info(f"[chat {chat_id}] Cau hoi: {question}")
     await context.bot.send_chat_action(chat_id=chat_id, action="typing")
     try:
-        result = ask(question, session_id=f"telegram_{chat_id}")
+        result = ask(question, session_id=f"telegram_{chat_id}", username=f"telegram:{chat_id}")
         raw_answer = result["answer"] or "Xin lỗi, tôi không tìm được câu trả lời phù hợp."
         answer_html = format_for_telegram(raw_answer)
     except Exception as e:

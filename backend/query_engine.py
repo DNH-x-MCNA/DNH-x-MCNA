@@ -85,10 +85,10 @@ def validate_sql(sql: str, db: str = "local") -> str:
     return s
 
 
-def run_query(sql: str, question: str = "", db: str = "local") -> dict:
+def run_query(sql: str, question: str = "", db: str = "local", username: str = None) -> dict:
     """Validate, thuc thi SQL (chi doc), ghi audit log, tra ve {columns, rows, row_count, duration_ms} hoac loi."""
     t0 = time.time()
-    entry = {"ts": dt.datetime.now().isoformat(), "question": question, "sql": sql, "db": db}
+    entry = {"ts": dt.datetime.now().isoformat(), "username": username, "question": question, "sql": sql, "db": db}
     try:
         safe_sql = validate_sql(sql, db)
         eng = _get_engine(db)

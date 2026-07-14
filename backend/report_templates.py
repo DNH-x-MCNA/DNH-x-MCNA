@@ -439,10 +439,10 @@ TEMPLATES = {
 }
 
 
-def call_template(name: str, args: dict, question: str = "") -> dict:
+def call_template(name: str, args: dict, question: str = "", username: str = None) -> dict:
     """Goi 1 template theo ten, ghi audit log (giong format run_query de nhat quan truy vet)."""
     t0 = dt.datetime.now()
-    entry = {"ts": t0.isoformat(), "question": question, "sql": f"<template:{name}>({args})"}
+    entry = {"ts": t0.isoformat(), "username": username, "question": question, "sql": f"<template:{name}>({args})"}
     try:
         fn = TEMPLATES[name]
         result = fn(**args)

@@ -140,7 +140,7 @@ def chat(req: ChatRequest, user: dict = Depends(require_user)):
     try:
         # TODO (giai doan 2): truyen user["role"]/user["scope_value"] vao ask() de gioi han du lieu
         # theo vung/QLV cho regional_director/qlv - hien tai CHUA enforce, chi moi co lop dang nhap.
-        result = ask(req.question, session_id=req.session_id)
+        result = ask(req.question, session_id=req.session_id, username=user["username"])
     except Exception as e:
         raise HTTPException(500, f"Loi he thong: {str(e)[:300]}")
 

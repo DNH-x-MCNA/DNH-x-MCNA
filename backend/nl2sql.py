@@ -319,7 +319,7 @@ def _dynamic_context_note() -> str:
             f'"gan day" neu nguoi dung khong noi ro ngay; kho local co the tre toi da ~15-30 phut so voi Bravo that).')
 
 
-def ask(question: str, session_id: str = "default") -> dict:
+def ask(question: str, session_id: str = "default", username: str = None) -> dict:
     """
     Nhan cau hoi tieng Viet + session_id (1 phien chat webapp) - tu dong nho lai vai cau hoi/tra loi
     gan nhat trong CUNG session de hieu ngu canh cau hoi tiep theo.
@@ -373,13 +373,13 @@ def ask(question: str, session_id: str = "default") -> dict:
                 db = RAW_SQL_TOOLS[tu.name]
                 sql = tu.input.get("sql", "")
                 sql_used.append(f"[{db}] {sql}")
-                result = run_query(sql, question=question, db=db)
+                result = run_query(sql, question=question, db=db, username=username)
                 last_result = result
                 payload = ({"columns": result["columns"], "rows": result["rows"][:MAX_ROWS_TO_MODEL],
                             "row_count": result["row_count"]} if result["ok"] else {"error": result["error"]})
             else:
                 sql_used.append(f"[bao cao chuan] {tu.name}({tu.input})")
-                tresult = call_template(tu.name, tu.input, question=question)
+                tresult = call_template(tu.name, tu.input, question=question, username=username)
                 last_result = tresult
                 payload = tresult["result"] if tresult["ok"] else {"error": tresult["error"]}
 
