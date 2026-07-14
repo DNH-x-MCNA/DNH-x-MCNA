@@ -545,7 +545,20 @@ def get_digest_metrics(start_dt, end_dt, period_label, granularity=None, region=
     #    _period_revenue) nên KHÔNG cần mở connection ở đây nữa.
     otc_rev, etc_rev, otc_invoice_count, etc_invoice_count = _period_revenue(start_dt, end_dt, region=region)
     period_len = end_dt - start_dt
-    prev_start, prev_end = start_dt - period_len, start_dt
+    # 14/07/2026: "kỳ trước" phải CĂN THEO LỊCH tuần/tháng (cùng vị trí ngày trong tuần/tháng
+    # trước), không phải lùi lại đúng period_len ngày kể từ start_dt. Bug cũ: start_dt luôn là
+    # thứ 2 đầu tuần/ngày 1 đầu tháng, nên "lùi period_len ngày" cho báo cáo ĐẦU tuần/tháng (còn
+    # ít ngày trôi qua) rơi vào ĐUÔI của tuần/tháng trước (vd thứ 7-CN) thay vì cùng vị trí đầu
+    # tuần/tháng trước — so sánh lệch pha, ngày cuối tuần doanh thu thấp tự nhiên khiến % tăng ảo
+    # rất cao (xác nhận thực tế: +465.5% khi so sai thứ 2-3 với thứ 7-CN tuần trước).
+    if granularity == "weekly":
+        prev_start = start_dt - timedelta(days=7)  # đúng 1 tuần trước, cùng thứ trong tuần
+    elif granularity == "monthly":
+        prev_year, prev_month = _prev_month_tuple(start_dt)
+        prev_start = start_dt.replace(year=prev_year, month=prev_month, day=1)  # ngày 1 tháng trước
+    else:
+        prev_start = start_dt - period_len  # Daily: giữ nguyên "hôm qua"
+    prev_end = prev_start + period_len
     prev_otc_rev, prev_etc_rev, _, _ = _period_revenue(prev_start, prev_end, region=region)
     if channel == "OTC":
         etc_rev = prev_etc_rev = 0.0
