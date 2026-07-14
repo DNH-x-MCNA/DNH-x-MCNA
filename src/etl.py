@@ -235,7 +235,14 @@ def _revenue_trend(start_dt, end_dt, granularity, region=None, channel=None):
 
     13/07/2026: kẹp end_dt tại hết hôm nay — get_weekly/monthly_digest_metrics giờ dùng kỳ ĐANG
     CHẠY (chưa hết), nếu không kẹp thì vòng lặp bucket vẽ cả các ngày TƯƠNG LAI (không có dữ liệu,
-    toàn số 0), khiến biểu đồ rối/vô nghĩa (vd gửi thứ 2 mà vẽ luôn cả thứ 3 - chủ nhật trống)."""
+    toàn số 0), khiến biểu đồ rối/vô nghĩa (vd gửi thứ 2 mà vẽ luôn cả thứ 3 - chủ nhật trống).
+
+    14/07/2026: `channel` trước đó nhận vào nhưng KHÔNG được dùng — mọi điểm trend đều cộng CẢ
+    OTC+ETC bất kể channel gì, trong khi phần "Tổng Doanh Thu" chính (get_digest_metrics) đã ép
+    đúng kênh được lọc. Hậu quả: audience chỉ được cấp quyền xem 1 kênh (vd "Quản lý Kênh OTC")
+    thấy đúng Tổng Doanh Thu (chỉ OTC) nhưng bảng Xu Hướng bên dưới lại lộ cả doanh thu ETC — vừa
+    sai số liệu vừa lộ dữ liệu ngoài phạm vi audience được cấp. Sửa: ép về 0 đúng kênh không được
+    chọn, khớp với cách get_digest_metrics đã làm cho phần tổng."""
     today_end = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
     end_dt = min(end_dt, today_end)
     buckets = []
@@ -257,6 +264,10 @@ def _revenue_trend(start_dt, end_dt, granularity, region=None, channel=None):
     trend = []
     for b_start, b_end, label in buckets:
         otc_rev, etc_rev, _, _ = _period_revenue(b_start, b_end, region=region)
+        if channel == "OTC":
+            etc_rev = 0.0
+        elif channel == "ETC":
+            otc_rev = 0.0
         trend.append({
             "label": label,
             "revenue": round(otc_rev + etc_rev, 2),

@@ -473,6 +473,7 @@ def get_bravo_kpi_tdv_snapshot(position_codes=('TDV',)):
             WHERE [SaveDate] = (SELECT MAX([SaveDate]) FROM [FACT_TongHopKhachHang])
         )
         SELECT n.[EmployeeCode] AS employee_code, n.[Name] AS employee_name, t.[AreaCode] AS area_code,
+               n.[PositionCode] AS position_code,
                t.[MonthSaleTarget] AS month_sale_target, ISNULL(a.TotalActual, 0) AS month_sale_amount
         FROM tdv_target t
         JOIN [DIM_NhanVien] n ON t.[EmployeeCode] = n.[EmployeeCode]
@@ -488,6 +489,7 @@ def get_bravo_kpi_tdv_snapshot(position_codes=('TDV',)):
         pct = (amount / target) if target > 0 else None
         result.append(types.SimpleNamespace(
             employee_code=r.employee_code, employee_name=r.employee_name, area_code=r.area_code,
+            position_code=r.position_code,
             month_sale_target=target, month_sale_amount=amount, month_sale_percent=pct))
     return result
 
@@ -787,15 +789,17 @@ def run_smart_business_alerts():
                 months_to_sell = r.months_to_sell
                 channel = r.channel or "Không rõ"
  
-                # Số ngày bán = Tồn kho / Số lượng bán trung bình mỗi ngày
-                # Số lượng bán trung bình mỗi ngày = Số lượng 1 năm / 365 (làm tròn lên - ceil)
+                # Số ngày bán = Tồn kho / Số lượng bán trung bình mỗi ngày (outward_qty/365).
+                # 14/07/2026: bỏ math.ceil() trên sales_per_day trước khi chia — làm tròn LÊN 1 tỷ
+                # lệ (rate) rồi mới chia khiến MỌI mặt hàng có outward_qty từ 1-364 (bán dưới 1
+                # SKU/ngày) đều bị quy đồng về đúng "1 SKU/ngày", làm sai lệch "ngày còn bán" rất xa
+                # so với months_to_sell (đã tính đúng ở ETL) — phát hiện qua audit toàn repo. Giờ
+                # chia trực tiếp với độ chính xác đầy đủ, chỉ làm tròn (ceil, ước lượng thận trọng)
+                # ở kết quả CUỐI (số ngày), không làm tròn ở bước trung gian.
                 if outward_qty is not None and outward_qty > 0:
-                    sales_per_day = math.ceil(outward_qty / 365)
-                    if sales_per_day > 0:
-                        days = math.ceil(closing_qty / sales_per_day)
-                        days_to_sell_fmt = f"Còn {days} ngày bán (Trung bình bán {sales_per_day} SKU/ngày)"
-                    else:
-                        days_to_sell_fmt = format_months_to_sell(months_to_sell)
+                    sales_per_day = outward_qty / 365
+                    days = math.ceil(closing_qty / sales_per_day)
+                    days_to_sell_fmt = f"Còn {days} ngày bán (Trung bình bán {sales_per_day:.2f} SKU/ngày)"
                 else:
                     days_to_sell_fmt = format_months_to_sell(months_to_sell)
  
@@ -1367,6 +1371,13 @@ def _bravo_recent_orders_by_customer(since):
     Truyền `since` dưới dạng chuỗi 'YYYY-MM-DD' (không phải datetime.date) — driver ODBC cũ
     "SQL Server" (không phải "ODBC Driver 17") lỗi SQLBindParameter khi bind thẳng kiểu date của
     Python, xác nhận thực tế 10/07/2026; chuỗi ISO thì SQL Server tự convert đúng, không lỗi.
+
+    14/07/2026: đổi sang query view gốc (vHoaDonTotal/vHoaDonETCTotal) thay vì SELECT thẳng
+    BRV_HoaDonHdr/BRVSX_HoaDonHdr — bản cũ KHÔNG lọc chứng từ hủy (IsCancelled qua
+    BRV_TrangThaiDuyet/BRV_TrangThaiHoaDon, các hàm khác trong file này đã biết lọc) nên 1 đơn
+    hàng bị hủy vẫn được tính là "đơn mới", gây cảnh báo A2 sai dựa trên đơn không còn hiệu lực.
+    Dùng COUNT(DISTINCT Stt)/SUM(Amount9) từ view thay vì COUNT(*)/SUM(TotalAmount) từ header —
+    nhất quán với cách tính "đơn hàng"/"doanh thu" ở mọi nơi khác đã sửa hôm nay.
     """
     from sqlalchemy import text
     from src.database import _get_bravo_engine
@@ -1375,10 +1386,10 @@ def _bravo_recent_orders_by_customer(since):
         raise RuntimeError("Không có Bravo engine")
     since_str = since.strftime("%Y-%m-%d") if hasattr(since, "strftime") else str(since)
     sql = text('''
-        SELECT CustomerCode AS cc, COUNT(*) AS n, SUM(TotalAmount) AS amt FROM (
-            SELECT CustomerCode, TotalAmount FROM BRV_HoaDonHdr WHERE IsActive=1 AND IsHC=0 AND DocDate >= :since
+        SELECT CustomerCode AS cc, COUNT(DISTINCT Stt) AS n, SUM(Amount9) AS amt FROM (
+            SELECT CustomerCode, Stt, Amount9 FROM dbo.vHoaDonTotal WHERE DocDate >= :since
             UNION ALL
-            SELECT CustomerCode, TotalAmount FROM BRVSX_HoaDonHdr WHERE IsActive=1 AND DocDate >= :since
+            SELECT CustomerCode, Stt, Amount9 FROM dbo.vHoaDonETCTotal WHERE DocDate >= :since
         ) x GROUP BY CustomerCode
     ''')
     with engine.connect() as conn:
@@ -1504,6 +1515,7 @@ def check_debt_aging_migration_alert():
     rows = []
     latest_label = None
     prev_label = None
+    key_suffix = None  # phần colon-free dùng cho alert_key — xem giải thích ở dòng gán alert_key
     try:
         snap = get_bravo_receivables_snapshot()
         by_customer = {}
@@ -1519,6 +1531,7 @@ def check_debt_aging_migration_alert():
         prev_snap = _get_debt_aging_snapshot(prev_date)
         latest_label = f"Tức thời (đến {datetime.now().strftime('%d/%m/%Y %H:%M')})"
         prev_label = prev_date
+        key_suffix = today_str  # "YYYY-MM-DD" — không có dấu ":"
         for code, (name, amt) in by_customer.items():
             if amt <= 10000000:
                 continue
@@ -1539,6 +1552,7 @@ def check_debt_aging_migration_alert():
                     print("[ALERTS][aging_migration] Chưa đủ 2 kỳ để so sánh.")
                     return
                 latest_label, prev_label = latest, prev
+                key_suffix = latest  # "M_YYYY" — không có dấu ":"
                 sql = text('''
                     SELECT c.customer_code, c.customer_name, c.overdue_gt_45,
                            COALESCE(p.overdue_gt_45, 0) AS prev_gt45
@@ -1559,7 +1573,11 @@ def check_debt_aging_migration_alert():
     if not rows:
         print("[ALERTS][aging_migration] Không có khách mới rơi vào nhóm >45 ngày.")
         return
-    alert_key = f"aging_migration_gt45:{latest_label}"
+    # 14/07/2026: alert_key dùng key_suffix (colon-free) thay vì latest_label trực tiếp —
+    # latest_label nhánh Bravo có dạng "Tức thời (đến DD/MM/YYYY HH:MM)", CHỨA dấu ":" (giờ:phút),
+    # phá vỡ alert_key.split(":") ở _highlight_group_key/_humanize_highlight (src/etl.py) —
+    # phát hiện qua audit toàn repo, gây vỡ hiển thị + hỏng logic gộp nhóm "Điểm Nổi Bật".
+    alert_key = f"aging_migration_gt45:{key_suffix}"
     top = rows[0][2]
     if should_send_alert(alert_key, cooldown_hours=24, current_value=str(top)):
         table = [[str(r[0]), r[1], format_vietnamese_money(r[2])] for r in rows]
@@ -1686,92 +1704,56 @@ def check_customer_churn_alert():
     bộ 'I000001'/'I000002'...) — nếu không lọc sẽ hiện nhầm các mã này như "khách hàng lớn" cần
     chăm sóc (đã thấy thực tế mã '1001136' 274 tỷ đồng/197 hóa đơn không khớp dim khách hàng nào).
     """
+    # 14/07/2026: đổi sang query view gốc Bravo (vHoaDonTotal/vHoaDonETCTotal) thay vì tự ráp
+    # SUM(h."TotalAmount") trực tiếp từ header — cùng lý do/cách làm với _period_revenue (đã sửa
+    # 13/07/2026): công thức tự ráp thiếu trừ hàng trả lại, thiếu lọc Post_TheKho=1. Không còn
+    # failover Postgres (view chỉ có ở Bravo, xem docstring _period_revenue trong src/etl.py).
     from sqlalchemy import text
-    from src.database import run_with_failover
+    from src.database import _get_bravo_engine
     drop_pct = float(_biz_threshold('customer_churn_drop_pct', 0.50))
     min_prev = float(_biz_threshold('customer_churn_min_prev', 50000000))
     params = {"min_prev": min_prev, "drop": drop_pct}
 
-    def _pg(conn):
-        sql = text('''
-            WITH cm AS (
-                SELECT 'OTC' AS channel, h."CustomerCode" AS cc, k."Name" AS cname,
-                       DATE_TRUNC('month',h."DocDate"::timestamp)::date AS m, SUM(h."TotalAmount") AS rev
-                FROM brv_hoadonhdr h
-                JOIN dms_khachhang k ON h."CustomerCode" = k."Code"
-                WHERE h."IsActive"=TRUE AND h."IsHC"=FALSE GROUP BY 1,2,3,4
-                UNION ALL
-                SELECT 'ETC', h."CustomerCode", k."Name",
-                       DATE_TRUNC('month',h."DocDate"::timestamp)::date, SUM(h."TotalAmount")
-                FROM brvsx_hoadonhdr h
-                JOIN dmssx_khachhang k ON h."CustomerCode" = k."Code"
-                WHERE h."IsActive"=TRUE GROUP BY 1,2,3,4
-            ),
-            agg AS (SELECT channel, cc, cname, m, SUM(rev) AS rev FROM cm GROUP BY channel, cc, cname, m),
-            mranked AS (
-                SELECT channel, m, ROW_NUMBER() OVER (PARTITION BY channel ORDER BY m DESC) AS rn
-                FROM (SELECT DISTINCT channel, m FROM agg) d
-            ),
-            latest AS (SELECT channel, m FROM mranked WHERE rn = 1),
-            prevm AS (SELECT channel, m FROM mranked WHERE rn = 2)
-            SELECT a.channel, a.cc, a.cname,
-                   COALESCE(cur.rev,0) AS cur_rev,
-                   prevd.rev AS prev_rev,
-                   l.m AS latest_month
-            FROM (SELECT DISTINCT channel, cc, cname FROM agg) a
-            JOIN prevm p ON p.channel = a.channel
-            JOIN agg prevd ON prevd.cc=a.cc AND prevd.channel=a.channel AND prevd.m=p.m
-            LEFT JOIN latest l ON l.channel=a.channel
-            LEFT JOIN agg cur ON cur.cc=a.cc AND cur.channel=a.channel AND cur.m=l.m
-            WHERE prevd.rev > :min_prev
-              AND (prevd.rev - COALESCE(cur.rev,0)) / prevd.rev > :drop
-            ORDER BY a.channel, prevd.rev DESC
-        ''')
-        return conn.execute(sql, params).fetchall()
-
-    def _mssql(conn):
-        # T-SQL không hỗ trợ GROUP BY theo vị trí số (1,2,3,4 như Postgres) -> liệt kê rõ cột.
-        # DATE_TRUNC('month', x) -> DATEFROMPARTS(YEAR(x), MONTH(x), 1).
-        sql = text('''
-            WITH cm AS (
-                SELECT 'OTC' AS channel, h."CustomerCode" AS cc, k."Name" AS cname,
-                       DATEFROMPARTS(YEAR(h."DocDate"), MONTH(h."DocDate"), 1) AS m, SUM(h."TotalAmount") AS rev
-                FROM dbo.BRV_HoaDonHdr h
-                JOIN dbo.DMS_KhachHang k ON h."CustomerCode" = k."Code"
-                WHERE h."IsActive"=1 AND h."IsHC"=0
-                GROUP BY h."CustomerCode", k."Name", DATEFROMPARTS(YEAR(h."DocDate"), MONTH(h."DocDate"), 1)
-                UNION ALL
-                SELECT 'ETC', h."CustomerCode", k."Name",
-                       DATEFROMPARTS(YEAR(h."DocDate"), MONTH(h."DocDate"), 1), SUM(h."TotalAmount")
-                FROM dbo.BRVSX_HoaDonHdr h
-                JOIN dbo.DMSSX_KhachHang k ON h."CustomerCode" = k."Code"
-                WHERE h."IsActive"=1
-                GROUP BY h."CustomerCode", k."Name", DATEFROMPARTS(YEAR(h."DocDate"), MONTH(h."DocDate"), 1)
-            ),
-            agg AS (SELECT channel, cc, cname, m, SUM(rev) AS rev FROM cm GROUP BY channel, cc, cname, m),
-            mranked AS (
-                SELECT channel, m, ROW_NUMBER() OVER (PARTITION BY channel ORDER BY m DESC) AS rn
-                FROM (SELECT DISTINCT channel, m FROM agg) d
-            ),
-            latest AS (SELECT channel, m FROM mranked WHERE rn = 1),
-            prevm AS (SELECT channel, m FROM mranked WHERE rn = 2)
-            SELECT a.channel, a.cc, a.cname,
-                   COALESCE(cur.rev,0) AS cur_rev,
-                   prevd.rev AS prev_rev,
-                   l.m AS latest_month
-            FROM (SELECT DISTINCT channel, cc, cname FROM agg) a
-            JOIN prevm p ON p.channel = a.channel
-            JOIN agg prevd ON prevd.cc=a.cc AND prevd.channel=a.channel AND prevd.m=p.m
-            LEFT JOIN latest l ON l.channel=a.channel
-            LEFT JOIN agg cur ON cur.cc=a.cc AND cur.channel=a.channel AND cur.m=l.m
-            WHERE prevd.rev > :min_prev
-              AND (prevd.rev - COALESCE(cur.rev,0)) / prevd.rev > :drop
-            ORDER BY a.channel, prevd.rev DESC
-        ''')
-        return conn.execute(sql, params).fetchall()
-
     try:
-        rows = run_with_failover(_pg, _mssql, label="customer_churn")
+        engine = _get_bravo_engine()
+        if engine is None:
+            raise RuntimeError("Chưa cấu hình BRAVO_SQL_* — không có nguồn nào khác cho churn.")
+        sql = text('''
+            WITH cm AS (
+                SELECT 'OTC' AS channel, v.CustomerCode AS cc, k.Name AS cname,
+                       DATEFROMPARTS(YEAR(v.DocDate), MONTH(v.DocDate), 1) AS m, SUM(v.Amount9) AS rev
+                FROM dbo.vHoaDonTotal v
+                JOIN dbo.DMS_KhachHang k ON v.CustomerCode = k.Code
+                GROUP BY v.CustomerCode, k.Name, DATEFROMPARTS(YEAR(v.DocDate), MONTH(v.DocDate), 1)
+                UNION ALL
+                SELECT 'ETC', v.CustomerCode, k.Name,
+                       DATEFROMPARTS(YEAR(v.DocDate), MONTH(v.DocDate), 1), SUM(v.Amount9)
+                FROM dbo.vHoaDonETCTotal v
+                JOIN dbo.DMSSX_KhachHang k ON v.CustomerCode = k.Code
+                GROUP BY v.CustomerCode, k.Name, DATEFROMPARTS(YEAR(v.DocDate), MONTH(v.DocDate), 1)
+            ),
+            agg AS (SELECT channel, cc, cname, m, SUM(rev) AS rev FROM cm GROUP BY channel, cc, cname, m),
+            mranked AS (
+                SELECT channel, m, ROW_NUMBER() OVER (PARTITION BY channel ORDER BY m DESC) AS rn
+                FROM (SELECT DISTINCT channel, m FROM agg) d
+            ),
+            latest AS (SELECT channel, m FROM mranked WHERE rn = 1),
+            prevm AS (SELECT channel, m FROM mranked WHERE rn = 2)
+            SELECT a.channel, a.cc, a.cname,
+                   COALESCE(cur.rev,0) AS cur_rev,
+                   prevd.rev AS prev_rev,
+                   l.m AS latest_month
+            FROM (SELECT DISTINCT channel, cc, cname FROM agg) a
+            JOIN prevm p ON p.channel = a.channel
+            JOIN agg prevd ON prevd.cc=a.cc AND prevd.channel=a.channel AND prevd.m=p.m
+            LEFT JOIN latest l ON l.channel=a.channel
+            LEFT JOIN agg cur ON cur.cc=a.cc AND cur.channel=a.channel AND cur.m=l.m
+            WHERE prevd.rev > :min_prev
+              AND (prevd.rev - COALESCE(cur.rev,0)) / prevd.rev > :drop
+            ORDER BY a.channel, prevd.rev DESC
+        ''')
+        with engine.connect() as conn:
+            rows = conn.execute(sql, params).fetchall()
         churn_data_day = _last_complete_data_day()
     except Exception as e:
         print(f"[ALERTS][churn] Lỗi: {e}")
@@ -1819,68 +1801,37 @@ def check_revenue_concentration_alert():
     N) lẫn mẫu số (tổng doanh thu kênh) — cùng lý do đã xác nhận thực tế ở check_customer_churn_alert
     (mã nội bộ/NCC lẫn trong CustomerCode của brv_hoadonhdr/brvsx_hoadonhdr).
     """
+    # 14/07/2026: đổi sang query view gốc Bravo (vHoaDonTotal/vHoaDonETCTotal), cùng lý do/cách
+    # làm với check_customer_churn_alert/_period_revenue. Không còn failover Postgres.
     from sqlalchemy import text
-    from src.database import run_with_failover
+    from src.database import _get_bravo_engine
     top_n = int(_biz_threshold('concentration_top_n', 3))
     threshold = float(_biz_threshold('concentration_pct', 0.50))
     params = {"n": top_n}
 
-    def _pg(conn):
+    try:
+        engine = _get_bravo_engine()
+        if engine is None:
+            raise RuntimeError("Chưa cấu hình BRAVO_SQL_* — không có nguồn nào khác cho concentration.")
+        # TOP (:n) cần ngoặc vì n là bind param, không phải literal.
         sql = text('''
             WITH mx AS (
-                SELECT 'OTC' AS channel, DATE_TRUNC('month', MAX("DocDate"::date)) AS m FROM brv_hoadonhdr WHERE "IsActive"=TRUE
+                SELECT 'OTC' AS channel, DATEFROMPARTS(YEAR(MAX(DocDate)), MONTH(MAX(DocDate)), 1) AS m FROM dbo.vHoaDonTotal
                 UNION ALL
-                SELECT 'ETC', DATE_TRUNC('month', MAX("DocDate"::date)) FROM brvsx_hoadonhdr WHERE "IsActive"=TRUE
+                SELECT 'ETC', DATEFROMPARTS(YEAR(MAX(DocDate)), MONTH(MAX(DocDate)), 1) FROM dbo.vHoaDonETCTotal
             ),
             cm AS (
-                SELECT 'OTC' AS channel, h."CustomerCode" AS cc, SUM(h."TotalAmount") AS rev
-                FROM brv_hoadonhdr h
-                JOIN dms_khachhang k ON h."CustomerCode" = k."Code"
-                WHERE h."IsActive"=TRUE AND h."IsHC"=FALSE
-                  AND DATE_TRUNC('month',h."DocDate"::timestamp) = (SELECT m FROM mx WHERE channel='OTC')
-                GROUP BY 1,2
+                SELECT 'OTC' AS channel, v.CustomerCode AS cc, SUM(v.Amount9) AS rev
+                FROM dbo.vHoaDonTotal v
+                JOIN dbo.DMS_KhachHang k ON v.CustomerCode = k.Code
+                WHERE DATEFROMPARTS(YEAR(v.DocDate), MONTH(v.DocDate), 1) = (SELECT m FROM mx WHERE channel='OTC')
+                GROUP BY v.CustomerCode
                 UNION ALL
-                SELECT 'ETC', h."CustomerCode", SUM(h."TotalAmount")
-                FROM brvsx_hoadonhdr h
-                JOIN dmssx_khachhang k ON h."CustomerCode" = k."Code"
-                WHERE h."IsActive"=TRUE
-                  AND DATE_TRUNC('month',h."DocDate"::timestamp) = (SELECT m FROM mx WHERE channel='ETC')
-                GROUP BY 1,2
-            ),
-            agg AS (SELECT channel, cc, SUM(rev) AS rev FROM cm GROUP BY channel, cc)
-            SELECT agg.channel,
-                (SELECT COALESCE(SUM(rev),0) FROM (SELECT rev FROM agg a2 WHERE a2.channel=agg.channel ORDER BY rev DESC LIMIT :n) t) AS top_sum,
-                (SELECT COALESCE(SUM(rev),0) FROM agg a3 WHERE a3.channel=agg.channel) AS total_sum,
-                mx.m AS channel_month
-            FROM agg JOIN mx ON mx.channel = agg.channel
-            GROUP BY agg.channel, mx.m
-        ''')
-        return conn.execute(sql, params).fetchall()
-
-    def _mssql(conn):
-        # DATE_TRUNC('month', x) -> DATEFROMPARTS(YEAR(x), MONTH(x), 1); LIMIT n (trong subquery)
-        # -> TOP (:n) (cần ngoặc vì n là bind param, không phải literal); GROUP BY theo vị trí số
-        # (1,2) không được hỗ trợ -> liệt kê rõ cột.
-        sql = text('''
-            WITH mx AS (
-                SELECT 'OTC' AS channel, DATEFROMPARTS(YEAR(MAX("DocDate")), MONTH(MAX("DocDate")), 1) AS m FROM dbo.BRV_HoaDonHdr WHERE "IsActive"=1
-                UNION ALL
-                SELECT 'ETC', DATEFROMPARTS(YEAR(MAX("DocDate")), MONTH(MAX("DocDate")), 1) FROM dbo.BRVSX_HoaDonHdr WHERE "IsActive"=1
-            ),
-            cm AS (
-                SELECT 'OTC' AS channel, h."CustomerCode" AS cc, SUM(h."TotalAmount") AS rev
-                FROM dbo.BRV_HoaDonHdr h
-                JOIN dbo.DMS_KhachHang k ON h."CustomerCode" = k."Code"
-                WHERE h."IsActive"=1 AND h."IsHC"=0
-                  AND DATEFROMPARTS(YEAR(h."DocDate"), MONTH(h."DocDate"), 1) = (SELECT m FROM mx WHERE channel='OTC')
-                GROUP BY h."CustomerCode"
-                UNION ALL
-                SELECT 'ETC', h."CustomerCode", SUM(h."TotalAmount")
-                FROM dbo.BRVSX_HoaDonHdr h
-                JOIN dbo.DMSSX_KhachHang k ON h."CustomerCode" = k."Code"
-                WHERE h."IsActive"=1
-                  AND DATEFROMPARTS(YEAR(h."DocDate"), MONTH(h."DocDate"), 1) = (SELECT m FROM mx WHERE channel='ETC')
-                GROUP BY h."CustomerCode"
+                SELECT 'ETC', v.CustomerCode, SUM(v.Amount9)
+                FROM dbo.vHoaDonETCTotal v
+                JOIN dbo.DMSSX_KhachHang k ON v.CustomerCode = k.Code
+                WHERE DATEFROMPARTS(YEAR(v.DocDate), MONTH(v.DocDate), 1) = (SELECT m FROM mx WHERE channel='ETC')
+                GROUP BY v.CustomerCode
             ),
             agg AS (SELECT channel, cc, SUM(rev) AS rev FROM cm GROUP BY channel, cc)
             SELECT agg.channel,
@@ -1890,10 +1841,8 @@ def check_revenue_concentration_alert():
             FROM agg JOIN mx ON mx.channel = agg.channel
             GROUP BY agg.channel, mx.m
         ''')
-        return conn.execute(sql, params).fetchall()
-
-    try:
-        rows = run_with_failover(_pg, _mssql, label="revenue_concentration")
+        with engine.connect() as conn:
+            rows = conn.execute(sql, params).fetchall()
         concentration_data_day = _last_complete_data_day()
     except Exception as e:
         print(f"[ALERTS][concentration] Lỗi: {e}")
@@ -2016,8 +1965,11 @@ def check_zero_sales_rep_alert():
         period_label = f"Tức thời (đến {datetime.now().strftime('%d/%m/%Y %H:%M')})"
         filtered = [r for r in snapshot if r.month_sale_target > 10000000 and (r.month_sale_amount or 0) == 0]
         filtered.sort(key=lambda r: r.month_sale_target, reverse=True)
-        rows = [(r.employee_code, r.employee_name, r.area_code,
-                  "TDV" if r.month_sale_percent is not None else "QLV", r.month_sale_target)
+        # 14/07/2026: dùng đúng position_code thật từ get_bravo_kpi_tdv_snapshot (mới thêm) thay
+        # vì heuristic cũ "TDV nếu month_sale_percent is not None else QLV" — heuristic này LUÔN
+        # cho ra "TDV" vì filtered đã lọc month_sale_target>0, nên month_sale_percent không bao
+        # giờ None (kể cả với nhân sự QLV thật), nhánh "QLV" không bao giờ chạy tới.
+        rows = [(r.employee_code, r.employee_name, r.area_code, r.position_code, r.month_sale_target)
                 for r in filtered[:10]]
     except Exception as e:
         print(f"[ALERTS][zero_sales] Bravo lỗi ({e}) — dự phòng Supabase kpi_summary.")
@@ -2290,6 +2242,7 @@ def check_daily_kpi_pace_alert():
                     WHERE h.[IsActive] = 1 AND h.[IsHC] = 0
                       AND (d.[IsCancelled] IS NULL OR d.[IsCancelled] = 0)
                       AND (e.[IsCancelled] IS NULL OR e.[IsCancelled] = 0)
+                      AND d.[Post_TheKho] = 1
                       AND h.[DocDate] = :target_day
                     GROUP BY n.[EmployeeCode]
                 ),
@@ -2348,6 +2301,7 @@ def check_daily_kpi_pace_alert():
                         WHERE h."IsActive" = TRUE AND h."IsHC" = FALSE
                           AND (d."IsCancelled" IS NULL OR d."IsCancelled" = FALSE)
                           AND (e."IsCancelled" IS NULL OR e."IsCancelled" = FALSE)
+                          AND d."Post_TheKho" = TRUE
                           AND h."DocDate"::date = :target_day
                         GROUP BY n."EmployeeCode"
                     )
@@ -2502,6 +2456,7 @@ def check_kpi_milestone_drop_alert():
                     WHERE h.[IsActive] = 1 AND h.[IsHC] = 0
                       AND (d.[IsCancelled] IS NULL OR d.[IsCancelled] = 0)
                       AND (e.[IsCancelled] IS NULL OR e.[IsCancelled] = 0)
+                      AND d.[Post_TheKho] = 1
                       AND h.[DocDate] >= :start_{idx} AND h.[DocDate] < :end_{idx}
                     GROUP BY n.[EmployeeCode]
                 ''')
@@ -2545,6 +2500,7 @@ def check_kpi_milestone_drop_alert():
                     WHERE h."IsActive" = TRUE AND h."IsHC" = FALSE
                       AND (d."IsCancelled" IS NULL OR d."IsCancelled" = FALSE)
                       AND (e."IsCancelled" IS NULL OR e."IsCancelled" = FALSE)
+                      AND d."Post_TheKho" = TRUE
                       AND h."DocDate"::timestamp >= :start_{idx} AND h."DocDate"::timestamp < :end_{idx}
                     GROUP BY n."EmployeeCode"
                 ''')
