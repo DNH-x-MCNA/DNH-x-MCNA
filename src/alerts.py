@@ -279,6 +279,13 @@ def estimate_overdue_days_str(period_str, overdue_1_15, overdue_15_30, overdue_3
     receivable_detail trên Supabase là bảng tổng hợp nợ theo kỳ, không có cột trạng thái từng
     hóa đơn để tra ngày quá hạn chính xác tuyệt đối — đây là ước lượng theo bucket, không phải
     số ngày thực đo từ hóa đơn gốc.
+
+    14/07/2026: hằng số mốc ngày đổi theo mốc mới (1-30/31-60/61-90/>90, xem
+    _BRAVO_RECEIVABLES_SQL). LƯU Ý: dữ liệu THẬT trong receivable_detail (Supabase) được import
+    1 lần từ trước khi đổi mốc — các cột overdue_1_15/15_30/30_45/gt_45 của bảng đó vẫn là SỐ đã
+    tính theo mốc CŨ (1-15/15-30/30-45/>45), chỉ TÊN CỘT/hàm này đổi theo mốc mới cho nhất quán
+    với nhánh Bravo. Nhánh dự phòng này hiếm khi chạy (chỉ khi Bravo lỗi) — chấp nhận sai số nhỏ
+    cho tới khi có nhu cầu import lại receivable_detail theo đúng mốc mới.
     """
     try:
         parts = period_str.split('_')
@@ -292,17 +299,17 @@ def estimate_overdue_days_str(period_str, overdue_1_15, overdue_15_30, overdue_3
         days_since_report = max(0, (today - report_date).days)
 
         if overdue_gt_45 and overdue_gt_45 > 0:
-            return f"Ít nhất {45 + days_since_report} ngày"
+            return f"Ít nhất {90 + days_since_report} ngày"
         elif overdue_30_45 and overdue_30_45 > 0:
-            return f"Từ {30 + days_since_report} đến {45 + days_since_report} ngày"
+            return f"Từ {61 + days_since_report} đến {90 + days_since_report} ngày"
         elif overdue_15_30 and overdue_15_30 > 0:
-            return f"Từ {15 + days_since_report} đến {30 + days_since_report} ngày"
+            return f"Từ {31 + days_since_report} đến {60 + days_since_report} ngày"
         elif overdue_1_15 and overdue_1_15 > 0:
-            return f"Từ {1 + days_since_report} đến {15 + days_since_report} ngày"
+            return f"Từ {1 + days_since_report} đến {30 + days_since_report} ngày"
     except Exception:
         pass
 
-    return "Trên 45 ngày"
+    return "Trên 90 ngày"
 
 
 def normalize_channel_label(raw_channel):
@@ -750,14 +757,18 @@ def run_smart_business_alerts():
             total_overdue = float(r.overdue_1_15 or 0) + float(r.overdue_15_30 or 0) + float(r.overdue_30_45 or 0) + float(r.overdue_gt_45 or 0)
             if total_overdue <= 10000000:
                 continue
+            # 14/07/2026: cập nhật nhãn theo mốc mới (1-30/31-60/61-90/>90 ngày) — trước đó ghi
+            # cứng text theo mốc CŨ (1-15/15-30/30-45/>45) trong khi field overdue_1_15/15_30/
+            # 30_45/gt_45 đã đổi ý nghĩa (giữ nguyên TÊN field, chỉ đổi biên ngày tính, xem
+            # _BRAVO_RECEIVABLES_SQL) — sai nhãn hiển thị dù số tiền vẫn đúng.
             if r.overdue_gt_45 and float(r.overdue_gt_45) > 0:
-                days_overdue = "Trên 45 ngày"
+                days_overdue = "Trên 90 ngày"
             elif r.overdue_30_45 and float(r.overdue_30_45) > 0:
-                days_overdue = "Từ 30 đến 45 ngày"
+                days_overdue = "Từ 61 đến 90 ngày"
             elif r.overdue_15_30 and float(r.overdue_15_30) > 0:
-                days_overdue = "Từ 15 đến 30 ngày"
+                days_overdue = "Từ 31 đến 60 ngày"
             else:
-                days_overdue = "Từ 1 đến 15 ngày"
+                days_overdue = "Từ 1 đến 30 ngày"
             enriched.append((total_overdue, r.customer_code, r.customer_name, r.sales_channel,
                               float(r.balance_end or 0), days_overdue))
         enriched.sort(key=lambda x: x[0], reverse=True)
