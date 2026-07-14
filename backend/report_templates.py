@@ -12,6 +12,7 @@ import datetime as dt
 from sqlalchemy import text
 from local_warehouse import get_conn
 from query_engine import _write_log, _get_engine
+from region_map import region_from_customer_code
 
 
 def _q(sql, params=()):
@@ -96,23 +97,23 @@ def revenue_by_region(date_from: str, date_to: str) -> list:
     truc tiep tren vhoadon_otc vi truong nay khong dang tin, tung gay lech doanh thu theo vung).
     BAT BUOC LEFT JOIN (khong duoc INNER JOIN) - khach "mo coi" khong co trong bang khach hang (vd
     HCM13508 - co that, ~2.3 ty doanh thu 2022-2025, KHONG co trong dms_khachhang) se bi INNER JOIN
-    am tham loai bo ca khoi tong lan breakdown. Voi LEFT JOIN, khach mo coi roi vao bucket
-    "Khac/chua xac dinh" thay vi bien mat - xem TODO doi len suy luan qua tien to ma KH (src/region_map.py,
-    chua tich hop) truoc khi chap nhan la "Khac/chua xac dinh"."""
+    am tham loai bo ca khoi tong lan breakdown. Voi LEFT JOIN, khach mo coi duoc suy luan vung qua
+    TIEN TO ma khach hang (region_map.py, bang 63 tien to da kiem chung >=95% thuan, vd HCM -> MN) -
+    CHI con roi vao "Khac/chua xac dinh" neu tien to khong nam trong bang do (an toan hon doan bua)."""
     rows = _q("""
-        SELECT tp.area_code area, SUM(o.amount9) rev
+        SELECT o.customer_code cc, tp.area_code area, SUM(o.amount9) rev
         FROM vhoadon_otc o LEFT JOIN dms_khachhang kh ON kh.code=o.customer_code
         LEFT JOIN dim_tinhthanhpho tp ON tp.city_id=kh.city_id
-        WHERE o.doc_date BETWEEN ? AND ? GROUP BY tp.area_code
+        WHERE o.doc_date BETWEEN ? AND ? GROUP BY o.customer_code, tp.area_code
         UNION ALL
-        SELECT tp.area_code area, SUM(e.amount9) rev
+        SELECT e.customer_code cc, tp.area_code area, SUM(e.amount9) rev
         FROM vhoadon_etc e LEFT JOIN dmssx_khachhang kh ON kh.code=e.customer_code
         LEFT JOIN dim_tinhthanhpho tp ON tp.city_id=kh.city_id
-        WHERE e.doc_date BETWEEN ? AND ? GROUP BY tp.area_code
+        WHERE e.doc_date BETWEEN ? AND ? GROUP BY e.customer_code, tp.area_code
         """, (date_from, date_to, date_from, date_to))
     agg = {}
     for r in rows:
-        area = r["area"] or "Khac/chua xac dinh"
+        area = r["area"] or region_from_customer_code(r["cc"]) or "Khac/chua xac dinh"
         agg[area] = agg.get(area, 0.0) + _f(r["rev"])
     total = sum(agg.values())
 

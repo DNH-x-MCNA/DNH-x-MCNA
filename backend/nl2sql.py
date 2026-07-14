@@ -75,7 +75,12 @@ TEMPLATE_TOOLS = [
     {
         "name": "get_revenue_by_region",
         "description": "Doanh thu theo vung mien (Mien Bac/Trung/Nam), gop ca OTC+ETC, trong 1 khoang ngay. "
-                        "UU TIEN dung tool nay cho moi cau hoi ve doanh thu theo vung/mien/khu vuc.",
+                        "BAT BUOC dung tool nay cho MOI cau hoi ve doanh thu theo vung/mien/khu vuc - KE CA "
+                        "KHI nguoi dung chi hoi 1 vung cu the (vd 'doanh thu mien Nam'): van goi tool nay "
+                        "(no luon tra ve ca 3 vung) roi CHI trich/hien thi vung duoc hoi trong cau tra loi, "
+                        "TUYET DOI KHONG tu viet SQL rieng voi dieu kien area_code=... vi se BO SOT khach "
+                        "hang 'mo coi' (khong co ho so trong bang khach hang) ma CHI ham nay moi suy luan "
+                        "dung vung qua tien to ma khach hang.",
         "input_schema": {
             "type": "object",
             "properties": {

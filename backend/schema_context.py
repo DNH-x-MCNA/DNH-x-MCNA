@@ -69,9 +69,13 @@ dms_khachhang: code (ma khach hang OTC), name, city_id (NGUON DUNG DE XAC DINH V
   id_code (Id noi bo DMS, khac code), emp_code (ma NV DUOC GAN phu trach khach hang nay - khac
   vhoadon_otc.employee_code la NV THUC TE ban hang tren tung hoa don, 2 ma co the khac nhau), kenh_bh.
 
-dim_nhanvien: employee_code, name, is_duplicate (=1 la ma bi trung/khong hop le,
-  LUON loc COALESCE(is_duplicate,0)<>1 O MENH DE WHERE - KHONG dat dieu kien nay trong ON cua
-  LEFT JOIN, vi se khong loai duoc dong du lieu, chi mat ten - da tung gay bug that), position_code
+dim_nhanvien: employee_code, name, is_duplicate (=1 la ma bi trung/khong hop le - CHI loc
+  COALESCE(is_duplicate,0)<>1 KHI TINH TOAN/TONG HOP so lieu THEO nhan vien (KPI, doanh so, xep hang...)
+  de tranh du lieu trung lam sai ket qua. KHI CHI TRA CUU/HIEN THI TEN (vd doi mot ma nhan vien/QLV/ASM
+  ra ten nguoi that trong cau tra loi ad-hoc, KHONG phai bao cao KPI) thi KHONG duoc loc is_duplicate -
+  van phai hien ten binh thuong, neu khong se bao nham "khong tim thay ten" cho nhung ma hop le nhung
+  co is_duplicate=1. Khi CO loc, dat dieu kien is_duplicate O MENH DE WHERE cua truy van chinh - KHONG
+  dat trong ON cua LEFT JOIN, vi se khong loai duoc dong du lieu, chi mat ten - da tung gay bug that), position_code
   (TDV/QLV/CTV/CS/TP/PP/TBP/TK - LUU Y: 1 nhan vien co the la QLV du EmployeeCode "nhin giong" ten
   ca nhan, KHONG suy doan vai tro tu ten ma phai kiem tra position_code), area_code (MB/MT/MN).
 dim_chucvu: position_code, description (ten tieng Viet day du, vd TDV -> "Trinh duoc vien", QLV ->
