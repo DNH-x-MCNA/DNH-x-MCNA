@@ -58,7 +58,13 @@ def _get_bravo_engine():
         # dùng lại mà không kiểm tra trước). pool_pre_ping tự ping nhẹ trước khi dùng 1 connection
         # lấy từ pool, tự âm thầm mở lại nếu đã chết — Postgres engine (_get_fast_cloud_engine)
         # đã có sẵn tuỳ chọn này, Bravo engine trước đó thiếu.
-        _bravo_engine = create_engine(url, connect_args={"timeout": 10}, pool_pre_ping=True)
+        #
+        # pool_recycle=240: nhiều firewall/thiết bị mạng nội bộ tự ngắt kết nối TCP nhàn rỗi sau
+        # ~5 phút — chủ động "làm mới" connection sau 240s (dù đang idle, chưa kịp bị ngắt) thay vì
+        # chờ pool_pre_ping phát hiện đã chết rồi mới mở lại. Kết hợp cả 2 giảm khả năng dính lỗi
+        # kết nối khi 1 chu kỳ quét chạy nhiều query rải rác qua thời gian (vd chờ Teams/email gửi
+        # xong giữa các alert).
+        _bravo_engine = create_engine(url, connect_args={"timeout": 10}, pool_pre_ping=True, pool_recycle=240)
     except Exception as e:
         print(f"[DB][bravo] Không tạo được engine Bravo: {e}")
         return None
