@@ -407,10 +407,16 @@ WITH Receivables AS (
 )
 SELECT customer_code, customer_name, sales_channel, area_code,
     SUM(amount) AS balance_end,
-    SUM(CASE WHEN overdue_days BETWEEN 1 AND 15 THEN amount ELSE 0 END) AS overdue_1_15,
-    SUM(CASE WHEN overdue_days BETWEEN 16 AND 30 THEN amount ELSE 0 END) AS overdue_15_30,
-    SUM(CASE WHEN overdue_days BETWEEN 31 AND 45 THEN amount ELSE 0 END) AS overdue_30_45,
-    SUM(CASE WHEN overdue_days > 45 THEN amount ELSE 0 END) AS overdue_gt_45
+    -- 14/07/2026: đổi mốc tuổi nợ sang 1-30/31-60/61-90/>90 ngày (chuẩn AR aging phổ biến,
+    -- phù hợp hơn mốc 15 ngày cũ với quy mô DNH — xem docstring get_bravo_receivables_snapshot).
+    -- GIỮ NGUYÊN tên cột overdue_1_15/15_30/30_45/gt_45 (không đổi tên) để tránh phải migrate
+    -- schema debt_aging_snapshot (SQLite) + receivable_detail (Supabase) — tên cột giờ CHỈ LÀ
+    -- NHÃN, không còn khớp nghĩa đen với số ngày; đây là đề xuất theo thông lệ chung, CHƯA được
+    -- DNH xác nhận chính thức (xem docs/Cau_hoi_can_DNH_chot_truoc_hop_16-07.md).
+    SUM(CASE WHEN overdue_days BETWEEN 1 AND 30 THEN amount ELSE 0 END) AS overdue_1_15,
+    SUM(CASE WHEN overdue_days BETWEEN 31 AND 60 THEN amount ELSE 0 END) AS overdue_15_30,
+    SUM(CASE WHEN overdue_days BETWEEN 61 AND 90 THEN amount ELSE 0 END) AS overdue_30_45,
+    SUM(CASE WHEN overdue_days > 90 THEN amount ELSE 0 END) AS overdue_gt_45
 FROM Receivables
 GROUP BY customer_code, customer_name, sales_channel, area_code
 """
@@ -447,6 +453,46 @@ def get_bravo_receivables_snapshot():
         raise RuntimeError("Không có Bravo engine (thiếu BRAVO_SQL_* trong .env)")
     with engine.connect() as conn:
         return conn.execute(text(_BRAVO_RECEIVABLES_SQL)).fetchall()
+
+
+_BRAVO_OVERDUE_GT45_SQL = """
+WITH Receivables AS (
+    SELECT k.[Code] AS customer_code, k.[Name] AS customer_name,
+           (h.[TotalAmount] - h.[PaidAmount]) AS amount,
+           DATEDIFF(day, DATEADD(day, ISNULL(h.[DueDate], 0), h.[DocDate]), GETDATE()) AS overdue_days
+    FROM [BRV_HTTDuDK] h
+    JOIN [BRV_KhachHang] k ON h.[CustomerId] = k.[Id]
+    WHERE h.[Account] LIKE '131%' AND (h.[TotalAmount] - h.[PaidAmount]) > 0
+      AND k.[IsCustomer] = 1 AND k.[Code] <> 'NCC100122'
+    UNION ALL
+    SELECT k.[Code], k.[Name],
+           (h.[TotalAmount] - h.[PaidAmount]),
+           DATEDIFF(day, DATEADD(day, ISNULL(h.[DueDate], 0), h.[DocDate]), GETDATE())
+    FROM [BRVSX_HTTDuDK] h
+    JOIN [BRVSX_KhachHang] k ON h.[CustomerId] = k.[Id]
+    WHERE h.[Account] LIKE '131%' AND (h.[TotalAmount] - h.[PaidAmount]) > 0
+      AND k.[IsCustomer] = 1 AND k.[Code] <> 'NCC100122'
+)
+SELECT customer_code, customer_name,
+    SUM(CASE WHEN overdue_days > 45 THEN amount ELSE 0 END) AS overdue_gt_45
+FROM Receivables
+GROUP BY customer_code, customer_name
+"""
+
+
+def _bravo_overdue_gt45_by_customer():
+    """A1 (check_debt_aging_migration_alert): nợ >45 ngày theo khách hàng (OTC+ETC gộp) — TÁCH
+    RIÊNG khỏi get_bravo_receivables_snapshot()/_BRAVO_RECEIVABLES_SQL (14/07/2026). Mốc >45 ngày
+    là 1 trong 4 trigger đã CHỐT THEO HỢP ĐỒNG (xem skill dnh-email-alert-builder) — không phụ
+    thuộc/không tự đổi theo mốc hiển thị chung của bảng aging (đã đổi sang 1-30/31-60/61-90/>90
+    ngày cùng ngày, theo đề xuất thông lệ chung, chờ DNH xác nhận riêng)."""
+    from sqlalchemy import text
+    from src.database import _get_bravo_engine
+    engine = _get_bravo_engine()
+    if engine is None:
+        raise RuntimeError("Không có Bravo engine (thiếu BRAVO_SQL_* trong .env)")
+    with engine.connect() as conn:
+        return conn.execute(text(_BRAVO_OVERDUE_GT45_SQL)).fetchall()
 
 
 def get_bravo_kpi_tdv_snapshot(position_codes=('TDV',)):
@@ -1527,11 +1573,11 @@ def check_debt_aging_migration_alert():
     prev_label = None
     key_suffix = None  # phần colon-free dùng cho alert_key — xem giải thích ở dòng gán alert_key
     try:
-        snap = get_bravo_receivables_snapshot()
-        by_customer = {}
-        for r in snap:
-            name, amt = by_customer.get(r.customer_code, (r.customer_name, 0.0))
-            by_customer[r.customer_code] = (name, amt + float(r.overdue_gt_45 or 0))
+        # 14/07/2026: dùng _bravo_overdue_gt45_by_customer() riêng (không phải
+        # get_bravo_receivables_snapshot()) — mốc >45 ngày của A1 độc lập với mốc hiển thị chung
+        # (đã đổi sang 1-30/31-60/61-90/>90 ngày cùng ngày), xem docstring hàm đó.
+        snap = _bravo_overdue_gt45_by_customer()
+        by_customer = {r.customer_code: (r.customer_name, float(r.overdue_gt_45 or 0)) for r in snap}
         today_str = datetime.now().strftime("%Y-%m-%d")
         _save_debt_aging_snapshot([(code, name, amt) for code, (name, amt) in by_customer.items()])
 
