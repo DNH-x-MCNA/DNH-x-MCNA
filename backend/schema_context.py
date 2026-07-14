@@ -34,8 +34,8 @@ vhoadon_otc (moi dong la 1 dong hoa don chi tiet, kenh OTC - nha thuoc/nha phan 
   customer_code -> dms_khachhang.code -> city_id, giong het cach lam voi ETC ben duoi. INNER JOIN se
   am tham loai bo khach hang "mo coi" (khong co trong dms_khachhang, vd HCM13508 - khach hang THAT,
   ~2.3 ty doanh thu 2022-2025) khoi CA breakdown lan tong so - sai ma khong co dau hieu bao truoc. Voi
-  LEFT JOIN, khach mo coi se co area_code=NULL - LUON GOM vao 1 nhom rieng ("Khac/chua xac dinh") va
-  BAO CHO NGUOI DUNG BIET neu nhom nay > 0, KHONG duoc am tham bo qua khi tra loi cau hoi theo vung,
+  LEFT JOIN, khach mo coi se tu dong co area_code=NULL, GOM vao 1 nhom rieng ("Khac/chua xac dinh") -
+  xem QUY TAC TRA LOI ben duoi ve khi nao can/khong can nhac den nhom nay voi nguoi dung,
   employee_code (ma NHAN VIEN BAN HANG CA NHAN gan voi hoa don nay, vd 'tungtx' - CHI co gia tri cho
   nhan vien ca nhan, ma khu vuc/quan ly vung nhu MBKV*/ASM* KHONG xuat hien o day),
   created_at (text 'YYYY-MM-DD HH:MM:SS' - thoi diem BAN GHI THUC SU duoc tao trong Bravo, KHAC voi
@@ -47,12 +47,15 @@ vhoadon_etc: doanh thu kenh ETC (benh vien). Dong bo tu vHoaDonETCTotal (KHONG P
   city_id rieng cua hoa don) - muon biet vung mien phai **LEFT JOIN** (KHONG INNER JOIN, xem giai
   thich o vhoadon_otc phia tren) qua customer_code -> dmssx_khachhang.code -> city_id.
 
-QUY TAC BAT BUOC khi tra loi cau hoi "doanh thu theo vung/mien X": sau khi tinh xong, TU KIEM TRA
-tong cong tat ca cac vung (gom ca "Khac/chua xac dinh") co dung bang tong KHONG loc vung cua cung ky
-khong (vd SELECT SUM(amount9) khong GROUP BY gi ca) - neu lech dau la co JOIN nao dang lam roi du lieu.
-Neu nguoi dung hoi rieng 1 vung (vd "doanh thu mien Nam"), van nen kiem tra xem co nhom "Khac/chua xac
-dinh" dang ton tai khong o cung ky do - neu co, PHAI de cap voi nguoi dung (khong bat buoc cong gop vao
-so tra loi, nhung phai noi ro co X dong chua xac dinh duoc vung).
+QUY TAC TRA LOI cau hoi "doanh thu theo vung/mien X": CHI tra loi DUNG PHAM VI nguoi dung hoi - hoi
+rieng 1 vung (vd "doanh thu mien Nam") thi CHI dua so cua vung do, KHONG tu y liet ke them cac vung
+khac, KHONG tu ve bang "doi chieu toan ky", KHONG chay them 1 truy van rieng de "kiem chung" roi in
+ca 2 ket qua ra - nguoi dung chi can 1 cau tra loi gon, khong can xem qua trinh AI tu kiem tra dung/sai.
+LEFT JOIN dung tu no da bao dam khong mat du lieu (khach mo coi tu dong roi vao nhom rieng), nen
+KHONG can hoi lai band tong de "doi chieu" moi lan tra loi. CHI de cap den nhom "Khac/chua xac dinh"
+NEU no chiem ty trong dang ke (vd >0.5% tong) trong cung ky duoc hoi - va chi 1 cau ngan gon, KHONG
+lam bang rieng cho no. Neu nhom nay bang 0 hoac khong dang ke, KHONG noi gi ca (im lang la binh thuong,
+dung noi "khong co phat sinh chua xac dinh vung" - do la thong tin thua, nguoi dung khong hoi).
 
 dim_tinhthanhpho: city_id, city_name, area_code (MB=Mien Bac, MT=Mien Trung, MN=Mien Nam).
 dim_targetvungmien: target doanh thu OTC theo vung/thang. Cot: area_code, channel_code (loc ='GT'
