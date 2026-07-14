@@ -8,9 +8,16 @@
 :: bai hoc tu viec lam lich Bravo Sync truoc day (Interactive gay mat/le lich khi may khong co
 :: phien dang nhap lien tuc).
 :: CAN CHAY FILE NAY VOI QUYEN ADMINISTRATOR (chuot phai > Run as administrator).
+::
+:: 14/07/2026: MAIN_PATH doi sang tu suy ra tu vi tri file nay (%~dp0) thay vi hardcode
+:: "D:\DNH\main.py" - repo clone o duong dan KHAC NHAU tren tung may (may dev: D:\DNH, may 24:
+:: C:\Users\Administrator\Desktop\WebChatbot), hardcode 1 duong dan gay xung dot moi lan git pull
+:: sang may khac. PYTHON_PATH van phai sua tay theo tung may (khong tu do duoc duoi tai khoan
+:: SYSTEM, PATH cua SYSTEM khac PATH nguoi dung dang nhap) - dang de theo duong dan may 24
+:: (production chinh) vi script nay chu yeu chay tren may 24; doi lai neu chay tren may khac.
 
-set PYTHON_PATH=C:\Users\Admin\AppData\Local\Programs\Python\Python312\python.exe
-set MAIN_PATH=D:\DNH\main.py
+set PYTHON_PATH=C:\Program Files\Python312\python.exe
+set MAIN_PATH=%~dp0..\main.py
 
 schtasks /create /tn "DNH_Daily_Digest_1745" /tr "\"%PYTHON_PATH%\" \"%MAIN_PATH%\" --send-daily" /sc weekly /d MON,TUE,WED,THU,FRI /st 17:45 /ru SYSTEM /rl HIGHEST /f
 schtasks /create /tn "DNH_Weekly_Report" /tr "\"%PYTHON_PATH%\" \"%MAIN_PATH%\" --send-weekly" /sc weekly /d SAT /st 15:00 /ru SYSTEM /rl HIGHEST /f
