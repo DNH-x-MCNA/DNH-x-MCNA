@@ -4,44 +4,18 @@ import re
 import anthropic
 from openai import OpenAI
 from dotenv import load_dotenv
+from src.region_map import REGION_SQL_MARKERS, REGION_NAMES_VI
 
 # Load variables from .env
 load_dotenv()
 
 DB_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "scripts", "dnh_intermediate.db")
 
-# Cached, pooled engine for the cloud Postgres DB. Built once per process and
-# reused by every call site below (schema fetch, date lookups, query exec)
-# instead of opening a brand new TCP/SSL connection on every single request.
-_cloud_engine = None
-_cloud_engine_url = None
-
-def _get_cloud_engine():
-    global _cloud_engine, _cloud_engine_url
-    cloud_db_url = os.getenv("CLOUD_DB_URL", "")
-    if not cloud_db_url:
-        return None
-
-    db_url = cloud_db_url.strip()
-    if db_url.startswith("postgres://"):
-        db_url = db_url.replace("postgres://", "postgresql://", 1)
-
-    if _cloud_engine is not None and _cloud_engine_url == db_url:
-        return _cloud_engine
-
-    from sqlalchemy import create_engine
-    _cloud_engine = create_engine(
-        db_url,
-        pool_size=5,
-        max_overflow=5,
-        pool_pre_ping=True,   # discard/replace stale pooled connections automatically
-        pool_recycle=300,     # avoid Supabase/pgbouncer idle-connection kills
-        connect_args={'connect_timeout': 10}  # đo thật: handshake tới pooler mất ~2.3-2.9s ngay
-                                               # cả khi rảnh (compute tier yếu) -> 3s cũ gần như
-                                               # luôn timeout khi có thêm tải, 10s mới có biên an toàn
-    )
-    _cloud_engine_url = db_url
-    return _cloud_engine
+# 14/07/2026: _get_cloud_engine chuyển sang src/database.py (giữ nguyên hành vi/pool settings) —
+# service báo cáo/cảnh báo (src/alerts.py, src/analytics.py) trước đó import thẳng hàm này từ file
+# này, khiến service phụ thuộc runtime vào phần chatbot. Import ngược lại ở đây để mọi lời gọi nội
+# bộ (_get_cloud_engine() bên dưới) tiếp tục hoạt động không đổi.
+from src.database import _get_cloud_engine
 
 # Helper to get the database schema dynamically — cached theo process (giống _cloud_engine)
 # vì schema hầu như không đổi giữa các câu hỏi, nhưng trước đây bị fetch lại MỖI câu hỏi (~3.25s
@@ -172,18 +146,9 @@ def get_db_schema(dialect="postgres"):
     _schema_cache["sqlite"], _schema_cache_time["sqlite"] = schema_text, now_ts
     return schema_text
 
-def _latest_period_key(period):
-    """Sort key for receivable_detail.period ('M_YYYY' text, not zero-padded).
-
-    String comparison alone is wrong here: '9_2025' > '1_2026' lexicographically
-    (month '9' beats any month starting with '1'), so a plain SQL MAX(period)
-    silently picks a stale period whenever the true latest month starts with 1.
-    """
-    try:
-        month_str, year_str = str(period).split('_')
-        return (int(year_str), int(month_str))
-    except (ValueError, AttributeError):
-        return (0, 0)
+# _latest_period_key: chuyển sang src/etl.py (14/07/2026) — không dùng nội bộ trong file này, chỉ
+# tồn tại ở đây trước kia để src/alerts.py import nhờ, khiến service báo cáo/cảnh báo phụ thuộc
+# runtime vào file chatbot. Xem src/etl.py::_latest_period_key.
 
 # --- Chart styling helpers (bảng màu brand DNH + format tiền/số tiếng Việt) ---
 _CHART_GREEN = '#337337'
@@ -987,7 +952,11 @@ class DNHChatbot:
                 "bán lẻ", "ban le", "nhà thuốc tư nhân", "nha thuoc tu nhan"],
         "etc": ["etc", "bệnh viện", "benh vien", "thầu", "thau", "đấu thầu", "dau thau"],
     }
-    _REGION_SQL_MARKERS = {"bac": ["MB", "MB2"], "nam": ["MN"], "trung": ["MT"]}  # mã miền, không quote — quote khi dùng
+    # 14/07/2026: nguồn thật chuyển sang src/region_map.py — service báo cáo/cảnh báo trước đó
+    # import 2 constant này thẳng từ file chatbot, khiến nó phụ thuộc runtime vào phần chatbot.
+    # Giữ làm class attribute (trỏ tới cùng object) để mọi self._REGION_SQL_MARKERS/
+    # DNHChatbot._REGION_SQL_MARKERS trong file này tiếp tục hoạt động không đổi.
+    _REGION_SQL_MARKERS = REGION_SQL_MARKERS  # mã miền, không quote — quote khi dùng
     _CHANNEL_SQL_MARKERS = {
         "otc": ["BRV_HOADONHDR", "BRV_HOADONCT", "BRV_HTTDUDK", "BRV_KHACHHANG", "'OTC'"],
         "etc": ["BRVSX_HOADONHDR", "BRVSX_HOADONCT", "BRVSX_HTTDUDK", "BRVSX_KHACHHANG", "'ETC'"],
@@ -1013,7 +982,7 @@ class DNHChatbot:
         "FACT_TONGHOPKHACHHANG",
     ]
     _CHANNEL_SHARED_TABLES = ["RECEIVABLE_DETAIL", "KPI_SUMMARY"]
-    _REGION_NAMES_VI = {"bac": "Miền Bắc", "nam": "Miền Nam", "trung": "Miền Trung"}
+    _REGION_NAMES_VI = REGION_NAMES_VI  # nguồn thật: src/region_map.py — xem ghi chú ở _REGION_SQL_MARKERS
     _CHANNEL_NAMES_VI = {"otc": "OTC (Nhà thuốc)", "etc": "ETC (Bệnh viện/Thầu)"}
 
     @staticmethod

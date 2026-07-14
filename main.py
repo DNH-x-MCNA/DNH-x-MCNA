@@ -133,7 +133,7 @@ def send_daily_digest():
     (audience không giới hạn vùng/kênh luôn khớp mọi lần gọi).
     """
     print(f"[{datetime.now()}] Đang chuẩn bị báo cáo Daily Digest...")
-    from ai_agent.chatbot import DNHChatbot
+    from src.region_map import REGION_NAMES_VI
 
     config = load_config()
     recipients = config.get('report_recipients') or []
@@ -150,7 +150,7 @@ def send_daily_digest():
         try:
             metrics = get_daily_digest_metrics(region=region, channel=channel)
             headers, rows = _digest_table(metrics)
-            region_label = DNHChatbot._REGION_NAMES_VI.get(region, region) if region else "Toàn quốc"
+            region_label = REGION_NAMES_VI.get(region, region) if region else "Toàn quốc"
             title = f"BÁO CÁO TỔNG HỢP HÀNG NGÀY ({metrics['date']})" + (f" — {audience}" if audience else "")
             summary = (
                 f"Tổng hợp hoạt động ERP/CRM ngày {metrics['date']}."
@@ -181,8 +181,8 @@ def _scope_label(region, channel):
     """Nhãn phạm vi hiển thị trong email — dùng chung tên miền tiếng Việt đã kiểm chứng."""
     parts = []
     if region:
-        from ai_agent.chatbot import DNHChatbot
-        parts.append(DNHChatbot._REGION_NAMES_VI.get(region, region))
+        from src.region_map import REGION_NAMES_VI
+        parts.append(REGION_NAMES_VI.get(region, region))
     if channel:
         parts.append(f"Kênh {channel}")
     return " — ".join(parts) if parts else "Toàn quốc, tất cả kênh"

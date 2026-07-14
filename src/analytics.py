@@ -17,7 +17,7 @@ def get_sales_and_kpi_analytics():
     """
     from sqlalchemy import text
     try:
-        from ai_agent.chatbot import _get_cloud_engine
+        from src.database import _get_cloud_engine
     except Exception as e:
         return {"error": f"Không import được engine dữ liệu: {e}"}
 
