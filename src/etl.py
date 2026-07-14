@@ -105,9 +105,17 @@ def _period_revenue(start_dt, end_dt, region=None):
     liệu Postgres cũ/gần đúng) — ưu tiên "báo lỗi rõ ràng" hơn "hiện số có thể sai" cho con số quan
     trọng nhất của mọi báo cáo. Các hàm gọi _period_revenue nên tự try/except nếu cần chạy tiếp dù
     thiếu doanh thu (đã áp dụng ở get_digest_metrics/_revenue_trend qua đường try/except sẵn có).
+
+    14/07/2026: khi có lọc vùng (region), đổi JOIN -> LEFT JOIN + COALESCE với CASE suy luận vùng
+    theo tiền tố mã khách hàng (src/region_map.py::CUSTOMER_CODE_PREFIX_TO_REGION) — cùng lý do với
+    _revenue_by_region: khách "mồ côi" (không có hồ sơ trong DMS_KhachHang, vd HCM13508) bị INNER
+    JOIN loại thẳng khỏi doanh thu theo vùng, gây thiếu số thật (xác nhận: HCM13508 riêng năm 2024
+    đã thiếu 762.287.986đ khỏi doanh thu OTC Miền Nam). Xây CASE trong SQL (thay vì lọc ở Python)
+    để giữ hiệu năng — hàm này gọi rất thường xuyên (digest hàng ngày, vòng lặp trend nhiều ngày).
     """
     from sqlalchemy import text, bindparam
     from src.database import _get_bravo_engine
+    from src.region_map import CUSTOMER_CODE_PREFIX_TO_REGION
 
     engine = _get_bravo_engine()
     if engine is None:
@@ -122,9 +130,14 @@ def _period_revenue(start_dt, end_dt, region=None):
     # ETC (vHoaDonETCTotal) ĐÃ lộ sẵn CityId -> join thẳng DIM_TinhThanhPho, không cần thêm bảng.
     otc_region_join, etc_region_join, region_where = "", "", ""
     if markers:
-        otc_region_join = "JOIN dbo.DMS_KhachHang k ON v.CustomerCode = k.Code JOIN dbo.DIM_TinhThanhPho rt ON k.CityId = rt.CityId"
-        etc_region_join = "JOIN dbo.DIM_TinhThanhPho rt ON v.CityId = rt.CityId"
-        region_where = " AND rt.AreaCode IN :region_markers"
+        prefix_case = " ".join(
+            f"WHEN v.CustomerCode LIKE '{prefix}%' THEN '{area}'"
+            for prefix, area in CUSTOMER_CODE_PREFIX_TO_REGION.items()
+        )
+        area_expr = f"COALESCE(rt.AreaCode, CASE {prefix_case} ELSE NULL END)"
+        otc_region_join = "LEFT JOIN dbo.DMS_KhachHang k ON v.CustomerCode = k.Code LEFT JOIN dbo.DIM_TinhThanhPho rt ON k.CityId = rt.CityId"
+        etc_region_join = "LEFT JOIN dbo.DIM_TinhThanhPho rt ON v.CityId = rt.CityId"
+        region_where = f" AND {area_expr} IN :region_markers"
         params["region_markers"] = tuple(markers)
 
     otc_sql = text(f'''
