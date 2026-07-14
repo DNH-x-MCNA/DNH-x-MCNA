@@ -384,29 +384,35 @@ def get_customer_regions_by_code(customer_codes, channel_label):
 _BRAVO_RECEIVABLES_SQL = """
 WITH Receivables AS (
     SELECT k.[Code] AS customer_code, k.[Name] AS customer_name, N'OTC' AS sales_channel,
+           rt.[AreaCode] AS area_code,
            (h.[TotalAmount] - h.[PaidAmount]) AS amount,
            DATEDIFF(day, DATEADD(day, ISNULL(h.[DueDate], 0), h.[DocDate]), GETDATE()) AS overdue_days
     FROM [BRV_HTTDuDK] h
     JOIN [BRV_KhachHang] k ON h.[CustomerId] = k.[Id]
+    LEFT JOIN [DMS_KhachHang] d ON k.[DMSId] = d.[Id]
+    LEFT JOIN [DIM_TinhThanhPho] rt ON d.[CityId] = rt.[CityId]
     WHERE h.[Account] LIKE '131%' AND (h.[TotalAmount] - h.[PaidAmount]) > 0
       AND k.[IsCustomer] = 1 AND k.[Code] <> 'NCC100122'
     UNION ALL
     SELECT k.[Code], k.[Name], N'ETC',
+           rt.[AreaCode],
            (h.[TotalAmount] - h.[PaidAmount]),
            DATEDIFF(day, DATEADD(day, ISNULL(h.[DueDate], 0), h.[DocDate]), GETDATE())
     FROM [BRVSX_HTTDuDK] h
     JOIN [BRVSX_KhachHang] k ON h.[CustomerId] = k.[Id]
+    LEFT JOIN [DMSSX_KhachHang] d ON k.[DMSId] = d.[Id]
+    LEFT JOIN [DIM_TinhThanhPho] rt ON d.[CityId] = rt.[CityId]
     WHERE h.[Account] LIKE '131%' AND (h.[TotalAmount] - h.[PaidAmount]) > 0
       AND k.[IsCustomer] = 1 AND k.[Code] <> 'NCC100122'
 )
-SELECT customer_code, customer_name, sales_channel,
+SELECT customer_code, customer_name, sales_channel, area_code,
     SUM(amount) AS balance_end,
     SUM(CASE WHEN overdue_days BETWEEN 1 AND 15 THEN amount ELSE 0 END) AS overdue_1_15,
     SUM(CASE WHEN overdue_days BETWEEN 16 AND 30 THEN amount ELSE 0 END) AS overdue_15_30,
     SUM(CASE WHEN overdue_days BETWEEN 31 AND 45 THEN amount ELSE 0 END) AS overdue_30_45,
     SUM(CASE WHEN overdue_days > 45 THEN amount ELSE 0 END) AS overdue_gt_45
 FROM Receivables
-GROUP BY customer_code, customer_name, sales_channel
+GROUP BY customer_code, customer_name, sales_channel, area_code
 """
 
 
@@ -426,9 +432,13 @@ def get_bravo_receivables_snapshot():
     check_debt_aging_migration_alert cần so 2 kỳ trước/sau — hàm đó vẫn giữ đọc receivable_detail
     vì Bravo không có cơ chế snapshot theo kỳ).
 
-    Trả về list các object có field: customer_code, customer_name, sales_channel, balance_end,
-    overdue_1_15, overdue_15_30, overdue_30_45, overdue_gt_45 (Decimal). Raise exception nếu Bravo
-    không truy cập được — người gọi tự bắt để fallback sang receivable_detail (Supabase).
+    Trả về list các object có field: customer_code, customer_name, sales_channel, area_code,
+    balance_end, overdue_1_15, overdue_15_30, overdue_30_45, overdue_gt_45 (Decimal). area_code
+    (14/07/2026, mới thêm) join qua BRV_KhachHang/BRVSX_KhachHang.DMSId -> DMS_KhachHang/
+    DMSSX_KhachHang.Id -> CityId -> DIM_TinhThanhPho — xác nhận thực tế join khớp 99,6% khách OTC
+    và 95,9% khách ETC (số ít không khớp -> area_code NULL, coi là "Không rõ" khi hiển thị). Raise
+    exception nếu Bravo không truy cập được — người gọi tự bắt để fallback sang receivable_detail
+    (Supabase).
     """
     from sqlalchemy import text
     from src.database import _get_bravo_engine
