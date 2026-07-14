@@ -20,15 +20,18 @@ SCHEMA_CONTEXT = """
 dat trong dau ngoac kep (SQLite khong phan biet hoa/thuong nhu Postgres). Dung LIMIT N (khong dung
 TOP N cua T-SQL). Ham ngay thang: date(), julianday() - cot doc_date/save_date la dang text 'YYYY-MM-DD'. ===
 
-vhoadon_otc (moi dong la 1 dong hoa don chi tiet, kenh OTC - nha thuoc/nha phan phoi):
+vhoadon_otc (moi dong la 1 dong hoa don chi tiet, kenh OTC - nha thuoc/nha phan phoi. Dong bo tu
+  vHoaDonTotal ben Bravo - DA xac nhan day la nguon DAY DU, co ca cac dong dieu chinh/hoan don
+  (Amount9 am) ma nguon cu (vHoaDon) am tham loai bo gay overstate doanh thu):
   doc_date (text 'YYYY-MM-DD', so sanh truc tiep vd doc_date BETWEEN '2026-07-01' AND '2026-07-03'),
-  customer_code, item_code, amount9 (doanh thu - dung SUM(amount9) de tinh doanh thu),
-  quantity, unit_price (=0 la hang khuyen mai/tang, loai khoi so luong ban that khi tinh Top SP),
-  stt (ma chung tu, dung COUNT(DISTINCT stt) de dem so hoa don), city_id (CO TREN BANG NHUNG KHONG
-  DANG TIN - DA ben Bravo da xac nhan truong nay hay bi sai/thieu so voi vung thuc te cua khach hang.
-  TUYET DOI KHONG dung truc tiep de loc/nhom theo vung mien - da tung gay lech doanh thu ~18 ty/6
-  thang cho 1 vung. Muon biet vung mien PHAI JOIN qua customer_code -> dms_khachhang.code -> city_id,
-  giong het cach lam voi ETC ben duoi),
+  customer_code, item_code, amount9 (doanh thu - dung SUM(amount9) de tinh doanh thu - CO THE AM
+  neu la dong dieu chinh/hoan, dung SUM binh thuong la tu dong tru dung, KHONG duoc loc amount9>0),
+  quantity, unit_price (=0 la hang khuyen mai/tang, loai khoi so luong ban that khi tinh Top SP -
+  LUU Y: cac dong so luong=0 nay hiem/khong con day du tu khi doi nguon, dung de uoc luong, KHONG
+  dung de bao cao chinh xac SL hang khuyen mai),
+  stt (ma chung tu, dung COUNT(DISTINCT stt) de dem so hoa don). KHONG CO city_id (nguon vHoaDonTotal
+  khong co truong nay) - muon biet vung mien PHAI JOIN qua customer_code -> dms_khachhang.code ->
+  city_id, giong het cach lam voi ETC ben duoi,
   employee_code (ma NHAN VIEN BAN HANG CA NHAN gan voi hoa don nay, vd 'tungtx' - CHI co gia tri cho
   nhan vien ca nhan, ma khu vuc/quan ly vung nhu MBKV*/ASM* KHONG xuat hien o day),
   created_at (text 'YYYY-MM-DD HH:MM:SS' - thoi diem BAN GHI THUC SU duoc tao trong Bravo, KHAC voi
