@@ -963,10 +963,24 @@ def _send_with_retry(fn, *args, max_retries=2, delays=(3, 6), **kwargs):
 # vẫn chỉ nhận đúng phần alert liên quan tới mình, không lẫn card của audience khác.
 _pending_critical_teams_alerts = []
 
+def _post_teams_webhook(webhook_url, payload):
+    """POST 1 payload JSON thẳng tới webhook_url — raise exception khi lỗi (để _send_with_retry
+    bắt được và retry), KHÔNG tự nuốt lỗi ở đây."""
+    data = json.dumps(payload).encode('utf-8')
+    req = urllib.request.Request(webhook_url.strip(), data=data, headers={'Content-Type': 'application/json'})
+    with urllib.request.urlopen(req, timeout=10):
+        return True
+
 def flush_critical_teams_queue():
     """Gửi TẤT CẢ alert CRITICAL đang chờ trong hàng đợi (xem _pending_critical_teams_alerts) —
-    gộp thành 1 card duy nhất CHO MỖI webhook đích, rồi xoá sạch hàng đợi. Gọi 1 LẦN ở CUỐI mỗi chu
-    kỳ quét (main.py::run_all_alert_checks), KHÔNG gọi giữa chừng — gọi sớm sẽ gộp thiếu."""
+    gộp thành 1 card duy nhất CHO MỖI webhook đích. Gọi 1 LẦN ở CUỐI mỗi chu kỳ quét
+    (main.py::run_all_alert_checks), KHÔNG gọi giữa chừng — gọi sớm sẽ gộp thiếu.
+
+    14/07/2026: trước đó `_pending_critical_teams_alerts = []` chạy VÔ ĐIỀU KIỆN sau vòng lặp,
+    kể cả khi 1/nhiều webhook gửi thất bại (lỗi mạng/timeout) — mất hẳn alert CRITICAL của audience
+    đó, không retry, không log lại để gửi bù ở chu kỳ sau. Giờ dùng _send_with_retry (retry 2 lần)
+    cho mỗi webhook, và CHỈ xoá khỏi hàng đợi những item thuộc webhook đã gửi THÀNH CÔNG — item nào
+    gửi thất bại (hết retry) vẫn nằm lại hàng đợi, tự động gộp cùng alert mới ở chu kỳ quét sau."""
     global _pending_critical_teams_alerts
     if not _pending_critical_teams_alerts:
         return
@@ -975,16 +989,16 @@ def flush_critical_teams_queue():
         for webhook_url, audience in item["webhooks"]:
             group = by_webhook.setdefault(webhook_url, {"audience": audience, "alerts": []})
             group["alerts"].append(item)
+    failed_item_ids = set()
     for webhook_url, group in by_webhook.items():
         payload = _build_teams_consolidated_card(group["alerts"])
-        try:
-            data = json.dumps(payload).encode('utf-8')
-            req = urllib.request.Request(webhook_url.strip(), data=data, headers={'Content-Type': 'application/json'})
-            with urllib.request.urlopen(req, timeout=10) as response:
-                print(f"[TEAMS] Da gui card gop ({len(group['alerts'])} canh bao) toi audience '{group['audience'] or 'mac dinh'}'.")
-        except Exception as e:
-            print(f"[TEAMS] Loi gui card gop toi audience '{group['audience'] or 'mac dinh'}': {e}")
-    _pending_critical_teams_alerts = []
+        ok = _send_with_retry(_post_teams_webhook, webhook_url, payload)
+        if ok:
+            print(f"[TEAMS] Da gui card gop ({len(group['alerts'])} canh bao) toi audience '{group['audience'] or 'mac dinh'}'.")
+        else:
+            print(f"[TEAMS] Loi gui card gop toi audience '{group['audience'] or 'mac dinh'}' — giữ lại hàng đợi, thử lại chu kỳ sau.")
+            failed_item_ids.update(id(item) for item in group["alerts"])
+    _pending_critical_teams_alerts = [item for item in _pending_critical_teams_alerts if id(item) in failed_item_ids]
 
 def _build_teams_consolidated_card(alerts):
     """1 Adaptive Card liệt kê NHIỀU alert CRITICAL cùng lúc (xem flush_critical_teams_queue) —

@@ -1042,32 +1042,11 @@ class DNHChatbot:
 
     def ask(self, user_question, session_key=None, username=None):
         """Translates natural language question to SQL, runs it, and formats response."""
-        if user_question.strip() == "admin_restart_bot_process":
-            # Acknowledge the update to Telegram to break the infinite restart loop
-            try:
-                import urllib.request
-                import json
-                token = os.getenv("TELEGRAM_BOT_TOKEN", "")
-                if token:
-                    # Fetch latest updates to get the update_id of this restart command
-                    get_url = f"https://api.telegram.org/bot{token}/getUpdates?limit=10"
-                    with urllib.request.urlopen(get_url, timeout=5) as resp:
-                        res = json.loads(resp.read().decode('utf-8'))
-                        if res.get("ok") and res.get("result"):
-                            # Find the update_id of the restart message
-                            max_update_id = None
-                            for update in res["result"]:
-                                msg = update.get("message", {})
-                                if msg.get("text", "").strip() == "admin_restart_bot_process":
-                                    max_update_id = max(max_update_id or 0, update["update_id"])
-                            if max_update_id is not None:
-                                # Send getUpdates with offset to acknowledge the message
-                                ack_url = f"https://api.telegram.org/bot{token}/getUpdates?offset={max_update_id + 1}&limit=1"
-                                urllib.request.urlopen(ack_url, timeout=5).close()
-            except Exception as e:
-                print(f"[Error acknowledging restart update]: {e}")
-                
-            os._exit(0)
+        # 14/07/2026: xóa hẳn "admin_restart_bot_process" kill-switch — cơ chế restart qua
+        # Telegram cũ (kênh đã ngừng dùng), nhưng nằm trong ask() là điểm vào CHUNG cho MỌI kênh
+        # (kể cả web chatbot công khai) và KHÔNG xác thực người gọi — bất kỳ ai gõ đúng câu này
+        # vào ô chat web cũng gọi được os._exit(0), tắt cả tiến trình cho toàn bộ người dùng
+        # (DoS không cần đăng nhập). Phát hiện qua audit bảo mật toàn repo.
 
         # Resolve user role/scope based on session_key or username — tổng quát theo token miền
         # (bac/nam/trung) + kênh (otc/etc) trong username, KHÔNG hard-code từng role riêng lẻ.
