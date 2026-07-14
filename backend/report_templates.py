@@ -91,9 +91,14 @@ def top_customers(date_from: str, date_to: str, limit: int = 10, channel: str = 
 
 
 def revenue_by_region(date_from: str, date_to: str) -> list:
-    """Doanh thu theo vung mien (MB/MT/MN), gop ca OTC + ETC. CA HAI deu join qua bang khach hang de
-    lay city_id (da doi chieu voi DA ben Bravo va xac nhan day la cach dung - KHONG dung city_id ghi
-    truc tiep tren vhoadon_otc vi truong nay khong dang tin, tung gay lech doanh thu theo vung)."""
+    """Doanh thu theo vung mien (MB/MT/MN), gop ca OTC + ETC. CA HAI deu LEFT JOIN qua bang khach hang
+    de lay city_id (da doi chieu voi DA ben Bravo va xac nhan day la cach dung - KHONG dung city_id ghi
+    truc tiep tren vhoadon_otc vi truong nay khong dang tin, tung gay lech doanh thu theo vung).
+    BAT BUOC LEFT JOIN (khong duoc INNER JOIN) - khach "mo coi" khong co trong bang khach hang (vd
+    HCM13508 - co that, ~2.3 ty doanh thu 2022-2025, KHONG co trong dms_khachhang) se bi INNER JOIN
+    am tham loai bo ca khoi tong lan breakdown. Voi LEFT JOIN, khach mo coi roi vao bucket
+    "Khac/chua xac dinh" thay vi bien mat - xem TODO doi len suy luan qua tien to ma KH (src/region_map.py,
+    chua tich hop) truoc khi chap nhan la "Khac/chua xac dinh"."""
     rows = _q("""
         SELECT tp.area_code area, SUM(o.amount9) rev
         FROM vhoadon_otc o LEFT JOIN dms_khachhang kh ON kh.code=o.customer_code
@@ -110,6 +115,18 @@ def revenue_by_region(date_from: str, date_to: str) -> list:
         area = r["area"] or "Khac/chua xac dinh"
         agg[area] = agg.get(area, 0.0) + _f(r["rev"])
     total = sum(agg.values())
+
+    # Tu doi chieu (re # 4): tong cong theo vung PHAI bang dung tong khong loc vung cung ky - neu
+    # lech tuc la co JOIN nao do dang am tham lam roi du lieu (vd bi doi lai thanh INNER JOIN).
+    raw_total = _f(_q("SELECT COALESCE(SUM(amount9),0) t FROM vhoadon_otc WHERE doc_date BETWEEN ? AND ?",
+                       (date_from, date_to))[0]["t"]) + \
+                _f(_q("SELECT COALESCE(SUM(amount9),0) t FROM vhoadon_etc WHERE doc_date BETWEEN ? AND ?",
+                       (date_from, date_to))[0]["t"])
+    if abs(total - raw_total) > 1:
+        _write_log({"ts": dt.datetime.now().isoformat(), "status": "warn",
+                    "sql": "<revenue_by_region reconciliation check>",
+                    "error": f"Tong theo vung ({total}) LECH voi tong khong loc vung ({raw_total}) - "
+                             f"co JOIN dang lam roi du lieu, kiem tra lai ngay."})
     return [{"area": k, "revenue": v, "share_pct": (v / total * 100 if total else 0.0)}
             for k, v in sorted(agg.items(), key=lambda x: -x[1])]
 

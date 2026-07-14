@@ -30,16 +30,29 @@ vhoadon_otc (moi dong la 1 dong hoa don chi tiet, kenh OTC - nha thuoc/nha phan 
   LUU Y: cac dong so luong=0 nay hiem/khong con day du tu khi doi nguon, dung de uoc luong, KHONG
   dung de bao cao chinh xac SL hang khuyen mai),
   stt (ma chung tu, dung COUNT(DISTINCT stt) de dem so hoa don). KHONG CO city_id (nguon vHoaDonTotal
-  khong co truong nay) - muon biet vung mien PHAI JOIN qua customer_code -> dms_khachhang.code ->
-  city_id, giong het cach lam voi ETC ben duoi,
+  khong co truong nay) - muon biet vung mien PHAI **LEFT JOIN** (TUYET DOI KHONG duoc INNER JOIN) qua
+  customer_code -> dms_khachhang.code -> city_id, giong het cach lam voi ETC ben duoi. INNER JOIN se
+  am tham loai bo khach hang "mo coi" (khong co trong dms_khachhang, vd HCM13508 - khach hang THAT,
+  ~2.3 ty doanh thu 2022-2025) khoi CA breakdown lan tong so - sai ma khong co dau hieu bao truoc. Voi
+  LEFT JOIN, khach mo coi se co area_code=NULL - LUON GOM vao 1 nhom rieng ("Khac/chua xac dinh") va
+  BAO CHO NGUOI DUNG BIET neu nhom nay > 0, KHONG duoc am tham bo qua khi tra loi cau hoi theo vung,
   employee_code (ma NHAN VIEN BAN HANG CA NHAN gan voi hoa don nay, vd 'tungtx' - CHI co gia tri cho
   nhan vien ca nhan, ma khu vuc/quan ly vung nhu MBKV*/ASM* KHONG xuat hien o day),
   created_at (text 'YYYY-MM-DD HH:MM:SS' - thoi diem BAN GHI THUC SU duoc tao trong Bravo, KHAC voi
   doc_date la ngay chung tu ghi tren hoa don (co the bi chon tay/backdate). So sanh 2 cot nay de phat
   hien "chay don don KPI" - xem tool check_order_timing).
 
-vhoadon_etc: doanh thu kenh ETC (benh vien). Cau truc GIONG vhoadon_otc (cung KHONG dung city_id
-  rieng cua hoa don) - muon biet vung mien phai JOIN qua customer_code -> dmssx_khachhang.code -> city_id.
+vhoadon_etc: doanh thu kenh ETC (benh vien). Dong bo tu vHoaDonETCTotal (KHONG PHAI vHoaDonETC - cung
+  ly do nhu OTC, nguon cu thieu dong dieu chinh/hoan). Cau truc GIONG vhoadon_otc (cung KHONG dung
+  city_id rieng cua hoa don) - muon biet vung mien phai **LEFT JOIN** (KHONG INNER JOIN, xem giai
+  thich o vhoadon_otc phia tren) qua customer_code -> dmssx_khachhang.code -> city_id.
+
+QUY TAC BAT BUOC khi tra loi cau hoi "doanh thu theo vung/mien X": sau khi tinh xong, TU KIEM TRA
+tong cong tat ca cac vung (gom ca "Khac/chua xac dinh") co dung bang tong KHONG loc vung cua cung ky
+khong (vd SELECT SUM(amount9) khong GROUP BY gi ca) - neu lech dau la co JOIN nao dang lam roi du lieu.
+Neu nguoi dung hoi rieng 1 vung (vd "doanh thu mien Nam"), van nen kiem tra xem co nhom "Khac/chua xac
+dinh" dang ton tai khong o cung ky do - neu co, PHAI de cap voi nguoi dung (khong bat buoc cong gop vao
+so tra loi, nhung phai noi ro co X dong chua xac dinh duoc vung).
 
 dim_tinhthanhpho: city_id, city_name, area_code (MB=Mien Bac, MT=Mien Trung, MN=Mien Nam).
 dim_targetvungmien: target doanh thu OTC theo vung/thang. Cot: area_code, channel_code (loc ='GT'

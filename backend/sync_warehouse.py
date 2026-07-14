@@ -181,12 +181,14 @@ def main():
     # LUU Y: vHoaDonTotal cung khong co cac dong so luong=0 (hang khuyen mai/tang kem) ma vHoaDon co -
     # khong anh huong tinh doanh thu (amount9=0) nhung neu sau nay can phan tich rieng SL hang khuyen mai
     # thi phai tim nguon khac (vd cot CTKM tren vHoaDonTotal, chua kham pha).
+    # ETC cung dong bo tu vHoaDonETCTotal (KHONG PHAI vHoaDonETC) - cung ly do nhu OTC: vHoaDonETC
+    # thieu cac dong dieu chinh/hoan (DocCode='HC'), da xac nhan lech ~1.13 ty rieng nam 2025 toan quoc.
     if a.full:
         sync_hoadon_full("vHoaDonTotal", "vhoadon_otc", has_city=False)
-        sync_hoadon_full("vHoaDonETC", "vhoadon_etc", has_city=False)
+        sync_hoadon_full("vHoaDonETCTotal", "vhoadon_etc", has_city=False)
     else:
         sync_hoadon_recent("vHoaDonTotal", "vhoadon_otc", has_city=False)
-        sync_hoadon_recent("vHoaDonETC", "vhoadon_etc", has_city=False)
+        sync_hoadon_recent("vHoaDonETCTotal", "vhoadon_etc", has_city=False)
 
     for bravo_tbl, local_tbl, bravo_cols, local_cols in SMALL_TABLES:
         sync_small_table(bravo_tbl, local_tbl, bravo_cols, local_cols)
