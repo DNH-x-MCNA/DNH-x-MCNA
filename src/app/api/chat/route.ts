@@ -8,11 +8,13 @@ export async function POST(request: Request) {
   }
 
   const body = await request.text();
+  const authHeader = request.headers.get("authorization");
   const res = await fetch(`${backendUrl}/chat`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       ...(apiKey ? { "X-API-Key": apiKey } : {}),
+      ...(authHeader ? { Authorization: authHeader } : {}),
     },
     body,
   });

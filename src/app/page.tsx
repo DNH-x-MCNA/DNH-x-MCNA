@@ -36,7 +36,22 @@ const SAMPLE_QUESTIONS = [
 // duyet khong bao gio thay duoc URL that/API key cua backend.
 const API_URL = "/api";
 const SESSION_KEY = "dnh_chat_session_id";
-const API_HEADERS: HeadersInit = { "Content-Type": "application/json" };
+const AUTH_TOKEN_KEY = "dnh_auth_token";
+
+function authHeaders(token: string | null): HeadersInit {
+  return {
+    "Content-Type": "application/json",
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+  };
+}
+
+type UserInfo = { username: string; name: string | null; role: string; scope_value: string | null };
+
+const ROLE_LABELS: Record<string, string> = {
+  c_level: "Ban Điều Hành (toàn công ty)",
+  regional_director: "Giám đốc miền",
+  qlv: "Quản lý vùng",
+};
 
 // Style rieng cho tung the Markdown trong bong bong chat cua bot (bang, in dam, danh sach...)
 const markdownComponents = {
@@ -84,11 +99,42 @@ export default function Home() {
   const [historyLoaded, setHistoryLoaded] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
 
-  // Khoi tao session + nap lai lich su hoi thoai cu (neu co) khi mo trang
+  // Trang thai dang nhap - kiem tra token da luu truoc khi cho vao giao dien chat
+  const [authToken, setAuthToken] = useState<string | null>(null);
+  const [userInfo, setUserInfo] = useState<UserInfo | null>(null);
+  const [authChecking, setAuthChecking] = useState(true);
+  const [loginUsername, setLoginUsername] = useState("");
+  const [loginPassword, setLoginPassword] = useState("");
+  const [loginError, setLoginError] = useState("");
+  const [loginSubmitting, setLoginSubmitting] = useState(false);
+
+  // Kiem tra token da luu (neu co) ngay khi mo trang - xac nhan qua /auth/me truoc khi cho vao chat
   useEffect(() => {
+    const saved = typeof window !== "undefined" ? window.localStorage.getItem(AUTH_TOKEN_KEY) : null;
+    if (!saved) {
+      setAuthChecking(false);
+      return;
+    }
+    fetch(`${API_URL}/auth/me`, { headers: authHeaders(saved) })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((info: UserInfo | null) => {
+        if (info) {
+          setAuthToken(saved);
+          setUserInfo(info);
+        } else {
+          window.localStorage.removeItem(AUTH_TOKEN_KEY);
+        }
+      })
+      .catch(() => {})
+      .finally(() => setAuthChecking(false));
+  }, []);
+
+  // Khoi tao session + nap lai lich su hoi thoai cu (neu co) khi mo trang - CHI sau khi dang nhap xong
+  useEffect(() => {
+    if (!authToken) return;
     const sid = getOrCreateSessionId();
     setSessionId(sid);
-    fetch(`${API_URL}/history/${sid}`, { headers: API_HEADERS })
+    fetch(`${API_URL}/history/${sid}`, { headers: authHeaders(authToken) })
       .then((r) => (r.ok ? r.json() : []))
       .then((history: HistoryMessage[]) => {
         setMessages(
@@ -100,7 +146,47 @@ export default function Home() {
       })
       .catch(() => {})
       .finally(() => setHistoryLoaded(true));
-  }, []);
+  }, [authToken]);
+
+  async function handleLogin(e: FormEvent) {
+    e.preventDefault();
+    if (!loginUsername.trim() || !loginPassword || loginSubmitting) return;
+    setLoginSubmitting(true);
+    setLoginError("");
+    try {
+      const res = await fetch(`${API_URL}/auth/login`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username: loginUsername.trim(), password: loginPassword }),
+      });
+      if (!res.ok) {
+        throw new Error("Tài khoản hoặc mật khẩu không đúng");
+      }
+      const data = await res.json();
+      window.localStorage.setItem(AUTH_TOKEN_KEY, data.token);
+      setAuthToken(data.token);
+      setUserInfo({ username: loginUsername.trim(), name: data.name, role: data.role, scope_value: data.scope_value });
+      setLoginPassword("");
+    } catch (e) {
+      setLoginError((e as Error).message);
+    } finally {
+      setLoginSubmitting(false);
+    }
+  }
+
+  async function handleLogout() {
+    if (authToken) {
+      try {
+        await fetch(`${API_URL}/auth/logout`, { method: "POST", headers: authHeaders(authToken) });
+      } catch {
+        // bo qua loi logout phia server - van xoa token cuc bo
+      }
+    }
+    window.localStorage.removeItem(AUTH_TOKEN_KEY);
+    setAuthToken(null);
+    setUserInfo(null);
+    setMessages([]);
+  }
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -114,7 +200,7 @@ export default function Home() {
     try {
       const res = await fetch(`${API_URL}/chat`, {
         method: "POST",
-        headers: API_HEADERS,
+        headers: authHeaders(authToken),
         body: JSON.stringify({ question, session_id: sessionId }),
       });
       if (!res.ok) {
@@ -145,7 +231,7 @@ export default function Home() {
   async function startNewConversation() {
     if (loading) return;
     try {
-      await fetch(`${API_URL}/clear/${sessionId}`, { method: "POST", headers: API_HEADERS });
+      await fetch(`${API_URL}/clear/${sessionId}`, { method: "POST", headers: authHeaders(authToken) });
     } catch {
       // bo qua loi xoa - van tao session moi phia client
     }
@@ -160,6 +246,59 @@ export default function Home() {
     sendQuestion(input);
   }
 
+  if (authChecking) {
+    return (
+      <div className="flex h-screen items-center justify-center bg-slate-50 text-sm text-slate-400">
+        Đang kiểm tra đăng nhập...
+      </div>
+    );
+  }
+
+  if (!authToken) {
+    return (
+      <div className="flex h-screen items-center justify-center bg-slate-50 px-4">
+        <form
+          onSubmit={handleLogin}
+          className="w-full max-w-sm rounded-2xl border border-slate-200 bg-white p-8 shadow-sm"
+        >
+          <div className="mb-6 flex flex-col items-center gap-2">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src="/namha-logo.png" alt="NAMHA PHARMA" className="h-10 w-auto" />
+            <h1 className="text-center text-lg font-bold text-slate-900">Đăng nhập AI Analyst</h1>
+            <p className="text-center text-xs text-slate-500">Dược Nam Hà · Trợ lý phân tích dữ liệu kinh doanh</p>
+          </div>
+          <div className="flex flex-col gap-3">
+            <input
+              type="text"
+              placeholder="Tên đăng nhập"
+              value={loginUsername}
+              onChange={(e) => setLoginUsername(e.target.value)}
+              className="rounded-lg border border-slate-300 px-4 py-2.5 text-sm outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
+              disabled={loginSubmitting}
+              autoFocus
+            />
+            <input
+              type="password"
+              placeholder="Mật khẩu"
+              value={loginPassword}
+              onChange={(e) => setLoginPassword(e.target.value)}
+              className="rounded-lg border border-slate-300 px-4 py-2.5 text-sm outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
+              disabled={loginSubmitting}
+            />
+            {loginError && <p className="text-xs text-red-600">{loginError}</p>}
+            <button
+              type="submit"
+              disabled={loginSubmitting || !loginUsername.trim() || !loginPassword}
+              className="mt-1 rounded-lg bg-blue-600 py-2.5 text-sm font-medium text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              {loginSubmitting ? "Đang đăng nhập..." : "Đăng nhập"}
+            </button>
+          </div>
+        </form>
+      </div>
+    );
+  }
+
   return (
     <div className="flex h-screen flex-col bg-slate-50">
       <header className="border-b border-slate-200 bg-slate-900 px-6 py-4 text-white">
@@ -172,13 +311,31 @@ export default function Home() {
               <h1 className="text-xl font-bold">Trợ lý phân tích dữ liệu kinh doanh</h1>
             </div>
           </div>
-          <button
-            onClick={startNewConversation}
-            title="Bắt đầu cuộc trò chuyện mới (xóa ngữ cảnh hiện tại)"
-            className="rounded-full border border-slate-600 px-4 py-2 text-xs text-slate-200 transition hover:border-blue-400 hover:text-blue-300"
-          >
-            + Cuộc trò chuyện mới
-          </button>
+          <div className="flex items-center gap-3">
+            {userInfo && (
+              <div className="hidden text-right text-xs text-slate-300 sm:block">
+                <div className="font-medium text-white">{userInfo.name || userInfo.username}</div>
+                <div>
+                  {ROLE_LABELS[userInfo.role] || userInfo.role}
+                  {userInfo.scope_value ? ` · ${userInfo.scope_value}` : ""}
+                </div>
+              </div>
+            )}
+            <button
+              onClick={startNewConversation}
+              title="Bắt đầu cuộc trò chuyện mới (xóa ngữ cảnh hiện tại)"
+              className="rounded-full border border-slate-600 px-4 py-2 text-xs text-slate-200 transition hover:border-blue-400 hover:text-blue-300"
+            >
+              + Cuộc trò chuyện mới
+            </button>
+            <button
+              onClick={handleLogout}
+              title="Đăng xuất"
+              className="rounded-full border border-slate-600 px-4 py-2 text-xs text-slate-200 transition hover:border-red-400 hover:text-red-300"
+            >
+              Đăng xuất
+            </button>
+          </div>
         </div>
       </header>
 

@@ -1,4 +1,4 @@
-export async function POST(_request: Request, ctx: RouteContext<"/api/clear/[sessionId]">) {
+export async function POST(request: Request, ctx: RouteContext<"/api/clear/[sessionId]">) {
   const { sessionId } = await ctx.params;
   const backendUrl = process.env.BACKEND_API_URL;
   const apiKey = process.env.BACKEND_API_KEY;
@@ -6,9 +6,13 @@ export async function POST(_request: Request, ctx: RouteContext<"/api/clear/[ses
     return Response.json({ detail: "Backend chua duoc cau hinh (BACKEND_API_URL)" }, { status: 500 });
   }
 
+  const authHeader = request.headers.get("authorization");
   const res = await fetch(`${backendUrl}/clear/${encodeURIComponent(sessionId)}`, {
     method: "POST",
-    headers: apiKey ? { "X-API-Key": apiKey } : {},
+    headers: {
+      ...(apiKey ? { "X-API-Key": apiKey } : {}),
+      ...(authHeader ? { Authorization: authHeader } : {}),
+    },
   });
 
   const data = await res.text();
