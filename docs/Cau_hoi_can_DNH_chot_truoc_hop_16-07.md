@@ -34,11 +34,13 @@ Hệ thống báo cáo/cảnh báo hiện đã chạy trên dữ liệu thật, 
 
 **Cần DNH hỗ trợ**: Công thức/bảng chuẩn để tính đúng số lượng tồn kho hiện tại của 1 mã hàng từ dữ liệu Bravo (thẻ kho, tồn kho đầu kỳ...) — hoặc xác nhận có bảng nào trên Bravo đã có sẵn số tồn tính đúng mà nhóm chưa biết tới.
 
-## 5. Nhóm 9.287 khách hàng có `CustomerType = 2`
+## 5. Cờ nhận diện "không phải khách hàng thật" trong `BRV_KhachHang`
 
-**Hiện trạng**: Đã xác nhận và loại 1 mã khách hàng cụ thể (NCC100122) ra khỏi tính toán công nợ vì đây thực chất là nhà cung cấp, không phải khách hàng. Rà lại thấy còn 9.287 bản ghi khác cũng mang `CustomerType = 2` — CHƯA loại các bản ghi này (chỉ loại đúng 1 mã đã xác nhận).
+**Đã tự đối chiếu, không còn cần DNH xác nhận phần chính**: Trước đó nghi ngờ `CustomerType = 2` (9.483 bản ghi) là cờ chung cho "không phải khách hàng thật" — kiểm tra lại bằng dữ liệu thật thì **KHÔNG đúng**: 97,9% nhóm này (`IsCustomer=1`) là khách "QUẦY THUỐC..." có thật, đối chiếu với `KenhBH` cũng cho thấy không liên quan gì đến phân kênh OTC/ETC. `CustomerType` nhiều khả năng chỉ là phân loại định dạng khách hàng (vd Nhà thuốc lớn vs Quầy thuốc nhỏ lẻ), không phải cờ thật/giả — **không loại nhóm này khỏi công nợ**, nếu loại sẽ mất oan 9.287 khách hàng thật.
 
-**Cần DNH xác nhận**: `CustomerType = 2` có phải là quy ước chung cho "không phải khách hàng thật" (nhà cung cấp, nội bộ...) không? Nếu đúng, cần loại toàn bộ nhóm này khỏi các báo cáo/cảnh báo công nợ.
+Cờ đúng để loại khách "không phải khách hàng thật" là **`IsCustomer`** — code hiện tại (`src/alerts.py`) đã dùng đúng cờ này. Mã `NCC100122` (nhà cung cấp) phải loại riêng bằng tay vì bị Bravo đánh dấu NHẦM `IsCustomer=1`. Rà thêm phát hiện 2 mã lỗi tương tự: `TEST00`, `TESt001` (1 mã tên rác "uuuuuu") — cũng bị đánh dấu nhầm `IsCustomer=1`, may là chưa phát sinh hóa đơn nào nên chưa ảnh hưởng số liệu.
+
+**Vẫn cần DNH hỗ trợ**: không có cách tự động 100% để bắt hết các bản ghi bị đánh dấu `IsCustomer` sai như trên (chỉ tìm được 3 mã trên nhờ dò theo tiền tố mã `NCC*`/`TEST*`, không đảm bảo hết) — DNH có quy trình/danh sách nào để rà soát định kỳ các bản ghi `BRV_KhachHang` bị gán sai `IsCustomer` không?
 
 ## 6. Nguồn dữ liệu KPI cho chức danh TP/PP/TBP
 
