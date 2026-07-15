@@ -129,7 +129,7 @@ SMALL_TABLES = [
     ("FACT_KeHoachTongETC", "fact_kehoachtongetc", "DocDate, Amount, ItemGroup", "doc_date,amount,item_group"),
     ("DMSSX_KhachHang", "dmssx_khachhang", "Code, Name, CityId, Id, KenhBH", "code,name,city_id,id_code,kenh_bh"),
     ("DMS_KhachHang", "dms_khachhang", "Code, Name, CityId, Id, EmpDMSCode1, KenhBH", "code,name,city_id,id_code,emp_code,kenh_bh"),
-    ("DIM_NhanVien", "dim_nhanvien", "EmployeeCode, Name, IsDuplicate, PositionCode, AreaCode", "employee_code,name,is_duplicate,position_code,area_code"),
+    ("DIM_NhanVien", "dim_nhanvien", "EmployeeCode, Name, IsDuplicate, PositionCode, AreaCode, DMSId", "employee_code,name,is_duplicate,position_code,area_code,dmsid"),
     ("BRV_SanPham", "brv_sanpham", "Code, Name, GroupCode, Unit", "code,name,group_code,unit"),
     ("BRVSX_TraLai", "brvsx_tralai", "DocDate, Amount9, IsActive, Stt, CustomerCode", "doc_date,amount9,is_active,stt,customer_code"),
     ("DIM_ChucVu", "dim_chucvu", "DISTINCT PositionCode, Description", "position_code,description"),
