@@ -91,6 +91,17 @@ def verify_login(username: str, password: str) -> dict | None:
     return {"id": uid, "username": db_username, "name": name, "role": role, "scope_value": scope_value}
 
 
+def get_name_by_username(username: str) -> str | None:
+    """Tra ten hien thi (name) tu username - dung khi c_level xem danh sach session cua nguoi khac,
+    can hien ten thay vi chi username ky thuat."""
+    conn = get_conn()
+    try:
+        row = conn.execute("SELECT name FROM users WHERE username=?", (username.lower().strip(),)).fetchone()
+        return row[0] if row else None
+    finally:
+        conn.close()
+
+
 def create_session(user_id: int) -> str:
     token = secrets.token_urlsafe(32)
     now = dt.datetime.now()

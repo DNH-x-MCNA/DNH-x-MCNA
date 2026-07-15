@@ -37,8 +37,71 @@ def init():
         last_args TEXT,
         updated_at TEXT NOT NULL
     )""")
+    # sessions: 1 dong = 1 cuoc tro chuyen (nhieu session/nguoi dung, kieu ChatGPT). owner_username
+    # dung de kiem soat quyen xem: nguoi thuong CHI xem duoc session cua chinh minh, c_level xem duoc
+    # tat ca (xem GET /sessions, GET /history/{id} trong main.py).
+    conn.execute("""CREATE TABLE IF NOT EXISTS sessions (
+        session_id TEXT PRIMARY KEY,
+        owner_username TEXT NOT NULL,
+        title TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    )""")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_owner ON sessions(owner_username, updated_at)")
     conn.commit()
     conn.close()
+
+
+def register_session(session_id: str, owner_username: str, first_question: str):
+    """Goi moi lan co tin nhan moi trong session (tu POST /chat) - INSERT neu la session moi (title
+    lay tu ~50 ky tu dau cau hoi DAU TIEN), hoac chi cap nhat updated_at neu session da ton tai (title
+    giu nguyen, khong doi theo cau hoi sau)."""
+    now = time.strftime("%Y-%m-%d %H:%M:%S")
+    title = (first_question or "").strip()[:50] or "Cuộc trò chuyện mới"
+    conn = _conn()
+    try:
+        conn.execute(
+            "INSERT INTO sessions (session_id, owner_username, title, created_at, updated_at) "
+            "VALUES (?,?,?,?,?) "
+            "ON CONFLICT(session_id) DO UPDATE SET updated_at=excluded.updated_at",
+            (session_id, owner_username, title, now, now),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def list_sessions(owner_username: str = None):
+    """owner_username=None (danh cho c_level) tra ve TAT CA session, kem owner_username de biet cua
+    ai; nguoc lai chi tra ve session cua dung nguoi do. Sap xep moi nhat truoc."""
+    conn = _conn()
+    try:
+        if owner_username is None:
+            rows = conn.execute(
+                "SELECT session_id, owner_username, title, created_at, updated_at "
+                "FROM sessions ORDER BY updated_at DESC"
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT session_id, owner_username, title, created_at, updated_at "
+                "FROM sessions WHERE owner_username=? ORDER BY updated_at DESC",
+                (owner_username,),
+            ).fetchall()
+        return [{"session_id": r[0], "owner_username": r[1], "title": r[2],
+                 "created_at": r[3], "updated_at": r[4]} for r in rows]
+    finally:
+        conn.close()
+
+
+def get_session_owner(session_id: str):
+    """Tra ve owner_username cua session, hoac None neu session chua dang ky (vd session cu tao
+    truoc khi co bang nay, hoac khong ton tai) - main.py coi None la 'cho qua' de khong vo du lieu cu."""
+    conn = _conn()
+    try:
+        row = conn.execute("SELECT owner_username FROM sessions WHERE session_id=?", (session_id,)).fetchone()
+        return row[0] if row else None
+    finally:
+        conn.close()
 
 
 def set_query_state(session_id: str, tool_name: str, args: str):
@@ -96,6 +159,7 @@ def clear_session(session_id: str):
     try:
         conn.execute("DELETE FROM messages WHERE session_id=?", (session_id,))
         conn.execute("DELETE FROM query_state WHERE session_id=?", (session_id,))
+        conn.execute("DELETE FROM sessions WHERE session_id=?", (session_id,))
         conn.commit()
     finally:
         conn.close()
