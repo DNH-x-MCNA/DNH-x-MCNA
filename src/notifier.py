@@ -57,6 +57,27 @@ def _log_alert_severity(alert_name, severity):
         print(f"[NOTIFIER] Không ghi được alert_severity_log (bỏ qua, không ảnh hưởng gửi alert): {e}")
 
 
+def _count_alert_occurrences_this_month(alert_name):
+    """15/07/2026: đếm số lần alert_name đã bắn CRITICAL (tức thực sự lên Teams — WARNING/INFO
+    chỉ log, không gửi, xem require_critical_for_teams) trong THÁNG HIỆN TẠI, tính cả lần vừa được
+    _log_alert_severity() ghi ngay phía trên lời gọi hàm này — dùng để báo "lần thứ N trong tháng"
+    trong card Teams, giúp người nhận phân biệt cảnh báo lặp lại (vấn đề tồn đọng) hay mới phát
+    sinh. Lỗi đếm không được chặn gửi alert thật — trả về 1 (coi như lần đầu) nếu lỗi."""
+    try:
+        conn = sqlite3.connect(STATE_DB_PATH)
+        month_prefix = datetime.now().strftime('%Y-%m')
+        row = conn.execute(
+            "SELECT COUNT(*) FROM alert_severity_log WHERE alert_name=? AND severity='CRITICAL' "
+            "AND strftime('%Y-%m', sent_at)=?",
+            (alert_name, month_prefix)
+        ).fetchone()
+        conn.close()
+        return row[0] if row else 1
+    except Exception as e:
+        print(f"[NOTIFIER] Không đếm được số lần lặp alert (bỏ qua, coi là lần đầu): {e}")
+        return 1
+
+
 # HTML template for alerts
 ALERT_EMAIL_TEMPLATE = """
 <!DOCTYPE html>
@@ -1214,14 +1235,18 @@ def send_alert_to_all_channels(alert_name, severity, summary, table_headers=None
             if not webhooks:
                 print("[WARNING] Không có webhook Teams nào khớp (kiểm tra TEAMS_WEBHOOK_URL/.env hoặc report_recipients).")
             else:
+                occurrence_n = _count_alert_occurrences_this_month(alert_name)
+                occurrence_summary = summary
+                if occurrence_n > 1:
+                    occurrence_summary += f" (Lần thứ {occurrence_n} trong tháng {datetime.now().strftime('%m/%Y')} — cảnh báo này đã lặp lại nhiều lần, vấn đề có thể vẫn tồn đọng.)"
                 _pending_critical_teams_alerts.append({
-                    "alert_name": alert_name, "summary": summary,
+                    "alert_name": alert_name, "summary": occurrence_summary,
                     "period": period, "channel": channel, "region": region, "issue": issue,
                     "webhooks": webhooks,
                     "table_headers": table_headers, "table_rows": table_rows
                 })
                 any_sent = True
-                print(f"[TEAMS] Đã đưa '{alert_name}' vào hàng đợi gộp card (gửi cuối chu kỳ quét).")
+                print(f"[TEAMS] Đã đưa '{alert_name}' vào hàng đợi gộp card (gửi cuối chu kỳ quét, lần thứ {occurrence_n} trong tháng).")
         except Exception as e:
             print(f"[ERROR] Loi dua vao hang doi Teams: {e}")
     elif "teams" in channels:

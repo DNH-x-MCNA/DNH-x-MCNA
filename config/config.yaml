@@ -162,3 +162,15 @@ scheduler:
   etl_check_interval_seconds: 3600  # Quét dự phòng mỗi 1 giờ — lưới an toàn, không phải nguồn trigger chính
   daily_digest_time: "17:45"        # Tham khảo — giờ thật đăng ký trong DNH_Daily_Digest_1745
   weekly_digest_day: "Monday"       # Tham khảo — giờ thật đăng ký trong DNH_Weekly_Report
+
+  # 15/07/2026: chỉ gửi cảnh báo nghiệp vụ thời gian thực (Teams) trong giờ hành chính — trước đó
+  # vòng lặp dự phòng (etl_check_interval_seconds, chạy 24/7 không phân biệt giờ) vẫn bắn cảnh báo
+  # CRITICAL lúc nửa đêm/rạng sáng (vd 23:09, 00:10, 05:19), gây phiền vô ích ngoài giờ làm việc.
+  # Áp dụng cho run_all_alert_checks() nói chung (cả nhánh trigger theo lịch đồng bộ Bravo lẫn vòng
+  # lặp dự phòng) — ngoài khung giờ này, TOÀN BỘ chu kỳ quét bị bỏ qua (không đánh giá, không ghi
+  # nhận đã gửi), để lần quét tiếp theo TRONG giờ hành chính tự đánh giá lại từ đầu, không mất
+  # cảnh báo thật nào, chỉ trì hoãn tới giờ làm việc. KHÔNG ảnh hưởng Daily/Weekly/Monthly Digest
+  # (chạy qua scheduled task riêng, đã tự trong giờ hành chính sẵn).
+  alert_business_hours_start: "08:00"
+  alert_business_hours_end: "18:00"
+  alert_business_days: [1, 2, 3, 4, 5]  # 1=Thứ 2 ... 7=Chủ nhật (ISO weekday) — hiện T2-T6
