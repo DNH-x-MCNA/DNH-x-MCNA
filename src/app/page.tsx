@@ -14,6 +14,31 @@ type ChatResponse = {
 
 type HistoryMessage = { role: "user" | "assistant"; content: string };
 
+type SessionSummary = {
+  session_id: string;
+  title: string | null;
+  owner_username: string;
+  owner_name: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+function formatRelativeTime(iso: string): string {
+  // Backend luu "YYYY-MM-DD HH:MM:SS" theo gio local server (khong co timezone suffix) - parse thu
+  // cong the la ISO-ish, cach nay du chinh xac cho hien thi "may phut/gio truoc".
+  const d = new Date(iso.replace(" ", "T"));
+  if (isNaN(d.getTime())) return "";
+  const diffMs = Date.now() - d.getTime();
+  const mins = Math.floor(diffMs / 60000);
+  if (mins < 1) return "vừa xong";
+  if (mins < 60) return `${mins} phút trước`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours} giờ trước`;
+  const days = Math.floor(hours / 24);
+  if (days < 7) return `${days} ngày trước`;
+  return d.toLocaleDateString("vi-VN");
+}
+
 type Message = {
   role: "user" | "bot";
   text: string;
@@ -99,6 +124,11 @@ export default function Home() {
   const [historyLoaded, setHistoryLoaded] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
 
+  // Danh sach cuoc tro chuyen (kieu ChatGPT) - c_level thay cua tat ca nguoi, con lai chi thay cua
+  // chinh minh (loc o backend, xem GET /sessions trong main.py).
+  const [sessions, setSessions] = useState<SessionSummary[]>([]);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+
   // Trang thai dang nhap - kiem tra token da luu truoc khi cho vao giao dien chat
   const [authToken, setAuthToken] = useState<string | null>(null);
   const [userInfo, setUserInfo] = useState<UserInfo | null>(null);
@@ -129,11 +159,16 @@ export default function Home() {
       .finally(() => setAuthChecking(false));
   }, []);
 
-  // Khoi tao session + nap lai lich su hoi thoai cu (neu co) khi mo trang - CHI sau khi dang nhap xong
-  useEffect(() => {
+  function refreshSessions() {
     if (!authToken) return;
-    const sid = getOrCreateSessionId();
-    setSessionId(sid);
+    fetch(`${API_URL}/sessions`, { headers: authHeaders(authToken) })
+      .then((r) => (r.ok ? r.json() : []))
+      .then((list: SessionSummary[]) => setSessions(list))
+      .catch(() => {});
+  }
+
+  function loadSessionHistory(sid: string) {
+    setHistoryLoaded(false);
     fetch(`${API_URL}/history/${sid}`, { headers: authHeaders(authToken) })
       .then((r) => (r.ok ? r.json() : []))
       .then((history: HistoryMessage[]) => {
@@ -146,7 +181,43 @@ export default function Home() {
       })
       .catch(() => {})
       .finally(() => setHistoryLoaded(true));
+  }
+
+  // Khoi tao session + nap lai lich su hoi thoai cu (neu co) + danh sach cuoc tro chuyen khi mo
+  // trang - CHI sau khi dang nhap xong
+  useEffect(() => {
+    if (!authToken) return;
+    const sid = getOrCreateSessionId();
+    setSessionId(sid);
+    loadSessionHistory(sid);
+    refreshSessions();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authToken]);
+
+  function switchToSession(sid: string) {
+    if (sid === sessionId) {
+      setSidebarOpen(false);
+      return;
+    }
+    window.localStorage.setItem(SESSION_KEY, sid);
+    setSessionId(sid);
+    loadSessionHistory(sid);
+    setSidebarOpen(false);
+  }
+
+  async function deleteSession(sid: string, e: React.MouseEvent) {
+    e.stopPropagation();
+    if (!confirm("Xóa cuộc trò chuyện này? Không thể hoàn tác.")) return;
+    try {
+      await fetch(`${API_URL}/sessions/${sid}`, { method: "DELETE", headers: authHeaders(authToken) });
+    } catch {
+      // bo qua loi xoa
+    }
+    setSessions((prev) => prev.filter((s) => s.session_id !== sid));
+    if (sid === sessionId) {
+      startNewConversation();
+    }
+  }
 
   async function handleLogin(e: FormEvent) {
     e.preventDefault();
@@ -218,6 +289,7 @@ export default function Home() {
           rows: data.rows,
         },
       ]);
+      refreshSessions();
     } catch (e) {
       setMessages((prev) => [
         ...prev,
@@ -228,17 +300,16 @@ export default function Home() {
     }
   }
 
-  async function startNewConversation() {
+  function startNewConversation() {
     if (loading) return;
-    try {
-      await fetch(`${API_URL}/clear/${sessionId}`, { method: "POST", headers: authHeaders(authToken) });
-    } catch {
-      // bo qua loi xoa - van tao session moi phia client
-    }
+    // KHONG xoa cuoc cu (khac hanh vi truoc day) - chi tao session moi va chuyen sang, cuoc cu van
+    // con nguyen trong sidebar de xem lai sau, giong ChatGPT.
     const newSid = crypto.randomUUID();
     window.localStorage.setItem(SESSION_KEY, newSid);
     setSessionId(newSid);
     setMessages([]);
+    setHistoryLoaded(true);
+    setSidebarOpen(false);
   }
 
   function handleSubmit(e: FormEvent) {
@@ -300,10 +371,74 @@ export default function Home() {
   }
 
   return (
-    <div className="flex h-screen flex-col bg-slate-50">
+    <div className="flex h-screen bg-slate-50">
+      {sidebarOpen && (
+        <div
+          onClick={() => setSidebarOpen(false)}
+          className="fixed inset-0 z-20 bg-black/30 md:hidden"
+        />
+      )}
+      <aside
+        className={`${sidebarOpen ? "fixed inset-y-0 left-0 z-30 flex" : "hidden"} w-72 flex-shrink-0 flex-col border-r border-slate-200 bg-white md:static md:z-0 md:flex`}
+      >
+        <div className="flex items-center justify-between border-b border-slate-200 px-4 py-4">
+          <span className="text-sm font-semibold text-slate-700">Lịch sử trò chuyện</span>
+          <button onClick={() => setSidebarOpen(false)} className="text-slate-400 md:hidden">
+            ✕
+          </button>
+        </div>
+        <button
+          onClick={startNewConversation}
+          className="mx-3 mt-3 rounded-lg border border-slate-300 px-3 py-2 text-left text-sm font-medium text-slate-700 transition hover:bg-slate-50"
+        >
+          + Cuộc trò chuyện mới
+        </button>
+        <div className="flex-1 overflow-y-auto px-2 py-3">
+          {sessions.length === 0 && (
+            <p className="px-2 text-xs text-slate-400">Chưa có cuộc trò chuyện nào.</p>
+          )}
+          {sessions.map((s) => (
+            <div
+              key={s.session_id}
+              onClick={() => switchToSession(s.session_id)}
+              className={`group mb-1 flex cursor-pointer items-center justify-between gap-1 rounded-lg px-3 py-2 text-sm transition ${
+                s.session_id === sessionId ? "bg-blue-50 text-blue-700" : "text-slate-600 hover:bg-slate-50"
+              }`}
+            >
+              <div className="min-w-0 flex-1">
+                <div className="truncate">{s.title || "Cuộc trò chuyện mới"}</div>
+                <div className="truncate text-xs text-slate-400">
+                  {formatRelativeTime(s.updated_at)}
+                  {userInfo?.role === "c_level" && s.owner_username !== userInfo.username
+                    ? ` · ${s.owner_name || s.owner_username}`
+                    : ""}
+                </div>
+              </div>
+              {s.owner_username === userInfo?.username && (
+                <button
+                  onClick={(e) => deleteSession(s.session_id, e)}
+                  className="hidden shrink-0 rounded p-1 text-slate-400 hover:bg-red-50 hover:text-red-500 group-hover:block"
+                  title="Xóa cuộc trò chuyện"
+                >
+                  🗑
+                </button>
+              )}
+            </div>
+          ))}
+        </div>
+      </aside>
+
+      <div className="flex min-w-0 flex-1 flex-col">
       <header className="border-b border-slate-200 bg-slate-900 px-6 py-4 text-white">
         <div className="mx-auto flex max-w-3xl items-center justify-between">
           <div className="flex items-center gap-3">
+            <button
+              onClick={() => setSidebarOpen(true)}
+              title="Lịch sử trò chuyện"
+              className="rounded-lg p-1.5 text-slate-300 hover:bg-slate-800 md:hidden"
+            >
+              ☰
+            </button>
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img src="/namha-logo.png" alt="NAMHA PHARMA" className="h-9 w-auto" />
             <div>
@@ -321,13 +456,6 @@ export default function Home() {
                 </div>
               </div>
             )}
-            <button
-              onClick={startNewConversation}
-              title="Bắt đầu cuộc trò chuyện mới (xóa ngữ cảnh hiện tại)"
-              className="rounded-full border border-slate-600 px-4 py-2 text-xs text-slate-200 transition hover:border-blue-400 hover:text-blue-300"
-            >
-              + Cuộc trò chuyện mới
-            </button>
             <button
               onClick={handleLogout}
               title="Đăng xuất"
@@ -462,6 +590,7 @@ export default function Home() {
           </div>
         </form>
       </main>
+      </div>
     </div>
   );
 }
