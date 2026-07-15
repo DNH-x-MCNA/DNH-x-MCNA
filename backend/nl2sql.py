@@ -217,6 +217,20 @@ TEMPLATE_TOOLS = [
             "required": ["date_from", "date_to"],
         },
     },
+    {
+        "name": "get_inventory_by_region",
+        "description": "Ton kho (so luong + gia tri) theo vung, tu Bravo (thay the Supabase - bang cu "
+                        "khong loc vung duoc). BAT BUOC dung tool nay cho MOI cau hoi ve ton kho co yeu "
+                        "to vung mien (vd 'ton kho mien Nam'), KE CA khi tai khoan bi gioi han vung -"
+                        "day la tool DUY NHAT con hoat dong cho ho vi tool SQL tu do da bi tat.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "area_code": {"type": "string", "description": "Loc theo 1 vung: 'MB'/'MT'/'MN' (khong bat buoc - bo trong de xem ca 4 vung gom ca San xuat)"},
+            },
+            "required": [],
+        },
+    },
 ]
 
 QUERY_TOOL = {
@@ -300,16 +314,17 @@ hoi "doanh thu thang 6" roi hoi tiep "con thang 5?", hieu la van hoi doanh thu t
 tuong tu nhung doi sang thang 5) - KHONG hoi lai nguoi dung nhung gi da ro tu ngu canh truoc.
 
 QUAN TRONG VE CHON TOOL:
-- Neu cau hoi thuoc 1 trong 10 nhom: doanh thu theo kenh, top san pham, top khach hang, doanh thu
+- Neu cau hoi thuoc 1 trong 11 nhom: doanh thu theo kenh, top san pham, top khach hang, doanh thu
   theo vung mien, KPI/doanh so nhan vien (tong quan/thang), KPI THEO NGAY 1 nhan vien ca nhan, SO SANH
   2 khoang thoi gian, CHI TIET 1 khach hang cu the, TRA CUU ma/ten/vai tro nhan vien, KIEM TRA don hang
-  bat thuong/chay don KPI -> BAT BUOC dung tool tuong ung (get_revenue_by_channel, get_top_products,
-  get_top_customers, get_revenue_by_region, get_employee_kpi, get_employee_daily_kpi, compare_periods,
-  get_customer_detail, get_employee_directory, check_order_timing).
+  bat thuong/chay don KPI, TON KHO THEO VUNG -> BAT BUOC dung tool tuong ung (get_revenue_by_channel,
+  get_top_products, get_top_customers, get_revenue_by_region, get_employee_kpi, get_employee_daily_kpi,
+  compare_periods, get_customer_detail, get_employee_directory, check_order_timing,
+  get_inventory_by_region).
   Day la cac truy van DA DUOC KIEM CHUNG khop voi du lieu goc, KHONG tu sinh SQL thay the.
 - Neu cau hoi co NHIEU khia canh cung luc (vd hoi ca doanh thu, top san pham, vung mien, nhan vien
   trong 1 cau) -> goi TUAN TU nhieu tool tuong ung, moi tool 1 khia canh, roi tong hop lai.
-- Voi phan cau hoi KHONG thuoc 10 nhom tren: neu la ve TON KHO/CONG NO -> dung query_inventory_receivables
+- Voi phan cau hoi KHONG thuoc 11 nhom tren: neu la ve CONG NO -> dung query_inventory_receivables
   (Supabase). Con lai (hoa don/doanh thu/san pham/khach hang/nhan vien/vung mien dang ad-hoc, tra hang...)
   -> dung query_database (kho local SQLite).
 - Cau hoi CO cum tu thoi gian TUONG DOI (hom nay, tuan nay, thang truoc, quy nay, quy truoc, cung ky
