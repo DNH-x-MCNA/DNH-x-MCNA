@@ -239,13 +239,22 @@ def _revenue_by_region(start_dt, end_dt, channel=None):
 def _top_customers(start_dt, end_dt, channel_label, region_markers=None):
     """Top 5 khách hàng theo doanh thu trong [start_dt, end_dt) cho 1 kênh (OTC hoặc ETC) —
     dùng cho get_digest_metrics(). Trả list row (CustomerCode, Name, rev). Tự failover
-    Supabase -> Bravo qua run_with_failover() (xem _period_revenue)."""
-    # 14/07/2026: đổi sang query view gốc Bravo (vHoaDonTotal/vHoaDonETCTotal), cùng lý do và
-    # cách làm với _period_revenue — công thức tự ráp cũ dùng chung logic (JOIN bảng thô + loại
-    # CTKM/hủy) nên chắc chắn dính đúng lỗi tương tự (thiếu trừ hàng trả lại...). Không còn
-    # failover Postgres (view chỉ có ở Bravo, xem docstring _period_revenue).
+    Supabase -> Bravo qua run_with_failover() (xem _period_revenue).
+
+    15/07/2026: đổi JOIN -> LEFT JOIN vào bảng khách hàng (không chỉ join vùng miền) — xác nhận
+    thực tế trước đó dùng JOIN thường (INNER) sẽ khiến khách hàng "mồ côi" (không có hồ sơ trong
+    DMS_KhachHang/DMSSX_KhachHang, vd HCM13508) bị loại HOÀN TOÀN khỏi Top 5, kể cả khi KHÔNG lọc
+    vùng miền — nghiêm trọng hơn lỗi đã sửa ở _revenue_by_region/_period_revenue (chỉ mất khi có
+    lọc vùng), vì đây mất ngay cả bản Top 5 mặc định. Khi có lọc vùng, dùng CASE suy luận qua tiền
+    tố mã KH (src/region_map.py) làm fallback, cùng cách với _period_revenue.
+
+    Đồng thời thêm điều kiện loại mã rác/nội bộ (customer_code_prefix_sql_or) — cùng bộ lọc vừa
+    thêm cho check_customer_churn_alert/check_revenue_concentration_alert (src/alerts.py), để nhất
+    quán: nếu không lọc, mã nội bộ dạng '1001136' (đã xác nhận thực tế 274 tỷ đồng/197 hóa đơn
+    không khớp khách hàng nào) có thể lọt vào "Top khách hàng" hiển thị cho DNH xem."""
     from sqlalchemy import text, bindparam
     from src.database import _get_bravo_engine
+    from src.region_map import CUSTOMER_CODE_PREFIX_TO_REGION, customer_code_prefix_sql_or
 
     engine = _get_bravo_engine()
     if engine is None:
@@ -256,18 +265,23 @@ def _top_customers(start_dt, end_dt, channel_label, region_markers=None):
     view = "dbo.vHoaDonTotal" if channel_label == "OTC" else "dbo.vHoaDonETCTotal"
     kh_table = "dbo.DMS_KhachHang" if channel_label == "OTC" else "dbo.DMSSX_KhachHang"
     params = {"start_dt": start_dt, "end_dt": end_dt}
-    region_join, region_where = "", ""
+    keep_where = f"(k.Code IS NOT NULL OR {customer_code_prefix_sql_or('v.CustomerCode')})"
+    region_where = ""
     if region_markers:
-        region_join = "JOIN dbo.DIM_TinhThanhPho rt ON k.CityId = rt.CityId"
-        region_where = " AND rt.AreaCode IN :region_markers"
+        prefix_case = " ".join(
+            f"WHEN v.CustomerCode LIKE '{prefix}%' THEN '{area}'"
+            for prefix, area in CUSTOMER_CODE_PREFIX_TO_REGION.items()
+        )
+        area_expr = f"COALESCE(rt.AreaCode, CASE {prefix_case} ELSE NULL END)"
+        region_where = f" AND {area_expr} IN :region_markers"
         params["region_markers"] = tuple(region_markers)
 
     sql = text(f'''
-        SELECT TOP 5 v.CustomerCode, k.Name, SUM(v.Amount9) AS rev
+        SELECT TOP 5 v.CustomerCode, COALESCE(k.Name, v.CustomerCode) AS Name, SUM(v.Amount9) AS rev
         FROM {view} v
-        JOIN {kh_table} k ON v.CustomerCode = k.Code
-        {region_join}
-        WHERE v.DocDate >= :start_dt AND v.DocDate < :end_dt
+        LEFT JOIN {kh_table} k ON v.CustomerCode = k.Code
+        LEFT JOIN dbo.DIM_TinhThanhPho rt ON k.CityId = rt.CityId
+        WHERE v.DocDate >= :start_dt AND v.DocDate < :end_dt AND {keep_where}
         {region_where}
         GROUP BY v.CustomerCode, k.Name
         ORDER BY rev DESC
