@@ -77,7 +77,16 @@ dim_nhanvien: employee_code, name, is_duplicate (=1 la ma bi trung/khong hop le 
   co is_duplicate=1. Khi CO loc, dat dieu kien is_duplicate O MENH DE WHERE cua truy van chinh - KHONG
   dat trong ON cua LEFT JOIN, vi se khong loai duoc dong du lieu, chi mat ten - da tung gay bug that), position_code
   (TDV/QLV/CTV/CS/TP/PP/TBP/TK - LUU Y: 1 nhan vien co the la QLV du EmployeeCode "nhin giong" ten
-  ca nhan, KHONG suy doan vai tro tu ten ma phai kiem tra position_code), area_code (MB/MT/MN).
+  ca nhan, KHONG suy doan vai tro tu ten ma phai kiem tra position_code), area_code (MB/MT/MN),
+  dmsid (ma noi bo DMS - KHAC employee_code, nhung nguoi dung co the dua mot trong hai ma khi hoi.
+  Khi tra cuu 1 nguoi theo ma, PHAI thu ca employee_code=? VA dmsid=? (vd WHERE employee_code=? OR
+  dmsid=?), KHONG chi thu employee_code - da xac nhan that co ma (vd 'DNH00591') CHI ton tai duoi
+  dang dmsid, khong khop employee_code nao ca. dmsid CO THE TRUNG giua nhieu dong khac position_code
+  (vd 'DNH00601' vua la employee_code cua 1 dong TDV vua la dmsid cua 1 dong QLV khac) - neu tra cuu
+  ra NHIEU dong, PHAI liet ke HET kem employee_code/dmsid/position_code/is_duplicate de nguoi dung tu
+  phan biet, KHONG tu chon 1 dong. KHONG loc is_duplicate khi tra cuu/hien thi ten (chi loc khi TINH
+  TOAN KPI/tong hop) - da co vi du that (TM24060301) dong is_duplicate=0 la vi tri TRONG con dong
+  is_duplicate=1 moi la ten nguoi that, nen is_duplicate=0 KHONG dong nghia la "dong dung".
 dim_chucvu: position_code, description (ten tieng Viet day du, vd TDV -> "Trinh duoc vien", QLV ->
   "Quan ly vung" - JOIN qua position_code de hien thi ten vai tro dep, DISTINCT san khi dong bo).
 fact_tonghopkhachhang: 1 dong = 1 (nhan vien, khach hang, ngay snapshot). Cot: employee_code,

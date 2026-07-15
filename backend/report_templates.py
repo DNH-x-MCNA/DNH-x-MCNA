@@ -322,20 +322,29 @@ def employee_directory(search: str = None, position_code: str = None, area_code:
                         scope_area_code: str = None) -> list:
     """Tra cuu MAPPING ma nhan vien <-> ten <-> vai tro (TDV/QLV/CTV/CS/TP/PP/TBP/TK). Dung khi nguoi
     dung hoi "ma cua [ten]" / "[ten] la ai" / "danh sach TDV vung MB" - KHONG can biet ma truoc.
-    search: tim gan dung theo TEN hoac MA (khong phan biet hoa/thuong). position_code: loc theo vai tro
-    (vd 'TDV','QLV'). area_code: loc theo vung (MB/MT/MN). LUON loc is_duplicate<>1.
-    scope_area_code: NEU co (tai khoan bi gioi han vung), EP GHI DE area_code bat ke AI truyen gi -
-    khong cho phep xem danh ba nhan vien vung khac."""
+    search: tim gan dung theo TEN, employee_code, HOAC dmsid (khong phan biet hoa/thuong) - mot nguoi
+    co the duoc hoi toi qua employee_code (vd 'TM25010101') hoac qua dmsid (ma noi bo DMS khac, vd
+    'DNH00591') tuy nguon du lieu, nen PHAI thu ca 2. position_code: loc theo vai tro. area_code: loc
+    theo vung (MB/MT/MN).
+    KHONG loc is_duplicate (khac ban truoc) - day la tool TRA CUU/DINH DANH, khong phai tong hop KPI/
+    doanh so (chi tool do moi can loc is_duplicate de tranh dem trung). PHAI tra ve ca is_duplicate va
+    dmsid de nguoi goi tu phan biet khi trung: DA XAC NHAN THAT tren du lieu dmsid co the trung giua
+    nhieu employee_code/vai tro khac nhau (vd DMSId 'DNH00601' vua la employee_code cua 1 dong TDV
+    (is_duplicate=1) vua la dmsid cua 1 dong QLV khac (is_duplicate=0)) - VA is_duplicate=0 KHONG PHAI
+    luon la dong "dung hon": vi du TM24060301, dong is_duplicate=0 la vi tri TRONG ("Trong QLV MK3"),
+    dong is_duplicate=1 moi la ten nguoi that. Khi ket qua co NHIEU dong cho cung 1 ma tra cuu, PHAI
+    liet ke HET, KHONG tu chon 1 dong."""
     if scope_area_code:
         area_code = scope_area_code
-    sql = """SELECT n.employee_code employee_code, n.name name,
-                    n.position_code position_code, c.description position_label, n.area_code area_code
+    sql = """SELECT n.employee_code employee_code, n.dmsid dmsid, n.name name,
+                    n.position_code position_code, c.description position_label, n.area_code area_code,
+                    n.is_duplicate is_duplicate
              FROM dim_nhanvien n LEFT JOIN dim_chucvu c ON c.position_code=n.position_code
-             WHERE COALESCE(n.is_duplicate,0)<>1"""
+             WHERE 1=1"""
     params = []
     if search:
-        sql += " AND (n.name LIKE ? OR n.employee_code LIKE ?)"
-        params += [f"%{search}%", f"%{search}%"]
+        sql += " AND (n.name LIKE ? OR n.employee_code LIKE ? OR n.dmsid LIKE ?)"
+        params += [f"%{search}%", f"%{search}%", f"%{search}%"]
     if position_code:
         sql += " AND n.position_code=?"
         params.append(position_code)

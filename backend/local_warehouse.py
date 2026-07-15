@@ -57,8 +57,12 @@ CREATE TABLE IF NOT EXISTS dms_khachhang (code TEXT, name TEXT, city_id INTEGER,
 CREATE INDEX IF NOT EXISTS idx_dms_code ON dms_khachhang(code);
 -- position_code: TDV=Trinh duoc vien, QLV=Quan ly vung, CTV/CS/TP/PP/TBP/TK = cac vai tro khac
 -- (xem dim_chucvu de dich sang ten tieng Viet). area_code: MB/MT/MN.
-CREATE TABLE IF NOT EXISTS dim_nhanvien (employee_code TEXT, name TEXT, is_duplicate INTEGER, position_code TEXT, area_code TEXT);
+-- dmsid: ma noi bo DMS - CO THE trung voi employee_code cua 1 dong KHAC (da xac nhan that, vd DMSId
+-- 'DNH00601' vua la employee_code cua 1 dong TDV vua la dmsid cua 1 dong QLV khac) - TUYET DOI KHONG
+-- coi dmsid la unique key, luon xu ly nhu co the tra ve NHIEU dong khi tra cuu.
+CREATE TABLE IF NOT EXISTS dim_nhanvien (employee_code TEXT, name TEXT, is_duplicate INTEGER, position_code TEXT, area_code TEXT, dmsid TEXT);
 CREATE INDEX IF NOT EXISTS idx_dnv_code ON dim_nhanvien(employee_code);
+CREATE INDEX IF NOT EXISTS idx_dnv_dmsid ON dim_nhanvien(dmsid);
 CREATE TABLE IF NOT EXISTS dim_chucvu (position_code TEXT, description TEXT);
 CREATE INDEX IF NOT EXISTS idx_dcv_code ON dim_chucvu(position_code);
 CREATE TABLE IF NOT EXISTS brv_sanpham (code TEXT, name TEXT, group_code TEXT, unit TEXT);
