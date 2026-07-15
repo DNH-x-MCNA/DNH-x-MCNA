@@ -1,0 +1,388 @@
+
+==================================================
+Thời gian gửi: 2026-06-29 15:07:28
+Người nhận: ceo@namhapharma.com, cfo@namhapharma.com, sales-manager@namhapharma.com
+Tiêu đề: [DNH Cảnh Báo] Báo cáo chỉ số & công nợ Dược Nam Hà ngày 2026-06-29
+Nội dung Email (HTML):
+
+        <html>
+        <body style="font-family: Arial, sans-serif; color: #333;">
+            <div style="background-color: #1e1b4b; padding: 20px; text-align: center; color: white;">
+                <h2 style="margin:0;">Báo Cáo Cảnh Báo Chỉ Số Tự Động</h2>
+                <p style="margin:5px 0 0 0;">Dược Nam Hà - Ngày 2026-06-29</p>
+            </div>
+            
+            <div style="padding: 20px;">
+        
+                <h3>1. Chỉ Số Doanh Thu Trong Ngày</h3>
+                <p>Tổng doanh thu ghi nhận ngày 2026-06-29: <strong>65,000,000.00 VND</strong></p>
+        
+                <div style="background-color: #d1fae5; border-left: 5px solid #10b981; padding: 10px; margin-bottom: 20px; color: #065f46;">
+                    <strong>[Trigger Đạt Mốc]:</strong> Doanh thu trong ngày đã vượt mốc trigger định sẵn (50,000,000 VND).
+                </div>
+            
+                <h3>2. Danh Sách Khách Hàng Vi Phạm Hạn Mức Công Nợ Ngày</h3>
+                <table border="1" cellpadding="8" cellspacing="0" style="border-collapse: collapse; width: 100%; text-align: left;">
+                    <tr style="background-color: #f3f4f6;">
+                        <th>Mã KH</th>
+                        <th>Tên Khách Hàng</th>
+                        <th>Kênh</th>
+                        <th>Miền</th>
+                        <th>Hạn Mức Cho Phép</th>
+                        <th>Dư Nợ Thực Tế</th>
+                        <th>Lý Do Cảnh Báo</th>
+                    </tr>
+            
+                    <tr>
+                        <td>CUST001</td>
+                        <td>Nha Thuoc Long Chau 1</td>
+                        <td>OTC</td>
+                        <td>Mien Bac</td>
+                        <td>50,000,000.00 VND</td>
+                        <td style="color: red; font-weight: bold;">282,794,033.83 VND</td>
+                        <td style="color: #d97706; font-weight: bold;">Vuot han muc no & Tre han 723/15 ngay</td>
+                    </tr>
+                
+                    <tr>
+                        <td>CUST002</td>
+                        <td>Nha Thuoc An Khang 2</td>
+                        <td>OTC</td>
+                        <td>Mien Nam</td>
+                        <td>70,000,000.00 VND</td>
+                        <td style="color: red; font-weight: bold;">511,395,804.15 VND</td>
+                        <td style="color: #d97706; font-weight: bold;">Vuot han muc no & Tre han 823/20 ngay</td>
+                    </tr>
+                
+                    <tr>
+                        <td>CUST003</td>
+                        <td>Benh Vien Bach Mai</td>
+                        <td>ETC</td>
+                        <td>Mien Bac</td>
+                        <td>500,000,000.00 VND</td>
+                        <td style="color: red; font-weight: bold;">4,588,874,671.79 VND</td>
+                        <td style="color: #d97706; font-weight: bold;">Vuot han muc no & Tre han 896/60 ngay</td>
+                    </tr>
+                
+                    <tr>
+                        <td>CUST004</td>
+                        <td>Benh Vien Cho Ray</td>
+                        <td>ETC</td>
+                        <td>Mien Nam</td>
+                        <td>800,000,000.00 VND</td>
+                        <td style="color: red; font-weight: bold;">3,642,183,425.24 VND</td>
+                        <td style="color: #d97706; font-weight: bold;">Vuot han muc no & Tre han 904/60 ngay</td>
+                    </tr>
+                
+                    <tr>
+                        <td>CUST005</td>
+                        <td>Nha Thuoc Tay Trung Bo</td>
+                        <td>OTC</td>
+                        <td>Mien Trung</td>
+                        <td>30,000,000.00 VND</td>
+                        <td style="color: red; font-weight: bold;">461,073,717.75 VND</td>
+                        <td style="color: #d97706; font-weight: bold;">Vuot han muc no & Tre han 864/10 ngay</td>
+                    </tr>
+                
+                    <tr>
+                        <td>CUST006</td>
+                        <td>Benh Vien Trung Uong Hue</td>
+                        <td>ETC</td>
+                        <td>Mien Trung</td>
+                        <td>400,000,000.00 VND</td>
+                        <td style="color: red; font-weight: bold;">3,298,019,648.93 VND</td>
+                        <td style="color: #d97706; font-weight: bold;">Vuot han muc no & Tre han 838/45 ngay</td>
+                    </tr>
+                
+                </table>
+                <p style="color: #ef4444; margin-top: 15px;"><strong>Lưu ý:</strong> Vui lòng chỉ đạo bộ phận kinh doanh kiểm tra lại trước khi ký duyệt đơn hàng tiếp theo cho các đối tượng trên.</p>
+            
+            </div>
+            <div style="background-color: #f3f4f6; padding: 10px; text-align: center; font-size: 11px; color: #6b7280; margin-top: 30px;">
+                Email này được gửi tự động từ hệ thống DNH Portal API. Vui lòng không trả lời trực tiếp email này.
+            </div>
+        </body>
+        </html>
+        
+
+==================================================
+Thời gian gửi: 2026-06-29 15:47:03
+Người nhận: ceo@namhapharma.com, cfo@namhapharma.com, sales-manager@namhapharma.com
+Tiêu đề: [DNH Cảnh Báo] Báo cáo chỉ số & công nợ Dược Nam Hà ngày 2026-06-29
+Nội dung Email (HTML):
+
+        <html>
+        <body style="font-family: Arial, sans-serif; color: #333;">
+            <div style="background-color: #1e1b4b; padding: 20px; text-align: center; color: white;">
+                <h2 style="margin:0;">Báo Cáo Cảnh Báo Chỉ Số Tự Động</h2>
+                <p style="margin:5px 0 0 0;">Dược Nam Hà - Ngày 2026-06-29</p>
+            </div>
+            
+            <div style="padding: 20px;">
+        
+                <h3>1. Chỉ Số Doanh Thu Trong Ngày</h3>
+                <p>Tổng doanh thu ghi nhận ngày 2026-06-29: <strong>65,000,000.00 VND</strong></p>
+        
+                <div style="background-color: #d1fae5; border-left: 5px solid #10b981; padding: 10px; margin-bottom: 20px; color: #065f46;">
+                    <strong>[Trigger Đạt Mốc]:</strong> Doanh thu trong ngày đã vượt mốc trigger định sẵn (50,000,000 VND).
+                </div>
+            
+                <h3>2. Danh Sách Khách Hàng Vi Phạm Hạn Mức Công Nợ Ngày</h3>
+                <table border="1" cellpadding="8" cellspacing="0" style="border-collapse: collapse; width: 100%; text-align: left;">
+                    <tr style="background-color: #f3f4f6;">
+                        <th>Mã KH</th>
+                        <th>Tên Khách Hàng</th>
+                        <th>Kênh</th>
+                        <th>Miền</th>
+                        <th>Hạn Mức Cho Phép</th>
+                        <th>Dư Nợ Thực Tế</th>
+                        <th>Lý Do Cảnh Báo</th>
+                    </tr>
+            
+                    <tr>
+                        <td>CUST001</td>
+                        <td>Nha Thuoc Long Chau 1</td>
+                        <td>OTC</td>
+                        <td>Mien Bac</td>
+                        <td>50,000,000.00 VND</td>
+                        <td style="color: red; font-weight: bold;">282,794,033.83 VND</td>
+                        <td style="color: #d97706; font-weight: bold;">Vuot han muc no & Tre han 723/15 ngay</td>
+                    </tr>
+                
+                    <tr>
+                        <td>CUST002</td>
+                        <td>Nha Thuoc An Khang 2</td>
+                        <td>OTC</td>
+                        <td>Mien Nam</td>
+                        <td>70,000,000.00 VND</td>
+                        <td style="color: red; font-weight: bold;">511,395,804.15 VND</td>
+                        <td style="color: #d97706; font-weight: bold;">Vuot han muc no & Tre han 823/20 ngay</td>
+                    </tr>
+                
+                    <tr>
+                        <td>CUST003</td>
+                        <td>Benh Vien Bach Mai</td>
+                        <td>ETC</td>
+                        <td>Mien Bac</td>
+                        <td>500,000,000.00 VND</td>
+                        <td style="color: red; font-weight: bold;">4,588,874,671.79 VND</td>
+                        <td style="color: #d97706; font-weight: bold;">Vuot han muc no & Tre han 896/60 ngay</td>
+                    </tr>
+                
+                    <tr>
+                        <td>CUST004</td>
+                        <td>Benh Vien Cho Ray</td>
+                        <td>ETC</td>
+                        <td>Mien Nam</td>
+                        <td>800,000,000.00 VND</td>
+                        <td style="color: red; font-weight: bold;">3,642,183,425.24 VND</td>
+                        <td style="color: #d97706; font-weight: bold;">Vuot han muc no & Tre han 904/60 ngay</td>
+                    </tr>
+                
+                    <tr>
+                        <td>CUST005</td>
+                        <td>Nha Thuoc Tay Trung Bo</td>
+                        <td>OTC</td>
+                        <td>Mien Trung</td>
+                        <td>30,000,000.00 VND</td>
+                        <td style="color: red; font-weight: bold;">461,073,717.75 VND</td>
+                        <td style="color: #d97706; font-weight: bold;">Vuot han muc no & Tre han 864/10 ngay</td>
+                    </tr>
+                
+                    <tr>
+                        <td>CUST006</td>
+                        <td>Benh Vien Trung Uong Hue</td>
+                        <td>ETC</td>
+                        <td>Mien Trung</td>
+                        <td>400,000,000.00 VND</td>
+                        <td style="color: red; font-weight: bold;">3,298,019,648.93 VND</td>
+                        <td style="color: #d97706; font-weight: bold;">Vuot han muc no & Tre han 838/45 ngay</td>
+                    </tr>
+                
+                </table>
+                <p style="color: #ef4444; margin-top: 15px;"><strong>Lưu ý:</strong> Vui lòng chỉ đạo bộ phận kinh doanh kiểm tra lại trước khi ký duyệt đơn hàng tiếp theo cho các đối tượng trên.</p>
+            
+            </div>
+            <div style="background-color: #f3f4f6; padding: 10px; text-align: center; font-size: 11px; color: #6b7280; margin-top: 30px;">
+                Email này được gửi tự động từ hệ thống DNH Portal API. Vui lòng không trả lời trực tiếp email này.
+            </div>
+        </body>
+        </html>
+        
+
+==================================================
+Thoi gian gui: 2026-06-29 17:27:00
+Nguoi nhan: ceo@namhapharma.com, cfo@namhapharma.com, sales-manager@namhapharma.com
+Tieu de: [DNH Canh Bao] Bao cao chi so & cong no Duoc Nam Ha ngay 2025-10-31
+Noi dung Email (HTML):
+
+        <html>
+        <body style="font-family: Arial, sans-serif; color: #333;">
+            <div style="background-color: #1e1b4b; padding: 20px; text-align: center; color: white;">
+                <h2 style="margin:0;">Bao Cao Canh Bao Chi So Tu Dong</h2>
+                <p style="margin:5px 0 0 0;">Duoc Nam Ha - Du lieu ngay 2025-10-31</p>
+            </div>
+            
+            <div style="padding: 20px;">
+                <h3>1. Chi So Doanh Thu Trong Ngay</h3>
+                <p>Tong doanh thu ghi nhan trong ky: <strong>33,518,716,093.00 VND</strong></p>
+        
+                <div style="background-color: #d1fae5; border-left: 5px solid #10b981; padding: 10px; margin-bottom: 20px; color: #065f46;">
+                    <strong>[Trigger Dat Moc]:</strong> Doanh thu trong ky da vuot moc trigger dinh san (200,000,000 VND).
+                </div>
+            
+                <h3>2. Top 15 Khach Hang Co No Qua Han Cao Nhat</h3>
+                <table border="1" cellpadding="8" cellspacing="0" style="border-collapse: collapse; width: 100%; text-align: left;">
+                    <tr style="background-color: #f3f4f6;">
+                        <th>Ma KH</th>
+                        <th>Ten Khach Hang</th>
+                        <th>Kenh</th>
+                        <th>Tong Du No</th>
+                        <th>No Qua Han</th>
+                        <th>Phan Loai Qua Han</th>
+                    </tr>
+            
+                    <tr>
+                        <td>THO00027</td>
+                        <td>Bệnh viện nội tiết Thanh Hóa</td>
+                        <td>ETC</td>
+                        <td>4,932,864,000 VND</td>
+                        <td style="color: red; font-weight: bold;">4,932,864,000 VND</td>
+                        <td style="font-size: 12px; color: #555;">30-45d: 4,015,344,000 | >45d: 917,520,000</td>
+                    </tr>
+                
+                    <tr>
+                        <td>THO00027</td>
+                        <td>Bệnh viện nội tiết Thanh Hóa</td>
+                        <td>ETC</td>
+                        <td>4,932,864,000 VND</td>
+                        <td style="color: red; font-weight: bold;">4,932,864,000 VND</td>
+                        <td style="font-size: 12px; color: #555;">>45d: 4,932,864,000</td>
+                    </tr>
+                
+                    <tr>
+                        <td>THO00027</td>
+                        <td>Bệnh viện nội tiết Thanh Hóa</td>
+                        <td>ETC</td>
+                        <td>4,932,864,000 VND</td>
+                        <td style="color: red; font-weight: bold;">4,932,864,000 VND</td>
+                        <td style="font-size: 12px; color: #555;">>45d: 4,932,864,000</td>
+                    </tr>
+                
+                    <tr>
+                        <td>THO00027</td>
+                        <td>Bệnh viện nội tiết Thanh Hóa</td>
+                        <td>ETC</td>
+                        <td>4,932,864,000 VND</td>
+                        <td style="color: red; font-weight: bold;">4,932,864,000 VND</td>
+                        <td style="font-size: 12px; color: #555;">>45d: 4,932,864,000</td>
+                    </tr>
+                
+                    <tr>
+                        <td>HCM04162</td>
+                        <td>Công Ty TNHH Một Thành Viên Dược Sài Gòn</td>
+                        <td>OTC1</td>
+                        <td>4,706,378,407 VND</td>
+                        <td style="color: red; font-weight: bold;">4,706,378,407 VND</td>
+                        <td style="font-size: 12px; color: #555;">1-15d: 4,706,378,407</td>
+                    </tr>
+                
+                    <tr>
+                        <td>HDU00006</td>
+                        <td>Bệnh viện đa khoa tỉnh Hải Dương</td>
+                        <td>ETC</td>
+                        <td>3,812,314,000 VND</td>
+                        <td style="color: red; font-weight: bold;">3,725,374,000 VND</td>
+                        <td style="font-size: 12px; color: #555;">30-45d: 1,356,334,000 | >45d: 2,369,040,000</td>
+                    </tr>
+                
+                    <tr>
+                        <td>HBI00286</td>
+                        <td>Bệnh viện đa khoa Tỉnh Hoà Bình</td>
+                        <td>ETC</td>
+                        <td>3,826,818,064 VND</td>
+                        <td style="color: red; font-weight: bold;">3,543,454,000 VND</td>
+                        <td style="font-size: 12px; color: #555;">30-45d: 1,200,890,000 | >45d: 2,342,564,000</td>
+                    </tr>
+                
+                    <tr>
+                        <td>HBI00286</td>
+                        <td>Bệnh viện đa khoa Tỉnh Hoà Bình</td>
+                        <td>ETC</td>
+                        <td>4,255,038,064 VND</td>
+                        <td style="color: red; font-weight: bold;">3,543,454,000 VND</td>
+                        <td style="font-size: 12px; color: #555;">>45d: 3,543,454,000</td>
+                    </tr>
+                
+                    <tr>
+                        <td>PTH00007</td>
+                        <td>Bệnh viện đa khoa tỉnh Phú Thọ</td>
+                        <td>ETC</td>
+                        <td>3,536,000,000 VND</td>
+                        <td style="color: red; font-weight: bold;">3,536,000,000 VND</td>
+                        <td style="font-size: 12px; color: #555;">>45d: 3,536,000,000</td>
+                    </tr>
+                
+                    <tr>
+                        <td>PTH00007</td>
+                        <td>Bệnh viện đa khoa tỉnh Phú Thọ</td>
+                        <td>ETC</td>
+                        <td>3,536,000,000 VND</td>
+                        <td style="color: red; font-weight: bold;">3,536,000,000 VND</td>
+                        <td style="font-size: 12px; color: #555;">>45d: 3,536,000,000</td>
+                    </tr>
+                
+                    <tr>
+                        <td>PTH00007</td>
+                        <td>Bệnh viện đa khoa tỉnh Phú Thọ</td>
+                        <td>ETC</td>
+                        <td>3,536,000,000 VND</td>
+                        <td style="color: red; font-weight: bold;">3,536,000,000 VND</td>
+                        <td style="font-size: 12px; color: #555;">>45d: 3,536,000,000</td>
+                    </tr>
+                
+                    <tr>
+                        <td>HCM113875</td>
+                        <td>CÔNG TY CỔ PHẦN DƯỢC PHẨM ĐẠI TÍN</td>
+                        <td>ETC</td>
+                        <td>12,055,992,620 VND</td>
+                        <td style="color: red; font-weight: bold;">3,370,543,180 VND</td>
+                        <td style="font-size: 12px; color: #555;">30-45d: 1,175,949,200 | >45d: 2,194,593,980</td>
+                    </tr>
+                
+                    <tr>
+                        <td>HBI00286</td>
+                        <td>Bệnh viện đa khoa Tỉnh Hoà Bình</td>
+                        <td>ETC</td>
+                        <td>3,765,626,000 VND</td>
+                        <td style="color: red; font-weight: bold;">3,337,406,000 VND</td>
+                        <td style="font-size: 12px; color: #555;">30-45d: 274,500,000 | >45d: 3,062,906,000</td>
+                    </tr>
+                
+                    <tr>
+                        <td>HBI00286</td>
+                        <td>Bệnh viện đa khoa Tỉnh Hoà Bình</td>
+                        <td>ETC</td>
+                        <td>3,774,490,064 VND</td>
+                        <td style="color: red; font-weight: bold;">3,071,770,064 VND</td>
+                        <td style="font-size: 12px; color: #555;">>45d: 3,071,770,064</td>
+                    </tr>
+                
+                    <tr>
+                        <td>HBI00286</td>
+                        <td>Bệnh viện đa khoa Tỉnh Hoà Bình</td>
+                        <td>ETC</td>
+                        <td>3,778,318,064 VND</td>
+                        <td style="color: red; font-weight: bold;">2,984,564,000 VND</td>
+                        <td style="font-size: 12px; color: #555;">15-30d: 2,236,000,000 | >45d: 748,564,000</td>
+                    </tr>
+                
+                </table>
+                <p style="color: #ef4444; margin-top: 15px;"><strong>Luu y:</strong> Vui long chi dao bo phan kinh doanh kiem tra lai truoc khi ky duyet don hang tiep theo cho cac doi tuong tren.</p>
+            
+            </div>
+            <div style="background-color: #f3f4f6; padding: 10px; text-align: center; font-size: 11px; color: #6b7280; margin-top: 30px;">
+                Email nay duoc gui tu dong tu he thong DNH Portal API. Vui long khong tra loi truc tiep email nay.
+            </div>
+        </body>
+        </html>
+        

@@ -1,0 +1,70 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/teams/v1.16/MicrosoftTeams.Schema.json",
+  "manifestVersion": "1.16",
+  "version": "1.0.0",
+  "id": "{{MICROSOFT_APP_ID}}",
+  "packageName": "com.dnh.databot",
+  "developer": {
+    "name": "Duoc Nam Ha (DNH)",
+    "websiteUrl": "https://www.namhapharma.com",
+    "privacyUrl": "https://www.namhapharma.com/privacy",
+    "termsOfUseUrl": "https://www.namhapharma.com/terms"
+  },
+  "icons": {
+    "color": "color.png",
+    "outline": "outline.png"
+  },
+  "name": {
+    "short": "Trợ lý Dữ liệu DNH",
+    "full": "Trợ lý Phân tích Dữ liệu Dược Nam Hà"
+  },
+  "description": {
+    "short": "Bot hỗ trợ tra cứu công nợ, tồn kho và KPI doanh số của DNH.",
+    "full": "Trợ lý ảo AI sử dụng Gemini giúp ban giám đốc và quản lý tra cứu nhanh công nợ khách hàng, kiểm kho hàng cận date/thiếu hàng và phân tích KPI doanh số kinh doanh."
+  },
+  "accentColor": "#1E3A8A",
+  "bots": [
+    {
+      "botId": "{{MICROSOFT_APP_ID}}",
+      "scopes": [
+        "personal",
+        "team",
+        "groupchat"
+      ],
+      "commandLists": [
+        {
+          "scopes": [
+            "personal",
+            "team",
+            "groupchat"
+          ],
+          "commands": [
+            {
+              "title": "doanh thu miền bắc",
+              "description": "Tra cứu nhanh doanh số của các khu vực miền Bắc"
+            },
+            {
+              "title": "cảnh báo công nợ",
+              "description": "Liệt kê danh sách khách hàng nợ quá hạn"
+            },
+            {
+              "title": "kiểm tra tồn kho",
+              "description": "Xem danh sách các mặt hàng sắp hết hoặc cận date"
+            },
+            {
+              "title": "giải pháp công nợ",
+              "description": "Phân tích nguyên nhân và tư vấn cách giảm công nợ"
+            }
+          ]
+        }
+      ],
+      "supportsFiles": false,
+      "isNotificationOnly": false
+    }
+  ],
+  "permissions": [
+    "identity",
+    "messageTeamMembers"
+  ],
+  "validDomains": []
+}

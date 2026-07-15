@@ -1,0 +1,342 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DNH Portal - Hệ Thống Quản Lý & AI Chatbot Dược Nam Hà</title>
+    <meta name="description" content="Cổng thông tin quản lý chỉ số doanh thu, theo dõi hạn mức công nợ ngày và phân tích dữ liệu tự động bằng AI của Dược Nam Hà.">
+    <!-- Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <!-- FontAwesome Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <link rel="stylesheet" href="style.css?v=2">
+    <link rel="icon" type="image/png" href="assets/Logo-Nam-Ha-new-Final-1-01.png">
+</head>
+<body>
+    <button id="theme-toggle" class="btn-theme-float" title="Đổi giao diện"><i class="fa-solid fa-moon"></i></button>
+ 
+    <!-- 1. LOGIN SCREEN -->
+    <div id="login-screen" class="login-container">
+        <div class="glow-bg-blobs">
+            <div class="blob blob-1"></div>
+            <div class="blob blob-2"></div>
+            <div class="blob blob-3"></div>
+        </div>
+        <div class="login-card">
+            <div class="brand">
+                <img src="assets/Logo-Nam-Ha-new-Final-1-01.png" alt="Dược Nam Hà" class="brand-logo-img">
+                <p>Hệ thống Portal & AI Chatbot</p>
+            </div>
+            <form id="login-form">
+                <div class="input-group">
+                    <label for="username"><i class="fa-solid fa-user"></i> Tên đăng nhập</label>
+                    <input type="text" id="username" placeholder="Nhập tên đăng nhập (ví dụ: c_level)" required>
+                </div>
+                <div class="input-group">
+                    <label for="password"><i class="fa-solid fa-lock"></i> Mật khẩu</label>
+                    <input type="password" id="password" placeholder="Nhập mật khẩu" required>
+                </div>
+                <button type="submit" id="btn-login" class="btn-primary">Đăng Nhập <i class="fa-solid fa-right-to-bracket"></i></button>
+            </form>
+            <div class="login-hints">
+                <p>Gợi ý tài khoản demo:</p>
+                <code>c_level / dnh@clevel2026</code><br>
+                <code>manager_bac / dnh@bac2026</code>
+            </div>
+            <div id="login-error" class="error-msg" style="display: none;"></div>
+        </div>
+    </div>
+
+    <!-- 2. MAIN APP PORTAL -->
+    <div id="app-container" class="app-layout" style="display: none;">
+        <!-- Sidebar Navigation -->
+        <aside class="sidebar">
+            <div class="sidebar-brand">
+                <img src="assets/Logo-Nam-Ha-new-Final-1-01.png" alt="Dược Nam Hà" class="sidebar-logo-img">
+                <span class="status-badge"><i class="fa-solid fa-circle"></i> Connected</span>
+            </div>
+            <nav class="sidebar-menu">
+                <a href="#" class="menu-item active" id="menu-chatbot"><i class="fa-solid fa-robot"></i> AI Chatbot</a>
+            </nav>
+            <div class="sidebar-actions">
+                <button class="btn-sidebar-action btn-guide" id="btn-open-guide">
+                    <i class="fa-solid fa-circle-question"></i> Hướng dẫn sử dụng
+                </button>
+                <button class="btn-sidebar-action btn-changepw" id="btn-open-change-pw">
+                    <i class="fa-solid fa-key"></i> Đổi mật khẩu
+                </button>
+            </div>
+            <div class="sidebar-user">
+                <div class="user-info">
+                    <i class="fa-solid fa-circle-user avatar-icon"></i>
+                    <div>
+                        <h4 id="user-display-name">User</h4>
+                        <p id="user-role">Role</p>
+                    </div>
+                </div>
+                <button id="btn-logout" class="btn-logout" title="Đăng xuất"><i class="fa-solid fa-power-off"></i></button>
+            </div>
+        </aside>
+
+        <!-- Main Workspace -->
+        <main class="main-content">
+            <!-- Header bar -->
+            <header class="workspace-header">
+                <h1 id="page-title">AI Chatbot Trợ Lý Phân Tích</h1>
+                <div class="header-actions">
+                    <div class="cycle-badge"><i class="fa-solid fa-calendar-days"></i> Chu kỳ tài chính: 2026</div>
+                </div>
+            </header>
+
+            <!-- Workspace Views -->
+            <div class="workspace-body">
+                
+                <!-- VIEW: AI CHATBOT (Hiển thị mặc định) -->
+                <section id="view-chatbot" class="workspace-view">
+                    <div class="chatbot-container">
+                        <!-- Left Panel: Chat messages -->
+                        <div class="chat-main">
+                            <div class="chat-messages" id="chat-messages-box">
+                                <div class="message bot">
+                                    <div class="message-avatar"><i class="fa-solid fa-robot"></i></div>
+                                    <div class="message-bubble">
+                                        Chào anh/chị. Tôi là AI trợ lý phân tích dữ liệu Dược Nam Hà. Tôi có thể giúp anh/chị truy vấn nhanh thông tin doanh thu, tình hình thầu ETC, hoặc khách hàng quá hạn công nợ năm 2026. Hãy nhập câu hỏi của bạn bằng tiếng Việt.
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="chat-input-area">
+                                <form id="chat-form">
+                                    <input type="text" id="chat-input" placeholder="Hỏi AI về doanh thu, công nợ, hợp đồng ETC..." autocomplete="off">
+                                    <button type="submit" id="btn-chat-send" class="btn-chat-send"><i class="fa-solid fa-paper-plane"></i></button>
+                                </form>
+                            </div>
+                        </div>
+                        
+                        <!-- Right Panel: Suggestions & Metadata -->
+                        <aside class="chat-sidebar">
+                            <h3>Câu hỏi gợi ý</h3>
+                            <div class="suggestions-list">
+                                <button class="suggest-btn" data-q="Cho tôi biết doanh thu mien bac"><i class="fa-solid fa-search"></i> Doanh thu Miền Bắc</button>
+                                <button class="suggest-btn" data-q="Khách hàng nào đang vượt hạn mức công nợ"><i class="fa-solid fa-search"></i> Kiểm tra vượt hạn mức nợ</button>
+                                <button class="suggest-btn" data-q="Xem chi tiết các hợp đồng thầu ETC"><i class="fa-solid fa-search"></i> Hợp đồng thầu ETC</button>
+                                <button class="suggest-btn" data-q="Doanh thu mien nam bao nhieu"><i class="fa-solid fa-search"></i> Doanh thu Miền Nam</button>
+                            </div>
+                            <hr>
+                            <div class="chatbot-meta">
+                                <h4><i class="fa-solid fa-shield-halved"></i> Bảo Mật Dữ Liệu AI</h4>
+                                <p>Hệ thống sử dụng **Text-to-SQL + Semantic Layer**. Dữ liệu thô được truy vấn và thực thi trực tiếp trên máy chủ nội bộ. AI không lưu trữ thông tin nhạy cảm của Dược Nam Hà.</p>
+                                <span class="badge" id="ai-mode-badge">Offline Mock Engine</span>
+                            </div>
+                        </aside>
+                    </div>
+                </section>
+
+            </div>
+        </main>
+    </div>
+
+    <!-- MODAL: ĐỔI MẬT KHẨU -->
+    <div id="modal-change-pw" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="modal-changepw-title">
+        <div class="modal-card">
+            <div class="modal-header">
+                <h2 id="modal-changepw-title"><i class="fa-solid fa-key"></i> Đổi Mật Khẩu</h2>
+                <button class="btn-modal-close" id="btn-close-change-pw" aria-label="Đóng"><i class="fa-solid fa-xmark"></i></button>
+            </div>
+            <form class="change-pw-form" id="change-pw-form" novalidate>
+                <div class="input-group">
+                    <label for="pw-old"><i class="fa-solid fa-lock"></i> Mật khẩu hiện tại</label>
+                    <div class="pw-input-wrap">
+                        <input type="password" id="pw-old" placeholder="Nhập mật khẩu hiện tại" autocomplete="current-password">
+                        <button type="button" class="btn-toggle-pw" data-target="pw-old" aria-label="Hiện/ẩn"><i class="fa-regular fa-eye"></i></button>
+                    </div>
+                </div>
+                <div class="input-group">
+                    <label for="pw-new"><i class="fa-solid fa-lock-open"></i> Mật khẩu mới</label>
+                    <div class="pw-input-wrap">
+                        <input type="password" id="pw-new" placeholder="Tối thiểu 8 ký tự" autocomplete="new-password">
+                        <button type="button" class="btn-toggle-pw" data-target="pw-new" aria-label="Hiện/ẩn"><i class="fa-regular fa-eye"></i></button>
+                    </div>
+                    <div class="pw-strength-bar"><div class="pw-strength-fill" id="pw-strength-fill"></div></div>
+                    <p class="pw-hint" id="pw-strength-label">Nhập mật khẩu mới để xem độ mạnh</p>
+                </div>
+                <div class="input-group">
+                    <label for="pw-confirm"><i class="fa-solid fa-shield-check"></i> Xác nhận mật khẩu mới</label>
+                    <div class="pw-input-wrap">
+                        <input type="password" id="pw-confirm" placeholder="Nhập lại mật khẩu mới" autocomplete="new-password">
+                        <button type="button" class="btn-toggle-pw" data-target="pw-confirm" aria-label="Hiện/ẩn"><i class="fa-regular fa-eye"></i></button>
+                    </div>
+                </div>
+                <div class="modal-error-msg" id="changepw-error"></div>
+                <div class="modal-success-msg" id="changepw-success"><i class="fa-solid fa-circle-check"></i> <span>Đổi mật khẩu thành công! Vui lòng đăng nhập lại.</span></div>
+                <div class="modal-actions">
+                    <button type="button" class="btn-secondary" id="btn-cancel-change-pw">Huỷ</button>
+                    <button type="submit" class="btn-primary" id="btn-submit-change-pw">
+                        <i class="fa-solid fa-check"></i> Xác nhận đổi
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- MODAL: HƯỚNG DẪN SỬ DỤNG CHATBOT -->
+    <div id="modal-guide" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="modal-guide-title">
+        <div class="modal-card wide">
+            <div class="modal-header">
+                <h2 id="modal-guide-title"><i class="fa-solid fa-circle-question"></i> Hướng Dẫn Sử Dụng AI Chatbot</h2>
+                <button class="btn-modal-close" id="btn-close-guide" aria-label="Đóng"><i class="fa-solid fa-xmark"></i></button>
+            </div>
+
+            <div class="guide-intro">
+                AI chatbot sử dụng công nghệ <strong>Text-to-SQL</strong> — bạn đặt câu hỏi bằng <strong>tiếng Việt</strong>, hệ thống tự động tạo câu lệnh SQL, truy vấn dữ liệu thật từ Dược Nam Hà và trả về kết quả dạng bảng hoặc biểu đồ.
+            </div>
+
+            <!-- Accordion 1: Câu hỏi mẫu theo chủ đề -->
+            <div class="guide-section open" id="gs-1">
+                <div class="guide-section-header" onclick="toggleGuideSection('gs-1')">
+                    <span class="gs-title"><i class="fa-solid fa-comments"></i> Câu hỏi mẫu theo chủ đề</span>
+                    <i class="fa-solid fa-chevron-down gs-chevron"></i>
+                </div>
+                <div class="guide-section-body">
+                    <p style="font-size:0.82rem;color:var(--text-muted);margin-bottom:0.5rem;">Nhấn vào chip để tự động gửi câu hỏi:</p>
+                    <p style="font-size:0.8rem;font-weight:600;color:var(--text-main);margin:0.75rem 0 0.25rem;">📊 Doanh thu &amp; KPI</p>
+                    <div class="guide-chips">
+                        <span class="guide-chip" onclick="sendGuideChip(this)"><i class="fa-solid fa-arrow-up-right-dots"></i> Doanh thu miền Bắc tháng này</span>
+                        <span class="guide-chip" onclick="sendGuideChip(this)"><i class="fa-solid fa-arrow-up-right-dots"></i> So sánh doanh thu OTC và ETC</span>
+                        <span class="guide-chip" onclick="sendGuideChip(this)"><i class="fa-solid fa-arrow-up-right-dots"></i> Nhân viên chưa đạt chỉ tiêu KPI</span>
+                        <span class="guide-chip" onclick="sendGuideChip(this)"><i class="fa-solid fa-arrow-up-right-dots"></i> Top 10 khách hàng doanh thu cao nhất</span>
+                        <span class="guide-chip" onclick="sendGuideChip(this)"><i class="fa-solid fa-arrow-up-right-dots"></i> Doanh thu theo vùng miền 6 tháng đầu năm</span>
+                    </div>
+                    <p style="font-size:0.8rem;font-weight:600;color:var(--text-main);margin:0.75rem 0 0.25rem;">💰 Công nợ &amp; Thu hồi</p>
+                    <div class="guide-chips">
+                        <span class="guide-chip" onclick="sendGuideChip(this)"><i class="fa-solid fa-triangle-exclamation"></i> Khách hàng có nợ quá hạn trên 45 ngày</span>
+                        <span class="guide-chip" onclick="sendGuideChip(this)"><i class="fa-solid fa-triangle-exclamation"></i> Tổng nợ quá hạn OTC hiện tại là bao nhiêu</span>
+                        <span class="guide-chip" onclick="sendGuideChip(this)"><i class="fa-solid fa-triangle-exclamation"></i> Top 5 khách hàng nợ nhiều nhất</span>
+                        <span class="guide-chip" onclick="sendGuideChip(this)"><i class="fa-solid fa-triangle-exclamation"></i> Tỷ lệ nợ quá hạn so với tổng dư nợ</span>
+                    </div>
+                    <p style="font-size:0.8rem;font-weight:600;color:var(--text-main);margin:0.75rem 0 0.25rem;">📦 Tồn kho &amp; Hàng hoá</p>
+                    <div class="guide-chips">
+                        <span class="guide-chip" onclick="sendGuideChip(this)"><i class="fa-solid fa-boxes-stacking"></i> Mặt hàng nào đang cận date</span>
+                        <span class="guide-chip" onclick="sendGuideChip(this)"><i class="fa-solid fa-boxes-stacking"></i> Sản phẩm tồn kho trên 6 tháng bán</span>
+                        <span class="guide-chip" onclick="sendGuideChip(this)"><i class="fa-solid fa-boxes-stacking"></i> Hàng sắp hết cần bổ sung gấp</span>
+                    </div>
+                    <p style="font-size:0.8rem;font-weight:600;color:var(--text-main);margin:0.75rem 0 0.25rem;">🏥 Thầu ETC</p>
+                    <div class="guide-chips">
+                        <span class="guide-chip" onclick="sendGuideChip(this)"><i class="fa-solid fa-hospital"></i> Hợp đồng ETC nào có tỷ lệ trả hàng cao</span>
+                        <span class="guide-chip" onclick="sendGuideChip(this)"><i class="fa-solid fa-hospital"></i> Doanh thu ETC theo bệnh viện</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Accordion 2: Cách đặt câu hỏi hiệu quả -->
+            <div class="guide-section" id="gs-2">
+                <div class="guide-section-header" onclick="toggleGuideSection('gs-2')">
+                    <span class="gs-title"><i class="fa-solid fa-lightbulb"></i> Cách đặt câu hỏi hiệu quả</span>
+                    <i class="fa-solid fa-chevron-down gs-chevron"></i>
+                </div>
+                <div class="guide-section-body">
+                    <ul class="guide-tip-list">
+                        <li>Đặt câu hỏi <strong>cụ thể</strong> — ví dụ: "doanh thu Miền Bắc tháng 6" thay vì chỉ "doanh thu"</li>
+                        <li>Có thể dùng <strong>số liệu ngưỡng</strong> — "khách hàng nợ quá hạn trên 50 triệu"</li>
+                        <li>Đặt câu <strong>so sánh</strong> — "so sánh OTC và ETC", "tháng này so tháng trước"</li>
+                        <li>Hỏi <strong>xếp hạng</strong> — "top 5", "10 khách hàng lớn nhất", "nhân viên thấp nhất"</li>
+                        <li>Yêu cầu <strong>biểu đồ</strong> — thêm cụm "vẽ biểu đồ" hoặc "cho tôi xem chart" vào câu hỏi</li>
+                        <li>Câu hỏi <strong>nhiều điều kiện</strong> — "khách hàng OTC miền Nam có nợ trên 30 ngày"</li>
+                    </ul>
+                    <div class="guide-note">
+                        💡 AI nhớ được ngữ cảnh trong cùng phiên (tối đa 6 lượt). Bạn có thể hỏi tiếp theo: "tương tự nhưng cho miền Nam" mà không cần gõ lại toàn bộ câu hỏi.
+                    </div>
+                </div>
+            </div>
+
+            <!-- Accordion 3: Phân quyền dữ liệu -->
+            <div class="guide-section" id="gs-3">
+                <div class="guide-section-header" onclick="toggleGuideSection('gs-3')">
+                    <span class="gs-title"><i class="fa-solid fa-shield-halved"></i> Phân quyền &amp; Phạm vi dữ liệu</span>
+                    <i class="fa-solid fa-chevron-down gs-chevron"></i>
+                </div>
+                <div class="guide-section-body">
+                    <div class="guide-shortcut-grid">
+                        <div class="guide-shortcut-item">
+                            <div class="sk-label">c_level / admin</div>
+                            <div class="sk-value">Xem toàn quốc, toàn kênh</div>
+                        </div>
+                        <div class="guide-shortcut-item">
+                            <div class="sk-label">manager_bac</div>
+                            <div class="sk-value">Chỉ dữ liệu Miền Bắc</div>
+                        </div>
+                        <div class="guide-shortcut-item">
+                            <div class="sk-label">manager_nam</div>
+                            <div class="sk-value">Chỉ dữ liệu Miền Nam</div>
+                        </div>
+                        <div class="guide-shortcut-item">
+                            <div class="sk-label">manager_trung</div>
+                            <div class="sk-value">Chỉ dữ liệu Miền Trung</div>
+                        </div>
+                        <div class="guide-shortcut-item">
+                            <div class="sk-label">manager_otc</div>
+                            <div class="sk-value">Chỉ kênh OTC (nhà thuốc)</div>
+                        </div>
+                        <div class="guide-shortcut-item">
+                            <div class="sk-label">manager_etc</div>
+                            <div class="sk-value">Chỉ kênh ETC (bệnh viện)</div>
+                        </div>
+                    </div>
+                    <div class="guide-note">
+                        🔒 Mọi câu trả lời tự động lọc theo phân quyền tài khoản đang đăng nhập — AI không thể trả về dữ liệu ngoài phạm vi được cấp phép.
+                    </div>
+                </div>
+            </div>
+
+            <!-- Accordion 4: Mẹo & Tricks -->
+            <div class="guide-section" id="gs-4">
+                <div class="guide-section-header" onclick="toggleGuideSection('gs-4')">
+                    <span class="gs-title"><i class="fa-solid fa-wand-magic-sparkles"></i> Mẹo &amp; Tính năng ẩn</span>
+                    <i class="fa-solid fa-chevron-down gs-chevron"></i>
+                </div>
+                <div class="guide-section-body">
+                    <ul class="guide-tip-list">
+                        <li>Nhấn <kbd>↑</kbd> trong ô nhập để lấy lại câu hỏi vừa gõ (chưa hỗ trợ, dùng cách copy từ bong bóng chat)</li>
+                        <li>Kết quả bảng có thể <strong>sắp xếp</strong> bằng cách nhấn vào tiêu đề cột (▲▼)</li>
+                        <li>Dùng ô <strong>Lọc...</strong> bên dưới tiêu đề cột để tìm kiếm trong kết quả</li>
+                        <li>Nhấn <strong>"Xem câu lệnh SQL do AI sinh"</strong> để kiểm tra query thực tế đã chạy</li>
+                        <li>Gõ <strong>"reset"</strong> hoặc <strong>"bắt đầu lại"</strong> để xoá bộ nhớ ngữ cảnh hội thoại</li>
+                        <li>Kết quả được <strong>lưu tự động</strong> — tải lại trang (F5) vẫn thấy lịch sử trò chuyện</li>
+                        <li>Biểu đồ trả về dưới dạng ảnh PNG — nhấn chuột phải → <strong>Lưu ảnh</strong> để tải về</li>
+                    </ul>
+                </div>
+            </div>
+
+            <!-- Accordion 5: Giới hạn & Lưu ý -->
+            <div class="guide-section" id="gs-5">
+                <div class="guide-section-header" onclick="toggleGuideSection('gs-5')">
+                    <span class="gs-title"><i class="fa-solid fa-circle-exclamation"></i> Giới hạn &amp; Lưu ý</span>
+                    <i class="fa-solid fa-chevron-down gs-chevron"></i>
+                </div>
+                <div class="guide-section-body">
+                    <ul class="guide-tip-list">
+                        <li>Dữ liệu được cập nhật <strong>5 lần/ngày</strong> từ Bravo — có thể chênh lệch tối đa vài giờ so với thực tế</li>
+                        <li>Chatbot chỉ <strong>đọc dữ liệu</strong>, không thể chỉnh sửa hay xóa bản ghi nào</li>
+                        <li>Thời gian phản hồi thường <strong>5–15 giây</strong> (AI đang tạo SQL và truy vấn database)</li>
+                        <li>Câu hỏi quá phức tạp hoặc mơ hồ có thể trả về kết quả không chính xác — nên kiểm tra SQL</li>
+                        <li>Hạn mức tín dụng và hạn dùng lô hàng <strong>chưa có dữ liệu</strong> — sẽ bổ sung trong phiên bản tiếp theo</li>
+                    </ul>
+                    <div class="guide-note">
+                        📞 Nếu AI trả lời sai hoặc gặp lỗi, vui lòng chụp màn hình và gửi cho bộ phận IT/Data để điều chỉnh prompt.
+                    </div>
+                </div>
+            </div>
+
+            <div class="modal-actions">
+                <button class="btn-primary" id="btn-close-guide-bottom">
+                    <i class="fa-solid fa-check"></i> Đã hiểu, bắt đầu sử dụng
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Script Entry -->
+    <script src="app.js?v=2"></script>
+</body>
+</html>
