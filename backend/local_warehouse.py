@@ -65,8 +65,21 @@ CREATE INDEX IF NOT EXISTS idx_dnv_code ON dim_nhanvien(employee_code);
 CREATE INDEX IF NOT EXISTS idx_dnv_dmsid ON dim_nhanvien(dmsid);
 CREATE TABLE IF NOT EXISTS dim_chucvu (position_code TEXT, description TEXT);
 CREATE INDEX IF NOT EXISTS idx_dcv_code ON dim_chucvu(position_code);
-CREATE TABLE IF NOT EXISTS brv_sanpham (code TEXT, name TEXT, group_code TEXT, unit TEXT);
+-- id_code = BRV_SanPham.Id (khoa noi, dung de join voi brv_tonkhodk.item_id - KHAC code la ma san
+-- pham dang text hien thi cho nguoi dung).
+CREATE TABLE IF NOT EXISTS brv_sanpham (code TEXT, name TEXT, group_code TEXT, unit TEXT, id_code INTEGER);
 CREATE INDEX IF NOT EXISTS idx_bsp_code ON brv_sanpham(code);
+CREATE INDEX IF NOT EXISTS idx_bsp_idcode ON brv_sanpham(id_code);
+
+-- Ton kho THAT tu Bravo (thay Supabase inventory - cot warehouse ben do 100% NULL). branch_code tren
+-- brv_kho: B01=San xuat, B02=Kinh doanh Mien Bac, B03=Kinh doanh Mien Trung, B04=Kinh doanh Mien Nam
+-- (xac nhan voi DA 15/07/2026). Join: brv_tonkhodk.warehouse_id -> brv_kho.id_code de biet vung,
+-- brv_tonkhodk.item_id -> brv_sanpham.id_code de biet ten san pham.
+CREATE TABLE IF NOT EXISTS brv_kho (id_code INTEGER, branch_code TEXT, code TEXT, name TEXT);
+CREATE INDEX IF NOT EXISTS idx_bkho_idcode ON brv_kho(id_code);
+CREATE TABLE IF NOT EXISTS brv_tonkhodk (warehouse_id INTEGER, item_id INTEGER, quantity REAL, amount REAL, is_active INTEGER);
+CREATE INDEX IF NOT EXISTS idx_tk_warehouse ON brv_tonkhodk(warehouse_id);
+CREATE INDEX IF NOT EXISTS idx_tk_item ON brv_tonkhodk(item_id);
 CREATE TABLE IF NOT EXISTS brvsx_tralai (doc_date TEXT, amount9 REAL, is_active INTEGER, stt TEXT, customer_code TEXT);
 CREATE INDEX IF NOT EXISTS idx_tralai_docdate ON brvsx_tralai(doc_date);
 

@@ -130,9 +130,16 @@ SMALL_TABLES = [
     ("DMSSX_KhachHang", "dmssx_khachhang", "Code, Name, CityId, Id, KenhBH", "code,name,city_id,id_code,kenh_bh"),
     ("DMS_KhachHang", "dms_khachhang", "Code, Name, CityId, Id, EmpDMSCode1, KenhBH", "code,name,city_id,id_code,emp_code,kenh_bh"),
     ("DIM_NhanVien", "dim_nhanvien", "EmployeeCode, Name, IsDuplicate, PositionCode, AreaCode, DMSId", "employee_code,name,is_duplicate,position_code,area_code,dmsid"),
-    ("BRV_SanPham", "brv_sanpham", "Code, Name, GroupCode, Unit", "code,name,group_code,unit"),
+    ("BRV_SanPham", "brv_sanpham", "Id, Code, Name, GroupCode, Unit", "id_code,code,name,group_code,unit"),
     ("BRVSX_TraLai", "brvsx_tralai", "DocDate, Amount9, IsActive, Stt, CustomerCode", "doc_date,amount9,is_active,stt,customer_code"),
     ("DIM_ChucVu", "dim_chucvu", "DISTINCT PositionCode, Description", "position_code,description"),
+    # Ton kho THAT (thay the Supabase inventory - cot "warehouse" ben do 100% NULL, khong dung duoc).
+    # BranchCode tren BRV_Kho la B01=San xuat, B02=Kinh doanh Mien Bac, B03=Kinh doanh Mien Trung,
+    # B04=Kinh doanh Mien Nam (xac nhan voi DA ben Bravo 15/07/2026) - join TonKhoDK.WarehouseId ->
+    # BRV_Kho.Id de biet vung, roi ItemId -> brv_sanpham.id_code de biet ten san pham.
+    ("BRV_Kho", "brv_kho", "Id, BranchCode, Code, Name", "id_code,branch_code,code,name"),
+    ("BRV_TonKhoDK", "brv_tonkhodk", "WarehouseId, ItemId, Quantity, Amount, IsActive",
+     "warehouse_id,item_id,quantity,amount,is_active"),
 ]
 
 
