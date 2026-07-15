@@ -51,3 +51,22 @@ def region_from_customer_code(customer_code):
     if not m:
         return None
     return CUSTOMER_CODE_PREFIX_TO_REGION.get(m.group(1).upper())
+
+
+def customer_code_prefix_sql_or(column_expr):
+    """15/07/2026: trả về mảnh SQL "{column_expr} LIKE 'AGI%' OR {column_expr} LIKE 'BDI%' OR ..."
+    liệt kê cả 63 tiền tố đã kiểm chứng — dùng làm ĐIỀU KIỆN GIỮ LẠI khách hàng "mồ côi" (không có
+    hồ sơ trong DMS_KhachHang/DMSSX_KhachHang) khi phải LEFT JOIN thay vì JOIN thường trong các
+    truy vấn Bravo (vd check_customer_churn_alert/check_revenue_concentration_alert).
+
+    QUAN TRỌNG: các hàm này trước đó dùng JOIN thường (INNER) KHÔNG PHẢI chỉ vì lười — có lý do
+    thật: bravo_hoadonhdr/brvsx_hoadonhdr chứa lẫn nhiều "CustomerCode" không phải khách hàng thật
+    (mã nội bộ 'P000001', mã nhà cung cấp 'NCC*', mã chi phí 'I000001'...) — xác nhận thực tế mã
+    '1001136' có 274 tỷ đồng/197 hóa đơn nhưng không khớp bất kỳ khách hàng nào. Đổi thẳng sang
+    LEFT JOIN không lọc gì sẽ lộ lại đúng vấn đề đó. Cách đúng: LEFT JOIN (không mất khách mồ côi
+    CÓ tiền tố tỉnh/thành hợp lệ, vd HCM13508) NHƯNG vẫn yêu cầu "có hồ sơ khách hàng HOẶC tiền tố
+    mã khớp tỉnh/thành đã biết" — mã rác kiểu P000001/NCC*/1001136 không khớp tiền tố nào trong
+    bảng nên vẫn bị loại đúng như trước, chỉ khách hàng thật bị "mồ côi" mới được giữ lại.
+
+    Dùng: f"k.Code IS NOT NULL OR {customer_code_prefix_sql_or('v.CustomerCode')}" trong WHERE."""
+    return " OR ".join(f"{column_expr} LIKE '{prefix}%'" for prefix in CUSTOMER_CODE_PREFIX_TO_REGION)

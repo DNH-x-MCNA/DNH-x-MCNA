@@ -1006,7 +1006,7 @@ def run_sales_kpi_insights_alert():
         # 4. Top 3 TDV/CTV xuất sắc nhất
         for idx, r in enumerate(data['top_reps']):
             rows.append([
-                f"⭐ Top {idx+1} TDV: {r['employee_name']}",
+                f"Top {idx+1} TDV: {r['employee_name']}",
                 format_vietnamese_money(r['month_sale_target']),
                 format_vietnamese_money(r['month_sale_amount']),
                 f"{r['month_sale_percent']*100:.1f}%".replace('.', ',')
@@ -1015,7 +1015,7 @@ def run_sales_kpi_insights_alert():
         # 5. Top 3 TDV/CTV cần hỗ trợ
         for idx, r in enumerate(data['bottom_reps']):
             rows.append([
-                f"⚠️ Cần hỗ trợ #{idx+1}: {r['employee_name']} ({r['position_code']})",
+                f"Cần hỗ trợ #{idx+1}: {r['employee_name']} ({r['position_code']})",
                 format_vietnamese_money(r['month_sale_target']),
                 format_vietnamese_money(r['month_sale_amount']),
                 f"{r['month_sale_percent']*100:.1f}%".replace('.', ',')
@@ -1769,11 +1769,13 @@ def check_customer_churn_alert():
     C1: Khách lớn (tháng trước mua nhiều) nhưng tháng mới nhất rớt mạnh — nguy cơ mất khách.
     Tính RIÊNG top 10 cho từng kênh OTC/ETC (không gộp trước khi xếp hạng/so ngưỡng).
 
-    INNER JOIN với dms_khachhang/dmssx_khachhang để CHỈ tính khách hàng thật — xác nhận thực tế
-    (08/07/2026) rằng brv_hoadonhdr/brvsx_hoadonhdr chứa nhiều "CustomerCode" KHÔNG phải khách
-    hàng bán lẻ/ETC thật (mã nội bộ/công ty mẹ 'P000001', mã nhà cung cấp 'NCC*', mã chi phí nội
-    bộ 'I000001'/'I000002'...) — nếu không lọc sẽ hiện nhầm các mã này như "khách hàng lớn" cần
-    chăm sóc (đã thấy thực tế mã '1001136' 274 tỷ đồng/197 hóa đơn không khớp dim khách hàng nào).
+    LEFT JOIN với dms_khachhang/dmssx_khachhang (15/07/2026, trước đó INNER JOIN) + điều kiện giữ
+    lại khách "mồ côi" có tiền tố mã hợp lệ (region_map.py::customer_code_prefix_sql_or) — vẫn loại
+    đúng mã rác như trước (mã nội bộ/công ty mẹ 'P000001', mã nhà cung cấp 'NCC*', mã chi phí nội
+    bộ 'I000001'/'I000002'... không khớp tiền tố tỉnh/thành nào, xác nhận thực tế 08/07/2026 mã
+    '1001136' 274 tỷ đồng/197 hóa đơn không khớp dim khách hàng nào), nhưng KHÔNG còn bỏ sót khách
+    hàng thật thiếu hồ sơ (vd HCM13508) như INNER JOIN cũ từng làm — xác nhận qua vụ lệch doanh thu
+    OTC Miền Nam 2025 với số DNH báo.
     """
     # 14/07/2026: đổi sang query view gốc Bravo (vHoaDonTotal/vHoaDonETCTotal) thay vì tự ráp
     # SUM(h."TotalAmount") trực tiếp từ header — cùng lý do/cách làm với _period_revenue (đã sửa
@@ -1789,18 +1791,22 @@ def check_customer_churn_alert():
         engine = _get_bravo_engine()
         if engine is None:
             raise RuntimeError("Chưa cấu hình BRAVO_SQL_* — không có nguồn nào khác cho churn.")
-        sql = text('''
+        from src.region_map import customer_code_prefix_sql_or
+        otc_keep = f"(k.Code IS NOT NULL OR {customer_code_prefix_sql_or('v.CustomerCode')})"
+        sql = text(f'''
             WITH cm AS (
-                SELECT 'OTC' AS channel, v.CustomerCode AS cc, k.Name AS cname,
+                SELECT 'OTC' AS channel, v.CustomerCode AS cc, COALESCE(k.Name, v.CustomerCode) AS cname,
                        DATEFROMPARTS(YEAR(v.DocDate), MONTH(v.DocDate), 1) AS m, SUM(v.Amount9) AS rev
                 FROM dbo.vHoaDonTotal v
-                JOIN dbo.DMS_KhachHang k ON v.CustomerCode = k.Code
+                LEFT JOIN dbo.DMS_KhachHang k ON v.CustomerCode = k.Code
+                WHERE {otc_keep}
                 GROUP BY v.CustomerCode, k.Name, DATEFROMPARTS(YEAR(v.DocDate), MONTH(v.DocDate), 1)
                 UNION ALL
-                SELECT 'ETC', v.CustomerCode, k.Name,
+                SELECT 'ETC', v.CustomerCode, COALESCE(k.Name, v.CustomerCode),
                        DATEFROMPARTS(YEAR(v.DocDate), MONTH(v.DocDate), 1), SUM(v.Amount9)
                 FROM dbo.vHoaDonETCTotal v
-                JOIN dbo.DMSSX_KhachHang k ON v.CustomerCode = k.Code
+                LEFT JOIN dbo.DMSSX_KhachHang k ON v.CustomerCode = k.Code
+                WHERE (k.Code IS NOT NULL OR {customer_code_prefix_sql_or('v.CustomerCode')})
                 GROUP BY v.CustomerCode, k.Name, DATEFROMPARTS(YEAR(v.DocDate), MONTH(v.DocDate), 1)
             ),
             agg AS (SELECT channel, cc, cname, m, SUM(rev) AS rev FROM cm GROUP BY channel, cc, cname, m),
@@ -1868,24 +1874,28 @@ def check_revenue_concentration_alert():
     C2: Rủi ro tập trung — top N khách chiếm > X% tổng doanh thu tháng mới nhất.
     Tính RIÊNG cho từng kênh OTC/ETC (không gộp trước khi tính tỷ trọng).
 
-    INNER JOIN với dms_khachhang/dmssx_khachhang để CHỈ tính khách hàng thật trong cả tử số (top
-    N) lẫn mẫu số (tổng doanh thu kênh) — cùng lý do đã xác nhận thực tế ở check_customer_churn_alert
-    (mã nội bộ/NCC lẫn trong CustomerCode của brv_hoadonhdr/brvsx_hoadonhdr).
+    LEFT JOIN với dms_khachhang/dmssx_khachhang (15/07/2026, trước đó INNER JOIN) + điều kiện giữ
+    lại khách "mồ côi" có tiền tố mã hợp lệ (region_map.py::customer_code_prefix_sql_or) trong cả
+    tử số (top N) lẫn mẫu số (tổng doanh thu kênh) — vẫn loại đúng mã rác như trước (mã nội bộ/NCC
+    không khớp tiền tố tỉnh/thành nào, cùng lý do đã xác nhận thực tế ở check_customer_churn_alert),
+    nhưng không còn làm sai tỷ lệ tập trung doanh thu do bỏ sót khách hàng thật thiếu hồ sơ.
     """
     # 14/07/2026: đổi sang query view gốc Bravo (vHoaDonTotal/vHoaDonETCTotal), cùng lý do/cách
     # làm với check_customer_churn_alert/_period_revenue. Không còn failover Postgres.
     from sqlalchemy import text
     from src.database import _get_bravo_engine
+    from src.region_map import customer_code_prefix_sql_or
     top_n = int(_biz_threshold('concentration_top_n', 3))
     threshold = float(_biz_threshold('concentration_pct', 0.50))
     params = {"n": top_n}
+    otc_keep = f"(k.Code IS NOT NULL OR {customer_code_prefix_sql_or('v.CustomerCode')})"
 
     try:
         engine = _get_bravo_engine()
         if engine is None:
             raise RuntimeError("Chưa cấu hình BRAVO_SQL_* — không có nguồn nào khác cho concentration.")
         # TOP (:n) cần ngoặc vì n là bind param, không phải literal.
-        sql = text('''
+        sql = text(f'''
             WITH mx AS (
                 SELECT 'OTC' AS channel, DATEFROMPARTS(YEAR(MAX(DocDate)), MONTH(MAX(DocDate)), 1) AS m FROM dbo.vHoaDonTotal
                 UNION ALL
@@ -1894,14 +1904,14 @@ def check_revenue_concentration_alert():
             cm AS (
                 SELECT 'OTC' AS channel, v.CustomerCode AS cc, SUM(v.Amount9) AS rev
                 FROM dbo.vHoaDonTotal v
-                JOIN dbo.DMS_KhachHang k ON v.CustomerCode = k.Code
-                WHERE DATEFROMPARTS(YEAR(v.DocDate), MONTH(v.DocDate), 1) = (SELECT m FROM mx WHERE channel='OTC')
+                LEFT JOIN dbo.DMS_KhachHang k ON v.CustomerCode = k.Code
+                WHERE {otc_keep} AND DATEFROMPARTS(YEAR(v.DocDate), MONTH(v.DocDate), 1) = (SELECT m FROM mx WHERE channel='OTC')
                 GROUP BY v.CustomerCode
                 UNION ALL
                 SELECT 'ETC', v.CustomerCode, SUM(v.Amount9)
                 FROM dbo.vHoaDonETCTotal v
-                JOIN dbo.DMSSX_KhachHang k ON v.CustomerCode = k.Code
-                WHERE DATEFROMPARTS(YEAR(v.DocDate), MONTH(v.DocDate), 1) = (SELECT m FROM mx WHERE channel='ETC')
+                LEFT JOIN dbo.DMSSX_KhachHang k ON v.CustomerCode = k.Code
+                WHERE (k.Code IS NOT NULL OR {customer_code_prefix_sql_or('v.CustomerCode')}) AND DATEFROMPARTS(YEAR(v.DocDate), MONTH(v.DocDate), 1) = (SELECT m FROM mx WHERE channel='ETC')
                 GROUP BY v.CustomerCode
             ),
             agg AS (SELECT channel, cc, SUM(rev) AS rev FROM cm GROUP BY channel, cc)
@@ -1948,50 +1958,55 @@ def check_revenue_concentration_alert():
 # ---- Nhóm E: Hàng trả về ---------------------------------------------------
 
 def check_return_rate_alert():
-    """E: Tỷ lệ giá trị hàng trả về (brvsx_tralai) / doanh số ETC tháng mới nhất vượt ngưỡng."""
+    """E: Tỷ lệ giá trị hàng trả về (brvsx_tralai) / doanh số ETC tháng mới nhất vượt ngưỡng.
+
+    15/07/2026: doanh số ETC (mẫu số) đổi sang dùng _period_revenue() (view vHoaDonETCTotal đã
+    kiểm chứng khớp 100% số DNH báo) thay vì tự tính SUM("TotalAmount") từ brvsx_hoadonhdr/
+    BRVSX_HoaDonHdr — công thức tự ráp cũ dính đúng lỗi đã tìm thấy nhiều nơi khác trong đợt rà
+    soát hôm nay: không trừ đúng hàng trả lại theo cách view gốc làm, không lọc Post_TheKho=1/
+    chứng từ hủy qua BRV_TrangThaiDuyet — khiến mẫu số tỷ lệ trả hàng KHÔNG khớp với doanh thu ETC
+    chính thức dùng ở mọi báo cáo/cảnh báo khác trong hệ thống (2 con số lẽ ra phải nhất quán).
+    Không còn failover Postgres cho phần doanh số (giống các hàm doanh thu khác đã sửa) — riêng
+    phần "hàng trả về" vẫn đọc BRVSX_TraLai trực tiếp trên Bravo."""
     from sqlalchemy import text
-    from src.database import run_with_failover
+    from src.database import _get_bravo_engine
+    from src.etl import _period_revenue
     threshold = float(_biz_threshold('return_rate_pct', 0.05))
 
-    def _pg(conn):
-        sql = text('''
-            WITH mx AS (SELECT DATE_TRUNC('month', MAX("DocDate"::date)) AS m FROM brvsx_hoadonhdr WHERE "IsActive"=TRUE),
-            ret AS (
-                SELECT COALESCE(SUM("Amount9"),0) AS v FROM brvsx_tralai
-                WHERE "IsActive"=TRUE AND DATE_TRUNC('month',"DocDate"::timestamp) = (SELECT m FROM mx)
-            ),
-            sales AS (
-                SELECT COALESCE(SUM("TotalAmount"),0) AS v FROM brvsx_hoadonhdr
-                WHERE "IsActive"=TRUE AND DATE_TRUNC('month',"DocDate"::timestamp) = (SELECT m FROM mx)
-            )
-            SELECT (SELECT v FROM ret), (SELECT v FROM sales), (SELECT m FROM mx)
-        ''')
-        return conn.execute(sql).fetchone()
-
-    def _mssql(conn):
-        sql = text('''
-            WITH mx AS (SELECT DATEFROMPARTS(YEAR(MAX("DocDate")), MONTH(MAX("DocDate")), 1) AS m FROM dbo.BRVSX_HoaDonHdr WHERE "IsActive"=1),
-            ret AS (
-                SELECT COALESCE(SUM("Amount9"),0) AS v FROM dbo.BRVSX_TraLai
-                WHERE "IsActive"=1 AND DATEFROMPARTS(YEAR("DocDate"), MONTH("DocDate"), 1) = (SELECT m FROM mx)
-            ),
-            sales AS (
-                SELECT COALESCE(SUM("TotalAmount"),0) AS v FROM dbo.BRVSX_HoaDonHdr
-                WHERE "IsActive"=1 AND DATEFROMPARTS(YEAR("DocDate"), MONTH("DocDate"), 1) = (SELECT m FROM mx)
-            )
-            SELECT (SELECT v FROM ret), (SELECT v FROM sales), (SELECT m FROM mx)
-        ''')
-        return conn.execute(sql).fetchone()
-
     try:
-        row = run_with_failover(_pg, _mssql, label="return_rate")
+        engine = _get_bravo_engine()
+        if engine is None:
+            raise RuntimeError("Chưa cấu hình BRAVO_SQL_* — không có nguồn nào khác cho return_rate.")
+        with engine.connect() as conn:
+            mx_row = conn.execute(text("SELECT MAX(DocDate) FROM dbo.vHoaDonETCTotal")).fetchone()
+        if not mx_row or not mx_row[0]:
+            print("[ALERTS][return_rate] Chưa có dữ liệu ETC để tính tỷ lệ trả hàng.")
+            return
+        max_date = mx_row[0]
+        # Driver ODBC cũ ("SQL Server") có thể trả cột date dạng chuỗi thay vì datetime.date gốc —
+        # cùng lỗi đã xác nhận thực tế ở _last_complete_data_day và nơi khác trong file này.
+        if isinstance(max_date, str):
+            max_date = datetime.strptime(max_date[:10], "%Y-%m-%d")
+        elif not hasattr(max_date, "strftime"):
+            max_date = datetime.combine(max_date, datetime.min.time())
+
+        month_start = datetime(max_date.year, max_date.month, 1)
+        next_year, next_month = (month_start.year + 1, 1) if month_start.month == 12 else (month_start.year, month_start.month + 1)
+        month_end = month_start.replace(year=next_year, month=next_month)
+
+        _, etc_sales, _, _ = _period_revenue(month_start, month_end)
+
+        with engine.connect() as conn:
+            ret_row = conn.execute(text('''
+                SELECT COALESCE(SUM(Amount9),0) FROM dbo.BRVSX_TraLai
+                WHERE IsActive = 1 AND DocDate >= :a AND DocDate < :b
+            '''), {"a": month_start, "b": month_end}).fetchone()
+        ret_value = float(ret_row[0]) if ret_row else 0.0
     except Exception as e:
         print(f"[ALERTS][return_rate] Lỗi: {e}")
         return
-    if row is None:
-        print("[ALERTS][return_rate] Không lấy được dữ liệu (Supabase và Bravo đều không dùng được).")
-        return
-    rate = return_rate(row[0], row[1])
+
+    rate = return_rate(ret_value, etc_sales)
     if rate is None:
         print("[ALERTS][return_rate] Chưa đủ dữ liệu (doanh số ETC = 0) để tính tỷ lệ trả hàng.")
         return
@@ -1999,20 +2014,14 @@ def check_return_rate_alert():
     if rate > threshold:
         alert_key = "etc_return_rate"
         if should_send_alert(alert_key, cooldown_hours=24, current_value=str(round(rate, 4))):
-            # row[2] (mốc tháng) có thể là chuỗi 'YYYY-MM-DD' khi run_with_failover trả về từ
-            # nhánh Bravo (driver ODBC cũ trả cột date dạng chuỗi, không phải datetime.date gốc —
-            # xác nhận thực tế 13/07/2026, cùng lỗi đã sửa ở _last_complete_data_day và nơi khác).
-            m_val = row[2]
-            if m_val and not hasattr(m_val, "strftime"):
-                m_val = datetime.strptime(str(m_val)[:10], "%Y-%m-%d")
-            period_m = m_val.strftime('%m/%Y') if m_val else None
+            period_m = month_start.strftime('%m/%Y')
             send_alert_to_all_channels(
                 alert_name="CẢNH BÁO TỶ LỆ HÀNG TRẢ VỀ CAO (ETC)",
                 severity="WARNING",
                 summary=(f"Tỷ lệ giá trị hàng trả về / doanh số ETC tháng mới nhất đạt {rate*100:.2f}% "
                          f"(vượt {threshold*100:.0f}%) — nghi vấn chất lượng lô/quá hạn/sai đơn."),
                 table_headers=["Giá trị trả về", "Doanh số ETC", "Tỷ lệ trả"],
-                table_rows=[[format_vietnamese_money(row[0]), format_vietnamese_money(row[1]), f"{rate*100:.2f}%"]],
+                table_rows=[[format_vietnamese_money(ret_value), format_vietnamese_money(etc_sales), f"{rate*100:.2f}%"]],
                 channels=("teams",),
                 period=period_m, channel="ETC", region="Toàn quốc",
                 issue=f"Tỷ lệ giá trị hàng trả về/doanh số ETC đạt {rate*100:.2f}%, vượt ngưỡng — nghi vấn chất lượng lô/quá hạn/sai đơn"
