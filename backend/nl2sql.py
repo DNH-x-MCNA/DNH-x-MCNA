@@ -19,7 +19,11 @@ import anthropic
 from schema_context import SCHEMA_CONTEXT
 from query_engine import run_query
 from report_templates import call_template, latest_data_date
-from conversation_memory import load_history, append_message
+from conversation_memory import load_history, append_message, get_query_state, set_query_state
+from realtime_context import REALTIME_TOOLS, REALTIME_TOOL_NAMES, get_current_datetime, resolve_relative_date
+from glossary_memory import save_glossary_term, retrieve_relevant_glossary
+from longterm_memory import save_example, retrieve_similar_examples
+from cost_logger import compute_and_log_cost
 
 MODEL = "claude-sonnet-5"
 MAX_TOOL_ROUNDS = 8  # gioi han so lan model duoc goi lai tool trong 1 cau hoi (tranh loop vo han)
@@ -252,9 +256,26 @@ QUERY_SUPABASE_TOOL = {
     },
 }
 
-RAW_SQL_TOOLS = {"query_database": "local", "query_inventory_receivables": "supabase"}
+SAVE_GLOSSARY_TOOL = {
+    "name": "save_business_term",
+    "description": "Luu 1 thuat ngu nghiep vu ma NGUOI DUNG vua dinh nghia trong cau hoi hien tai (vd "
+                    "'doanh thu rong nghia la doanh thu tru chiet khau') de cac lan hoi sau tu dong ap "
+                    "dung dung nghia nay, khong can nguoi dung giai thich lai. CHI goi khi nguoi dung "
+                    "THUC SU dang dinh nghia 1 khai niem (khong phai chi hoi so lieu binh thuong).",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "term": {"type": "string", "description": "Ten thuat ngu, vd 'doanh thu rong'"},
+            "definition": {"type": "string", "description": "Dinh nghia nguoi dung vua giai thich"},
+        },
+        "required": ["term", "definition"],
+    },
+}
 
-ALL_TOOLS = TEMPLATE_TOOLS + [QUERY_TOOL, QUERY_SUPABASE_TOOL]
+RAW_SQL_TOOLS = {"query_database": "local", "query_inventory_receivables": "supabase"}
+LOCAL_UTIL_TOOLS = REALTIME_TOOL_NAMES | {"save_business_term"}
+
+ALL_TOOLS = TEMPLATE_TOOLS + [QUERY_TOOL, QUERY_SUPABASE_TOOL] + REALTIME_TOOLS + [SAVE_GLOSSARY_TOOL]
 # Tools KHONG bao gio doi trong 1 phien chay - danh cache_control tren tool CUOI CUNG de cache ca
 # mang tools (Anthropic cache theo kieu "prefix": danh dau 1 block = cache moi thu TINH DEN block do).
 ALL_TOOLS_CACHED = ALL_TOOLS[:-1] + [{**ALL_TOOLS[-1], "cache_control": {"type": "ephemeral", "ttl": "1h"}}]
@@ -291,6 +312,13 @@ QUAN TRONG VE CHON TOOL:
 - Voi phan cau hoi KHONG thuoc 10 nhom tren: neu la ve TON KHO/CONG NO -> dung query_inventory_receivables
   (Supabase). Con lai (hoa don/doanh thu/san pham/khach hang/nhan vien/vung mien dang ad-hoc, tra hang...)
   -> dung query_database (kho local SQLite).
+- Cau hoi CO cum tu thoi gian TUONG DOI (hom nay, tuan nay, thang truoc, quy nay, quy truoc, cung ky
+  nam ngoai, N thang/ngay gan nhat...) -> BAT BUOC goi resolve_relative_date TRUOC de lay khoang ngay
+  cu the, roi moi dung ket qua do lam date_from/date_to cho tool khac - TUYET DOI KHONG tu suy luan
+  ngay thang, de tranh nham quy/thang. Neu resolve_relative_date bao loi (khong nhan dien duoc cum
+  tu), hoi lai nguoi dung ngay/khoang ngay cu the thay vi doan bua.
+- Neu nguoi dung dinh nghia 1 thuat ngu nghiep vu moi trong cau hoi (vd "doanh thu rong la doanh thu
+  tru chiet khau") -> goi save_business_term de luu lai, roi tiep tuc tra loi cau hoi nhu binh thuong.
 - Voi KPI nhan vien TONG QUAN/xep hang/nhieu nhan vien cung luc (ke ca ma khu vuc nhu MBKV*, ASM*):
   dung get_employee_kpi, nguong DAT KPI la 80% (khong phai 100%). Ket qua da co san truong "status"
   (🟢 Tot / 🟡 Trung binh / 🔴 Nguy hiem) - LUON dat emoji nay canh ten/ma NV, khong tu nghi nguong khac.
@@ -316,12 +344,33 @@ QUAN TRONG VE DO DAI CAU TRA LOI (tiet kiem chi phi - moi token output deu tinh 
 """
 
 
-def _dynamic_context_note() -> str:
-    """Phan DONG cua system prompt (moc ngay du lieu moi nhat) - tach rieng khoi phan tinh de KHONG
-    lam vo cache (kho local dong bo lai moi 15-30 phut nen gia tri nay doi lien tuc trong ngay)."""
+def _dynamic_context_note(question: str = "", session_id: str = "") -> str:
+    """Phan DONG cua system prompt (ngay du lieu + ngu canh doi theo tung cau hoi) - tach rieng khoi
+    phan tinh de KHONG lam vo cache (kho local dong bo lai moi 15-30 phut, glossary/query-state doi
+    theo tung cau hoi nen KHONG the cache chung voi schema/rules tinh)."""
     latest = latest_data_date()
-    return (f'Ngay co du lieu moi nhat trong kho hien tai: {latest} (dung lam moc cho "hom nay"/'
-            f'"gan day" neu nguoi dung khong noi ro ngay; kho local co the tre toi da ~15-30 phut so voi Bravo that).')
+    parts = [f'Ngay co du lieu moi nhat trong kho hien tai: {latest} (dung lam moc cho "hom nay"/'
+             f'"gan day" neu nguoi dung khong noi ro ngay; kho local co the tre toi da ~15-30 phut so voi Bravo that).']
+
+    glossary = retrieve_relevant_glossary(question)
+    if glossary:
+        parts.append("Dinh nghia nghiep vu nguoi dung da giai thich truoc do, ap dung neu lien quan:\n"
+                      + "\n".join(f"- {g}" for g in glossary))
+
+    if session_id:
+        qs = get_query_state(session_id)
+        if qs and qs.get("last_tool"):
+            parts.append(f'Ngu canh truy van GAN NHAT trong phien nay: da dung {qs["last_tool"]}'
+                          f'({qs["last_args"]}) - neu cau hoi hien tai la hoi tiep kieu "con...thi sao",'
+                          f' "so voi..." thi dung lam diem tham chieu.')
+
+    examples = retrieve_similar_examples(question)
+    if examples:
+        ex_text = "\n".join(f"- Cau hoi: {e['question']}\n  SQL: {e['sql']}" for e in examples)
+        parts.append("Vi du cau hoi-SQL tuong tu tung chay thanh cong truoc do (chi de THAM KHAO cach "
+                      "viet, KHONG copy may moc neu cau hoi hien tai khac ve dieu kien loc):\n" + ex_text)
+
+    return "\n\n".join(parts)
 
 
 def ask(question: str, session_id: str = "default", username: str = None) -> dict:
@@ -336,11 +385,14 @@ def ask(question: str, session_id: str = "default", username: str = None) -> dic
 
     sql_used = []
     last_result = None
+    last_tool_used = None  # (name, args_str) - cap nhat query_state cuoi ham neu tra loi thanh cong
+    ran_adhoc_query = None  # (question, sql) - luu vao longterm_memory neu query_database chay ok
     # System tach 2 block: block TINH (rules+schema) danh cache_control TTL 1h - it doi nen cache-hit
-    # cao, chi tinh ~10% gia input goc; block DONG (ngay du lieu moi nhat) KHONG cache vi doi moi 15-30p.
+    # cao, chi tinh ~10% gia input goc; block DONG (ngay du lieu, glossary, query-state, few-shot)
+    # KHONG cache vi doi theo tung cau hoi.
     system_blocks = [
         {"type": "text", "text": _static_system_prompt(), "cache_control": {"type": "ephemeral", "ttl": "1h"}},
-        {"type": "text", "text": _dynamic_context_note()},
+        {"type": "text", "text": _dynamic_context_note(question, session_id)},
     ]
 
     for _ in range(MAX_TOOL_ROUNDS):
@@ -352,6 +404,7 @@ def ask(question: str, session_id: str = "default", username: str = None) -> dic
             messages=messages,
             extra_headers=_CACHE_BETA_HEADERS,
         )
+        compute_and_log_cost(resp.usage, MODEL, question, session_id)
         messages.append({"role": "assistant", "content": resp.content})
 
         tool_uses = [b for b in resp.content if b.type == "tool_use"]
@@ -364,28 +417,51 @@ def ask(question: str, session_id: str = "default", username: str = None) -> dic
                 resp2 = client.messages.create(model=MODEL, max_tokens=MAX_TOKENS, system=system_blocks,
                                                 tools=ALL_TOOLS_CACHED, messages=messages,
                                                 extra_headers=_CACHE_BETA_HEADERS)
+                compute_and_log_cost(resp2.usage, MODEL, question, session_id)
                 answer_text = "".join(b.text for b in resp2.content if b.type == "text").strip()
                 if not answer_text:
                     answer_text = ("Xin lỗi, dữ liệu trả về quá lớn để tổng hợp gọn trong 1 câu trả lời. "
                                     "Bạn thử hỏi cụ thể/thu hẹp phạm vi hơn giúp mình nhé (vd theo vùng, theo thời gian ngắn hơn).")
             append_message(session_id, "user", question)
             append_message(session_id, "assistant", answer_text)
+            if last_tool_used:
+                set_query_state(session_id, last_tool_used[0], last_tool_used[1])
+            if ran_adhoc_query:
+                save_example(*ran_adhoc_query)
             return {"answer": answer_text, "sql_used": sql_used, "last_result": last_result}
 
         tool_results = []
         for tu in tool_uses:
-            if tu.name in RAW_SQL_TOOLS:
+            if tu.name in LOCAL_UTIL_TOOLS:
+                # Tool "tien ich" chay bang code thuan, khong cham DB - xu ly ngay tai cho, khong qua
+                # run_query/call_template (khong can audit log SQL vi khong co SQL nao ca).
+                sql_used.append(f"[tien ich] {tu.name}({tu.input})")
+                if tu.name == "get_current_datetime":
+                    payload = get_current_datetime()
+                elif tu.name == "resolve_relative_date":
+                    payload = resolve_relative_date(tu.input.get("phrase", ""))
+                elif tu.name == "save_business_term":
+                    save_glossary_term(tu.input.get("term", ""), tu.input.get("definition", ""),
+                                        defined_by=username)
+                    payload = {"ok": True, "message": "Da luu dinh nghia."}
+                else:
+                    payload = {"error": f"Tool khong ro: {tu.name}"}
+            elif tu.name in RAW_SQL_TOOLS:
                 db = RAW_SQL_TOOLS[tu.name]
                 sql = tu.input.get("sql", "")
                 sql_used.append(f"[{db}] {sql}")
                 result = run_query(sql, question=question, db=db, username=username)
                 last_result = result
+                last_tool_used = (tu.name, str(tu.input))
+                if db == "local" and result["ok"]:
+                    ran_adhoc_query = (question, sql)
                 payload = ({"columns": result["columns"], "rows": result["rows"][:MAX_ROWS_TO_MODEL],
                             "row_count": result["row_count"]} if result["ok"] else {"error": result["error"]})
             else:
                 sql_used.append(f"[bao cao chuan] {tu.name}({tu.input})")
                 tresult = call_template(tu.name, tu.input, question=question, username=username)
                 last_result = tresult
+                last_tool_used = (tu.name, str(tu.input))
                 payload = tresult["result"] if tresult["ok"] else {"error": tresult["error"]}
 
             tool_results.append({

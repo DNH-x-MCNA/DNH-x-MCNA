@@ -29,8 +29,42 @@ def init():
         created_at TEXT NOT NULL
     )""")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_msg_session ON messages(session_id, id)")
+    # Query State (co cau truc) - luu tool/tham so vua dung trong session, de cau hoi noi tiep kieu
+    # "con quy truoc thi sao?" co the doi chieu chac chan thay vi chi doc lai text lich su tho.
+    conn.execute("""CREATE TABLE IF NOT EXISTS query_state (
+        session_id TEXT PRIMARY KEY,
+        last_tool TEXT,
+        last_args TEXT,
+        updated_at TEXT NOT NULL
+    )""")
     conn.commit()
     conn.close()
+
+
+def set_query_state(session_id: str, tool_name: str, args: str):
+    conn = _conn()
+    try:
+        conn.execute(
+            "INSERT INTO query_state (session_id, last_tool, last_args, updated_at) VALUES (?,?,?,?) "
+            "ON CONFLICT(session_id) DO UPDATE SET last_tool=excluded.last_tool, "
+            "last_args=excluded.last_args, updated_at=excluded.updated_at",
+            (session_id, tool_name, args, time.strftime("%Y-%m-%d %H:%M:%S")),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_query_state(session_id: str):
+    """Tra ve {last_tool, last_args, updated_at} hoac None neu session chua co truy van nao."""
+    conn = _conn()
+    try:
+        row = conn.execute(
+            "SELECT last_tool, last_args, updated_at FROM query_state WHERE session_id=?", (session_id,)
+        ).fetchone()
+        return {"last_tool": row[0], "last_args": row[1], "updated_at": row[2]} if row else None
+    finally:
+        conn.close()
 
 
 def load_history(session_id: str, max_turns: int = 10):
@@ -61,6 +95,7 @@ def clear_session(session_id: str):
     conn = _conn()
     try:
         conn.execute("DELETE FROM messages WHERE session_id=?", (session_id,))
+        conn.execute("DELETE FROM query_state WHERE session_id=?", (session_id,))
         conn.commit()
     finally:
         conn.close()
