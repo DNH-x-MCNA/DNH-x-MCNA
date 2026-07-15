@@ -532,6 +532,41 @@ def order_timing_check(date_from: str, date_to: str, threshold_days: int = 2, li
     }
 
 
+_AREA_TO_BRANCH = {"MB": "B02", "MT": "B03", "MN": "B04"}
+_BRANCH_LABEL = {"B01": "Sản xuất", "B02": "Kinh doanh Miền Bắc",
+                 "B03": "Kinh doanh Miền Trung", "B04": "Kinh doanh Miền Nam"}
+
+
+def inventory_by_region(area_code: str = None, scope_area_code: str = None) -> list:
+    """Ton kho (so luong + gia tri) theo vung, tu Bravo qua brv_tonkhodk/brv_kho/brv_sanpham - THAY
+    THE nguon Supabase cu (bang inventory co cot warehouse nhung 100% NULL, khong loc vung duoc).
+    area_code: 'MB'/'MT'/'MN' - tuy chon, khong truyen se tra ve CA 4 vung (gom ca B01 San xuat).
+    scope_area_code: EP GHI DE area_code khi tai khoan bi gioi han vung (giong cac ham khac) - vi
+    B01 (San xuat) khong thuoc vung MB/MT/MN nao nen KHONG BAO GIO hien voi tai khoan bi gioi han."""
+    if scope_area_code:
+        area_code = scope_area_code
+    branch_filter = _AREA_TO_BRANCH.get(area_code) if area_code else None
+    sql = """SELECT k.branch_code area_code, COUNT(DISTINCT t.item_id) so_mat_hang,
+                    SUM(t.quantity) tong_so_luong, SUM(t.amount) tong_gia_tri
+             FROM brv_tonkhodk t LEFT JOIN brv_kho k ON k.id_code = t.warehouse_id
+             WHERE t.is_active = 1"""
+    params = []
+    if branch_filter:
+        sql += " AND k.branch_code = ?"
+        params.append(branch_filter)
+    elif scope_area_code:
+        # scope_area_code duoc set nhung khong map duoc sang branch (khong nen xay ra voi MB/MT/MN
+        # hop le) - an toan hon la khong tra ve gi thay vi lo het ca 4 vung.
+        return []
+    sql += " GROUP BY k.branch_code ORDER BY k.branch_code"
+    rows = _q(sql, tuple(params))
+    for r in rows:
+        r["area_label"] = _BRANCH_LABEL.get(r["area_code"], r["area_code"])
+        r["tong_so_luong"] = _f(r["tong_so_luong"])
+        r["tong_gia_tri"] = _f(r["tong_gia_tri"])
+    return rows
+
+
 TEMPLATES = {
     "get_revenue_by_channel": revenue_by_channel,
     "get_top_products": top_products,
@@ -543,6 +578,7 @@ TEMPLATES = {
     "get_customer_detail": customer_detail,
     "get_employee_directory": employee_directory,
     "check_order_timing": order_timing_check,
+    "get_inventory_by_region": inventory_by_region,
 }
 
 
