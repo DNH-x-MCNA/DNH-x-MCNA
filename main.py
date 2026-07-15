@@ -32,6 +32,26 @@ from src.alerts import (
 )
 
 
+def _is_alert_business_hours(config):
+    """15/07/2026: chỉ cho phép quét/gửi cảnh báo nghiệp vụ thời gian thực trong giờ hành chính
+    (config['scheduler']::alert_business_hours_start/end/days) — xem ghi chú trong config.yaml.
+    Không có khung giờ trong config (môi trường cũ) -> mặc định luôn cho phép (hành vi cũ)."""
+    sched = config.get('scheduler', {}) or {}
+    start_str = sched.get('alert_business_hours_start')
+    end_str = sched.get('alert_business_hours_end')
+    days = sched.get('alert_business_days')
+    if not start_str or not end_str or not days:
+        return True
+    now = datetime.now()
+    if now.isoweekday() not in days:
+        return False
+    start_h, start_m = (int(x) for x in start_str.split(':'))
+    end_h, end_m = (int(x) for x in end_str.split(':'))
+    start_t = now.replace(hour=start_h, minute=start_m, second=0, microsecond=0)
+    end_t = now.replace(hour=end_h, minute=end_m, second=0, microsecond=0)
+    return start_t <= now < end_t
+
+
 def run_all_alert_checks(config, erp_engine=None, crm_engine=None):
     """
     Chạy TOÀN BỘ cảnh báo nghiệp vụ THẬT của DNH đọc từ dữ liệu thật:
@@ -44,6 +64,10 @@ def run_all_alert_checks(config, erp_engine=None, crm_engine=None):
     Bản MOCK run_alert_checks(ERP/CRM giả lập) CHỈ chạy khi environment == 'local' để dev test;
     production KHÔNG bao giờ chạy mock.
     """
+    if not _is_alert_business_hours(config):
+        print(f"[ALERTS] Ngoài giờ hành chính ({datetime.now().strftime('%Y-%m-%d %H:%M:%S')}) — bỏ qua chu kỳ quét cảnh báo này.")
+        return
+
     flags = config.get('alert_feature_flags', {}) or {}
 
     # G1: health-check ETL trước (không phụ thuộc dữ liệu nghiệp vụ) — tắt tạm khi trỏ vào
