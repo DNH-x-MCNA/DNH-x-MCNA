@@ -138,9 +138,12 @@ def chat(req: ChatRequest, user: dict = Depends(require_user)):
     if not req.question or not req.question.strip():
         raise HTTPException(400, "Cau hoi khong duoc de trong")
     try:
-        # TODO (giai doan 2): truyen user["role"]/user["scope_value"] vao ask() de gioi han du lieu
-        # theo vung/QLV cho regional_director/qlv - hien tai CHUA enforce, chi moi co lop dang nhap.
-        result = ask(req.question, session_id=req.session_id, username=user["username"])
+        # regional_director/qlv bi gioi han xem theo vung (scope_value = MB/MT/MN) - c_level khong
+        # gioi han gi (scope_area_code=None). Enforce THAT xay ra o report_templates.py (tang code,
+        # khong phu thuoc AI), day chi la buoc suy ra scope tu tai khoan da dang nhap.
+        scope_area_code = user["scope_value"] if user["role"] in ("regional_director", "qlv") else None
+        result = ask(req.question, session_id=req.session_id, username=user["username"],
+                     scope_area_code=scope_area_code)
     except Exception as e:
         raise HTTPException(500, f"Loi he thong: {str(e)[:300]}")
 

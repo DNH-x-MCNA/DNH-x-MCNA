@@ -30,6 +30,26 @@ def _f(v):
     return float(v) if v is not None else 0.0
 
 
+def _scope_clause(scope_area_code: str):
+    """Tra ve (sql_suffix, params) de them dieu kien loc vung khi user bi gioi han (QLV/GD mien).
+    Gia dinh query da JOIN toi dim_tinhthanhpho voi alias 'tp' khi scope_area_code duoc truyen."""
+    if scope_area_code:
+        return " AND tp.area_code=?", (scope_area_code,)
+    return "", ()
+
+
+def _otc_area_join(alias: str = "v", scope_area_code: str = None) -> str:
+    if not scope_area_code:
+        return ""
+    return f"LEFT JOIN dms_khachhang kh ON kh.code={alias}.customer_code LEFT JOIN dim_tinhthanhpho tp ON tp.city_id=kh.city_id"
+
+
+def _etc_area_join(alias: str = "v", scope_area_code: str = None) -> str:
+    if not scope_area_code:
+        return ""
+    return f"LEFT JOIN dmssx_khachhang kh ON kh.code={alias}.customer_code LEFT JOIN dim_tinhthanhpho tp ON tp.city_id=kh.city_id"
+
+
 def latest_data_date() -> str:
     """Ngay gan nhat CO DU LIEU trong kho local (Bravo co the tre vai ngay, va kho local co the
     tre them toi da 1 chu ky dong bo nua so voi Bravo)."""
@@ -38,12 +58,18 @@ def latest_data_date() -> str:
     return d if d else str(dt.date.today())
 
 
-def revenue_by_channel(date_from: str, date_to: str) -> dict:
-    """Doanh thu + so hoa don theo kenh OTC/ETC trong khoang [date_from, date_to]."""
-    o = _q("SELECT COALESCE(SUM(amount9),0) rev, COUNT(DISTINCT stt) hd FROM vhoadon_otc "
-           "WHERE doc_date BETWEEN ? AND ?", (date_from, date_to))[0]
-    e = _q("SELECT COALESCE(SUM(amount9),0) rev, COUNT(DISTINCT stt) hd FROM vhoadon_etc "
-           "WHERE doc_date BETWEEN ? AND ?", (date_from, date_to))[0]
+def revenue_by_channel(date_from: str, date_to: str, scope_area_code: str = None) -> dict:
+    """Doanh thu + so hoa don theo kenh OTC/ETC trong khoang [date_from, date_to].
+    scope_area_code: NEU duoc truyen (tai khoan QLV/GD mien bi gioi han vung), CHI tinh doanh thu
+    cua dung vung do (join qua bang khach hang) - do la co che ep buoc o tang code, khong phu thuoc
+    AI co tu loc dung hay khong."""
+    scope_sql, scope_params = _scope_clause(scope_area_code)
+    join_o = _otc_area_join("v", scope_area_code)
+    join_e = _etc_area_join("v", scope_area_code)
+    o = _q(f"SELECT COALESCE(SUM(v.amount9),0) rev, COUNT(DISTINCT v.stt) hd FROM vhoadon_otc v {join_o} "
+           f"WHERE v.doc_date BETWEEN ? AND ?{scope_sql}", (date_from, date_to) + scope_params)[0]
+    e = _q(f"SELECT COALESCE(SUM(v.amount9),0) rev, COUNT(DISTINCT v.stt) hd FROM vhoadon_etc v {join_e} "
+           f"WHERE v.doc_date BETWEEN ? AND ?{scope_sql}", (date_from, date_to) + scope_params)[0]
     otc_rev, otc_hd = _f(o["rev"]), int(o["hd"])
     etc_rev, etc_hd = _f(e["rev"]), int(e["hd"])
     return {
@@ -55,43 +81,58 @@ def revenue_by_channel(date_from: str, date_to: str) -> dict:
     }
 
 
-def top_products(date_from: str, date_to: str, limit: int = 10, channel: str = "ALL") -> list:
-    """Top N san pham theo doanh thu. Loai hang khuyen mai (unit_price=0) khoi so luong ban that."""
-    parts = []
+def top_products(date_from: str, date_to: str, limit: int = 10, channel: str = "ALL",
+                  scope_area_code: str = None) -> list:
+    """Top N san pham theo doanh thu. Loai hang khuyen mai (unit_price=0) khoi so luong ban that.
+    scope_area_code: ep loc theo vung khi tai khoan bi gioi han (xem revenue_by_channel)."""
+    scope_sql, scope_params = _scope_clause(scope_area_code)
+    parts, part_params = [], []
     if channel in ("OTC", "ALL"):
-        parts.append("SELECT item_code, amount9, quantity, unit_price FROM vhoadon_otc WHERE doc_date BETWEEN ? AND ?")
+        join = _otc_area_join("v", scope_area_code)
+        parts.append(f"SELECT v.item_code, v.amount9, v.quantity, v.unit_price FROM vhoadon_otc v {join} "
+                      f"WHERE v.doc_date BETWEEN ? AND ?{scope_sql}")
+        part_params.append((date_from, date_to) + scope_params)
     if channel in ("ETC", "ALL"):
-        parts.append("SELECT item_code, amount9, quantity, unit_price FROM vhoadon_etc WHERE doc_date BETWEEN ? AND ?")
-    n_ranges = len(parts)
+        join = _etc_area_join("v", scope_area_code)
+        parts.append(f"SELECT v.item_code, v.amount9, v.quantity, v.unit_price FROM vhoadon_etc v {join} "
+                      f"WHERE v.doc_date BETWEEN ? AND ?{scope_sql}")
+        part_params.append((date_from, date_to) + scope_params)
     sql = f"""WITH combined AS ({" UNION ALL ".join(parts)})
               SELECT c.item_code, sp.name,
                      SUM(c.amount9) rev,
                      SUM(CASE WHEN COALESCE(c.unit_price,0) > 0 THEN c.quantity ELSE 0 END) qty
               FROM combined c LEFT JOIN brv_sanpham sp ON sp.code = c.item_code
               GROUP BY c.item_code, sp.name ORDER BY rev DESC LIMIT ?"""
-    params = (date_from, date_to) * n_ranges + (limit,)
+    params = tuple(p for pp in part_params for p in pp) + (limit,)
     rows = _q(sql, params)
     return [{"item_code": r["item_code"], "name": r["name"] or f'(chua co ten - ma {r["item_code"]})',
              "revenue": _f(r["rev"]), "qty": _f(r["qty"])} for r in rows]
 
 
-def top_customers(date_from: str, date_to: str, limit: int = 10, channel: str = "ALL") -> list:
-    """Top N khach hang theo doanh thu."""
-    parts = []
+def top_customers(date_from: str, date_to: str, limit: int = 10, channel: str = "ALL",
+                   scope_area_code: str = None) -> list:
+    """Top N khach hang theo doanh thu. scope_area_code: ep loc theo vung khi tai khoan bi gioi han."""
+    scope_sql, scope_params = _scope_clause(scope_area_code)
+    parts, part_params = [], []
     if channel in ("OTC", "ALL"):
-        parts.append("SELECT customer_code, amount9 FROM vhoadon_otc WHERE doc_date BETWEEN ? AND ?")
+        join = _otc_area_join("v", scope_area_code)
+        parts.append(f"SELECT v.customer_code, v.amount9 FROM vhoadon_otc v {join} "
+                      f"WHERE v.doc_date BETWEEN ? AND ?{scope_sql}")
+        part_params.append((date_from, date_to) + scope_params)
     if channel in ("ETC", "ALL"):
-        parts.append("SELECT customer_code, amount9 FROM vhoadon_etc WHERE doc_date BETWEEN ? AND ?")
-    n_ranges = len(parts)
+        join = _etc_area_join("v", scope_area_code)
+        parts.append(f"SELECT v.customer_code, v.amount9 FROM vhoadon_etc v {join} "
+                      f"WHERE v.doc_date BETWEEN ? AND ?{scope_sql}")
+        part_params.append((date_from, date_to) + scope_params)
     sql = f"""WITH combined AS ({" UNION ALL ".join(parts)})
               SELECT customer_code, SUM(amount9) rev
               FROM combined GROUP BY customer_code ORDER BY rev DESC LIMIT ?"""
-    params = (date_from, date_to) * n_ranges + (limit,)
+    params = tuple(p for pp in part_params for p in pp) + (limit,)
     rows = _q(sql, params)
     return [{"customer_code": r["customer_code"], "revenue": _f(r["rev"])} for r in rows]
 
 
-def revenue_by_region(date_from: str, date_to: str) -> list:
+def revenue_by_region(date_from: str, date_to: str, scope_area_code: str = None) -> list:
     """Doanh thu theo vung mien (MB/MT/MN), gop ca OTC + ETC. CA HAI deu LEFT JOIN qua bang khach hang
     de lay city_id (da doi chieu voi DA ben Bravo va xac nhan day la cach dung - KHONG dung city_id ghi
     truc tiep tren vhoadon_otc vi truong nay khong dang tin, tung gay lech doanh thu theo vung).
@@ -116,6 +157,12 @@ def revenue_by_region(date_from: str, date_to: str) -> list:
         area = r["area"] or region_from_customer_code(r["cc"]) or "Khac/chua xac dinh"
         agg[area] = agg.get(area, 0.0) + _f(r["rev"])
     total = sum(agg.values())
+
+    if scope_area_code:
+        # Tai khoan bi gioi han vung: CHI tra ve dung 1 vung duoc phep, KHONG lo cac vung khac ra
+        # ngoai (agg da tinh full o tren de con dung cho phep tinh noi bo, nhung KHONG duoc tra het ra).
+        v = agg.get(scope_area_code, 0.0)
+        return [{"area": scope_area_code, "revenue": v, "share_pct": 100.0 if v else 0.0}]
 
     # Tu doi chieu (re # 4): tong cong theo vung PHAI bang dung tong khong loc vung cung ky - neu
     # lech tuc la co JOIN nao do dang am tham lam roi du lieu (vd bi doi lai thanh INNER JOIN).
@@ -146,7 +193,7 @@ def _kpi_status(pct: float) -> str:
 
 
 def employee_kpi(as_of_date: str, limit: int = 10, order_by: str = "sales", filter: str = "all",
-                  position_code: str = None) -> dict:
+                  position_code: str = None, scope_area_code: str = None) -> dict:
     """KPI nhan vien: snapshot fact_tonghopkhachhang gan nhat <= as_of_date.
     order_by: 'sales' hoac 'pct' (dung khi filter='all', luon xep TOT NHAT truoc).
     filter: 'all' (top N tot nhat), 'below_target' (CHUA dat KPI, pct<80, xep TE NHAT truoc),
@@ -171,6 +218,9 @@ def employee_kpi(as_of_date: str, limit: int = 10, order_by: str = "sales", filt
     if position_code:
         sql += " AND nv.position_code=?"
         params.append(position_code)
+    if scope_area_code:
+        sql += " AND nv.area_code=?"
+        params.append(scope_area_code)
     sql += """ GROUP BY nv.name, e.employee_code, nv.position_code, cv.description
                HAVING MAX(e.month_sale_target)>0"""
     rows = _q(sql, tuple(params))
@@ -205,14 +255,21 @@ def _daily_kpi_status(pct: float) -> str:
     return "🟢 Xanh"
 
 
-def employee_daily_kpi(employee_code: str, year_month: str) -> dict:
+def employee_daily_kpi(employee_code: str, year_month: str, scope_area_code: str = None) -> dict:
     """KPI THEO NGAY cho 1 nhan vien CA NHAN (co ma truc tiep tren hoa don, vd EmpDMSCode2 nhu
     'tungtx') trong 1 thang (YYYY-MM). Target 1 ngay = 4% MonthSaleTarget cua nhan vien (tuong duong
     100% cua ngay). Phan loai tung ngay: 🔴 Do (<2.5%), 🟡 Vang (2.5%-3.5%), 🟢 Xanh (>3.5%). CHI tinh
     T2-T6 (bo qua T7/CN). Rieng "month_pct_of_target" la % TONG thang (thuc te/target*100, cach tinh
     CU khong lien quan 4%/ngay, KHONG co mau/nguong - chi la con so tham khao cuoi thang.
     KHONG dung cho ma khu vuc/quan ly vung (MBKV*, ASM*...) - cac ma nay khong xuat hien tren hoa don,
-    dung get_employee_kpi (snapshot thang, nguong 80%/50%) thay the cho nhom do."""
+    dung get_employee_kpi (snapshot thang, nguong 80%/50%) thay the cho nhom do.
+    scope_area_code: NEU co, chi cho xem KPI cua nhan vien CUNG vung - tra ve loi neu khac vung
+    (an toan hon la mac dinh cho phep khi khong xac dinh duoc vung cua nhan vien)."""
+    if scope_area_code:
+        nv = _q("SELECT area_code FROM dim_nhanvien WHERE employee_code=? LIMIT 1", (employee_code,))
+        emp_area = nv[0]["area_code"] if nv else None
+        if emp_area != scope_area_code:
+            return {"error": f"Ban khong co quyen xem du lieu nhan vien nay - ngoai vung {scope_area_code} ban phu trach."}
     year, month = int(year_month[:4]), int(year_month[5:7])
     month_start = dt.date(year, month, 1)
     month_end = (dt.date(year + 1, 1, 1) if month == 12 else dt.date(year, month + 1, 1)) - dt.timedelta(days=1)
@@ -261,11 +318,16 @@ def employee_daily_kpi(employee_code: str, year_month: str) -> dict:
     }
 
 
-def employee_directory(search: str = None, position_code: str = None, area_code: str = None, limit: int = 30) -> list:
+def employee_directory(search: str = None, position_code: str = None, area_code: str = None, limit: int = 30,
+                        scope_area_code: str = None) -> list:
     """Tra cuu MAPPING ma nhan vien <-> ten <-> vai tro (TDV/QLV/CTV/CS/TP/PP/TBP/TK). Dung khi nguoi
     dung hoi "ma cua [ten]" / "[ten] la ai" / "danh sach TDV vung MB" - KHONG can biet ma truoc.
     search: tim gan dung theo TEN hoac MA (khong phan biet hoa/thuong). position_code: loc theo vai tro
-    (vd 'TDV','QLV'). area_code: loc theo vung (MB/MT/MN). LUON loc is_duplicate<>1."""
+    (vd 'TDV','QLV'). area_code: loc theo vung (MB/MT/MN). LUON loc is_duplicate<>1.
+    scope_area_code: NEU co (tai khoan bi gioi han vung), EP GHI DE area_code bat ke AI truyen gi -
+    khong cho phep xem danh ba nhan vien vung khac."""
+    if scope_area_code:
+        area_code = scope_area_code
     sql = """SELECT n.employee_code employee_code, n.name name,
                     n.position_code position_code, c.description position_label, n.area_code area_code
              FROM dim_nhanvien n LEFT JOIN dim_chucvu c ON c.position_code=n.position_code
@@ -285,11 +347,12 @@ def employee_directory(search: str = None, position_code: str = None, area_code:
     return _q(sql, tuple(params))
 
 
-def compare_periods(date_from_a: str, date_to_a: str, date_from_b: str, date_to_b: str) -> dict:
+def compare_periods(date_from_a: str, date_to_a: str, date_from_b: str, date_to_b: str,
+                     scope_area_code: str = None) -> dict:
     """So sanh nhanh doanh thu giua 2 khoang thoi gian (vd thang nay vs thang truoc, cung ky nam truoc).
     Vi kho local co day du lich su (nhieu nam) nen so sanh xa duoc, khong chi vai ngay gan day."""
-    a = revenue_by_channel(date_from_a, date_to_a)
-    b = revenue_by_channel(date_from_b, date_to_b)
+    a = revenue_by_channel(date_from_a, date_to_a, scope_area_code)
+    b = revenue_by_channel(date_from_b, date_to_b, scope_area_code)
     delta = a["total"]["revenue"] - b["total"]["revenue"]
     pct_change = (delta / b["total"]["revenue"] * 100) if b["total"]["revenue"] else None
     return {"period_a": a, "period_b": b, "delta": delta, "pct_change": pct_change}
@@ -329,12 +392,24 @@ def _customer_receivable(customer_code: str, channel: str) -> dict:
     return empty
 
 
-def customer_detail(customer_code: str, date_from: str, date_to: str) -> dict:
+def customer_detail(customer_code: str, date_from: str, date_to: str, scope_area_code: str = None) -> dict:
     """Chi tiet 1 khach hang: gop doanh thu thuc te (kho local, tu Bravo) + du no/qua han (Supabase) +
     mapping vung mien/NV phu trach (DMS_KhachHang + DIM_NhanVien). Doanh thu tinh trong [date_from,date_to],
     du no/qua han la SNAPSHOT KY GAN NHAT hien co (khong theo date_from/date_to).
     LUU Y: kenh ETC KHONG co NV phu trach truc tiep gan tren khach hang (chi OTC co qua EmpDMSCode1) -
-    cot employee_code/employee_name/position_label se rong voi khach hang thuan ETC."""
+    cot employee_code/employee_name/position_label se rong voi khach hang thuan ETC.
+    scope_area_code: NEU co, xac dinh vung cua khach TRUOC KHI tra du lieu - tu choi neu khac vung
+    (dung ca tien to ma KH lam fallback cho khach "mo coi" giong revenue_by_region)."""
+    if scope_area_code:
+        c = _q("""SELECT tp.area_code a FROM dms_khachhang kh
+                  LEFT JOIN dim_tinhthanhpho tp ON tp.city_id=kh.city_id WHERE kh.code=?
+                  UNION ALL
+                  SELECT tp.area_code a FROM dmssx_khachhang kh
+                  LEFT JOIN dim_tinhthanhpho tp ON tp.city_id=kh.city_id WHERE kh.code=?""",
+                 (customer_code, customer_code))
+        cust_area = next((r["a"] for r in c if r["a"]), None) or region_from_customer_code(customer_code)
+        if cust_area != scope_area_code:
+            return {"error": f"Ban khong co quyen xem khach hang nay - ngoai vung {scope_area_code} ban phu trach."}
     o = _q("SELECT COALESCE(SUM(amount9),0) rev, COUNT(DISTINCT stt) hd FROM vhoadon_otc "
            "WHERE customer_code=? AND doc_date BETWEEN ? AND ?", (customer_code, date_from, date_to))[0]
     e = _q("SELECT COALESCE(SUM(amount9),0) rev, COUNT(DISTINCT stt) hd FROM vhoadon_etc "
@@ -393,27 +468,32 @@ def customer_detail(customer_code: str, date_from: str, date_to: str) -> dict:
     }
 
 
-def order_timing_check(date_from: str, date_to: str, threshold_days: int = 2, limit: int = 20) -> dict:
+def order_timing_check(date_from: str, date_to: str, threshold_days: int = 2, limit: int = 20,
+                        scope_area_code: str = None) -> dict:
     """Phat hien dau hieu 'chay don don KPI': hoa don co created_at (thoi diem BAN GHI THUC SU duoc
     tao trong Bravo) lech qua xa so voi doc_date (ngay chung tu tren hoa don, co the bi chon tay).
     Vd: doc_date la cuoi thang truoc nhung created_at lai la dau thang sau -> dau hieu tao/sua don
     backdate de kip chi tieu KPI thang truoc. threshold_days: so ngay lech toi thieu de bi liet ke
     (mac dinh 2). Tra ve ca TOM TAT theo tung nhan vien (ai co nhieu don bat thuong nhat) LAN danh
-    sach chi tiet top nhung don lech nhieu nhat."""
-    sql = """
+    sach chi tiet top nhung don lech nhieu nhat. scope_area_code: ep loc theo vung khi bi gioi han."""
+    scope_sql, scope_params = _scope_clause(scope_area_code)
+    join_o = _otc_area_join("v", scope_area_code)
+    join_e = _etc_area_join("v", scope_area_code)
+    sql = f"""
         SELECT doc_date, created_at, customer_code, employee_code, amount9, stt,
                CAST(julianday(created_at) - julianday(doc_date) AS INTEGER) AS lech_ngay
         FROM (
-            SELECT doc_date, created_at, customer_code, employee_code, amount9, stt
-            FROM vhoadon_otc WHERE doc_date BETWEEN ? AND ? AND created_at IS NOT NULL
+            SELECT v.doc_date, v.created_at, v.customer_code, v.employee_code, v.amount9, v.stt
+            FROM vhoadon_otc v {join_o} WHERE v.doc_date BETWEEN ? AND ? AND v.created_at IS NOT NULL{scope_sql}
             UNION ALL
-            SELECT doc_date, created_at, customer_code, employee_code, amount9, stt
-            FROM vhoadon_etc WHERE doc_date BETWEEN ? AND ? AND created_at IS NOT NULL
+            SELECT v.doc_date, v.created_at, v.customer_code, v.employee_code, v.amount9, v.stt
+            FROM vhoadon_etc v {join_e} WHERE v.doc_date BETWEEN ? AND ? AND v.created_at IS NOT NULL{scope_sql}
         )
         WHERE ABS(CAST(julianday(created_at) - julianday(doc_date) AS INTEGER)) >= ?
         ORDER BY ABS(lech_ngay) DESC
     """
-    rows = _q(sql, (date_from, date_to, date_from, date_to, threshold_days))
+    params = (date_from, date_to) + scope_params + (date_from, date_to) + scope_params + (threshold_days,)
+    rows = _q(sql, params)
 
     for r in rows:
         r["amount9"] = _f(r["amount9"])
@@ -457,13 +537,20 @@ TEMPLATES = {
 }
 
 
-def call_template(name: str, args: dict, question: str = "", username: str = None) -> dict:
-    """Goi 1 template theo ten, ghi audit log (giong format run_query de nhat quan truy vet)."""
+def call_template(name: str, args: dict, question: str = "", username: str = None,
+                   scope_area_code: str = None) -> dict:
+    """Goi 1 template theo ten, ghi audit log (giong format run_query de nhat quan truy vet).
+    scope_area_code: EP TRUYEN tu server (khong phai tu tham so AI dua ra) khi tai khoan bi gioi han
+    vung - ghi de bat ky gia tri nao AI cung cap trong args, dam bao AI KHONG the tu "mo khoa" vung
+    khac bang cach truyen tham so la."""
     t0 = dt.datetime.now()
     entry = {"ts": t0.isoformat(), "username": username, "question": question, "sql": f"<template:{name}>({args})"}
     try:
         fn = TEMPLATES[name]
-        result = fn(**args)
+        call_args = dict(args)
+        if scope_area_code:
+            call_args["scope_area_code"] = scope_area_code
+        result = fn(**call_args)
         entry["status"] = "ok"
         entry["duration_ms"] = int((dt.datetime.now() - t0).total_seconds() * 1000)
         _write_log(entry)

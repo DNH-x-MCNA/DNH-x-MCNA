@@ -344,13 +344,27 @@ QUAN TRONG VE DO DAI CAU TRA LOI (tiet kiem chi phi - moi token output deu tinh 
 """
 
 
-def _dynamic_context_note(question: str = "", session_id: str = "") -> str:
+def _dynamic_context_note(question: str = "", session_id: str = "", scope_area_code: str = None) -> str:
     """Phan DONG cua system prompt (ngay du lieu + ngu canh doi theo tung cau hoi) - tach rieng khoi
     phan tinh de KHONG lam vo cache (kho local dong bo lai moi 15-30 phut, glossary/query-state doi
     theo tung cau hoi nen KHONG the cache chung voi schema/rules tinh)."""
     latest = latest_data_date()
     parts = [f'Ngay co du lieu moi nhat trong kho hien tai: {latest} (dung lam moc cho "hom nay"/'
              f'"gan day" neu nguoi dung khong noi ro ngay; kho local co the tre toi da ~15-30 phut so voi Bravo that).']
+
+    if scope_area_code:
+        parts.append(
+            f'QUAN TRONG - TAI KHOAN NAY BI GIOI HAN VUNG {scope_area_code}: moi tool bao cao da duoc '
+            f'EP LOC theo dung vung nay o tang he thong (khong the vo tinh lo du lieu vung khac du AI '
+            f'co lam gi). Neu nguoi dung hoi ve 1 vung KHAC (vd hoi "mien Nam" trong khi tai khoan chi '
+            f'duoc xem {scope_area_code}), hoac hoi CHUNG CHUNG kieu "ca cong ty"/"toan quoc" - PHAI TU '
+            f'CHOI RO RANG, giai thich tai khoan chi co quyen xem vung {scope_area_code}, KHONG duoc tra '
+            f'loi bang so lieu vung {scope_area_code} nhu the la dung cau hoi (gay hieu nham). Tool tra '
+            f'cuu SQL tu do (query_database) KHONG kha dung cho tai khoan nay. '
+            f'MOI cau tra loi co so lieu (ke ca khi nguoi dung KHONG hoi ro vung) PHAI ghi ro dang "(vung '
+            f'{scope_area_code})" ngay canh con so - de nguoi dung luon biet day la so lieu da bi gioi han '
+            f'vung, khong phai so lieu toan quoc/vung khac.'
+        )
 
     glossary = retrieve_relevant_glossary(question)
     if glossary:
@@ -373,10 +387,14 @@ def _dynamic_context_note(question: str = "", session_id: str = "") -> str:
     return "\n\n".join(parts)
 
 
-def ask(question: str, session_id: str = "default", username: str = None) -> dict:
+def ask(question: str, session_id: str = "default", username: str = None, scope_area_code: str = None) -> dict:
     """
     Nhan cau hoi tieng Viet + session_id (1 phien chat webapp) - tu dong nho lai vai cau hoi/tra loi
     gan nhat trong CUNG session de hieu ngu canh cau hoi tiep theo.
+    scope_area_code: NEU duoc truyen (tai khoan regional_director/qlv bi gioi han vung), MOI tool bao
+    cao chuan se bi EP LOC theo dung vung nay o TANG CODE (report_templates.py), va tool SQL tu do
+    (query_database/query_inventory_receivables) se bi LOAI HAN khoi danh sach tool kha dung - day la
+    lop bao ve du lieu THAT (khong phu thuoc AI co lam dung huong dan hay khong).
     Tra ve dict: {answer: str, sql_used: [list mo ta cac tool/SQL da chay], last_result: {...} hoac None}
     """
     client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
@@ -387,12 +405,21 @@ def ask(question: str, session_id: str = "default", username: str = None) -> dic
     last_result = None
     last_tool_used = None  # (name, args_str) - cap nhat query_state cuoi ham neu tra loi thanh cong
     ran_adhoc_query = None  # (question, sql) - luu vao longterm_memory neu query_database chay ok
+
+    # Tai khoan bi gioi han vung: loai han tool SQL tu do khoi danh sach gui cho AI (AI KHONG CO KHA
+    # NANG goi, khong chi la "duoc dan dung goi") - chi con lai cac tool bao cao chuan da kiem soat
+    # duoc filter vung o tang code.
+    tools_for_request = ALL_TOOLS_CACHED
+    if scope_area_code:
+        scoped_tools = [t for t in ALL_TOOLS if t["name"] not in RAW_SQL_TOOLS]
+        tools_for_request = scoped_tools[:-1] + [{**scoped_tools[-1], "cache_control": {"type": "ephemeral", "ttl": "1h"}}]
+
     # System tach 2 block: block TINH (rules+schema) danh cache_control TTL 1h - it doi nen cache-hit
-    # cao, chi tinh ~10% gia input goc; block DONG (ngay du lieu, glossary, query-state, few-shot)
-    # KHONG cache vi doi theo tung cau hoi.
+    # cao, chi tinh ~10% gia input goc; block DONG (ngay du lieu, glossary, query-state, few-shot, scope)
+    # KHONG cache vi doi theo tung cau hoi/tai khoan.
     system_blocks = [
         {"type": "text", "text": _static_system_prompt(), "cache_control": {"type": "ephemeral", "ttl": "1h"}},
-        {"type": "text", "text": _dynamic_context_note(question, session_id)},
+        {"type": "text", "text": _dynamic_context_note(question, session_id, scope_area_code)},
     ]
 
     for _ in range(MAX_TOOL_ROUNDS):
@@ -400,7 +427,7 @@ def ask(question: str, session_id: str = "default", username: str = None) -> dic
             model=MODEL,
             max_tokens=MAX_TOKENS,
             system=system_blocks,
-            tools=ALL_TOOLS_CACHED,
+            tools=tools_for_request,
             messages=messages,
             extra_headers=_CACHE_BETA_HEADERS,
         )
@@ -415,7 +442,7 @@ def ask(question: str, session_id: str = "default", username: str = None) -> dic
                 # cho phan text tra ve - thu lai 1 lan voi yeu cau tra loi ngay, ngan gon.
                 messages.append({"role": "user", "content": "Hay tra loi ngay bay gio, ngan gon truc tiep."})
                 resp2 = client.messages.create(model=MODEL, max_tokens=MAX_TOKENS, system=system_blocks,
-                                                tools=ALL_TOOLS_CACHED, messages=messages,
+                                                tools=tools_for_request, messages=messages,
                                                 extra_headers=_CACHE_BETA_HEADERS)
                 compute_and_log_cost(resp2.usage, MODEL, question, session_id)
                 answer_text = "".join(b.text for b in resp2.content if b.type == "text").strip()
@@ -447,19 +474,26 @@ def ask(question: str, session_id: str = "default", username: str = None) -> dic
                 else:
                     payload = {"error": f"Tool khong ro: {tu.name}"}
             elif tu.name in RAW_SQL_TOOLS:
-                db = RAW_SQL_TOOLS[tu.name]
-                sql = tu.input.get("sql", "")
-                sql_used.append(f"[{db}] {sql}")
-                result = run_query(sql, question=question, db=db, username=username)
-                last_result = result
-                last_tool_used = (tu.name, str(tu.input))
-                if db == "local" and result["ok"]:
-                    ran_adhoc_query = (question, sql)
-                payload = ({"columns": result["columns"], "rows": result["rows"][:MAX_ROWS_TO_MODEL],
-                            "row_count": result["row_count"]} if result["ok"] else {"error": result["error"]})
+                if scope_area_code:
+                    # Phong ho: tool nay khong con trong tools_for_request nen AI khong the goi duoc,
+                    # nhung neu vi ly do gi van xuat hien thi tu choi thang, KHONG thuc thi SQL.
+                    sql_used.append(f"[BI CHAN - tai khoan gioi han vung] {tu.name}")
+                    payload = {"error": "Tai khoan cua ban bi gioi han theo vung, khong duoc dung truy van SQL tu do."}
+                else:
+                    db = RAW_SQL_TOOLS[tu.name]
+                    sql = tu.input.get("sql", "")
+                    sql_used.append(f"[{db}] {sql}")
+                    result = run_query(sql, question=question, db=db, username=username)
+                    last_result = result
+                    last_tool_used = (tu.name, str(tu.input))
+                    if db == "local" and result["ok"]:
+                        ran_adhoc_query = (question, sql)
+                    payload = ({"columns": result["columns"], "rows": result["rows"][:MAX_ROWS_TO_MODEL],
+                                "row_count": result["row_count"]} if result["ok"] else {"error": result["error"]})
             else:
                 sql_used.append(f"[bao cao chuan] {tu.name}({tu.input})")
-                tresult = call_template(tu.name, tu.input, question=question, username=username)
+                tresult = call_template(tu.name, tu.input, question=question, username=username,
+                                         scope_area_code=scope_area_code)
                 last_result = tresult
                 last_tool_used = (tu.name, str(tu.input))
                 payload = tresult["result"] if tresult["ok"] else {"error": tresult["error"]}
