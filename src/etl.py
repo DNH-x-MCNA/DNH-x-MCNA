@@ -409,6 +409,13 @@ _HIGHLIGHT_LABELS = {
     "etl_stale": ("ETL nghi đứng (dữ liệu không mới)", "hours"),
 }
 
+# 16/07/2026: các prefix KHÔNG nên vào "Điểm Nổi Bật Trong Kỳ" dù có trong _HIGHLIGHT_LABELS —
+# data_sanity_zero/etl_stale là cảnh báo SỨC KHỎE HỆ THỐNG (guard kỹ thuật), không phải vấn đề
+# nghiệp vụ; sales_kpi_insights_report chỉ là thông báo "đã gửi báo cáo định kỳ" (status luôn
+# "Đã gửi"), không phản ánh bất thường gì — liệt kê chung với các cảnh báo thật (nợ quá hạn, khách
+# rời bỏ...) sẽ làm loãng phần nội dung thực sự đáng chú ý.
+_HIGHLIGHT_EXCLUDE_PREFIXES = {"data_sanity_zero", "etl_stale", "sales_kpi_insights_report"}
+
 def _format_highlight_date_part(part):
     """Nếu 1 mảnh suffix của alert_key là ngày/tháng (YYYY-MM-DD, YYYY-MM, hoặc "M_YYYY" — định
     dạng period dùng ở receivable_detail/check_debt_aging_migration_alert), đổi sang định dạng
@@ -531,6 +538,9 @@ def _get_period_highlights(start_dt, end_dt):
     seen_groups = set()
     deduped = []
     for r in rows:
+        prefix = "sales_kpi_insights_report" if r[0].startswith("sales_kpi_insights_report_") else r[0].split(":")[0]
+        if prefix in _HIGHLIGHT_EXCLUDE_PREFIXES:
+            continue
         group_key = _highlight_group_key(r[0])
         if group_key in seen_groups:
             continue
@@ -830,8 +840,12 @@ def get_digest_metrics(start_dt, end_dt, period_label, granularity=None, region=
         if region is None:
             region_breakdown = _revenue_by_region(start_dt, end_dt, channel=channel)
 
-    highlights = _get_period_highlights(start_dt, end_dt) if granularity in ("weekly", "monthly") else []
-    has_critical = _period_has_critical(start_dt, end_dt) if granularity in ("weekly", "monthly") else False
+    # 16/07/2026: TRƯỚC ĐÂY chỉ tính cho weekly/monthly — Daily Digest hoàn toàn không có mục
+    # "Điểm Nổi Bật Trong Kỳ" dù trong ngày có cảnh báo CRITICAL thật (vd tỷ lệ nợ quá hạn, khách
+    # nợ quá hạn vẫn lên đơn mới...) đã bắn qua Teams. Bật cho mọi granularity — chi phí không đáng
+    # kể (1 query SQLite cục bộ, không đụng Bravo/Supabase).
+    highlights = _get_period_highlights(start_dt, end_dt)
+    has_critical = _period_has_critical(start_dt, end_dt)
 
     result = {
         "date": start_dt.strftime("%d/%m/%Y"),
@@ -862,13 +876,13 @@ def get_digest_metrics(start_dt, end_dt, period_label, granularity=None, region=
                 for r in dead_items
             ],
         },
+        "highlights": highlights,
+        "has_critical": has_critical,
     }
     if granularity in ("weekly", "monthly"):
         result["trend"] = trend
         result["region_breakdown"] = region_breakdown
         result["kpi_summary"] = kpi_summary
-        result["highlights"] = highlights
-        result["has_critical"] = has_critical
     return result
 
 def get_daily_digest_metrics(region=None, channel=None):
