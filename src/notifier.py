@@ -260,50 +260,6 @@ DIGEST_EMAIL_TEMPLATE = """
                 <![endif]-->
             </div>
 
-            <!-- Top khách hàng Section -->
-            <div class="section-title">Top 5 Khách Hàng Theo Doanh Thu</div>
-            <div class="grid">
-                <!--[if mso]>
-                <table role="presentation" width="100%" style="border-collapse: collapse; border: 0;"><tr><td width="50%" valign="top" style="padding: 8px;">
-                <![endif]-->
-                <div class="col" style="width: 100%; max-width: 290px; padding: 8px;">
-                    <p style="font-size:12px; font-weight:700; color:#64748b; text-transform:uppercase; margin: 0 0 6px;">Kênh OTC</p>
-                    {% if metrics.top_customers_otc %}
-                    <table class="data-table">
-                        <thead><tr><th>Khách hàng</th><th>Doanh thu</th></tr></thead>
-                        <tbody>
-                            {% for c in metrics.top_customers_otc %}
-                            <tr><td>{{ c.name }}</td><td>{{ "{:,.0f}".format(c.revenue) }} đ</td></tr>
-                            {% endfor %}
-                        </tbody>
-                    </table>
-                    {% else %}
-                    <p class="no-data">Không có dữ liệu.</p>
-                    {% endif %}
-                </div>
-                <!--[if mso]>
-                </td><td width="50%" valign="top" style="padding: 8px;">
-                <![endif]-->
-                <div class="col" style="width: 100%; max-width: 290px; padding: 8px;">
-                    <p style="font-size:12px; font-weight:700; color:#64748b; text-transform:uppercase; margin: 0 0 6px;">Kênh ETC</p>
-                    {% if metrics.top_customers_etc %}
-                    <table class="data-table">
-                        <thead><tr><th>Khách hàng</th><th>Doanh thu</th></tr></thead>
-                        <tbody>
-                            {% for c in metrics.top_customers_etc %}
-                            <tr><td>{{ c.name }}</td><td>{{ "{:,.0f}".format(c.revenue) }} đ</td></tr>
-                            {% endfor %}
-                        </tbody>
-                    </table>
-                    {% else %}
-                    <p class="no-data">Không có dữ liệu.</p>
-                    {% endif %}
-                </div>
-                <!--[if mso]>
-                </td></tr></table>
-                <![endif]-->
-            </div>
-
             {% if metrics.trend %}
             <!-- Xu hướng trong kỳ Section — weekly: theo NGÀY, monthly: theo TUẦN.
             13/07/2026: bỏ hẳn biểu đồ SVG — Outlook Desktop (dùng engine Word để render HTML

@@ -280,12 +280,10 @@ def estimate_overdue_days_str(period_str, overdue_1_15, overdue_15_30, overdue_3
     hóa đơn để tra ngày quá hạn chính xác tuyệt đối — đây là ước lượng theo bucket, không phải
     số ngày thực đo từ hóa đơn gốc.
 
-    14/07/2026: hằng số mốc ngày đổi theo mốc mới (1-30/31-60/61-90/>90, xem
-    _BRAVO_RECEIVABLES_SQL). LƯU Ý: dữ liệu THẬT trong receivable_detail (Supabase) được import
-    1 lần từ trước khi đổi mốc — các cột overdue_1_15/15_30/30_45/gt_45 của bảng đó vẫn là SỐ đã
-    tính theo mốc CŨ (1-15/15-30/30-45/>45), chỉ TÊN CỘT/hàm này đổi theo mốc mới cho nhất quán
-    với nhánh Bravo. Nhánh dự phòng này hiếm khi chạy (chỉ khi Bravo lỗi) — chấp nhận sai số nhỏ
-    cho tới khi có nhu cầu import lại receivable_detail theo đúng mốc mới.
+    16/07/2026: QUAY LẠI mốc cũ 1-15/15-30/30-45/>45 ngày (đảo ngược đổi mốc 14/07/2026 sang
+    1-30/31-60/61-90/>90 — bản đó gây lệch với ai_agent/chatbot.py và receivable_detail, xem
+    _BRAVO_RECEIVABLES_SQL). Giờ khớp lại đúng với dữ liệu THẬT trong receivable_detail (Supabase,
+    vẫn luôn tính theo mốc 1-15/15-30/30-45/>45 từ lần import gốc, chưa từng đổi).
     """
     try:
         parts = period_str.split('_')
@@ -299,17 +297,17 @@ def estimate_overdue_days_str(period_str, overdue_1_15, overdue_15_30, overdue_3
         days_since_report = max(0, (today - report_date).days)
 
         if overdue_gt_45 and overdue_gt_45 > 0:
-            return f"Ít nhất {90 + days_since_report} ngày"
+            return f"Ít nhất {45 + days_since_report} ngày"
         elif overdue_30_45 and overdue_30_45 > 0:
-            return f"Từ {61 + days_since_report} đến {90 + days_since_report} ngày"
+            return f"Từ {31 + days_since_report} đến {45 + days_since_report} ngày"
         elif overdue_15_30 and overdue_15_30 > 0:
-            return f"Từ {31 + days_since_report} đến {60 + days_since_report} ngày"
+            return f"Từ {16 + days_since_report} đến {30 + days_since_report} ngày"
         elif overdue_1_15 and overdue_1_15 > 0:
-            return f"Từ {1 + days_since_report} đến {30 + days_since_report} ngày"
+            return f"Từ {1 + days_since_report} đến {15 + days_since_report} ngày"
     except Exception:
         pass
 
-    return "Trên 90 ngày"
+    return "Trên 45 ngày"
 
 
 def normalize_channel_label(raw_channel):
@@ -414,16 +412,15 @@ WITH Receivables AS (
 )
 SELECT customer_code, customer_name, sales_channel, area_code,
     SUM(amount) AS balance_end,
-    -- 14/07/2026: đổi mốc tuổi nợ sang 1-30/31-60/61-90/>90 ngày (chuẩn AR aging phổ biến,
-    -- phù hợp hơn mốc 15 ngày cũ với quy mô DNH — xem docstring get_bravo_receivables_snapshot).
-    -- GIỮ NGUYÊN tên cột overdue_1_15/15_30/30_45/gt_45 (không đổi tên) để tránh phải migrate
-    -- schema debt_aging_snapshot (SQLite) + receivable_detail (Supabase) — tên cột giờ CHỈ LÀ
-    -- NHÃN, không còn khớp nghĩa đen với số ngày; đây là đề xuất theo thông lệ chung, CHƯA được
-    -- DNH xác nhận chính thức (xem docs/Cau_hoi_can_DNH_chot_truoc_hop_16-07.md).
-    SUM(CASE WHEN overdue_days BETWEEN 1 AND 30 THEN amount ELSE 0 END) AS overdue_1_15,
-    SUM(CASE WHEN overdue_days BETWEEN 31 AND 60 THEN amount ELSE 0 END) AS overdue_15_30,
-    SUM(CASE WHEN overdue_days BETWEEN 61 AND 90 THEN amount ELSE 0 END) AS overdue_30_45,
-    SUM(CASE WHEN overdue_days > 90 THEN amount ELSE 0 END) AS overdue_gt_45
+    -- 16/07/2026: QUAY LẠI mốc cũ 1-15/15-30/30-45/>45 ngày theo yêu cầu — bản 14/07/2026 từng đổi
+    -- sang 1-30/31-60/61-90/>90 (đề xuất thông lệ chung, chưa DNH xác nhận) đã gây lệch với
+    -- ai_agent/chatbot.py (vẫn dùng mốc 15 ngày) và với receivable_detail (Supabase, đóng băng
+    -- theo mốc 15 ngày từ lần import gốc) — phát hiện qua rà soát toàn diện 16/07/2026. Quay lại
+    -- mốc cũ để 3 nơi (alert/chatbot/receivable_detail) đồng nhất trở lại.
+    SUM(CASE WHEN overdue_days BETWEEN 1 AND 15 THEN amount ELSE 0 END) AS overdue_1_15,
+    SUM(CASE WHEN overdue_days BETWEEN 16 AND 30 THEN amount ELSE 0 END) AS overdue_15_30,
+    SUM(CASE WHEN overdue_days BETWEEN 31 AND 45 THEN amount ELSE 0 END) AS overdue_30_45,
+    SUM(CASE WHEN overdue_days > 45 THEN amount ELSE 0 END) AS overdue_gt_45
 FROM Receivables
 GROUP BY customer_code, customer_name, sales_channel, area_code
 """
