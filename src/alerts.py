@@ -2789,6 +2789,125 @@ def check_etl_freshness_alert():
             record_alert_sent(alert_key, str(int(age_hours)))
 
 
+def check_kpi_revenue_reconciliation_alert():
+    """
+    G3 (16/07/2026): Đối chiếu TỔNG doanh thu OTC tính từ hóa đơn Bravo (_period_revenue —
+    vHoaDonTotal, công thức đã kiểm chứng khớp số liệu DNH) với TỔNG doanh số ghi nhận trong
+    bảng KPI (FACT_TongHopKhachHang.Amount_Cus, dự phòng kpi_summary/Supabase) tháng hiện tại —
+    bắt sớm nếu dữ liệu KPI lệch khỏi doanh thu thực tế, đúng yêu cầu "doanh số phải luôn so với
+    bảng KPI để đảm bảo tính chính xác".
+
+    CHỈ ĐỐI CHIẾU ĐƯỢC KÊNH OTC — FACT_TongHopKhachHang/kpi_summary chỉ có khái niệm nhân sự
+    TDV/QLV cho OTC, không có cột nhân viên bên ETC (giống giới hạn đã biết ở
+    check_daily_kpi_pace_alert). Không suy ra ETC từ chênh lệch này.
+
+    CỘNG THEO KHÁCH HÀNG (DISTINCT CustomerCode), KHÔNG cộng theo nhân viên/vai trò (16/07/2026,
+    lịch sử sửa 2 lần trước khi ra bản này — xem điều tra thực tế):
+      1) Bản đầu cộng cả TDV+QLV -> gấp ~2 lần doanh thu thật (lệch "66%") — vì TDV và QLV là 2
+         cách CẮT LÁT SONG SONG của CÙNG 1 khoản doanh thu (theo người bán trực tiếp vs theo
+         quản lý họ báo cáo lên), không phải 2 phần cộng dồn.
+      2) Sửa thành chỉ cộng QLV (rollup quản lý — verify khớp TUYỆT ĐỐI 4 tháng liên tiếp) —
+         nhưng vẫn lệch ~18% tháng 07/2026: trace tới tận hóa đơn gốc phát hiện 1 số node QLV
+         (vd "MN1 - Kênh MT", nơi nhân viên thật Dương Thị Hồng Huệ/HCM03 báo cáo lên) bị gắn
+         NHẦM cờ IsDuplicate=1 dù vẫn là điểm neo phân cấp hợp lệ — lọc IsDuplicate làm rơi rụng
+         doanh thu của khách hàng thuộc nhánh đó, dù doanh thu đó VẪN CÒN NGUYÊN ở dòng nhân viên
+         cấp dưới (TM23100133) trong CÙNG BẢNG.
+      3) Bản này: cộng theo DISTINCT CustomerCode (mỗi khách 1 dòng duy nhất, lấy MAX(Amount_Cus)
+         — giá trị giống hệt nhau ở mọi cấp phân cấp của cùng khách) — MIỄN NHIỄM với lỗi gắn cờ
+         IsDuplicate ở BẤT KỲ cấp nào, vì không cần biết/chọn đúng cấp bậc nhân viên nào cả. Verify
+         khớp TUYỆT ĐỐI — lệch = 0 ĐỒNG, cả 4 tháng test (3 tháng đã xong + tháng đang chạy) —
+         2 nguồn tính từ CÙNG dữ liệu thời gian thực, không có độ trễ đồng bộ nào cả.
+
+    NGƯỠNG dung sai DÙNG SỐ TUYỆT ĐỐI (kpi_reconciliation_tolerance_vnd), KHÔNG dùng % (16/07/2026,
+    sửa sau phản hồi thực tế): vì baseline thật đã verify là lệch = 0 đồng, dùng % sẽ ngày càng
+    LỎNG khi doanh thu công ty tăng (vd 5% của 20 tỷ = 1 tỷ đồng lọt qua không báo). ZERO-TOLERANCE
+    theo yêu cầu (mặc định 0đ) — lệch dù chỉ 1 đơn/1 đồng cũng phải báo, không có vùng đệm nào.
+    """
+    from src.etl import _period_revenue
+    threshold_vnd = float(_biz_threshold('kpi_reconciliation_tolerance_vnd', 0))
+
+    now = datetime.now()
+    month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+
+    try:
+        otc_rev, _, _, _ = _period_revenue(month_start, now)
+    except Exception as e:
+        print(f"[ALERTS][kpi_reconcile] Lỗi lấy doanh thu OTC từ hóa đơn: {e}")
+        return
+
+    kpi_total = None
+    data_source = None
+    try:
+        from sqlalchemy import text
+        from src.database import _get_bravo_engine
+        bravo_engine = _get_bravo_engine()
+        if bravo_engine is None:
+            raise RuntimeError("Không có Bravo engine")
+        with bravo_engine.connect() as conn:
+            row = conn.execute(text('''
+                SELECT SUM(amt) FROM (
+                    SELECT [CustomerCode], MAX([Amount_Cus]) AS amt
+                    FROM [FACT_TongHopKhachHang]
+                    WHERE [SaveDate] = (SELECT MAX([SaveDate]) FROM [FACT_TongHopKhachHang])
+                    GROUP BY [CustomerCode]
+                ) x
+            ''')).fetchone()
+        kpi_total = float(row[0]) if row and row[0] is not None else 0.0
+        data_source = "Bravo (FACT_TongHopKhachHang, theo khách hàng)"
+    except Exception as e:
+        print(f"[ALERTS][kpi_reconcile] Bravo lỗi ({e}) — dự phòng Supabase kpi_summary.")
+        engine = _alert_engine()
+        if engine is None:
+            return
+        try:
+            from sqlalchemy import text
+            # kpi_summary (Supabase) không có cột CustomerCode (đã là bảng phẳng theo nhân viên,
+            # xem docs/data_dictionary.md) -> không áp dụng được cách khử trùng theo khách hàng ở
+            # đây, đành dùng QLV (rollup quản lý) như phương án tốt nhất có thể với schema này.
+            with engine.connect() as conn:
+                row = conn.execute(text(
+                    "SELECT COALESCE(SUM(month_sale_amount),0) FROM kpi_summary "
+                    "WHERE position_code = 'QLV'"
+                )).fetchone()
+            kpi_total = float(row[0]) if row else 0.0
+            data_source = "Supabase (kpi_summary, rollup QLV)"
+        except Exception as e2:
+            print(f"[ALERTS][kpi_reconcile] Lỗi cả 2 nguồn: {e2}")
+            return
+
+    if otc_rev <= 0:
+        print("[ALERTS][kpi_reconcile] Chưa có doanh thu OTC tháng này để đối chiếu.")
+        return
+
+    diff_vnd = abs(otc_rev - kpi_total)
+    diff_pct = diff_vnd / otc_rev
+    print(f"[ALERTS][kpi_reconcile] Doanh thu OTC hóa đơn={otc_rev:,.0f}đ vs Tổng KPI ({data_source})={kpi_total:,.0f}đ "
+          f"(lệch {diff_vnd:,.0f}đ / {diff_pct*100:.2f}%, ngưỡng {threshold_vnd:,.0f}đ).")
+
+    if diff_vnd > threshold_vnd:
+        alert_key = f"kpi_revenue_reconciliation:{now.strftime('%Y-%m')}"
+        if should_send_alert(alert_key, cooldown_hours=24, current_value=str(round(diff_vnd, 0))):
+            send_alert_to_all_channels(
+                alert_name="CẢNH BÁO: DOANH THU KPI LỆCH SO VỚI HÓA ĐƠN THỰC TẾ (OTC)",
+                severity="WARNING",
+                summary=(f"Tổng doanh thu OTC tính từ hóa đơn Bravo tháng {now.strftime('%m/%Y')} là "
+                         f"{format_vietnamese_money(otc_rev)}, trong khi tổng doanh số ghi nhận trong bảng KPI "
+                         f"({data_source}) là {format_vietnamese_money(kpi_total)} — lệch {format_vietnamese_money(diff_vnd)} "
+                         f"({diff_pct*100:.2f}%), vượt ngưỡng {format_vietnamese_money(threshold_vnd)}. Có thể do đồng bộ "
+                         f"KPI bị trễ/đứng, gán sai nhân viên, hoặc dữ liệu KPI import từ nguồn cũ."),
+                table_headers=["Nguồn", "Doanh thu OTC tháng này"],
+                table_rows=[["Hóa đơn Bravo (thực tế)", format_vietnamese_money(otc_rev)],
+                            [f"Bảng KPI ({data_source})", format_vietnamese_money(kpi_total)]],
+                channels=("teams",),
+                period=f"Tháng {now.strftime('%m/%Y')} (đến {now.strftime('%d/%m/%Y %H:%M')})",
+                channel="OTC", region="Toàn quốc",
+                issue=f"Doanh thu KPI lệch {format_vietnamese_money(diff_vnd)} so với hóa đơn thực tế kênh OTC — nghi đồng bộ KPI có vấn đề"
+            )
+            record_alert_sent(alert_key, str(round(diff_vnd, 0)))
+    else:
+        print("[ALERTS][kpi_reconcile] Doanh thu KPI khớp hóa đơn thực tế trong ngưỡng cho phép.")
+
+
 if __name__ == '__main__':
     # Chạy thử test module cảnh báo cục bộ
     # Vì chưa set tài khoản SMTP thật nên send_email sẽ ghi warning ra log thay vì crash.

@@ -407,6 +407,7 @@ _HIGHLIGHT_LABELS = {
     "kpi_milestone_tdv": ("Số TDV giảm KPI so TB 5 tháng trước", "count"),
     "data_sanity_zero": ("Dữ liệu rỗng/bất thường — đã chặn cảnh báo", "status"),
     "etl_stale": ("ETL nghi đứng (dữ liệu không mới)", "hours"),
+    "kpi_revenue_reconciliation": ("Doanh thu KPI lệch so với hóa đơn thực tế (OTC)", "money"),
 }
 
 # 16/07/2026: các prefix KHÔNG nên vào "Điểm Nổi Bật Trong Kỳ" dù có trong _HIGHLIGHT_LABELS —

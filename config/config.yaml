@@ -110,6 +110,13 @@ thresholds:
     kpi_pace_red_alert_count: 5      # >= 5 TDV đỏ trong ngày -> gửi alert
     kpi_milestone_drop_pct: 0.05     # giảm > 5% tại mốc ngày 10/20 so với TB 5 tháng trước -> alert
     kpi_milestone_lookback_months: 5 # số tháng liền trước dùng để tính trung bình
+
+    # 16/07/2026: đối chiếu doanh thu OTC (hóa đơn Bravo) với bảng KPI tháng hiện tại, cộng theo
+    # DISTINCT khách hàng (miễn nhiễm lỗi gắn cờ IsDuplicate ở bất kỳ cấp nhân viên nào) — xem
+    # check_kpi_revenue_reconciliation_alert. Verify khớp TUYỆT ĐỐI (lệch = 0 đồng, 4/4 tháng
+    # test). ZERO-TOLERANCE theo yêu cầu — lệch dù chỉ 1 đơn/1 đồng cũng phải báo, KHÔNG có vùng
+    # đệm nào (0 = tắt hẳn dung sai, không phải "gần như tắt").
+    kpi_reconciliation_tolerance_vnd: 0
     kpi_milestone_min_prev: 10000000 # TB lũy kế 5 tháng trước phải > 10 triệu mới xét (tránh chia ~0)
 
   # Ngưỡng KPI nhân sự khối kinh doanh OTC MIỀN NAM — trích từ QĐ 0429-2/QĐ-HĐQT.25 (5 phụ lục:

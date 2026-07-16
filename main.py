@@ -28,6 +28,7 @@ from src.alerts import (
     check_kpi_milestone_drop_alert,      # F4: mốc ngày 10/20 giảm >5% so TB 5 tháng trước (kênh + từng TDV)
     check_data_sanity_ok,                # G2: guard chặn alert khi dữ liệu rỗng/hỏng
     check_etl_freshness_alert,           # G1: ETL đứng (dữ liệu không refresh)
+    check_kpi_revenue_reconciliation_alert,  # G3: doanh thu KPI lệch so với hóa đơn thực tế (OTC)
     format_vietnamese_money,
 )
 
@@ -103,6 +104,7 @@ def run_all_alert_checks(config, erp_engine=None, crm_engine=None):
         check_kpi_sales_force_risk_alert()
     check_daily_kpi_pace_alert()
     check_kpi_milestone_drop_alert()
+    check_kpi_revenue_reconciliation_alert()
 
     if str(config.get('environment', 'local')).lower() == 'local' and erp_engine is not None and crm_engine is not None:
         print("[ALERTS] (môi trường 'local') Chạy thêm bộ MOCK ERP/CRM để dev test...")
@@ -133,11 +135,18 @@ def _digest_table(metrics):
         ["Mặt hàng tồn chết", str(metrics['inventory']['dead_stock_count'])],
         ["Mặt hàng sắp hết hàng", str(metrics['inventory']['near_stockout_count'])],
     ]
-    # 14/07/2026: bỏ hẳn khối công nợ chi tiết (5 dòng Nợ quá hạn/Dư nợ OTC/ETC/Tổng) và mục
-    # "Cảnh báo phát sinh hôm nay" — Daily Digest chỉ còn doanh thu + tồn kho, ngắn gọn xem nhanh.
-    # Cảnh báo nợ quá hạn nghiêm trọng (vượt ngưỡng) vẫn tự bắn CARD RIÊNG qua Teams khi phát sinh
-    # (check_company_overdue_ratio_alert trong src/alerts.py, không phụ thuộc Daily Digest này).
-            
+    # 14/07/2026: bỏ hẳn khối công nợ chi tiết (5 dòng Nợ quá hạn/Dư nợ OTC/ETC/Tổng) — Daily
+    # Digest chỉ còn doanh thu + tồn kho, ngắn gọn xem nhanh. Cảnh báo nợ quá hạn nghiêm trọng
+    # (vượt ngưỡng) vẫn tự bắn CARD RIÊNG qua Teams khi phát sinh (check_company_overdue_ratio_alert
+    # trong src/alerts.py), độc lập với Daily Digest này.
+    #
+    # 16/07/2026: THÊM LẠI mục cảnh báo — nhưng khác bản cũ đã bỏ: giờ chỉ liệt kê cảnh báo THẬT
+    # SỰ có ý nghĩa nghiệp vụ (metrics['highlights'], đã lọc bỏ data_sanity_zero/etl_stale/
+    # sales_kpi_insights_report ở _get_period_highlights — xem src/etl.py), scope ĐÚNG NGÀY hôm
+    # nay (không phải toàn bộ lịch sử), không phải liệt kê thô mọi alert_key kỹ thuật như trước.
+    for h in metrics.get('highlights', []):
+        rows.append([f"Cảnh báo: {h['label']}", f"{h['value_display']} (lúc {h['sent_at_display']})"])
+
     return headers, rows
 
 def send_daily_digest():
