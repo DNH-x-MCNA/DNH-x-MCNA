@@ -261,9 +261,14 @@ def _revenue_trend(start_dt, end_dt, granularity, region=None, channel=None):
             buckets.append((cur, nxt, cur.strftime("%a %d/%m")))
             cur = nxt
     elif granularity == "monthly":
+        # 16/07/2026: chia theo TUẦN LỊCH thật (căn Thứ 2 - Chủ Nhật), KHÔNG phải "7 ngày kể từ
+        # mùng 1" như trước (01-07/08-14/... — không khớp tuần thật, gây khó đối chiếu với báo cáo
+        # Tuần). Tuần đầu/cuối tháng cắt theo biên tháng (partial). Ví dụ tháng 7/2026 (mùng 1 rơi
+        # Thứ 4): 01-05/07 (Thứ 4-CN), 06-12/07, 13-19/07... — trùng đúng kỳ báo cáo Tuần.
         cur = start_dt
         while cur < end_dt:
-            nxt = min(cur + timedelta(days=7), end_dt)
+            days_to_next_monday = 7 - cur.weekday()  # weekday(): Thứ 2 = 0 ... Chủ nhật = 6
+            nxt = min(cur + timedelta(days=days_to_next_monday), end_dt)
             buckets.append((cur, nxt, f"{cur.strftime('%d/%m')}-{(nxt - timedelta(days=1)).strftime('%d/%m')}"))
             cur = nxt
     else:
@@ -773,7 +778,22 @@ def get_digest_metrics(start_dt, end_dt, period_label, granularity=None, region=
     #    region_breakdown tự failover nội bộ (xem _revenue_trend/_revenue_by_region).
     trend, region_breakdown = [], []
     if granularity in ("weekly", "monthly"):
-        trend = _revenue_trend(start_dt, end_dt, granularity, region=region, channel=channel)
+        # 16/07/2026: ĐỐI CHIẾU bảng xu hướng với Tổng Doanh Thu đã tính riêng (total_rev) — 2 con
+        # số này LẼ RA bằng nhau (doanh thu cộng dồn được theo ngày, cả 2 cùng kẹp end_dt/region/
+        # channel giống nhau). Nếu lệch: 1 truy vấn con của _revenue_trend đã trả RỖNG do lỗi Bravo
+        # tạm thời (COALESCE SUM = 0), sinh bug "1 ngày = 0 dù tổng vẫn đúng" — phát hiện thực tế
+        # 16/07: báo cáo OTC hiện Wed 15/07 = 0 dù Tổng Doanh Thu gồm cả ngày đó (do chạy Weekly+
+        # Monthly đồng thời gây nghẽn Bravo). Thử lại 1 lần; vẫn lệch thì BỎ bảng xu hướng — thà
+        # không có biểu đồ còn hơn gửi biểu đồ sai/nội bộ mâu thuẫn cho quản lý.
+        for _attempt in range(2):
+            trend = _revenue_trend(start_dt, end_dt, granularity, region=region, channel=channel)
+            trend_sum = round(sum(t["revenue"] for t in trend), 2)
+            if abs(trend_sum - round(total_rev, 2)) <= 1.0:
+                break
+            print(f"[DIGEST] Xu hướng lệch tổng ({trend_sum:,.0f} vs {total_rev:,.0f}) — "
+                  f"{'thử lại' if _attempt == 0 else 'BỎ bảng xu hướng lần này'}.")
+        else:
+            trend = []
         if region is None:
             region_breakdown = _revenue_by_region(start_dt, end_dt, channel=channel)
 
