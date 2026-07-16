@@ -60,9 +60,14 @@ CREATE INDEX IF NOT EXISTS idx_dms_code ON dms_khachhang(code);
 -- dmsid: ma noi bo DMS - CO THE trung voi employee_code cua 1 dong KHAC (da xac nhan that, vd DMSId
 -- 'DNH00601' vua la employee_code cua 1 dong TDV vua la dmsid cua 1 dong QLV khac) - TUYET DOI KHONG
 -- coi dmsid la unique key, luon xu ly nhu co the tra ve NHIEU dong khi tra cuu.
-CREATE TABLE IF NOT EXISTS dim_nhanvien (employee_code TEXT, name TEXT, is_duplicate INTEGER, position_code TEXT, area_code TEXT, dmsid TEXT);
+-- start_date/end_date/is_resigned: lich su dam nhiem - Bravo GIU LAI ban ghi cu khi doi nguoi (khong
+-- xoa), nen co the dung lam timeline. manager_area_code: ma khu vuc nho V01-V22 (xem org_hierarchy.py
+-- de biet cach suy luan QLV nao phu trach to nao - suy luan qua ten co hau to "(QLV)", KHONG phai
+-- khoa ngoai tuong minh, nen co the co truong hop khong xac dinh duoc).
+CREATE TABLE IF NOT EXISTS dim_nhanvien (employee_code TEXT, name TEXT, is_duplicate INTEGER, position_code TEXT, area_code TEXT, dmsid TEXT, start_date TEXT, end_date TEXT, is_resigned INTEGER, manager_area_code TEXT);
 CREATE INDEX IF NOT EXISTS idx_dnv_code ON dim_nhanvien(employee_code);
 CREATE INDEX IF NOT EXISTS idx_dnv_dmsid ON dim_nhanvien(dmsid);
+CREATE INDEX IF NOT EXISTS idx_dnv_manager_area ON dim_nhanvien(manager_area_code);
 CREATE TABLE IF NOT EXISTS dim_chucvu (position_code TEXT, description TEXT);
 CREATE INDEX IF NOT EXISTS idx_dcv_code ON dim_chucvu(position_code);
 -- id_code = BRV_SanPham.Id (khoa noi, dung de join voi brv_tonkhodk.item_id - KHAC code la ma san
