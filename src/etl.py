@@ -236,62 +236,6 @@ def _revenue_by_region(start_dt, end_dt, channel=None):
             for area, rev in sorted(agg.items(), key=lambda x: -x[1])]
 
 
-def _top_customers(start_dt, end_dt, channel_label, region_markers=None):
-    """Top 5 khách hàng theo doanh thu trong [start_dt, end_dt) cho 1 kênh (OTC hoặc ETC) —
-    dùng cho get_digest_metrics(). Trả list row (CustomerCode, Name, rev). Tự failover
-    Supabase -> Bravo qua run_with_failover() (xem _period_revenue).
-
-    15/07/2026: đổi JOIN -> LEFT JOIN vào bảng khách hàng (không chỉ join vùng miền) — xác nhận
-    thực tế trước đó dùng JOIN thường (INNER) sẽ khiến khách hàng "mồ côi" (không có hồ sơ trong
-    DMS_KhachHang/DMSSX_KhachHang, vd HCM13508) bị loại HOÀN TOÀN khỏi Top 5, kể cả khi KHÔNG lọc
-    vùng miền — nghiêm trọng hơn lỗi đã sửa ở _revenue_by_region/_period_revenue (chỉ mất khi có
-    lọc vùng), vì đây mất ngay cả bản Top 5 mặc định. Khi có lọc vùng, dùng CASE suy luận qua tiền
-    tố mã KH (src/region_map.py) làm fallback, cùng cách với _period_revenue.
-
-    Đồng thời thêm điều kiện loại mã rác/nội bộ (customer_code_prefix_sql_or) — cùng bộ lọc vừa
-    thêm cho check_customer_churn_alert/check_revenue_concentration_alert (src/alerts.py), để nhất
-    quán: nếu không lọc, mã nội bộ dạng '1001136' (đã xác nhận thực tế 274 tỷ đồng/197 hóa đơn
-    không khớp khách hàng nào) có thể lọt vào "Top khách hàng" hiển thị cho DNH xem."""
-    from sqlalchemy import text, bindparam
-    from src.database import _get_bravo_engine
-    from src.region_map import CUSTOMER_CODE_PREFIX_TO_REGION, customer_code_prefix_sql_or
-
-    engine = _get_bravo_engine()
-    if engine is None:
-        raise RuntimeError(
-            "Chưa cấu hình BRAVO_SQL_* trong .env — không còn nguồn nào khác cho top khách hàng."
-        )
-
-    view = "dbo.vHoaDonTotal" if channel_label == "OTC" else "dbo.vHoaDonETCTotal"
-    kh_table = "dbo.DMS_KhachHang" if channel_label == "OTC" else "dbo.DMSSX_KhachHang"
-    params = {"start_dt": start_dt, "end_dt": end_dt}
-    keep_where = f"(k.Code IS NOT NULL OR {customer_code_prefix_sql_or('v.CustomerCode')})"
-    region_where = ""
-    if region_markers:
-        prefix_case = " ".join(
-            f"WHEN v.CustomerCode LIKE '{prefix}%' THEN '{area}'"
-            for prefix, area in CUSTOMER_CODE_PREFIX_TO_REGION.items()
-        )
-        area_expr = f"COALESCE(rt.AreaCode, CASE {prefix_case} ELSE NULL END)"
-        region_where = f" AND {area_expr} IN :region_markers"
-        params["region_markers"] = tuple(region_markers)
-
-    sql = text(f'''
-        SELECT TOP 5 v.CustomerCode, COALESCE(k.Name, v.CustomerCode) AS Name, SUM(v.Amount9) AS rev
-        FROM {view} v
-        LEFT JOIN {kh_table} k ON v.CustomerCode = k.Code
-        LEFT JOIN dbo.DIM_TinhThanhPho rt ON k.CityId = rt.CityId
-        WHERE v.DocDate >= :start_dt AND v.DocDate < :end_dt AND {keep_where}
-        {region_where}
-        GROUP BY v.CustomerCode, k.Name
-        ORDER BY rev DESC
-    ''')
-    if region_markers:
-        sql = sql.bindparams(bindparam("region_markers", expanding=True))
-    with engine.connect() as conn:
-        return conn.execute(sql, params).fetchall()
-
-
 def _revenue_trend(start_dt, end_dt, granularity, region=None, channel=None):
     """Xu hướng doanh thu trong kỳ: 'weekly' -> theo TỪNG NGÀY (7 điểm), 'monthly' -> theo TỪNG
     TUẦN (4-5 điểm). Chạy thêm N truy vấn _period_revenue nhỏ — chấp nhận được vì weekly/monthly
@@ -646,14 +590,6 @@ def get_digest_metrics(start_dt, end_dt, period_label, granularity=None, region=
     prev_total_rev = prev_otc_rev + prev_etc_rev
     change_pct = ((total_rev - prev_total_rev) / prev_total_rev) if prev_total_rev > 0 else None
 
-    # 2. Top 5 khách hàng theo doanh thu — tách riêng OTC/ETC vì 2 kênh có KHÔNG GIAN MÃ khách
-    #    hàng khác nhau (dms_khachhang vs dmssx_khachhang), không gộp chung được. Cũng tự failover
-    #    nội bộ qua _top_customers().
-    top_otc, top_etc = [], []
-    if channel != "ETC":
-        top_otc = _top_customers(start_dt, end_dt, "OTC", region_markers)
-    if channel != "OTC":
-        top_etc = _top_customers(start_dt, end_dt, "ETC", region_markers)
 
     # 3. Công nợ — ưu tiên TỨC THỜI từ Bravo (get_bravo_receivables_snapshot, 10/07/2026), dự
     #    phòng receivable_detail (Supabase) nếu Bravo lỗi. Bravo không có khái niệm "kỳ" (luôn
@@ -866,8 +802,6 @@ def get_digest_metrics(start_dt, end_dt, period_label, granularity=None, region=
             # trước"/"tuần trước" trọn vẹn, nhất là khi kỳ hiện tại đang chạy dở/chưa hết).
             "prev_period_label": f"{prev_start.strftime('%d/%m')}-{(prev_end - timedelta(days=1)).strftime('%d/%m/%Y')}",
         },
-        "top_customers_otc": [{"code": r[0], "name": r[1], "revenue": round(float(r[2]), 2)} for r in top_otc],
-        "top_customers_etc": [{"code": r[0], "name": r[1], "revenue": round(float(r[2]), 2)} for r in top_etc],
         "receivables": receivables,
         "inventory": {
             "dead_stock_count": dead_stock_count,
