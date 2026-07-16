@@ -35,7 +35,11 @@ def init_schema():
             salt TEXT NOT NULL,
             name TEXT,
             role TEXT NOT NULL,          -- 'c_level' | 'regional_director' | 'qlv'
-            scope_value TEXT,            -- NULL cho c_level; 'MB'/'MT'/'MN' cho regional_director; employee_code cho qlv
+            scope_value TEXT,            -- NULL cho c_level; 'MB'/'MT'/'MN' cho regional_director VA qlv (loc du lieu vung)
+            employee_code TEXT,          -- CHI dung cho qlv: ma nhan vien THAT cua ho trong dim_nhanvien (vd 'MBKV1') -
+                                          -- dung de gioi han "doi cua rieng ho" o cac bao cao lo hieu suat CA NHAN dong
+                                          -- nghiep (get_revenue_tree, get_kpi_ranking) - KHAC scope_value (van la vung
+                                          -- rong MB/MT/MN, dung cho cac bao cao tong hop khac nhu doanh thu/ton kho).
             is_active INTEGER DEFAULT 1,
             created_at TEXT
         );
@@ -55,7 +59,8 @@ def _hash_password(password: str, salt: str) -> str:
     return hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt.encode("utf-8"), 200_000).hex()
 
 
-def create_user(username: str, password: str, name: str, role: str, scope_value: str = None) -> dict:
+def create_user(username: str, password: str, name: str, role: str, scope_value: str = None,
+                 employee_code: str = None) -> dict:
     if role not in ("c_level", "regional_director", "qlv"):
         raise ValueError(f"Vai tro khong hop le: {role}")
     salt = secrets.token_hex(16)
@@ -63,21 +68,32 @@ def create_user(username: str, password: str, name: str, role: str, scope_value:
     conn = get_conn()
     try:
         conn.execute(
-            "INSERT INTO users (username, password_hash, salt, name, role, scope_value, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (username.lower().strip(), pwd_hash, salt, name, role, scope_value, dt.datetime.now().isoformat()),
+            "INSERT INTO users (username, password_hash, salt, name, role, scope_value, employee_code, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (username.lower().strip(), pwd_hash, salt, name, role, scope_value, employee_code, dt.datetime.now().isoformat()),
         )
         conn.commit()
     finally:
         conn.close()
-    return {"username": username, "name": name, "role": role, "scope_value": scope_value}
+    return {"username": username, "name": name, "role": role, "scope_value": scope_value, "employee_code": employee_code}
+
+
+def set_employee_code(username: str, employee_code: str):
+    """Gan/cap nhat ma nhan vien THAT cho 1 tai khoan qlv da ton tai - dung de gioi han 'doi cua rieng
+    ho' o cac bao cao lo hieu suat ca nhan dong nghiep (xem ghi chu o init_schema)."""
+    conn = get_conn()
+    try:
+        conn.execute("UPDATE users SET employee_code=? WHERE username=?", (employee_code, username.lower().strip()))
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def verify_login(username: str, password: str) -> dict | None:
     conn = get_conn()
     try:
         row = conn.execute(
-            "SELECT id, username, password_hash, salt, name, role, scope_value FROM users "
+            "SELECT id, username, password_hash, salt, name, role, scope_value, employee_code FROM users "
             "WHERE username=? AND is_active=1",
             (username.lower().strip(),),
         ).fetchone()
@@ -85,10 +101,11 @@ def verify_login(username: str, password: str) -> dict | None:
         conn.close()
     if not row:
         return None
-    uid, db_username, pwd_hash, salt, name, role, scope_value = row
+    uid, db_username, pwd_hash, salt, name, role, scope_value, employee_code = row
     if not hmac.compare_digest(_hash_password(password, salt), pwd_hash):
         return None
-    return {"id": uid, "username": db_username, "name": name, "role": role, "scope_value": scope_value}
+    return {"id": uid, "username": db_username, "name": name, "role": role, "scope_value": scope_value,
+            "employee_code": employee_code}
 
 
 def get_name_by_username(username: str) -> str | None:
@@ -124,7 +141,7 @@ def get_user_by_session(token: str) -> dict | None:
     conn = get_conn()
     try:
         row = conn.execute(
-            "SELECT s.expires_at, u.id, u.username, u.name, u.role, u.scope_value "
+            "SELECT s.expires_at, u.id, u.username, u.name, u.role, u.scope_value, u.employee_code "
             "FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token=? AND u.is_active=1",
             (token,),
         ).fetchone()
@@ -132,10 +149,11 @@ def get_user_by_session(token: str) -> dict | None:
         conn.close()
     if not row:
         return None
-    expires_at, uid, username, name, role, scope_value = row
+    expires_at, uid, username, name, role, scope_value, employee_code = row
     if dt.datetime.fromisoformat(expires_at) < dt.datetime.now():
         return None
-    return {"id": uid, "username": username, "name": name, "role": role, "scope_value": scope_value}
+    return {"id": uid, "username": username, "name": name, "role": role, "scope_value": scope_value,
+            "employee_code": employee_code}
 
 
 def delete_session(token: str):

@@ -13,6 +13,7 @@ from sqlalchemy import text
 from local_warehouse import get_conn
 from query_engine import _write_log, _get_engine
 from region_map import region_from_customer_code
+import org_hierarchy as oh
 
 
 def _q(sql, params=()):
@@ -567,6 +568,163 @@ def inventory_by_region(area_code: str = None, scope_area_code: str = None) -> l
     return rows
 
 
+def _kpi_snapshot(employee_code: str, fdate: str):
+    """Sales/target/pct cua 1 nhan vien (QLV/TDV deu dung duoc) tai 1 snapshot da biet - fact_tonghopkhachhang
+    da tinh san rollup cho ca cap QLV (Bravo tu tong hop), khong can tu cong tay tu doanh thu TDV."""
+    r = _q("SELECT SUM(amount_ct) sales, MAX(month_sale_target) target FROM fact_tonghopkhachhang "
+           "WHERE employee_code=? AND save_date=?", (employee_code, fdate))
+    sales = _f(r[0]["sales"]) if r else 0.0
+    target = _f(r[0]["target"]) if r else 0.0
+    pct = (sales / target * 100) if target else 0.0
+    return {"sales": sales, "target": target, "pct": pct, "status": _kpi_status(pct)}
+
+
+def qlv_change_history(area_code: str = None, qlv_search: str = None, scope_area_code: str = None) -> list:
+    """Lich su ai tung/dang phu trach tung 'to' (zone noi bo V01-V22) - CHI suy luan duoc tu quy uoc
+    dat ten (xem org_hierarchy.py), KHONG phai du lieu audit chinh thuc (Bravo khong co bang lich su
+    thay doi nhan su). area_code: loc theo vung MB/MT/MN (hien tat ca to trong vung). qlv_search: tim
+    theo ten/ma 1 QLV de xem lich su dung to cua ho. scope_area_code: ep gioi han vung khi tai khoan
+    bi han che. LUU Y: ~30% so to KHONG suy luan duoc QLV hien tai qua cach nay (se ghi "Chua xac
+    dinh") - day la han che that cua du lieu, KHONG duoc tu suy doan de lap day."""
+    if scope_area_code:
+        area_code = scope_area_code
+    status = oh.all_zones_with_qlv_status()
+
+    target_zones = None
+    if qlv_search:
+        matches = _q("SELECT employee_code FROM dim_nhanvien WHERE (name LIKE ? OR employee_code LIKE ?) "
+                      "AND position_code='QLV'", (f"%{qlv_search}%", f"%{qlv_search}%"))
+        target_zones = set()
+        for m in matches:
+            target_zones.update(oh.qlv_zones(m["employee_code"]))
+        if not target_zones:
+            return []
+
+    result = []
+    for z in status:
+        zone = z["zone"]
+        if target_zones is not None and zone not in target_zones:
+            continue
+        if area_code:
+            zone_area = _q("SELECT area_code FROM dim_nhanvien WHERE manager_area_code=? AND area_code IS NOT NULL LIMIT 1", (zone,))
+            if not zone_area or zone_area[0]["area_code"] != area_code:
+                continue
+        history = oh.qlv_history_for_zone(zone)
+        result.append({"zone": zone, "current_qlv": z["qlv_name"], "history": history})
+    return result
+
+
+def revenue_tree(as_of_date: str = None, area_code: str = None, scope_area_code: str = None,
+                  scope_employee_code: str = None) -> dict:
+    """Cay doanh thu/KPI 3 cap: Truong phong (TP) -> QLV -> TDV, dung snapshot KPI da co san trong
+    fact_tonghopkhachhang (Bravo tu tong hop rollup cho ca cap QLV, khong can tu cong tay). area_code:
+    loc theo 1 vung MB/MT/MN (khuyen khich dung khi hoi ca cong ty vi cay day du RAT dai). scope_area_code:
+    ep gioi han vung khi tai khoan bi han che. scope_employee_code: CHI danh cho qlv - ep chi tra ve
+    DUNG 1 QLV nay (khong thay cac QLV khac cung vung) vi day la du lieu hieu suat CA NHAN dong nghiep,
+    nhay cam hon so lieu tong hop thong thuong. Cac 'to' KHONG xac dinh duoc QLV (xem org_hierarchy.py)
+    se KHONG xuat hien duoi bat ky TP nao - can luu y khi doc ket qua co the thieu 1 vai to.
+    LUU Y QUAN TRONG: cap TP hien LUON co sales/target/pct = 0 (Bravo khong tracking target ca nhan
+    cho TP trong fact_tonghopkhachhang) - khi tra loi PHAI noi ro so 0 nay la "chua co du lieu target
+    rieng cho TP", TUYET DOI KHONG bao la TP "khong dat KPI"/0% - do la thong tin sai lech nghiem trong.
+    Muon biet tong doanh thu THAT cua ca vung TP phu trach, cong don sales cua tat ca QLV ben duoi
+    (hoac dung get_revenue_by_region cho doanh thu hoa don thuc te, khac voi so KPI o day)."""
+    if scope_area_code:
+        area_code = scope_area_code
+    if as_of_date is None:
+        as_of_date = str(dt.date.today())
+    fdate_r = _q("SELECT MAX(save_date) d FROM fact_tonghopkhachhang WHERE save_date<=?", (as_of_date,))
+    fdate = fdate_r[0]["d"] if fdate_r else None
+    if not fdate:
+        return {"as_of": None, "tree": []}
+
+    tp_sql = "SELECT employee_code, name, area_code FROM dim_nhanvien WHERE position_code='TP' AND end_date IS NULL AND COALESCE(is_resigned,0)<>1"
+    tp_params = ()
+    if area_code:
+        tp_sql += " AND area_code=?"
+        tp_params = (area_code,)
+    tp_rows = _q(tp_sql, tp_params)
+
+    tree = []
+    for tp in tp_rows:
+        tp_kpi = _kpi_snapshot(tp["employee_code"], fdate)
+        qlv_sql = ("SELECT employee_code, name FROM dim_nhanvien WHERE position_code='QLV' AND area_code=? "
+                   "AND end_date IS NULL AND COALESCE(is_resigned,0)<>1")
+        qlv_params = [tp["area_code"]]
+        if scope_employee_code:
+            qlv_sql += " AND employee_code=?"
+            qlv_params.append(scope_employee_code)
+        qlv_sql += " ORDER BY name"
+        qlv_rows = _q(qlv_sql, tuple(qlv_params))
+        qlv_list = []
+        for qlv in qlv_rows:
+            q_kpi = _kpi_snapshot(qlv["employee_code"], fdate)
+            team = oh.team_of_qlv(qlv["employee_code"])
+            tdv_list = []
+            for t in team:
+                t_kpi = _kpi_snapshot(t["employee_code"], fdate)
+                tdv_list.append({"employee_code": t["employee_code"], "name": t["name"], **t_kpi})
+            qlv_list.append({"employee_code": qlv["employee_code"], "name": qlv["name"], **q_kpi,
+                              "tdv_count": len(tdv_list), "tdv": tdv_list})
+        tree.append({"employee_code": tp["employee_code"], "name": tp["name"], "area_code": tp["area_code"],
+                      **tp_kpi, "qlv_count": len(qlv_list), "qlv": qlv_list})
+    return {"as_of": fdate, "tree": tree}
+
+
+def kpi_ranking(group_by: str = "qlv", as_of_date: str = None, limit: int = 20,
+                 scope_area_code: str = None, scope_employee_code: str = None) -> list:
+    """Xep hang KPI (% dat target) giua cac QLV hoac giua cac vung, TOT NHAT truoc. group_by: 'qlv'
+    (xep hang tung QLV, dung khi hoi 'QLV nao dat KPI tot nhat') hoac 'region' (gop tat ca nhan vien
+    theo vung MB/MT/MN, dung khi hoi 'vung nao dat KPI tot nhat'). scope_area_code: ep gioi han vung
+    khi tai khoan bi han che - voi group_by='region' se chi con 1 dong (vung cua chinh ho). scope_employee_code:
+    CHI danh cho qlv - voi group_by='qlv' se chi tra ve DUNG 1 dong (chinh ho), khong xep hang so sanh
+    voi cac QLV khac (du lieu hieu suat CA NHAN dong nghiep, khong duoc xem)."""
+    fdate_r = _q("SELECT MAX(save_date) d FROM fact_tonghopkhachhang WHERE save_date<=?",
+                 (as_of_date or str(dt.date.today()),))
+    fdate = fdate_r[0]["d"] if fdate_r else None
+    if not fdate:
+        return []
+
+    if group_by == "region":
+        # QUAN TRONG: phai gom ve 1 dong/nhan vien TRUOC (SUM(amount_ct), MAX(target) - target lap
+        # lai moi dong theo khach hang) roi moi SUM tiep theo vung - neu SUM(target) truc tiep tren
+        # fact_tonghopkhachhang se dem target trung nhieu lan (1 lan/khach hang cua nhan vien do),
+        # thoi phong target sai hang chuc lan, lam % KPI vung bi tinh sai (qua thap).
+        sql = """SELECT nv.area_code area_code, SUM(e.sales) sales, SUM(e.target) target
+                  FROM (SELECT employee_code, SUM(amount_ct) sales, MAX(month_sale_target) target
+                        FROM fact_tonghopkhachhang WHERE save_date=? GROUP BY employee_code) e
+                  JOIN dim_nhanvien nv ON nv.employee_code=e.employee_code AND COALESCE(nv.is_duplicate,0)<>1
+                  WHERE nv.position_code='TDV'"""
+        params = [fdate]
+        if scope_area_code:
+            sql += " AND nv.area_code=?"
+            params.append(scope_area_code)
+        sql += " GROUP BY nv.area_code"
+        rows = _q(sql, tuple(params))
+        for r in rows:
+            r["sales"] = _f(r["sales"]); r["target"] = _f(r["target"])
+            r["pct"] = (r["sales"] / r["target"] * 100) if r["target"] else 0.0
+            r["status"] = _kpi_status(r["pct"])
+        return sorted(rows, key=lambda x: -x["pct"])[:limit]
+
+    # group_by == "qlv"
+    qlv_sql = "SELECT employee_code, name, area_code FROM dim_nhanvien WHERE position_code='QLV' AND end_date IS NULL AND COALESCE(is_resigned,0)<>1"
+    params = []
+    if scope_area_code:
+        qlv_sql += " AND area_code=?"
+        params.append(scope_area_code)
+    if scope_employee_code:
+        qlv_sql += " AND employee_code=?"
+        params.append(scope_employee_code)
+    qlv_rows = _q(qlv_sql, tuple(params))
+    result = []
+    for qlv in qlv_rows:
+        kpi = _kpi_snapshot(qlv["employee_code"], fdate)
+        if kpi["target"] <= 0:
+            continue
+        result.append({"employee_code": qlv["employee_code"], "name": qlv["name"], "area_code": qlv["area_code"], **kpi})
+    return sorted(result, key=lambda x: -x["pct"])[:limit]
+
+
 TEMPLATES = {
     "get_revenue_by_channel": revenue_by_channel,
     "get_top_products": top_products,
@@ -579,15 +737,23 @@ TEMPLATES = {
     "get_employee_directory": employee_directory,
     "check_order_timing": order_timing_check,
     "get_inventory_by_region": inventory_by_region,
+    "get_qlv_change_history": qlv_change_history,
+    "get_revenue_tree": revenue_tree,
+    "get_kpi_ranking": kpi_ranking,
 }
 
 
+_EMPLOYEE_SCOPED_TEMPLATES = {"get_revenue_tree", "get_kpi_ranking"}
+
+
 def call_template(name: str, args: dict, question: str = "", username: str = None,
-                   scope_area_code: str = None) -> dict:
+                   scope_area_code: str = None, scope_employee_code: str = None) -> dict:
     """Goi 1 template theo ten, ghi audit log (giong format run_query de nhat quan truy vet).
     scope_area_code: EP TRUYEN tu server (khong phai tu tham so AI dua ra) khi tai khoan bi gioi han
     vung - ghi de bat ky gia tri nao AI cung cap trong args, dam bao AI KHONG the tu "mo khoa" vung
-    khac bang cach truyen tham so la."""
+    khac bang cach truyen tham so la. scope_employee_code: CHI ap dung cho get_revenue_tree/
+    get_kpi_ranking (xem _EMPLOYEE_SCOPED_TEMPLATES) - cac ham khac khong nhan tham so nay nen KHONG
+    duoc truyen bua, se loi TypeError."""
     t0 = dt.datetime.now()
     entry = {"ts": t0.isoformat(), "username": username, "question": question, "sql": f"<template:{name}>({args})"}
     try:
@@ -595,6 +761,8 @@ def call_template(name: str, args: dict, question: str = "", username: str = Non
         call_args = dict(args)
         if scope_area_code:
             call_args["scope_area_code"] = scope_area_code
+        if scope_employee_code and name in _EMPLOYEE_SCOPED_TEMPLATES:
+            call_args["scope_employee_code"] = scope_employee_code
         result = fn(**call_args)
         entry["status"] = "ok"
         entry["duration_ms"] = int((dt.datetime.now() - t0).total_seconds() * 1000)

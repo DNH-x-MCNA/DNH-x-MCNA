@@ -191,8 +191,13 @@ def chat(req: ChatRequest, user: dict = Depends(require_user)):
         # gioi han gi (scope_area_code=None). Enforce THAT xay ra o report_templates.py (tang code,
         # khong phu thuoc AI), day chi la buoc suy ra scope tu tai khoan da dang nhap.
         scope_area_code = user["scope_value"] if user["role"] in ("regional_director", "qlv") else None
+        # scope_employee_code: CHI danh cho qlv (khong danh cho regional_director - ho la cap tren
+        # nhieu QLV nen duoc xem het ca vung nhu thiet ke ban dau) - gioi han bao cao lo hieu suat CA
+        # NHAN dong nghiep (get_revenue_tree/get_kpi_ranking) chi con doi cua rieng ho, khong thay
+        # KPI ca nhan cua cac QLV khac trong cung vung.
+        scope_employee_code = user["employee_code"] if user["role"] == "qlv" else None
         result = ask(req.question, session_id=req.session_id, username=user["username"],
-                     scope_area_code=scope_area_code)
+                     scope_area_code=scope_area_code, scope_employee_code=scope_employee_code)
         register_session(req.session_id, user["username"], req.question)
     except HTTPException:
         raise

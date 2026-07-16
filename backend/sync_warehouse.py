@@ -129,7 +129,13 @@ SMALL_TABLES = [
     ("FACT_KeHoachTongETC", "fact_kehoachtongetc", "DocDate, Amount, ItemGroup", "doc_date,amount,item_group"),
     ("DMSSX_KhachHang", "dmssx_khachhang", "Code, Name, CityId, Id, KenhBH", "code,name,city_id,id_code,kenh_bh"),
     ("DMS_KhachHang", "dms_khachhang", "Code, Name, CityId, Id, EmpDMSCode1, KenhBH", "code,name,city_id,id_code,emp_code,kenh_bh"),
-    ("DIM_NhanVien", "dim_nhanvien", "EmployeeCode, Name, IsDuplicate, PositionCode, AreaCode, DMSId", "employee_code,name,is_duplicate,position_code,area_code,dmsid"),
+    # StartDate/EndDate/IsResigned: lich su dam nhiem (Bravo giu lai ban ghi cu, KHONG xoa khi doi
+    # nguoi) - dung de dung lai timeline "ai phu trach luc nao". ManagerAreaCode: ma khu vuc nho
+    # (V01-V22) - TDV mang ma nay de biet thuoc "to" nao, ban ghi "bong" cua QLV (ten co hau to
+    # "(QLV)") cung mang dung ma nay de biet QLV nao phu trach to do (xem org_hierarchy.py).
+    ("DIM_NhanVien", "dim_nhanvien",
+     "EmployeeCode, Name, IsDuplicate, PositionCode, AreaCode, DMSId, StartDate, EndDate, IsResigned, ManagerAreaCode",
+     "employee_code,name,is_duplicate,position_code,area_code,dmsid,start_date,end_date,is_resigned,manager_area_code"),
     ("BRV_SanPham", "brv_sanpham", "Id, Code, Name, GroupCode, Unit", "id_code,code,name,group_code,unit"),
     ("BRVSX_TraLai", "brvsx_tralai", "DocDate, Amount9, IsActive, Stt, CustomerCode", "doc_date,amount9,is_active,stt,customer_code"),
     ("DIM_ChucVu", "dim_chucvu", "DISTINCT PositionCode, Description", "position_code,description"),

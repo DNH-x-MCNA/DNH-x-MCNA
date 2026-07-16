@@ -231,6 +231,52 @@ TEMPLATE_TOOLS = [
             "required": [],
         },
     },
+    {
+        "name": "get_qlv_change_history",
+        "description": "Lich su ai tung/dang phu trach tung khu vuc nho (zone noi bo) - dung khi hoi "
+                        "'QLV vung X tung doi qua ai', 'QLV nay lam tu bao gio'. CANH BAO: day la suy "
+                        "luan gian tiep tu quy uoc dat ten (Bravo KHONG co bang lich su nhan su chinh "
+                        "thuc), ~30% khu vuc se tra ve 'Chua xac dinh' - PHAI noi ro voi nguoi dung day "
+                        "la han che du lieu THAT, KHONG duoc tu suy doan/bia them de lap day cho trong.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "area_code": {"type": "string", "description": "Loc theo vung MB/MT/MN (tuy chon - hien tat ca khu vuc trong vung)"},
+                "qlv_search": {"type": "string", "description": "Tim theo ten/ma 1 QLV cu the de xem lich su khu vuc cua rieng ho (tuy chon)"},
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "get_revenue_tree",
+        "description": "Cay doanh thu/KPI 3 cap: Truong phong/GD mien -> QLV -> Trinh duoc vien, dung "
+                        "khi hoi kieu 'doanh so mien nay chia theo QLV/TDV the nao', 'cay to chuc doanh "
+                        "thu vung X'. LUON dung tool nay cho cau hoi co ca 3 cap cung luc, KHONG tu ghep "
+                        "nhieu tool KPI rieng le. Ket qua RAT DAI neu khong loc vung - KHUYEN KHICH truyen "
+                        "area_code khi hoi ve 1 vung cu the.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "area_code": {"type": "string", "description": "Loc theo 1 vung MB/MT/MN (khuyen khich dung, de tranh ket qua qua dai)"},
+                "as_of_date": {"type": "string", "description": "YYYY-MM-DD, mac dinh la hom nay (lay snapshot KPI gan nhat truoc/bang ngay nay)"},
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "get_kpi_ranking",
+        "description": "Xep hang % dat KPI, TOT NHAT truoc - dung khi hoi 'QLV nao dat KPI tot/kem "
+                        "nhat', 'xep hang cac vung theo KPI', 'so sanh KPI giua cac QLV/vung'.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "group_by": {"type": "string", "description": "'qlv' (xep hang tung QLV, mac dinh) hoac 'region' (gop theo vung MB/MT/MN)"},
+                "as_of_date": {"type": "string", "description": "YYYY-MM-DD, mac dinh la hom nay"},
+                "limit": {"type": "integer", "description": "So luong toi da tra ve, mac dinh 20"},
+            },
+            "required": [],
+        },
+    },
 ]
 
 QUERY_TOOL = {
@@ -314,17 +360,18 @@ hoi "doanh thu thang 6" roi hoi tiep "con thang 5?", hieu la van hoi doanh thu t
 tuong tu nhung doi sang thang 5) - KHONG hoi lai nguoi dung nhung gi da ro tu ngu canh truoc.
 
 QUAN TRONG VE CHON TOOL:
-- Neu cau hoi thuoc 1 trong 11 nhom: doanh thu theo kenh, top san pham, top khach hang, doanh thu
+- Neu cau hoi thuoc 1 trong 14 nhom: doanh thu theo kenh, top san pham, top khach hang, doanh thu
   theo vung mien, KPI/doanh so nhan vien (tong quan/thang), KPI THEO NGAY 1 nhan vien ca nhan, SO SANH
   2 khoang thoi gian, CHI TIET 1 khach hang cu the, TRA CUU ma/ten/vai tro nhan vien, KIEM TRA don hang
-  bat thuong/chay don KPI, TON KHO THEO VUNG -> BAT BUOC dung tool tuong ung (get_revenue_by_channel,
-  get_top_products, get_top_customers, get_revenue_by_region, get_employee_kpi, get_employee_daily_kpi,
-  compare_periods, get_customer_detail, get_employee_directory, check_order_timing,
-  get_inventory_by_region).
+  bat thuong/chay don KPI, TON KHO THEO VUNG, LICH SU DOI QLV, CAY DOANH THU/KPI TP-QLV-TDV, XEP HANG
+  KPI -> BAT BUOC dung tool tuong ung (get_revenue_by_channel, get_top_products, get_top_customers,
+  get_revenue_by_region, get_employee_kpi, get_employee_daily_kpi, compare_periods, get_customer_detail,
+  get_employee_directory, check_order_timing, get_inventory_by_region, get_qlv_change_history,
+  get_revenue_tree, get_kpi_ranking).
   Day la cac truy van DA DUOC KIEM CHUNG khop voi du lieu goc, KHONG tu sinh SQL thay the.
 - Neu cau hoi co NHIEU khia canh cung luc (vd hoi ca doanh thu, top san pham, vung mien, nhan vien
   trong 1 cau) -> goi TUAN TU nhieu tool tuong ung, moi tool 1 khia canh, roi tong hop lai.
-- Voi phan cau hoi KHONG thuoc 11 nhom tren: neu la ve CONG NO -> dung query_inventory_receivables
+- Voi phan cau hoi KHONG thuoc 14 nhom tren: neu la ve CONG NO -> dung query_inventory_receivables
   (Supabase). Con lai (hoa don/doanh thu/san pham/khach hang/nhan vien/vung mien dang ad-hoc, tra hang...)
   -> dung query_database (kho local SQLite).
 - Cau hoi CO cum tu thoi gian TUONG DOI (hom nay, tuan nay, thang truoc, quy nay, quy truoc, cung ky
@@ -359,7 +406,8 @@ QUAN TRONG VE DO DAI CAU TRA LOI (tiet kiem chi phi - moi token output deu tinh 
 """
 
 
-def _dynamic_context_note(question: str = "", session_id: str = "", scope_area_code: str = None) -> str:
+def _dynamic_context_note(question: str = "", session_id: str = "", scope_area_code: str = None,
+                           scope_employee_code: str = None) -> str:
     """Phan DONG cua system prompt (ngay du lieu + ngu canh doi theo tung cau hoi) - tach rieng khoi
     phan tinh de KHONG lam vo cache (kho local dong bo lai moi 15-30 phut, glossary/query-state doi
     theo tung cau hoi nen KHONG the cache chung voi schema/rules tinh)."""
@@ -379,6 +427,15 @@ def _dynamic_context_note(question: str = "", session_id: str = "", scope_area_c
             f'MOI cau tra loi co so lieu (ke ca khi nguoi dung KHONG hoi ro vung) PHAI ghi ro dang "(vung '
             f'{scope_area_code})" ngay canh con so - de nguoi dung luon biet day la so lieu da bi gioi han '
             f'vung, khong phai so lieu toan quoc/vung khac.'
+        )
+    if scope_employee_code:
+        parts.append(
+            f'QUAN TRONG THEM - rieng get_revenue_tree/get_kpi_ranking: tai khoan nay CHI xem duoc du '
+            f'lieu hieu suat CA NHAN cua CHINH DOI CUA HO (khong thay ten/so lieu KPI ca nhan cua cac '
+            f'QLV khac trong cung vung, du van cung vung {scope_area_code or ""}) - day la du lieu hieu '
+            f'suat nhay cam cua dong nghiep, khac voi so lieu doanh thu/ton kho tong hop thong thuong. '
+            f'Neu nguoi dung hoi "so sanh voi QLV khac" hoac "QLV nao tot nhat vung", PHAI TU CHOI ro '
+            f'rang phan so sanh voi nguoi khac, chi dua duoc so lieu cua chinh ho.'
         )
 
     glossary = retrieve_relevant_glossary(question)
@@ -402,7 +459,8 @@ def _dynamic_context_note(question: str = "", session_id: str = "", scope_area_c
     return "\n\n".join(parts)
 
 
-def ask(question: str, session_id: str = "default", username: str = None, scope_area_code: str = None) -> dict:
+def ask(question: str, session_id: str = "default", username: str = None, scope_area_code: str = None,
+        scope_employee_code: str = None) -> dict:
     """
     Nhan cau hoi tieng Viet + session_id (1 phien chat webapp) - tu dong nho lai vai cau hoi/tra loi
     gan nhat trong CUNG session de hieu ngu canh cau hoi tiep theo.
@@ -410,6 +468,10 @@ def ask(question: str, session_id: str = "default", username: str = None, scope_
     cao chuan se bi EP LOC theo dung vung nay o TANG CODE (report_templates.py), va tool SQL tu do
     (query_database/query_inventory_receivables) se bi LOAI HAN khoi danh sach tool kha dung - day la
     lop bao ve du lieu THAT (khong phu thuoc AI co lam dung huong dan hay khong).
+    scope_employee_code: CHI danh cho tai khoan qlv - gioi han rieng cac bao cao lo hieu suat CA NHAN
+    dong nghiep (get_revenue_tree/get_kpi_ranking) chi con doi cua rieng ho, khong thay KPI ca nhan
+    cua cac QLV khac trong cung vung (khac scope_area_code van cho xem so lieu TONG HOP ca vung o cac
+    tool khac nhu doanh thu/ton kho - 2 co che tach biet, xem main.py).
     Tra ve dict: {answer: str, sql_used: [list mo ta cac tool/SQL da chay], last_result: {...} hoac None}
     """
     client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
@@ -434,7 +496,7 @@ def ask(question: str, session_id: str = "default", username: str = None, scope_
     # KHONG cache vi doi theo tung cau hoi/tai khoan.
     system_blocks = [
         {"type": "text", "text": _static_system_prompt(), "cache_control": {"type": "ephemeral", "ttl": "1h"}},
-        {"type": "text", "text": _dynamic_context_note(question, session_id, scope_area_code)},
+        {"type": "text", "text": _dynamic_context_note(question, session_id, scope_area_code, scope_employee_code)},
     ]
 
     for _ in range(MAX_TOOL_ROUNDS):
@@ -508,7 +570,7 @@ def ask(question: str, session_id: str = "default", username: str = None, scope_
             else:
                 sql_used.append(f"[bao cao chuan] {tu.name}({tu.input})")
                 tresult = call_template(tu.name, tu.input, question=question, username=username,
-                                         scope_area_code=scope_area_code)
+                                         scope_area_code=scope_area_code, scope_employee_code=scope_employee_code)
                 last_result = tresult
                 last_tool_used = (tu.name, str(tu.input))
                 payload = tresult["result"] if tresult["ok"] else {"error": tresult["error"]}
