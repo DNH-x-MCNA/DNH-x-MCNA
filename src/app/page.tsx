@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useEffect, FormEvent, ReactNode } from "react";
+import { useState, useRef, useEffect, memo, FormEvent, ReactNode, RefObject } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
@@ -105,6 +105,102 @@ const markdownComponents = {
   ),
   td: ({ children }: { children?: ReactNode }) => <td className="px-3 py-2 text-slate-700">{children}</td>,
 };
+
+// Tach rieng khoi Home() + boc React.memo: Home() co state `input` doi moi lan go phim, neu khung
+// tin nhan nam chung component se bi ve lai TOAN BO (ke ca parse lai markdown/bang cua moi tin nhan
+// cu) moi lan go 1 ky tu - cang nhieu tin nhan cang lag. Component rieng nay CHI ve lai khi `messages`
+// hoac `loading` thuc su doi (gui/nhan tin moi), khong bi anh huong boi viec go chu.
+const MessageList = memo(function MessageList({
+  messages,
+  loading,
+  bottomRef,
+}: {
+  messages: Message[];
+  loading: boolean;
+  bottomRef: RefObject<HTMLDivElement | null>;
+}) {
+  return (
+    <div className="flex flex-col gap-4">
+      {messages.map((m, i) => (
+        <div key={i} className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}>
+          <div
+            className={`max-w-[85%] rounded-2xl px-4 py-3 text-sm ${
+              m.role === "user"
+                ? "bg-blue-600 text-white"
+                : m.error
+                ? "bg-red-50 text-red-700 border border-red-200"
+                : "bg-white text-slate-800 border border-slate-200 shadow-sm"
+            }`}
+          >
+            {m.role === "bot" ? (
+              <div className="markdown-body">
+                <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
+                  {m.text}
+                </ReactMarkdown>
+              </div>
+            ) : (
+              <div className="whitespace-pre-wrap">{m.text}</div>
+            )}
+
+            {m.rows && m.columns && m.rows.length > 0 && (
+              <div className="mt-3 overflow-x-auto rounded-lg border border-slate-200">
+                <table className="min-w-full text-xs">
+                  <thead className="bg-slate-100">
+                    <tr>
+                      {m.columns.map((c) => (
+                        <th key={c} className="px-3 py-2 text-left font-semibold text-slate-600">
+                          {c}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {m.rows.map((row, ri) => (
+                      <tr key={ri} className="border-t border-slate-100">
+                        {row.map((cell, ci) => (
+                          <td key={ci} className="px-3 py-2 text-slate-700">
+                            {cell === null ? "—" : String(cell)}
+                          </td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            {m.sqlUsed && m.sqlUsed.length > 0 && (
+              <details className="mt-2 text-xs text-slate-400">
+                <summary className="cursor-pointer select-none hover:text-slate-600">
+                  Xem truy vấn đã dùng (để kiểm chứng)
+                </summary>
+                {m.sqlUsed.map((sql, si) => (
+                  <pre key={si} className="mt-1 overflow-x-auto rounded bg-slate-900 p-2 text-slate-100">
+                    {sql}
+                  </pre>
+                ))}
+              </details>
+            )}
+          </div>
+        </div>
+      ))}
+
+      {loading && (
+        <div className="flex justify-start">
+          <div className="flex items-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-400 shadow-sm">
+            <span className="flex gap-1">
+              <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-slate-400 [animation-delay:-0.3s]" />
+              <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-slate-400 [animation-delay:-0.15s]" />
+              <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-slate-400" />
+            </span>
+            Đang truy vấn dữ liệu...
+          </div>
+        </div>
+      )}
+      <div ref={bottomRef} />
+    </div>
+  );
+});
 
 function getOrCreateSessionId(): string {
   if (typeof window === "undefined") return "default";
@@ -490,85 +586,7 @@ export default function Home() {
             </div>
           )}
 
-          <div className="flex flex-col gap-4">
-            {messages.map((m, i) => (
-              <div key={i} className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}>
-                <div
-                  className={`max-w-[85%] rounded-2xl px-4 py-3 text-sm ${
-                    m.role === "user"
-                      ? "bg-blue-600 text-white"
-                      : m.error
-                      ? "bg-red-50 text-red-700 border border-red-200"
-                      : "bg-white text-slate-800 border border-slate-200 shadow-sm"
-                  }`}
-                >
-                  {m.role === "bot" ? (
-                    <div className="markdown-body">
-                      <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
-                        {m.text}
-                      </ReactMarkdown>
-                    </div>
-                  ) : (
-                    <div className="whitespace-pre-wrap">{m.text}</div>
-                  )}
-
-                  {m.rows && m.columns && m.rows.length > 0 && (
-                    <div className="mt-3 overflow-x-auto rounded-lg border border-slate-200">
-                      <table className="min-w-full text-xs">
-                        <thead className="bg-slate-100">
-                          <tr>
-                            {m.columns.map((c) => (
-                              <th key={c} className="px-3 py-2 text-left font-semibold text-slate-600">
-                                {c}
-                              </th>
-                            ))}
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {m.rows.map((row, ri) => (
-                            <tr key={ri} className="border-t border-slate-100">
-                              {row.map((cell, ci) => (
-                                <td key={ci} className="px-3 py-2 text-slate-700">
-                                  {cell === null ? "—" : String(cell)}
-                                </td>
-                              ))}
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  )}
-
-                  {m.sqlUsed && m.sqlUsed.length > 0 && (
-                    <details className="mt-2 text-xs text-slate-400">
-                      <summary className="cursor-pointer select-none hover:text-slate-600">
-                        Xem truy vấn đã dùng (để kiểm chứng)
-                      </summary>
-                      {m.sqlUsed.map((sql, si) => (
-                        <pre key={si} className="mt-1 overflow-x-auto rounded bg-slate-900 p-2 text-slate-100">
-                          {sql}
-                        </pre>
-                      ))}
-                    </details>
-                  )}
-                </div>
-              </div>
-            ))}
-
-            {loading && (
-              <div className="flex justify-start">
-                <div className="flex items-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-400 shadow-sm">
-                  <span className="flex gap-1">
-                    <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-slate-400 [animation-delay:-0.3s]" />
-                    <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-slate-400 [animation-delay:-0.15s]" />
-                    <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-slate-400" />
-                  </span>
-                  Đang truy vấn dữ liệu...
-                </div>
-              </div>
-            )}
-          </div>
-          <div ref={bottomRef} />
+          <MessageList messages={messages} loading={loading} bottomRef={bottomRef} />
         </div>
 
         <form onSubmit={handleSubmit} className="border-t border-slate-200 bg-slate-50 py-4">
