@@ -777,6 +777,35 @@ def get_digest_metrics(start_dt, end_dt, period_label, granularity=None, region=
         if region is None:
             region_breakdown = _revenue_by_region(start_dt, end_dt, channel=channel)
 
+    # 16/07/2026: phân tích tăng trưởng theo vùng + tỷ trọng kênh — CHỈ cho Monthly (theo yêu
+    # cầu "thêm phân tích rõ ràng hơn cho báo cáo monthly"), để phân biệt rõ với Weekly thay vì
+    # chỉ khác màu tiêu đề. So sánh cùng prev_start/prev_end đã tính ở trên (kỳ liền trước cùng
+    # độ dài) — tái dùng, không query thêm ngoài _revenue_by_region cho kỳ trước.
+    region_growth = []
+    channel_share = None
+    if granularity == "monthly":
+        if region is None:
+            try:
+                prev_region_breakdown = _revenue_by_region(prev_start, prev_end, channel=channel)
+                prev_by_name = {r["region"]: r["revenue"] for r in prev_region_breakdown}
+                for r in region_breakdown:
+                    prev_rev = prev_by_name.get(r["region"], 0.0)
+                    growth_pct = ((r["revenue"] - prev_rev) / prev_rev * 100) if prev_rev > 0 else None
+                    region_growth.append({
+                        "region": r["region"], "revenue": r["revenue"],
+                        "prev_revenue": round(prev_rev, 2), "growth_pct": round(growth_pct, 1) if growth_pct is not None else None,
+                    })
+            except Exception as e:
+                print(f"[DIGEST] Lỗi tính tăng trưởng theo vùng: {e}")
+        # 16/07/2026: chỉ tính khi báo cáo KHÔNG lọc sẵn theo 1 kênh — nếu đã lọc (audience "Quản
+        # lý Kênh OTC/ETC"), etc_rev/otc_rev đã bị ép về 0 ở trên nên tỷ trọng luôn ra 100%/0% vô
+        # nghĩa, không nên hiện cho những audience đó.
+        if channel is None and total_rev > 0:
+            channel_share = {
+                "otc_pct": round(otc_rev / total_rev * 100, 1),
+                "etc_pct": round(etc_rev / total_rev * 100, 1),
+            }
+
     # 16/07/2026: TRƯỚC ĐÂY chỉ tính cho weekly/monthly — Daily Digest hoàn toàn không có mục
     # "Điểm Nổi Bật Trong Kỳ" dù trong ngày có cảnh báo CRITICAL thật (vd tỷ lệ nợ quá hạn, khách
     # nợ quá hạn vẫn lên đơn mới...) đã bắn qua Teams. Bật cho mọi granularity — chi phí không đáng
@@ -818,6 +847,9 @@ def get_digest_metrics(start_dt, end_dt, period_label, granularity=None, region=
         result["trend"] = trend
         result["region_breakdown"] = region_breakdown
         result["kpi_summary"] = kpi_summary
+    if granularity == "monthly":
+        result["region_growth"] = region_growth
+        result["channel_share"] = channel_share
     return result
 
 def get_daily_digest_metrics(region=None, channel=None):
