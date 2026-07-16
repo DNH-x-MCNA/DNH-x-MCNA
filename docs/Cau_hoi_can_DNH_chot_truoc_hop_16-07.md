@@ -2,31 +2,51 @@
 
 *Chuẩn bị cho buổi họp báo cáo tiến độ ngày 16/07/2026. Gửi trước để buổi họp tập trung vào quyết định thay vì giải thích.*
 
-Hệ thống báo cáo/cảnh báo hiện đã chạy trên dữ liệu thật, cập nhật gần thời gian thực từ Bravo. Tuy nhiên có 7 điểm dưới đây hiện đang dùng **giả định tạm thời** vì chưa có xác nhận chính thức từ DNH — số liệu vẫn đúng về mặt kỹ thuật (tính đúng theo công thức đang chọn) nhưng công thức đó có thể chưa khớp quy ước nội bộ của DNH. Càng chốt sớm, số liệu báo cáo/cảnh báo càng đáng tin cậy.
+Hệ thống báo cáo/cảnh báo/chatbot hiện đã chạy trên dữ liệu thật, cập nhật gần thời gian thực từ Bravo. Tuy nhiên các điểm dưới đây hiện đang dùng **giả định tạm thời** hoặc cần DNH xác nhận thêm vì chưa có xác nhận chính thức — số liệu vẫn đúng về mặt kỹ thuật (tính đúng theo công thức đang chọn) nhưng công thức đó có thể chưa khớp quy ước nội bộ của DNH. Càng chốt sớm, số liệu báo cáo/cảnh báo/chatbot càng đáng tin cậy.
+
+**Phân nhóm nhanh** (theo mức độ ưu tiên):
+- **Cách tính dữ liệu (ảnh hưởng độ chính xác số liệu)**: mục 1 (ngày quá hạn), 2 (mốc tuổi nợ), 4 (tồn kho).
+- **Ngưỡng kích hoạt cảnh báo (giá trị số)**: mục 3b (sụt giảm doanh thu), 12 (các ngưỡng còn lại).
+- **Chất lượng dữ liệu nguồn (Bravo/HR đánh dấu sai)**: mục 5 (khách hàng), 8 (nhân viên).
+- **Nguồn/chu kỳ dữ liệu**: mục 6 (KPI quản lý), 7 (Excel công nợ/tồn kho).
+- **Chính sách & chatbot**: mục 3 (QĐ 0429-2 — đang tắt), 9 (tài khoản chatbot), 10 (hạ tầng Supabase/on-prem), 11 (bảng vùng miền).
 
 ---
 
 ## 1. Cách tính "ngày quá hạn" của công nợ
 
-**Đang dùng tạm**: Ngày đến hạn = Ngày hóa đơn (DocDate) + Số ngày công nợ (payment term). Quá hạn = ngày hiện tại vượt qua ngày đến hạn này.
+**Đang dùng tạm**: Ngày đến hạn = Ngày hóa đơn (DocDate) + Số ngày công nợ (payment term, lấy TRÊN TỪNG HÓA ĐƠN). Quá hạn = ngày hiện tại vượt qua ngày đến hạn này.
 
 **Cần DNH xác nhận**: Đây có đúng là cách tính chính thức DNH đang áp dụng không? (Có phương án khác thường gặp: tính từ ngày xuất hóa đơn điện tử, hoặc từ ngày ghi nhận công nợ trên hệ thống kế toán, có thể lệch vài ngày so với DocDate).
 
 *Lý do hỏi kỹ: đã từng có bất đồng về cách tính này trong hợp đồng trước đây — cần chốt bằng văn bản để tránh lặp lại.*
 
+*Cập nhật 16/07/2026: đã đối chiếu thêm — số ngày công nợ trên danh mục khách hàng (`BRV_KhachHang.DueDate`, hạn mặc định gán cho khách) so với số ngày công nợ ghi trên từng hóa đơn (`BRV_HTTDuDK.DueDate`) cho toàn bộ 18.741 hóa đơn OTC còn dư nợ: 82,7% khớp nhau; 15,2% khách hàng CHƯA được cấu hình hạn mặc định trong danh mục (DueDate=0) nhưng hóa đơn vẫn có hạn thật; 2,1% có cấu hình nhưng khác với hóa đơn thực tế (vd khách có hạn mặc định 3 ngày nhưng hóa đơn lại cho 12 ngày). Kết luận: dùng hạn trên TỪNG HÓA ĐƠN (như đang làm) đáng tin hơn hạn mặc định của danh mục khách hàng — không đổi cách tính, chỉ xác nhận thêm.*
+
 ## 2. Mốc phân nhóm tuổi nợ (aging bucket) trong báo cáo "Công Nợ"
 
-**Đang dùng tạm**: 1-30 / 31-60 / 61-90 / >90 ngày (vừa đổi từ 1-15/16-30/31-45/>45 ngày cũ) — theo chuẩn phân nhóm công nợ phổ biến trong kế toán/ERP, không phải số DNH đã xác nhận.
+**Đang dùng tạm**: 1-15 / 15-30 / 30-45 / >45 ngày (mốc gốc từ đầu dự án — có thử đổi sang 1-30/31-60/61-90/>90 theo chuẩn kế toán phổ biến hôm 14/07, nhưng đã revert lại mốc gốc hôm 16/07 vì gây lệch giữa chatbot và card cảnh báo Teams — 2 nơi vô tình dùng 2 mốc khác nhau cho cùng 1 câu hỏi. Giờ toàn hệ thống — chatbot, alert, báo cáo — đã đồng nhất lại đúng 1 mốc 1-15/15-30/30-45/>45).
 
-**Cần DNH xác nhận**: DNH có quy ước riêng về mốc phân nhóm tuổi nợ (vd theo chính sách tín dụng nội bộ, khác nhau giữa kênh OTC bán lẻ và ETC bệnh viện) không, hay dùng mốc phổ biến trên là được?
+**Cần DNH xác nhận**: DNH có quy ước riêng về mốc phân nhóm tuổi nợ (vd theo chính sách tín dụng nội bộ, khác nhau giữa kênh OTC bán lẻ và ETC bệnh viện) không, hay dùng mốc 1-15/15-30/30-45/>45 hiện tại là được? (Nếu DNH muốn đổi sang mốc khác — kể cả mốc 1-30/31-60/61-90/>90 đã thử — xin nêu rõ để đổi ĐÚNG 1 LẦN ở tất cả các nơi cùng lúc, tránh lặp lại tình trạng lệch giữa các hệ thống.)
 
-*Lưu ý: cảnh báo "khách hàng lần đầu chuyển nhóm nợ xấu" (mục A1 trong 4 trigger đã chốt) vẫn giữ nguyên mốc >45 ngày, KHÔNG phụ thuộc vào mốc hiển thị này — 2 việc tách biệt.*
+*Lưu ý: cảnh báo "khách hàng lần đầu chuyển nhóm nợ xấu" (mục A1 trong 4 trigger đã chốt) vẫn giữ nguyên mốc >45 ngày cố định, KHÔNG phụ thuộc vào mốc hiển thị này — 2 việc tách biệt, không đổi theo dù mục 2 này đổi thế nào.*
 
-## 3. Định nghĩa "Quý" trong chính sách thu nhập QĐ 0429-2 (khối OTC Miền Nam)
+## 3. Chính sách thu nhập QĐ 0429-2 (khối OTC Miền Nam) — nhiều giả định
 
-**Đang dùng tạm**: Quý dương lịch chuẩn (Q1 = T1-T3, Q2 = T4-T6, Q3 = T7-T9, Q4 = T10-T12).
+**Trạng thái**: Cảnh báo này (nguy cơ chấm dứt HĐLĐ / mất thưởng quý-năm theo QĐ 0429-2) hiện **đang TẠM TẮT** vì nguồn dữ liệu KPI hiện có 100% là Miền Bắc, chưa có dòng nào Miền Nam để áp chính sách này. Sẽ bật lại khi có dữ liệu Miền Nam — nhưng trước đó cần chốt các giả định sau:
 
-**Cần DNH xác nhận**: QĐ 0429-2 có dùng đúng quy ước quý dương lịch này để tính "% đạt chỉ tiêu quý" (ảnh hưởng tới cảnh báo mất thưởng quý) không, hay theo 1 mốc khác (vd quý tài chính lệch tháng)?
+- **Định nghĩa "Quý"** — đang dùng quý dương lịch (Q1=T1-T3...). QĐ 0429-2 có dùng đúng quy ước này để tính "% đạt chỉ tiêu quý" không, hay theo mốc khác (quý tài chính lệch tháng)?
+- **Điều kiện "2 tháng liên tiếp"** — chính sách yêu cầu 2 tháng liên tiếp dưới ngưỡng mới đủ điều kiện chấm dứt HĐLĐ, nhưng dữ liệu KPI hiện không lưu lịch sử theo tháng nên chỉ kiểm được THÁNG HIỆN TẠI (cảnh báo sớm, chưa đủ căn cứ chính thức). DNH có nguồn lưu lịch sử KPI theo tháng không?
+- **Ánh xạ vai trò** — quy ước CS = TDV chợ sỉ, TK = Trưởng kênh MT hiện là **tự suy luận** từ dữ liệu, chưa có bảng chú giải chính thức từ HR. Xin xác nhận.
+- **Mốc ngày 10/20** trong cảnh báo nhịp KPI giữa tháng — có phải mốc chốt theo QĐ/quy định nội bộ không, hay chỉ là mốc tham chiếu?
+
+## 3b. Ngưỡng "sụt giảm doanh thu" (revenue drop) và kỳ so sánh
+
+**Đang dùng tạm**: Cảnh báo khi doanh thu tháng mới nhất giảm **> 20%** so với **tháng liền trước** (month-over-month).
+
+**Cần DNH xác nhận** (2 việc):
+1. **Ngưỡng %**: 20% là con số MCNA tạm đặt, chưa có căn cứ nghiệp vụ từ DNH — DNH muốn ngưỡng nào là "sụt giảm bất thường đáng cảnh báo"?
+2. **Kỳ so sánh**: đang so tháng liền kề (MoM). DNH có muốn so **cùng kỳ năm trước** (year-over-year, tránh nhiễu mùa vụ — vd tháng Tết thấp là bình thường) không? *(Lưu ý: hiện dữ liệu chưa đủ dài để tính YoY, nhưng cần chốt hướng để chuẩn bị.)*
 
 ## 4. Công thức tính tồn kho hiện tại từ Bravo
 
@@ -54,6 +74,52 @@ Cờ đúng để loại khách "không phải khách hàng thật" là **`IsCus
 
 **Cần DNH xác nhận**: Nếu mục 4 (công thức tồn kho) chưa giải quyết được ngay, DNH có thể cung cấp file Excel tồn kho cập nhật theo chu kỳ nào (hàng tuần/hàng tháng) để thay thế bản dữ liệu cũ không?
 
+## 8. Cờ `IsDuplicate` trên `DIM_NhanVien` (danh mục nhân sự bán hàng) — mới phát hiện 16/07/2026
+
+**Hiện trạng**: Khi xây dựng thêm 1 lớp kiểm tra tự động đối chiếu doanh thu hóa đơn thực tế với bảng KPI (đã triển khai, chạy hàng ngày), phát hiện ít nhất 2 nhân viên bán hàng THẬT đang bị hệ thống gắn cờ "trùng lặp" (`IsDuplicate = 1`) trên `DIM_NhanVien`, khiến doanh số thật của họ (tổng ~1,55 tỷ đồng/tháng) bị loại khỏi mọi báo cáo/thống kê tính theo nhân viên hợp lệ, dù họ vẫn đang bán hàng bình thường:
+- Nguyễn Thị Thanh Thủy (mã `MBKV12`, Miền Bắc, vào làm chính thức từ 11/04/2024) — ~1,25 tỷ đ/tháng.
+- Lạc Ngọc Sâm (mã `TM25030101`, Miền Nam, vào làm chính thức từ 01/03/2025) — ~296 triệu đ/tháng.
+
+Ngoài ra còn 2 mã khác cũng bị gắn `IsDuplicate=1` nhưng KHÔNG phải người thật — là mã kênh phân phối chung (`MN1` "Kênh MT", `MN4` "Chợ sỉ") — 2 mã này việc gắn cờ có vẻ hợp lý (không phải nhân viên cá nhân).
+
+**Cần DNH/phía nhân sự xác nhận**: 2 trường hợp Nguyễn Thị Thanh Thủy và Lạc Ngọc Sâm có đúng là bị gắn nhầm cờ không? DNH có quy trình rà soát định kỳ nào để phát hiện các trường hợp tương tự trong tương lai không (giống câu hỏi tương tự đã nêu ở mục 5 cho `BRV_KhachHang`)?
+
+*Đã bổ sung sẵn: 1 alert tự động (chạy mỗi chu kỳ quét) đối chiếu tổng doanh thu OTC từ hóa đơn với tổng doanh số trong bảng KPI — báo ngay nếu lệch dù chỉ 1 đồng, giúp phát hiện sớm các trường hợp tương tự mà không cần chờ rà soát tay.*
+
+## 9. Danh sách tài khoản đăng nhập Chatbot DNH
+
+**Hiện trạng**: Chatbot web (nút "Hỏi Chatbot DNH" trên card Teams/báo cáo) đang xác thực qua danh sách tài khoản cấu hình sẵn (`CHATBOT_USERS_JSON`), mỗi tài khoản gắn cố định 1 phạm vi vùng/kênh được phép hỏi (RBAC — vd tài khoản Quản lý Miền Bắc chỉ hỏi được dữ liệu Miền Bắc). Danh sách này hiện vẫn là tài khoản do MCNA tự tạo để test, chưa xác nhận là danh sách thật của từng người dùng DNH.
+
+**Cần DNH xác nhận**: Danh sách người dùng thật sẽ dùng Chatbot là ai (tên, vai trò, phạm vi vùng/kênh tương ứng)? Ai bên DNH sẽ là đầu mối cập nhật danh sách này khi có nhân sự mới/nghỉ việc/đổi vai trò? *(Câu hỏi cùng tính chất với danh sách nhận Teams DM cá nhân hoá — cả 2 đều đang chờ danh sách thật từ DNH.)*
+
+## 10. Hạ tầng dữ liệu cho Chatbot: Supabase (cloud) hay SQL Server on-premises
+
+**Hiện trạng**: Hợp đồng gốc quy định kiến trúc 3 tầng dữ liệu **on-premises trên SQL Server** (theo chính sách data residency của DNH, không dùng cloud). Theo chỉ đạo 03/07/2026, team đang build & test Chatbot trên **Supabase (Postgres, cloud)** để đẩy nhanh tiến độ — đây được xác định là bước TEST TRƯỚC, chưa phải quyết định thay thế vĩnh viễn kiến trúc on-prem đã ký.
+
+**Cần DNH xác nhận**: Supabase có được chấp nhận làm hạ tầng CHÍNH THỨC lâu dài cho Chatbot (và dữ liệu trung gian nói chung) không, hay sau giai đoạn test phải chuyển về SQL Server on-prem như hợp đồng gốc? Nếu chấp nhận Supabase chính thức: cần xác nhận thêm region/project Supabase cụ thể, ai bên DNH quản lý quyền truy cập (service role key), chính sách backup/retention, và có cần ký phụ lục data residency mới không (vì khác với điều khoản gốc).
+
+## 11. Bảng suy luận vùng miền theo tiền tố mã khách hàng (dùng cho khách hàng "mồ côi")
+
+**Hiện trạng**: Với các khách hàng thiếu hồ sơ trong `DMS_KhachHang`/`DMSSX_KhachHang` (không join được sang bảng vùng miền chuẩn), cả Chatbot lẫn hệ thống cảnh báo đang dùng 1 bảng suy luận vùng miền TỰ XÂY DỰNG dựa theo 2-3 ký tự đầu của mã khách hàng (vd `HNO*` → Hà Nội, `HCM*` → TP.HCM...) — suy ra bằng thống kê từ ~47.500 khách hàng đã biết vùng, độ chính xác ước tính ≥95% nhưng KHÔNG phải dữ liệu chính thức từ DNH.
+
+**Cần DNH xác nhận**: DNH có bảng ánh xạ chính thức (mã khách hàng/CityId → tỉnh thành/vùng miền) để thay thế bảng suy luận này không? Nếu có, xin cung cấp để tăng độ chính xác cho các báo cáo/cảnh báo phân theo vùng miền — đặc biệt với nhóm khách hàng mồ côi vẫn đang dùng suy luận tạm.
+
+## 12. Các ngưỡng cảnh báo còn lại (giá trị số kích hoạt cảnh báo)
+
+**Hiện trạng**: Ngoài các mục đã nêu riêng ở trên, các ngưỡng dưới đây hiện là **giá trị mặc định MCNA tự đặt** dựa trên thông lệ chung, CHƯA có căn cứ nghiệp vụ chính thức từ DNH. Hệ thống đã tách sẵn ra file cấu hình nên đổi rất nhanh, không cần sửa code:
+
+| Cảnh báo | Ngưỡng đang dùng |
+| --- | --- |
+| Khách lớn sụt giảm/rời bỏ | Giảm > 50% so tháng trước, VÀ tháng trước mua > 50 triệu (mới coi là "khách lớn") |
+| Rủi ro tập trung doanh thu | Top 3 khách chiếm > 50% doanh thu kỳ |
+| Tỷ lệ hàng trả về cao (ETC) | > 5% doanh số ETC |
+| Tồn kho chết / bán chậm | Đủ bán ≥ 12 tháng VÀ giá trị tồn > 50 triệu |
+| Nhịp KPI ngày TDV (OTC) | < 3%/ngày = Đỏ, 3-4% = Vàng, ≥ 4% = Xanh; gửi báo cáo khi ≥ 5 TDV Đỏ |
+| Sụt giảm mốc giữa tháng (ngày 10/20) | Giảm > 5% so trung bình 5 tháng trước |
+| Tỷ lệ nợ quá hạn cao | OTC > 80%, ETC > 65% (tách riêng 16/07 dựa trên mức nền thực tế; vẫn tạm, phụ thuộc mục 1) |
+
+**Cần DNH xác nhận**: DNH xem qua và điều chỉnh các ngưỡng trên cho phù hợp với thực tế kinh doanh / khẩu vị rủi ro của công ty (ngưỡng nào đang quá nhạy gây nhiễu, ngưỡng nào chưa đủ nhạy để bắt vấn đề thật)?
+
 ---
 
-*Chuẩn bị bởi: MCNA — 13/07/2026, cập nhật 14/07/2026*
+*Chuẩn bị bởi: MCNA — 13/07/2026, cập nhật 16/07/2026*
