@@ -1368,6 +1368,22 @@ def return_rate(return_value, sales_value):
 
 # ---- Nhóm A: Công nợ / dòng tiền -------------------------------------------
 
+def _overdue_ratio_threshold(channel_label):
+    """16/07/2026: tách ngưỡng riêng OTC/ETC thay vì dùng chung 1 số 35% — rà soát thực tế cho
+    thấy tỷ lệ quá hạn thật (đã loại rác dữ liệu <50k, xem scripts đối chiếu 15-16/07/2026) đang
+    ở mức OTC ~93%, ETC ~81%, khiến ngưỡng 35% cũ luôn bị vi phạm, mất tác dụng phân biệt "bình
+    thường" vs "bất thường" (alert lặp lại mỗi ngày dù không có gì mới). Ngưỡng mới đặt gần sát
+    mức nền hiện tại của từng kênh (còn dư địa để bắt được nếu XẤU ĐI thêm), KHÔNG phải ngưỡng
+    nghiệp vụ đã được DNH xác nhận — vẫn phụ thuộc debt_aging.date_basis còn đang tạm (xem skill
+    dnh-debt-aging-schema). Đọc từ config.yaml (thresholds.business), có thể chỉnh mà không sửa
+    code khi có số liệu chính thức từ DNH."""
+    if channel_label == 'OTC':
+        return float(_biz_threshold('overdue_ratio_pct_otc', 0.80))
+    if channel_label == 'ETC':
+        return float(_biz_threshold('overdue_ratio_pct_etc', 0.65))
+    return float(_biz_threshold('overdue_ratio_pct', 0.35))
+
+
 def check_company_overdue_ratio_alert():
     """
     A3: Tỷ lệ nợ quá hạn / tổng dư nợ vượt ngưỡng (sức khỏe dòng tiền).
@@ -1377,7 +1393,6 @@ def check_company_overdue_ratio_alert():
     phòng đọc receivable_detail (Supabase, theo kỳ gần nhất) như trước.
     """
     from sqlalchemy import text
-    threshold = float(_biz_threshold('overdue_ratio_pct', 0.35))
 
     period_label = None
     by_channel = {}
@@ -1418,6 +1433,7 @@ def check_company_overdue_ratio_alert():
         ratio = overdue_ratio(overdue_sum, balance_sum)
         if ratio is None:
             continue
+        threshold = _overdue_ratio_threshold(channel_label)
         print(f"[ALERTS][overdue_ratio][{channel_label}] {period_label}: nợ quá hạn/tổng nợ = {ratio*100:.1f}% (ngưỡng {threshold*100:.0f}%).")
         if ratio > threshold:
             alert_key = f"company_overdue_ratio:{channel_label}:{datetime.now().strftime('%Y-%m-%d')}"

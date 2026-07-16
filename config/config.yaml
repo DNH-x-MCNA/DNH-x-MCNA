@@ -88,7 +88,11 @@ thresholds:
   business:
     revenue_drop_pct: 0.20        # Doanh thu tháng mới nhất giảm > 20% so với tháng liền trước
     # comparison_mode: "mom"      # mom = so tháng liền kề (đang dùng); "yoy" = cùng kỳ năm trước (chờ DNH chốt)
-    overdue_ratio_pct: 0.35       # Tổng nợ quá hạn / tổng dư nợ toàn công ty vượt 35%
+    # 16/07/2026: tách riêng theo kênh thay vì 1 ngưỡng chung 35% — thực tế (đã loại rác dữ liệu
+    # <50k) OTC ~93%, ETC ~81%, ngưỡng cũ luôn bị vi phạm nên mất tác dụng cảnh báo. Vẫn TẠM THỜI,
+    # chờ DNH xác nhận date-basis chính thức (xem skill dnh-debt-aging-schema) mới chốt lại.
+    overdue_ratio_pct_otc: 0.80   # Kênh OTC: nợ quá hạn/tổng dư nợ vượt 80%
+    overdue_ratio_pct_etc: 0.65   # Kênh ETC: nợ quá hạn/tổng dư nợ vượt 65%
     dead_stock_months: 12.0       # Tồn "chết": months_to_sell >= 12 tháng
     dead_stock_min_value: 50000000    # ...và giá trị tồn > 50 triệu (mới đáng cảnh báo vốn đọng)
     customer_churn_drop_pct: 0.50 # Khách lớn: doanh số tháng mới nhất rớt > 50% so tháng trước
