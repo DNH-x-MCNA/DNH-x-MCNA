@@ -154,11 +154,14 @@ alert_feature_flags:
   near_expiry_check: false    # cần cột ExpiryDate lô hàng (map lô -> hạn dùng) trong mart tồn kho
   etl_freshness_check: false  # TẠM TẮT: đang trỏ CLOUD_DB_URL sang Supabase dev/test (snapshot
                                # tĩnh, SyncAt không tăng) -> bật lại true khi đổi CLOUD_DB_URL về production
-  kpi_sales_force_risk_check: false  # TẠM TẮT: kpi_summary hiện 100% area_code='MB2' (miền Bắc),
-                                      # CHƯA có dòng nào miền Nam -> query lọc area_code LIKE 'MN%'
-                                      # nên sẽ luôn trả rỗng (an toàn, không báo nhầm ngưỡng miền Nam
-                                      # cho nhân sự miền Bắc). Bật true khi DNH bổ sung ETL nguồn miền
-                                      # Nam vào kpi_summary VÀ đã xác nhận legend position_code CS/TK.
+  kpi_sales_force_risk_check: false  # 16/07/2026: VẪN TẮT — lý do tắt cũ ("kpi_summary 100% miền
+                                      # Bắc") đã không còn đúng (nhánh Bravo chính đã có đủ dữ liệu
+                                      # Miền Nam/Trung, xác nhận thực tế 16/07: 33 nhân sự vi phạm,
+                                      # 7 người đủ điều kiện "2 tháng liên tiếp" — xem
+                                      # get_bravo_last_n_complete_months), NHƯNG đây là cảnh báo nêu
+                                      # đích danh nhân sự có nguy cơ chấm dứt HĐLĐ gửi lên Teams —
+                                      # cần XÁC NHẬN RÕ RÀNG RIÊNG từ người dùng trước khi bật thật,
+                                      # không tự ý bật cùng lúc với việc sửa logic 2-tháng-liên-tiếp.
 
 # Cấu hình Chu kỳ chạy (giây hoặc phút)
 # LƯU Ý: cảnh báo thời gian thực chính nay trigger ngay sau mỗi lần đồng bộ Bravo (xem

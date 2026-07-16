@@ -649,6 +649,76 @@ def get_bravo_kpi_quarter_year_snapshot(position_codes):
     return result
 
 
+def get_bravo_last_n_complete_months(position_codes, n=2):
+    """
+    16/07/2026: trả {employee_code: [(year, month, percent), ...]} cho N THÁNG HOÀN CHỈNH gần
+    nhất (mới nhất trước), dùng để kiểm tra điều kiện "N tháng liên tiếp dưới ngưỡng" theo QĐ
+    0429-2 — xem check_kpi_sales_force_risk_alert.
+
+    XÁC NHẬN THỰC TẾ 16/07/2026: FACT_TongHopKhachHang giữ snapshot HÀNG THÁNG từ 01/2025 tới
+    nay (18 tháng liên tục tính đến 07/2026) — TRƯỚC ĐÂY (10/07/2026) tài liệu ghi nhầm là
+    "kpi_summary không lưu lịch sử theo tháng nên chỉ kiểm được THÁNG HIỆN TẠI" — đúng cho nhánh
+    dự phòng Supabase (kpi_summary quả thật không có lịch sử), nhưng SAI cho nhánh chính Bravo,
+    vốn ĐÃ CÓ đủ lịch sử để kiểm tra "2 tháng liên tiếp" thật, chỉ là chưa được nối vào code.
+
+    Loại bỏ THÁNG ĐANG CHẠY DỞ (SaveDate mới nhất khác ngày cuối tháng thật của nó — vd hôm nay
+    16/07 thì SaveDate=2026-07-16 là tháng 7 dở dang, không tính) trước khi lấy N tháng gần nhất,
+    vì điều kiện "N tháng liên tiếp" trong chính sách chỉ có ý nghĩa với tháng ĐÃ HOÀN CHỈNH.
+
+    Raise exception nếu Bravo không truy cập được — người gọi tự bắt để fallback (giống các hàm
+    Bravo khác trong file này).
+    """
+    from sqlalchemy import text
+    import calendar
+    from src.database import _get_bravo_engine
+    engine = _get_bravo_engine()
+    if engine is None:
+        raise RuntimeError("Không có Bravo engine (thiếu BRAVO_SQL_* trong .env)")
+    pos_ph = ",".join(f"'{p}'" for p in position_codes)
+
+    with engine.connect() as conn:
+        raw_dates = [r[0] for r in conn.execute(text("SELECT DISTINCT [SaveDate] FROM [FACT_TongHopKhachHang]")).fetchall()]
+        parsed = sorted(d if hasattr(d, "year") else datetime.strptime(str(d)[:10], "%Y-%m-%d").date() for d in raw_dates)
+        if not parsed:
+            return {}
+        latest = parsed[-1]
+        last_day_of_latest_month = calendar.monthrange(latest.year, latest.month)[1]
+        complete_dates = parsed if latest.day == last_day_of_latest_month else parsed[:-1]
+        complete_dates = complete_dates[-n:]
+        if not complete_dates:
+            return {}
+
+        date_ph = ",".join(f"'{d.strftime('%Y-%m-%d')}'" for d in complete_dates)
+        sql = text(f'''
+            WITH tgt AS (
+                SELECT DISTINCT [SaveDate], [EmployeeCode], [MonthSaleTarget]
+                FROM [FACT_TongHopKhachHang] WHERE [SaveDate] IN ({date_ph})
+            ),
+            act AS (
+                SELECT [SaveDate], [EmployeeCode], SUM([Amount_Cus]) AS amt
+                FROM [FACT_TongHopKhachHang] WHERE [SaveDate] IN ({date_ph})
+                GROUP BY [SaveDate], [EmployeeCode]
+            )
+            SELECT t.[SaveDate] AS save_date, n.[EmployeeCode] AS employee_code,
+                   t.[MonthSaleTarget] AS target, ISNULL(a.amt, 0) AS actual
+            FROM tgt t
+            JOIN [DIM_NhanVien] n ON t.[EmployeeCode] = n.[EmployeeCode]
+            LEFT JOIN act a ON a.[SaveDate] = t.[SaveDate] AND a.[EmployeeCode] = t.[EmployeeCode]
+            WHERE n.[PositionCode] IN ({pos_ph}) AND (n.[IsDuplicate] IS NULL OR n.[IsDuplicate] = 0)
+        ''')
+        rows = conn.execute(sql).fetchall()
+
+    result = {}
+    for r in rows:
+        save_date = r.save_date if hasattr(r.save_date, "year") else datetime.strptime(str(r.save_date)[:10], "%Y-%m-%d").date()
+        target = float(r.target or 0)
+        pct = (float(r.actual) / target) if target > 0 else None
+        result.setdefault(r.employee_code, []).append((save_date.year, save_date.month, pct))
+    for emp in result:
+        result[emp].sort(key=lambda x: (x[0], x[1]), reverse=True)
+    return result
+
+
 def _last_complete_data_day():
     """
     Trả về ngày LIỀN TRƯỚC ngày mới nhất có dữ liệu hóa đơn (gộp cả OTC brv_hoadonhdr và ETC
@@ -2107,16 +2177,27 @@ def check_zero_sales_rep_alert():
 
 
 def kpi_sales_force_risk_reasons(position_code, month_pct, quarter_pct, year_pct,
-                                  risk_map, quarter_floor, year_floor):
+                                  risk_map, quarter_floor, year_floor, two_month_history=None):
     """
     Pure helper (unit-test được, không đụng DB): trả về list lý do vi phạm ngưỡng KPI
     theo QĐ 0429-2/QĐ-HĐQT.25 (khối OTC miền Nam) cho 1 nhân sự. Rỗng nếu không vi phạm gì.
-    """
+
+    two_month_history (16/07/2026, optional — mặc định None để không phá tương thích chữ ký cũ):
+    list [(year, month, percent), ...] MỚI NHẤT TRƯỚC, từ get_bravo_last_n_complete_months(n=2).
+    Nếu CẢ 2 tháng hoàn chỉnh gần nhất đều <= ngưỡng vai trò, thêm 1 lý do RIÊNG mức độ CAO HƠN
+    (đủ điều kiện chính thức theo chính sách "2 tháng liên tiếp"), tách biệt với cảnh báo sớm
+    "tháng hiện tại" (month_pct, vẫn giữ nguyên — tháng hiện tại có thể đang chạy dở)."""
     reasons = []
     role_threshold = risk_map.get(position_code)
     if role_threshold is not None and month_pct is not None and month_pct <= role_threshold:
         reasons.append(
             f"Nguy cơ chấm dứt HĐLĐ (tháng {month_pct*100:.0f}% <= {role_threshold*100:.0f}%, mới tính 1 tháng)")
+    if role_threshold is not None and two_month_history and len(two_month_history) >= 2:
+        (y1, m1, p1), (y2, m2, p2) = two_month_history[0], two_month_history[1]
+        if p1 is not None and p2 is not None and p1 <= role_threshold and p2 <= role_threshold:
+            reasons.append(
+                f"ĐỦ ĐIỀU KIỆN CHÍNH THỨC 2 THÁNG LIÊN TIẾP dưới ngưỡng (T{m1}/{y1}={p1*100:.0f}%, "
+                f"T{m2}/{y2}={p2*100:.0f}%, cả 2 <= {role_threshold*100:.0f}%)")
     if quarter_pct is not None and quarter_pct < quarter_floor:
         reasons.append(f"Mất thưởng quý (quý {quarter_pct*100:.0f}% < {quarter_floor*100:.0f}%)")
     if year_pct is not None and year_pct < year_floor:
@@ -2139,10 +2220,15 @@ def check_kpi_sales_force_risk_alert():
     risk_map KHÔNG có trên Bravo (nếu có) sẽ tự vắng mặt khỏi kết quả Bravo, không crash.
 
     GIỚI HẠN CẦN BIẾT:
-      - Chính sách yêu cầu "2 tháng liên tiếp" dưới ngưỡng mới đủ điều kiện xem xét chấm dứt HĐLĐ,
-        nhưng kpi_summary chỉ là snapshot hiện tại (không lưu lịch sử theo tháng) -> hàm này chỉ
-        kiểm tra được THÁNG HIỆN TẠI, là cảnh báo sớm chứ KHÔNG phải xác nhận chính thức đủ điều
-        kiện chấm dứt HĐLĐ.
+      - 16/07/2026: điều kiện "2 tháng liên tiếp" dưới ngưỡng (chính thức đủ điều kiện xem xét
+        chấm dứt HĐLĐ) GIỜ ĐÃ KIỂM TRA ĐƯỢC THẬT ở nhánh Bravo — xác nhận thực tế FACT_TongHopKhachHang
+        giữ snapshot hàng tháng từ 01/2025 (xem get_bravo_last_n_complete_months). TRƯỚC ĐÂY tài
+        liệu này ghi nhầm "không lưu lịch sử theo tháng" — đúng cho kpi_summary/Supabase (nhánh dự
+        phòng, vẫn CHỈ kiểm được tháng hiện tại), nhưng sai cho nhánh Bravo chính. Kết quả tách 2
+        mức: lý do "Nguy cơ..." (chỉ 1 tháng, cảnh báo sớm) vs "ĐỦ ĐIỀU KIỆN CHÍNH THỨC 2 THÁNG
+        LIÊN TIẾP" (2 tháng hoàn chỉnh gần nhất đều dưới ngưỡng) — vẫn CHƯA dùng làm căn cứ chính
+        thức duy nhất cho quyết định nhân sự mà không xác nhận lại với DNH (định nghĩa "quý" và
+        các giả định khác vẫn tạm), nhưng đáng tin hơn hẳn bản chỉ-1-tháng trước đây.
       - Ánh xạ vai trò <-> position_code (CS = TDV chợ sỉ, TK = Trưởng kênh MT) suy luận từ số
         lượng nhân viên thực tế (dim_nhanvien, AreaCode='MN'), chưa có bảng chú giải chính thức
         từ HR.
@@ -2163,10 +2249,15 @@ def check_kpi_sales_force_risk_alert():
 
     rows = []
     kpi_force_data_day = None
+    months_history = {}
     try:
         roles = tuple(risk_map.keys())
         month_snap = {r.employee_code: r for r in get_bravo_kpi_tdv_snapshot(position_codes=roles)}
         qy_snap = get_bravo_kpi_quarter_year_snapshot(roles)
+        try:
+            months_history = get_bravo_last_n_complete_months(roles, n=2)
+        except Exception as e_hist:
+            print(f"[ALERTS][kpi_sales_force] Không lấy được lịch sử 2 tháng ({e_hist}) — bỏ qua điều kiện '2 tháng liên tiếp', vẫn dùng cảnh báo 1 tháng.")
         # position_code không có sẵn trong 2 snapshot trên (đều đã filter theo roles rồi) — dò lại
         # qua DIM_NhanVien 1 lần để gắn đúng position_code cho từng dòng kết quả.
         from src.database import _get_bravo_engine
@@ -2216,7 +2307,8 @@ def check_kpi_sales_force_risk_alert():
 
     at_risk = []
     for emp_code, emp_name, area, pos, m_pct, q_pct, y_pct in rows:
-        reasons = kpi_sales_force_risk_reasons(pos, m_pct, q_pct, y_pct, risk_map, quarter_floor, year_floor)
+        reasons = kpi_sales_force_risk_reasons(pos, m_pct, q_pct, y_pct, risk_map, quarter_floor, year_floor,
+                                                two_month_history=months_history.get(emp_code))
         if reasons:
             at_risk.append((emp_code, emp_name, area, pos, m_pct, q_pct, y_pct, "; ".join(reasons)))
 
@@ -2239,8 +2331,8 @@ def check_kpi_sales_force_risk_alert():
             alert_name="CẢNH BÁO RỦI RO KPI KHỐI OTC MIỀN NAM (QĐ 0429-2)",
             severity="WARNING",
             summary=(f"{len(at_risk)} nhân sự OTC miền Nam đang dưới ít nhất 1 ngưỡng KPI theo QĐ 0429-2. "
-                     f"Ngưỡng 'nguy cơ chấm dứt HĐLĐ' mới kiểm tra được THÁNG HIỆN TẠI, chưa xác nhận đủ "
-                     f"điều kiện chính thức '2 tháng liên tiếp' (thiếu lịch sử theo tháng)."),
+                     f"Dòng ghi 'ĐỦ ĐIỀU KIỆN CHÍNH THỨC 2 THÁNG LIÊN TIẾP' đã kiểm tra thật qua lịch sử "
+                     f"tháng trên Bravo; dòng chỉ ghi 'Nguy cơ...' mới tính riêng tháng hiện tại (cảnh báo sớm)."),
             table_headers=["Mã NV", "Tên NV", "Vai trò", "% Tháng", "% Quý", "% Năm", "Cảnh báo"],
             table_rows=table,
             channels=("teams",),
