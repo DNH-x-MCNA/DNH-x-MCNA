@@ -202,12 +202,20 @@ const MessageList = memo(function MessageList({
   );
 });
 
-function getOrCreateSessionId(): string {
+function sessionKeyFor(username: string): string {
+  // Rieng key theo tung username - tranh truong hop 2 tai khoan khac nhau dung chung 1 trinh duyet
+  // (vd dang xuat roi dang nhap tai khoan khac) vo tinh dung chung 1 session_id cu, dan den bi 403
+  // "khong co quyen xem cuoc tro chuyen nay" vi session_id do la cua nguoi dung TRUOC.
+  return `${SESSION_KEY}_${username}`;
+}
+
+function getOrCreateSessionId(username: string): string {
   if (typeof window === "undefined") return "default";
-  let sid = window.localStorage.getItem(SESSION_KEY);
+  const key = sessionKeyFor(username);
+  let sid = window.localStorage.getItem(key);
   if (!sid) {
     sid = crypto.randomUUID();
-    window.localStorage.setItem(SESSION_KEY, sid);
+    window.localStorage.setItem(key, sid);
   }
   return sid;
 }
@@ -282,20 +290,20 @@ export default function Home() {
   // Khoi tao session + nap lai lich su hoi thoai cu (neu co) + danh sach cuoc tro chuyen khi mo
   // trang - CHI sau khi dang nhap xong
   useEffect(() => {
-    if (!authToken) return;
-    const sid = getOrCreateSessionId();
+    if (!authToken || !userInfo) return;
+    const sid = getOrCreateSessionId(userInfo.username);
     setSessionId(sid);
     loadSessionHistory(sid);
     refreshSessions();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [authToken]);
+  }, [authToken, userInfo]);
 
   function switchToSession(sid: string) {
     if (sid === sessionId) {
       setSidebarOpen(false);
       return;
     }
-    window.localStorage.setItem(SESSION_KEY, sid);
+    if (userInfo) window.localStorage.setItem(sessionKeyFor(userInfo.username), sid);
     setSessionId(sid);
     loadSessionHistory(sid);
     setSidebarOpen(false);
@@ -401,7 +409,7 @@ export default function Home() {
     // KHONG xoa cuoc cu (khac hanh vi truoc day) - chi tao session moi va chuyen sang, cuoc cu van
     // con nguyen trong sidebar de xem lai sau, giong ChatGPT.
     const newSid = crypto.randomUUID();
-    window.localStorage.setItem(SESSION_KEY, newSid);
+    if (userInfo) window.localStorage.setItem(sessionKeyFor(userInfo.username), newSid);
     setSessionId(newSid);
     setMessages([]);
     setHistoryLoaded(true);
