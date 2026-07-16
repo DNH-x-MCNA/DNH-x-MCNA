@@ -33,10 +33,10 @@ Hệ thống báo cáo/cảnh báo/chatbot hiện đã chạy trên dữ liệu 
 
 ## 3. Chính sách thu nhập QĐ 0429-2 (khối OTC Miền Nam) — nhiều giả định
 
-**Trạng thái**: Cảnh báo này (nguy cơ chấm dứt HĐLĐ / mất thưởng quý-năm theo QĐ 0429-2) hiện **đang TẠM TẮT** vì nguồn dữ liệu KPI hiện có 100% là Miền Bắc, chưa có dòng nào Miền Nam để áp chính sách này. Sẽ bật lại khi có dữ liệu Miền Nam — nhưng trước đó cần chốt các giả định sau:
+**Trạng thái**: Cảnh báo này (nguy cơ chấm dứt HĐLĐ / mất thưởng quý-năm theo QĐ 0429-2) hiện **đang TẠM TẮT** — lý do tắt cũ ("KPI hiện 100% Miền Bắc") đã lỗi thời (nhánh Bravo chính đã xác nhận có đủ dữ liệu Miền Nam/Trung), nhưng vẫn giữ tắt vì đây là cảnh báo nêu đích danh nhân sự có nguy cơ chấm dứt HĐLĐ — **cần DNH + người phụ trách xác nhận rõ ràng riêng trước khi bật**, không tự ý bật cùng lúc với sửa lỗi logic.
 
+- **Điều kiện "2 tháng liên tiếp"** — ĐÃ GIẢI QUYẾT được phần kỹ thuật 16/07/2026: xác nhận Bravo (`FACT_TongHopKhachHang`) có lưu lịch sử KPI theo tháng từ 01/2025, đủ để kiểm tra thật điều kiện này (không còn chỉ dựa vào tháng hiện tại). Chạy thử: trong số nhân sự Miền Nam vi phạm ngưỡng, có nhóm đủ điều kiện CHÍNH THỨC 2 tháng liên tiếp (khác nhóm chỉ mới cảnh báo sớm 1 tháng). Vẫn cần DNH xác nhận cách tính này có đúng tinh thần chính sách không, trước khi dùng làm căn cứ chính thức cho quyết định nhân sự.
 - **Định nghĩa "Quý"** — đang dùng quý dương lịch (Q1=T1-T3...). QĐ 0429-2 có dùng đúng quy ước này để tính "% đạt chỉ tiêu quý" không, hay theo mốc khác (quý tài chính lệch tháng)?
-- **Điều kiện "2 tháng liên tiếp"** — chính sách yêu cầu 2 tháng liên tiếp dưới ngưỡng mới đủ điều kiện chấm dứt HĐLĐ, nhưng dữ liệu KPI hiện không lưu lịch sử theo tháng nên chỉ kiểm được THÁNG HIỆN TẠI (cảnh báo sớm, chưa đủ căn cứ chính thức). DNH có nguồn lưu lịch sử KPI theo tháng không?
 - **Ánh xạ vai trò** — quy ước CS = TDV chợ sỉ, TK = Trưởng kênh MT hiện là **tự suy luận** từ dữ liệu, chưa có bảng chú giải chính thức từ HR. Xin xác nhận.
 - **Mốc ngày 10/20** trong cảnh báo nhịp KPI giữa tháng — có phải mốc chốt theo QĐ/quy định nội bộ không, hay chỉ là mốc tham chiếu?
 
@@ -50,9 +50,15 @@ Hệ thống báo cáo/cảnh báo/chatbot hiện đã chạy trên dữ liệu 
 
 ## 4. Công thức tính tồn kho hiện tại từ Bravo
 
-**Hiện trạng**: Đã thử tính tồn kho hiện tại trực tiếp từ dữ liệu thẻ kho Bravo, đối chiếu với 1 mã hàng cụ thể thì lệch khoảng 19 lần so với số liệu đã biết là đúng — nên **chưa dùng** công thức tự tính này cho báo cáo/cảnh báo tồn kho.
+**Hiện trạng CŨ**: Đã thử tính tồn kho hiện tại trực tiếp từ bảng thẻ kho thô (`BRV_TheKho`, quy ước kế toán kép `DebitAccount/CreditAccount`), đối chiếu với 1 mã hàng cụ thể thì lệch khoảng 19 lần so với số liệu đã biết là đúng — nên **chưa dùng** công thức này.
 
-**Cần DNH hỗ trợ**: Công thức/bảng chuẩn để tính đúng số lượng tồn kho hiện tại của 1 mã hàng từ dữ liệu Bravo (thẻ kho, tồn kho đầu kỳ...) — hoặc xác nhận có bảng nào trên Bravo đã có sẵn số tồn tính đúng mà nhóm chưa biết tới.
+**Cập nhật 16/07/2026 — tìm hướng mới khả quan hơn**: Phát hiện 2 VIEW (không phải bảng thô) chưa từng thử: `vTheKhoLot` (có sẵn cột `ReceiptQuantity`/`IssueQuantity` rõ ràng theo từng lô/kho) và `vTonKhoDKLot` (tồn đầu kỳ theo lô/năm). Công thức thử nghiệm:
+```
+Tồn hiện tại = Tồn đầu kỳ (năm hiện tại, vTonKhoDKLot) + Σ Nhập − Σ Xuất trong năm (vTheKhoLot)
+```
+Test trên 3 mã hàng mẫu cho kết quả **dương, ổn định, hợp lý** — khác hẳn lần thử trước. Nhiều khả năng lỗi "lệch 19 lần" trước đây đến từ việc dùng bảng thô có quy ước kế toán kép dễ sai dấu, chứ không phải do thiếu dữ liệu.
+
+**Cần DNH xác nhận**: Xin 1 (hoặc vài) mã hàng cụ thể kèm số tồn ĐÃ BIẾT LÀ ĐÚNG tại 1 thời điểm, để đối chiếu công thức trên — đây là bước còn thiếu duy nhất trước khi có thể tin dùng (khác doanh thu, đã có số DNH báo để so khớp ngay; tồn kho thì chưa có gì để đối chiếu). Nếu công thức khớp, có thể thay thế hẳn nguồn Excel tồn kho tĩnh hiện tại (xem thêm mục 7).
 
 ## 5. Cờ nhận diện "không phải khách hàng thật" trong `BRV_KhachHang`
 
@@ -64,15 +70,21 @@ Cờ đúng để loại khách "không phải khách hàng thật" là **`IsCus
 
 ## 6. Nguồn dữ liệu KPI cho chức danh TP/PP/TBP
 
-**Hiện trạng**: KPI của Trưởng phòng (TP), Phó phòng (PP), Trưởng bộ phận (TBP) hiện chỉ có trong 1 file Excel DNH gửi đầu dự án (import 1 lần, không tự cập nhật). KPI của TDV/QLV đã có nguồn cập nhật gần thời gian thực từ Bravo.
+**Hiện trạng CŨ**: KPI của Trưởng phòng (TP), Phó phòng (PP), Trưởng bộ phận (TBP) hiện chỉ có trong 1 file Excel DNH gửi đầu dự án (import 1 lần, không tự cập nhật). Từng giả định các chức danh này "không tồn tại trên Bravo".
 
-**Cần DNH xác nhận**: Có nguồn dữ liệu nào trên Bravo/hệ thống nội bộ chứa KPI của các chức danh quản lý này không, để đồng bộ tự động thay vì dùng file tĩnh đã cũ?
+**Cập nhật 16/07/2026 — tìm được nguồn thật**: Giả định trên **SAI** — cả 7 người (4 TP, 2 PP, 1 TBP) đều có hồ sơ thật trên Bravo (`DIM_NhanVien`). Và tìm ra 1 bảng chưa từng dùng, `FACT_ThongKeTinhLuong` ("Thống kê tính lương"), có đủ chỉ tiêu/doanh số đạt/% hoàn thành theo tháng cho cả 7 người này (cùng cơ chế snapshot hàng tháng như bảng KPI TDV/QLV đang dùng).
+
+**Đã xác nhận nội bộ (16/07/2026)**: chỉ 3/7 người có dữ liệu cập nhật đến hôm nay — đúng là do nhân sự đã nghỉ, không phải lỗi đồng bộ: **cả 2 Phó phòng (PP) đã nghỉ việc**, và thực tế hiện chỉ còn **3 Trưởng phòng (TP)** đang làm việc (khớp chính xác với 3 người có dữ liệu Bravo mới nhất — Nguyễn Thị Thanh Thủy/Miền Bắc, Trần Thanh Tùng/Miền Nam, Lê Văn Hưng/Miền Trung). Còn 1 Trưởng bộ phận (TBP — Hoàng Công Thưởng, dữ liệu dừng ở 30/09/2025) **chưa xác nhận** tình trạng.
+
+**Vẫn cần DNH xác nhận**: (1) `FACT_ThongKeTinhLuong` có đúng là nguồn KPI chính thức cho cấp quản lý này không (để chuyển hẳn sang đọc tự động, bỏ file Excel tĩnh, và bỏ luôn 2 mã PP đã nghỉ + xác nhận 3 mã TP hiện tại)? (2) Trưởng bộ phận (TBP) Hoàng Công Thưởng còn đang làm việc không?
 
 ## 7. Chu kỳ cập nhật dữ liệu công nợ/tồn kho dạng tổng hợp sẵn
 
 **Hiện trạng**: 2 bảng công nợ theo kỳ (`receivable_detail`) và tồn kho tổng hợp (`inventory`) hiện là dữ liệu Excel DNH gửi 1 lần đầu dự án — không tự làm mới. (Lưu ý: công nợ đã có nguồn thay thế cập nhật real-time từ Bravo — xem mục 1; tồn kho thì chưa, xem mục 4.)
 
-**Cần DNH xác nhận**: Nếu mục 4 (công thức tồn kho) chưa giải quyết được ngay, DNH có thể cung cấp file Excel tồn kho cập nhật theo chu kỳ nào (hàng tuần/hàng tháng) để thay thế bản dữ liệu cũ không?
+**Cập nhật 16/07/2026 — định lượng được mức độ cũ**: Bảng `inventory` (Supabase) **không có bất kỳ cột ngày/timestamp nào** — bản thân hệ thống không tự biết được dữ liệu cũ bao nhiêu. Tra lại lịch sử: script import chỉ chạy **đúng 1 lần**, từ commit ĐẦU TIÊN của cả repo (02/07/2026), với dữ liệu được ghi rõ là **"aligned June 2026"** (phản ánh tình trạng tháng 6). Tính đến hôm nay: tối thiểu ~2 tuần không refresh kể từ lúc import, và bản thân số liệu gốc đã là của tháng trước — với ngành dược vòng quay nhanh, đây là độ trễ đáng kể cho các cảnh báo "sắp hết hàng"/"tồn kho chết" đang dùng đúng bảng này.
+
+**Cần DNH xác nhận**: Nếu mục 4 (công thức tồn kho tự tính từ Bravo) chưa xác nhận được ngay, DNH có thể cung cấp file Excel tồn kho cập nhật theo chu kỳ nào (hàng tuần/hàng tháng) để thay thế bản dữ liệu tháng 6 hiện tại không?
 
 ## 8. Cờ `IsDuplicate` trên `DIM_NhanVien` (danh mục nhân sự bán hàng) — mới phát hiện 16/07/2026
 
@@ -81,6 +93,12 @@ Cờ đúng để loại khách "không phải khách hàng thật" là **`IsCus
 - Lạc Ngọc Sâm (mã `TM25030101`, Miền Nam, vào làm chính thức từ 01/03/2025) — ~296 triệu đ/tháng.
 
 Ngoài ra còn 2 mã khác cũng bị gắn `IsDuplicate=1` nhưng KHÔNG phải người thật — là mã kênh phân phối chung (`MN1` "Kênh MT", `MN4` "Chợ sỉ") — 2 mã này việc gắn cờ có vẻ hợp lý (không phải nhân viên cá nhân).
+
+**Cập nhật 16/07/2026 — kiểm định lại bằng chính case đã biết (2 PP đã nghỉ, xem mục 6)**: Đối chiếu `EndDate`/hoạt động gần nhất giữa 2 PP ĐÃ XÁC NHẬN NGHỈ và 2 người nghi gắn nhầm cờ này:
+- 2 PP đã nghỉ: có `EndDate=2026-04-30` (trùng khớp), dữ liệu doanh số **dừng đúng ngày đó, không có gì sau** — mẫu hình rõ ràng của người đã thôi việc.
+- Nguyễn Thị Thanh Thủy & Lạc Ngọc Sâm: **`EndDate = None`** (không có), và **vẫn phát sinh doanh số thật đều đặn tới tận HÔM NAY (16/07/2026)** — Thủy: 1,26 tỷ đ/22 khách hôm nay, 17 tháng liên tục có dữ liệu; Sâm: 305,6 triệu đ/84 khách hôm nay, 15 tháng liên tục.
+
+→ Mẫu hình hoàn toàn khác người đã nghỉ — đây gần như chắc chắn là lỗi gắn cờ, không phải trạng thái nghỉ việc/ngừng hoạt động. Cũng xác nhận thêm: `IsResigned` (bit) **không đáng tin** (cả người đã nghỉ thật cũng để `None`) — nên dùng `EndDate` làm tín hiệu chính khi rà soát tương tự.
 
 **Cần DNH/phía nhân sự xác nhận**: 2 trường hợp Nguyễn Thị Thanh Thủy và Lạc Ngọc Sâm có đúng là bị gắn nhầm cờ không? DNH có quy trình rà soát định kỳ nào để phát hiện các trường hợp tương tự trong tương lai không (giống câu hỏi tương tự đã nêu ở mục 5 cho `BRV_KhachHang`)?
 
