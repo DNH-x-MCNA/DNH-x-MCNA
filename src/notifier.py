@@ -1064,8 +1064,16 @@ def _build_teams_consolidated_card(alerts):
         if facts:
             item_items.append({"type": "FactSet", "facts": facts, "spacing": "Small"})
         
+        # 16/07/2026: TRƯỚC ĐÂY chỉ hiện issue HOẶC summary (ưu tiên issue, bỏ qua summary khi cả 2
+        # đều có) — ghi chú "Lần thứ N trong tháng" (send_alert_to_all_channels) chỉ được gắn vào
+        # summary nên hầu như không bao giờ hiển thị trên card gộp (mọi alert đều truyền issue).
+        # Giờ hiện CẢ HAI như card đơn (_build_teams_adaptive_card) đã làm đúng từ trước.
+        issue_text = a.get("issue")
         main_summary = a.get("summary") or ""
-        item_items.append({"type": "TextBlock", "text": a.get("issue") or main_summary, "wrap": True, "spacing": "Small"})
+        if issue_text:
+            item_items.append({"type": "TextBlock", "text": issue_text, "weight": "Bolder", "wrap": True, "spacing": "Small"})
+        if main_summary and main_summary != issue_text:
+            item_items.append({"type": "TextBlock", "text": main_summary, "wrap": True, "spacing": "Small" if issue_text else "Small"})
 
         # Compact Table Toggle inside list if headers & rows present
         table_headers = a.get("table_headers")
