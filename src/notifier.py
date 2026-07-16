@@ -153,6 +153,8 @@ DIGEST_EMAIL_TEMPLATE = """
         body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; color: #333333; margin: 0; padding: 20px; background-color: #f4f5f8; }
         .container { max-width: 650px; margin: 0 auto; background: #ffffff; border-radius: 16px; box-shadow: 0 4px 20px rgba(0,0,0,0.06); overflow: hidden; border: 1px solid #e2e8f0; }
         .header { background-color: #1e3a8a; background: linear-gradient(135deg, #1e3a8a 0%, #3b82f6 100%); padding: 30px 24px; color: #ffffff; }
+        .header.header-monthly { background-color: #4c1d95; background: linear-gradient(135deg, #4c1d95 0%, #7c3aed 100%); }
+        .header-badge { display: inline-block; font-size: 11px; font-weight: 700; letter-spacing: 0.8px; text-transform: uppercase; background: rgba(255,255,255,0.18); padding: 4px 10px; border-radius: 999px; margin-bottom: 10px; }
         .header h1 { margin: 0; font-size: 22px; font-weight: 700; letter-spacing: 0.5px; }
         .header p { margin: 5px 0 0 0; font-size: 14px; opacity: 0.9; }
         .content { padding: 24px; }
@@ -175,8 +177,9 @@ DIGEST_EMAIL_TEMPLATE = """
 </head>
 <body>
     <div class="container">
-        <div class="header">
-            <h1>BÁO CÁO TỔNG HỢP HOẠT ĐỘNG {{ period_label|upper }}</h1>
+        <div class="header{% if period_label == 'Monthly' %} header-monthly{% endif %}">
+            <span class="header-badge">{% if period_label == 'Weekly' %}Báo cáo Tuần{% elif period_label == 'Monthly' %}Báo cáo Tháng{% else %}Báo cáo Ngày{% endif %}</span>
+            <h1>BÁO CÁO TỔNG HỢP HOẠT ĐỘNG {% if period_label == 'Weekly' %}TUẦN{% elif period_label == 'Monthly' %}THÁNG{% else %}{{ period_label|upper }}{% endif %}</h1>
             <p>{{ metrics.period_range or metrics.date }}</p>
             {% if audience %}
             <p style="margin: 8px 0 0 0; font-size: 13px; opacity: 0.9;">
@@ -243,6 +246,9 @@ DIGEST_EMAIL_TEMPLATE = """
                         {% else %}
                         <div class="no-data">Chưa đủ dữ liệu kỳ trước</div>
                         {% endif %}
+                        {% if metrics.channel_share %}
+                        <div class="no-data">OTC {{ metrics.channel_share.otc_pct }}% &bull; ETC {{ metrics.channel_share.etc_pct }}%</div>
+                        {% endif %}
                     </div>
                 </div>
                 <!--[if mso]>
@@ -278,7 +284,30 @@ DIGEST_EMAIL_TEMPLATE = """
             </table>
             {% endif %}
 
-            {% if metrics.region_breakdown %}
+            {% if metrics.region_growth %}
+            <!-- 16/07/2026: bản Monthly có thêm cột tăng trưởng so kỳ trước — Weekly vẫn dùng
+            bảng đơn giản bên dưới (region_growth chỉ tính cho granularity="monthly", xem etl.py). -->
+            <div class="section-title">Doanh Thu Theo Vùng &amp; Tăng Trưởng</div>
+            <table class="data-table">
+                <thead><tr><th>Vùng</th><th>Doanh thu</th><th>Kỳ trước</th><th>Tăng trưởng</th></tr></thead>
+                <tbody>
+                    {% for r in metrics.region_growth %}
+                    <tr>
+                        <td>{{ r.region }}</td>
+                        <td>{{ "{:,.0f}".format(r.revenue) }} đ</td>
+                        <td>{{ "{:,.0f}".format(r.prev_revenue) }} đ</td>
+                        <td>
+                            {% if r.growth_pct is not none %}
+                            <span class="{{ 'trend-up' if r.growth_pct >= 0 else 'trend-down' }}">{{ "%+.1f"|format(r.growth_pct) }}%</span>
+                            {% else %}
+                            <span class="no-data">—</span>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            {% elif metrics.region_breakdown %}
             <!-- Breakdown theo Vùng Section — chỉ hiện khi báo cáo KHÔNG lọc sẵn theo 1 vùng cụ thể -->
             <div class="section-title">Doanh Thu Theo Vùng</div>
             <table class="data-table">
@@ -325,6 +354,31 @@ DIGEST_EMAIL_TEMPLATE = """
                 <!--[if mso]>
                 </td></tr></table>
                 <![endif]-->
+                {% if metrics.channel_share and metrics.kpi_summary.total_target %}
+                <!-- 16/07/2026: chỉ tiêu tháng — chỉ hiện ở Monthly (channel_share chỉ tính cho
+                granularity="monthly", dùng làm cờ đánh dấu, xem etl.py). -->
+                <!--[if mso]>
+                <table role="presentation" width="100%" style="border-collapse: collapse; border: 0;"><tr><td width="50%" valign="top" style="padding: 8px;">
+                <![endif]-->
+                <div class="col" style="width: 100%; max-width: 290px; padding: 8px;">
+                    <div class="kpi-card">
+                        <div class="lbl">Tổng Chỉ Tiêu Tháng</div>
+                        <div class="val">{{ "{:,.0f}".format(metrics.kpi_summary.total_target) }} đ</div>
+                    </div>
+                </div>
+                <!--[if mso]>
+                </td><td width="50%" valign="top" style="padding: 8px;">
+                <![endif]-->
+                <div class="col" style="width: 100%; max-width: 290px; padding: 8px;">
+                    <div class="kpi-card {{ 'success' if metrics.kpi_summary.total_amount >= metrics.kpi_summary.total_target else 'failed' }}">
+                        <div class="lbl">Còn Thiếu Để Đạt 100%</div>
+                        <div class="val">{{ "{:,.0f}".format([metrics.kpi_summary.total_target - metrics.kpi_summary.total_amount, 0]|max) }} đ</div>
+                    </div>
+                </div>
+                <!--[if mso]>
+                </td></tr></table>
+                <![endif]-->
+                {% endif %}
             </div>
             {% endif %}
 
