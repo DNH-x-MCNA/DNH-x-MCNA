@@ -371,6 +371,30 @@ _HIGHLIGHT_LABELS = {
 # rời bỏ...) sẽ làm loãng phần nội dung thực sự đáng chú ý.
 _HIGHLIGHT_EXCLUDE_PREFIXES = {"data_sanity_zero", "etl_stale", "sales_kpi_insights_report"}
 
+def _highlight_matches_channel(alert_key, channel):
+    """17/07/2026: True nếu highlight này nên hiện cho audience đang lọc theo `channel` (None =
+    không giới hạn kênh, C-Level/Toàn quốc — luôn hiện tất cả). Phát hiện qua báo cáo Daily Digest
+    "Quản lý Kênh OTC" vẫn hiện cảnh báo ETC thật (khách rời bỏ, nợ quá hạn...) — get_digest_metrics
+    đã lọc đúng channel cho doanh thu/công nợ/tồn kho, nhưng _get_period_highlights đọc thẳng
+    sent_alerts KHÔNG biết gì về scope audience.
+
+    Các alert_key có gắn kênh đều dùng đúng 1 quy ước: segment sau dấu ':' là literal 'OTC'/'ETC'
+    (vd 'company_overdue_ratio:ETC:2026-07-16', 'customer_churn:OTC') — xem revenue_drop/
+    company_overdue_ratio/overdue_customer_new_orders/customer_churn/revenue_concentration/
+    kpi_milestone_channel trong src/alerts.py, tất cả dùng channel_label='OTC'/'ETC' y hệt. Alert
+    KHÔNG gắn kênh nào (vd kpi_daily_pace_red, smart_debt_overdue_top5 — vốn đã gộp cả 2 kênh) thì
+    luôn hiện cho mọi audience kênh, không có gì để lọc."""
+    if channel is None:
+        return True
+    if alert_key.startswith("sales_kpi_insights_report_"):
+        return True
+    segments = alert_key.split(":")[1:]
+    if "OTC" in segments:
+        return channel == "OTC"
+    if "ETC" in segments:
+        return channel == "ETC"
+    return True
+
 def _format_highlight_date_part(part):
     """Nếu 1 mảnh suffix của alert_key là ngày/tháng (YYYY-MM-DD, YYYY-MM, hoặc "M_YYYY" — định
     dạng period dùng ở receivable_detail/check_debt_aging_migration_alert), đổi sang định dạng
@@ -464,7 +488,7 @@ def _humanize_highlight(alert_key, sent_at, value):
 
 _HIGHLIGHTS_MAX_ROWS = 15  # xem _get_period_highlights — trần số dòng hiển thị sau khi đã gộp nhóm
 
-def _get_period_highlights(start_dt, end_dt):
+def _get_period_highlights(start_dt, end_dt, channel=None):
     """"Điểm nổi bật trong kỳ": các cảnh báo nghiệp vụ đã THỰC SỰ fire trong [start_dt, end_dt),
     đọc từ data/alerts_state.db (bảng sent_alerts, ghi bởi src/alerts.py::record_alert_sent) —
     nối luồng cảnh báo thời gian thực với báo cáo định kỳ thành 1 câu chuyện liền mạch. Mỗi dòng
@@ -473,7 +497,11 @@ def _get_period_highlights(start_dt, end_dt):
     14/07/2026: gộp theo _highlight_group_key() (bỏ mảnh NGÀY khỏi alert_key) — trước đó các cảnh
     báo lặp lại theo ngày (vd "Tỷ lệ nợ quá hạn... (OTC)" tự bắn mỗi sáng) liệt kê riêng TỪNG NGÀY
     trong kỳ báo cáo Monthly, có thể ra 40-50 dòng cho 1 kỳ — chỉ giữ lần gần nhất mỗi nhóm, rồi
-    giới hạn tối đa _HIGHLIGHTS_MAX_ROWS dòng (ưu tiên mới nhất, đã ORDER BY last_sent_at DESC)."""
+    giới hạn tối đa _HIGHLIGHTS_MAX_ROWS dòng (ưu tiên mới nhất, đã ORDER BY last_sent_at DESC).
+
+    17/07/2026: thêm `channel` — lọc bỏ highlight thuộc kênh KHÁC audience đang xem (xem
+    _highlight_matches_channel). channel=None giữ nguyên hành vi cũ (không lọc gì, dùng cho
+    audience C-Level/Toàn quốc)."""
     if not os.path.exists(STATE_DB_PATH):
         return []
     try:
@@ -495,6 +523,8 @@ def _get_period_highlights(start_dt, end_dt):
     for r in rows:
         prefix = "sales_kpi_insights_report" if r[0].startswith("sales_kpi_insights_report_") else r[0].split(":")[0]
         if prefix in _HIGHLIGHT_EXCLUDE_PREFIXES:
+            continue
+        if not _highlight_matches_channel(r[0], channel):
             continue
         group_key = _highlight_group_key(r[0])
         if group_key in seen_groups:
@@ -835,13 +865,15 @@ def get_digest_metrics(start_dt, end_dt, period_label, granularity=None, region=
     # "Điểm Nổi Bật Trong Kỳ" dù trong ngày có cảnh báo CRITICAL thật (vd tỷ lệ nợ quá hạn, khách
     # nợ quá hạn vẫn lên đơn mới...) đã bắn qua Teams. Bật cho mọi granularity — chi phí không đáng
     # kể (1 query SQLite cục bộ, không đụng Bravo/Supabase).
-    highlights = _get_period_highlights(start_dt, end_dt)
+    highlights = _get_period_highlights(start_dt, end_dt, channel=channel)
     has_critical = _period_has_critical(start_dt, end_dt)
 
     result = {
         "date": start_dt.strftime("%d/%m/%Y"),
         "period_range": period_label,
         "updated_at": datetime.now().strftime("%H:%M %d/%m/%Y"),
+        "region": region,
+        "channel": channel,
         "revenue": {
             "otc": round(otc_rev, 2),
             "etc": round(etc_rev, 2),
