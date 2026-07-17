@@ -125,16 +125,24 @@ def _digest_table(metrics):
     change_pct = metrics['revenue']['change_pct']
     prev_label = metrics['revenue'].get('prev_period_label', '')
     change_str = f"{change_pct:+.1f}% so kỳ {prev_label}" if change_pct is not None else "chưa đủ dữ liệu kỳ trước"
-    rows = [
-        ["Doanh thu OTC", format_vietnamese_money(metrics['revenue']['otc'])],
-        ["Doanh thu ETC", format_vietnamese_money(metrics['revenue']['etc'])],
-        ["Tổng doanh thu", f"{format_vietnamese_money(metrics['revenue']['total'])} ({change_str})"],
-        ["Số hóa đơn OTC", str(metrics['revenue']['otc_invoice_count'])],
-        ["Số hóa đơn ETC", str(metrics['revenue']['etc_invoice_count'])],
-        ["Tổng số hóa đơn", str(metrics['revenue']['invoice_count'])],
-        ["Mặt hàng tồn chết", str(metrics['inventory']['dead_stock_count'])],
-        ["Mặt hàng sắp hết hàng", str(metrics['inventory']['near_stockout_count'])],
-    ]
+    # 17/07/2026: audience đã lọc theo 1 kênh (vd "Quản lý Kênh OTC") thì etc_rev/etc_invoice_count
+    # đã bị ép về 0 ở get_digest_metrics (đúng) — nhưng hiện thẳng "Doanh thu ETC: 0đ" trong báo cáo
+    # OTC là rác hiển thị vô nghĩa, dễ gây hiểu lầm là "ETC thật sự bằng 0". Ẩn hẳn dòng kênh không
+    # thuộc scope thay vì hiện số 0 giả.
+    scoped_channel = metrics.get('channel')
+    rows = []
+    if scoped_channel != "ETC":
+        rows.append(["Doanh thu OTC", format_vietnamese_money(metrics['revenue']['otc'])])
+    if scoped_channel != "OTC":
+        rows.append(["Doanh thu ETC", format_vietnamese_money(metrics['revenue']['etc'])])
+    rows.append(["Tổng doanh thu", f"{format_vietnamese_money(metrics['revenue']['total'])} ({change_str})"])
+    if scoped_channel != "ETC":
+        rows.append(["Số hóa đơn OTC", str(metrics['revenue']['otc_invoice_count'])])
+    if scoped_channel != "OTC":
+        rows.append(["Số hóa đơn ETC", str(metrics['revenue']['etc_invoice_count'])])
+    rows.append(["Tổng số hóa đơn", str(metrics['revenue']['invoice_count'])])
+    rows.append(["Mặt hàng tồn chết", str(metrics['inventory']['dead_stock_count'])])
+    rows.append(["Mặt hàng sắp hết hàng", str(metrics['inventory']['near_stockout_count'])])
     # 14/07/2026: bỏ hẳn khối công nợ chi tiết (5 dòng Nợ quá hạn/Dư nợ OTC/ETC/Tổng) — Daily
     # Digest chỉ còn doanh thu + tồn kho, ngắn gọn xem nhanh. Cảnh báo nợ quá hạn nghiêm trọng
     # (vượt ngưỡng) vẫn tự bắn CARD RIÊNG qua Teams khi phát sinh (check_company_overdue_ratio_alert
