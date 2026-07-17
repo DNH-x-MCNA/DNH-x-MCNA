@@ -23,6 +23,25 @@ Hệ thống báo cáo/cảnh báo/chatbot hiện đã chạy trên dữ liệu 
 
 *Cập nhật 16/07/2026: đã đối chiếu thêm — số ngày công nợ trên danh mục khách hàng (`BRV_KhachHang.DueDate`, hạn mặc định gán cho khách) so với số ngày công nợ ghi trên từng hóa đơn (`BRV_HTTDuDK.DueDate`) cho toàn bộ 18.741 hóa đơn OTC còn dư nợ: 82,7% khớp nhau; 15,2% khách hàng CHƯA được cấu hình hạn mặc định trong danh mục (DueDate=0) nhưng hóa đơn vẫn có hạn thật; 2,1% có cấu hình nhưng khác với hóa đơn thực tế (vd khách có hạn mặc định 3 ngày nhưng hóa đơn lại cho 12 ngày). Kết luận: dùng hạn trên TỪNG HÓA ĐƠN (như đang làm) đáng tin hơn hạn mặc định của danh mục khách hàng — không đổi cách tính, chỉ xác nhận thêm.*
 
+## 1b. ĐÃ SỬA: dư nợ/tỷ lệ quá hạn trước đây bị thổi phồng 4-15 lần (nguyên nhân con số 92,9%/81,1%)
+
+**Bối cảnh**: DNH phản hồi trong họp rằng tỷ lệ nợ quá hạn báo cáo (OTC 92,9% / ETC 81,1%) "quá cao, không thực tế". Đã truy nguyên (17/07/2026) và **xác nhận đây là bug thật, đã sửa dứt điểm**.
+
+**Nguyên nhân**: công thức cũ đọc thẳng bảng `BRV_HTTDuDK`/`BRVSX_HTTDuDK` (Dư Đầu Kỳ) với cột `PaidAmount` **stale** (chỉ ghi khoản đã trả tại thời điểm tạo bản ghi, không cập nhật khoản trả sau này — khoản trả sau nằm ở sổ phát sinh `vHTTPhatSinh`, và ứng trước `vUTDuDauKy` cũng không được đối trừ). Hệ quả định lượng bằng dữ liệu thật, đối chiếu với SP gốc của DNH `NH_Report_TM.dbo.usp_DeptAccDueDate_GetData`:
+- FPT Long Châu: repo báo nợ **9,17 tỷ**, thực tế chỉ **0,61 tỷ** (khách đã trả 34,5 tỷ nhưng cột `PaidAmount` chỉ ghi 261 triệu).
+- Top 5 khách OTC lệch **4-15 lần**; có khách (Đa Phúc) đang **dư có** (trả thừa) vẫn bị báo nợ 2,45 tỷ.
+- Tổng dư nợ OTC: repo 108,7 tỷ vs thực tế **11,77 tỷ**.
+
+**Đã sửa**: `get_bravo_receivables_snapshot()` giờ gọi trực tiếp SP gốc DNH (read-only, chỉ tạo temp table). Đã kiểm chứng: viết replica trung thành logic SP thì **dư nợ khớp 100% từng khách đến từng đồng** (xác nhận SP là nguồn đúng); phần phân bổ waterfall của ứng trước vào các mốc quá hạn quá phức tạp để tái tạo bằng SQL thuần nên gọi thẳng SP cho chính xác tuyệt đối. Trigger A1 (nợ >45 ngày, theo hợp đồng) cũng đã chuyển sang dùng chung nguồn này.
+
+**Số liệu ĐÚNG sau khi sửa (tức thời 17/07/2026)**:
+| | Dư nợ | Nợ quá hạn | Tỷ lệ quá hạn (cũ → đúng) |
+|---|---|---|---|
+| OTC | 11,77 tỷ | 4,64 tỷ | 92,9% → **39,4%** |
+| ETC | 192,3 tỷ | 100,6 tỷ | 81,1% → **52,3%** |
+
+**Cần DNH xác nhận**: SP `usp_DeptAccDueDate_GetData` (với `@_Period2=15` cho mốc 1-15/16-30/31-45/>45 ngày) có đúng là báo cáo công nợ chuẩn DNH đang dùng nội bộ không? Nếu đúng thì số liệu công nợ của hệ thống giờ khớp 100% với báo cáo nội bộ DNH.
+
 ## 2. Mốc phân nhóm tuổi nợ (aging bucket) trong báo cáo "Công Nợ"
 
 **Đang dùng tạm**: 1-15 / 15-30 / 30-45 / >45 ngày (mốc gốc từ đầu dự án — có thử đổi sang 1-30/31-60/61-90/>90 theo chuẩn kế toán phổ biến hôm 14/07, nhưng đã revert lại mốc gốc hôm 16/07 vì gây lệch giữa chatbot và card cảnh báo Teams — 2 nơi vô tình dùng 2 mốc khác nhau cho cùng 1 câu hỏi. Giờ toàn hệ thống — chatbot, alert, báo cáo — đã đồng nhất lại đúng 1 mốc 1-15/15-30/30-45/>45).

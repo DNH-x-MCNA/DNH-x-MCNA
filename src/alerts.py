@@ -1,6 +1,7 @@
 import os
 import sys
 import sqlite3
+from collections import namedtuple
 from datetime import datetime, timedelta
 from src.database import load_config, get_db_engines
 from src.etl import get_low_inventory, get_recent_failed_orders, get_unresolved_urgent_tickets
@@ -386,7 +387,15 @@ def get_customer_regions_by_code(customer_codes, channel_label):
     return {r.cc: normalize_region_label(r.area_code) for r in rows}
 
 
-_BRAVO_RECEIVABLES_SQL = """
+# 17/07/2026: CÔNG THỨC CŨ DƯỚI ĐÂY (_BRAVO_RECEIVABLES_SQL) ĐÃ BỎ — đọc thẳng BRV_HTTDuDK/
+# BRVSX_HTTDuDK (TotalAmount - PaidAmount) với cột PaidAmount STALE, thổi phồng dư nợ 4-15 LẦN so
+# với sổ phát sinh thật. Đã ĐỊNH LƯỢNG bằng dữ liệu Bravo thật khi đối chiếu với SP gốc DNH
+# usp_DeptAccDueDate_GetData: vd FPT Long Châu repo báo 9,17 tỷ nhưng thật chỉ 0,61 tỷ (khách đã
+# trả 34,5 tỷ mà cột PaidAmount chỉ ghi 261 triệu); top 5 khách OTC lệch 4-15×; 1 khách đang DƯ CÓ
+# vẫn bị báo nợ 2,45 tỷ. Đây chính là lý do tỷ lệ quá hạn 92,9%/81,1% mà DNH nói "quá cao" — mẫu số
+# bị phồng + hóa đơn cũ đã trả vẫn bị tính là còn nợ + quá hạn. Xem get_bravo_receivables_snapshot
+# (đã chuyển sang gọi SP gốc). Giữ lại chuỗi SQL cũ chỉ để tham khảo lịch sử, KHÔNG dùng nữa.
+_BRAVO_RECEIVABLES_SQL_DEPRECATED = """
 WITH Receivables AS (
     SELECT k.[Code] AS customer_code, k.[Name] AS customer_name, N'OTC' AS sales_channel,
            rt.[AreaCode] AS area_code,
@@ -426,81 +435,130 @@ GROUP BY customer_code, customer_name, sales_channel, area_code
 """
 
 
-def get_bravo_receivables_snapshot():
+_ReceivableRow = namedtuple("_ReceivableRow", [
+    "customer_code", "customer_name", "sales_channel", "area_code",
+    "balance_end", "overdue_1_15", "overdue_15_30", "overdue_30_45", "overdue_gt_45",
+])
+# Cache trong-tiến-trình để KHÔNG chạy lại SP nặng nhiều lần trong CÙNG 1 chu kỳ quét — số alert
+# gọi get_bravo_receivables_snapshot() 3-4 lần/chu kỳ (smart_debt, overdue_ratio,
+# overdue_new_orders, digest). SP là snapshot TỨC THỜI nên cache 5 phút không làm sai lệch đáng kể.
+_RECEIVABLES_SP_CACHE = {"ts": 0.0, "rows": None}
+_RECEIVABLES_SP_TTL_SECONDS = 300
+
+
+def get_bravo_receivables_snapshot(force_refresh=False):
     """
-    Snapshot công nợ THEO KHÁCH HÀNG tính TRỰC TIẾP, TỨC THỜI từ Bravo (BRV_HTTDuDK/BRVSX_HTTDuDK)
-    — dùng chung công thức đã kiểm chứng bên chatbot (TotalAmount-PaidAmount, Account LIKE '131%',
-    IsCustomer=1, DueDate = DocDate + số ngày công nợ). Loại thêm bằng tay NCC100122/TEST00/TESt001
-    — 3 mã bị Bravo đánh dấu NHẦM IsCustomer=1 dù không phải khách hàng thật (nhà cung cấp/bản ghi
-    test) — xác nhận 14/07/2026 qua đối chiếu dữ liệu: CustomerType KHÔNG phải cờ thật/giả (97,9%
-    nhóm CustomerType=2 là khách "QUẦY THUỐC..." có thật), IsCustomer mới là cờ đúng nhưng thỉnh
-    thoảng vẫn có bản ghi bị gán sai — xem mục 5 trong docs/Cau_hoi_can_DNH_chot_truoc_hop_16-07.md.
+    Snapshot công nợ THEO KHÁCH HÀNG, TỨC THỜI từ Bravo — 17/07/2026 chuyển sang GỌI TRỰC TIẾP SP
+    gốc DNH `NH_Report_TM.dbo.usp_DeptAccDueDate_GetData` (Bảng kê tình hình thực hiện đơn hàng, do
+    DNH cung cấp) thay cho công thức tự viết cũ (BRV_HTTDuDK.TotalAmount-PaidAmount) đã bị chứng minh
+    thổi phồng dư nợ 4-15 LẦN (xem ghi chú ở _BRAVO_RECEIVABLES_SQL_DEPRECATED).
 
-    LƯU Ý QUAN TRỌNG: đây là công thức TẠM THỜI, ngày cơ sở tính tuổi nợ CHƯA được DNH xác nhận
-    chính thức (xem config/config.yaml::debt_aging, đã từng gây tranh chấp hợp đồng trước đây) —
-    giống hệt mức độ rủi ro banner cảnh báo bên chatbot, nhưng card Teams không có chỗ hiển thị
-    banner nên KHÔNG được coi là số liệu chính thức khi trình bày với khách hàng/đối tác.
+    Vì sao gọi thẳng SP mà không tự viết lại: đã thử replica trung thành logic SP trên dữ liệu thật
+    (17/07/2026) — DƯ NỢ khớp 100% từng khách đến đồng (xác nhận SP là nguồn đúng), NHƯNG phần phân
+    bổ waterfall của khoản ứng trước vào các mốc quá hạn có tương tác 2 sơ đồ (7 ngày/15 ngày) không
+    tái tạo được chính xác bằng SQL thuần (literal công thức SP cho ra kết quả khác chính output của
+    nó). Vùng công nợ/tuổi nợ đã từng gây tranh chấp hợp đồng nên KHÔNG chấp nhận số gần đúng — gọi
+    thẳng SP là cách DUY NHẤT vừa đúng đến đồng vừa an toàn. SP chỉ tạo temp table (read-only với dữ
+    liệu thật).
 
-    KHÔNG có khái niệm "kỳ" (period) như receivable_detail trên Supabase — đây luôn là số liệu
-    TỨC THỜI tính đến thời điểm gọi hàm, KHÔNG dùng được cho các so sánh period-over-period (vd
-    check_debt_aging_migration_alert cần so 2 kỳ trước/sau — hàm đó vẫn giữ đọc receivable_detail
-    vì Bravo không có cơ chế snapshot theo kỳ).
+    @_DocDate2 = hôm nay (số liệu tức thời). @_Period2=15 -> mốc 1-15/16-30/31-45/>45 ngày, khớp
+    đúng bucket cũ đang dùng (overdue_1_15..overdue_gt_45). Map: balance_end=CloseBal,
+    overdue_1_15=CloseBal5, overdue_15_30=CloseBal6, overdue_30_45=CloseBal7, overdue_gt_45=CloseBal8;
+    sales_channel = OTC nếu ClassCode='TM', ETC nếu 'SX'; area_code=AreaCode (SP tự join sẵn).
 
-    Trả về list các object có field: customer_code, customer_name, sales_channel, area_code,
-    balance_end, overdue_1_15, overdue_15_30, overdue_30_45, overdue_gt_45 (Decimal). area_code
-    (14/07/2026, mới thêm) join qua BRV_KhachHang/BRVSX_KhachHang.DMSId -> DMS_KhachHang/
-    DMSSX_KhachHang.Id -> CityId -> DIM_TinhThanhPho — xác nhận thực tế join khớp 99,6% khách OTC
-    và 95,9% khách ETC (số ít không khớp -> area_code NULL, coi là "Không rõ" khi hiển thị). Raise
-    exception nếu Bravo không truy cập được — người gọi tự bắt để fallback sang receivable_detail
-    (Supabase).
+    Trả về list namedtuple có field: customer_code, customer_name, sales_channel, area_code,
+    balance_end, overdue_1_15, overdue_15_30, overdue_30_45, overdue_gt_45. Kết quả cache 5 phút
+    (force_refresh=True để bỏ qua cache). Raise exception nếu Bravo không truy cập được — người gọi
+    tự bắt để fallback sang receivable_detail (Supabase).
     """
-    from sqlalchemy import text
+    import time as _t
+    now = _t.time()
+    if (not force_refresh and _RECEIVABLES_SP_CACHE["rows"] is not None
+            and (now - _RECEIVABLES_SP_CACHE["ts"]) < _RECEIVABLES_SP_TTL_SECONDS):
+        return _RECEIVABLES_SP_CACHE["rows"]
+
     from src.database import _get_bravo_engine
     engine = _get_bravo_engine()
     if engine is None:
         raise RuntimeError("Không có Bravo engine (thiếu BRAVO_SQL_* trong .env)")
-    with engine.connect() as conn:
-        return conn.execute(text(_BRAVO_RECEIVABLES_SQL)).fetchall()
+
+    today = datetime.now()
+    d1 = datetime(today.year, 1, 1).strftime("%Y-%m-%d")  # đầu năm — không ảnh hưởng CloseBal/tuổi nợ cuối
+    d2 = today.strftime("%Y-%m-%d")
+
+    raw = engine.raw_connection()
+    try:
+        cur = raw.cursor()
+        cur.execute(
+            "EXEC dbo.usp_DeptAccDueDate_GetData "
+            "@_DocDate1=?, @_DocDate2=?, @_Period1=?, @_Period2=?, @_RepType=?, @_IsPrepaymentInclude=?",
+            d1, d2, 7, 15, 1, 1)
+        cols, data = None, None
+        while True:
+            if cur.description is not None:
+                c = [dsc[0] for dsc in cur.description]
+                if "CustomerCode" in c and "OverDueAmount" in c:
+                    cols = c
+                    data = cur.fetchall()
+                    break
+            if not cur.nextset():
+                break
+        if cols is None:
+            raise RuntimeError("SP usp_DeptAccDueDate_GetData không trả về result set công nợ mong đợi.")
+        ix = {name: i for i, name in enumerate(cols)}
+
+        def _norm_area(raw):
+            # SP dùng cột DIM_TinhThanhPho.AreaCode2 (giá trị MB1/MB2/MN/MT), trong khi phần còn lại
+            # của hệ thống (region_map.REGION_SQL_MARKERS, lọc digest theo vùng) theo quy ước AreaCode
+            # = MB/MB2/MN/MT. Chỉ 'MB1' lệch (2.811 khách miền Bắc) -> map về 'MB' (đã có trong
+            # markers 'bac'=['MB','MB2']) để không bị rớt khỏi báo cáo "Quản lý Miền Bắc". MB2/MN/MT
+            # đã khớp sẵn; NULL giữ nguyên (coi là "Không rõ").
+            return "MB" if raw == "MB1" else raw
+
+        rows = [
+            _ReceivableRow(
+                customer_code=rec[ix["CustomerCode"]],
+                customer_name=rec[ix["CustomerName"]],
+                sales_channel="OTC" if rec[ix["ClassCode"]] == "TM" else "ETC",
+                area_code=_norm_area(rec[ix["AreaCode"]]),
+                balance_end=rec[ix["CloseBal"]],
+                overdue_1_15=rec[ix["CloseBal5"]],
+                overdue_15_30=rec[ix["CloseBal6"]],
+                overdue_30_45=rec[ix["CloseBal7"]],
+                overdue_gt_45=rec[ix["CloseBal8"]],
+            )
+            for rec in data
+        ]
+    finally:
+        try:
+            raw.rollback()  # bỏ mọi thay đổi temp-table, không đụng dữ liệu thật
+        except Exception:
+            pass
+        raw.close()
+
+    _RECEIVABLES_SP_CACHE["ts"] = now
+    _RECEIVABLES_SP_CACHE["rows"] = rows
+    return rows
 
 
-_BRAVO_OVERDUE_GT45_SQL = """
-WITH Receivables AS (
-    SELECT k.[Code] AS customer_code, k.[Name] AS customer_name,
-           (h.[TotalAmount] - h.[PaidAmount]) AS amount,
-           DATEDIFF(day, DATEADD(day, ISNULL(h.[DueDate], 0), h.[DocDate]), GETDATE()) AS overdue_days
-    FROM [BRV_HTTDuDK] h
-    JOIN [BRV_KhachHang] k ON h.[CustomerId] = k.[Id]
-    WHERE h.[Account] LIKE '131%' AND (h.[TotalAmount] - h.[PaidAmount]) > 0
-      AND k.[IsCustomer] = 1 AND k.[Code] NOT IN ('NCC100122', 'TEST00', 'TESt001')
-    UNION ALL
-    SELECT k.[Code], k.[Name],
-           (h.[TotalAmount] - h.[PaidAmount]),
-           DATEDIFF(day, DATEADD(day, ISNULL(h.[DueDate], 0), h.[DocDate]), GETDATE())
-    FROM [BRVSX_HTTDuDK] h
-    JOIN [BRVSX_KhachHang] k ON h.[CustomerId] = k.[Id]
-    WHERE h.[Account] LIKE '131%' AND (h.[TotalAmount] - h.[PaidAmount]) > 0
-      AND k.[IsCustomer] = 1 AND k.[Code] NOT IN ('NCC100122', 'TEST00', 'TESt001')
-)
-SELECT customer_code, customer_name,
-    SUM(CASE WHEN overdue_days > 45 THEN amount ELSE 0 END) AS overdue_gt_45
-FROM Receivables
-GROUP BY customer_code, customer_name
-"""
+_Gt45Row = namedtuple("_Gt45Row", ["customer_code", "customer_name", "overdue_gt_45"])
 
 
 def _bravo_overdue_gt45_by_customer():
-    """A1 (check_debt_aging_migration_alert): nợ >45 ngày theo khách hàng (OTC+ETC gộp) — TÁCH
-    RIÊNG khỏi get_bravo_receivables_snapshot()/_BRAVO_RECEIVABLES_SQL (14/07/2026). Mốc >45 ngày
-    là 1 trong 4 trigger đã CHỐT THEO HỢP ĐỒNG (xem skill dnh-email-alert-builder) — không phụ
-    thuộc/không tự đổi theo mốc hiển thị chung của bảng aging (đã đổi sang 1-30/31-60/61-90/>90
-    ngày cùng ngày, theo đề xuất thông lệ chung, chờ DNH xác nhận riêng)."""
-    from sqlalchemy import text
-    from src.database import _get_bravo_engine
-    engine = _get_bravo_engine()
-    if engine is None:
-        raise RuntimeError("Không có Bravo engine (thiếu BRAVO_SQL_* trong .env)")
-    with engine.connect() as conn:
-        return conn.execute(text(_BRAVO_OVERDUE_GT45_SQL)).fetchall()
+    """A1 (check_debt_aging_migration_alert): nợ >45 ngày theo khách hàng (OTC+ETC gộp). Mốc >45
+    ngày là 1 trong 4 trigger đã CHỐT THEO HỢP ĐỒNG (xem skill dnh-email-alert-builder).
+
+    17/07/2026: chuyển sang DÙNG CHUNG get_bravo_receivables_snapshot() (đã gọi SP gốc DNH) thay cho
+    _BRAVO_OVERDUE_GT45_SQL cũ — công thức cũ dùng chung gốc BRV_HTTDuDK.TotalAmount-PaidAmount với
+    cột PaidAmount stale nên nợ >45 ngày cũng bị thổi phồng 4-15× như dư nợ tổng (xem
+    _BRAVO_RECEIVABLES_SQL_DEPRECATED). overdue_gt_45 ở đây = CloseBal8 của SP (đã qua waterfall đối
+    trừ ứng trước), gộp OTC+ETC theo customer_code."""
+    snapshot = get_bravo_receivables_snapshot()
+    agg = {}  # customer_code -> [name, gt45]
+    for r in snapshot:
+        cur = agg.setdefault(r.customer_code, [r.customer_name, 0.0])
+        cur[1] += float(r.overdue_gt_45 or 0)
+    return [_Gt45Row(code, name, gt45) for code, (name, gt45) in agg.items()]
 
 
 def get_bravo_kpi_tdv_snapshot(position_codes=('TDV',)):
