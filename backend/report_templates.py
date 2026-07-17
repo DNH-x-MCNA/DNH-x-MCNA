@@ -59,33 +59,47 @@ def latest_data_date() -> str:
     return d if d else str(dt.date.today())
 
 
-def revenue_by_channel(date_from: str, date_to: str, scope_area_code: str = None) -> dict:
+def revenue_by_channel(date_from: str, date_to: str, scope_area_code: str = None,
+                        scope_channel: str = None) -> dict:
     """Doanh thu + so hoa don theo kenh OTC/ETC trong khoang [date_from, date_to].
     scope_area_code: NEU duoc truyen (tai khoan QLV/GD mien bi gioi han vung), CHI tinh doanh thu
     cua dung vung do (join qua bang khach hang) - do la co che ep buoc o tang code, khong phu thuoc
-    AI co tu loc dung hay khong."""
+    AI co tu loc dung hay khong.
+    scope_channel: NEU duoc truyen (vd 'OTC'), KHONG truy van kenh con lai - tra ve 0 cho kenh do,
+    kem co "channel_scope" bao hieu day la du lieu bi gioi han kenh (khac scope_area_code, co che
+    nay doc lap va ap dung duoc cho moi role)."""
     scope_sql, scope_params = _scope_clause(scope_area_code)
     join_o = _otc_area_join("v", scope_area_code)
-    join_e = _etc_area_join("v", scope_area_code)
     o = _q(f"SELECT COALESCE(SUM(v.amount9),0) rev, COUNT(DISTINCT v.stt) hd FROM vhoadon_otc v {join_o} "
            f"WHERE v.doc_date BETWEEN ? AND ?{scope_sql}", (date_from, date_to) + scope_params)[0]
-    e = _q(f"SELECT COALESCE(SUM(v.amount9),0) rev, COUNT(DISTINCT v.stt) hd FROM vhoadon_etc v {join_e} "
-           f"WHERE v.doc_date BETWEEN ? AND ?{scope_sql}", (date_from, date_to) + scope_params)[0]
     otc_rev, otc_hd = _f(o["rev"]), int(o["hd"])
-    etc_rev, etc_hd = _f(e["rev"]), int(e["hd"])
-    return {
+    if scope_channel == "OTC":
+        etc_rev, etc_hd = 0.0, 0
+    else:
+        join_e = _etc_area_join("v", scope_area_code)
+        e = _q(f"SELECT COALESCE(SUM(v.amount9),0) rev, COUNT(DISTINCT v.stt) hd FROM vhoadon_etc v {join_e} "
+               f"WHERE v.doc_date BETWEEN ? AND ?{scope_sql}", (date_from, date_to) + scope_params)[0]
+        etc_rev, etc_hd = _f(e["rev"]), int(e["hd"])
+    result = {
         "date_from": date_from, "date_to": date_to,
         "otc": {"revenue": otc_rev, "invoices": otc_hd},
         "etc": {"revenue": etc_rev, "invoices": etc_hd},
         "total": {"revenue": otc_rev + etc_rev, "invoices": otc_hd + etc_hd},
         "data_as_of": latest_data_date(),
     }
+    if scope_channel:
+        result["channel_scope"] = f"Tai khoan chi duoc xem kenh {scope_channel} - so lieu kenh khac KHONG duoc hien thi."
+    return result
 
 
 def top_products(date_from: str, date_to: str, limit: int = 10, channel: str = "ALL",
-                  scope_area_code: str = None) -> list:
+                  scope_area_code: str = None, scope_channel: str = None) -> list:
     """Top N san pham theo doanh thu. Loai hang khuyen mai (unit_price=0) khoi so luong ban that.
-    scope_area_code: ep loc theo vung khi tai khoan bi gioi han (xem revenue_by_channel)."""
+    scope_area_code: ep loc theo vung khi tai khoan bi gioi han (xem revenue_by_channel).
+    scope_channel: EP GHI DE tham so channel (bo qua gia tri AI truyen vao) khi tai khoan bi gioi
+    han kenh - dam bao khong the "mo khoa" kenh khac bang cach truyen channel='ETC'/'ALL'."""
+    if scope_channel:
+        channel = scope_channel
     scope_sql, scope_params = _scope_clause(scope_area_code)
     parts, part_params = [], []
     if channel in ("OTC", "ALL"):
@@ -111,8 +125,11 @@ def top_products(date_from: str, date_to: str, limit: int = 10, channel: str = "
 
 
 def top_customers(date_from: str, date_to: str, limit: int = 10, channel: str = "ALL",
-                   scope_area_code: str = None) -> list:
-    """Top N khach hang theo doanh thu. scope_area_code: ep loc theo vung khi tai khoan bi gioi han."""
+                   scope_area_code: str = None, scope_channel: str = None) -> list:
+    """Top N khach hang theo doanh thu. scope_area_code: ep loc theo vung khi tai khoan bi gioi han.
+    scope_channel: EP GHI DE tham so channel khi tai khoan bi gioi han kenh (xem top_products)."""
+    if scope_channel:
+        channel = scope_channel
     scope_sql, scope_params = _scope_clause(scope_area_code)
     parts, part_params = [], []
     if channel in ("OTC", "ALL"):
@@ -358,11 +375,11 @@ def employee_directory(search: str = None, position_code: str = None, area_code:
 
 
 def compare_periods(date_from_a: str, date_to_a: str, date_from_b: str, date_to_b: str,
-                     scope_area_code: str = None) -> dict:
+                     scope_area_code: str = None, scope_channel: str = None) -> dict:
     """So sanh nhanh doanh thu giua 2 khoang thoi gian (vd thang nay vs thang truoc, cung ky nam truoc).
     Vi kho local co day du lich su (nhieu nam) nen so sanh xa duoc, khong chi vai ngay gan day."""
-    a = revenue_by_channel(date_from_a, date_to_a, scope_area_code)
-    b = revenue_by_channel(date_from_b, date_to_b, scope_area_code)
+    a = revenue_by_channel(date_from_a, date_to_a, scope_area_code, scope_channel)
+    b = revenue_by_channel(date_from_b, date_to_b, scope_area_code, scope_channel)
     delta = a["total"]["revenue"] - b["total"]["revenue"]
     pct_change = (delta / b["total"]["revenue"] * 100) if b["total"]["revenue"] else None
     return {"period_a": a, "period_b": b, "delta": delta, "pct_change": pct_change}
@@ -402,14 +419,18 @@ def _customer_receivable(customer_code: str, channel: str) -> dict:
     return empty
 
 
-def customer_detail(customer_code: str, date_from: str, date_to: str, scope_area_code: str = None) -> dict:
+def customer_detail(customer_code: str, date_from: str, date_to: str, scope_area_code: str = None,
+                     scope_channel: str = None) -> dict:
     """Chi tiet 1 khach hang: gop doanh thu thuc te (kho local, tu Bravo) + du no/qua han (Supabase) +
     mapping vung mien/NV phu trach (DMS_KhachHang + DIM_NhanVien). Doanh thu tinh trong [date_from,date_to],
     du no/qua han la SNAPSHOT KY GAN NHAT hien co (khong theo date_from/date_to).
     LUU Y: kenh ETC KHONG co NV phu trach truc tiep gan tren khach hang (chi OTC co qua EmpDMSCode1) -
     cot employee_code/employee_name/position_label se rong voi khach hang thuan ETC.
     scope_area_code: NEU co, xac dinh vung cua khach TRUOC KHI tra du lieu - tu choi neu khac vung
-    (dung ca tien to ma KH lam fallback cho khach "mo coi" giong revenue_by_region)."""
+    (dung ca tien to ma KH lam fallback cho khach "mo coi" giong revenue_by_region).
+    scope_channel: NEU co (vd 'OTC'), tu choi thang neu khach hang la khach THUAN kenh khac (khong co
+    giao dich nao trong kenh duoc phep) - neu khach co CA 2 kenh, chi hien phan doanh thu cua kenh
+    duoc phep (redact kenh kia ve 0, KHONG lo so lieu that)."""
     if scope_area_code:
         c = _q("""SELECT tp.area_code a FROM dms_khachhang kh
                   LEFT JOIN dim_tinhthanhpho tp ON tp.city_id=kh.city_id WHERE kh.code=?
@@ -424,8 +445,11 @@ def customer_detail(customer_code: str, date_from: str, date_to: str, scope_area
            "WHERE customer_code=? AND doc_date BETWEEN ? AND ?", (customer_code, date_from, date_to))[0]
     e = _q("SELECT COALESCE(SUM(amount9),0) rev, COUNT(DISTINCT stt) hd FROM vhoadon_etc "
            "WHERE customer_code=? AND doc_date BETWEEN ? AND ?", (customer_code, date_from, date_to))[0]
-    otc_rev, otc_hd = _f(o["rev"]), int(o["hd"])
-    etc_rev, etc_hd = _f(e["rev"]), int(e["hd"])
+    real_otc_hd, real_etc_hd = int(o["hd"]), int(e["hd"])
+    if scope_channel == "OTC" and real_otc_hd == 0 and real_etc_hd > 0:
+        return {"error": f"Ban khong co quyen xem khach hang nay - day la khach hang kenh ETC, tai khoan cua ban chi duoc xem kenh {scope_channel}."}
+    otc_rev, otc_hd = _f(o["rev"]), real_otc_hd
+    etc_rev, etc_hd = (0.0, 0) if scope_channel == "OTC" else (_f(e["rev"]), real_etc_hd)
 
     if otc_hd and etc_hd:
         channel = "OTC+ETC"
@@ -465,7 +489,7 @@ def customer_detail(customer_code: str, date_from: str, date_to: str, scope_area
 
     receivable = _customer_receivable(customer_code, channel or lookup_src)
 
-    return {
+    result = {
         "customer_code": customer_code, "customer_name": name, "channel": channel,
         "kenh_bh": kenh_bh, "province": city_name, "area_code": area_code,
         "employee_code": emp_code, "employee_name": emp_name,
@@ -476,33 +500,38 @@ def customer_detail(customer_code: str, date_from: str, date_to: str, scope_area
         **receivable,
         "data_as_of": latest_data_date(),
     }
+    if scope_channel:
+        result["channel_scope"] = f"Tai khoan chi duoc xem kenh {scope_channel} - so lieu kenh khac (neu co) KHONG duoc hien thi."
+    return result
 
 
 def order_timing_check(date_from: str, date_to: str, threshold_days: int = 2, limit: int = 20,
-                        scope_area_code: str = None) -> dict:
+                        scope_area_code: str = None, scope_channel: str = None) -> dict:
     """Phat hien dau hieu 'chay don don KPI': hoa don co created_at (thoi diem BAN GHI THUC SU duoc
     tao trong Bravo) lech qua xa so voi doc_date (ngay chung tu tren hoa don, co the bi chon tay).
     Vd: doc_date la cuoi thang truoc nhung created_at lai la dau thang sau -> dau hieu tao/sua don
     backdate de kip chi tieu KPI thang truoc. threshold_days: so ngay lech toi thieu de bi liet ke
     (mac dinh 2). Tra ve ca TOM TAT theo tung nhan vien (ai co nhieu don bat thuong nhat) LAN danh
-    sach chi tiet top nhung don lech nhieu nhat. scope_area_code: ep loc theo vung khi bi gioi han."""
+    sach chi tiet top nhung don lech nhieu nhat. scope_area_code: ep loc theo vung khi bi gioi han.
+    scope_channel: NEU co (vd 'OTC'), BO HAN kenh con lai khoi truy van (khong chi redact ket qua)."""
     scope_sql, scope_params = _scope_clause(scope_area_code)
     join_o = _otc_area_join("v", scope_area_code)
-    join_e = _etc_area_join("v", scope_area_code)
+    parts = [f"""SELECT v.doc_date, v.created_at, v.customer_code, v.employee_code, v.amount9, v.stt
+            FROM vhoadon_otc v {join_o} WHERE v.doc_date BETWEEN ? AND ? AND v.created_at IS NOT NULL{scope_sql}"""]
+    part_params = [(date_from, date_to) + scope_params]
+    if scope_channel != "OTC":
+        join_e = _etc_area_join("v", scope_area_code)
+        parts.append(f"""SELECT v.doc_date, v.created_at, v.customer_code, v.employee_code, v.amount9, v.stt
+            FROM vhoadon_etc v {join_e} WHERE v.doc_date BETWEEN ? AND ? AND v.created_at IS NOT NULL{scope_sql}""")
+        part_params.append((date_from, date_to) + scope_params)
     sql = f"""
         SELECT doc_date, created_at, customer_code, employee_code, amount9, stt,
                CAST(julianday(created_at) - julianday(doc_date) AS INTEGER) AS lech_ngay
-        FROM (
-            SELECT v.doc_date, v.created_at, v.customer_code, v.employee_code, v.amount9, v.stt
-            FROM vhoadon_otc v {join_o} WHERE v.doc_date BETWEEN ? AND ? AND v.created_at IS NOT NULL{scope_sql}
-            UNION ALL
-            SELECT v.doc_date, v.created_at, v.customer_code, v.employee_code, v.amount9, v.stt
-            FROM vhoadon_etc v {join_e} WHERE v.doc_date BETWEEN ? AND ? AND v.created_at IS NOT NULL{scope_sql}
-        )
+        FROM ({" UNION ALL ".join(parts)})
         WHERE ABS(CAST(julianday(created_at) - julianday(doc_date) AS INTEGER)) >= ?
         ORDER BY ABS(lech_ngay) DESC
     """
-    params = (date_from, date_to) + scope_params + (date_from, date_to) + scope_params + (threshold_days,)
+    params = tuple(p for pp in part_params for p in pp) + (threshold_days,)
     rows = _q(sql, params)
 
     for r in rows:
@@ -744,16 +773,21 @@ TEMPLATES = {
 
 
 _EMPLOYEE_SCOPED_TEMPLATES = {"get_revenue_tree", "get_kpi_ranking"}
+_CHANNEL_SCOPED_TEMPLATES = {"get_revenue_by_channel", "get_top_products", "get_top_customers",
+                              "compare_periods", "get_customer_detail", "check_order_timing"}
 
 
 def call_template(name: str, args: dict, question: str = "", username: str = None,
-                   scope_area_code: str = None, scope_employee_code: str = None) -> dict:
+                   scope_area_code: str = None, scope_employee_code: str = None,
+                   scope_channel: str = None) -> dict:
     """Goi 1 template theo ten, ghi audit log (giong format run_query de nhat quan truy vet).
     scope_area_code: EP TRUYEN tu server (khong phai tu tham so AI dua ra) khi tai khoan bi gioi han
     vung - ghi de bat ky gia tri nao AI cung cap trong args, dam bao AI KHONG the tu "mo khoa" vung
     khac bang cach truyen tham so la. scope_employee_code: CHI ap dung cho get_revenue_tree/
     get_kpi_ranking (xem _EMPLOYEE_SCOPED_TEMPLATES) - cac ham khac khong nhan tham so nay nen KHONG
-    duoc truyen bua, se loi TypeError."""
+    duoc truyen bua, se loi TypeError. scope_channel: CHI ap dung cho cac template lien quan doanh
+    thu/khach hang (xem _CHANNEL_SCOPED_TEMPLATES) - EP GIOI HAN kenh (vd 'OTC'), doc lap voi 2 co
+    che scope kia, ap dung duoc cho MOI role."""
     t0 = dt.datetime.now()
     entry = {"ts": t0.isoformat(), "username": username, "question": question, "sql": f"<template:{name}>({args})"}
     try:
@@ -763,6 +797,8 @@ def call_template(name: str, args: dict, question: str = "", username: str = Non
             call_args["scope_area_code"] = scope_area_code
         if scope_employee_code and name in _EMPLOYEE_SCOPED_TEMPLATES:
             call_args["scope_employee_code"] = scope_employee_code
+        if scope_channel and name in _CHANNEL_SCOPED_TEMPLATES:
+            call_args["scope_channel"] = scope_channel
         result = fn(**call_args)
         entry["status"] = "ok"
         entry["duration_ms"] = int((dt.datetime.now() - t0).total_seconds() * 1000)

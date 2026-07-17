@@ -196,8 +196,12 @@ def chat(req: ChatRequest, user: dict = Depends(require_user)):
         # NHAN dong nghiep (get_revenue_tree/get_kpi_ranking) chi con doi cua rieng ho, khong thay
         # KPI ca nhan cua cac QLV khac trong cung vung.
         scope_employee_code = user["employee_code"] if user["role"] == "qlv" else None
+        # scope_channel: doc lap voi role/scope_area_code - CHI gioi han theo kenh (vd 'OTC') khi tai
+        # khoan duoc gan rieng, ap dung duoc cho BAT KY role nao (vd c_level nhung chi duoc xem OTC).
+        scope_channel = user.get("scope_channel")
         result = ask(req.question, session_id=req.session_id, username=user["username"],
-                     scope_area_code=scope_area_code, scope_employee_code=scope_employee_code)
+                     scope_area_code=scope_area_code, scope_employee_code=scope_employee_code,
+                     scope_channel=scope_channel)
         register_session(req.session_id, user["username"], req.question)
     except HTTPException:
         raise
