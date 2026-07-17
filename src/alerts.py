@@ -1874,22 +1874,26 @@ def check_customer_churn_alert():
         engine = _get_bravo_engine()
         if engine is None:
             raise RuntimeError("Chưa cấu hình BRAVO_SQL_* — không có nguồn nào khác cho churn.")
-        from src.region_map import customer_code_prefix_sql_or
-        otc_keep = f"(k.Code IS NOT NULL OR {customer_code_prefix_sql_or('v.CustomerCode')})"
+        # 16/07/2026: JOIN + điều kiện giữ lại khách "mồ côi"/loại mã rác chuyển sang
+        # customer_keep_filter_sql() dùng chung (src/region_map.py) — trước đó viết inline riêng
+        # ở đây VÀ ở check_revenue_concentration_alert, dễ lệch nếu sửa 1 chỗ quên chỗ kia.
+        from src.region_map import customer_keep_filter_sql
+        otc_join, otc_keep = customer_keep_filter_sql("v", "OTC")
+        etc_join, etc_keep = customer_keep_filter_sql("v", "ETC")
         sql = text(f'''
             WITH cm AS (
                 SELECT 'OTC' AS channel, v.CustomerCode AS cc, COALESCE(k.Name, v.CustomerCode) AS cname,
                        DATEFROMPARTS(YEAR(v.DocDate), MONTH(v.DocDate), 1) AS m, SUM(v.Amount9) AS rev
                 FROM dbo.vHoaDonTotal v
-                LEFT JOIN dbo.DMS_KhachHang k ON v.CustomerCode = k.Code
+                {otc_join}
                 WHERE {otc_keep}
                 GROUP BY v.CustomerCode, k.Name, DATEFROMPARTS(YEAR(v.DocDate), MONTH(v.DocDate), 1)
                 UNION ALL
                 SELECT 'ETC', v.CustomerCode, COALESCE(k.Name, v.CustomerCode),
                        DATEFROMPARTS(YEAR(v.DocDate), MONTH(v.DocDate), 1), SUM(v.Amount9)
                 FROM dbo.vHoaDonETCTotal v
-                LEFT JOIN dbo.DMSSX_KhachHang k ON v.CustomerCode = k.Code
-                WHERE (k.Code IS NOT NULL OR {customer_code_prefix_sql_or('v.CustomerCode')})
+                {etc_join}
+                WHERE {etc_keep}
                 GROUP BY v.CustomerCode, k.Name, DATEFROMPARTS(YEAR(v.DocDate), MONTH(v.DocDate), 1)
             ),
             agg AS (SELECT channel, cc, cname, m, SUM(rev) AS rev FROM cm GROUP BY channel, cc, cname, m),
@@ -1965,13 +1969,17 @@ def check_revenue_concentration_alert():
     """
     # 14/07/2026: đổi sang query view gốc Bravo (vHoaDonTotal/vHoaDonETCTotal), cùng lý do/cách
     # làm với check_customer_churn_alert/_period_revenue. Không còn failover Postgres.
+    # 16/07/2026: JOIN + điều kiện giữ lại khách "mồ côi"/loại mã rác chuyển sang
+    # customer_keep_filter_sql() dùng chung (src/region_map.py) — cùng lý do đã áp dụng ở
+    # check_customer_churn_alert, tránh 2 nơi lệch nhau theo thời gian.
     from sqlalchemy import text
     from src.database import _get_bravo_engine
-    from src.region_map import customer_code_prefix_sql_or
+    from src.region_map import customer_keep_filter_sql
     top_n = int(_biz_threshold('concentration_top_n', 3))
     threshold = float(_biz_threshold('concentration_pct', 0.50))
     params = {"n": top_n}
-    otc_keep = f"(k.Code IS NOT NULL OR {customer_code_prefix_sql_or('v.CustomerCode')})"
+    otc_join, otc_keep = customer_keep_filter_sql("v", "OTC")
+    etc_join, etc_keep = customer_keep_filter_sql("v", "ETC")
 
     try:
         engine = _get_bravo_engine()
@@ -1987,14 +1995,14 @@ def check_revenue_concentration_alert():
             cm AS (
                 SELECT 'OTC' AS channel, v.CustomerCode AS cc, SUM(v.Amount9) AS rev
                 FROM dbo.vHoaDonTotal v
-                LEFT JOIN dbo.DMS_KhachHang k ON v.CustomerCode = k.Code
+                {otc_join}
                 WHERE {otc_keep} AND DATEFROMPARTS(YEAR(v.DocDate), MONTH(v.DocDate), 1) = (SELECT m FROM mx WHERE channel='OTC')
                 GROUP BY v.CustomerCode
                 UNION ALL
                 SELECT 'ETC', v.CustomerCode, SUM(v.Amount9)
                 FROM dbo.vHoaDonETCTotal v
-                LEFT JOIN dbo.DMSSX_KhachHang k ON v.CustomerCode = k.Code
-                WHERE (k.Code IS NOT NULL OR {customer_code_prefix_sql_or('v.CustomerCode')}) AND DATEFROMPARTS(YEAR(v.DocDate), MONTH(v.DocDate), 1) = (SELECT m FROM mx WHERE channel='ETC')
+                {etc_join}
+                WHERE {etc_keep} AND DATEFROMPARTS(YEAR(v.DocDate), MONTH(v.DocDate), 1) = (SELECT m FROM mx WHERE channel='ETC')
                 GROUP BY v.CustomerCode
             ),
             agg AS (SELECT channel, cc, SUM(rev) AS rev FROM cm GROUP BY channel, cc)

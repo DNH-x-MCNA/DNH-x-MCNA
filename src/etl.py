@@ -115,7 +115,7 @@ def _period_revenue(start_dt, end_dt, region=None):
     """
     from sqlalchemy import text, bindparam
     from src.database import _get_bravo_engine
-    from src.region_map import CUSTOMER_CODE_PREFIX_TO_REGION
+    from src.region_map import customer_region_resolve_sql
 
     engine = _get_bravo_engine()
     if engine is None:
@@ -128,16 +128,16 @@ def _period_revenue(start_dt, end_dt, region=None):
     params = {"start_dt": start_dt, "end_dt": end_dt}
     # OTC (vHoaDonTotal) KHÔNG lộ sẵn CityId trong cột output -> join thêm qua CustomerCode.
     # ETC (vHoaDonETCTotal) ĐÃ lộ sẵn CityId -> join thẳng DIM_TinhThanhPho, không cần thêm bảng.
-    otc_region_join, etc_region_join, region_where = "", "", ""
+    # 16/07/2026: JOIN + biểu thức CASE suy luận vùng chuyển sang customer_region_resolve_sql()
+    # dùng chung (src/region_map.py) — trước đó viết inline riêng ở đây, cùng dạng logic với
+    # check_customer_churn_alert/check_revenue_concentration_alert (src/alerts.py) nhưng khác biến
+    # thể, dễ lệch nếu sửa 1 chỗ quên chỗ kia.
+    otc_region_join, etc_region_join, otc_where, etc_where = "", "", "", ""
     if markers:
-        prefix_case = " ".join(
-            f"WHEN v.CustomerCode LIKE '{prefix}%' THEN '{area}'"
-            for prefix, area in CUSTOMER_CODE_PREFIX_TO_REGION.items()
-        )
-        area_expr = f"COALESCE(rt.AreaCode, CASE {prefix_case} ELSE NULL END)"
-        otc_region_join = "LEFT JOIN dbo.DMS_KhachHang k ON v.CustomerCode = k.Code LEFT JOIN dbo.DIM_TinhThanhPho rt ON k.CityId = rt.CityId"
-        etc_region_join = "LEFT JOIN dbo.DIM_TinhThanhPho rt ON v.CityId = rt.CityId"
-        region_where = f" AND {area_expr} IN :region_markers"
+        otc_region_join, otc_area_expr = customer_region_resolve_sql("v", "OTC")
+        etc_region_join, etc_area_expr = customer_region_resolve_sql("v", "ETC")
+        otc_where = f" AND {otc_area_expr} IN :region_markers"
+        etc_where = f" AND {etc_area_expr} IN :region_markers"
         params["region_markers"] = tuple(markers)
 
     otc_sql = text(f'''
@@ -145,14 +145,14 @@ def _period_revenue(start_dt, end_dt, region=None):
         FROM dbo.vHoaDonTotal v
         {otc_region_join}
         WHERE v.DocDate >= :start_dt AND v.DocDate < :end_dt
-        {region_where}
+        {otc_where}
     ''')
     etc_sql = text(f'''
         SELECT COALESCE(SUM(v.Amount9), 0), COUNT(DISTINCT v.Stt)
         FROM dbo.vHoaDonETCTotal v
         {etc_region_join}
         WHERE v.DocDate >= :start_dt AND v.DocDate < :end_dt
-        {region_where}
+        {etc_where}
     ''')
     if markers:
         otc_sql = otc_sql.bindparams(bindparam("region_markers", expanding=True))
@@ -189,7 +189,7 @@ def _revenue_by_region(start_dt, end_dt, channel=None):
     tốn thêm 1 chút nhưng vẫn nhẹ vì hàm này chỉ gọi cho weekly/monthly."""
     from sqlalchemy import text
     from src.database import _get_bravo_engine
-    from src.region_map import region_from_customer_code
+    from src.region_map import region_from_customer_code, customer_region_resolve_sql
 
     engine = _get_bravo_engine()
     if engine is None:
@@ -197,21 +197,26 @@ def _revenue_by_region(start_dt, end_dt, channel=None):
             "Chưa cấu hình BRAVO_SQL_* trong .env — không còn nguồn nào khác cho breakdown vùng."
         )
 
+    # 16/07/2026: JOIN clause dùng chung customer_region_resolve_sql() (src/region_map.py) —
+    # chỉ lấy phần join_clause, KHÔNG dùng area_expr (hàm này vẫn tự suy luận vùng ở PYTHON qua
+    # region_from_customer_code() như cũ, không đổi — group theo customer_code trước rồi mới suy
+    # luận, giữ nguyên hành vi/độ chính xác đã kiểm chứng, chỉ hợp nhất phần JOIN bị lặp).
+    otc_join, _ = customer_region_resolve_sql("v", "OTC")
+    etc_join, _ = customer_region_resolve_sql("v", "ETC")
     parts = []
     if channel is None or channel == "OTC":
-        parts.append('''
+        parts.append(f'''
             SELECT v.CustomerCode AS customer_code, rt.AreaCode AS area_code, SUM(v.Amount9) AS rev
             FROM dbo.vHoaDonTotal v
-            LEFT JOIN dbo.DMS_KhachHang k ON v.CustomerCode = k.Code
-            LEFT JOIN dbo.DIM_TinhThanhPho rt ON k.CityId = rt.CityId
+            {otc_join}
             WHERE v.DocDate >= :start_dt AND v.DocDate < :end_dt
             GROUP BY v.CustomerCode, rt.AreaCode
         ''')
     if channel is None or channel == "ETC":
-        parts.append('''
+        parts.append(f'''
             SELECT v.CustomerCode AS customer_code, rt.AreaCode AS area_code, SUM(v.Amount9) AS rev
             FROM dbo.vHoaDonETCTotal v
-            LEFT JOIN dbo.DIM_TinhThanhPho rt ON v.CityId = rt.CityId
+            {etc_join}
             WHERE v.DocDate >= :start_dt AND v.DocDate < :end_dt
             GROUP BY v.CustomerCode, rt.AreaCode
         ''')
