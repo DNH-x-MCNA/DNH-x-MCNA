@@ -88,6 +88,85 @@ def get_supabase_engine():
         connect_args={"connect_timeout": 5, "options": "-c statement_timeout=60000"},
     )
 
+# 16/07/2026: 2 bảng kiểm soát vận hành ETL còn thiếu theo đúng kế hoạch gốc (skill
+# dnh-realtime-etl-pipeline đã chỉ rõ đây là gap) — theo yêu cầu DNH sau họp 16/07: tập trung
+# "tính chính xác + tính mở rộng", cụ thể là kiểm soát được ETL dễ hơn. KHÔNG đổi filter/upsert
+# logic hiện có — chỉ bổ sung ghi log/watermark sau mỗi bảng đã sync như trước.
+#
+# etl_run_log: LỊCH SỬ đầy đủ, 1 dòng/bảng/lần chạy — trả lời được "lần nào lỗi, lỗi gì, chậm
+# bao lâu, đồng bộ được bao nhiêu dòng" — trước đây không lưu lại được gì, chỉ in ra console rồi
+# mất khi cửa sổ terminal đóng.
+#
+# etl_sync_watermark: TRẠNG THÁI HIỆN TẠI, 1 dòng/bảng (upsert đè), tra cứu nhanh "bảng X lần
+# cuối đồng bộ thành công lúc nào" mà không cần quét etl_run_log — dùng thay cho cách cũ
+# check_etl_freshness_alert phải tự query ad-hoc MAX(SyncAt) trên đúng 1 bảng brv_hoadonct mỗi
+# lần chạy (src/alerts.py::check_etl_freshness_alert), không biết gì về CÁC bảng khác.
+ETL_CONTROL_DDL = """
+CREATE TABLE IF NOT EXISTS etl_run_log (
+    id              BIGSERIAL PRIMARY KEY,
+    table_name      text NOT NULL,
+    run_started_at  timestamp NOT NULL,
+    run_finished_at timestamp,
+    status          text NOT NULL,      -- 'success' | 'failed'
+    rows_synced     integer,
+    rows_purged     integer,
+    error_message   text
+);
+CREATE INDEX IF NOT EXISTS idx_etl_run_log_table_time ON etl_run_log (table_name, run_started_at);
+
+CREATE TABLE IF NOT EXISTS etl_sync_watermark (
+    table_name        text PRIMARY KEY,
+    last_run_at       timestamp NOT NULL,
+    last_success_at   timestamp,
+    last_status       text NOT NULL,
+    rows_synced       integer
+);
+"""
+
+
+def ensure_etl_control_tables(pg_engine):
+    """Tạo etl_run_log/etl_sync_watermark nếu chưa có — an toàn gọi lại nhiều lần (IF NOT EXISTS),
+    không đổi gì nếu bảng đã tồn tại."""
+    with pg_engine.begin() as conn:
+        for stmt in ETL_CONTROL_DDL.strip().split(";"):
+            stmt = stmt.strip()
+            if stmt:
+                conn.execute(text(stmt))
+
+
+def log_sync_run(pg_engine, table_name, started_at, status, rows_synced=None, rows_purged=None, error_message=None):
+    """Ghi 1 dòng lịch sử vào etl_run_log + cập nhật trạng thái mới nhất vào etl_sync_watermark.
+    Lỗi khi ghi log KHÔNG được làm chết cả job đồng bộ chính — chỉ in cảnh báo rồi bỏ qua, đúng
+    tinh thần các log phụ trợ khác trong dự án (vd _log_alert_severity trong src/notifier.py)."""
+    finished_at = datetime.now()
+    if error_message and len(error_message) > 1000:
+        error_message = error_message[:1000] + f"... (cắt bớt, dài {len(error_message)} ký tự)"
+    try:
+        with pg_engine.begin() as conn:
+            conn.execute(text('''
+                INSERT INTO etl_run_log (table_name, run_started_at, run_finished_at, status, rows_synced, rows_purged, error_message)
+                VALUES (:table_name, :started_at, :finished_at, :status, :rows_synced, :rows_purged, :error_message)
+            '''), {
+                "table_name": table_name, "started_at": started_at, "finished_at": finished_at,
+                "status": status, "rows_synced": rows_synced, "rows_purged": rows_purged, "error_message": error_message,
+            })
+            conn.execute(text('''
+                INSERT INTO etl_sync_watermark (table_name, last_run_at, last_success_at, last_status, rows_synced)
+                VALUES (:table_name, :run_at, :success_at, :status, :rows_synced)
+                ON CONFLICT (table_name) DO UPDATE SET
+                    last_run_at = EXCLUDED.last_run_at,
+                    last_success_at = COALESCE(EXCLUDED.last_success_at, etl_sync_watermark.last_success_at),
+                    last_status = EXCLUDED.last_status,
+                    rows_synced = EXCLUDED.rows_synced
+            '''), {
+                "table_name": table_name, "run_at": finished_at,
+                "success_at": finished_at if status == "success" else None,
+                "status": status, "rows_synced": rows_synced,
+            })
+    except Exception as e:
+        print(f"  -> [CẢNH BÁO] Không ghi được etl_run_log/etl_sync_watermark cho '{table_name}' (bỏ qua, không ảnh hưởng sync): {e}")
+
+
 def fetch_table_schema_columns(sql_conn, schema, table_name):
     # Lấy danh sách cột thực tế của bảng SQL Server từ cursor description
     cursor = sql_conn.cursor()
@@ -301,6 +380,7 @@ def run_sync():
     
     sql_conn = get_sql_server_connection()
     pg_engine = get_supabase_engine()
+    ensure_etl_control_tables(pg_engine)
 
     # Cửa sổ trượt "từ ngày 1 tháng TRƯỚC tới hiện tại" (tối thiểu ~30 ngày nếu hôm nay là đầu
     # tháng, tối đa ~62 ngày nếu hôm nay là cuối tháng) — đổi từ lọc cả năm (YEAR(x)=2026) sang đây
@@ -393,7 +473,9 @@ def run_sync():
         filter_cond = item["filter"]
         
         print(f"\n[*] Đang xử lý bảng '{src_table}' -> '{dest_table}'...")
-        
+        run_started_at = datetime.now()
+        rows_purged = None
+
         try:
             # 1. Lấy danh sách cột thực tế của bảng nguồn
             schema, table_name = src_table.split(".")
@@ -422,7 +504,10 @@ def run_sync():
             if purge_sql:
                 with pg_engine.begin() as pg_conn:
                     result = pg_conn.execute(text(purge_sql))
+                rows_purged = result.rowcount
                 print(f"  -> Đã dọn {result.rowcount:,} dòng ngoài cửa sổ trượt khỏi '{dest_table}'.")
+
+            log_sync_run(pg_engine, dest_table, run_started_at, "success", rows_synced=len(df_cleaned), rows_purged=rows_purged)
 
         except Exception as e:
             # SQLAlchemy tự in kèm CẢ câu SQL lẫn TOÀN BỘ tham số bind khi lỗi xảy ra trên câu
@@ -433,6 +518,7 @@ def run_sync():
             if len(err_text) > 500:
                 err_text = err_text[:500] + f"... (cắt bớt, dài {len(err_text)} ký tự)"
             print(f"  -> [THẤT BẠI] Lỗi khi xử lý bảng '{dest_table}': {err_text}")
+            log_sync_run(pg_engine, dest_table, run_started_at, "failed", error_message=err_text)
 
     try:
         sql_conn.close()
