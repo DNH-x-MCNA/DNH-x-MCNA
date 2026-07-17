@@ -212,29 +212,38 @@ DIGEST_EMAIL_TEMPLATE = """
             {% endif %}
 
             <!-- Doanh thu Section -->
+            {% if metrics.channel == 'OTC' %}
+            <div class="section-title">Doanh Thu (OTC)</div>
+            {% elif metrics.channel == 'ETC' %}
+            <div class="section-title">Doanh Thu (ETC)</div>
+            {% else %}
             <div class="section-title">Doanh Thu (OTC + ETC)</div>
+            {% endif %}
             <div class="grid">
                 <!--[if mso]>
-                <table role="presentation" width="100%" style="border-collapse: collapse; border: 0;"><tr><td width="25%" valign="top" style="padding: 8px;">
+                <table role="presentation" width="100%" style="border-collapse: collapse; border: 0;"><tr>
                 <![endif]-->
+                {% if metrics.channel != 'ETC' %}
+                <!--[if mso]><td width="25%" valign="top" style="padding: 8px;"><![endif]-->
                 <div class="col" style="width: 100%; max-width: 145px; padding: 8px;">
                     <div class="kpi-card">
                         <div class="lbl">Doanh Thu OTC</div>
                         <div class="val">{{ "{:,.0f}".format(metrics.revenue.otc) }} đ</div>
                     </div>
                 </div>
-                <!--[if mso]>
-                </td><td width="25%" valign="top" style="padding: 8px;">
-                <![endif]-->
+                <!--[if mso]></td><![endif]-->
+                {% endif %}
+                {% if metrics.channel != 'OTC' %}
+                <!--[if mso]><td width="25%" valign="top" style="padding: 8px;"><![endif]-->
                 <div class="col" style="width: 100%; max-width: 145px; padding: 8px;">
                     <div class="kpi-card">
                         <div class="lbl">Doanh Thu ETC</div>
                         <div class="val">{{ "{:,.0f}".format(metrics.revenue.etc) }} đ</div>
                     </div>
                 </div>
-                <!--[if mso]>
-                </td><td width="25%" valign="top" style="padding: 8px;">
-                <![endif]-->
+                <!--[if mso]></td><![endif]-->
+                {% endif %}
+                <!--[if mso]><td width="25%" valign="top" style="padding: 8px;"><![endif]-->
                 <div class="col" style="width: 100%; max-width: 145px; padding: 8px;">
                     <div class="kpi-card success">
                         <div class="lbl">Tổng Doanh Thu</div>
@@ -251,18 +260,30 @@ DIGEST_EMAIL_TEMPLATE = """
                         {% endif %}
                     </div>
                 </div>
-                <!--[if mso]>
-                </td><td width="25%" valign="top" style="padding: 8px;">
-                <![endif]-->
+                <!--[if mso]></td><![endif]-->
+                <!--[if mso]><td width="25%" valign="top" style="padding: 8px;"><![endif]-->
                 <div class="col" style="width: 100%; max-width: 145px; padding: 8px;">
+                    {% if metrics.channel == 'OTC' %}
+                    <div class="kpi-card">
+                        <div class="lbl">Số Hóa Đơn OTC</div>
+                        <div class="val">{{ metrics.revenue.otc_invoice_count }}</div>
+                    </div>
+                    {% elif metrics.channel == 'ETC' %}
+                    <div class="kpi-card">
+                        <div class="lbl">Số Hóa Đơn ETC</div>
+                        <div class="val">{{ metrics.revenue.etc_invoice_count }}</div>
+                    </div>
+                    {% else %}
                     <div class="kpi-card">
                         <div class="lbl">Số Hóa Đơn (OTC/ETC)</div>
                         <div class="val">{{ metrics.revenue.otc_invoice_count }} / {{ metrics.revenue.etc_invoice_count }}</div>
                         <div class="no-data">Tổng: {{ metrics.revenue.invoice_count }}</div>
                     </div>
+                    {% endif %}
                 </div>
+                <!--[if mso]></td><![endif]-->
                 <!--[if mso]>
-                </td></tr></table>
+                </tr></table>
                 <![endif]-->
             </div>
 
