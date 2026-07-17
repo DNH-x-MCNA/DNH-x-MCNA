@@ -395,6 +395,23 @@ def _highlight_matches_channel(alert_key, channel):
         return channel == "ETC"
     return True
 
+def _highlight_matches_region(prefix, region):
+    """17/07/2026: True nếu highlight loại `prefix` nên hiện cho audience đã lọc theo `region`
+    (None = không giới hạn vùng, C-Level/Toàn quốc — luôn hiện tất cả). Phát hiện qua Daily Digest
+    "Quản lý Miền Trung" 17/07/2026 vẫn hiện thẳng mã khách hàng NGOÀI vùng (HNA00274, HCM04298) từ
+    cảnh báo customer_churn.
+
+    Khác _highlight_matches_channel (lọc được vì alert_key có gắn literal 'OTC'/'ETC'), bảng
+    sent_alerts KHÔNG lưu vùng của alert đã fire — chỉ lưu alert_key + giá trị cuối. Một số alert
+    (zero_sales_rep, kpi_daily_pace_red, kpi_milestone_tdv...) THẬT SỰ có tính vùng khi gửi Teams
+    (tham số region= suy ra động từ dữ liệu, xem send_alert_to_all_channels trong src/alerts.py),
+    nhưng giá trị vùng đó không được ghi lại vào sent_alerts nên không cách nào đọc lại được ở đây;
+    số còn lại hardcode region="Toàn quốc" (không có breakdown theo vùng trong kiến trúc hiện tại).
+    Vì KHÔNG có alert nào xác minh được đúng vùng audience đang xem, chọn fail-closed triệt để: ẩn
+    HẲN mọi highlight khỏi báo cáo đã scope theo vùng, thay vì hiện nhầm dữ liệu vùng khác (theo
+    yêu cầu — báo cáo vùng chỉ nên chứa đúng thứ thuộc vùng đó, thà trống còn hơn sai)."""
+    return region is None
+
 def _format_highlight_date_part(part):
     """Nếu 1 mảnh suffix của alert_key là ngày/tháng (YYYY-MM-DD, YYYY-MM, hoặc "M_YYYY" — định
     dạng period dùng ở receivable_detail/check_debt_aging_migration_alert), đổi sang định dạng
@@ -488,7 +505,7 @@ def _humanize_highlight(alert_key, sent_at, value):
 
 _HIGHLIGHTS_MAX_ROWS = 15  # xem _get_period_highlights — trần số dòng hiển thị sau khi đã gộp nhóm
 
-def _get_period_highlights(start_dt, end_dt, channel=None):
+def _get_period_highlights(start_dt, end_dt, channel=None, region=None):
     """"Điểm nổi bật trong kỳ": các cảnh báo nghiệp vụ đã THỰC SỰ fire trong [start_dt, end_dt),
     đọc từ data/alerts_state.db (bảng sent_alerts, ghi bởi src/alerts.py::record_alert_sent) —
     nối luồng cảnh báo thời gian thực với báo cáo định kỳ thành 1 câu chuyện liền mạch. Mỗi dòng
@@ -501,7 +518,8 @@ def _get_period_highlights(start_dt, end_dt, channel=None):
 
     17/07/2026: thêm `channel` — lọc bỏ highlight thuộc kênh KHÁC audience đang xem (xem
     _highlight_matches_channel). channel=None giữ nguyên hành vi cũ (không lọc gì, dùng cho
-    audience C-Level/Toàn quốc)."""
+    audience C-Level/Toàn quốc). Thêm `region` cùng đợt — lọc bỏ highlight LỘ DANH TÍNH khách hàng
+    cụ thể khi audience đã scope theo vùng (xem _highlight_matches_region)."""
     if not os.path.exists(STATE_DB_PATH):
         return []
     try:
@@ -525,6 +543,8 @@ def _get_period_highlights(start_dt, end_dt, channel=None):
         if prefix in _HIGHLIGHT_EXCLUDE_PREFIXES:
             continue
         if not _highlight_matches_channel(r[0], channel):
+            continue
+        if not _highlight_matches_region(prefix, region):
             continue
         group_key = _highlight_group_key(r[0])
         if group_key in seen_groups:
@@ -865,7 +885,7 @@ def get_digest_metrics(start_dt, end_dt, period_label, granularity=None, region=
     # "Điểm Nổi Bật Trong Kỳ" dù trong ngày có cảnh báo CRITICAL thật (vd tỷ lệ nợ quá hạn, khách
     # nợ quá hạn vẫn lên đơn mới...) đã bắn qua Teams. Bật cho mọi granularity — chi phí không đáng
     # kể (1 query SQLite cục bộ, không đụng Bravo/Supabase).
-    highlights = _get_period_highlights(start_dt, end_dt, channel=channel)
+    highlights = _get_period_highlights(start_dt, end_dt, channel=channel, region=region)
     has_critical = _period_has_critical(start_dt, end_dt)
 
     result = {
