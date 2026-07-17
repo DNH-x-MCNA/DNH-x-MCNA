@@ -50,7 +50,7 @@ def zone_to_qlv_map() -> dict:
         real = _q("""
             SELECT employee_code, name FROM dim_nhanvien
             WHERE position_code='QLV' AND end_date IS NULL AND COALESCE(is_resigned,0)<>1
-              AND name=? LIMIT 1
+              AND COALESCE(is_duplicate,0)<>1 AND name=? LIMIT 1
         """, (base_name,))
         result[zone] = {"employee_code": real[0]["employee_code"], "name": real[0]["name"]} if real else None
     return result
