@@ -666,7 +666,8 @@ def revenue_tree(as_of_date: str = None, area_code: str = None, scope_area_code:
     if not fdate:
         return {"as_of": None, "tree": []}
 
-    tp_sql = "SELECT employee_code, name, area_code FROM dim_nhanvien WHERE position_code='TP' AND end_date IS NULL AND COALESCE(is_resigned,0)<>1"
+    tp_sql = ("SELECT employee_code, name, area_code FROM dim_nhanvien WHERE position_code='TP' "
+              "AND end_date IS NULL AND COALESCE(is_resigned,0)<>1 AND COALESCE(is_duplicate,0)<>1")
     tp_params = ()
     if area_code:
         tp_sql += " AND area_code=?"
@@ -677,7 +678,7 @@ def revenue_tree(as_of_date: str = None, area_code: str = None, scope_area_code:
     for tp in tp_rows:
         tp_kpi = _kpi_snapshot(tp["employee_code"], fdate)
         qlv_sql = ("SELECT employee_code, name FROM dim_nhanvien WHERE position_code='QLV' AND area_code=? "
-                   "AND end_date IS NULL AND COALESCE(is_resigned,0)<>1")
+                   "AND end_date IS NULL AND COALESCE(is_resigned,0)<>1 AND COALESCE(is_duplicate,0)<>1")
         qlv_params = [tp["area_code"]]
         if scope_employee_code:
             qlv_sql += " AND employee_code=?"
@@ -736,7 +737,8 @@ def kpi_ranking(group_by: str = "qlv", as_of_date: str = None, limit: int = 20,
         return sorted(rows, key=lambda x: -x["pct"])[:limit]
 
     # group_by == "qlv"
-    qlv_sql = "SELECT employee_code, name, area_code FROM dim_nhanvien WHERE position_code='QLV' AND end_date IS NULL AND COALESCE(is_resigned,0)<>1"
+    qlv_sql = ("SELECT employee_code, name, area_code FROM dim_nhanvien WHERE position_code='QLV' "
+               "AND end_date IS NULL AND COALESCE(is_resigned,0)<>1 AND COALESCE(is_duplicate,0)<>1")
     params = []
     if scope_area_code:
         qlv_sql += " AND area_code=?"
