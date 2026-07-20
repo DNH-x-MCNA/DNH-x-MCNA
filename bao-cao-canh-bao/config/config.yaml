@@ -88,7 +88,11 @@ thresholds:
   business:
     revenue_drop_pct: 0.20        # Doanh thu tháng mới nhất giảm > 20% so với tháng liền trước
     # comparison_mode: "mom"      # mom = so tháng liền kề (đang dùng); "yoy" = cùng kỳ năm trước (chờ DNH chốt)
-    overdue_ratio_pct: 0.35       # Tổng nợ quá hạn / tổng dư nợ toàn công ty vượt 35%
+    # 16/07/2026: tách riêng theo kênh thay vì 1 ngưỡng chung 35% — thực tế (đã loại rác dữ liệu
+    # <50k) OTC ~93%, ETC ~81%, ngưỡng cũ luôn bị vi phạm nên mất tác dụng cảnh báo. Vẫn TẠM THỜI,
+    # chờ DNH xác nhận date-basis chính thức (xem skill dnh-debt-aging-schema) mới chốt lại.
+    overdue_ratio_pct_otc: 0.80   # Kênh OTC: nợ quá hạn/tổng dư nợ vượt 80%
+    overdue_ratio_pct_etc: 0.65   # Kênh ETC: nợ quá hạn/tổng dư nợ vượt 65%
     dead_stock_months: 12.0       # Tồn "chết": months_to_sell >= 12 tháng
     dead_stock_min_value: 50000000    # ...và giá trị tồn > 50 triệu (mới đáng cảnh báo vốn đọng)
     customer_churn_drop_pct: 0.50 # Khách lớn: doanh số tháng mới nhất rớt > 50% so tháng trước
@@ -106,6 +110,13 @@ thresholds:
     kpi_pace_red_alert_count: 5      # >= 5 TDV đỏ trong ngày -> gửi alert
     kpi_milestone_drop_pct: 0.05     # giảm > 5% tại mốc ngày 10/20 so với TB 5 tháng trước -> alert
     kpi_milestone_lookback_months: 5 # số tháng liền trước dùng để tính trung bình
+
+    # 16/07/2026: đối chiếu doanh thu OTC (hóa đơn Bravo) với bảng KPI tháng hiện tại, cộng theo
+    # DISTINCT khách hàng (miễn nhiễm lỗi gắn cờ IsDuplicate ở bất kỳ cấp nhân viên nào) — xem
+    # check_kpi_revenue_reconciliation_alert. Verify khớp TUYỆT ĐỐI (lệch = 0 đồng, 4/4 tháng
+    # test). ZERO-TOLERANCE theo yêu cầu — lệch dù chỉ 1 đơn/1 đồng cũng phải báo, KHÔNG có vùng
+    # đệm nào (0 = tắt hẳn dung sai, không phải "gần như tắt").
+    kpi_reconciliation_tolerance_vnd: 0
     kpi_milestone_min_prev: 10000000 # TB lũy kế 5 tháng trước phải > 10 triệu mới xét (tránh chia ~0)
 
   # Ngưỡng KPI nhân sự khối kinh doanh OTC MIỀN NAM — trích từ QĐ 0429-2/QĐ-HĐQT.25 (5 phụ lục:
@@ -143,11 +154,14 @@ alert_feature_flags:
   near_expiry_check: false    # cần cột ExpiryDate lô hàng (map lô -> hạn dùng) trong mart tồn kho
   etl_freshness_check: false  # TẠM TẮT: đang trỏ CLOUD_DB_URL sang Supabase dev/test (snapshot
                                # tĩnh, SyncAt không tăng) -> bật lại true khi đổi CLOUD_DB_URL về production
-  kpi_sales_force_risk_check: false  # TẠM TẮT: kpi_summary hiện 100% area_code='MB2' (miền Bắc),
-                                      # CHƯA có dòng nào miền Nam -> query lọc area_code LIKE 'MN%'
-                                      # nên sẽ luôn trả rỗng (an toàn, không báo nhầm ngưỡng miền Nam
-                                      # cho nhân sự miền Bắc). Bật true khi DNH bổ sung ETL nguồn miền
-                                      # Nam vào kpi_summary VÀ đã xác nhận legend position_code CS/TK.
+  kpi_sales_force_risk_check: false  # 16/07/2026: VẪN TẮT — lý do tắt cũ ("kpi_summary 100% miền
+                                      # Bắc") đã không còn đúng (nhánh Bravo chính đã có đủ dữ liệu
+                                      # Miền Nam/Trung, xác nhận thực tế 16/07: 33 nhân sự vi phạm,
+                                      # 7 người đủ điều kiện "2 tháng liên tiếp" — xem
+                                      # get_bravo_last_n_complete_months), NHƯNG đây là cảnh báo nêu
+                                      # đích danh nhân sự có nguy cơ chấm dứt HĐLĐ gửi lên Teams —
+                                      # cần XÁC NHẬN RÕ RÀNG RIÊNG từ người dùng trước khi bật thật,
+                                      # không tự ý bật cùng lúc với việc sửa logic 2-tháng-liên-tiếp.
 
 # Cấu hình Chu kỳ chạy (giây hoặc phút)
 # LƯU Ý: cảnh báo thời gian thực chính nay trigger ngay sau mỗi lần đồng bộ Bravo (xem
@@ -162,3 +176,15 @@ scheduler:
   etl_check_interval_seconds: 3600  # Quét dự phòng mỗi 1 giờ — lưới an toàn, không phải nguồn trigger chính
   daily_digest_time: "17:45"        # Tham khảo — giờ thật đăng ký trong DNH_Daily_Digest_1745
   weekly_digest_day: "Monday"       # Tham khảo — giờ thật đăng ký trong DNH_Weekly_Report
+
+  # 15/07/2026: chỉ gửi cảnh báo nghiệp vụ thời gian thực (Teams) trong giờ hành chính — trước đó
+  # vòng lặp dự phòng (etl_check_interval_seconds, chạy 24/7 không phân biệt giờ) vẫn bắn cảnh báo
+  # CRITICAL lúc nửa đêm/rạng sáng (vd 23:09, 00:10, 05:19), gây phiền vô ích ngoài giờ làm việc.
+  # Áp dụng cho run_all_alert_checks() nói chung (cả nhánh trigger theo lịch đồng bộ Bravo lẫn vòng
+  # lặp dự phòng) — ngoài khung giờ này, TOÀN BỘ chu kỳ quét bị bỏ qua (không đánh giá, không ghi
+  # nhận đã gửi), để lần quét tiếp theo TRONG giờ hành chính tự đánh giá lại từ đầu, không mất
+  # cảnh báo thật nào, chỉ trì hoãn tới giờ làm việc. KHÔNG ảnh hưởng Daily/Weekly/Monthly Digest
+  # (chạy qua scheduled task riêng, đã tự trong giờ hành chính sẵn).
+  alert_business_hours_start: "08:00"
+  alert_business_hours_end: "18:00"
+  alert_business_days: [1, 2, 3, 4, 5]  # 1=Thứ 2 ... 7=Chủ nhật (ISO weekday) — hiện T2-T6

@@ -88,6 +88,85 @@ def get_supabase_engine():
         connect_args={"connect_timeout": 5, "options": "-c statement_timeout=60000"},
     )
 
+# 16/07/2026: 2 bảng kiểm soát vận hành ETL còn thiếu theo đúng kế hoạch gốc (skill
+# dnh-realtime-etl-pipeline đã chỉ rõ đây là gap) — theo yêu cầu DNH sau họp 16/07: tập trung
+# "tính chính xác + tính mở rộng", cụ thể là kiểm soát được ETL dễ hơn. KHÔNG đổi filter/upsert
+# logic hiện có — chỉ bổ sung ghi log/watermark sau mỗi bảng đã sync như trước.
+#
+# etl_run_log: LỊCH SỬ đầy đủ, 1 dòng/bảng/lần chạy — trả lời được "lần nào lỗi, lỗi gì, chậm
+# bao lâu, đồng bộ được bao nhiêu dòng" — trước đây không lưu lại được gì, chỉ in ra console rồi
+# mất khi cửa sổ terminal đóng.
+#
+# etl_sync_watermark: TRẠNG THÁI HIỆN TẠI, 1 dòng/bảng (upsert đè), tra cứu nhanh "bảng X lần
+# cuối đồng bộ thành công lúc nào" mà không cần quét etl_run_log — dùng thay cho cách cũ
+# check_etl_freshness_alert phải tự query ad-hoc MAX(SyncAt) trên đúng 1 bảng brv_hoadonct mỗi
+# lần chạy (src/alerts.py::check_etl_freshness_alert), không biết gì về CÁC bảng khác.
+ETL_CONTROL_DDL = """
+CREATE TABLE IF NOT EXISTS etl_run_log (
+    id              BIGSERIAL PRIMARY KEY,
+    table_name      text NOT NULL,
+    run_started_at  timestamp NOT NULL,
+    run_finished_at timestamp,
+    status          text NOT NULL,      -- 'success' | 'failed'
+    rows_synced     integer,
+    rows_purged     integer,
+    error_message   text
+);
+CREATE INDEX IF NOT EXISTS idx_etl_run_log_table_time ON etl_run_log (table_name, run_started_at);
+
+CREATE TABLE IF NOT EXISTS etl_sync_watermark (
+    table_name        text PRIMARY KEY,
+    last_run_at       timestamp NOT NULL,
+    last_success_at   timestamp,
+    last_status       text NOT NULL,
+    rows_synced       integer
+);
+"""
+
+
+def ensure_etl_control_tables(pg_engine):
+    """Tạo etl_run_log/etl_sync_watermark nếu chưa có — an toàn gọi lại nhiều lần (IF NOT EXISTS),
+    không đổi gì nếu bảng đã tồn tại."""
+    with pg_engine.begin() as conn:
+        for stmt in ETL_CONTROL_DDL.strip().split(";"):
+            stmt = stmt.strip()
+            if stmt:
+                conn.execute(text(stmt))
+
+
+def log_sync_run(pg_engine, table_name, started_at, status, rows_synced=None, rows_purged=None, error_message=None):
+    """Ghi 1 dòng lịch sử vào etl_run_log + cập nhật trạng thái mới nhất vào etl_sync_watermark.
+    Lỗi khi ghi log KHÔNG được làm chết cả job đồng bộ chính — chỉ in cảnh báo rồi bỏ qua, đúng
+    tinh thần các log phụ trợ khác trong dự án (vd _log_alert_severity trong src/notifier.py)."""
+    finished_at = datetime.now()
+    if error_message and len(error_message) > 1000:
+        error_message = error_message[:1000] + f"... (cắt bớt, dài {len(error_message)} ký tự)"
+    try:
+        with pg_engine.begin() as conn:
+            conn.execute(text('''
+                INSERT INTO etl_run_log (table_name, run_started_at, run_finished_at, status, rows_synced, rows_purged, error_message)
+                VALUES (:table_name, :started_at, :finished_at, :status, :rows_synced, :rows_purged, :error_message)
+            '''), {
+                "table_name": table_name, "started_at": started_at, "finished_at": finished_at,
+                "status": status, "rows_synced": rows_synced, "rows_purged": rows_purged, "error_message": error_message,
+            })
+            conn.execute(text('''
+                INSERT INTO etl_sync_watermark (table_name, last_run_at, last_success_at, last_status, rows_synced)
+                VALUES (:table_name, :run_at, :success_at, :status, :rows_synced)
+                ON CONFLICT (table_name) DO UPDATE SET
+                    last_run_at = EXCLUDED.last_run_at,
+                    last_success_at = COALESCE(EXCLUDED.last_success_at, etl_sync_watermark.last_success_at),
+                    last_status = EXCLUDED.last_status,
+                    rows_synced = EXCLUDED.rows_synced
+            '''), {
+                "table_name": table_name, "run_at": finished_at,
+                "success_at": finished_at if status == "success" else None,
+                "status": status, "rows_synced": rows_synced,
+            })
+    except Exception as e:
+        print(f"  -> [CẢNH BÁO] Không ghi được etl_run_log/etl_sync_watermark cho '{table_name}' (bỏ qua, không ảnh hưởng sync): {e}")
+
+
 def fetch_table_schema_columns(sql_conn, schema, table_name):
     # Lấy danh sách cột thực tế của bảng SQL Server từ cursor description
     cursor = sql_conn.cursor()
@@ -164,101 +243,194 @@ def upsert_to_supabase(table_name, df, pg_engine, key_columns):
 
 def sync_inventory_from_bravo(dry_run=False):
     """
-    Tính toán bảng inventory (tồn kho) từ dữ liệu thô Bravo:
-      - BRV_TheKhoLot + BRV_TonKhoDK + BRV_SanPham  (OTC)
-      - BRVSX_TheKhoLot + BRVSX_TonKhoDK + BRVSX_SanPham  (ETC)
-    rồi UPSERT lên Supabase bảng `inventory` (PK = item_code + channel).
+    Tính toán bảng inventory (tồn kho) từ dữ liệu Bravo — dùng ĐÚNG nguồn/công thức gốc DNH
+    (usp_StockLotFinance_Report, DNH cung cấp 17/07/2026), rồi UPSERT lên Supabase bảng `inventory`
+    (PK = item_code + channel).
 
-    Công thức:
-      opening_qty  = SUM(TonKhoDK.Quantity) cho năm tài chính hiện tại
-      inward_qty   = SUM(TheKhoLot.ReceiptQuantity) cho năm tài chính hiện tại
-      outward_qty  = SUM(TheKhoLot.IssueQuantity) cho năm tài chính hiện tại
-      closing_qty  = opening_qty + inward_qty - outward_qty
-      months_to_sell = closing_qty / (outward_qty / months_elapsed)  [0 nếu không bán]
-      closing_value  = 0  (tạm — BRV_TonKhoDK.Amount phần lớn = 0, chờ DNH xác nhận nguồn)
+    17/07/2026: SỬA LỚN sau khi phát hiện + ĐỊNH LƯỢNG 3 lỗi bằng cách so sánh trực tiếp với SP gốc
+    trên dữ liệu Bravo thật:
 
-    Tách riêng OTC / ETC thành 2 dòng (cùng item_code có thể xuất hiện ở cả 2 kênh).
+    1. THIẾU QUY ĐỔI ĐƠN VỊ (bug thật, không phải chỉ khác công thức): bảng thô BRV_TheKhoLot/
+       BRVSX_TheKhoLot KHÔNG có cột đơn vị — luôn ghi theo đơn vị giao dịch nhỏ nhất, trong khi tên/
+       đơn vị hiển thị cho người dùng lấy từ SanPham.UnitDMS (đơn vị LỚN HƠN, vd 1 Hộp = 28 Viên).
+       Code cũ cộng thẳng Quantity thô không quy đổi -> closing_qty của một số mặt hàng ETC (185/8598
+       = 2,2% mặt hàng có ConvertRateDMS != 1) bị TĂNG ẢO tới hàng chục lần (xác nhận cụ thể: mặt
+       hàng "NewChoice LEVO-FEM FE" lệch đúng 28,0 lần = ConvertRateDMS thật của mặt hàng đó). SỬA:
+       đổi nguồn sang view vTheKhoLot/vTonKhoDKLot (DNH đã tự quy đổi sẵn QuantityDMS/
+       ReceiptQuantityDMS/IssueQuantityDMS).
+
+    2. CÔNG THỨC VẬN TỐC BÁN SAI BẢN CHẤT: outward_qty cũ = MỌI lượt xuất kho (kể cả chuyển kho nội
+       bộ/hủy, không phải bán thật), tính TỪ ĐẦU NĂM DƯƠNG LỊCH tới nay (mẫu số quá nhỏ đầu năm — vd
+       tháng 2 chỉ ~1,5 tháng — ước lượng cực không ổn định). SP gốc DNH tính từ DOANH SỐ BÁN THẬT
+       (loại hàng khuyến mãi UnitPrice=0) trong 6 THÁNG GẦN NHẤT ĐÃ HOÀN TẤT (rolling window, ổn định
+       quanh năm), chia cho số THÁNG THẬT CÓ PHÁT SINH (không cố định /6). SỬA: dùng
+       dbo.vHoaDonTotal (OTC)/dbo.vHoaDonETCTotal (ETC) — ĐÚNG nguồn doanh thu đã kiểm chứng dùng
+       xuyên suốt repo (_period_revenue, verify_revenue_consistency.py 16/16 khớp), lọc UnitPrice>0,
+       cửa sổ 6 tháng ĐÃ HOÀN TẤT gần nhất (loại tháng hiện tại đang chạy dở — cùng nguyên tắc
+       get_bravo_last_n_complete_months trong src/alerts.py đã kiểm chứng cho KPI).
+
+    3. (Thử lần 1, ĐÃ SỬA LẠI) từng map ClassCode ('TM'/'SX' trong vTheKhoLot/vTonKhoDKLot) thẳng
+       sang kênh OTC/ETC — SAI, phát hiện qua đối chiếu thực tế: mặt hàng "Siro thuốc ho bổ phế Nam
+       Hà" có tồn kho ghi nhận ở ClassCode='SX' nhưng bán 100% qua vHoaDonTotal (OTC), 0 dòng ở
+       vHoaDonETCTotal. Xác nhận thêm 372/401 mặt hàng OTC (93%) CŨNG có trong danh mục ETC
+       (BRVSX_SanPham) — trùng mã phổ biến. Thử gộp cả 2 ClassCode thành 1 kho chung (giống RepType=1
+       của SP) rồi tách kênh theo danh mục — nhưng lại làm MẤT PHẠM VI: view vTonKhoDKLot/vTheKhoLot
+       chỉ phủ hàng CÓ THEO DÕI LÔ (IsItemWithLot=1) — chỉ 117/195 mã OTC và 216/2957 mã ETC có biến
+       động thật trong bảng thô khớp được với view (view "biến mất" ~93% mặt hàng ETC, ~40% mặt hàng
+       OTC không theo dõi lô). SỬA LẠI (bản cuối): OTC giữ NGUYÊN bảng thô như code gốc (BRV_SanPham
+       không có cột ConvertRateDMS/UnitDMS — xác nhận KHÔNG có lỗi quy đổi đơn vị, không cần đổi gì).
+       Riêng ETC dùng HYBRID theo IsItemWithLot: hàng có lô (IsItemWithLot=1) lấy từ view
+       vTonKhoDKLot/vTheKhoLot lọc ClassCode='SX' (khớp đúng BRVSX_Lot theo SP gốc — mục RepType=0,
+       LotCatg CTE: 'SX' ClassCode ứng với BRVSX_Lot, 'TM' ứng với BRV_Lot — 1 bảng lô KHÁC, thuộc hệ
+       thống nào chưa đủ bằng chứng để gộp vào ETC, không tự ý dùng); hàng không lô (IsItemWithLot=0
+       hoặc NULL) lấy từ bảng thô BRVSX_TonKhoDK/BRVSX_TheKhoLot NHƯNG tự chia cho ConvertRateDMS của
+       từng mặt hàng (sửa luôn lỗi #1 cho 12/185 mặt hàng không-lô còn sót, không chỉ riêng hàng có
+       lô) — vừa giữ đủ phạm vi bảng thô, vừa sửa đúng lỗi quy đổi đơn vị cho toàn bộ danh mục ETC.
+
+    Công thức CUỐI:
+      OTC: closing_qty = SUM(BRV_TonKhoDK.Quantity) + SUM(BRV_TheKhoLot.Receipt-IssueQuantity) — bảng thô,
+           không quy đổi (không cần, xem mục 3).
+      ETC (hàng có lô): closing_qty = SUM(vTonKhoDKLot.QuantityDMS) + SUM(vTheKhoLot.Receipt/IssueQuantityDMS),
+           lọc ClassCode='SX' — đã quy đổi DMS sẵn từ view.
+      ETC (hàng không lô): closing_qty = [SUM(BRVSX_TonKhoDK.Quantity) + SUM(BRVSX_TheKhoLot.Receipt-IssueQuantity)] / ConvertRateDMS.
+      avg_monthly_sales  = SUM(Quantity thật từ vHoaDonTotal (OTC)/vHoaDonETCTotal (ETC), UnitPrice>0)
+                           / số tháng THẬT có phát sinh, trong cửa sổ 6 tháng đã hoàn tất gần nhất
+      months_to_sell     = closing_qty / avg_monthly_sales  [9999 nếu không có doanh số bán trong cửa sổ]
+      closing_value      = 0  (tạm — chờ DNH xác nhận nguồn, không đổi so với trước)
+
     dry_run=True chỉ in kết quả, không upsert.
     """
     print("\n" + "=" * 60)
     print("ĐỒNG BỘ TỒN KHO: BRAVO -> SUPABASE (inventory)")
     print("=" * 60)
 
-    fiscal_year = str(datetime.now().year)
-    # Số tháng đã trôi qua từ đầu năm (dùng tính avg_monthly_sales)
     now = datetime.now()
-    months_elapsed = (now.month - 1) + now.day / 30.0  # xấp xỉ, đủ chính xác cho months_to_sell
-    if months_elapsed < 0.5:
-        months_elapsed = 0.5  # tránh chia 0 đầu tháng 1
+    fiscal_year = str(now.year)
+
+    # Cửa sổ 6 tháng ĐÃ HOÀN TẤT gần nhất (loại tháng hiện tại đang chạy dở) — xem lý do ở docstring.
+    window_end = datetime(now.year, now.month, 1)  # đầu tháng này (mốc trên, không bao gồm)
+    wy, wm = now.year, now.month - 6
+    while wm <= 0:
+        wm += 12
+        wy -= 1
+    window_start = datetime(wy, wm, 1)
 
     sql_conn = get_sql_server_connection()
 
-    # Cấu hình 2 kênh: (channel_label, SanPham_table, TonKhoDK_table, TheKhoLot_table, year_col)
-    channel_configs = [
-        ("OTC", "BRV_SanPham", "BRV_TonKhoDK", "BRV_TheKhoLot", "FiscalYear"),
-        ("ETC", "BRVSX_SanPham", "BRVSX_TonKhoDK", "BRVSX_TheKhoLot", "FiscalYear"),
-    ]
-
-    all_rows = []
-    for channel, sp_tbl, dk_tbl, tk_tbl, yr_col in channel_configs:
-        # BRVSX_TonKhoDK dùng cột "Year" thay vì "FiscalYear"
-        # Kiểm tra tên cột thực tế
-        cursor = sql_conn.cursor()
-        cursor.execute(f"SELECT TOP 1 * FROM [{dk_tbl}]")
-        dk_cols = [col[0] for col in cursor.description]
-        cursor.close()
-        actual_yr_col = "FiscalYear" if "FiscalYear" in dk_cols else "Year"
-
-        query = f"""
-            SELECT s.Code AS item_code, s.Name AS item_name, s.Unit AS unit,
-                ISNULL(dk.open_qty, 0) AS opening_qty,
-                ISNULL(tk.total_receipt, 0) AS inward_qty,
-                ISNULL(tk.total_issue, 0) AS outward_qty
-            FROM [{sp_tbl}] s
-            LEFT JOIN (
-                SELECT ItemId, SUM(Quantity) AS open_qty
-                FROM [{dk_tbl}] WHERE [{actual_yr_col}] = ?
-                GROUP BY ItemId
-            ) dk ON dk.ItemId = s.Id
-            LEFT JOIN (
-                SELECT ItemId,
-                    SUM(ReceiptQuantity) AS total_receipt,
-                    SUM(IssueQuantity) AS total_issue
-                FROM [{tk_tbl}] WHERE FiscalYear = ?
-                GROUP BY ItemId
-            ) tk ON tk.ItemId = s.Id
-            WHERE ISNULL(dk.open_qty, 0) + ISNULL(tk.total_receipt, 0) + ISNULL(tk.total_issue, 0) > 0
+    # ---- 1a. OTC — GIỮ NGUYÊN bảng thô như code gốc (không có lỗi quy đổi đơn vị, xem docstring
+    # mục 3) ----
+    df_otc = pd.read_sql(
         """
-        df = pd.read_sql(query, sql_conn, params=[fiscal_year, fiscal_year])
-        df["channel"] = channel
-        print(f"  [{channel}] Đọc {len(df):,} mặt hàng có biến động năm {fiscal_year} từ Bravo.")
-        all_rows.append(df)
+        SELECT s.Code AS ItemCode, s.Name AS item_name, s.Unit AS unit,
+            ISNULL(dk.open_qty, 0) AS opening_qty,
+            ISNULL(tk.total_receipt, 0) AS inward_qty,
+            ISNULL(tk.total_issue, 0) AS outward_qty
+        FROM BRV_SanPham s
+        LEFT JOIN (
+            SELECT ItemId, SUM(Quantity) AS open_qty FROM BRV_TonKhoDK WHERE FiscalYear = ? GROUP BY ItemId
+        ) dk ON dk.ItemId = s.Id
+        LEFT JOIN (
+            SELECT ItemId, SUM(ReceiptQuantity) AS total_receipt, SUM(IssueQuantity) AS total_issue
+            FROM BRV_TheKhoLot WHERE FiscalYear = ? GROUP BY ItemId
+        ) tk ON tk.ItemId = s.Id
+        WHERE ISNULL(dk.open_qty, 0) + ISNULL(tk.total_receipt, 0) + ISNULL(tk.total_issue, 0) <> 0
+        """, sql_conn, params=[fiscal_year, fiscal_year])
+    df_otc["closing_qty"] = df_otc["opening_qty"] + df_otc["inward_qty"] - df_otc["outward_qty"]
+    df_otc = df_otc[df_otc["closing_qty"] != 0].copy()
+    df_otc["channel"] = "OTC"
+    df_otc = df_otc.rename(columns={"ItemCode": "item_code"})
+    print(f"  [OTC] {len(df_otc):,} mặt hàng có tồn kho ròng khác 0 (bảng thô, không cần quy đổi đơn vị).")
 
-    if not all_rows:
-        print("  -> Không có dữ liệu tồn kho nào từ Bravo.")
-        try:
-            sql_conn.close()
-        except:
-            pass
-        return
+    # ---- 1b. ETC — hybrid: hàng có lô (IsItemWithLot=1) dùng view đã quy đổi DMS sẵn (ClassCode='SX'
+    # — khớp đúng BRVSX_Lot theo SP gốc); hàng không lô dùng bảng thô + TỰ chia ConvertRateDMS (sửa
+    # đúng lỗi #1 cho cả phần không-lô, không chỉ hàng có lô) ----
+    df_etc_lot_open = pd.read_sql(
+        "SELECT ItemCode, UnitDMS, SUM(QuantityDMS) AS opening_qty FROM vTonKhoDKLot "
+        "WHERE Year = ? AND ClassCode = 'SX' GROUP BY ItemCode, UnitDMS", sql_conn, params=[fiscal_year])
+    df_etc_lot_flow = pd.read_sql(
+        "SELECT ItemCode, UnitDMS, SUM(ReceiptQuantityDMS) AS inward_qty, SUM(IssueQuantityDMS) AS outward_qty "
+        "FROM vTheKhoLot WHERE FiscalYear = ? AND ClassCode = 'SX' GROUP BY ItemCode, UnitDMS", sql_conn, params=[fiscal_year])
+    df_etc_lot = pd.merge(df_etc_lot_open, df_etc_lot_flow, on=["ItemCode", "UnitDMS"], how="outer")
+    for c in ("opening_qty", "inward_qty", "outward_qty"):
+        df_etc_lot[c] = df_etc_lot[c].fillna(0.0)
+    df_etc_lot["closing_qty"] = df_etc_lot["opening_qty"] + df_etc_lot["inward_qty"] - df_etc_lot["outward_qty"]
+    df_etc_lot = df_etc_lot[df_etc_lot["closing_qty"] != 0].copy()
+    df_etc_lot = df_etc_lot.rename(columns={"UnitDMS": "unit"})
+    lot_item_codes = set(df_etc_lot["ItemCode"])
+    print(f"  [ETC-lô] {len(df_etc_lot):,} mặt hàng có tồn kho ròng khác 0 (view đã quy đổi DMS).")
 
-    df_all = pd.concat(all_rows, ignore_index=True)
+    df_etc_raw = pd.read_sql(
+        """
+        SELECT s.Code AS ItemCode, s.Name AS item_name, s.Unit AS unit,
+            ISNULL(s.ConvertRateDMS, 1.0) AS convert_rate,
+            ISNULL(dk.open_qty, 0) AS opening_qty_raw,
+            ISNULL(tk.total_receipt, 0) AS inward_qty_raw,
+            ISNULL(tk.total_issue, 0) AS outward_qty_raw
+        FROM BRVSX_SanPham s
+        LEFT JOIN (
+            SELECT ItemId, SUM(Quantity) AS open_qty FROM BRVSX_TonKhoDK WHERE Year = ? GROUP BY ItemId
+        ) dk ON dk.ItemId = s.Id
+        LEFT JOIN (
+            SELECT ItemId, SUM(ReceiptQuantity) AS total_receipt, SUM(IssueQuantity) AS total_issue
+            FROM BRVSX_TheKhoLot WHERE FiscalYear = ? GROUP BY ItemId
+        ) tk ON tk.ItemId = s.Id
+        WHERE ISNULL(s.IsItemWithLot, 0) = 0
+          AND ISNULL(dk.open_qty, 0) + ISNULL(tk.total_receipt, 0) + ISNULL(tk.total_issue, 0) <> 0
+        """, sql_conn, params=[fiscal_year, fiscal_year])
+    # Loại các mã ĐÃ lấy từ view có lô ở trên (phòng trường hợp IsItemWithLot ghi chưa nhất quán với
+    # việc mã đó THẬT SỰ có xuất hiện trong view Lot hay không) — tránh đếm trùng.
+    df_etc_raw = df_etc_raw[~df_etc_raw["ItemCode"].isin(lot_item_codes)].copy()
+    for c in ("opening_qty_raw", "inward_qty_raw", "outward_qty_raw"):
+        df_etc_raw[c] = df_etc_raw[c] / df_etc_raw["convert_rate"].replace(0, 1.0)
+    df_etc_raw = df_etc_raw.rename(columns={
+        "opening_qty_raw": "opening_qty", "inward_qty_raw": "inward_qty", "outward_qty_raw": "outward_qty"})
+    df_etc_raw["closing_qty"] = df_etc_raw["opening_qty"] + df_etc_raw["inward_qty"] - df_etc_raw["outward_qty"]
+    df_etc_raw = df_etc_raw[df_etc_raw["closing_qty"] != 0].copy()
+    df_etc_raw = df_etc_raw.drop(columns=["convert_rate"])
+    print(f"  [ETC-không lô] {len(df_etc_raw):,} mặt hàng có tồn kho ròng khác 0 (bảng thô, đã tự quy đổi ConvertRateDMS).")
 
-    # Tính closing_qty, months_to_sell
-    df_all["closing_qty"] = df_all["opening_qty"] + df_all["inward_qty"] - df_all["outward_qty"]
-    df_all["closing_value"] = 0.0  # tạm — chờ DNH xác nhận nguồn giá trị tồn kho
+    # Gắn tên mặt hàng cho phần ETC-lô (view không có sẵn tên)
+    df_etc_names = pd.read_sql("SELECT Code AS ItemCode, Name AS item_name FROM BRVSX_SanPham", sql_conn)
+    df_etc_lot = df_etc_lot.merge(df_etc_names, on="ItemCode", how="left")
+
+    df_etc = pd.concat([df_etc_lot, df_etc_raw], ignore_index=True)
+    df_etc["channel"] = "ETC"
+    df_etc = df_etc.rename(columns={"ItemCode": "item_code"})
+
+    df_all = pd.concat([df_otc, df_etc], ignore_index=True)
+
+    # ---- 2. Vận tốc bán THẬT theo ĐÚNG kênh của từng dòng — doanh số 6 tháng hoàn tất gần nhất,
+    # loại hàng khuyến mãi ----
+    velocity_sql = """
+        SELECT ItemCode AS item_code, DATEFROMPARTS(YEAR(DocDate), MONTH(DocDate), 1) AS month_key, SUM(Quantity) AS qty
+        FROM {view}
+        WHERE DocDate >= ? AND DocDate < ? AND UnitPrice > 0
+        GROUP BY ItemCode, DATEFROMPARTS(YEAR(DocDate), MONTH(DocDate), 1)
+    """
+    df_vel_otc = pd.read_sql(velocity_sql.format(view="vHoaDonTotal"), sql_conn, params=[window_start, window_end])
+    df_vel_etc = pd.read_sql(velocity_sql.format(view="vHoaDonETCTotal"), sql_conn, params=[window_start, window_end])
+    df_vel_otc["channel"] = "OTC"
+    df_vel_etc["channel"] = "ETC"
+    df_vel = pd.concat([df_vel_otc, df_vel_etc], ignore_index=True)
+
+    velocity = df_vel.groupby(["item_code", "channel"]).agg(
+        total_qty=("qty", "sum"), months_with_sale=("month_key", "nunique")
+    ).reset_index()
+    velocity["avg_monthly_sales"] = velocity["total_qty"] / velocity["months_with_sale"]
+
+    df_all = df_all.merge(velocity[["item_code", "channel", "avg_monthly_sales"]],
+                           on=["item_code", "channel"], how="left")
 
     def calc_months_to_sell(row):
         if row["closing_qty"] <= 0:
             return 0.0
-        if row["outward_qty"] <= 0:
-            return 9999.0  # không bán được -> tồn vĩnh viễn
-        avg_monthly = row["outward_qty"] / months_elapsed
-        if avg_monthly <= 0:
-            return 9999.0
-        return round(row["closing_qty"] / avg_monthly, 2)
+        avg = row["avg_monthly_sales"]
+        if pd.isna(avg) or avg <= 0:
+            return 9999.0  # không có doanh số bán thật trong 6 tháng gần nhất -> tồn vĩnh viễn
+        return round(row["closing_qty"] / avg, 2)
 
     df_all["months_to_sell"] = df_all.apply(calc_months_to_sell, axis=1)
+    df_all["closing_value"] = 0.0  # tạm — chờ DNH xác nhận nguồn giá trị tồn kho, không đổi so với trước
     df_all["warehouse"] = None  # gộp tất cả kho, không phân biệt
 
     # Chỉ giữ các cột đúng schema inventory
@@ -301,6 +473,7 @@ def run_sync():
     
     sql_conn = get_sql_server_connection()
     pg_engine = get_supabase_engine()
+    ensure_etl_control_tables(pg_engine)
 
     # Cửa sổ trượt "từ ngày 1 tháng TRƯỚC tới hiện tại" (tối thiểu ~30 ngày nếu hôm nay là đầu
     # tháng, tối đa ~62 ngày nếu hôm nay là cuối tháng) — đổi từ lọc cả năm (YEAR(x)=2026) sang đây
@@ -393,7 +566,9 @@ def run_sync():
         filter_cond = item["filter"]
         
         print(f"\n[*] Đang xử lý bảng '{src_table}' -> '{dest_table}'...")
-        
+        run_started_at = datetime.now()
+        rows_purged = None
+
         try:
             # 1. Lấy danh sách cột thực tế của bảng nguồn
             schema, table_name = src_table.split(".")
@@ -422,7 +597,10 @@ def run_sync():
             if purge_sql:
                 with pg_engine.begin() as pg_conn:
                     result = pg_conn.execute(text(purge_sql))
+                rows_purged = result.rowcount
                 print(f"  -> Đã dọn {result.rowcount:,} dòng ngoài cửa sổ trượt khỏi '{dest_table}'.")
+
+            log_sync_run(pg_engine, dest_table, run_started_at, "success", rows_synced=len(df_cleaned), rows_purged=rows_purged)
 
         except Exception as e:
             # SQLAlchemy tự in kèm CẢ câu SQL lẫn TOÀN BỘ tham số bind khi lỗi xảy ra trên câu
@@ -433,6 +611,7 @@ def run_sync():
             if len(err_text) > 500:
                 err_text = err_text[:500] + f"... (cắt bớt, dài {len(err_text)} ký tự)"
             print(f"  -> [THẤT BẠI] Lỗi khi xử lý bảng '{dest_table}': {err_text}")
+            log_sync_run(pg_engine, dest_table, run_started_at, "failed", error_message=err_text)
 
     try:
         sql_conn.close()

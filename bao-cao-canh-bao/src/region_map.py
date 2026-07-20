@@ -51,3 +51,75 @@ def region_from_customer_code(customer_code):
     if not m:
         return None
     return CUSTOMER_CODE_PREFIX_TO_REGION.get(m.group(1).upper())
+
+
+def customer_code_prefix_sql_or(column_expr):
+    """15/07/2026: trả về mảnh SQL "{column_expr} LIKE 'AGI%' OR {column_expr} LIKE 'BDI%' OR ..."
+    liệt kê cả 63 tiền tố đã kiểm chứng — dùng làm ĐIỀU KIỆN GIỮ LẠI khách hàng "mồ côi" (không có
+    hồ sơ trong DMS_KhachHang/DMSSX_KhachHang) khi phải LEFT JOIN thay vì JOIN thường trong các
+    truy vấn Bravo (vd check_customer_churn_alert/check_revenue_concentration_alert).
+
+    QUAN TRỌNG: các hàm này trước đó dùng JOIN thường (INNER) KHÔNG PHẢI chỉ vì lười — có lý do
+    thật: bravo_hoadonhdr/brvsx_hoadonhdr chứa lẫn nhiều "CustomerCode" không phải khách hàng thật
+    (mã nội bộ 'P000001', mã nhà cung cấp 'NCC*', mã chi phí 'I000001'...) — xác nhận thực tế mã
+    '1001136' có 274 tỷ đồng/197 hóa đơn nhưng không khớp bất kỳ khách hàng nào. Đổi thẳng sang
+    LEFT JOIN không lọc gì sẽ lộ lại đúng vấn đề đó. Cách đúng: LEFT JOIN (không mất khách mồ côi
+    CÓ tiền tố tỉnh/thành hợp lệ, vd HCM13508) NHƯNG vẫn yêu cầu "có hồ sơ khách hàng HOẶC tiền tố
+    mã khớp tỉnh/thành đã biết" — mã rác kiểu P000001/NCC*/1001136 không khớp tiền tố nào trong
+    bảng nên vẫn bị loại đúng như trước, chỉ khách hàng thật bị "mồ côi" mới được giữ lại.
+
+    Dùng: f"k.Code IS NOT NULL OR {customer_code_prefix_sql_or('v.CustomerCode')}" trong WHERE."""
+    return " OR ".join(f"{column_expr} LIKE '{prefix}%'" for prefix in CUSTOMER_CODE_PREFIX_TO_REGION)
+
+
+def customer_keep_filter_sql(invoice_alias, channel, customer_alias='k'):
+    """16/07/2026: hợp nhất logic "JOIN + điều kiện giữ lại khách mồ côi/loại mã rác" — trước đó
+    lặp lại độc lập 4 lần (2 nhánh OTC/ETC x 2 hàm check_customer_churn_alert/
+    check_revenue_concentration_alert trong src/alerts.py), rủi ro lệch dần theo thời gian nếu
+    sửa 1 chỗ quên sửa chỗ kia (đúng lớp lỗi đã gặp — vd mốc tuổi nợ từng lệch giữa chatbot và
+    alert vì sửa 1 nơi không sửa nơi kia).
+
+    Trả (join_clause, keep_where) — LEFT JOIN sang đúng bảng khách hàng theo kênh + điều kiện GIỮ
+    LẠI dòng hợp lệ (có hồ sơ khách hàng HOẶC tiền tố mã khớp tỉnh/thành đã biết trong
+    CUSTOMER_CODE_PREFIX_TO_REGION) để loại mã rác (vd 'P000001'/'NCC*'/'1001136' — xác nhận thực
+    tế 08/07/2026 không khớp bất kỳ khách hàng nào) mà KHÔNG mất khách hàng "mồ côi" thật.
+    channel: 'OTC' -> dbo.DMS_KhachHang, 'ETC' -> dbo.DMSSX_KhachHang.
+
+    Dùng:
+        join_clause, keep_where = customer_keep_filter_sql('v', 'OTC')
+        f"FROM dbo.vHoaDonTotal v {join_clause} WHERE {keep_where} AND ..."
+    """
+    kh_table = "dbo.DMS_KhachHang" if channel == "OTC" else "dbo.DMSSX_KhachHang"
+    join_clause = f"LEFT JOIN {kh_table} {customer_alias} ON {invoice_alias}.CustomerCode = {customer_alias}.Code"
+    keep_where = f"({customer_alias}.Code IS NOT NULL OR {customer_code_prefix_sql_or(f'{invoice_alias}.CustomerCode')})"
+    return join_clause, keep_where
+
+
+def customer_region_resolve_sql(invoice_alias, channel, customer_alias='k', city_alias='rt'):
+    """16/07/2026: hợp nhất logic "JOIN + suy luận AreaCode" — trước đó chỉ có ở
+    src/etl.py::_period_revenue (nhánh SQL, khi lọc theo vùng), nhưng cùng 1 dạng biểu thức CASE
+    lẽ ra nên dùng chung với các chỗ suy luận vùng khác thay vì viết lại mỗi lần cần.
+
+    Trả (join_clause, area_expr) — LEFT JOIN(s) + biểu thức CASE ưu tiên AreaCode qua CityId
+    (DIM_TinhThanhPho), fallback tiền tố mã KH khi khách "mồ côi" (area_code NULL từ đường JOIN
+    chính). channel='OTC': vHoaDonTotal không lộ sẵn CityId -> cần join thêm DMS_KhachHang trước
+    khi join DIM_TinhThanhPho. channel='ETC': vHoaDonETCTotal đã lộ sẵn CityId -> join thẳng
+    DIM_TinhThanhPho, không cần bảng khách hàng.
+
+    Dùng:
+        join_clause, area_expr = customer_region_resolve_sql('v', 'OTC')
+        f"FROM dbo.vHoaDonTotal v {join_clause} WHERE {area_expr} IN :region_markers"
+    """
+    prefix_case = " ".join(
+        f"WHEN {invoice_alias}.CustomerCode LIKE '{prefix}%' THEN '{area}'"
+        for prefix, area in CUSTOMER_CODE_PREFIX_TO_REGION.items()
+    )
+    area_expr = f"COALESCE({city_alias}.AreaCode, CASE {prefix_case} ELSE NULL END)"
+    if channel == "OTC":
+        join_clause = (
+            f"LEFT JOIN dbo.DMS_KhachHang {customer_alias} ON {invoice_alias}.CustomerCode = {customer_alias}.Code "
+            f"LEFT JOIN dbo.DIM_TinhThanhPho {city_alias} ON {customer_alias}.CityId = {city_alias}.CityId"
+        )
+    else:
+        join_clause = f"LEFT JOIN dbo.DIM_TinhThanhPho {city_alias} ON {invoice_alias}.CityId = {city_alias}.CityId"
+    return join_clause, area_expr
