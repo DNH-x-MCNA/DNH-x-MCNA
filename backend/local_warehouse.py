@@ -56,6 +56,12 @@ CREATE TABLE IF NOT EXISTS fact_kehoachtongetc (doc_date TEXT, amount REAL, item
 -- phu trach truc tiep tren khach hang (khac OTC) - EmpDMSCode2 tren hoa don van la nguon duy nhat.
 CREATE TABLE IF NOT EXISTS dmssx_khachhang (code TEXT, name TEXT, city_id INTEGER, id_code INTEGER, kenh_bh TEXT);
 CREATE INDEX IF NOT EXISTS idx_dmssx_code ON dmssx_khachhang(code);
+-- Bang nhan vien RIENG cho phia SX/ETC - xac nhan 20/07/2026: mot nhom nhan vien (vd ma DNH00087,
+-- DNH00268, Sale01-Sale15...) hoan toan KHONG co trong DIM_NhanVien, chi ton tai o day. dmscode/code
+-- thuong giong nhau (co truong hop khac, vd Sale03/Sale04) - luon thu ca 2 khi tra cuu.
+CREATE TABLE IF NOT EXISTS dmssx_nhanvien (id_code INTEGER, name TEXT, dmscode TEXT, code TEXT, is_active TEXT);
+CREATE INDEX IF NOT EXISTS idx_dmssxnv_dmscode ON dmssx_nhanvien(dmscode);
+CREATE INDEX IF NOT EXISTS idx_dmssxnv_code ON dmssx_nhanvien(code);
 -- emp_code = EmpDMSCode1 (ma NV DMS duoc GAN de phu trach khach hang nay - khac EmpDMSCode2 tren
 -- hoa don la NV THUC TE ban hang; 2 ma co the khac nhau).
 CREATE TABLE IF NOT EXISTS dms_khachhang (code TEXT, name TEXT, city_id INTEGER, id_code INTEGER, emp_code TEXT, kenh_bh TEXT);
