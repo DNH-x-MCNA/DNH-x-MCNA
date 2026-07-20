@@ -67,7 +67,7 @@ def month_ranges(start: dt.date, end: dt.date):
 
 
 # ==================== BANG HOA DON (lon, co lich su) ====================
-def sync_hoadon_full(table_bravo, table_local, has_city):
+def sync_hoadon_full(table_bravo, table_local, has_city, has_channel=False):
     print(f"[{table_local}] Dong bo FULL lich su...")
     cols_sql, rows = bravo_query(f"SELECT MIN(DocDate) mn, MAX(DocDate) mx FROM dbo.{table_bravo}")
     mn, mx = rows[0]
@@ -79,14 +79,25 @@ def sync_hoadon_full(table_bravo, table_local, has_city):
     total = 0
     t0 = time.time()
     for a, b in month_ranges(mn, mx):
-        cols = "DocDate, CustomerCode, ItemCode, Amount9, Quantity, UnitPrice, Stt, EmpDMSCode2" + (", CityId" if has_city else "") + ", CreatedAt"
+        # EmpDMSCode (KHONG PHAI EmpDMSCode2) - da xac minh 17/07/2026: EmpDMSCode2 tren hoa don la
+        # ma QLV/khu vuc phu trach (vd 'ASM12'), KHONG PHAI ma nguoi ban hang (TDV) thuc su. EmpDMSCode
+        # moi khop voi DIM_NhanVien.DMSId cua chinh TDV do (kiem chung: doi chieu ~150 TDV, khop 100%
+        # doanh thu hoa don vs KPI khi join qua EmpDMSCode<->DMSId, sai lech 0 dong cho tat ca).
+        # EmpDMSCode2 (has_channel, CHI OTC) duoc luu rieng vao channel_code - dung de nhan dien cac
+        # "kenh ao" nhu Modern Trade (xem local_warehouse.py va report_templates.py revenue_by_region()).
+        cols = ("DocDate, CustomerCode, ItemCode, Amount9, Quantity, UnitPrice, Stt, EmpDMSCode"
+                + (", CityId" if has_city else "") + ", CreatedAt"
+                + (", EmpDMSCode2" if has_channel else ""))
         _, rows = bravo_query(
             f"SELECT {cols} FROM dbo.{table_bravo} WHERE DocDate BETWEEN :a AND :b",
             a=str(a), b=str(b),
         )
         if rows:
-            placeholders = ",".join(["?"] * (10 if has_city else 9))
-            cols_local = "doc_date,customer_code,item_code,amount9,quantity,unit_price,stt,employee_code" + (",city_id" if has_city else "") + ",created_at"
+            n_cols = 9 + (1 if has_city else 0) + (1 if has_channel else 0)
+            placeholders = ",".join(["?"] * n_cols)
+            cols_local = ("doc_date,customer_code,item_code,amount9,quantity,unit_price,stt,employee_code"
+                          + (",city_id" if has_city else "") + ",created_at"
+                          + (",channel_code" if has_channel else ""))
             conn.executemany(
                 f"INSERT INTO {table_local} ({cols_local}) VALUES ({placeholders})", rows,
             )
@@ -98,20 +109,26 @@ def sync_hoadon_full(table_bravo, table_local, has_city):
     print(f"[{table_local}] Xong FULL: {total} dong, {time.time()-t0:.0f}s")
 
 
-def sync_hoadon_recent(table_bravo, table_local, has_city, days=N_RECENT_DAYS):
+def sync_hoadon_recent(table_bravo, table_local, has_city, days=N_RECENT_DAYS, has_channel=False):
     today = dt.date.today()
     start = today - dt.timedelta(days=days)
     print(f"[{table_local}] Refresh gia tang {start} -> {today}...")
     conn = get_conn()
     conn.execute(f"DELETE FROM {table_local} WHERE doc_date >= ?", (str(start),))
     conn.commit()
-    cols = "DocDate, CustomerCode, ItemCode, Amount9, Quantity, UnitPrice, Stt, EmpDMSCode2" + (", CityId" if has_city else "") + ", CreatedAt"
+    # EmpDMSCode (KHONG PHAI EmpDMSCode2) - xem ghi chu chi tiet trong sync_hoadon_full()
+    cols = ("DocDate, CustomerCode, ItemCode, Amount9, Quantity, UnitPrice, Stt, EmpDMSCode"
+            + (", CityId" if has_city else "") + ", CreatedAt"
+            + (", EmpDMSCode2" if has_channel else ""))
     _, rows = bravo_query(
         f"SELECT {cols} FROM dbo.{table_bravo} WHERE DocDate >= :a", a=str(start),
     )
     if rows:
-        placeholders = ",".join(["?"] * (10 if has_city else 9))
-        cols_local = "doc_date,customer_code,item_code,amount9,quantity,unit_price,stt,employee_code" + (",city_id" if has_city else "") + ",created_at"
+        n_cols = 9 + (1 if has_city else 0) + (1 if has_channel else 0)
+        placeholders = ",".join(["?"] * n_cols)
+        cols_local = ("doc_date,customer_code,item_code,amount9,quantity,unit_price,stt,employee_code"
+                      + (",city_id" if has_city else "") + ",created_at"
+                      + (",channel_code" if has_channel else ""))
         conn.executemany(
             f"INSERT INTO {table_local} ({cols_local}) VALUES ({placeholders})", rows,
         )
@@ -129,10 +146,23 @@ SMALL_TABLES = [
     ("FACT_KeHoachTongETC", "fact_kehoachtongetc", "DocDate, Amount, ItemGroup", "doc_date,amount,item_group"),
     ("DMSSX_KhachHang", "dmssx_khachhang", "Code, Name, CityId, Id, KenhBH", "code,name,city_id,id_code,kenh_bh"),
     ("DMS_KhachHang", "dms_khachhang", "Code, Name, CityId, Id, EmpDMSCode1, KenhBH", "code,name,city_id,id_code,emp_code,kenh_bh"),
-    ("DIM_NhanVien", "dim_nhanvien", "EmployeeCode, Name, IsDuplicate, PositionCode, AreaCode", "employee_code,name,is_duplicate,position_code,area_code"),
-    ("BRV_SanPham", "brv_sanpham", "Code, Name, GroupCode, Unit", "code,name,group_code,unit"),
+    # StartDate/EndDate/IsResigned: lich su dam nhiem (Bravo giu lai ban ghi cu, KHONG xoa khi doi
+    # nguoi) - dung de dung lai timeline "ai phu trach luc nao". ManagerAreaCode: ma khu vuc nho
+    # (V01-V22) - TDV mang ma nay de biet thuoc "to" nao, ban ghi "bong" cua QLV (ten co hau to
+    # "(QLV)") cung mang dung ma nay de biet QLV nao phu trach to do (xem org_hierarchy.py).
+    ("DIM_NhanVien", "dim_nhanvien",
+     "EmployeeCode, Name, IsDuplicate, PositionCode, AreaCode, DMSId, StartDate, EndDate, IsResigned, ManagerAreaCode",
+     "employee_code,name,is_duplicate,position_code,area_code,dmsid,start_date,end_date,is_resigned,manager_area_code"),
+    ("BRV_SanPham", "brv_sanpham", "Id, Code, Name, GroupCode, Unit", "id_code,code,name,group_code,unit"),
     ("BRVSX_TraLai", "brvsx_tralai", "DocDate, Amount9, IsActive, Stt, CustomerCode", "doc_date,amount9,is_active,stt,customer_code"),
     ("DIM_ChucVu", "dim_chucvu", "DISTINCT PositionCode, Description", "position_code,description"),
+    # Ton kho THAT (thay the Supabase inventory - cot "warehouse" ben do 100% NULL, khong dung duoc).
+    # BranchCode tren BRV_Kho la B01=San xuat, B02=Kinh doanh Mien Bac, B03=Kinh doanh Mien Trung,
+    # B04=Kinh doanh Mien Nam (xac nhan voi DA ben Bravo 15/07/2026) - join TonKhoDK.WarehouseId ->
+    # BRV_Kho.Id de biet vung, roi ItemId -> brv_sanpham.id_code de biet ten san pham.
+    ("BRV_Kho", "brv_kho", "Id, BranchCode, Code, Name", "id_code,branch_code,code,name"),
+    ("BRV_TonKhoDK", "brv_tonkhodk", "WarehouseId, ItemId, Quantity, Amount, IsActive",
+     "warehouse_id,item_id,quantity,amount,is_active"),
 ]
 
 
@@ -184,10 +214,10 @@ def main():
     # ETC cung dong bo tu vHoaDonETCTotal (KHONG PHAI vHoaDonETC) - cung ly do nhu OTC: vHoaDonETC
     # thieu cac dong dieu chinh/hoan (DocCode='HC'), da xac nhan lech ~1.13 ty rieng nam 2025 toan quoc.
     if a.full:
-        sync_hoadon_full("vHoaDonTotal", "vhoadon_otc", has_city=False)
+        sync_hoadon_full("vHoaDonTotal", "vhoadon_otc", has_city=False, has_channel=True)
         sync_hoadon_full("vHoaDonETCTotal", "vhoadon_etc", has_city=False)
     else:
-        sync_hoadon_recent("vHoaDonTotal", "vhoadon_otc", has_city=False)
+        sync_hoadon_recent("vHoaDonTotal", "vhoadon_otc", has_city=False, has_channel=True)
         sync_hoadon_recent("vHoaDonETCTotal", "vhoadon_etc", has_city=False)
 
     for bravo_tbl, local_tbl, bravo_cols, local_cols in SMALL_TABLES:

@@ -77,7 +77,16 @@ dim_nhanvien: employee_code, name, is_duplicate (=1 la ma bi trung/khong hop le 
   co is_duplicate=1. Khi CO loc, dat dieu kien is_duplicate O MENH DE WHERE cua truy van chinh - KHONG
   dat trong ON cua LEFT JOIN, vi se khong loai duoc dong du lieu, chi mat ten - da tung gay bug that), position_code
   (TDV/QLV/CTV/CS/TP/PP/TBP/TK - LUU Y: 1 nhan vien co the la QLV du EmployeeCode "nhin giong" ten
-  ca nhan, KHONG suy doan vai tro tu ten ma phai kiem tra position_code), area_code (MB/MT/MN).
+  ca nhan, KHONG suy doan vai tro tu ten ma phai kiem tra position_code), area_code (MB/MT/MN),
+  dmsid (ma noi bo DMS - KHAC employee_code, nhung nguoi dung co the dua mot trong hai ma khi hoi.
+  Khi tra cuu 1 nguoi theo ma, PHAI thu ca employee_code=? VA dmsid=? (vd WHERE employee_code=? OR
+  dmsid=?), KHONG chi thu employee_code - da xac nhan that co ma (vd 'DNH00591') CHI ton tai duoi
+  dang dmsid, khong khop employee_code nao ca. dmsid CO THE TRUNG giua nhieu dong khac position_code
+  (vd 'DNH00601' vua la employee_code cua 1 dong TDV vua la dmsid cua 1 dong QLV khac) - neu tra cuu
+  ra NHIEU dong, PHAI liet ke HET kem employee_code/dmsid/position_code/is_duplicate de nguoi dung tu
+  phan biet, KHONG tu chon 1 dong. KHONG loc is_duplicate khi tra cuu/hien thi ten (chi loc khi TINH
+  TOAN KPI/tong hop) - da co vi du that (TM24060301) dong is_duplicate=0 la vi tri TRONG con dong
+  is_duplicate=1 moi la ten nguoi that, nen is_duplicate=0 KHONG dong nghia la "dong dung".
 dim_chucvu: position_code, description (ten tieng Viet day du, vd TDV -> "Trinh duoc vien", QLV ->
   "Quan ly vung" - JOIN qua position_code de hien thi ten vai tro dep, DISTINCT san khi dong bo).
 fact_tonghopkhachhang: 1 dong = 1 (nhan vien, khach hang, ngay snapshot). Cot: employee_code,
@@ -87,10 +96,25 @@ fact_tonghopkhachhang: 1 dong = 1 (nhan vien, khach hang, ngay snapshot). Cot: e
   local (lich su xa hon khong dong bo vi it gia tri cho KPI hien tai).
   NGUONG DAT KPI nhan vien la >=80% (amount_ct/month_sale_target), KHONG PHAI 100%.
 
-brv_sanpham: code, name, group_code (nhom SP), unit (don vi tinh).
+brv_sanpham: code, name, group_code (nhom SP), unit (don vi tinh), id_code (khoa noi bo - dung de
+  JOIN voi brv_tonkhodk.item_id, KHAC code la ma san pham dang text).
 
 brvsx_tralai: tra hang (CHI co kenh ETC, OTC chua co nguon). Cot: doc_date, amount9 (gia tri tra),
   is_active (=1 la hop le), stt (ma chung tu), customer_code.
+
+brv_kho: danh muc KHO trong Bravo (co hang chuc kho vat ly/dai ly khac nhau). Cot: id_code (khoa noi
+  bo, dung join voi brv_tonkhodk.warehouse_id), branch_code (**day la truong quyet dinh VUNG MIEN cho
+  ton kho**: B01=San xuat/tru so chinh, B02=Kinh doanh Mien Bac, B03=Kinh doanh Mien Trung, B04=Kinh
+  doanh Mien Nam - xac nhan voi DA ben Bravo 15/07/2026), code, name (ten kho cu the, vd 'Kho WHI91').
+brv_tonkhodk: TON KHO THAT tinh den hien tai (snapshot, khong theo ngay) - THAY THE nguon Supabase cu
+  (bang "inventory" ben Supabase co cot "warehouse" nhung 100% NULL, KHONG dung de loc vung duoc -
+  DA XAC NHAN LOI, tuyet doi khong dung Supabase cho cau hoi ton kho THEO VUNG nua, chi con Bravo/kho
+  local nay moi co du lieu vung dung). Cot: warehouse_id (JOIN brv_kho.id_code de biet vung/ten kho),
+  item_id (JOIN brv_sanpham.id_code de biet ten/ma san pham), quantity (so luong ton), amount (gia
+  tri ton tien - LUU Y mot so vung/kho co the =0 du quantity>0, day la han che du lieu that tu Bravo,
+  khong phai loi dong bo), is_active (LUON loc =1, dong is_active=0 la ban ghi cu/khong con hieu luc).
+  Muon hoi "ton kho vung X": JOIN ca 3 bang (brv_tonkhodk + brv_kho + brv_sanpham), GROUP BY
+  k.branch_code, loc WHERE k.branch_code='B0x' VA t.is_active=1.
 
 === SUPABASE (PostgreSQL) - CHI dung voi tool query_inventory_receivables ===
 (Ten cot phan biet hoa/thuong, PHAI dat trong dau ngoac kep "...", dung LIMIT N)
@@ -98,7 +122,9 @@ brvsx_tralai: tra hang (CHI co kenh ETC, OTC chua co nguon). Cot: doc_date, amou
 inventory (snapshot ton kho MOI NHAT, khong theo ngay): "item_code", "item_name", "unit",
   "opening_qty", "inward_qty", "outward_qty", "closing_qty" (ton cuoi SL),
   "closing_value" (ton cuoi tien), "months_to_sell" (so thang uoc tinh ban het ton hien tai -
-  CANG THAP ban cang nhanh, <=1 la sap can xu ly/ban rat cham), "warehouse".
+  CANG THAP ban cang nhanh, <=1 la sap can xu ly/ban rat cham), "warehouse" (CHU Y: cot nay 100%
+  NULL, KHONG dung duoc de loc/nhom theo vung - neu cau hoi co yeu to VUNG MIEN, chuyen sang dung
+  query_database voi brv_tonkhodk/brv_kho/brv_sanpham o kho local thay vi bang nay).
 
 receivable_detail: cong no kenh OTC/chung, theo tung ky (thang). Cot: "period" (dang "thang_nam"
   vd "9_2025"), "customer_code", "customer_name", "balance_end" (du no cuoi ky), "in_term",

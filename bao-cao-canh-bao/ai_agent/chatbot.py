@@ -1881,8 +1881,14 @@ VERY IMPORTANT — Vietnamese Column Labels (BẮT BUỘC): EVERY column in the 
 {dialect_rules}
 """
         sql_query = ""
+        # used_fallback_sql: TRUE bat cu khi nao SQL thuc te den tu _generate_mock_sql() (so khop tu
+        # khoa don gian, KHONG hieu ngu canh/nghiep vu that) - dung ca cho truong hop is_mock=True
+        # (offline vinh vien, thieu API key) LAN truong hop AI that loi 2 lan lien tiep ben duoi. Dung
+        # de chen banner canh bao vao answer (xem gan cuoi ham) va sua lai "mode" cho dung thuc te.
+        used_fallback_sql = False
         if self.is_mock:
             sql_query = self._generate_mock_sql(user_question)
+            used_fallback_sql = True
         else:
             sql_user_prompt = user_question
             if history_block:
@@ -1916,6 +1922,7 @@ VERY IMPORTANT — Vietnamese Column Labels (BẮT BUỘC): EVERY column in the 
             if sql_query is None:
                 print(f"[Error] AI sinh SQL thất bại sau 2 lần thử, rơi về mock (KHÔNG có ngữ cảnh hội thoại): {last_error}")
                 sql_query = self._generate_mock_sql(user_question)
+                used_fallback_sql = True
 
         # Post-check Security Validation on generated SQL query
         sql_clean = sql_query.upper()
@@ -2150,6 +2157,22 @@ CRITICAL RULES:
                 "Vui lòng kiểm tra kết nối mạng/DNS rồi thử lại để có số liệu chính xác.\n\n" + answer
             )
 
+        # Banner SQL du phong (heuristic) — used_fallback_sql=True nghia la cau SQL vua chay KHONG
+        # phai do AI hieu cau hoi ma sinh ra, ma tu ham so khop tu khoa don gian _generate_mock_sql()
+        # (xem dinh nghia used_fallback_sql o dau ham). Truoc day truong hop AI that loi 2 lan lien
+        # tiep se am tham dung ket qua nay ma KHONG bao gi ca - nguoi dung thay cau tra loi "binh
+        # thuong" nen hieu lam la AI hieu sai/quen ngu canh, trong khi thuc te AI khong he chay cho
+        # cau hoi nay. Banner nay BAT BUOC phai hien ra moi khi used_fallback_sql=True, khong duoc bo qua.
+        if used_fallback_sql:
+            reason = ("chưa cấu hình API key AI" if self.is_mock
+                       else "hệ thống AI gặp sự cố tạm thời (lỗi mạng/timeout) khi xử lý câu hỏi này")
+            answer = (
+                f"⚠️ <b>Câu trả lời dưới đây KHÔNG do AI phân tích câu hỏi</b> ({reason}) — hệ thống dùng "
+                f"chế độ dự phòng đơn giản (so khớp từ khóa), CÓ THỂ không đúng ý câu hỏi hoặc bỏ sót cách "
+                f"tính đúng (vd tuổi nợ tính từ Bravo). Vui lòng thử hỏi lại sau ít phút để có câu trả lời "
+                f"chính xác từ AI.\n\n" + answer
+            )
+
         # Banner tuổi nợ TẠM THỜI — ép bằng CODE (dò trực tiếp trong SQL đã sinh ra), KHÔNG phụ
         # thuộc AI có nhớ chèn hay không (đã xác nhận thực tế 10/07/2026: câu hỏi nhiều dòng đi qua
         # LLM tóm tắt riêng — summary_prompt — không nhận được chỉ dẫn banner từ system_prompt sinh
@@ -2171,7 +2194,10 @@ CRITICAL RULES:
             "columns": query_result.get("columns", []),
             "answer": answer,
             "chart_path": chart_path,
-            "mode": f"Live {self.model_type.upper()} API" if not self.is_mock else "Offline Mock Engine"
+            # Sua theo used_fallback_sql (thuc te cua LUOT NAY), khong chi dua vao self.is_mock (co
+            # dinh theo instance) - truoc day 1 luot bi AI loi tam thoi roi fallback sang mock van bao
+            # nham la "Live ... API" du SQL thuc te den tu heuristic, khong phai AI.
+            "mode": "Offline Mock Engine" if used_fallback_sql else f"Live {self.model_type.upper()} API"
         }
 
         # Ghi cache — chỉ khi KHÔNG có lỗi (không cache lỗi tạm thời như Bravo/Postgres timeout,
