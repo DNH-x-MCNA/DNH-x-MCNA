@@ -24,6 +24,15 @@ load_dotenv()
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 STATE_DB_PATH = os.path.join(PROJECT_ROOT, 'data', 'alerts_state.db')
+# Logo DNH host tại repo public riêng (danglvmcna/dnh-assets) — KHÔNG chứa code/business logic,
+# chỉ 1 file ảnh — để Teams webhook/Outlook Desktop tải được qua HTTPS công khai (base64 nhúng
+# trực tiếp không hiển thị được trên Outlook Desktop và không được Teams Adaptive Card hỗ trợ ổn
+# định). Đổi logo: push file mới vào repo đó, giữ nguyên tên/đường dẫn file.
+DNH_LOGO_URL = "https://raw.githubusercontent.com/danglvmcna/dnh-assets/main/dnh_logo.png"
+
+
+def _dnh_logo_data_uri():
+    return DNH_LOGO_URL
 
 
 def _log_alert_severity(alert_name, severity):
@@ -86,32 +95,39 @@ ALERT_EMAIL_TEMPLATE = """
     <meta charset="utf-8">
     <style>
         body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; color: #333333; margin: 0; padding: 20px; background-color: #f9f9fb; }
-        .card { max-width: 600px; margin: 0 auto; background: #ffffff; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.05); overflow: hidden; border: 1px solid #e1e1e7; }
-        .header { padding: 24px; color: #ffffff; font-weight: bold; font-size: 20px; text-transform: uppercase; letter-spacing: 0.5px; }
-        .header.critical { background-color: #e53e3e; background: linear-gradient(135deg, #e53e3e 0%, #b7791f 100%); }
-        .header.warning { background-color: #dd6b20; background: linear-gradient(135deg, #dd6b20 0%, #d69e2e 100%); }
-        .header.info { background-color: #059669; background: linear-gradient(135deg, #059669 0%, #10b981 100%); }
+        .card { max-width: 600px; margin: 0 auto; background: #ffffff; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.05); overflow: hidden; border: 1px solid #e1e1e7; border-top: 5px solid #f15a25; }
+        .header { padding: 18px 24px 22px; color: #ffffff; }
+        .header.critical { background-color: #b7392f; background: linear-gradient(135deg, #7a2119 0%, #9c2c22 40%, #b7392f 75%, #c94a3a 100%); }
+        .header.warning { background-color: #b3691a; background: linear-gradient(135deg, #7a4210 0%, #96540f 40%, #b3691a 75%, #d9822b 100%); }
+        .header.info { background-color: #1f4a22; background: linear-gradient(135deg, #153a1a 0%, #1f4a22 38%, #2f6b32 72%, #3c8a3f 100%); }
+        .header-top { display: table; width: 100%; margin-bottom: 10px; }
+        .logo-chip { display: inline-block; background: #ffffff; border-radius: 8px; padding: 5px 9px; box-shadow: 0 1px 3px rgba(0,0,0,0.18); }
+        .logo-chip img { height: 20px; width: auto; display: block; }
+        .header-name { font-weight: bold; font-size: 19px; text-transform: uppercase; letter-spacing: 0.5px; }
         .content { padding: 24px; line-height: 1.6; }
         .alert-title { font-size: 18px; font-weight: bold; margin-bottom: 8px; color: #1a202c; }
         .alert-desc { font-size: 14px; color: #718096; margin-bottom: 20px; }
         .kpi-table { width: 100%; border-collapse: collapse; margin-bottom: 20px; }
-        .kpi-table th { text-align: left; padding: 8px; background-color: #f7fafc; border-bottom: 2px solid #edf2f7; font-size: 12px; color: #4a5568; text-transform: uppercase; }
+        .kpi-table th { text-align: left; padding: 8px; background-color: #1f4a22; color: #ffffff; border-bottom: 2px solid #153a1a; font-size: 12px; text-transform: uppercase; }
         .kpi-table td { padding: 10px 8px; border-bottom: 1px solid #edf2f7; font-size: 14px; color: #2d3748; }
         .badge { display: inline-block; padding: 4px 8px; border-radius: 4px; font-size: 11px; font-weight: bold; text-transform: uppercase; }
-        .badge.critical { background-color: #fed7d7; color: #9b2c2c; }
-        .badge.warning { background-color: #feebc8; color: #9c4221; }
+        .badge.critical { background-color: #fbe2e2; color: #9b2c2c; }
+        .badge.warning { background-color: #fde7dc; color: #9c4221; }
         .footer { background: #f7fafc; padding: 16px 24px; text-align: center; font-size: 12px; color: #a0aec0; border-top: 1px solid #edf2f7; }
     </style>
 </head>
 <body>
     <div class="card">
         <div class="header {{ severity.lower() }}">
-            {{ alert_name }}
+            <div class="header-top">
+                <span class="logo-chip"><img src="{{ dnh_logo_data_uri }}" alt="" /></span>
+            </div>
+            <div class="header-name">{{ alert_name }}</div>
         </div>
         <div class="content">
             <div class="alert-title">{{ summary }}</div>
             <div class="alert-desc">Hệ thống phát hiện chỉ số đã vượt ngưỡng cảnh báo an toàn. Chi tiết bên dưới:</div>
-            
+
             <table class="kpi-table">
                 <thead>
                     <tr>
@@ -130,8 +146,8 @@ ALERT_EMAIL_TEMPLATE = """
                     {% endfor %}
                 </tbody>
             </table>
-            
-            <p style="font-size: 13px; color: #e53e3e; font-weight: bold; background: #fff5f5; padding: 10px; border-radius: 6px; border-left: 4px solid #e53e3e;">
+
+            <p style="font-size: 13px; color: #c63232; font-weight: bold; background: #fbe2e2; padding: 10px; border-radius: 6px; border-left: 4px solid #c63232;">
                 Lưu ý: Cảnh báo này sẽ tạm thời bị khóa gửi lặp trong vòng 1-4 giờ tới để tránh spam hộp thư của bạn, trừ khi lỗi nghiêm trọng hơn xảy ra.
             </p>
         </div>
@@ -151,26 +167,30 @@ DIGEST_EMAIL_TEMPLATE = """
     <meta charset="utf-8">
     <style>
         body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; color: #333333; margin: 0; padding: 20px; background-color: #f4f5f8; }
-        .container { max-width: 650px; margin: 0 auto; background: #ffffff; border-radius: 16px; box-shadow: 0 4px 20px rgba(0,0,0,0.06); overflow: hidden; border: 1px solid #e2e8f0; }
-        .header { background-color: #1e3a8a; background: linear-gradient(135deg, #1e3a8a 0%, #3b82f6 100%); padding: 30px 24px; color: #ffffff; }
-        .header.header-monthly { background-color: #4c1d95; background: linear-gradient(135deg, #4c1d95 0%, #7c3aed 100%); }
+        .container { max-width: 650px; margin: 0 auto; background: #ffffff; border-radius: 16px; box-shadow: 0 4px 20px rgba(0,0,0,0.06); overflow: hidden; border: 1px solid #e2e8f0; border-top: 5px solid #f15a25; }
+        .header { background-color: #1f4a22; background: linear-gradient(135deg, #153a1a 0%, #1f4a22 35%, #2f6b32 70%, #3c8a3f 100%); padding: 24px 24px 26px; color: #ffffff; }
+        .header.header-monthly { background-color: #1f4a22; background: linear-gradient(135deg, #153a1a 0%, #1f4a22 35%, #2f6b32 70%, #3c8a3f 100%); }
+        .header-top { display: table; width: 100%; margin-bottom: 14px; }
+        .logo-chip { display: inline-block; background: #ffffff; border-radius: 8px; padding: 6px 10px; box-shadow: 0 1px 3px rgba(0,0,0,0.18); }
+        .logo-chip img { height: 24px; width: auto; display: block; }
         .header-badge { display: inline-block; font-size: 11px; font-weight: 700; letter-spacing: 0.8px; text-transform: uppercase; background: rgba(255,255,255,0.18); padding: 4px 10px; border-radius: 999px; margin-bottom: 10px; }
         .header h1 { margin: 0; font-size: 22px; font-weight: 700; letter-spacing: 0.5px; }
         .header p { margin: 5px 0 0 0; font-size: 14px; opacity: 0.9; }
         .content { padding: 24px; }
-        .section-title { font-size: 16px; font-weight: 700; color: #1e3a8a; margin-top: 24px; margin-bottom: 12px; border-bottom: 2px solid #e2e8f0; padding-bottom: 6px; text-transform: uppercase; letter-spacing: 0.5px; }
+        .section-title { font-size: 15px; font-weight: 800; color: #1f4a22; margin-top: 24px; margin-bottom: 12px; border-bottom: 2.5px solid #337337; padding-bottom: 7px; text-transform: uppercase; letter-spacing: 0.5px; }
+        .section-title::before { content: "\25A0"; color: #f15a25; font-size: 10px; margin-right: 7px; }
         .grid { display: block; width: 100%; margin: -8px 0; }
         .col { display: inline-block; vertical-align: top; box-sizing: border-box; }
-        .kpi-card { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 16px; text-align: center; height: 100%; box-sizing: border-box; }
+        .kpi-card { background: #eef5ea; border: 1px solid #d6e6cd; border-radius: 8px; padding: 16px; text-align: center; height: 100%; box-sizing: border-box; }
         .kpi-card .val { font-size: 20px; font-weight: 700; color: #1e293b; margin: 5px 0; }
-        .kpi-card .lbl { font-size: 11px; color: #64748b; font-weight: 600; text-transform: uppercase; }
-        .kpi-card.failed { border-left: 4px solid #ef4444; }
-        .kpi-card.success { border-left: 4px solid #10b981; }
+        .kpi-card .lbl { font-size: 11px; color: #54604f; font-weight: 600; text-transform: uppercase; }
+        .kpi-card.failed { background: #fdece3; border-color: #f6c7ac; border-left: 4px solid #ef4444; }
+        .kpi-card.success { background: #e3f0dc; border-color: #bfdcaf; border-left: 4px solid #337337; }
         .data-table { width: 100%; border-collapse: collapse; margin-top: 10px; margin-bottom: 20px; }
-        .data-table th { text-align: left; padding: 10px; background-color: #f1f5f9; border-bottom: 2px solid #e2e8f0; font-size: 12px; color: #475569; text-transform: uppercase; }
+        .data-table th { text-align: left; padding: 10px; background-color: #1f4a22; color: #ffffff; border-bottom: 2px solid #153a1a; font-size: 12px; text-transform: uppercase; }
         .data-table td { padding: 12px 10px; border-bottom: 1px solid #f1f5f9; font-size: 13px; color: #334155; }
         .no-data { font-size: 13px; color: #64748b; font-style: italic; padding: 10px 0; }
-        .trend-up { color: #10b981; font-size: 13px; font-weight: 600; }
+        .trend-up { color: #337337; font-size: 13px; font-weight: 600; }
         .trend-down { color: #ef4444; font-size: 13px; font-weight: 600; }
         .footer { background: #f8fafc; padding: 20px; text-align: center; font-size: 12px; color: #94a3b8; border-top: 1px solid #e2e8f0; }
     </style>
@@ -178,6 +198,9 @@ DIGEST_EMAIL_TEMPLATE = """
 <body>
     <div class="container">
         <div class="header{% if period_label == 'Monthly' %} header-monthly{% endif %}">
+            <div class="header-top">
+                <span class="logo-chip"><img src="{{ dnh_logo_data_uri }}" alt="" /></span>
+            </div>
             <span class="header-badge">{% if period_label == 'Weekly' %}Báo cáo Tuần{% elif period_label == 'Monthly' %}Báo cáo Tháng{% else %}Báo cáo Ngày{% endif %}</span>
             <h1>BÁO CÁO TỔNG HỢP HOẠT ĐỘNG {% if period_label == 'Weekly' %}TUẦN{% elif period_label == 'Monthly' %}THÁNG{% else %}{{ period_label|upper }}{% endif %}</h1>
             <p>{{ metrics.period_range or metrics.date }}</p>
@@ -247,7 +270,7 @@ DIGEST_EMAIL_TEMPLATE = """
                 <div class="col" style="width: 100%; max-width: 145px; padding: 8px;">
                     <div class="kpi-card success">
                         <div class="lbl">Tổng Doanh Thu</div>
-                        <div class="val" style="color: #10b981;">{{ "{:,.0f}".format(metrics.revenue.total) }} đ</div>
+                        <div class="val" style="color: #337337;">{{ "{:,.0f}".format(metrics.revenue.total) }} đ</div>
                         {% if metrics.revenue.change_pct is not none %}
                         <div class="{{ 'trend-up' if metrics.revenue.change_pct >= 0 else 'trend-down' }}">
                             {{ "%+.1f"|format(metrics.revenue.change_pct) }}% so kỳ {{ metrics.revenue.prev_period_label }}
@@ -351,7 +374,7 @@ DIGEST_EMAIL_TEMPLATE = """
                 <div class="col" style="width: 100%; max-width: 190px; padding: 8px;">
                     <div class="kpi-card success">
                         <div class="lbl">Đạt Chỉ Tiêu</div>
-                        <div class="val" style="color: #10b981;">{{ metrics.kpi_summary.achieved_count }}/{{ metrics.kpi_summary.total_count }}</div>
+                        <div class="val" style="color: #337337;">{{ metrics.kpi_summary.achieved_count }}/{{ metrics.kpi_summary.total_count }}</div>
                     </div>
                 </div>
                 <!--[if mso]>
@@ -440,7 +463,7 @@ DIGEST_EMAIL_TEMPLATE = """
                 <div class="col" style="width: 100%; max-width: 290px; padding: 8px;">
                     <div class="kpi-card failed">
                         <div class="lbl">Tồn Chết (&ge;12 tháng)</div>
-                        <div class="val" style="color: #ea580c;">{{ metrics.inventory.dead_stock_count }}</div>
+                        <div class="val" style="color: #d94e1c;">{{ metrics.inventory.dead_stock_count }}</div>
                     </div>
                 </div>
                 <!--[if mso]>
@@ -465,7 +488,7 @@ DIGEST_EMAIL_TEMPLATE = """
                         <td><strong>{{ item.item_code }} ({% if item.channel %}{{ item.channel }}{% else %}—{% endif %})</strong></td>
                         <td>{{ item.item_name }}</td>
                         <td>{{ "{:,.0f}".format(item.closing_value) }} đ</td>
-                        <td style="color: #ea580c; font-weight: bold;">{{ item.months_to_sell }} tháng</td>
+                        <td style="color: #d94e1c; font-weight: bold;">{{ item.months_to_sell }} tháng</td>
                     </tr>
                     {% endfor %}
                 </tbody>
@@ -474,7 +497,7 @@ DIGEST_EMAIL_TEMPLATE = """
 
             {% if chatbot_url %}
             <div style="text-align: center; margin-top: 28px; padding-top: 20px; border-top: 1px solid #e2e8f0;">
-                <a href="{{ chatbot_url }}" style="display: inline-block; background-color: #1e3a8a; background: linear-gradient(135deg, #1e3a8a 0%, #3b82f6 100%); color: #ffffff; text-decoration: none; font-size: 14px; font-weight: 700; padding: 12px 28px; border-radius: 8px;">
+                <a href="{{ chatbot_url }}" style="display: inline-block; background-color: #1f4a22; background: linear-gradient(135deg, #1f4a22, #337337); color: #ffffff; text-decoration: none; font-size: 14px; font-weight: 700; padding: 12px 28px; border-radius: 8px;">
                     Mở Chatbot DNH để hỏi thêm
                 </a>
                 <p style="margin: 10px 0 0 0; font-size: 12px; color: #94a3b8;">Đăng nhập đúng tài khoản của bạn để xem đúng phạm vi vùng/kênh được phân quyền.</p>
@@ -666,7 +689,8 @@ def build_alert_email(alert_name, severity, summary, table_headers, table_rows):
         summary=summary,
         table_headers=table_headers,
         table_rows=table_rows,
-        timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        dnh_logo_data_uri=_dnh_logo_data_uri()
     )
 
 def build_digest_email(metrics, period_label="Daily", audience=None, scope_label=None):
@@ -684,6 +708,7 @@ def build_digest_email(metrics, period_label="Daily", audience=None, scope_label
         audience=audience,
         scope_label=scope_label,
         chatbot_url=_chatbot_deep_link(),
+        dnh_logo_data_uri=_dnh_logo_data_uri(),
     )
 
 def send_telegram_alert(text):
@@ -819,8 +844,28 @@ def _build_teams_adaptive_card(title, summary, severity, table_headers=None, tab
             "style": style,
             "bleed": True,
             "items": [
-                {"type": "TextBlock", "text": _severity_label_vi(severity), "weight": "Bolder", "size": "Small",
-                 "color": style, "spacing": "None"},
+                {
+                    "type": "ColumnSet",
+                    "columns": [
+                        {
+                            "type": "Column",
+                            "width": "auto",
+                            "verticalContentAlignment": "Center",
+                            "items": [
+                                {"type": "Image", "url": DNH_LOGO_URL, "width": "90px", "altText": "Dược Nam Hà"}
+                            ]
+                        },
+                        {
+                            "type": "Column",
+                            "width": "stretch",
+                            "verticalContentAlignment": "Center",
+                            "items": [
+                                {"type": "TextBlock", "text": _severity_label_vi(severity), "weight": "Bolder",
+                                 "size": "Small", "color": style, "horizontalAlignment": "Right", "spacing": "None"}
+                            ]
+                        }
+                    ]
+                },
                 {"type": "TextBlock", "text": title, "weight": "Bolder", "size": "Large", "wrap": True, "spacing": "Small"},
             ]
         }
@@ -1077,7 +1122,28 @@ def _build_teams_consolidated_card(alerts):
             "style": "attention",
             "bleed": True,
             "items": [
-                {"type": "TextBlock", "text": "NGHIÊM TRỌNG", "weight": "Bolder", "size": "Small", "color": "attention", "spacing": "None"},
+                {
+                    "type": "ColumnSet",
+                    "columns": [
+                        {
+                            "type": "Column",
+                            "width": "auto",
+                            "verticalContentAlignment": "Center",
+                            "items": [
+                                {"type": "Image", "url": DNH_LOGO_URL, "width": "90px", "altText": "Dược Nam Hà"}
+                            ]
+                        },
+                        {
+                            "type": "Column",
+                            "width": "stretch",
+                            "verticalContentAlignment": "Center",
+                            "items": [
+                                {"type": "TextBlock", "text": "NGHIÊM TRỌNG", "weight": "Bolder", "size": "Small",
+                                 "color": "attention", "horizontalAlignment": "Right", "spacing": "None"}
+                            ]
+                        }
+                    ]
+                },
                 {"type": "TextBlock", "text": f"{len(alerts)} cảnh báo nghiêm trọng", "weight": "Bolder", "size": "Large", "wrap": True, "spacing": "Small"},
                 {"type": "TextBlock", "text": f"Phát hiện lúc {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", "isSubtle": True, "size": "Small", "wrap": True}
             ]
