@@ -79,7 +79,11 @@ def sync_hoadon_full(table_bravo, table_local, has_city):
     total = 0
     t0 = time.time()
     for a, b in month_ranges(mn, mx):
-        cols = "DocDate, CustomerCode, ItemCode, Amount9, Quantity, UnitPrice, Stt, EmpDMSCode2" + (", CityId" if has_city else "") + ", CreatedAt"
+        # EmpDMSCode (KHONG PHAI EmpDMSCode2) - da xac minh 17/07/2026: EmpDMSCode2 tren hoa don la
+        # ma QLV/khu vuc phu trach (vd 'ASM12'), KHONG PHAI ma nguoi ban hang (TDV) thuc su. EmpDMSCode
+        # moi khop voi DIM_NhanVien.DMSId cua chinh TDV do (kiem chung: doi chieu ~150 TDV, khop 100%
+        # doanh thu hoa don vs KPI khi join qua EmpDMSCode<->DMSId, sai lech 0 dong cho tat ca).
+        cols = "DocDate, CustomerCode, ItemCode, Amount9, Quantity, UnitPrice, Stt, EmpDMSCode" + (", CityId" if has_city else "") + ", CreatedAt"
         _, rows = bravo_query(
             f"SELECT {cols} FROM dbo.{table_bravo} WHERE DocDate BETWEEN :a AND :b",
             a=str(a), b=str(b),
@@ -105,7 +109,8 @@ def sync_hoadon_recent(table_bravo, table_local, has_city, days=N_RECENT_DAYS):
     conn = get_conn()
     conn.execute(f"DELETE FROM {table_local} WHERE doc_date >= ?", (str(start),))
     conn.commit()
-    cols = "DocDate, CustomerCode, ItemCode, Amount9, Quantity, UnitPrice, Stt, EmpDMSCode2" + (", CityId" if has_city else "") + ", CreatedAt"
+    # EmpDMSCode (KHONG PHAI EmpDMSCode2) - xem ghi chu chi tiet trong sync_hoadon_full()
+    cols = "DocDate, CustomerCode, ItemCode, Amount9, Quantity, UnitPrice, Stt, EmpDMSCode" + (", CityId" if has_city else "") + ", CreatedAt"
     _, rows = bravo_query(
         f"SELECT {cols} FROM dbo.{table_bravo} WHERE DocDate >= :a", a=str(start),
     )
