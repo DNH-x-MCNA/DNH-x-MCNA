@@ -316,15 +316,14 @@ def employee_daily_kpi(employee_code: str, year_month: str, scope_area_code: str
     EmployeeCode (2 gia tri thuong khac nhau, vd EmployeeCode='DNH00832' nhung DMSId='HYE_02') - da
     xac minh 17/07/2026 doi chieu ~150 TDV khop 100% khi dung dung DMSId. Tham so employee_code dau
     vao co the la EmployeeCode HOAC DMSId (tra ca 2, giong employee_directory), ham tu quy doi sang
-    DMSId that truoc khi truy van hoa don."""
-    nv = _q("SELECT employee_code, dmsid, area_code FROM dim_nhanvien "
-            "WHERE (employee_code=? OR dmsid=?) AND COALESCE(is_duplicate,0)<>1 LIMIT 1",
-            (employee_code, employee_code))
-    resolved_code = nv[0]["employee_code"] if nv else employee_code
-    dms_code = nv[0]["dmsid"] if (nv and nv[0]["dmsid"]) else employee_code
+    DMSId that truoc khi truy van hoa don. NEU nhan vien khong co trong dim_nhanvien, tu dong thu
+    tiep dmssx_nhanvien (bang rieng phia SX/ETC, xac nhan 20/07/2026 - xem _resolve_employee_identity())
+    - truong hop nay scope_area_code se LUON tu choi (vung khong xac dinh duoc, an toan hon cho qua)."""
+    ident = _resolve_employee_identity(employee_code)
+    resolved_code = ident["code"]
+    dms_code = ident["dmsid"]
     if scope_area_code:
-        emp_area = nv[0]["area_code"] if nv else None
-        if emp_area != scope_area_code:
+        if ident["area_code"] != scope_area_code:
             return {"error": f"Ban khong co quyen xem du lieu nhan vien nay - ngoai vung {scope_area_code} ban phu trach."}
     year, month = int(year_month[:4]), int(year_month[5:7])
     month_start = dt.date(year, month, 1)
@@ -374,6 +373,30 @@ def employee_daily_kpi(employee_code: str, year_month: str, scope_area_code: str
     }
 
 
+def _resolve_employee_identity(code: str) -> dict:
+    """Tra danh tinh 1 nhan vien tu 1 ma (EmployeeCode HOAC DMSId): thu dim_nhanvien (OTC) truoc -
+    neu co nhieu dong trung ma, uu tien dong is_duplicate=1 (thuong la nguoi that, xem
+    employee_directory()). Neu KHONG co trong dim_nhanvien, thu tiep dmssx_nhanvien (bang nhan vien
+    RIENG cho phia SX/ETC, xac nhan 20/07/2026: mot nhom nhan vien - vd ma DNH00087, DNH00268,
+    Sale01-Sale15... - hoan toan khong ton tai trong DIM_NhanVien, chi co o day).
+    Luon tra ve dict co "code" (ma da resolve, hoac ma dau vao neu khong tim thay gi), "name",
+    "position_code", "area_code" (None neu tu dmssx_nhanvien - bang do khong co truong nay), "dmsid"
+    (ma dung de truy van hoa don - danh cho vhoadon_otc/etc.employee_code)."""
+    if not code:
+        return {"code": code, "name": None, "position_code": None, "area_code": None, "dmsid": code}
+    nv = _q("SELECT employee_code, dmsid, name, position_code, area_code FROM dim_nhanvien "
+            "WHERE employee_code=? OR dmsid=? ORDER BY is_duplicate DESC LIMIT 1", (code, code))
+    if nv:
+        return {"code": nv[0]["employee_code"], "name": nv[0]["name"],
+                "position_code": nv[0]["position_code"], "area_code": nv[0]["area_code"],
+                "dmsid": nv[0]["dmsid"] or code}
+    sx = _q("SELECT dmscode, code, name FROM dmssx_nhanvien WHERE dmscode=? OR code=? LIMIT 1", (code, code))
+    if sx:
+        return {"code": sx[0]["dmscode"] or code, "name": sx[0]["name"], "position_code": None,
+                "area_code": None, "dmsid": sx[0]["code"] or code}
+    return {"code": code, "name": None, "position_code": None, "area_code": None, "dmsid": code}
+
+
 def employee_directory(search: str = None, position_code: str = None, area_code: str = None, limit: int = 30,
                         scope_area_code: str = None) -> list:
     """Tra cuu MAPPING ma nhan vien <-> ten <-> vai tro (TDV/QLV/CTV/CS/TP/PP/TBP/TK). Dung khi nguoi
@@ -389,7 +412,11 @@ def employee_directory(search: str = None, position_code: str = None, area_code:
     (is_duplicate=1) vua la dmsid cua 1 dong QLV khac (is_duplicate=0)) - VA is_duplicate=0 KHONG PHAI
     luon la dong "dung hon": vi du TM24060301, dong is_duplicate=0 la vi tri TRONG ("Trong QLV MK3"),
     dong is_duplicate=1 moi la ten nguoi that. Khi ket qua co NHIEU dong cho cung 1 ma tra cuu, PHAI
-    liet ke HET, KHONG tu chon 1 dong."""
+    liet ke HET, KHONG tu chon 1 dong.
+    NEU co "search" VA KHONG loc position_code/area_code: ket qua CO THE gom them nhan vien tu
+    dmssx_nhanvien (bang rieng phia SX/ETC, xac nhan 20/07/2026 - vd ma DNH00087, Sale01-Sale15...
+    hoan toan khong co trong dim_nhanvien) - cac dong nay se co position_code/position_label/area_code
+    = None vi bang do khong luu thong tin nay."""
     if scope_area_code:
         area_code = scope_area_code
     sql = """SELECT n.employee_code employee_code, n.dmsid dmsid, n.name name,
@@ -407,9 +434,17 @@ def employee_directory(search: str = None, position_code: str = None, area_code:
     if area_code:
         sql += " AND n.area_code=?"
         params.append(area_code)
-    sql += " ORDER BY n.name LIMIT ?"
-    params.append(limit)
-    return _q(sql, tuple(params))
+    rows = _q(sql, tuple(params))
+    if search and not position_code and not area_code:
+        sx_rows = _q("""SELECT dmscode employee_code, code dmsid, name name
+                         FROM dmssx_nhanvien WHERE name LIKE ? OR dmscode LIKE ? OR code LIKE ?""",
+                     (f"%{search}%", f"%{search}%", f"%{search}%"))
+        for r in sx_rows:
+            r["position_code"] = None; r["position_label"] = None
+            r["area_code"] = None; r["is_duplicate"] = 0
+        rows += sx_rows
+    rows.sort(key=lambda r: r["name"] or "")
+    return rows[:limit]
 
 
 def compare_periods(date_from_a: str, date_to_a: str, date_from_b: str, date_to_b: str,
@@ -577,14 +612,14 @@ def order_timing_check(date_from: str, date_to: str, threshold_days: int = 2, li
         # Bao cao chong gian lan: LAY TEN DU is_duplicate=1 (khac cac tool khac) - muc dich la minh
         # bach danh tinh, khong nen an ten chi vi 1 co du lieu khong lien quan.
         # r["employee_code"] o day la gia tri THO tren hoa don = DMSId (KHONG PHAI EmployeeCode -
-        # da xac minh 17/07/2026, xem ghi chu trong employee_daily_kpi()) - tra theo dmsid, sau do
-        # gan lai employee_code THAT de hien thi/nhom dung ma nhan vien chinh thuc.
-        nv = _q("SELECT employee_code, name, position_code FROM dim_nhanvien WHERE dmsid=? LIMIT 1",
-                (r["employee_code"],)) if r["employee_code"] else []
-        r["employee_name"] = nv[0]["name"] if nv else None
-        r["position_code"] = nv[0]["position_code"] if nv else None
-        if nv:
-            r["employee_code"] = nv[0]["employee_code"]
+        # da xac minh 17/07/2026, xem ghi chu trong employee_daily_kpi()) - tra qua
+        # _resolve_employee_identity() (thu dim_nhanvien truoc, roi dmssx_nhanvien - xac nhan
+        # 20/07/2026 mot nhom nhan vien chi co o bang do), sau do gan lai employee_code THAT.
+        ident = _resolve_employee_identity(r["employee_code"])
+        r["employee_name"] = ident["name"]
+        r["position_code"] = ident["position_code"]
+        if ident["name"]:
+            r["employee_code"] = ident["code"]
 
     by_employee = {}
     for r in rows:

@@ -145,6 +145,9 @@ SMALL_TABLES = [
     ("DIM_TargetVungMien", "dim_targetvungmien", "AreaCode, ChannelCode, Amount, DocDate", "area_code,channel_code,amount,doc_date"),
     ("FACT_KeHoachTongETC", "fact_kehoachtongetc", "DocDate, Amount, ItemGroup", "doc_date,amount,item_group"),
     ("DMSSX_KhachHang", "dmssx_khachhang", "Code, Name, CityId, Id, KenhBH", "code,name,city_id,id_code,kenh_bh"),
+    # Nhan vien rieng phia SX/ETC, KHONG co trong DIM_NhanVien - xac nhan 20/07/2026 (vd ma DNH00087,
+    # DNH00268, Sale01-Sale15...). Xem local_warehouse.py va report_templates.py _resolve_employee_identity().
+    ("DMSSX_NhanVien", "dmssx_nhanvien", "Id, Name, DMSCode, Code, IsActive", "id_code,name,dmscode,code,is_active"),
     ("DMS_KhachHang", "dms_khachhang", "Code, Name, CityId, Id, EmpDMSCode1, KenhBH", "code,name,city_id,id_code,emp_code,kenh_bh"),
     # StartDate/EndDate/IsResigned: lich su dam nhiem (Bravo giu lai ban ghi cu, KHONG xoa khi doi
     # nguoi) - dung de dung lai timeline "ai phu trach luc nao". ManagerAreaCode: ma khu vuc nho
