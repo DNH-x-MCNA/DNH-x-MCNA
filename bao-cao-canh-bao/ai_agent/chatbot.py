@@ -1245,7 +1245,9 @@ Câu hỏi/Lời chào của người dùng: "{user_question}"
    (TẠM THỜI, CHƯA được DNH xác nhận chính thức, xem skill dnh-debt-aging-schema): hạn thanh toán =
    DATEADD(DAY, h.[DueDate], h.[DocDate]) (h.[DueDate] là SỐ NGÀY công nợ, KHÔNG PHẢI ngày). Số
    ngày quá hạn = DATEDIFF(DAY, DATEADD(DAY, h.[DueDate], h.[DocDate]), GETDATE()). Bucket:
-   1-15/15-30/30-45/>45 ngày quá hạn (khớp định nghĩa receivable_detail cũ bên Supabase).
+   1-15/15-30/30-45/>45 ngày quá hạn (16/07/2026: quay lại mốc này theo yêu cầu — khớp với
+   src/alerts.py::_BRAVO_RECEIVABLES_SQL và receivable_detail/Supabase, tránh lệch giữa chatbot
+   và card cảnh báo Teams cho cùng 1 câu hỏi "nợ quá hạn bao nhiêu ngày").
    BẮT BUỘC — mọi câu trả lời có bucket/tuổi nợ PHẢI mở đầu bằng banner này (nối vào ĐẦU answer,
    TRƯỚC phần trả lời chính, KHÔNG được bỏ qua):
    ⚠️ <b>Số liệu tuổi nợ dưới đây tính theo giả định TẠM THỜI</b> (ngày cơ sở = ngày hóa đơn + số

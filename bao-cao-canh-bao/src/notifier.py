@@ -57,6 +57,27 @@ def _log_alert_severity(alert_name, severity):
         print(f"[NOTIFIER] Không ghi được alert_severity_log (bỏ qua, không ảnh hưởng gửi alert): {e}")
 
 
+def _count_alert_occurrences_this_month(alert_name):
+    """15/07/2026: đếm số lần alert_name đã bắn CRITICAL (tức thực sự lên Teams — WARNING/INFO
+    chỉ log, không gửi, xem require_critical_for_teams) trong THÁNG HIỆN TẠI, tính cả lần vừa được
+    _log_alert_severity() ghi ngay phía trên lời gọi hàm này — dùng để báo "lần thứ N trong tháng"
+    trong card Teams, giúp người nhận phân biệt cảnh báo lặp lại (vấn đề tồn đọng) hay mới phát
+    sinh. Lỗi đếm không được chặn gửi alert thật — trả về 1 (coi như lần đầu) nếu lỗi."""
+    try:
+        conn = sqlite3.connect(STATE_DB_PATH)
+        month_prefix = datetime.now().strftime('%Y-%m')
+        row = conn.execute(
+            "SELECT COUNT(*) FROM alert_severity_log WHERE alert_name=? AND severity='CRITICAL' "
+            "AND strftime('%Y-%m', sent_at)=?",
+            (alert_name, month_prefix)
+        ).fetchone()
+        conn.close()
+        return row[0] if row else 1
+    except Exception as e:
+        print(f"[NOTIFIER] Không đếm được số lần lặp alert (bỏ qua, coi là lần đầu): {e}")
+        return 1
+
+
 # HTML template for alerts
 ALERT_EMAIL_TEMPLATE = """
 <!DOCTYPE html>
@@ -85,7 +106,7 @@ ALERT_EMAIL_TEMPLATE = """
 <body>
     <div class="card">
         <div class="header {{ severity.lower() }}">
-            🚨 {{ alert_name }}
+            {{ alert_name }}
         </div>
         <div class="content">
             <div class="alert-title">{{ summary }}</div>
@@ -132,6 +153,8 @@ DIGEST_EMAIL_TEMPLATE = """
         body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; color: #333333; margin: 0; padding: 20px; background-color: #f4f5f8; }
         .container { max-width: 650px; margin: 0 auto; background: #ffffff; border-radius: 16px; box-shadow: 0 4px 20px rgba(0,0,0,0.06); overflow: hidden; border: 1px solid #e2e8f0; }
         .header { background-color: #1e3a8a; background: linear-gradient(135deg, #1e3a8a 0%, #3b82f6 100%); padding: 30px 24px; color: #ffffff; }
+        .header.header-monthly { background-color: #4c1d95; background: linear-gradient(135deg, #4c1d95 0%, #7c3aed 100%); }
+        .header-badge { display: inline-block; font-size: 11px; font-weight: 700; letter-spacing: 0.8px; text-transform: uppercase; background: rgba(255,255,255,0.18); padding: 4px 10px; border-radius: 999px; margin-bottom: 10px; }
         .header h1 { margin: 0; font-size: 22px; font-weight: 700; letter-spacing: 0.5px; }
         .header p { margin: 5px 0 0 0; font-size: 14px; opacity: 0.9; }
         .content { padding: 24px; }
@@ -154,8 +177,9 @@ DIGEST_EMAIL_TEMPLATE = """
 </head>
 <body>
     <div class="container">
-        <div class="header">
-            <h1>BÁO CÁO TỔNG HỢP HOẠT ĐỘNG {{ period_label|upper }}</h1>
+        <div class="header{% if period_label == 'Monthly' %} header-monthly{% endif %}">
+            <span class="header-badge">{% if period_label == 'Weekly' %}Báo cáo Tuần{% elif period_label == 'Monthly' %}Báo cáo Tháng{% else %}Báo cáo Ngày{% endif %}</span>
+            <h1>BÁO CÁO TỔNG HỢP HOẠT ĐỘNG {% if period_label == 'Weekly' %}TUẦN{% elif period_label == 'Monthly' %}THÁNG{% else %}{{ period_label|upper }}{% endif %}</h1>
             <p>{{ metrics.period_range or metrics.date }}</p>
             {% if audience %}
             <p style="margin: 8px 0 0 0; font-size: 13px; opacity: 0.9;">
@@ -188,29 +212,38 @@ DIGEST_EMAIL_TEMPLATE = """
             {% endif %}
 
             <!-- Doanh thu Section -->
+            {% if metrics.channel == 'OTC' %}
+            <div class="section-title">Doanh Thu (OTC)</div>
+            {% elif metrics.channel == 'ETC' %}
+            <div class="section-title">Doanh Thu (ETC)</div>
+            {% else %}
             <div class="section-title">Doanh Thu (OTC + ETC)</div>
+            {% endif %}
             <div class="grid">
                 <!--[if mso]>
-                <table role="presentation" width="100%" style="border-collapse: collapse; border: 0;"><tr><td width="25%" valign="top" style="padding: 8px;">
+                <table role="presentation" width="100%" style="border-collapse: collapse; border: 0;"><tr>
                 <![endif]-->
+                {% if metrics.channel != 'ETC' %}
+                <!--[if mso]><td width="25%" valign="top" style="padding: 8px;"><![endif]-->
                 <div class="col" style="width: 100%; max-width: 145px; padding: 8px;">
                     <div class="kpi-card">
                         <div class="lbl">Doanh Thu OTC</div>
                         <div class="val">{{ "{:,.0f}".format(metrics.revenue.otc) }} đ</div>
                     </div>
                 </div>
-                <!--[if mso]>
-                </td><td width="25%" valign="top" style="padding: 8px;">
-                <![endif]-->
+                <!--[if mso]></td><![endif]-->
+                {% endif %}
+                {% if metrics.channel != 'OTC' %}
+                <!--[if mso]><td width="25%" valign="top" style="padding: 8px;"><![endif]-->
                 <div class="col" style="width: 100%; max-width: 145px; padding: 8px;">
                     <div class="kpi-card">
                         <div class="lbl">Doanh Thu ETC</div>
                         <div class="val">{{ "{:,.0f}".format(metrics.revenue.etc) }} đ</div>
                     </div>
                 </div>
-                <!--[if mso]>
-                </td><td width="25%" valign="top" style="padding: 8px;">
-                <![endif]-->
+                <!--[if mso]></td><![endif]-->
+                {% endif %}
+                <!--[if mso]><td width="25%" valign="top" style="padding: 8px;"><![endif]-->
                 <div class="col" style="width: 100%; max-width: 145px; padding: 8px;">
                     <div class="kpi-card success">
                         <div class="lbl">Tổng Doanh Thu</div>
@@ -222,64 +255,35 @@ DIGEST_EMAIL_TEMPLATE = """
                         {% else %}
                         <div class="no-data">Chưa đủ dữ liệu kỳ trước</div>
                         {% endif %}
+                        {% if metrics.channel_share %}
+                        <div class="no-data">OTC {{ metrics.channel_share.otc_pct }}% &bull; ETC {{ metrics.channel_share.etc_pct }}%</div>
+                        {% endif %}
                     </div>
                 </div>
-                <!--[if mso]>
-                </td><td width="25%" valign="top" style="padding: 8px;">
-                <![endif]-->
+                <!--[if mso]></td><![endif]-->
+                <!--[if mso]><td width="25%" valign="top" style="padding: 8px;"><![endif]-->
                 <div class="col" style="width: 100%; max-width: 145px; padding: 8px;">
+                    {% if metrics.channel == 'OTC' %}
+                    <div class="kpi-card">
+                        <div class="lbl">Số Hóa Đơn OTC</div>
+                        <div class="val">{{ metrics.revenue.otc_invoice_count }}</div>
+                    </div>
+                    {% elif metrics.channel == 'ETC' %}
+                    <div class="kpi-card">
+                        <div class="lbl">Số Hóa Đơn ETC</div>
+                        <div class="val">{{ metrics.revenue.etc_invoice_count }}</div>
+                    </div>
+                    {% else %}
                     <div class="kpi-card">
                         <div class="lbl">Số Hóa Đơn (OTC/ETC)</div>
                         <div class="val">{{ metrics.revenue.otc_invoice_count }} / {{ metrics.revenue.etc_invoice_count }}</div>
                         <div class="no-data">Tổng: {{ metrics.revenue.invoice_count }}</div>
                     </div>
-                </div>
-                <!--[if mso]>
-                </td></tr></table>
-                <![endif]-->
-            </div>
-
-            <!-- Top khách hàng Section -->
-            <div class="section-title">Top 5 Khách Hàng Theo Doanh Thu</div>
-            <div class="grid">
-                <!--[if mso]>
-                <table role="presentation" width="100%" style="border-collapse: collapse; border: 0;"><tr><td width="50%" valign="top" style="padding: 8px;">
-                <![endif]-->
-                <div class="col" style="width: 100%; max-width: 290px; padding: 8px;">
-                    <p style="font-size:12px; font-weight:700; color:#64748b; text-transform:uppercase; margin: 0 0 6px;">Kênh OTC</p>
-                    {% if metrics.top_customers_otc %}
-                    <table class="data-table">
-                        <thead><tr><th>Khách hàng</th><th>Doanh thu</th></tr></thead>
-                        <tbody>
-                            {% for c in metrics.top_customers_otc %}
-                            <tr><td>{{ c.name }}</td><td>{{ "{:,.0f}".format(c.revenue) }} đ</td></tr>
-                            {% endfor %}
-                        </tbody>
-                    </table>
-                    {% else %}
-                    <p class="no-data">Không có dữ liệu.</p>
                     {% endif %}
                 </div>
+                <!--[if mso]></td><![endif]-->
                 <!--[if mso]>
-                </td><td width="50%" valign="top" style="padding: 8px;">
-                <![endif]-->
-                <div class="col" style="width: 100%; max-width: 290px; padding: 8px;">
-                    <p style="font-size:12px; font-weight:700; color:#64748b; text-transform:uppercase; margin: 0 0 6px;">Kênh ETC</p>
-                    {% if metrics.top_customers_etc %}
-                    <table class="data-table">
-                        <thead><tr><th>Khách hàng</th><th>Doanh thu</th></tr></thead>
-                        <tbody>
-                            {% for c in metrics.top_customers_etc %}
-                            <tr><td>{{ c.name }}</td><td>{{ "{:,.0f}".format(c.revenue) }} đ</td></tr>
-                            {% endfor %}
-                        </tbody>
-                    </table>
-                    {% else %}
-                    <p class="no-data">Không có dữ liệu.</p>
-                    {% endif %}
-                </div>
-                <!--[if mso]>
-                </td></tr></table>
+                </tr></table>
                 <![endif]-->
             </div>
 
@@ -301,7 +305,30 @@ DIGEST_EMAIL_TEMPLATE = """
             </table>
             {% endif %}
 
-            {% if metrics.region_breakdown %}
+            {% if metrics.region_growth %}
+            <!-- 16/07/2026: bản Monthly có thêm cột tăng trưởng so kỳ trước — Weekly vẫn dùng
+            bảng đơn giản bên dưới (region_growth chỉ tính cho granularity="monthly", xem etl.py). -->
+            <div class="section-title">Doanh Thu Theo Vùng &amp; Tăng Trưởng</div>
+            <table class="data-table">
+                <thead><tr><th>Vùng</th><th>Doanh thu</th><th>Kỳ trước</th><th>Tăng trưởng</th></tr></thead>
+                <tbody>
+                    {% for r in metrics.region_growth %}
+                    <tr>
+                        <td>{{ r.region }}</td>
+                        <td>{{ "{:,.0f}".format(r.revenue) }} đ</td>
+                        <td>{{ "{:,.0f}".format(r.prev_revenue) }} đ</td>
+                        <td>
+                            {% if r.growth_pct is not none %}
+                            <span class="{{ 'trend-up' if r.growth_pct >= 0 else 'trend-down' }}">{{ "%+.1f"|format(r.growth_pct) }}%</span>
+                            {% else %}
+                            <span class="no-data">—</span>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            {% elif metrics.region_breakdown %}
             <!-- Breakdown theo Vùng Section — chỉ hiện khi báo cáo KHÔNG lọc sẵn theo 1 vùng cụ thể -->
             <div class="section-title">Doanh Thu Theo Vùng</div>
             <table class="data-table">
@@ -348,6 +375,31 @@ DIGEST_EMAIL_TEMPLATE = """
                 <!--[if mso]>
                 </td></tr></table>
                 <![endif]-->
+                {% if metrics.channel_share and metrics.kpi_summary.total_target %}
+                <!-- 16/07/2026: chỉ tiêu tháng — chỉ hiện ở Monthly (channel_share chỉ tính cho
+                granularity="monthly", dùng làm cờ đánh dấu, xem etl.py). -->
+                <!--[if mso]>
+                <table role="presentation" width="100%" style="border-collapse: collapse; border: 0;"><tr><td width="50%" valign="top" style="padding: 8px;">
+                <![endif]-->
+                <div class="col" style="width: 100%; max-width: 290px; padding: 8px;">
+                    <div class="kpi-card">
+                        <div class="lbl">Tổng Chỉ Tiêu Tháng</div>
+                        <div class="val">{{ "{:,.0f}".format(metrics.kpi_summary.total_target) }} đ</div>
+                    </div>
+                </div>
+                <!--[if mso]>
+                </td><td width="50%" valign="top" style="padding: 8px;">
+                <![endif]-->
+                <div class="col" style="width: 100%; max-width: 290px; padding: 8px;">
+                    <div class="kpi-card {{ 'success' if metrics.kpi_summary.total_amount >= metrics.kpi_summary.total_target else 'failed' }}">
+                        <div class="lbl">Còn Thiếu Để Đạt 100%</div>
+                        <div class="val">{{ "{:,.0f}".format([metrics.kpi_summary.total_target - metrics.kpi_summary.total_amount, 0]|max) }} đ</div>
+                    </div>
+                </div>
+                <!--[if mso]>
+                </td></tr></table>
+                <![endif]-->
+                {% endif %}
             </div>
             {% endif %}
 
@@ -423,7 +475,7 @@ DIGEST_EMAIL_TEMPLATE = """
             {% if chatbot_url %}
             <div style="text-align: center; margin-top: 28px; padding-top: 20px; border-top: 1px solid #e2e8f0;">
                 <a href="{{ chatbot_url }}" style="display: inline-block; background-color: #1e3a8a; background: linear-gradient(135deg, #1e3a8a 0%, #3b82f6 100%); color: #ffffff; text-decoration: none; font-size: 14px; font-weight: 700; padding: 12px 28px; border-radius: 8px;">
-                    💬 Mở Chatbot DNH để hỏi thêm
+                    Mở Chatbot DNH để hỏi thêm
                 </a>
                 <p style="margin: 10px 0 0 0; font-size: 12px; color: #94a3b8;">Đăng nhập đúng tài khoản của bạn để xem đúng phạm vi vùng/kênh được phân quyền.</p>
             </div>
@@ -680,6 +732,12 @@ def _severity_to_card_style(severity):
         return "warning"    # vang
     return "good"           # xanh, dung cho INFO
 
+def _severity_label_vi(severity):
+    """15/07/2026: nhan tieng Viet cho severity, dung thay the emoji lam dau hieu muc do nghiem
+    trong — mau sac (qua _severity_to_card_style) + chu dam da du phan biet, khong can emoji."""
+    s = (severity or "").upper()
+    return {"CRITICAL": "NGHIÊM TRỌNG", "WARNING": "CẢNH BÁO"}.get(s, "THÔNG TIN")
+
 def _chatbot_deep_link(question=None):
     """
     URL dẫn vào web chatbot — nếu có `question` thì kèm sẵn câu hỏi (?q=...). `question=None` ->
@@ -700,6 +758,44 @@ def _chatbot_deep_link(question=None):
     return base
 
 
+def _build_detail_table(table_headers, table_rows, max_rows=None):
+    """Bảng Adaptive Card thật (type Table, schema 1.5) — mỗi cột dữ liệu nằm riêng 1 ô, thay
+    cho FactSet gộp các giá trị bằng " | " vào 1 dòng text (vỡ dòng khó đọc khi tên khách hàng
+    dài, như phản ánh 15/07/2026). Cột chứa tên (khách hàng/sản phẩm/nhân sự) được cấp width
+    gấp đôi các cột còn lại vì thường dài hơn nhiều."""
+    name_idx = None
+    for idx, h in enumerate(table_headers):
+        hl = h.lower()
+        if "tên" in hl or "name" in hl or "đại lý" in hl or "nhân sự" in hl:
+            name_idx = idx
+            break
+
+    def _cell(text, is_header=False):
+        return {
+            "type": "TableCell",
+            "items": [{
+                "type": "TextBlock",
+                "text": str(text),
+                "wrap": True,
+                "weight": "Bolder" if is_header else "Default",
+                "size": "Small"
+            }],
+            "verticalContentAlignment": "Center"
+        }
+
+    rows = [{"type": "TableRow", "cells": [_cell(h, is_header=True) for h in table_headers]}]
+    for row in (table_rows[:max_rows] if max_rows else table_rows):
+        rows.append({"type": "TableRow", "cells": [_cell(v) for v in row]})
+
+    return {
+        "type": "Table",
+        "columns": [{"width": 2 if i == name_idx else 1} for i in range(len(table_headers))],
+        "rows": rows,
+        "firstRowAsHeaders": False,
+        "showGridLines": True
+    }
+
+
 def _build_teams_adaptive_card(title, summary, severity, table_headers=None, table_rows=None,
                                 period=None, channel=None, region=None, issue=None):
     """
@@ -716,35 +812,37 @@ def _build_teams_adaptive_card(title, summary, severity, table_headers=None, tab
     vào hàm — KHÔNG đổi chữ ký để không phải sửa lại toàn bộ các nơi gọi trong src/alerts.py — chỉ
     không dùng để vẽ Table nữa (email vẫn hiển thị bảng bình thường, không đổi).
     """
+    style = _severity_to_card_style(severity)
     body = [
         {
             "type": "Container",
-            "style": _severity_to_card_style(severity),
+            "style": style,
             "bleed": True,
             "items": [
-                {"type": "TextBlock", "text": f"🚨 {title}", "weight": "Bolder", "size": "Large", "wrap": True},
-                {"type": "TextBlock", "text": f"Mức độ: {severity}", "isSubtle": True, "size": "Small", "wrap": True}
+                {"type": "TextBlock", "text": _severity_label_vi(severity), "weight": "Bolder", "size": "Small",
+                 "color": style, "spacing": "None"},
+                {"type": "TextBlock", "text": title, "weight": "Bolder", "size": "Large", "wrap": True, "spacing": "Small"},
             ]
         }
     ]
 
     facts = []
     if period:
-        facts.append({"title": "📅 Kỳ / Ngày", "value": str(period)})
+        facts.append({"title": "Kỳ / Ngày", "value": str(period)})
     if channel:
-        facts.append({"title": "🏷️ Kênh", "value": str(channel)})
+        facts.append({"title": "Kênh", "value": str(channel)})
     if region:
-        facts.append({"title": "📍 Khu vực", "value": str(region)})
+        facts.append({"title": "Khu vực", "value": str(region)})
     if facts:
         body.append({"type": "FactSet", "facts": facts, "spacing": "Medium"})
 
     if issue:
         body.append({
             "type": "TextBlock",
-            "text": f"⚠️ Vấn đề phát hiện: {issue}",
+            "text": f"Vấn đề phát hiện: {issue}",
             "weight": "Bolder",
             "wrap": True,
-            "color": _severity_to_card_style(severity),
+            "color": style,
             "spacing": "Medium" if not facts else "Small"
         })
 
@@ -753,32 +851,6 @@ def _build_teams_adaptive_card(title, summary, severity, table_headers=None, tab
     # Compact Table Container using Action.ToggleVisibility
     has_details = table_headers and table_rows
     if has_details:
-        facts_list = []
-        code_idx = None
-        name_idx = None
-        for idx, h in enumerate(table_headers):
-            hl = h.lower()
-            if ("mã" in hl or "sku" in hl or "code" in hl) and code_idx is None:
-                code_idx = idx
-            if ("tên" in hl or "name" in hl or "đại lý" in hl or "nhân sự" in hl) and name_idx is None:
-                name_idx = idx
-        
-        # Fallbacks
-        if code_idx is None:
-            code_idx = 0
-        if name_idx is None:
-            name_idx = 1 if len(table_headers) > 1 else 0
-
-        for row in table_rows:
-            if len(table_headers) == 2:
-                key = str(row[0])
-                val = str(row[1])
-            else:
-                key = f"{row[code_idx]} - {row[name_idx]}" if code_idx != name_idx else str(row[code_idx])
-                other_vals = [str(row[i]) for i in range(len(row)) if i not in (code_idx, name_idx)]
-                val = " | ".join(other_vals)
-            facts_list.append({"title": key, "value": val})
-
         body.append({
             "type": "Container",
             "id": "compactTableDetails",
@@ -787,15 +859,11 @@ def _build_teams_adaptive_card(title, summary, severity, table_headers=None, tab
             "items": [
                 {
                     "type": "TextBlock",
-                    "text": "📋 Chi tiết danh sách:",
+                    "text": "Chi tiết danh sách:",
                     "weight": "Bolder",
                     "size": "Small"
                 },
-                {
-                    "type": "FactSet",
-                    "facts": facts_list,
-                    "spacing": "Small"
-                }
+                _build_detail_table(table_headers, table_rows)
             ]
         })
 
@@ -820,7 +888,7 @@ def _build_teams_adaptive_card(title, summary, severity, table_headers=None, tab
     if has_details:
         actions.append({
             "type": "Action.ToggleVisibility",
-            "title": "👁️ Thu gọn / Hiện chi tiết",
+            "title": "Thu gọn / Hiện chi tiết",
             "targetElements": ["compactTableDetails"]
         })
 
@@ -829,7 +897,7 @@ def _build_teams_adaptive_card(title, summary, severity, table_headers=None, tab
     if is_debt:
         actions.append({
             "type": "Action.OpenUrl",
-            "title": "📞 Gọi Hotline DNH (1900 636433)",
+            "title": "Gọi Hotline DNH (1900 636433)",
             "url": "tel:1900636433"
         })
 
@@ -837,7 +905,7 @@ def _build_teams_adaptive_card(title, summary, severity, table_headers=None, tab
     if chat_question:
         actions.append({
             "type": "Action.OpenUrl",
-            "title": "💬 Hỏi Chatbot DNH",
+            "title": "Hỏi Chatbot DNH",
             "url": _chatbot_deep_link(f"Cho tôi xem chi tiết: {chat_question}")
         })
 
@@ -1009,7 +1077,8 @@ def _build_teams_consolidated_card(alerts):
             "style": "attention",
             "bleed": True,
             "items": [
-                {"type": "TextBlock", "text": f"🚨 {len(alerts)} cảnh báo nghiêm trọng", "weight": "Bolder", "size": "Large", "wrap": True},
+                {"type": "TextBlock", "text": "NGHIÊM TRỌNG", "weight": "Bolder", "size": "Small", "color": "attention", "spacing": "None"},
+                {"type": "TextBlock", "text": f"{len(alerts)} cảnh báo nghiêm trọng", "weight": "Bolder", "size": "Large", "wrap": True, "spacing": "Small"},
                 {"type": "TextBlock", "text": f"Phát hiện lúc {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", "isSubtle": True, "size": "Small", "wrap": True}
             ]
         }
@@ -1017,17 +1086,25 @@ def _build_teams_consolidated_card(alerts):
     for i, a in enumerate(alerts, 1):
         facts = []
         if a.get("period"):
-            facts.append({"title": "📅 Kỳ / Ngày", "value": str(a["period"])})
+            facts.append({"title": "Kỳ / Ngày", "value": str(a["period"])})
         if a.get("channel"):
-            facts.append({"title": "🏷️ Kênh", "value": str(a["channel"])})
+            facts.append({"title": "Kênh", "value": str(a["channel"])})
         if a.get("region"):
-            facts.append({"title": "📍 Khu vực", "value": str(a["region"])})
+            facts.append({"title": "Khu vực", "value": str(a["region"])})
         item_items = [{"type": "TextBlock", "text": f"{i}. {a['alert_name']}", "weight": "Bolder", "wrap": True}]
         if facts:
             item_items.append({"type": "FactSet", "facts": facts, "spacing": "Small"})
         
+        # 16/07/2026: TRƯỚC ĐÂY chỉ hiện issue HOẶC summary (ưu tiên issue, bỏ qua summary khi cả 2
+        # đều có) — ghi chú "Lần thứ N trong tháng" (send_alert_to_all_channels) chỉ được gắn vào
+        # summary nên hầu như không bao giờ hiển thị trên card gộp (mọi alert đều truyền issue).
+        # Giờ hiện CẢ HAI như card đơn (_build_teams_adaptive_card) đã làm đúng từ trước.
+        issue_text = a.get("issue")
         main_summary = a.get("summary") or ""
-        item_items.append({"type": "TextBlock", "text": a.get("issue") or main_summary, "wrap": True, "spacing": "Small"})
+        if issue_text:
+            item_items.append({"type": "TextBlock", "text": issue_text, "weight": "Bolder", "wrap": True, "spacing": "Small"})
+        if main_summary and main_summary != issue_text:
+            item_items.append({"type": "TextBlock", "text": main_summary, "wrap": True, "spacing": "Small" if issue_text else "Small"})
 
         # Compact Table Toggle inside list if headers & rows present
         table_headers = a.get("table_headers")
@@ -1035,32 +1112,6 @@ def _build_teams_consolidated_card(alerts):
         item_actions = []
 
         if table_headers and table_rows:
-            facts_list = []
-            code_idx = None
-            name_idx = None
-            for idx, h in enumerate(table_headers):
-                hl = h.lower()
-                if ("mã" in hl or "sku" in hl or "code" in hl) and code_idx is None:
-                    code_idx = idx
-                if ("tên" in hl or "name" in hl or "đại lý" in hl or "nhân sự" in hl) and name_idx is None:
-                    name_idx = idx
-            
-            # Fallbacks
-            if code_idx is None:
-                code_idx = 0
-            if name_idx is None:
-                name_idx = 1 if len(table_headers) > 1 else 0
-
-            for row in table_rows[:5]:
-                if len(table_headers) == 2:
-                    key = str(row[0])
-                    val = str(row[1])
-                else:
-                    key = f"{row[code_idx]} - {row[name_idx]}" if code_idx != name_idx else str(row[code_idx])
-                    other_vals = [str(row[i]) for i in range(len(row)) if i not in (code_idx, name_idx)]
-                    val = " | ".join(other_vals)
-                facts_list.append({"title": key, "value": val})
-
             toggle_id = f"compactTable_{i}"
             item_items.append({
                 "type": "Container",
@@ -1068,13 +1119,13 @@ def _build_teams_consolidated_card(alerts):
                 "isVisible": False,
                 "spacing": "Small",
                 "items": [
-                    {"type": "TextBlock", "text": "📋 Chi tiết danh sách (tối đa 5 dòng):", "weight": "Bolder", "size": "Small"},
-                    {"type": "FactSet", "facts": facts_list, "spacing": "Small"}
+                    {"type": "TextBlock", "text": "Chi tiết danh sách (tối đa 5 dòng):", "weight": "Bolder", "size": "Small"},
+                    _build_detail_table(table_headers, table_rows, max_rows=5)
                 ]
             })
             item_actions.append({
                 "type": "Action.ToggleVisibility",
-                "title": "👁️ Xem nhanh danh sách",
+                "title": "Xem nhanh danh sách",
                 "targetElements": [toggle_id]
             })
 
@@ -1083,7 +1134,7 @@ def _build_teams_consolidated_card(alerts):
         if is_debt:
             item_actions.append({
                 "type": "Action.OpenUrl",
-                "title": "📞 Gọi Hotline DNH",
+                "title": "Gọi Hotline DNH",
                 "url": "tel:1900636433"
             })
 
@@ -1114,7 +1165,7 @@ def _build_teams_consolidated_card(alerts):
         "body": body,
         "actions": [{
             "type": "Action.OpenUrl",
-            "title": "💬 Mở Chatbot DNH",
+            "title": "Mở Chatbot DNH",
             "url": _chatbot_deep_link()
         }]
     }
@@ -1214,14 +1265,18 @@ def send_alert_to_all_channels(alert_name, severity, summary, table_headers=None
             if not webhooks:
                 print("[WARNING] Không có webhook Teams nào khớp (kiểm tra TEAMS_WEBHOOK_URL/.env hoặc report_recipients).")
             else:
+                occurrence_n = _count_alert_occurrences_this_month(alert_name)
+                occurrence_summary = summary
+                if occurrence_n > 1:
+                    occurrence_summary += f" (Lần thứ {occurrence_n} trong tháng {datetime.now().strftime('%m/%Y')} — cảnh báo này đã lặp lại nhiều lần, vấn đề có thể vẫn tồn đọng.)"
                 _pending_critical_teams_alerts.append({
-                    "alert_name": alert_name, "summary": summary,
+                    "alert_name": alert_name, "summary": occurrence_summary,
                     "period": period, "channel": channel, "region": region, "issue": issue,
                     "webhooks": webhooks,
                     "table_headers": table_headers, "table_rows": table_rows
                 })
                 any_sent = True
-                print(f"[TEAMS] Đã đưa '{alert_name}' vào hàng đợi gộp card (gửi cuối chu kỳ quét).")
+                print(f"[TEAMS] Đã đưa '{alert_name}' vào hàng đợi gộp card (gửi cuối chu kỳ quét, lần thứ {occurrence_n} trong tháng).")
         except Exception as e:
             print(f"[ERROR] Loi dua vao hang doi Teams: {e}")
     elif "teams" in channels:

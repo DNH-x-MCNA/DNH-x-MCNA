@@ -115,7 +115,7 @@ def _period_revenue(start_dt, end_dt, region=None):
     """
     from sqlalchemy import text, bindparam
     from src.database import _get_bravo_engine
-    from src.region_map import CUSTOMER_CODE_PREFIX_TO_REGION
+    from src.region_map import customer_region_resolve_sql
 
     engine = _get_bravo_engine()
     if engine is None:
@@ -128,16 +128,16 @@ def _period_revenue(start_dt, end_dt, region=None):
     params = {"start_dt": start_dt, "end_dt": end_dt}
     # OTC (vHoaDonTotal) KHÔNG lộ sẵn CityId trong cột output -> join thêm qua CustomerCode.
     # ETC (vHoaDonETCTotal) ĐÃ lộ sẵn CityId -> join thẳng DIM_TinhThanhPho, không cần thêm bảng.
-    otc_region_join, etc_region_join, region_where = "", "", ""
+    # 16/07/2026: JOIN + biểu thức CASE suy luận vùng chuyển sang customer_region_resolve_sql()
+    # dùng chung (src/region_map.py) — trước đó viết inline riêng ở đây, cùng dạng logic với
+    # check_customer_churn_alert/check_revenue_concentration_alert (src/alerts.py) nhưng khác biến
+    # thể, dễ lệch nếu sửa 1 chỗ quên chỗ kia.
+    otc_region_join, etc_region_join, otc_where, etc_where = "", "", "", ""
     if markers:
-        prefix_case = " ".join(
-            f"WHEN v.CustomerCode LIKE '{prefix}%' THEN '{area}'"
-            for prefix, area in CUSTOMER_CODE_PREFIX_TO_REGION.items()
-        )
-        area_expr = f"COALESCE(rt.AreaCode, CASE {prefix_case} ELSE NULL END)"
-        otc_region_join = "LEFT JOIN dbo.DMS_KhachHang k ON v.CustomerCode = k.Code LEFT JOIN dbo.DIM_TinhThanhPho rt ON k.CityId = rt.CityId"
-        etc_region_join = "LEFT JOIN dbo.DIM_TinhThanhPho rt ON v.CityId = rt.CityId"
-        region_where = f" AND {area_expr} IN :region_markers"
+        otc_region_join, otc_area_expr = customer_region_resolve_sql("v", "OTC")
+        etc_region_join, etc_area_expr = customer_region_resolve_sql("v", "ETC")
+        otc_where = f" AND {otc_area_expr} IN :region_markers"
+        etc_where = f" AND {etc_area_expr} IN :region_markers"
         params["region_markers"] = tuple(markers)
 
     otc_sql = text(f'''
@@ -145,14 +145,14 @@ def _period_revenue(start_dt, end_dt, region=None):
         FROM dbo.vHoaDonTotal v
         {otc_region_join}
         WHERE v.DocDate >= :start_dt AND v.DocDate < :end_dt
-        {region_where}
+        {otc_where}
     ''')
     etc_sql = text(f'''
         SELECT COALESCE(SUM(v.Amount9), 0), COUNT(DISTINCT v.Stt)
         FROM dbo.vHoaDonETCTotal v
         {etc_region_join}
         WHERE v.DocDate >= :start_dt AND v.DocDate < :end_dt
-        {region_where}
+        {etc_where}
     ''')
     if markers:
         otc_sql = otc_sql.bindparams(bindparam("region_markers", expanding=True))
@@ -189,7 +189,7 @@ def _revenue_by_region(start_dt, end_dt, channel=None):
     tốn thêm 1 chút nhưng vẫn nhẹ vì hàm này chỉ gọi cho weekly/monthly."""
     from sqlalchemy import text
     from src.database import _get_bravo_engine
-    from src.region_map import region_from_customer_code
+    from src.region_map import region_from_customer_code, customer_region_resolve_sql
 
     engine = _get_bravo_engine()
     if engine is None:
@@ -197,21 +197,26 @@ def _revenue_by_region(start_dt, end_dt, channel=None):
             "Chưa cấu hình BRAVO_SQL_* trong .env — không còn nguồn nào khác cho breakdown vùng."
         )
 
+    # 16/07/2026: JOIN clause dùng chung customer_region_resolve_sql() (src/region_map.py) —
+    # chỉ lấy phần join_clause, KHÔNG dùng area_expr (hàm này vẫn tự suy luận vùng ở PYTHON qua
+    # region_from_customer_code() như cũ, không đổi — group theo customer_code trước rồi mới suy
+    # luận, giữ nguyên hành vi/độ chính xác đã kiểm chứng, chỉ hợp nhất phần JOIN bị lặp).
+    otc_join, _ = customer_region_resolve_sql("v", "OTC")
+    etc_join, _ = customer_region_resolve_sql("v", "ETC")
     parts = []
     if channel is None or channel == "OTC":
-        parts.append('''
+        parts.append(f'''
             SELECT v.CustomerCode AS customer_code, rt.AreaCode AS area_code, SUM(v.Amount9) AS rev
             FROM dbo.vHoaDonTotal v
-            LEFT JOIN dbo.DMS_KhachHang k ON v.CustomerCode = k.Code
-            LEFT JOIN dbo.DIM_TinhThanhPho rt ON k.CityId = rt.CityId
+            {otc_join}
             WHERE v.DocDate >= :start_dt AND v.DocDate < :end_dt
             GROUP BY v.CustomerCode, rt.AreaCode
         ''')
     if channel is None or channel == "ETC":
-        parts.append('''
+        parts.append(f'''
             SELECT v.CustomerCode AS customer_code, rt.AreaCode AS area_code, SUM(v.Amount9) AS rev
             FROM dbo.vHoaDonETCTotal v
-            LEFT JOIN dbo.DIM_TinhThanhPho rt ON v.CityId = rt.CityId
+            {etc_join}
             WHERE v.DocDate >= :start_dt AND v.DocDate < :end_dt
             GROUP BY v.CustomerCode, rt.AreaCode
         ''')
@@ -234,48 +239,6 @@ def _revenue_by_region(start_dt, end_dt, channel=None):
         agg[area] = agg.get(area, 0.0) + float(r.rev or 0)
     return [{"region": _region_label(area), "revenue": round(rev, 2)}
             for area, rev in sorted(agg.items(), key=lambda x: -x[1])]
-
-
-def _top_customers(start_dt, end_dt, channel_label, region_markers=None):
-    """Top 5 khách hàng theo doanh thu trong [start_dt, end_dt) cho 1 kênh (OTC hoặc ETC) —
-    dùng cho get_digest_metrics(). Trả list row (CustomerCode, Name, rev). Tự failover
-    Supabase -> Bravo qua run_with_failover() (xem _period_revenue)."""
-    # 14/07/2026: đổi sang query view gốc Bravo (vHoaDonTotal/vHoaDonETCTotal), cùng lý do và
-    # cách làm với _period_revenue — công thức tự ráp cũ dùng chung logic (JOIN bảng thô + loại
-    # CTKM/hủy) nên chắc chắn dính đúng lỗi tương tự (thiếu trừ hàng trả lại...). Không còn
-    # failover Postgres (view chỉ có ở Bravo, xem docstring _period_revenue).
-    from sqlalchemy import text, bindparam
-    from src.database import _get_bravo_engine
-
-    engine = _get_bravo_engine()
-    if engine is None:
-        raise RuntimeError(
-            "Chưa cấu hình BRAVO_SQL_* trong .env — không còn nguồn nào khác cho top khách hàng."
-        )
-
-    view = "dbo.vHoaDonTotal" if channel_label == "OTC" else "dbo.vHoaDonETCTotal"
-    kh_table = "dbo.DMS_KhachHang" if channel_label == "OTC" else "dbo.DMSSX_KhachHang"
-    params = {"start_dt": start_dt, "end_dt": end_dt}
-    region_join, region_where = "", ""
-    if region_markers:
-        region_join = "JOIN dbo.DIM_TinhThanhPho rt ON k.CityId = rt.CityId"
-        region_where = " AND rt.AreaCode IN :region_markers"
-        params["region_markers"] = tuple(region_markers)
-
-    sql = text(f'''
-        SELECT TOP 5 v.CustomerCode, k.Name, SUM(v.Amount9) AS rev
-        FROM {view} v
-        JOIN {kh_table} k ON v.CustomerCode = k.Code
-        {region_join}
-        WHERE v.DocDate >= :start_dt AND v.DocDate < :end_dt
-        {region_where}
-        GROUP BY v.CustomerCode, k.Name
-        ORDER BY rev DESC
-    ''')
-    if region_markers:
-        sql = sql.bindparams(bindparam("region_markers", expanding=True))
-    with engine.connect() as conn:
-        return conn.execute(sql, params).fetchall()
 
 
 def _revenue_trend(start_dt, end_dt, granularity, region=None, channel=None):
@@ -303,9 +266,14 @@ def _revenue_trend(start_dt, end_dt, granularity, region=None, channel=None):
             buckets.append((cur, nxt, cur.strftime("%a %d/%m")))
             cur = nxt
     elif granularity == "monthly":
+        # 16/07/2026: chia theo TUẦN LỊCH thật (căn Thứ 2 - Chủ Nhật), KHÔNG phải "7 ngày kể từ
+        # mùng 1" như trước (01-07/08-14/... — không khớp tuần thật, gây khó đối chiếu với báo cáo
+        # Tuần). Tuần đầu/cuối tháng cắt theo biên tháng (partial). Ví dụ tháng 7/2026 (mùng 1 rơi
+        # Thứ 4): 01-05/07 (Thứ 4-CN), 06-12/07, 13-19/07... — trùng đúng kỳ báo cáo Tuần.
         cur = start_dt
         while cur < end_dt:
-            nxt = min(cur + timedelta(days=7), end_dt)
+            days_to_next_monday = 7 - cur.weekday()  # weekday(): Thứ 2 = 0 ... Chủ nhật = 6
+            nxt = min(cur + timedelta(days=days_to_next_monday), end_dt)
             buckets.append((cur, nxt, f"{cur.strftime('%d/%m')}-{(nxt - timedelta(days=1)).strftime('%d/%m')}"))
             cur = nxt
     else:
@@ -393,7 +361,56 @@ _HIGHLIGHT_LABELS = {
     "kpi_milestone_tdv": ("Số TDV giảm KPI so TB 5 tháng trước", "count"),
     "data_sanity_zero": ("Dữ liệu rỗng/bất thường — đã chặn cảnh báo", "status"),
     "etl_stale": ("ETL nghi đứng (dữ liệu không mới)", "hours"),
+    "kpi_revenue_reconciliation": ("Doanh thu KPI lệch so với hóa đơn thực tế (OTC)", "money"),
 }
+
+# 16/07/2026: các prefix KHÔNG nên vào "Điểm Nổi Bật Trong Kỳ" dù có trong _HIGHLIGHT_LABELS —
+# data_sanity_zero/etl_stale là cảnh báo SỨC KHỎE HỆ THỐNG (guard kỹ thuật), không phải vấn đề
+# nghiệp vụ; sales_kpi_insights_report chỉ là thông báo "đã gửi báo cáo định kỳ" (status luôn
+# "Đã gửi"), không phản ánh bất thường gì — liệt kê chung với các cảnh báo thật (nợ quá hạn, khách
+# rời bỏ...) sẽ làm loãng phần nội dung thực sự đáng chú ý.
+_HIGHLIGHT_EXCLUDE_PREFIXES = {"data_sanity_zero", "etl_stale", "sales_kpi_insights_report"}
+
+def _highlight_matches_channel(alert_key, channel):
+    """17/07/2026: True nếu highlight này nên hiện cho audience đang lọc theo `channel` (None =
+    không giới hạn kênh, C-Level/Toàn quốc — luôn hiện tất cả). Phát hiện qua báo cáo Daily Digest
+    "Quản lý Kênh OTC" vẫn hiện cảnh báo ETC thật (khách rời bỏ, nợ quá hạn...) — get_digest_metrics
+    đã lọc đúng channel cho doanh thu/công nợ/tồn kho, nhưng _get_period_highlights đọc thẳng
+    sent_alerts KHÔNG biết gì về scope audience.
+
+    Các alert_key có gắn kênh đều dùng đúng 1 quy ước: segment sau dấu ':' là literal 'OTC'/'ETC'
+    (vd 'company_overdue_ratio:ETC:2026-07-16', 'customer_churn:OTC') — xem revenue_drop/
+    company_overdue_ratio/overdue_customer_new_orders/customer_churn/revenue_concentration/
+    kpi_milestone_channel trong src/alerts.py, tất cả dùng channel_label='OTC'/'ETC' y hệt. Alert
+    KHÔNG gắn kênh nào (vd kpi_daily_pace_red, smart_debt_overdue_top5 — vốn đã gộp cả 2 kênh) thì
+    luôn hiện cho mọi audience kênh, không có gì để lọc."""
+    if channel is None:
+        return True
+    if alert_key.startswith("sales_kpi_insights_report_"):
+        return True
+    segments = alert_key.split(":")[1:]
+    if "OTC" in segments:
+        return channel == "OTC"
+    if "ETC" in segments:
+        return channel == "ETC"
+    return True
+
+def _highlight_matches_region(prefix, region):
+    """17/07/2026: True nếu highlight loại `prefix` nên hiện cho audience đã lọc theo `region`
+    (None = không giới hạn vùng, C-Level/Toàn quốc — luôn hiện tất cả). Phát hiện qua Daily Digest
+    "Quản lý Miền Trung" 17/07/2026 vẫn hiện thẳng mã khách hàng NGOÀI vùng (HNA00274, HCM04298) từ
+    cảnh báo customer_churn.
+
+    Khác _highlight_matches_channel (lọc được vì alert_key có gắn literal 'OTC'/'ETC'), bảng
+    sent_alerts KHÔNG lưu vùng của alert đã fire — chỉ lưu alert_key + giá trị cuối. Một số alert
+    (zero_sales_rep, kpi_daily_pace_red, kpi_milestone_tdv...) THẬT SỰ có tính vùng khi gửi Teams
+    (tham số region= suy ra động từ dữ liệu, xem send_alert_to_all_channels trong src/alerts.py),
+    nhưng giá trị vùng đó không được ghi lại vào sent_alerts nên không cách nào đọc lại được ở đây;
+    số còn lại hardcode region="Toàn quốc" (không có breakdown theo vùng trong kiến trúc hiện tại).
+    Vì KHÔNG có alert nào xác minh được đúng vùng audience đang xem, chọn fail-closed triệt để: ẩn
+    HẲN mọi highlight khỏi báo cáo đã scope theo vùng, thay vì hiện nhầm dữ liệu vùng khác (theo
+    yêu cầu — báo cáo vùng chỉ nên chứa đúng thứ thuộc vùng đó, thà trống còn hơn sai)."""
+    return region is None
 
 def _format_highlight_date_part(part):
     """Nếu 1 mảnh suffix của alert_key là ngày/tháng (YYYY-MM-DD, YYYY-MM, hoặc "M_YYYY" — định
@@ -488,7 +505,7 @@ def _humanize_highlight(alert_key, sent_at, value):
 
 _HIGHLIGHTS_MAX_ROWS = 15  # xem _get_period_highlights — trần số dòng hiển thị sau khi đã gộp nhóm
 
-def _get_period_highlights(start_dt, end_dt):
+def _get_period_highlights(start_dt, end_dt, channel=None, region=None):
     """"Điểm nổi bật trong kỳ": các cảnh báo nghiệp vụ đã THỰC SỰ fire trong [start_dt, end_dt),
     đọc từ data/alerts_state.db (bảng sent_alerts, ghi bởi src/alerts.py::record_alert_sent) —
     nối luồng cảnh báo thời gian thực với báo cáo định kỳ thành 1 câu chuyện liền mạch. Mỗi dòng
@@ -497,7 +514,12 @@ def _get_period_highlights(start_dt, end_dt):
     14/07/2026: gộp theo _highlight_group_key() (bỏ mảnh NGÀY khỏi alert_key) — trước đó các cảnh
     báo lặp lại theo ngày (vd "Tỷ lệ nợ quá hạn... (OTC)" tự bắn mỗi sáng) liệt kê riêng TỪNG NGÀY
     trong kỳ báo cáo Monthly, có thể ra 40-50 dòng cho 1 kỳ — chỉ giữ lần gần nhất mỗi nhóm, rồi
-    giới hạn tối đa _HIGHLIGHTS_MAX_ROWS dòng (ưu tiên mới nhất, đã ORDER BY last_sent_at DESC)."""
+    giới hạn tối đa _HIGHLIGHTS_MAX_ROWS dòng (ưu tiên mới nhất, đã ORDER BY last_sent_at DESC).
+
+    17/07/2026: thêm `channel` — lọc bỏ highlight thuộc kênh KHÁC audience đang xem (xem
+    _highlight_matches_channel). channel=None giữ nguyên hành vi cũ (không lọc gì, dùng cho
+    audience C-Level/Toàn quốc). Thêm `region` cùng đợt — lọc bỏ highlight LỘ DANH TÍNH khách hàng
+    cụ thể khi audience đã scope theo vùng (xem _highlight_matches_region)."""
     if not os.path.exists(STATE_DB_PATH):
         return []
     try:
@@ -517,6 +539,13 @@ def _get_period_highlights(start_dt, end_dt):
     seen_groups = set()
     deduped = []
     for r in rows:
+        prefix = "sales_kpi_insights_report" if r[0].startswith("sales_kpi_insights_report_") else r[0].split(":")[0]
+        if prefix in _HIGHLIGHT_EXCLUDE_PREFIXES:
+            continue
+        if not _highlight_matches_channel(r[0], channel):
+            continue
+        if not _highlight_matches_region(prefix, region):
+            continue
         group_key = _highlight_group_key(r[0])
         if group_key in seen_groups:
             continue
@@ -621,14 +650,6 @@ def get_digest_metrics(start_dt, end_dt, period_label, granularity=None, region=
     prev_total_rev = prev_otc_rev + prev_etc_rev
     change_pct = ((total_rev - prev_total_rev) / prev_total_rev) if prev_total_rev > 0 else None
 
-    # 2. Top 5 khách hàng theo doanh thu — tách riêng OTC/ETC vì 2 kênh có KHÔNG GIAN MÃ khách
-    #    hàng khác nhau (dms_khachhang vs dmssx_khachhang), không gộp chung được. Cũng tự failover
-    #    nội bộ qua _top_customers().
-    top_otc, top_etc = [], []
-    if channel != "ETC":
-        top_otc = _top_customers(start_dt, end_dt, "OTC", region_markers)
-    if channel != "OTC":
-        top_etc = _top_customers(start_dt, end_dt, "ETC", region_markers)
 
     # 3. Công nợ — ưu tiên TỨC THỜI từ Bravo (get_bravo_receivables_snapshot, 10/07/2026), dự
     #    phòng receivable_detail (Supabase) nếu Bravo lỗi. Bravo không có khái niệm "kỳ" (luôn
@@ -812,17 +833,67 @@ def get_digest_metrics(start_dt, end_dt, period_label, granularity=None, region=
     #    region_breakdown tự failover nội bộ (xem _revenue_trend/_revenue_by_region).
     trend, region_breakdown = [], []
     if granularity in ("weekly", "monthly"):
-        trend = _revenue_trend(start_dt, end_dt, granularity, region=region, channel=channel)
+        # 16/07/2026: ĐỐI CHIẾU bảng xu hướng với Tổng Doanh Thu đã tính riêng (total_rev) — 2 con
+        # số này LẼ RA bằng nhau (doanh thu cộng dồn được theo ngày, cả 2 cùng kẹp end_dt/region/
+        # channel giống nhau). Nếu lệch: 1 truy vấn con của _revenue_trend đã trả RỖNG do lỗi Bravo
+        # tạm thời (COALESCE SUM = 0), sinh bug "1 ngày = 0 dù tổng vẫn đúng" — phát hiện thực tế
+        # 16/07: báo cáo OTC hiện Wed 15/07 = 0 dù Tổng Doanh Thu gồm cả ngày đó (do chạy Weekly+
+        # Monthly đồng thời gây nghẽn Bravo). Thử lại 1 lần; vẫn lệch thì BỎ bảng xu hướng — thà
+        # không có biểu đồ còn hơn gửi biểu đồ sai/nội bộ mâu thuẫn cho quản lý.
+        for _attempt in range(2):
+            trend = _revenue_trend(start_dt, end_dt, granularity, region=region, channel=channel)
+            trend_sum = round(sum(t["revenue"] for t in trend), 2)
+            if abs(trend_sum - round(total_rev, 2)) <= 1.0:
+                break
+            print(f"[DIGEST] Xu hướng lệch tổng ({trend_sum:,.0f} vs {total_rev:,.0f}) — "
+                  f"{'thử lại' if _attempt == 0 else 'BỎ bảng xu hướng lần này'}.")
+        else:
+            trend = []
         if region is None:
             region_breakdown = _revenue_by_region(start_dt, end_dt, channel=channel)
 
-    highlights = _get_period_highlights(start_dt, end_dt) if granularity in ("weekly", "monthly") else []
-    has_critical = _period_has_critical(start_dt, end_dt) if granularity in ("weekly", "monthly") else False
+    # 16/07/2026: phân tích tăng trưởng theo vùng + tỷ trọng kênh — CHỈ cho Monthly (theo yêu
+    # cầu "thêm phân tích rõ ràng hơn cho báo cáo monthly"), để phân biệt rõ với Weekly thay vì
+    # chỉ khác màu tiêu đề. So sánh cùng prev_start/prev_end đã tính ở trên (kỳ liền trước cùng
+    # độ dài) — tái dùng, không query thêm ngoài _revenue_by_region cho kỳ trước.
+    region_growth = []
+    channel_share = None
+    if granularity == "monthly":
+        if region is None:
+            try:
+                prev_region_breakdown = _revenue_by_region(prev_start, prev_end, channel=channel)
+                prev_by_name = {r["region"]: r["revenue"] for r in prev_region_breakdown}
+                for r in region_breakdown:
+                    prev_rev = prev_by_name.get(r["region"], 0.0)
+                    growth_pct = ((r["revenue"] - prev_rev) / prev_rev * 100) if prev_rev > 0 else None
+                    region_growth.append({
+                        "region": r["region"], "revenue": r["revenue"],
+                        "prev_revenue": round(prev_rev, 2), "growth_pct": round(growth_pct, 1) if growth_pct is not None else None,
+                    })
+            except Exception as e:
+                print(f"[DIGEST] Lỗi tính tăng trưởng theo vùng: {e}")
+        # 16/07/2026: chỉ tính khi báo cáo KHÔNG lọc sẵn theo 1 kênh — nếu đã lọc (audience "Quản
+        # lý Kênh OTC/ETC"), etc_rev/otc_rev đã bị ép về 0 ở trên nên tỷ trọng luôn ra 100%/0% vô
+        # nghĩa, không nên hiện cho những audience đó.
+        if channel is None and total_rev > 0:
+            channel_share = {
+                "otc_pct": round(otc_rev / total_rev * 100, 1),
+                "etc_pct": round(etc_rev / total_rev * 100, 1),
+            }
+
+    # 16/07/2026: TRƯỚC ĐÂY chỉ tính cho weekly/monthly — Daily Digest hoàn toàn không có mục
+    # "Điểm Nổi Bật Trong Kỳ" dù trong ngày có cảnh báo CRITICAL thật (vd tỷ lệ nợ quá hạn, khách
+    # nợ quá hạn vẫn lên đơn mới...) đã bắn qua Teams. Bật cho mọi granularity — chi phí không đáng
+    # kể (1 query SQLite cục bộ, không đụng Bravo/Supabase).
+    highlights = _get_period_highlights(start_dt, end_dt, channel=channel, region=region)
+    has_critical = _period_has_critical(start_dt, end_dt)
 
     result = {
         "date": start_dt.strftime("%d/%m/%Y"),
         "period_range": period_label,
         "updated_at": datetime.now().strftime("%H:%M %d/%m/%Y"),
+        "region": region,
+        "channel": channel,
         "revenue": {
             "otc": round(otc_rev, 2),
             "etc": round(etc_rev, 2),
@@ -837,8 +908,6 @@ def get_digest_metrics(start_dt, end_dt, period_label, granularity=None, region=
             # trước"/"tuần trước" trọn vẹn, nhất là khi kỳ hiện tại đang chạy dở/chưa hết).
             "prev_period_label": f"{prev_start.strftime('%d/%m')}-{(prev_end - timedelta(days=1)).strftime('%d/%m/%Y')}",
         },
-        "top_customers_otc": [{"code": r[0], "name": r[1], "revenue": round(float(r[2]), 2)} for r in top_otc],
-        "top_customers_etc": [{"code": r[0], "name": r[1], "revenue": round(float(r[2]), 2)} for r in top_etc],
         "receivables": receivables,
         "inventory": {
             "dead_stock_count": dead_stock_count,
@@ -848,13 +917,16 @@ def get_digest_metrics(start_dt, end_dt, period_label, granularity=None, region=
                 for r in dead_items
             ],
         },
+        "highlights": highlights,
+        "has_critical": has_critical,
     }
     if granularity in ("weekly", "monthly"):
         result["trend"] = trend
         result["region_breakdown"] = region_breakdown
         result["kpi_summary"] = kpi_summary
-        result["highlights"] = highlights
-        result["has_critical"] = has_critical
+    if granularity == "monthly":
+        result["region_growth"] = region_growth
+        result["channel_share"] = channel_share
     return result
 
 def get_daily_digest_metrics(region=None, channel=None):
