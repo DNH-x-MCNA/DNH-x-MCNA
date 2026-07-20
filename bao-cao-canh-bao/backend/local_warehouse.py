@@ -13,22 +13,27 @@ import os, sqlite3, datetime as dt
 DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "warehouse.db")
 
 SCHEMA = """
--- employee_code (tu EmpDMSCode2 tren Bravo) - CHI dung tin cay cho nhan vien CA NHAN (vd "tungtx",
--- "DNH00832"...). Ma khu vuc/quan ly vung (MBKV*, ASM*, MN*...) KHONG xuat hien truc tiep tren hoa
--- don nen se khong co/khong dung duoc qua cot nay - xem employee_kpi() (snapshot thang) cho nhom do.
+-- employee_code (tu EmpDMSCode tren Bravo) - la DMSId CUA CHINH nguoi ban hang (TDV), CHI dung tin
+-- cay cho nhan vien CA NHAN (vd "tungtx", "HYE_02"...). Ma khu vuc/quan ly vung (MBKV*, ASM*, MN*...)
+-- KHONG xuat hien truc tiep tren hoa don qua cot nay - xem employee_kpi() (snapshot thang) cho nhom do.
+-- channel_code (tu EmpDMSCode2 tren Bravo, CHI co o OTC) - ma QLV/kenh gan tren hoa don (KHAC
+-- employee_code la nguoi ban thuc su) - dung de nhan dien cac "kenh dac biet" nhu Modern Trade (Long
+-- Chau, Pharmacity...) duoc ghi nhan qua ban ghi "nhan vien ao" trong dim_nhanvien (vd DMSId='ASM01',
+-- Name='Kênh MT') - xem revenue_by_region() cho cach tach doanh thu kenh nay.
 -- created_at = CreatedAt tren Bravo (thoi diem BAN GHI THUC SU duoc tao trong he thong, KHAC voi
 -- doc_date la ngay chung tu tren hoa don - co the bi chon/sua tay). Dung de phat hien "chay don don
 -- KPI": tao hang loat hoa don CreatedAt dồn vao 1 ngay (thuong cuoi ky) nhung DocDate rai rac truoc do.
 CREATE TABLE IF NOT EXISTS vhoadon_otc (
     doc_date TEXT NOT NULL, customer_code TEXT, item_code TEXT,
     amount9 REAL, quantity REAL, unit_price REAL, stt TEXT, city_id INTEGER, employee_code TEXT,
-    created_at TEXT
+    created_at TEXT, channel_code TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_otc_docdate ON vhoadon_otc(doc_date);
 CREATE INDEX IF NOT EXISTS idx_otc_customer ON vhoadon_otc(customer_code);
 CREATE INDEX IF NOT EXISTS idx_otc_item ON vhoadon_otc(item_code);
 CREATE INDEX IF NOT EXISTS idx_otc_city ON vhoadon_otc(city_id);
 CREATE INDEX IF NOT EXISTS idx_otc_employee ON vhoadon_otc(employee_code, doc_date);
+CREATE INDEX IF NOT EXISTS idx_otc_channel ON vhoadon_otc(channel_code);
 
 CREATE TABLE IF NOT EXISTS vhoadon_etc (
     doc_date TEXT NOT NULL, customer_code TEXT, item_code TEXT,
@@ -57,12 +62,34 @@ CREATE TABLE IF NOT EXISTS dms_khachhang (code TEXT, name TEXT, city_id INTEGER,
 CREATE INDEX IF NOT EXISTS idx_dms_code ON dms_khachhang(code);
 -- position_code: TDV=Trinh duoc vien, QLV=Quan ly vung, CTV/CS/TP/PP/TBP/TK = cac vai tro khac
 -- (xem dim_chucvu de dich sang ten tieng Viet). area_code: MB/MT/MN.
-CREATE TABLE IF NOT EXISTS dim_nhanvien (employee_code TEXT, name TEXT, is_duplicate INTEGER, position_code TEXT, area_code TEXT);
+-- dmsid: ma noi bo DMS - CO THE trung voi employee_code cua 1 dong KHAC (da xac nhan that, vd DMSId
+-- 'DNH00601' vua la employee_code cua 1 dong TDV vua la dmsid cua 1 dong QLV khac) - TUYET DOI KHONG
+-- coi dmsid la unique key, luon xu ly nhu co the tra ve NHIEU dong khi tra cuu.
+-- start_date/end_date/is_resigned: lich su dam nhiem - Bravo GIU LAI ban ghi cu khi doi nguoi (khong
+-- xoa), nen co the dung lam timeline. manager_area_code: ma khu vuc nho V01-V22 (xem org_hierarchy.py
+-- de biet cach suy luan QLV nao phu trach to nao - suy luan qua ten co hau to "(QLV)", KHONG phai
+-- khoa ngoai tuong minh, nen co the co truong hop khong xac dinh duoc).
+CREATE TABLE IF NOT EXISTS dim_nhanvien (employee_code TEXT, name TEXT, is_duplicate INTEGER, position_code TEXT, area_code TEXT, dmsid TEXT, start_date TEXT, end_date TEXT, is_resigned INTEGER, manager_area_code TEXT);
 CREATE INDEX IF NOT EXISTS idx_dnv_code ON dim_nhanvien(employee_code);
+CREATE INDEX IF NOT EXISTS idx_dnv_dmsid ON dim_nhanvien(dmsid);
+CREATE INDEX IF NOT EXISTS idx_dnv_manager_area ON dim_nhanvien(manager_area_code);
 CREATE TABLE IF NOT EXISTS dim_chucvu (position_code TEXT, description TEXT);
 CREATE INDEX IF NOT EXISTS idx_dcv_code ON dim_chucvu(position_code);
-CREATE TABLE IF NOT EXISTS brv_sanpham (code TEXT, name TEXT, group_code TEXT, unit TEXT);
+-- id_code = BRV_SanPham.Id (khoa noi, dung de join voi brv_tonkhodk.item_id - KHAC code la ma san
+-- pham dang text hien thi cho nguoi dung).
+CREATE TABLE IF NOT EXISTS brv_sanpham (code TEXT, name TEXT, group_code TEXT, unit TEXT, id_code INTEGER);
 CREATE INDEX IF NOT EXISTS idx_bsp_code ON brv_sanpham(code);
+CREATE INDEX IF NOT EXISTS idx_bsp_idcode ON brv_sanpham(id_code);
+
+-- Ton kho THAT tu Bravo (thay Supabase inventory - cot warehouse ben do 100% NULL). branch_code tren
+-- brv_kho: B01=San xuat, B02=Kinh doanh Mien Bac, B03=Kinh doanh Mien Trung, B04=Kinh doanh Mien Nam
+-- (xac nhan voi DA 15/07/2026). Join: brv_tonkhodk.warehouse_id -> brv_kho.id_code de biet vung,
+-- brv_tonkhodk.item_id -> brv_sanpham.id_code de biet ten san pham.
+CREATE TABLE IF NOT EXISTS brv_kho (id_code INTEGER, branch_code TEXT, code TEXT, name TEXT);
+CREATE INDEX IF NOT EXISTS idx_bkho_idcode ON brv_kho(id_code);
+CREATE TABLE IF NOT EXISTS brv_tonkhodk (warehouse_id INTEGER, item_id INTEGER, quantity REAL, amount REAL, is_active INTEGER);
+CREATE INDEX IF NOT EXISTS idx_tk_warehouse ON brv_tonkhodk(warehouse_id);
+CREATE INDEX IF NOT EXISTS idx_tk_item ON brv_tonkhodk(item_id);
 CREATE TABLE IF NOT EXISTS brvsx_tralai (doc_date TEXT, amount9 REAL, is_active INTEGER, stt TEXT, customer_code TEXT);
 CREATE INDEX IF NOT EXISTS idx_tralai_docdate ON brvsx_tralai(doc_date);
 
@@ -92,6 +119,16 @@ def get_conn() -> sqlite3.Connection:
 def init_schema():
     conn = get_conn()
     try:
+        # Migration: them cot channel_code TRUOC khi chay SCHEMA - SCHEMA co CREATE INDEX tren cot
+        # nay, se loi "no such column" neu bang vhoadon_otc da ton tai tu truoc (CREATE TABLE IF NOT
+        # EXISTS khong tu them cot moi vao bang da co san) ma chua duoc ALTER truoc.
+        has_table = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='vhoadon_otc'").fetchone()
+        if has_table:
+            cols = [r[1] for r in conn.execute("PRAGMA table_info(vhoadon_otc)").fetchall()]
+            if "channel_code" not in cols:
+                conn.execute("ALTER TABLE vhoadon_otc ADD COLUMN channel_code TEXT")
+                conn.commit()
         conn.executescript(SCHEMA)
         conn.commit()
     finally:
