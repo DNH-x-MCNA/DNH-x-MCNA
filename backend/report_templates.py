@@ -150,6 +150,15 @@ def top_customers(date_from: str, date_to: str, limit: int = 10, channel: str = 
     return [{"customer_code": r["customer_code"], "revenue": _f(r["rev"])} for r in rows]
 
 
+def _channel_sub_buckets():
+    """Cac ban ghi 'kenh ao' trong dim_nhanvien (QLV gia dung de gan doanh thu kenh dac biet, vd
+    Modern Trade/Long Chau - Name bat dau bang 'Kênh', IsDuplicate=1) - KHONG phai QLV that, chi la
+    cho gan doanh thu theo kenh ban hang. dmsid cua ban ghi nay khop voi vhoadon_otc.channel_code
+    (tu EmpDMSCode2 tren Bravo, xem sync_warehouse.py) - CHI co o OTC, ETC khong co co che nay."""
+    return _q("SELECT dmsid, name, area_code FROM dim_nhanvien "
+              "WHERE position_code='QLV' AND is_duplicate=1 AND name LIKE 'Kênh%' AND dmsid IS NOT NULL")
+
+
 def revenue_by_region(date_from: str, date_to: str, scope_area_code: str = None) -> list:
     """Doanh thu theo vung mien (MB/MT/MN), gop ca OTC + ETC. CA HAI deu LEFT JOIN qua bang khach hang
     de lay city_id (da doi chieu voi DA ben Bravo va xac nhan day la cach dung - KHONG dung city_id ghi
@@ -158,7 +167,12 @@ def revenue_by_region(date_from: str, date_to: str, scope_area_code: str = None)
     HCM13508 - co that, ~2.3 ty doanh thu 2022-2025, KHONG co trong dms_khachhang) se bi INNER JOIN
     am tham loai bo ca khoi tong lan breakdown. Voi LEFT JOIN, khach mo coi duoc suy luan vung qua
     TIEN TO ma khach hang (region_map.py, bang 63 tien to da kiem chung >=95% thuan, vd HCM -> MN) -
-    CHI con roi vao "Khac/chua xac dinh" neu tien to khong nam trong bang do (an toan hon doan bua)."""
+    CHI con roi vao "Khac/chua xac dinh" neu tien to khong nam trong bang do (an toan hon doan bua).
+    Moi dong CO THE co them "channel_breakdown" (danh sach {name, revenue}) neu vung do co kenh dac
+    biet duoc theo doi rieng (vd Modern Trade/Long Chau, Pharmacity... trong Mien Nam) - day la SO DA
+    NAM SAN TRONG "revenue" cua vung (KHONG duoc cong them vao tong), chi de bao cao minh bach tach
+    rieng theo yeu cau nghiep vu (xac nhan voi DA DNH 20/07/2026): kenh nay VAN tinh vao tong vung
+    nhung can hien thi tach biet vi ban chat kinh doanh khac (chuoi lon vs kenh thuong)."""
     rows = _q("""
         SELECT o.customer_code cc, tp.area_code area, SUM(o.amount9) rev
         FROM vhoadon_otc o LEFT JOIN dms_khachhang kh ON kh.code=o.customer_code
@@ -180,21 +194,36 @@ def revenue_by_region(date_from: str, date_to: str, scope_area_code: str = None)
         # Tai khoan bi gioi han vung: CHI tra ve dung 1 vung duoc phep, KHONG lo cac vung khac ra
         # ngoai (agg da tinh full o tren de con dung cho phep tinh noi bo, nhung KHONG duoc tra het ra).
         v = agg.get(scope_area_code, 0.0)
-        return [{"area": scope_area_code, "revenue": v, "share_pct": 100.0 if v else 0.0}]
+        result = [{"area": scope_area_code, "revenue": v, "share_pct": 100.0 if v else 0.0}]
+    else:
+        # Tu doi chieu (re # 4): tong cong theo vung PHAI bang dung tong khong loc vung cung ky - neu
+        # lech tuc la co JOIN nao do dang am tham lam roi du lieu (vd bi doi lai thanh INNER JOIN).
+        raw_total = _f(_q("SELECT COALESCE(SUM(amount9),0) t FROM vhoadon_otc WHERE doc_date BETWEEN ? AND ?",
+                           (date_from, date_to))[0]["t"]) + \
+                    _f(_q("SELECT COALESCE(SUM(amount9),0) t FROM vhoadon_etc WHERE doc_date BETWEEN ? AND ?",
+                           (date_from, date_to))[0]["t"])
+        if abs(total - raw_total) > 1:
+            _write_log({"ts": dt.datetime.now().isoformat(), "status": "warn",
+                        "sql": "<revenue_by_region reconciliation check>",
+                        "error": f"Tong theo vung ({total}) LECH voi tong khong loc vung ({raw_total}) - "
+                                 f"co JOIN dang lam roi du lieu, kiem tra lai ngay."})
+        result = [{"area": k, "revenue": v, "share_pct": (v / total * 100 if total else 0.0)}
+                  for k, v in sorted(agg.items(), key=lambda x: -x[1])]
 
-    # Tu doi chieu (re # 4): tong cong theo vung PHAI bang dung tong khong loc vung cung ky - neu
-    # lech tuc la co JOIN nao do dang am tham lam roi du lieu (vd bi doi lai thanh INNER JOIN).
-    raw_total = _f(_q("SELECT COALESCE(SUM(amount9),0) t FROM vhoadon_otc WHERE doc_date BETWEEN ? AND ?",
-                       (date_from, date_to))[0]["t"]) + \
-                _f(_q("SELECT COALESCE(SUM(amount9),0) t FROM vhoadon_etc WHERE doc_date BETWEEN ? AND ?",
-                       (date_from, date_to))[0]["t"])
-    if abs(total - raw_total) > 1:
-        _write_log({"ts": dt.datetime.now().isoformat(), "status": "warn",
-                    "sql": "<revenue_by_region reconciliation check>",
-                    "error": f"Tong theo vung ({total}) LECH voi tong khong loc vung ({raw_total}) - "
-                             f"co JOIN dang lam roi du lieu, kiem tra lai ngay."})
-    return [{"area": k, "revenue": v, "share_pct": (v / total * 100 if total else 0.0)}
-            for k, v in sorted(agg.items(), key=lambda x: -x[1])]
+    # Tach rieng cac kenh dac biet (vd Modern Trade) da NAM SAN trong "revenue" cua vung - chi de
+    # bao cao minh bach, KHONG cong them vao tong (xem _channel_sub_buckets()).
+    buckets = _channel_sub_buckets()
+    if buckets:
+        for row in result:
+            row_buckets = [b for b in buckets if b["area_code"] == row["area"]]
+            if row_buckets:
+                breakdown = []
+                for b in row_buckets:
+                    r = _q("SELECT COALESCE(SUM(amount9),0) rev FROM vhoadon_otc WHERE channel_code=? "
+                           "AND doc_date BETWEEN ? AND ?", (b["dmsid"], date_from, date_to))
+                    breakdown.append({"name": b["name"], "revenue": _f(r[0]["rev"])})
+                row["channel_breakdown"] = breakdown
+    return result
 
 
 KPI_ACHIEVED_THRESHOLD = 80  # % dat KPI nhan vien tinh la "dat" (theo yeu cau nghiep vu, KHONG phai 100%)
