@@ -274,7 +274,7 @@ def _daily_kpi_status(pct: float) -> str:
 
 
 def employee_daily_kpi(employee_code: str, year_month: str, scope_area_code: str = None) -> dict:
-    """KPI THEO NGAY cho 1 nhan vien CA NHAN (co ma truc tiep tren hoa don, vd EmpDMSCode2 nhu
+    """KPI THEO NGAY cho 1 nhan vien CA NHAN (co ma truc tiep tren hoa don, vd EmpDMSCode nhu
     'tungtx') trong 1 thang (YYYY-MM). Target 1 ngay = 4% MonthSaleTarget cua nhan vien (tuong duong
     100% cua ngay). Phan loai tung ngay: 🔴 Do (<2.5%), 🟡 Vang (2.5%-3.5%), 🟢 Xanh (>3.5%). CHI tinh
     T2-T6 (bo qua T7/CN). Rieng "month_pct_of_target" la % TONG thang (thuc te/target*100, cach tinh
@@ -282,9 +282,18 @@ def employee_daily_kpi(employee_code: str, year_month: str, scope_area_code: str
     KHONG dung cho ma khu vuc/quan ly vung (MBKV*, ASM*...) - cac ma nay khong xuat hien tren hoa don,
     dung get_employee_kpi (snapshot thang, nguong 80%/50%) thay the cho nhom do.
     scope_area_code: NEU co, chi cho xem KPI cua nhan vien CUNG vung - tra ve loi neu khac vung
-    (an toan hon la mac dinh cho phep khi khong xac dinh duoc vung cua nhan vien)."""
+    (an toan hon la mac dinh cho phep khi khong xac dinh duoc vung cua nhan vien).
+    LUU Y KY THUAT: hoa don (vhoadon_otc/etc.employee_code) ghi theo DMSId cua nhan vien, KHONG PHAI
+    EmployeeCode (2 gia tri thuong khac nhau, vd EmployeeCode='DNH00832' nhung DMSId='HYE_02') - da
+    xac minh 17/07/2026 doi chieu ~150 TDV khop 100% khi dung dung DMSId. Tham so employee_code dau
+    vao co the la EmployeeCode HOAC DMSId (tra ca 2, giong employee_directory), ham tu quy doi sang
+    DMSId that truoc khi truy van hoa don."""
+    nv = _q("SELECT employee_code, dmsid, area_code FROM dim_nhanvien "
+            "WHERE (employee_code=? OR dmsid=?) AND COALESCE(is_duplicate,0)<>1 LIMIT 1",
+            (employee_code, employee_code))
+    resolved_code = nv[0]["employee_code"] if nv else employee_code
+    dms_code = nv[0]["dmsid"] if (nv and nv[0]["dmsid"]) else employee_code
     if scope_area_code:
-        nv = _q("SELECT area_code FROM dim_nhanvien WHERE employee_code=? LIMIT 1", (employee_code,))
         emp_area = nv[0]["area_code"] if nv else None
         if emp_area != scope_area_code:
             return {"error": f"Ban khong co quyen xem du lieu nhan vien nay - ngoai vung {scope_area_code} ban phu trach."}
@@ -296,7 +305,7 @@ def employee_daily_kpi(employee_code: str, year_month: str, scope_area_code: str
     target_asof = min(month_end, today)
 
     r = _q("SELECT MAX(month_sale_target) t, MAX(save_date) d FROM fact_tonghopkhachhang "
-           "WHERE employee_code=? AND save_date<=?", (employee_code, str(target_asof)))
+           "WHERE employee_code=? AND save_date<=?", (resolved_code, str(target_asof)))
     target = _f(r[0]["t"]) if r else 0.0
     target_as_of = r[0]["d"] if r else None
 
@@ -309,7 +318,7 @@ def employee_daily_kpi(employee_code: str, year_month: str, scope_area_code: str
                         UNION ALL
                         SELECT doc_date, amount9 FROM vhoadon_etc WHERE employee_code=? AND doc_date BETWEEN ? AND ?
                      ) GROUP BY doc_date""",
-                  (employee_code, str(month_start), str(range_end), employee_code, str(month_start), str(range_end)))
+                  (dms_code, str(month_start), str(range_end), dms_code, str(month_start), str(range_end)))
         by_date = {r["doc_date"]: _f(r["rev"]) for r in rows}
         total_sales_month = sum(by_date.values())
         d = month_start
@@ -538,10 +547,15 @@ def order_timing_check(date_from: str, date_to: str, threshold_days: int = 2, li
         r["amount9"] = _f(r["amount9"])
         # Bao cao chong gian lan: LAY TEN DU is_duplicate=1 (khac cac tool khac) - muc dich la minh
         # bach danh tinh, khong nen an ten chi vi 1 co du lieu khong lien quan.
-        nv = _q("SELECT name, position_code FROM dim_nhanvien WHERE employee_code=? LIMIT 1",
+        # r["employee_code"] o day la gia tri THO tren hoa don = DMSId (KHONG PHAI EmployeeCode -
+        # da xac minh 17/07/2026, xem ghi chu trong employee_daily_kpi()) - tra theo dmsid, sau do
+        # gan lai employee_code THAT de hien thi/nhom dung ma nhan vien chinh thuc.
+        nv = _q("SELECT employee_code, name, position_code FROM dim_nhanvien WHERE dmsid=? LIMIT 1",
                 (r["employee_code"],)) if r["employee_code"] else []
         r["employee_name"] = nv[0]["name"] if nv else None
         r["position_code"] = nv[0]["position_code"] if nv else None
+        if nv:
+            r["employee_code"] = nv[0]["employee_code"]
 
     by_employee = {}
     for r in rows:
