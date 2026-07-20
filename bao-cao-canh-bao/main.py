@@ -28,8 +28,29 @@ from src.alerts import (
     check_kpi_milestone_drop_alert,      # F4: mốc ngày 10/20 giảm >5% so TB 5 tháng trước (kênh + từng TDV)
     check_data_sanity_ok,                # G2: guard chặn alert khi dữ liệu rỗng/hỏng
     check_etl_freshness_alert,           # G1: ETL đứng (dữ liệu không refresh)
+    check_kpi_revenue_reconciliation_alert,  # G3: doanh thu KPI lệch so với hóa đơn thực tế (OTC)
     format_vietnamese_money,
 )
+
+
+def _is_alert_business_hours(config):
+    """15/07/2026: chỉ cho phép quét/gửi cảnh báo nghiệp vụ thời gian thực trong giờ hành chính
+    (config['scheduler']::alert_business_hours_start/end/days) — xem ghi chú trong config.yaml.
+    Không có khung giờ trong config (môi trường cũ) -> mặc định luôn cho phép (hành vi cũ)."""
+    sched = config.get('scheduler', {}) or {}
+    start_str = sched.get('alert_business_hours_start')
+    end_str = sched.get('alert_business_hours_end')
+    days = sched.get('alert_business_days')
+    if not start_str or not end_str or not days:
+        return True
+    now = datetime.now()
+    if now.isoweekday() not in days:
+        return False
+    start_h, start_m = (int(x) for x in start_str.split(':'))
+    end_h, end_m = (int(x) for x in end_str.split(':'))
+    start_t = now.replace(hour=start_h, minute=start_m, second=0, microsecond=0)
+    end_t = now.replace(hour=end_h, minute=end_m, second=0, microsecond=0)
+    return start_t <= now < end_t
 
 
 def run_all_alert_checks(config, erp_engine=None, crm_engine=None):
@@ -44,6 +65,10 @@ def run_all_alert_checks(config, erp_engine=None, crm_engine=None):
     Bản MOCK run_alert_checks(ERP/CRM giả lập) CHỈ chạy khi environment == 'local' để dev test;
     production KHÔNG bao giờ chạy mock.
     """
+    if not _is_alert_business_hours(config):
+        print(f"[ALERTS] Ngoài giờ hành chính ({datetime.now().strftime('%Y-%m-%d %H:%M:%S')}) — bỏ qua chu kỳ quét cảnh báo này.")
+        return
+
     flags = config.get('alert_feature_flags', {}) or {}
 
     # G1: health-check ETL trước (không phụ thuộc dữ liệu nghiệp vụ) — tắt tạm khi trỏ vào
@@ -79,6 +104,7 @@ def run_all_alert_checks(config, erp_engine=None, crm_engine=None):
         check_kpi_sales_force_risk_alert()
     check_daily_kpi_pace_alert()
     check_kpi_milestone_drop_alert()
+    check_kpi_revenue_reconciliation_alert()
 
     if str(config.get('environment', 'local')).lower() == 'local' and erp_engine is not None and crm_engine is not None:
         print("[ALERTS] (môi trường 'local') Chạy thêm bộ MOCK ERP/CRM để dev test...")
@@ -99,21 +125,36 @@ def _digest_table(metrics):
     change_pct = metrics['revenue']['change_pct']
     prev_label = metrics['revenue'].get('prev_period_label', '')
     change_str = f"{change_pct:+.1f}% so kỳ {prev_label}" if change_pct is not None else "chưa đủ dữ liệu kỳ trước"
-    rows = [
-        ["Doanh thu OTC", format_vietnamese_money(metrics['revenue']['otc'])],
-        ["Doanh thu ETC", format_vietnamese_money(metrics['revenue']['etc'])],
-        ["Tổng doanh thu", f"{format_vietnamese_money(metrics['revenue']['total'])} ({change_str})"],
-        ["Số hóa đơn OTC", str(metrics['revenue']['otc_invoice_count'])],
-        ["Số hóa đơn ETC", str(metrics['revenue']['etc_invoice_count'])],
-        ["Tổng số hóa đơn", str(metrics['revenue']['invoice_count'])],
-        ["Mặt hàng tồn chết", str(metrics['inventory']['dead_stock_count'])],
-        ["Mặt hàng sắp hết hàng", str(metrics['inventory']['near_stockout_count'])],
-    ]
-    # 14/07/2026: bỏ hẳn khối công nợ chi tiết (5 dòng Nợ quá hạn/Dư nợ OTC/ETC/Tổng) và mục
-    # "Cảnh báo phát sinh hôm nay" — Daily Digest chỉ còn doanh thu + tồn kho, ngắn gọn xem nhanh.
-    # Cảnh báo nợ quá hạn nghiêm trọng (vượt ngưỡng) vẫn tự bắn CARD RIÊNG qua Teams khi phát sinh
-    # (check_company_overdue_ratio_alert trong src/alerts.py, không phụ thuộc Daily Digest này).
-            
+    # 17/07/2026: audience đã lọc theo 1 kênh (vd "Quản lý Kênh OTC") thì etc_rev/etc_invoice_count
+    # đã bị ép về 0 ở get_digest_metrics (đúng) — nhưng hiện thẳng "Doanh thu ETC: 0đ" trong báo cáo
+    # OTC là rác hiển thị vô nghĩa, dễ gây hiểu lầm là "ETC thật sự bằng 0". Ẩn hẳn dòng kênh không
+    # thuộc scope thay vì hiện số 0 giả.
+    scoped_channel = metrics.get('channel')
+    rows = []
+    if scoped_channel != "ETC":
+        rows.append(["Doanh thu OTC", format_vietnamese_money(metrics['revenue']['otc'])])
+    if scoped_channel != "OTC":
+        rows.append(["Doanh thu ETC", format_vietnamese_money(metrics['revenue']['etc'])])
+    rows.append(["Tổng doanh thu", f"{format_vietnamese_money(metrics['revenue']['total'])} ({change_str})"])
+    if scoped_channel != "ETC":
+        rows.append(["Số hóa đơn OTC", str(metrics['revenue']['otc_invoice_count'])])
+    if scoped_channel != "OTC":
+        rows.append(["Số hóa đơn ETC", str(metrics['revenue']['etc_invoice_count'])])
+    rows.append(["Tổng số hóa đơn", str(metrics['revenue']['invoice_count'])])
+    rows.append(["Mặt hàng tồn chết", str(metrics['inventory']['dead_stock_count'])])
+    rows.append(["Mặt hàng sắp hết hàng", str(metrics['inventory']['near_stockout_count'])])
+    # 14/07/2026: bỏ hẳn khối công nợ chi tiết (5 dòng Nợ quá hạn/Dư nợ OTC/ETC/Tổng) — Daily
+    # Digest chỉ còn doanh thu + tồn kho, ngắn gọn xem nhanh. Cảnh báo nợ quá hạn nghiêm trọng
+    # (vượt ngưỡng) vẫn tự bắn CARD RIÊNG qua Teams khi phát sinh (check_company_overdue_ratio_alert
+    # trong src/alerts.py), độc lập với Daily Digest này.
+    #
+    # 16/07/2026: THÊM LẠI mục cảnh báo — nhưng khác bản cũ đã bỏ: giờ chỉ liệt kê cảnh báo THẬT
+    # SỰ có ý nghĩa nghiệp vụ (metrics['highlights'], đã lọc bỏ data_sanity_zero/etl_stale/
+    # sales_kpi_insights_report ở _get_period_highlights — xem src/etl.py), scope ĐÚNG NGÀY hôm
+    # nay (không phải toàn bộ lịch sử), không phải liệt kê thô mọi alert_key kỹ thuật như trước.
+    for h in metrics.get('highlights', []):
+        rows.append([f"Cảnh báo: {h['label']}", f"{h['value_display']} (lúc {h['sent_at_display']})"])
+
     return headers, rows
 
 def send_daily_digest():
