@@ -295,44 +295,6 @@ def _revenue_trend(start_dt, end_dt, granularity, region=None, channel=None):
     return trend
 
 
-def _kpi_summary(conn, region=None):
-    """Tóm tắt KPI toàn đội từ kpi_summary — LƯU Ý: bảng này là SNAPSHOT hiện tại, không lưu
-    lịch sử theo kỳ (xem ghi chú trong config.yaml), nên số liệu luôn là "tính đến hiện tại",
-    không thực sự bó hẹp trong [start_dt, end_dt) của báo cáo tuần/tháng."""
-    from sqlalchemy import text, bindparam
-    markers = _region_markers(region)
-    where = 'month_sale_target > 0'
-    params = {}
-    if markers:
-        where += ' AND area_code IN :region_markers'
-        params["region_markers"] = tuple(markers)
-    sql = text(f'''
-        SELECT COUNT(*) FILTER (WHERE month_sale_percent >= 1.0) AS achieved,
-               COUNT(*) AS total,
-               COALESCE(SUM(month_sale_target),0) AS total_target,
-               COALESCE(SUM(month_sale_amount),0) AS total_amount
-        FROM kpi_summary WHERE {where}
-    ''')
-    if markers:
-        sql = sql.bindparams(bindparam("region_markers", expanding=True))
-    try:
-        row = conn.execute(sql, params).fetchone()
-    except Exception as e:
-        print(f"[DIGEST] Lỗi truy vấn tóm tắt KPI: {e}")
-        return None
-    if not row or not row[1]:
-        return None
-    achieved, total, total_target, total_amount = row
-    team_pct = (float(total_amount) / float(total_target)) if total_target else None
-    return {
-        "achieved_count": int(achieved or 0),
-        "total_count": int(total or 0),
-        "team_pct": round(team_pct * 100, 1) if team_pct is not None else None,
-        "total_target": round(float(total_target), 2),
-        "total_amount": round(float(total_amount), 2),
-    }
-
-
 # Tên tiếng Việt + kiểu định dạng giá trị cho từng loại alert_key (prefix trước dấu ":" đầu
 # tiên) — dùng để "dịch" các dòng "Điểm Nổi Bật Trong Kỳ" từ key/số thô sang câu chữ đọc được.
 # Kiểu giá trị: money (tiền VNĐ) | ratio/percent (0-1 -> %) | qty (số lượng) | count (số nguyên)
@@ -591,8 +553,9 @@ def _prev_month_tuple(dt):
 
 def get_digest_metrics(start_dt, end_dt, period_label, granularity=None, region=None, channel=None):
     """
-    Tổng hợp dữ liệu THẬT (Supabase: brv_*/brvsx_*/receivable_detail/inventory/kpi_summary)
-    trong khoảng [start_dt, end_dt) phục vụ digest định kỳ (dùng chung cho daily/weekly/monthly).
+    Tổng hợp dữ liệu THẬT trong khoảng [start_dt, end_dt) phục vụ digest định kỳ (dùng chung cho
+    daily/weekly/monthly). 20/07/2026: doanh thu/công nợ/tồn kho/KPI đội đều đọc Bravo trực tiếp
+    — không còn phụ thuộc Supabase (brv_*/brvsx_*/receivable_detail/inventory/kpi_summary).
 
     granularity: None (Daily — giữ nguyên hành vi/cấu trúc cũ) hoặc "weekly"/"monthly" (bật thêm
     trend theo ngày/tuần, breakdown vùng, tóm tắt KPI, điểm nổi bật — xem Phần 2 kế hoạch báo cáo).
@@ -603,7 +566,6 @@ def get_digest_metrics(start_dt, end_dt, period_label, granularity=None, region=
         chưa xác nhận định dạng gốc — để nguyên toàn công ty, tránh suy đoán sai).
     """
     from sqlalchemy import text
-    from src.database import _get_fast_cloud_engine
 
     # 13/07/2026: kẹp end_dt tại hết hôm nay ngay từ đầu hàm. Từ khi get_weekly/monthly_digest_metrics
     # dùng kỳ ĐANG CHẠY (chưa hết tuần/tháng), end_dt truyền vào có thể là ngày TƯƠNG LAI — phát
@@ -651,10 +613,8 @@ def get_digest_metrics(start_dt, end_dt, period_label, granularity=None, region=
     change_pct = ((total_rev - prev_total_rev) / prev_total_rev) if prev_total_rev > 0 else None
 
 
-    # 3. Công nợ — ưu tiên TỨC THỜI từ Bravo (get_bravo_receivables_snapshot, 10/07/2026), dự
-    #    phòng receivable_detail (Supabase) nếu Bravo lỗi. Bravo không có khái niệm "kỳ" (luôn
-    #    tức thời) nên bỏ hẳn bước kiểm tra độ mới của kỳ khi dùng Bravo — chỉ áp dụng khi rơi
-    #    xuống nhánh dự phòng Supabase.
+    # 3. Công nợ — TỨC THỜI từ Bravo (get_bravo_receivables_snapshot). 20/07/2026: bỏ hẳn fallback
+    #    Supabase receivable_detail (dữ liệu Excel tĩnh, không tự làm mới) — Bravo lỗi thì để None.
     receivables = None
     try:
         from src.alerts import get_bravo_receivables_snapshot
@@ -696,106 +656,36 @@ def get_digest_metrics(start_dt, end_dt, period_label, granularity=None, region=
             "period": f"Tức thời (đến {datetime.now().strftime('%d/%m/%Y %H:%M')})",
         }
     except Exception as e:
-        print(f"[DIGEST] Bravo lỗi ({e}) — dự phòng Supabase receivable_detail.")
-        try:
-            fast_engine = _get_fast_cloud_engine()
-            if fast_engine is not None:
-                with fast_engine.connect() as conn:
-                    periods = [r[0] for r in conn.execute(text("SELECT DISTINCT period FROM receivable_detail")).fetchall() if r[0]]
-                    if periods:
-                        latest_period = max(periods, key=_latest_period_key)
-                        month_str, year_str = latest_period.split('_')
-                        latest_tuple = (int(year_str), int(month_str))
-                        report_last_day = end_dt - timedelta(days=1)
-                        if latest_tuple in (_month_tuple(report_last_day), _prev_month_tuple(report_last_day)):
-                            # 14/07/2026: lọc theo vùng qua JOIN dms_khachhang/dmssx_khachhang (theo
-                            # đúng kênh, xem comment schema — customer_code là không gian mã hỗn hợp)
-                            # -> dim_tinhthanhpho, cùng cách đã kiểm chứng ở nhánh Bravo phía trên.
-                            from sqlalchemy import bindparam
-                            params_rd = {"p": latest_period}
-                            otc_join = etc_join = region_where = ""
-                            if region_markers:
-                                otc_join = 'JOIN dms_khachhang k ON rd.customer_code = k."Code" JOIN dim_tinhthanhpho rt ON k."CityId" = rt."CityId"'
-                                etc_join = 'JOIN dmssx_khachhang k ON rd.customer_code = k."Code" JOIN dim_tinhthanhpho rt ON k."CityId" = rt."CityId"'
-                                region_where = ' AND rt."AreaCode" IN :region_markers'
-                                params_rd["region_markers"] = tuple(region_markers)
-
-                            def _rd_sql(extra_join, channel_where):
-                                s = text(
-                                    f'SELECT COALESCE(SUM(rd.total_overdue),0), COALESCE(SUM(rd.balance_end),0) '
-                                    f'FROM receivable_detail rd {extra_join} '
-                                    f'WHERE rd.period = :p AND {channel_where} {region_where}'
-                                )
-                                return s.bindparams(bindparam("region_markers", expanding=True)) if region_markers else s
-
-                            otc_row = conn.execute(_rd_sql(otc_join, "(rd.sales_channel = 'OTC' OR rd.sales_channel = '0')"), params_rd).fetchone()
-                            etc_row = conn.execute(_rd_sql(etc_join, "rd.sales_channel = 'ETC'"), params_rd).fetchone()
-                            deb_row = (float(otc_row[0]) + float(etc_row[0]), float(otc_row[1]) + float(etc_row[1]))
-
-                            receivables = {
-                                "total_overdue": round(float(deb_row[0]), 2),
-                                "balance_end": round(float(deb_row[1]), 2),
-                                "otc_overdue": round(float(otc_row[0]), 2),
-                                "otc_balance": round(float(otc_row[1]), 2),
-                                "etc_overdue": round(float(etc_row[0]), 2),
-                                "etc_balance": round(float(etc_row[1]), 2),
-                                "period": latest_period,
-                            }
-                        # else: dữ liệu công nợ quá cũ so với kỳ báo cáo -> để None, KHÔNG hiển thị
-        except Exception as e2:
-            print(f"[DIGEST] Lỗi cả 2 nguồn khi lấy công nợ: {e2}")
+        print(f"[DIGEST] Bravo lỗi khi lấy công nợ ({e}) — bỏ trống mục này.")
 
     # 14/07/2026: khi báo cáo đã lọc theo 1 kênh cụ thể (audience "Quản lý Kênh OTC/ETC"),
     # total_overdue/balance_end (2 field hiển thị chính trong email — mục "Công Nợ") phải đúng
-    # PHẠM VI kênh đó, không phải tổng công ty — cả 2 nhánh (Bravo/Supabase) đều đã tính sẵn
-    # otc_overdue/etc_overdue/otc_balance/etc_balance, chỉ cần chọn đúng cặp thay cho tổng.
+    # PHẠM VI kênh đó, không phải tổng công ty — đã tính sẵn otc_overdue/etc_overdue/otc_balance/
+    # etc_balance, chỉ cần chọn đúng cặp thay cho tổng.
     if receivables and channel in ("OTC", "ETC"):
         receivables["total_overdue"] = receivables[f"{channel.lower()}_overdue"]
         receivables["balance_end"] = receivables[f"{channel.lower()}_balance"]
 
-    # 4. Tồn kho — VẪN Supabase (chưa verify công thức Bravo BRV_TheKho/TonKhoDK khớp số liệu thật
-    #    — xem docstring check_dead_stock_alert trong src/alerts.py, cùng lý do). KPI đội — ưu
-    #    tiên Bravo (TDV/QLV, get_bravo_kpi_tdv_snapshot), dự phòng kpi_summary (Supabase, đủ mọi
-    #    chức danh) nếu Bravo lỗi.
+    # 4. Tồn kho — 20/07/2026: chuyển sang Bravo-first qua get_bravo_inventory_snapshot() (src/
+    #    alerts.py), bỏ hẳn bảng Supabase `inventory` (thiếu cột channel, chưa từng nhận đúng dữ
+    #    liệu sau khi công thức được sửa 17/07/2026 — xem docstring get_bravo_inventory_snapshot).
+    #    KPI đội — Bravo trực tiếp (TDV/QLV, get_bravo_kpi_tdv_snapshot); bỏ hẳn fallback
+    #    Supabase kpi_summary (xác nhận chỉ có 6/20 QLV thật, thiếu nghiêm trọng).
     dead_stock_count = near_stockout_count = 0
     dead_items = []
     kpi_summary = None
-    fast_engine = _get_fast_cloud_engine()
-    if fast_engine is not None:
-        try:
-            with fast_engine.connect() as conn:
-                # Filter inventory by channel if specified
-                channel_clause = ""
-                if channel in ("OTC", "ETC"):
-                    channel_clause = " WHERE channel = :channel"
-                
-                q_count = f'''
-                    SELECT
-                        COUNT(*) FILTER (WHERE months_to_sell >= :dead_months AND closing_value > :dead_min_value),
-                        COUNT(*) FILTER (WHERE months_to_sell > 0 AND months_to_sell <= 1.0 AND closing_qty > 0)
-                    FROM inventory
-                    {channel_clause}
-                '''
-                
-                q_items = f'''
-                    SELECT item_code, item_name, closing_value, months_to_sell, channel
-                    FROM inventory
-                    WHERE months_to_sell >= :dead_months AND closing_value > :dead_min_value
-                    {"AND channel = :channel" if channel in ("OTC", "ETC") else ""}
-                    ORDER BY closing_value DESC LIMIT 5
-                '''
-                
-                params = {"dead_months": dead_months, "dead_min_value": dead_min_value}
-                if channel in ("OTC", "ETC"):
-                    params["channel"] = channel
+    try:
+        from src.alerts import get_bravo_inventory_snapshot
+        inv_snapshot = get_bravo_inventory_snapshot()
+        if channel in ("OTC", "ETC"):
+            inv_snapshot = [r for r in inv_snapshot if r.channel == channel]
 
-                inv_row = conn.execute(text(q_count), params).fetchone()
-                dead_stock_count = int(inv_row[0] or 0)
-                near_stockout_count = int(inv_row[1] or 0)
-
-                dead_items = conn.execute(text(q_items), params).fetchall()
-        except Exception as e:
-            print(f"[DIGEST] Supabase lỗi/timeout khi lấy tồn kho (chưa có Bravo để fallback) — bỏ trống mục này: {e}")
+        dead_filtered = [r for r in inv_snapshot if r.months_to_sell >= dead_months and r.closing_value > dead_min_value]
+        dead_stock_count = len(dead_filtered)
+        near_stockout_count = sum(1 for r in inv_snapshot if 0 < r.months_to_sell <= 1.0 and r.closing_qty > 0)
+        dead_items = sorted(dead_filtered, key=lambda r: r.closing_value, reverse=True)[:5]
+    except Exception as e:
+        print(f"[DIGEST] Lỗi lấy tồn kho từ Bravo — bỏ trống mục này: {e}")
 
     # 14/07/2026: bỏ qua hẳn mục KPI đội khi báo cáo lọc riêng kênh ETC — kpi_summary/TDV/QLV
     # BẢN CHẤT chỉ có ở OTC (nhân viên bán hàng field-force; brvsx_hoadonhdr/ETC không có cột
@@ -821,13 +711,11 @@ def get_digest_metrics(start_dt, end_dt, period_label, granularity=None, region=
                     "total_target": round(total_target, 2), "total_amount": round(total_amount, 2),
                 }
         except Exception as e:
-            print(f"[DIGEST] Bravo lỗi khi lấy KPI đội ({e}) — dự phòng Supabase kpi_summary.")
-            if fast_engine is not None:
-                try:
-                    with fast_engine.connect() as conn:
-                        kpi_summary = _kpi_summary(conn, region=region)
-                except Exception as e2:
-                    print(f"[DIGEST] Lỗi cả 2 nguồn khi lấy KPI đội: {e2}")
+            # 20/07/2026: bỏ fallback Supabase kpi_summary — xác nhận bảng đó chỉ có 6/20 QLV
+            # thật (import 1 lần từ đầu dự án, không refresh), hiện số liệu đó còn tệ hơn bỏ trống
+            # mục này (cùng nguyên tắc "báo lỗi rõ ràng hơn số liệu có thể sai" đã áp dụng cho
+            # doanh thu/công nợ/tồn kho).
+            print(f"[DIGEST] Bravo lỗi khi lấy KPI đội ({e}) — bỏ trống mục này.")
 
     # 5. Phần mở rộng CHỈ cho weekly/monthly (không đổi hành vi/tải truy vấn của daily). Trend +
     #    region_breakdown tự failover nội bộ (xem _revenue_trend/_revenue_by_region).
@@ -913,7 +801,8 @@ def get_digest_metrics(start_dt, end_dt, period_label, granularity=None, region=
             "dead_stock_count": dead_stock_count,
             "near_stockout_count": near_stockout_count,
             "dead_stock_items": [
-                {"item_code": r[0], "item_name": r[1], "closing_value": round(float(r[2]), 2), "months_to_sell": round(float(r[3]), 1), "channel": r[4]}
+                {"item_code": r.item_code, "item_name": r.item_name, "closing_value": round(float(r.closing_value), 2),
+                 "months_to_sell": round(float(r.months_to_sell), 1), "channel": r.channel}
                 for r in dead_items
             ],
         },

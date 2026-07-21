@@ -1,15 +1,18 @@
 # Các vấn đề nghiệp vụ cần Dược Nam Hà (DNH) xác nhận
 
-*Chuẩn bị cho buổi họp báo cáo tiến độ ngày 16/07/2026. Gửi trước để buổi họp tập trung vào quyết định thay vì giải thích.*
+*Danh sách chạy (không gắn 1 buổi họp cụ thể) — cập nhật liên tục khi phát hiện vấn đề mới, gửi
+trước mỗi buổi họp biweekly với DNH để buổi họp tập trung vào quyết định thay vì giải thích.
+Khởi tạo cho buổi họp 16/07/2026, cập nhật lần gần nhất 20/07/2026.*
 
 Hệ thống báo cáo/cảnh báo/chatbot hiện đã chạy trên dữ liệu thật, cập nhật gần thời gian thực từ Bravo. Tuy nhiên các điểm dưới đây hiện đang dùng **giả định tạm thời** hoặc cần DNH xác nhận thêm vì chưa có xác nhận chính thức — số liệu vẫn đúng về mặt kỹ thuật (tính đúng theo công thức đang chọn) nhưng công thức đó có thể chưa khớp quy ước nội bộ của DNH. Càng chốt sớm, số liệu báo cáo/cảnh báo/chatbot càng đáng tin cậy.
 
 **Phân nhóm nhanh** (theo mức độ ưu tiên):
-- **Cách tính dữ liệu (ảnh hưởng độ chính xác số liệu)**: mục 1 (ngày quá hạn), 2 (mốc tuổi nợ), 4 (tồn kho).
-- **Ngưỡng kích hoạt cảnh báo (giá trị số)**: mục 3b (sụt giảm doanh thu), 12 (các ngưỡng còn lại).
-- **Chất lượng dữ liệu nguồn (Bravo/HR đánh dấu sai)**: mục 5 (khách hàng), 8 (nhân viên).
+- **Cách tính dữ liệu (ảnh hưởng độ chính xác số liệu)**: mục 1 (ngày quá hạn), 2 (mốc tuổi nợ), 4 (giá trị tồn kho — công thức số lượng đã xong).
+- **Ngưỡng kích hoạt cảnh báo (giá trị số)**: mục 3b (sụt giảm doanh thu), 12 (các ngưỡng còn lại), 15 (ngưỡng churn theo TDV).
+- **Chất lượng dữ liệu nguồn (Bravo/HR đánh dấu sai)**: mục 5 (khách hàng), 8 (nhân viên), 13 (6 mã NV lạ).
 - **Nguồn/chu kỳ dữ liệu**: mục 6 (KPI quản lý), 7 (Excel công nợ/tồn kho).
 - **Chính sách & chatbot**: mục 3 (QĐ 0429-2 — đang tắt), 9 (tài khoản chatbot), 10 (hạ tầng Supabase/on-prem), 11 (bảng vùng miền).
+- **Định nghĩa nghiệp vụ cho tính năng cấp cá nhân (Lớp 4)**: mục 14 (khách mở mới).
 
 ---
 
@@ -69,15 +72,20 @@ Hệ thống báo cáo/cảnh báo/chatbot hiện đã chạy trên dữ liệu 
 
 ## 4. Công thức tính tồn kho hiện tại từ Bravo
 
-**Hiện trạng CŨ**: Đã thử tính tồn kho hiện tại trực tiếp từ bảng thẻ kho thô (`BRV_TheKho`, quy ước kế toán kép `DebitAccount/CreditAccount`), đối chiếu với 1 mã hàng cụ thể thì lệch khoảng 19 lần so với số liệu đã biết là đúng — nên **chưa dùng** công thức này.
+**ĐÃ GIẢI QUYẾT (17-20/07/2026)**: DNH cung cấp SP gốc `usp_StockLotFinance_Report` ngày 17/07 —
+đối chiếu trực tiếp phát hiện + sửa 2 lỗi thật (thiếu quy đổi đơn vị cho ~2,2% mặt hàng ETC có
+`ConvertRateDMS≠1`; công thức vận tốc bán dùng nhầm MỌI lượt xuất kho thay vì doanh số bán thật).
+Công thức cuối: OTC dùng bảng thô (không cần quy đổi), ETC dùng hybrid theo `IsItemWithLot` (hàng
+có lô qua view `vTonKhoDKLot`/`vTheKhoLot` lọc `ClassCode='SX'`, hàng không lô qua bảng thô tự chia
+`ConvertRateDMS`); vận tốc bán = doanh số thật 6 tháng hoàn tất gần nhất / số tháng thật có phát
+sinh. Đã đọc trực tiếp Bravo (`get_bravo_inventory_snapshot`, `src/alerts.py`), không còn qua
+Supabase/Excel tĩnh — xem chi tiết `docs/data_dictionary.md` mục 8.
 
-**Cập nhật 16/07/2026 — tìm hướng mới khả quan hơn**: Phát hiện 2 VIEW (không phải bảng thô) chưa từng thử: `vTheKhoLot` (có sẵn cột `ReceiptQuantity`/`IssueQuantity` rõ ràng theo từng lô/kho) và `vTonKhoDKLot` (tồn đầu kỳ theo lô/năm). Công thức thử nghiệm:
-```
-Tồn hiện tại = Tồn đầu kỳ (năm hiện tại, vTonKhoDKLot) + Σ Nhập − Σ Xuất trong năm (vTheKhoLot)
-```
-Test trên 3 mã hàng mẫu cho kết quả **dương, ổn định, hợp lý** — khác hẳn lần thử trước. Nhiều khả năng lỗi "lệch 19 lần" trước đây đến từ việc dùng bảng thô có quy ước kế toán kép dễ sai dấu, chứ không phải do thiếu dữ liệu.
-
-**Cần DNH xác nhận**: Xin 1 (hoặc vài) mã hàng cụ thể kèm số tồn ĐÃ BIẾT LÀ ĐÚNG tại 1 thời điểm, để đối chiếu công thức trên — đây là bước còn thiếu duy nhất trước khi có thể tin dùng (khác doanh thu, đã có số DNH báo để so khớp ngay; tồn kho thì chưa có gì để đối chiếu). Nếu công thức khớp, có thể thay thế hẳn nguồn Excel tồn kho tĩnh hiện tại (xem thêm mục 7).
+**Vẫn CÒN 1 câu hỏi chưa giải quyết — `closing_value` (giá trị tồn kho quy đổi VND)**: hiện đang
+hardcode = 0 vì chưa xác định được nguồn giá vốn/giá bán để quy đổi số lượng tồn → tiền. Hệ quả:
+mục "tồn kho chết" (dead stock, lọc theo giá trị tồn > ngưỡng) trong mọi báo cáo/cảnh báo hiện luôn
+ra 0 — không phải lỗi, chỉ là thiếu dữ liệu nguồn. **Cần DNH xác nhận**: nguồn giá đúng để tính giá
+trị tồn kho là gì (giá vốn bình quân? giá nhập gần nhất? bảng giá riêng)?
 
 ## 5. Cờ nhận diện "không phải khách hàng thật" trong `BRV_KhachHang`
 
@@ -119,7 +127,16 @@ Ngoài ra còn 2 mã khác cũng bị gắn `IsDuplicate=1` nhưng KHÔNG phải
 
 → Mẫu hình hoàn toàn khác người đã nghỉ — đây gần như chắc chắn là lỗi gắn cờ, không phải trạng thái nghỉ việc/ngừng hoạt động. Cũng xác nhận thêm: `IsResigned` (bit) **không đáng tin** (cả người đã nghỉ thật cũng để `None`) — nên dùng `EndDate` làm tín hiệu chính khi rà soát tương tự.
 
-**Cần DNH/phía nhân sự xác nhận**: 2 trường hợp Nguyễn Thị Thanh Thủy và Lạc Ngọc Sâm có đúng là bị gắn nhầm cờ không? DNH có quy trình rà soát định kỳ nào để phát hiện các trường hợp tương tự trong tương lai không (giống câu hỏi tương tự đã nêu ở mục 5 cho `BRV_KhachHang`)?
+**ĐÃ VÁ TẠM trong code (20/07/2026)** — phát hiện lại vấn đề này khi mổ xẻ kiến trúc Lớp 3 (QLV):
+xác nhận cả 2 người **vẫn đang bán hàng thật, tăng trưởng đều** (Thủy nay ~1,545 tỷ đ/tháng, Sâm
+~388,6 triệu đ/tháng — cao hơn số 16/07), và **toàn bộ report/alert KPI (so sánh QLV, doanh số=0,
+tụt mốc giữa tháng, rủi ro KPI...) đều đang lọc `IsDuplicate=0` nên 2 đội của họ biến mất khỏi
+MỌI báo cáo** — nếu đội họ có vấn đề thật sẽ không ai biết. Đã thêm override CÓ CHỦ ĐÍCH, CHỈ 2 mã
+này (`_KNOWN_MISFLAGGED_DUPLICATE_CODES` trong `src/alerts.py`), không đụng `MN1`/`MN4` (mã kênh,
+gắn cờ đúng). Đây là bản vá TẠM ở tầng code — **vẫn cần DNH/phía nhân sự xác nhận chính thức để sửa
+thẳng dữ liệu gốc trên Bravo** (khi đó bỏ override trong code đi), và xác nhận có quy trình rà soát
+định kỳ nào để phát hiện trường hợp tương tự trong tương lai không (giống câu hỏi ở mục 5 cho
+`BRV_KhachHang`).
 
 *Đã bổ sung sẵn: 1 alert tự động (chạy mỗi chu kỳ quét) đối chiếu tổng doanh thu OTC từ hóa đơn với tổng doanh số trong bảng KPI — báo ngay nếu lệch dù chỉ 1 đồng, giúp phát hiện sớm các trường hợp tương tự mà không cần chờ rà soát tay.*
 
@@ -157,6 +174,49 @@ Ngoài ra còn 2 mã khác cũng bị gắn `IsDuplicate=1` nhưng KHÔNG phải
 
 **Cần DNH xác nhận**: DNH xem qua và điều chỉnh các ngưỡng trên cho phù hợp với thực tế kinh doanh / khẩu vị rủi ro của công ty (ngưỡng nào đang quá nhạy gây nhiễu, ngưỡng nào chưa đủ nhạy để bắt vấn đề thật)?
 
+## 13. 6 mã nhân viên OTC không xác định được (~484 triệu đồng, tháng 7/2026) — mới phát hiện 20/07/2026
+
+**Hiện trạng**: Khi kiểm tra dữ liệu cấp cá nhân (Lớp 4, xem `docs/data_dictionary.md` mục 8.2),
+phát hiện đa số mã nhân viên "không tồn tại" trên hóa đơn thực ra CHỈ là bí danh `DMSCode` chưa
+được đối chiếu (đã tự xử lý xong, không cần DNH). Sau khi xử lý hết các trường hợp đó, còn lại
+đúng **6 mã OTC thật sự không khớp bất kỳ nhân viên nào** (cả `DIM_NhanVien` lẫn `DMSSX_NhanVien`),
+tổng ~484 triệu đồng doanh thu tháng 7/2026:
+
+| Mã nhân viên | Doanh thu tháng 7 (ước tính) |
+| --- | --- |
+| `DNH01229` | 208.967.517 đ |
+| `DNH01206` | 106.798.255 đ |
+| `DNH01257` | 60.556.481 đ |
+| `DNH01171` | 56.075.189 đ |
+| `DNH01208` | 41.856.721 đ |
+| `DNH00107` | 10.258.333 đ |
+
+**Cần DNH xác nhận**: 6 mã này là nhân viên đã nghỉ việc (chưa cập nhật hóa đơn) hay lỗi nhập liệu
+khác? Có ảnh hưởng gì tới báo cáo KPI/lương của ai đang làm việc không?
+
+## 14. Định nghĩa "khách hàng mở mới" cho mục đích KPI/thưởng — mới phát hiện 20/07/2026
+
+**Hiện trạng**: Thử nghiệm 1 định nghĩa (chỉ để kiểm tra khả thi, CHƯA triển khai thành tính năng
+chính thức — tránh vi phạm chỉ đạo "dừng thêm tính năng mới" từ họp 16/07): khách mở mới = hóa đơn
+đầu tiên trong toàn bộ lịch sử của khách rơi vào tháng hiện tại. Ra kết quả hợp lý (144 khách mới
+OTC/79 TDV trong tháng 7/2026) nhưng đây là định nghĩa TỰ CHỌN của MCNA.
+
+**Cần DNH xác nhận**: Định nghĩa "khách hàng mở mới" chính thức (dùng cho KPI/thưởng nếu có) có
+khớp với cách trên không, hay có tiêu chí khác (vd phải có N hóa đơn liên tiếp mới tính, hay loại
+trừ khách quay lại sau thời gian dài)?
+
+## 15. Ngưỡng "im lặng"/rủi ro rời bỏ (churn) theo từng TDV — mới phát hiện 20/07/2026
+
+**Hiện trạng**: Thử tính tỷ lệ khách hàng trong sổ mỗi TDV không mua hàng >60 ngày (trong nhóm
+khách có mua ít nhất 1 lần trong 12 tháng gần đây) — ra trung bình toàn công ty **47,9%**, một số
+TDV cá biệt lên tới 90-100%. Con số này RẤT NHẠY với cách chọn mẫu số (dùng nhầm mẫu số ban đầu ra
+tới 78,6%) — **CHƯA đủ tin cậy để dùng làm cảnh báo**, giống hệt tranh cãi ngưỡng quá hạn 30/45/60
+ngày đã nêu ở mục 2.
+
+**Cần DNH xác nhận**: Chu kỳ mua hàng bình thường của khách dược phẩm là bao lâu (theo tuần/tháng/
+quý, có khác nhau theo loại khách OTC/ETC không)? Bao lâu không mua thì DNH coi là "có dấu hiệu rời
+bỏ" đáng cảnh báo?
+
 ---
 
-*Chuẩn bị bởi: MCNA — 13/07/2026, cập nhật 16/07/2026*
+*Chuẩn bị bởi: MCNA — 13/07/2026, cập nhật gần nhất 20/07/2026*

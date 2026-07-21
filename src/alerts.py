@@ -274,43 +274,6 @@ def format_months_to_sell(months):
     else:
         return f"Còn {days} ngày bán ({months:.1f} thg)"
 
-def estimate_overdue_days_str(period_str, overdue_1_15, overdue_15_30, overdue_30_45, overdue_gt_45):
-    """
-    Ước lượng số ngày quá hạn từ kỳ báo cáo (period) + nhóm tuổi nợ (aging bucket).
-    receivable_detail trên Supabase là bảng tổng hợp nợ theo kỳ, không có cột trạng thái từng
-    hóa đơn để tra ngày quá hạn chính xác tuyệt đối — đây là ước lượng theo bucket, không phải
-    số ngày thực đo từ hóa đơn gốc.
-
-    16/07/2026: QUAY LẠI mốc cũ 1-15/15-30/30-45/>45 ngày (đảo ngược đổi mốc 14/07/2026 sang
-    1-30/31-60/61-90/>90 — bản đó gây lệch với ai_agent/chatbot.py và receivable_detail, xem
-    _BRAVO_RECEIVABLES_SQL). Giờ khớp lại đúng với dữ liệu THẬT trong receivable_detail (Supabase,
-    vẫn luôn tính theo mốc 1-15/15-30/30-45/>45 từ lần import gốc, chưa từng đổi).
-    """
-    try:
-        parts = period_str.split('_')
-        month, year = int(parts[0]), int(parts[1])
-
-        import calendar
-        last_day = calendar.monthrange(year, month)[1]
-        report_date = datetime(year, month, last_day)
-
-        today = datetime.now()
-        days_since_report = max(0, (today - report_date).days)
-
-        if overdue_gt_45 and overdue_gt_45 > 0:
-            return f"Ít nhất {45 + days_since_report} ngày"
-        elif overdue_30_45 and overdue_30_45 > 0:
-            return f"Từ {31 + days_since_report} đến {45 + days_since_report} ngày"
-        elif overdue_15_30 and overdue_15_30 > 0:
-            return f"Từ {16 + days_since_report} đến {30 + days_since_report} ngày"
-        elif overdue_1_15 and overdue_1_15 > 0:
-            return f"Từ {1 + days_since_report} đến {15 + days_since_report} ngày"
-    except Exception:
-        pass
-
-    return "Trên 45 ngày"
-
-
 def normalize_channel_label(raw_channel):
     """
     Chuẩn hoá giá trị kênh thô từ DB (vd receivable_detail.sales_channel) về nhãn hiển thị
@@ -346,39 +309,32 @@ def normalize_region_label(area_code):
 
 def get_customer_regions_by_code(customer_codes, channel_label):
     """
-    Tra map {customer_code: tên miền} qua chain CityId -> dim_tinhthanhpho.AreaCode đã xác minh
-    (docs/dev_supabase_schema.sql): khách OTC tra qua dms_khachhang, khách ETC qua dmssx_khachhang.
-    Dùng 1 câu truy vấn IN theo lô (không query từng khách hàng riêng lẻ) để đỡ tải Supabase.
+    Tra map {customer_code: tên miền} qua chain CityId -> DIM_TinhThanhPho.AreaCode: khách OTC tra
+    qua DMS_KhachHang, khách ETC qua DMSSX_KhachHang. Dùng 1 câu truy vấn IN theo lô.
     Trả dict rỗng nếu lỗi hoặc danh sách mã KH rỗng — gọi nơi dùng phải tự fallback (vd "Không rõ").
-    Tự failover Supabase -> Bravo qua run_with_failover() (xem src/etl.py::_period_revenue).
+
+    20/07/2026: Bravo trực tiếp, bỏ hẳn nhánh Supabase (run_with_failover) — cùng lý do với toàn
+    bộ hệ thống báo cáo/cảnh báo (đọc thẳng nguồn thật, không qua bảng trung gian có thể lệch).
     """
     if not customer_codes:
         return {}
     from sqlalchemy import text, bindparam
-    from src.database import run_with_failover
+    from src.database import _get_bravo_engine
 
-    def _pg(conn):
-        table = "dms_khachhang" if channel_label == "OTC" else "dmssx_khachhang"
-        sql = text(f'''
-            SELECT k."Code" AS cc, t."AreaCode" AS area_code
-            FROM {table} k
-            LEFT JOIN dim_tinhthanhpho t ON k."CityId" = t."CityId"
-            WHERE k."Code" IN :codes
-        ''').bindparams(bindparam("codes", expanding=True))
-        return conn.execute(sql, {"codes": tuple(customer_codes)}).fetchall()
-
-    def _mssql(conn):
-        table = "dbo.DMS_KhachHang" if channel_label == "OTC" else "dbo.DMSSX_KhachHang"
-        sql = text(f'''
-            SELECT k."Code" AS cc, t."AreaCode" AS area_code
-            FROM {table} k
-            LEFT JOIN dbo.DIM_TinhThanhPho t ON k."CityId" = t."CityId"
-            WHERE k."Code" IN :codes
-        ''').bindparams(bindparam("codes", expanding=True))
-        return conn.execute(sql, {"codes": tuple(customer_codes)}).fetchall()
-
+    engine = _get_bravo_engine()
+    if engine is None:
+        print(f"[ALERTS][region_lookup] Không có Bravo engine — không tra được vùng ({channel_label}).")
+        return {}
+    table = "dbo.DMS_KhachHang" if channel_label == "OTC" else "dbo.DMSSX_KhachHang"
+    sql = text(f'''
+        SELECT k."Code" AS cc, t."AreaCode" AS area_code
+        FROM {table} k
+        LEFT JOIN dbo.DIM_TinhThanhPho t ON k."CityId" = t."CityId"
+        WHERE k."Code" IN :codes
+    ''').bindparams(bindparam("codes", expanding=True))
     try:
-        rows = run_with_failover(_pg, _mssql, label="customer_regions")
+        with engine.connect() as conn:
+            rows = conn.execute(sql, {"codes": tuple(customer_codes)}).fetchall()
     except Exception as e:
         print(f"[ALERTS][region_lookup] Lỗi tra vùng theo CityId ({channel_label}): {e}")
         return {}
@@ -469,7 +425,7 @@ def get_bravo_receivables_snapshot(force_refresh=False):
     Trả về list namedtuple có field: customer_code, customer_name, sales_channel, area_code,
     balance_end, overdue_1_15, overdue_15_30, overdue_30_45, overdue_gt_45. Kết quả cache 5 phút
     (force_refresh=True để bỏ qua cache). Raise exception nếu Bravo không truy cập được — người gọi
-    tự bắt để fallback sang receivable_detail (Supabase).
+    tự bắt để xử lý (không còn fallback Supabase, xem ghi chú kiến trúc 20/07/2026).
     """
     import time as _t
     now = _t.time()
@@ -507,20 +463,32 @@ def get_bravo_receivables_snapshot(force_refresh=False):
             raise RuntimeError("SP usp_DeptAccDueDate_GetData không trả về result set công nợ mong đợi.")
         ix = {name: i for i, name in enumerate(cols)}
 
-        def _norm_area(raw):
+        from src.region_map import region_from_customer_code
+
+        def _norm_area(raw, customer_code):
             # SP dùng cột DIM_TinhThanhPho.AreaCode2 (giá trị MB1/MB2/MN/MT), trong khi phần còn lại
             # của hệ thống (region_map.REGION_SQL_MARKERS, lọc digest theo vùng) theo quy ước AreaCode
             # = MB/MB2/MN/MT. Chỉ 'MB1' lệch (2.811 khách miền Bắc) -> map về 'MB' (đã có trong
             # markers 'bac'=['MB','MB2']) để không bị rớt khỏi báo cáo "Quản lý Miền Bắc". MB2/MN/MT
-            # đã khớp sẵn; NULL giữ nguyên (coi là "Không rõ").
-            return "MB" if raw == "MB1" else raw
+            # đã khớp sẵn.
+            # 20/07/2026: SP không tự suy luận vùng cho khách "mồ côi" (area_code NULL) — phát hiện
+            # 45 khách/6,07 tỷ đồng (3,3% tổng dư nợ) rơi vào "Không rõ", trong đó có đúng
+            # HCM13508 — case mồ côi kinh điển đã biết từ _revenue_by_region. Thêm fallback suy luận
+            # theo tiền tố mã KH (cùng bảng CUSTOMER_CODE_PREFIX_TO_REGION dùng cho doanh thu) —
+            # cứu được 36/45 khách (2,1 tỷ đồng), phần còn lại (mã nội bộ/nước ngoài như MYA*/GC*/
+            # I0*/số thuần) thật sự không suy luận được, giữ "Không rõ" đúng bản chất.
+            if raw == "MB1":
+                return "MB"
+            if raw:
+                return raw
+            return region_from_customer_code(customer_code)
 
         rows = [
             _ReceivableRow(
                 customer_code=rec[ix["CustomerCode"]],
                 customer_name=rec[ix["CustomerName"]],
                 sales_channel="OTC" if rec[ix["ClassCode"]] == "TM" else "ETC",
-                area_code=_norm_area(rec[ix["AreaCode"]]),
+                area_code=_norm_area(rec[ix["AreaCode"]], rec[ix["CustomerCode"]]),
                 balance_end=rec[ix["CloseBal"]],
                 overdue_1_15=rec[ix["CloseBal5"]],
                 overdue_15_30=rec[ix["CloseBal6"]],
@@ -559,6 +527,83 @@ def _bravo_overdue_gt45_by_customer():
         cur = agg.setdefault(r.customer_code, [r.customer_name, 0.0])
         cur[1] += float(r.overdue_gt_45 or 0)
     return [_Gt45Row(code, name, gt45) for code, (name, gt45) in agg.items()]
+
+
+_INVENTORY_SNAPSHOT_CACHE = {"ts": 0.0, "rows": None}
+_INVENTORY_SNAPSHOT_TTL_SECONDS = 1800  # 30 phút — tồn kho đổi chậm hơn nhiều so với công nợ/doanh thu
+
+
+def get_bravo_inventory_snapshot(force_refresh=False):
+    """
+    Snapshot tồn kho (OTC+ETC) TRỰC TIẾP từ Bravo — 20/07/2026: bỏ hẳn bảng Supabase `inventory`
+    làm nguồn đọc cho digest/check_dead_stock_alert (cùng lý do/cách làm với get_bravo_receivables_
+    snapshot/_period_revenue: bảng trung gian có thể lệch schema hoặc chưa được ghi đúng — xác nhận
+    thực tế: Supabase `inventory` thiếu hẳn cột `channel`, chưa từng nhận được dữ liệu đúng công
+    thức đã sửa ngày 17/07/2026 (usp_StockLotFinance_Report), khiến mọi digest/alert đọc tồn kho từ
+    đó đều lỗi "column channel does not exist" hoặc hiện số liệu CŨ/SAI (vd item Siro thuốc ho bổ
+    phế Nam Hà từng hiện closing_qty gộp chung 1 số thay vì tách đúng OTC/ETC).
+
+    Công thức tính (SQL/pandas) dùng chung với script đồng bộ cũ — xem
+    scripts/sync_from_bravo_to_supabase.py::build_inventory_dataframe() để tránh trùng lặp/lệch
+    công thức về sau (script đó giờ CHỈ còn là backup thủ công, không chạy tự động).
+
+    LƯU Ý: closing_value hiện luôn = 0 (chưa có nguồn giá trị tồn kho được DNH xác nhận) — mục
+    "tồn chết" (dead stock, lọc theo closing_value) vẫn sẽ luôn trống cho tới khi có nguồn đó; mục
+    "sắp hết hàng" (near-stockout, chỉ dựa vào months_to_sell) không bị ảnh hưởng.
+
+    Cache 30 phút (tồn kho không cần tươi từng phút như công nợ/doanh thu, và câu tính vận tốc bán
+    6 tháng khá nặng — không nên chạy lại mỗi lần digest/alert gọi tới).
+    Trả list namedtuple-like (SimpleNamespace) có field: item_code, item_name, unit, opening_qty,
+    inward_qty, outward_qty, closing_qty, closing_value, months_to_sell, warehouse, channel.
+    Raise exception nếu Bravo không truy cập được — người gọi tự bắt để xử lý (không còn fallback
+    Supabase).
+    """
+    import time as _t
+    now = _t.time()
+    if not force_refresh and _INVENTORY_SNAPSHOT_CACHE["rows"] is not None and \
+            (now - _INVENTORY_SNAPSHOT_CACHE["ts"]) < _INVENTORY_SNAPSHOT_TTL_SECONDS:
+        return _INVENTORY_SNAPSHOT_CACHE["rows"]
+
+    import types
+    sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "scripts"))
+    from sync_from_bravo_to_supabase import build_inventory_dataframe, get_sql_server_connection
+
+    sql_conn = get_sql_server_connection()
+    try:
+        df = build_inventory_dataframe(sql_conn)
+    finally:
+        try:
+            sql_conn.close()
+        except Exception:
+            pass
+
+    rows = [types.SimpleNamespace(**row) for row in df.to_dict("records")]
+    _INVENTORY_SNAPSHOT_CACHE["rows"] = rows
+    _INVENTORY_SNAPSHOT_CACHE["ts"] = now
+    return rows
+
+
+# 20/07/2026: 2 nhân viên THẬT bị Bravo gắn nhầm cờ IsDuplicate=1 trên DIM_NhanVien — xác nhận qua
+# đối chiếu EndDate (đều =None) + doanh số bán liên tục tới hiện tại (Nguyễn Thị Thanh Thủy
+# MBKV12 ~1,25 tỷ đ/tháng, Lạc Ngọc Sâm TM25030101 ~296 triệu đ/tháng), mẫu hình hoàn toàn khác
+# nhân viên đã nghỉ thật (EndDate có giá trị, doanh số dừng đúng ngày nghỉ) — xem
+# docs/Cau_hoi_can_DNH_xac_nhan.md mục 8. Hậu quả nếu KHÔNG xử lý: mọi truy vấn lọc IsDuplicate=0
+# (KPI, digest, alert...) làm BIẾN MẤT hoàn toàn 2 đội này khỏi report — nếu đội họ có vấn đề thật
+# sẽ không ai biết. Override CÓ CHỦ ĐÍCH, CHỈ 2 mã này (không đụng MN1/MN4 — mã kênh phân phối
+# dùng chung, không phải người, gắn cờ IsDuplicate đúng theo xác nhận trong tài liệu trên) — cần
+# DNH/HR xác nhận chính thức để sửa thẳng dữ liệu gốc, khi đó bỏ override này đi.
+_KNOWN_MISFLAGGED_DUPLICATE_CODES = ("MBKV12", "TM25030101")
+
+
+def _is_duplicate_filter_sql(alias="n"):
+    """Trả về mảnh SQL lọc "không bị đánh dấu trùng" — CÓ ngoại lệ cho
+    _KNOWN_MISFLAGGED_DUPLICATE_CODES (xem ghi chú phía trên). Dùng thay cho việc viết tay
+    "(x.[IsDuplicate] IS NULL OR x.[IsDuplicate] = 0)" ở mọi câu truy vấn Bravo lọc nhân sự, để
+    không lệch dần theo thời gian nếu sửa 1 chỗ quên chỗ khác."""
+    codes = ",".join(f"'{c}'" for c in _KNOWN_MISFLAGGED_DUPLICATE_CODES)
+    prefix = f"{alias}." if alias else ""
+    return (f"({prefix}[IsDuplicate] IS NULL OR {prefix}[IsDuplicate] = 0 "
+            f"OR {prefix}[EmployeeCode] IN ({codes}))")
 
 
 def get_bravo_kpi_tdv_snapshot(position_codes=('TDV',)):
@@ -600,7 +645,53 @@ def get_bravo_kpi_tdv_snapshot(position_codes=('TDV',)):
         FROM tdv_target t
         JOIN [DIM_NhanVien] n ON t.[EmployeeCode] = n.[EmployeeCode]
         LEFT JOIN tdv_actual a ON t.[EmployeeCode] = a.[EmployeeCode]
-        WHERE n.[PositionCode] IN ({placeholders}) AND (n.[IsDuplicate] IS NULL OR n.[IsDuplicate] = 0)
+        WHERE n.[PositionCode] IN ({placeholders}) AND {_is_duplicate_filter_sql('n')}
+    ''')
+    with engine.connect() as conn:
+        rows = conn.execute(sql).fetchall()
+    result = []
+    for r in rows:
+        target = float(r.month_sale_target) if r.month_sale_target else 0.0
+        amount = float(r.month_sale_amount or 0)
+        pct = (amount / target) if target > 0 else None
+        result.append(types.SimpleNamespace(
+            employee_code=r.employee_code, employee_name=r.employee_name, area_code=r.area_code,
+            position_code=r.position_code,
+            month_sale_target=target, month_sale_amount=amount, month_sale_percent=pct))
+    return result
+
+
+def get_bravo_management_kpi_snapshot(position_codes=('TP', 'PP', 'TBP')):
+    """
+    Snapshot KPI TỨC THỜI từ Bravo cho cấp quản lý cao (TP/PP/TBP) — bảng `FACT_ThongKeTinhLuong`
+    ("Thống kê tính lương"), phát hiện 16/07/2026 (xem docs/Cau_hoi_can_DNH_xac_nhan.md mục 6),
+    dùng thật 20/07/2026 sau khi xác nhận: bỏ hẳn bảng Supabase `kpi_summary` (đối chiếu 20/07/2026
+    — CHỈ có 6/20 QLV thật, tương tự chỉ có phần nhỏ TP/PP/TBP — dữ liệu import 1 lần từ đầu dự án,
+    không bao giờ refresh, KHÔNG phải lỗi 1 node đơn lẻ như từng nghĩ ở check_kpi_revenue_
+    reconciliation_alert).
+
+    LƯU Ý: nguồn này CHƯA được DNH xác nhận chính thức là nguồn KPI đúng cho TP/PP/TBP (câu hỏi
+    mục 6 vẫn còn mở) — nhưng dữ liệu tươi thật (SaveDate = hôm nay khi test 20/07/2026) và khớp
+    đúng thực tế nhân sự đã biết (chỉ 3 TP đang làm việc, khớp số dòng trả về) — dùng tạm, tốt hơn
+    hẳn Supabase đã xác nhận sai/thiếu nghiêm trọng, không phải chờ xác nhận mới dùng.
+
+    Trả list SimpleNamespace: employee_code, employee_name, area_code, position_code,
+    month_sale_target, month_sale_amount, month_sale_percent. Raise exception nếu Bravo lỗi.
+    """
+    from sqlalchemy import text
+    import types
+    from src.database import _get_bravo_engine
+    engine = _get_bravo_engine()
+    if engine is None:
+        raise RuntimeError("Không có Bravo engine (thiếu BRAVO_SQL_* trong .env)")
+    placeholders = ",".join(f"'{p}'" for p in position_codes)
+    sql = text(f'''
+        SELECT EmployeeCode AS employee_code, EmployeeName AS employee_name, AreaCode AS area_code,
+               PositionCode AS position_code, MonthSaleTarget AS month_sale_target,
+               MonthSaleAmount AS month_sale_amount
+        FROM FACT_ThongKeTinhLuong
+        WHERE PositionCode IN ({placeholders})
+          AND SaveDate = (SELECT MAX(SaveDate) FROM FACT_ThongKeTinhLuong WHERE PositionCode IN ({placeholders}))
     ''')
     with engine.connect() as conn:
         rows = conn.execute(sql).fetchall()
@@ -666,7 +757,7 @@ def get_bravo_kpi_quarter_year_snapshot(position_codes):
             FROM tgt t
             JOIN [DIM_NhanVien] n ON t.[EmployeeCode] = n.[EmployeeCode]
             LEFT JOIN act a ON a.[SaveDate] = t.[SaveDate] AND a.[EmployeeCode] = t.[EmployeeCode]
-            WHERE n.[PositionCode] IN ({pos_ph}) AND (n.[IsDuplicate] IS NULL OR n.[IsDuplicate] = 0)
+            WHERE n.[PositionCode] IN ({pos_ph}) AND {_is_duplicate_filter_sql('n')}
             GROUP BY n.[EmployeeCode], n.[Name]
         ''')
         rows = conn.execute(sql).fetchall()
@@ -762,7 +853,7 @@ def get_bravo_last_n_complete_months(position_codes, n=2):
             FROM tgt t
             JOIN [DIM_NhanVien] n ON t.[EmployeeCode] = n.[EmployeeCode]
             LEFT JOIN act a ON a.[SaveDate] = t.[SaveDate] AND a.[EmployeeCode] = t.[EmployeeCode]
-            WHERE n.[PositionCode] IN ({pos_ph}) AND (n.[IsDuplicate] IS NULL OR n.[IsDuplicate] = 0)
+            WHERE n.[PositionCode] IN ({pos_ph}) AND {_is_duplicate_filter_sql('n')}
         ''')
         rows = conn.execute(sql).fetchall()
 
@@ -785,35 +876,18 @@ def _last_complete_data_day():
     thật đã đồng bộ) hoặc MAX(DocDate) thẳng (ngày mới nhất luôn có thể đang dở dang do TDV nhập
     liệu suốt ngày / sync chưa bắt kịp cuối ngày — xác minh thực tế 08/07/2026: ngày mới nhất chỉ
     16/~135 nhân viên phát sinh hóa đơn so với ngày liền trước có 135 người).
-    None nếu chưa có dữ liệu hóa đơn nào. Tự failover Supabase -> Bravo qua run_with_failover().
+    None nếu chưa có dữ liệu hóa đơn nào. 20/07/2026: Bravo trực tiếp, bỏ hẳn nhánh Supabase.
     """
     from sqlalchemy import text
-    from src.database import run_with_failover
+    from src.database import _get_bravo_engine
 
-    def _pg(conn):
-        overall_max_row = conn.execute(text('''
-            SELECT MAX(d) FROM (
-                SELECT MAX("DocDate"::date) AS d FROM brv_hoadonhdr WHERE "IsActive"=TRUE
-                UNION ALL
-                SELECT MAX("DocDate"::date) FROM brvsx_hoadonhdr WHERE "IsActive"=TRUE
-            ) x
-        ''')).fetchone()
-        overall_max = overall_max_row[0] if overall_max_row else None
-        if not overall_max:
-            return None
-        complete_row = conn.execute(text('''
-            SELECT MAX(d) FROM (
-                SELECT MAX("DocDate"::date) AS d FROM brv_hoadonhdr WHERE "IsActive"=TRUE AND "DocDate"::date < :overall_max
-                UNION ALL
-                SELECT MAX("DocDate"::date) FROM brvsx_hoadonhdr WHERE "IsActive"=TRUE AND "DocDate"::date < :overall_max
-            ) x
-        '''), {"overall_max": overall_max}).fetchone()
-        return complete_row[0] if complete_row else None
-
-    def _mssql(conn):
-        # Driver ODBC cũ "SQL Server" (không phải "ODBC Driver 17"): (a) trả cột kiểu date về dạng
-        # CHUỖI 'YYYY-MM-DD' thay vì datetime.date gốc, (b) lỗi SQLBindParameter nếu bind thẳng
-        # datetime.date vào query sau — xác nhận thực tế 10/07/2026. Ép kiểu tường minh cả 2 chiều.
+    engine = _get_bravo_engine()
+    if engine is None:
+        return None
+    # Driver ODBC cũ "SQL Server" (không phải "ODBC Driver 17"): (a) trả cột kiểu date về dạng
+    # CHUỖI 'YYYY-MM-DD' thay vì datetime.date gốc, (b) lỗi SQLBindParameter nếu bind thẳng
+    # datetime.date vào query sau — xác nhận thực tế 10/07/2026. Ép kiểu tường minh cả 2 chiều.
+    with engine.connect() as conn:
         overall_max_row = conn.execute(text('''
             SELECT MAX(d) FROM (
                 SELECT MAX("DocDate") AS d FROM dbo.BRV_HoaDonHdr WHERE "IsActive"=1
@@ -832,12 +906,10 @@ def _last_complete_data_day():
                 SELECT MAX("DocDate") FROM dbo.BRVSX_HoaDonHdr WHERE "IsActive"=1 AND "DocDate" < :overall_max
             ) x
         '''), {"overall_max": overall_max_str}).fetchone()
-        result = complete_row[0] if complete_row else None
-        if result is None or hasattr(result, "strftime"):
-            return result
-        return datetime.strptime(str(result)[:10], "%Y-%m-%d").date()
-
-    return run_with_failover(_pg, _mssql, label="last_complete_data_day")
+    result = complete_row[0] if complete_row else None
+    if result is None or hasattr(result, "strftime"):
+        return result
+    return datetime.strptime(str(result)[:10], "%Y-%m-%d").date()
 
 
 def _month_period_label(month_start, data_day=None):
@@ -866,16 +938,13 @@ def run_smart_business_alerts():
     """
     Quét và gửi cảnh báo thông minh (Nợ quá hạn, Cháy kho, KPI thấp).
 
-    Phần NỢ QUÁ HẠN ưu tiên tính TỨC THỜI từ Bravo (get_bravo_receivables_snapshot, 10/07/2026),
-    dự phòng receivable_detail (Supabase) nếu Bravo lỗi. Phần Cháy kho/KPI vẫn đọc inventory/
-    kpi_summary trên Supabase (chưa có nguồn Bravo tương đương đã kiểm chứng — xem TODO tồn kho).
+    20/07/2026: bỏ hẳn mọi fallback Supabase (receivable_detail/inventory/kpi_summary) — cả 3 phần
+    (Nợ quá hạn, Cháy kho, KPI) giờ đọc TRỰC TIẾP Bravo qua get_bravo_receivables_snapshot/
+    get_bravo_inventory_snapshot/get_bravo_kpi_tdv_snapshot. Nếu Bravo lỗi, phần đó bị bỏ qua
+    (log lỗi, không gửi alert dựa trên số liệu Supabase có thể sai/thiếu — xác nhận thực tế
+    kpi_summary chỉ có 6/20 QLV thật, inventory từng thiếu cột channel/dữ liệu cũ).
     """
-    from sqlalchemy import text
-    engine = _alert_engine()
-    if engine is None:
-        return
-
-    # 1. CẢNH BÁO NỢ QUÁ HẠN KHUNG (Top Overdue Debts) — Bravo trước, Supabase dự phòng
+    # 1. CẢNH BÁO NỢ QUÁ HẠN KHUNG (Top Overdue Debts) — Bravo trực tiếp
     debt_rows = []
     debt_period_label = None
     try:
@@ -903,30 +972,7 @@ def run_smart_business_alerts():
         enriched.sort(key=lambda x: x[0], reverse=True)
         debt_rows = enriched[:5]
     except Exception as e:
-        print(f"[ALERTS][smart_debt] Bravo lỗi ({e}) — dự phòng Supabase receivable_detail.")
-        try:
-            with engine.connect() as conn:
-                latest_period, _ = _two_latest_periods(conn)
-            if not latest_period:
-                print("[ALERTS][smart_debt] Không tìm thấy kỳ báo cáo nào trong receivable_detail.")
-            else:
-                debt_period_label = latest_period
-                with engine.connect() as conn:
-                    sb_rows = conn.execute(text('''
-                        SELECT period, customer_code, customer_name, total_overdue, balance_end,
-                               overdue_1_15, overdue_15_30, overdue_30_45, overdue_gt_45, sales_channel
-                        FROM receivable_detail
-                        WHERE period = :p AND total_overdue > 10000000
-                        ORDER BY total_overdue DESC
-                        LIMIT 5
-                    '''), {"p": latest_period}).fetchall()
-                for r in sb_rows:
-                    days_overdue = estimate_overdue_days_str(
-                        r.period, r.overdue_1_15, r.overdue_15_30, r.overdue_30_45, r.overdue_gt_45)
-                    debt_rows.append((r.total_overdue, r.customer_code, r.customer_name, r.sales_channel,
-                                       r.balance_end, days_overdue))
-        except Exception as e2:
-            print(f"[ALERTS][smart_debt] Lỗi cả 2 nguồn: {e2}")
+        print(f"[ALERTS][smart_debt] Bravo lỗi ({e}) — bỏ qua mục nợ quá hạn kỳ này.")
 
     if debt_rows:
         alert_key = "smart_debt_overdue_top5"
@@ -956,22 +1002,15 @@ def run_smart_business_alerts():
     else:
         print("[ALERTS][smart_debt] Không có khách hàng nào nợ quá hạn vượt ngưỡng 10 triệu.")
 
-    # 2. CẢNH BÁO CHÁY HÀNG TỒN KHO (Inventory Out-of-Stock Risk)
+    # 2. CẢNH BÁO CHÁY HÀNG TỒN KHO (Inventory Out-of-Stock Risk) — 20/07/2026: Bravo trực tiếp
     inv_rows = []
     try:
-        with engine.connect() as conn:
-            if not _supabase_table_exists(conn, "inventory"):
-                print("[ALERTS][smart_inventory] Bảng 'inventory' chưa có dữ liệu (chờ Excel/DNH) — bỏ qua.")
-            else:
-                inv_rows = conn.execute(text('''
-                    SELECT item_code, item_name, closing_qty, outward_qty, months_to_sell, channel
-                    FROM inventory
-                    WHERE months_to_sell > 0.0 AND months_to_sell <= 1.0 AND closing_qty > 0
-                    ORDER BY months_to_sell ASC
-                    LIMIT 5
-                ''')).fetchall()
+        inv_snapshot = get_bravo_inventory_snapshot()
+        inv_rows = sorted(
+            [r for r in inv_snapshot if 0.0 < r.months_to_sell <= 1.0 and r.closing_qty > 0],
+            key=lambda r: r.months_to_sell)[:5]
     except Exception as e:
-        print(f"[ALERTS][smart_inventory] Lỗi truy vấn tồn kho (có thể thiếu cột outward_qty hoặc channel trên Supabase): {e}")
+        print(f"[ALERTS][smart_inventory] Lỗi lấy tồn kho từ Bravo: {e}")
         inv_rows = []
  
     if inv_rows:
@@ -1025,22 +1064,8 @@ def run_smart_business_alerts():
         kpi_rows.sort(key=lambda r: r.month_sale_percent)
         kpi_rows = kpi_rows[:5]
     except Exception as e:
-        print(f"[ALERTS][smart_kpi] Bravo lỗi ({e}) — dự phòng Supabase kpi_summary.")
-        try:
-            with engine.connect() as conn:
-                kpi_rows = conn.execute(text('''
-                    SELECT employee_code, employee_name, area_code, month_sale_target, month_sale_amount, month_sale_percent
-                    FROM kpi_summary
-                    WHERE month_sale_target > 10000000 AND month_sale_percent < 0.60
-                    ORDER BY month_sale_percent ASC
-                    LIMIT 5
-                ''')).fetchall()
-                # kpi_summary không có cột ngày riêng — mượn ngày dữ liệu hóa đơn gần nhất đã đồng bộ
-                # trọn vẹn làm mốc "tính đến ngày" rõ ràng, thay vì giờ máy chạy job (datetime.now()).
-                kpi_period_label = _month_period_label(_last_complete_data_day(), _last_complete_data_day())
-        except Exception as e2:
-            print(f"[ALERTS][smart_kpi] Lỗi cả 2 nguồn: {e2}")
-            kpi_rows = []
+        print(f"[ALERTS][smart_kpi] Bravo lỗi ({e}) — bỏ qua mục KPI thấp kỳ này.")
+        kpi_rows = []
 
     if kpi_rows:
         alert_key = "smart_kpi_low_progress_top5"
@@ -1079,12 +1104,11 @@ def run_sales_kpi_insights_alert():
 
     LƯU Ý: trước đây báo cáo này còn có phần chia theo kênh (OTC/ETC), nhưng phần đó dựa trên
     dữ liệu suy luận không đáng tin cậy (xem docstring get_sales_and_kpi_analytics) nên đã bỏ —
-    chỉ còn phần so sánh theo chức danh, đọc thẳng kpi_summary trên Supabase.
+    chỉ còn phần so sánh theo chức danh.
 
-    CHỦ ĐỘNG GIỮ SUPABASE (không chuyển Bravo-first, 10/07/2026): báo cáo gồm CẢ TP/PP/QLV lẫn
-    TDV/CTV/CS trong cùng 1 bảng so sánh — TP/PP/CS/CTV/TK KHÔNG tồn tại trên Bravo (chỉ TDV/QLV có
-    qua FACT_TongHopKhachHang, đã xác nhận ở get_bravo_kpi_tdv_snapshot). Không tách được 1 phần
-    sang Bravo mà giữ nguyên ý nghĩa "so sánh đủ mọi cấp bậc" của báo cáo này.
+    20/07/2026: get_sales_and_kpi_analytics() đã chuyển hẳn sang Bravo-first (TP/PP/TBP qua
+    FACT_ThongKeTinhLuong, TDV/QLV/CTV/CS qua FACT_TongHopKhachHang) — không còn đọc Supabase
+    `kpi_summary` nữa (bảng đó xác nhận chỉ có 6/20 QLV thật, thiếu nghiêm trọng).
     """
     from src.analytics import get_sales_and_kpi_analytics
 
@@ -1098,6 +1122,13 @@ def run_sales_kpi_insights_alert():
     if should_send_alert(alert_key, cooldown_hours=12, current_value="sent"):
         rows = []
 
+        # 20/07/2026: month_sale_percent giờ có thể là None (target=0 — get_bravo_kpi_tdv_snapshot/
+        # get_bravo_management_kpi_snapshot trả None thay vì ép về 0 giả khi không chia được, khác
+        # hành vi bảng Supabase cũ luôn có DEFAULT 0.0) — cần guard trước khi nhân/format %.
+        def _pct_display(r):
+            p = r['month_sale_percent']
+            return f"{p*100:.1f}%".replace('.', ',') if p is not None else "—"
+
         # 1. So sánh hiệu suất giữa các Trưởng phòng (TP)
         if data['tps']:
             for r in data['tps']:
@@ -1105,9 +1136,9 @@ def run_sales_kpi_insights_alert():
                     f"TP: {r['employee_name']}",
                     format_vietnamese_money(r['month_sale_target']),
                     format_vietnamese_money(r['month_sale_amount']),
-                    f"{r['month_sale_percent']*100:.1f}%".replace('.', ',')
+                    _pct_display(r)
                 ])
-                
+
         # 2. So sánh hiệu suất giữa các Phó phòng (PP)
         if data['pps']:
             for r in data['pps']:
@@ -1115,7 +1146,7 @@ def run_sales_kpi_insights_alert():
                     f"PP: {r['employee_name']}",
                     format_vietnamese_money(r['month_sale_target']),
                     format_vietnamese_money(r['month_sale_amount']),
-                    f"{r['month_sale_percent']*100:.1f}%".replace('.', ',')
+                    _pct_display(r)
                 ])
 
         # 3. So sánh hiệu suất giữa các Quản lý vùng (QLV)
@@ -1125,16 +1156,16 @@ def run_sales_kpi_insights_alert():
                     f"QLV: {r['employee_name']}",
                     format_vietnamese_money(r['month_sale_target']),
                     format_vietnamese_money(r['month_sale_amount']),
-                    f"{r['month_sale_percent']*100:.1f}%".replace('.', ',')
+                    _pct_display(r)
                 ])
-                
+
         # 4. Top 3 TDV/CTV xuất sắc nhất
         for idx, r in enumerate(data['top_reps']):
             rows.append([
                 f"Top {idx+1} TDV: {r['employee_name']}",
                 format_vietnamese_money(r['month_sale_target']),
                 format_vietnamese_money(r['month_sale_amount']),
-                f"{r['month_sale_percent']*100:.1f}%".replace('.', ',')
+                _pct_display(r)
             ])
 
         # 5. Top 3 TDV/CTV cần hỗ trợ
@@ -1143,7 +1174,7 @@ def run_sales_kpi_insights_alert():
                 f"Cần hỗ trợ #{idx+1}: {r['employee_name']} ({r['position_code']})",
                 format_vietnamese_money(r['month_sale_target']),
                 format_vietnamese_money(r['month_sale_amount']),
-                f"{r['month_sale_percent']*100:.1f}%".replace('.', ',')
+                _pct_display(r)
             ])
 
         send_alert_to_all_channels(
@@ -1218,9 +1249,7 @@ def check_revenue_drop_alert():
         mốc thời gian — nhưng dữ liệu hiện chỉ có Q2/2026 nên YoY chưa tính được.
     """
     try:
-        from src.database import _get_cloud_engine
         from src.etl import _period_revenue, _prev_month_tuple
-        from sqlalchemy import text
     except Exception as e:
         print(f"[ALERTS][revenue_drop] Không import được engine dữ liệu: {e}")
         return
@@ -1284,121 +1313,21 @@ def check_revenue_drop_alert():
                 record_alert_sent(alert_key, str(round(ratio, 4)))
 
 
-def _find_credit_limit_column(conn):
-    """
-    Dò tìm cột hạn mức tín dụng trong schema (dms_khachhang / receivable_detail).
-    Trả về (table_name, column_name) nếu tìm thấy, ngược lại None.
-    Đây là GAP DỮ LIỆU đã biết: hạn mức tín dụng có thể còn nằm ở Bravo/DMS nguồn,
-    chưa được đưa vào staging/mart — cần DNH xác nhận (xem Go-Live Plan Phase 1.2b).
-    """
-    from sqlalchemy import text
-    q = text("""
-        SELECT table_name, column_name
-        FROM information_schema.columns
-        WHERE table_schema = 'public'
-          AND table_name IN ('dms_khachhang', 'dmssx_khachhang', 'receivable_detail')
-          AND (lower(column_name) LIKE '%credit%limit%'
-               OR lower(column_name) LIKE '%creditlimit%'
-               OR lower(column_name) LIKE '%hanmuc%'
-               OR lower(column_name) LIKE '%han_muc%')
-        LIMIT 1
-    """)
-    row = conn.execute(q).fetchone()
-    return (row[0], row[1]) if row else None
-
-
 def check_credit_limit_exceeded_alert():
     """
     TRIGGER 5: Cảnh báo khi dư nợ hiện tại của khách hàng vượt hạn mức tín dụng.
 
-    TRẠNG THÁI: Phòng thủ theo GAP DỮ LIỆU. Hàm tự dò cột hạn mức tín dụng lúc chạy;
-    nếu schema chưa có cột này (rất có thể vì credit limit còn ở Bravo/DMS nguồn, chưa
-    được đưa vào staging/mart), hàm ghi log rõ ràng và no-op — KHÔNG crash. Khi DNH đưa
-    cột hạn mức vào mart, hàm tự động kích hoạt so sánh balance_end vs hạn mức mà không
-    cần sửa code khung này (chỉ hoàn thiện phần liệt kê nếu cần).
+    TRẠNG THÁI (20/07/2026): NO-OP — GAP DỮ LIỆU chưa giải quyết. Hạn mức tín dụng khách hàng
+    hiện KHÔNG có cột nào trên Bravo (DMS_KhachHang/DMSSX_KhachHang không có trường hạn mức, xác
+    nhận qua data_dictionary + khảo sát cột). Trước đây hàm dò cột này trên schema Supabase, nhưng
+    đã bỏ hẳn Supabase (20/07/2026) — và bản thân Supabase cũng chưa từng có cột đó. Cần DNH cung
+    cấp nguồn hạn mức tín dụng (xem docs/Cau_hoi_can_DNH_xac_nhan.md) trước khi bật cảnh báo này.
+    Giữ khung hàm để không phải sửa nơi gọi (run_all_alert_checks); khi có nguồn Bravo thật thì
+    triển khai lại phần so sánh balance_end vs hạn mức ở đây.
     """
-    try:
-        from src.database import _get_cloud_engine
-        from sqlalchemy import text
-    except Exception as e:
-        print(f"[ALERTS][credit_limit] Không import được engine dữ liệu: {e}")
-        return
-
-    engine = _get_cloud_engine()
-    if engine is None:
-        print("[ALERTS][credit_limit] Chưa cấu hình CLOUD_DB_URL — bỏ qua cảnh báo hạn mức tín dụng.")
-        return
-
-    try:
-        with engine.connect() as conn:
-            found = _find_credit_limit_column(conn)
-            if not found:
-                print("[ALERTS][credit_limit] GAP DỮ LIỆU: chưa tìm thấy cột hạn mức tín dụng "
-                      "trong dms_khachhang/receivable_detail. Cần DNH đưa hạn mức từ Bravo/DMS "
-                      "vào mart trước khi bật cảnh báo này. Bỏ qua (no-op).")
-                return
-
-            table_name, col = found
-            print(f"[ALERTS][credit_limit] Tìm thấy cột hạn mức: {table_name}.{col} — chạy so sánh dư nợ.")
-            # Chỉ chạy khi cột nằm trên receivable_detail (có sẵn balance_end cùng bảng).
-            # Nếu hạn mức nằm ở bảng khách hàng, cần join theo customer_code — hoàn thiện khi
-            # xác nhận được khóa join thực tế với DNH.
-            if table_name != 'receivable_detail':
-                print(f"[ALERTS][credit_limit] Cột hạn mức nằm ở '{table_name}', cần xác nhận khóa join "
-                      "với receivable_detail (customer_code) trước khi bật — tạm bỏ qua.")
-                return
-
-            latest_period_row = conn.execute(text(
-                "SELECT DISTINCT period FROM receivable_detail")).fetchall()
-            periods = [r[0] for r in latest_period_row if r[0]]
-            if not periods:
-                return
-            try:
-                from src.etl import _latest_period_key
-                latest_period = max(periods, key=_latest_period_key)
-            except Exception:
-                latest_period = max(periods)
-
-            q = text(f'''
-                SELECT customer_code, customer_name, balance_end, "{col}" AS credit_limit,
-                       (balance_end - "{col}") AS over_amount
-                FROM receivable_detail
-                WHERE period = :p AND "{col}" IS NOT NULL AND "{col}" > 0
-                  AND balance_end > "{col}"
-                ORDER BY (balance_end - "{col}") DESC
-                LIMIT 10
-            ''')
-            over_rows = conn.execute(q, {"p": latest_period}).fetchall()
-    except Exception as e:
-        print(f"[ALERTS][credit_limit] Lỗi khi kiểm tra hạn mức tín dụng: {e}")
-        return
-
-    if not over_rows:
-        print("[ALERTS][credit_limit] Không có khách hàng nào vượt hạn mức tín dụng.")
-        return
-
-    alert_key = "credit_limit_exceeded_top10"
-    top_over = over_rows[0][4]
-    if should_send_alert(alert_key, cooldown_hours=12, current_value=str(top_over)):
-        rows = []
-        for r in over_rows:
-            rows.append([
-                str(r[0]), r[1],
-                format_vietnamese_money(r[2]),
-                format_vietnamese_money(r[3]),
-                format_vietnamese_money(r[4]),
-            ])
-        send_alert_to_all_channels(
-            alert_name="CẢNH BÁO NỢ VƯỢT HẠN MỨC TÍN DỤNG",
-            severity="CRITICAL",
-            summary="Các khách hàng sau có dư nợ hiện tại vượt hạn mức tín dụng được cấp.",
-            table_headers=["Mã KH", "Tên Khách Hàng", "Dư Nợ", "Hạn Mức", "Vượt"],
-            table_rows=rows,
-            channels=("teams",),
-            period=latest_period, region="Toàn quốc",
-            issue="Khách hàng có dư nợ hiện tại vượt hạn mức tín dụng được cấp"
-        )
-        record_alert_sent(alert_key, str(top_over))
+    print("[ALERTS][credit_limit] GAP DỮ LIỆU: chưa có nguồn hạn mức tín dụng trên Bravo — "
+          "bỏ qua (no-op). Cần DNH cung cấp nguồn hạn mức trước khi bật cảnh báo này.")
+    return
 
 
 # =============================================================================
@@ -1422,19 +1351,6 @@ def _alert_engine():
     except Exception as e:
         print(f"[ALERTS] Không lấy được engine dữ liệu: {e}")
         return None
-
-
-def _supabase_table_exists(conn, table_name):
-    """
-    True nếu bảng tồn tại trong schema public trên Supabase (Postgres). Dùng to_regclass — trả
-    NULL thay vì NÉM LỖI khi bảng vắng, nên KHÔNG làm bẩn log bằng stack trace UndefinedTable mỗi
-    chu kỳ quét (5 lần/ngày) cho các bảng đang CHỦ ĐỘNG để trống (vd 'inventory' chờ dữ liệu
-    Excel/DNH — xem docstring check_dead_stock_alert). Giữ log sạch để lỗi THẬT không bị chôn vùi.
-    """
-    from sqlalchemy import text
-    return conn.execute(
-        text("SELECT to_regclass('public.' || :t)"), {"t": table_name}
-    ).scalar() is not None
 
 
 def _two_latest_periods(conn):
@@ -1514,11 +1430,9 @@ def check_company_overdue_ratio_alert():
     A3: Tỷ lệ nợ quá hạn / tổng dư nợ vượt ngưỡng (sức khỏe dòng tiền).
     Tính RIÊNG cho từng kênh OTC/ETC (receivable_detail.sales_channel) thay vì gộp toàn công ty,
     để bắt được ca 1 kênh có tỷ lệ quá hạn cao bị kênh kia che lấp khi gộp.
-    Ưu tiên tính TỨC THỜI từ Bravo (get_bravo_receivables_snapshot, 10/07/2026); Bravo lỗi thì dự
-    phòng đọc receivable_detail (Supabase, theo kỳ gần nhất) như trước.
+    Tính TỨC THỜI từ Bravo (get_bravo_receivables_snapshot). 20/07/2026: bỏ hẳn fallback Supabase
+    receivable_detail (dữ liệu Excel tĩnh, không tự làm mới) — Bravo lỗi thì bỏ qua kỳ này.
     """
-    from sqlalchemy import text
-
     period_label = None
     by_channel = {}
     try:
@@ -1531,28 +1445,8 @@ def check_company_overdue_ratio_alert():
             acc[0] += overdue
             acc[1] += float(r.balance_end or 0)
     except Exception as e:
-        print(f"[ALERTS][overdue_ratio] Bravo lỗi ({e}) — dự phòng Supabase receivable_detail.")
-        engine = _alert_engine()
-        if engine is None:
-            return
-        try:
-            with engine.connect() as conn:
-                latest, _ = _two_latest_periods(conn)
-                if not latest:
-                    return
-                period_label = latest
-                rows = conn.execute(text(
-                    "SELECT sales_channel, SUM(total_overdue) AS overdue, SUM(balance_end) AS balance "
-                    "FROM receivable_detail WHERE period=:p GROUP BY sales_channel"
-                ), {"p": latest}).fetchall()
-                for r in rows:
-                    label = normalize_channel_label(r.sales_channel)
-                    acc = by_channel.setdefault(label, [0, 0])
-                    acc[0] += float(r.overdue or 0)
-                    acc[1] += float(r.balance or 0)
-        except Exception as e2:
-            print(f"[ALERTS][overdue_ratio] Lỗi cả 2 nguồn: {e2}")
-            return
+        print(f"[ALERTS][overdue_ratio] Bravo lỗi ({e}) — bỏ qua kỳ này.")
+        return
 
     for channel_label, (overdue_sum, balance_sum) in by_channel.items():
         ratio = overdue_ratio(overdue_sum, balance_sum)
@@ -1612,10 +1506,9 @@ def _bravo_recent_orders_by_customer(since):
 def check_overdue_customer_new_orders_alert():
     """
     A2: Khách đang nợ quá hạn NHƯNG vẫn được lên đơn mới trong tháng gần nhất.
-    Ưu tiên tính TỨC THỜI từ Bravo (get_bravo_receivables_snapshot + _bravo_recent_orders_by_customer,
-    10/07/2026); Bravo lỗi thì dự phòng đọc receivable_detail (Supabase, theo kỳ gần nhất) như trước.
+    Tính TỨC THỜI từ Bravo (get_bravo_receivables_snapshot + _bravo_recent_orders_by_customer).
+    20/07/2026: bỏ hẳn fallback Supabase receivable_detail — Bravo lỗi thì bỏ qua kỳ này.
     """
-    from sqlalchemy import text
     import types
 
     period_label = None
@@ -1637,46 +1530,8 @@ def check_overdue_customer_new_orders_alert():
                 total_overdue=total_overdue, sales_channel=r.sales_channel,
                 n=recent[0], amt=recent[1]))
     except Exception as e:
-        print(f"[ALERTS][overdue_new_orders] Bravo lỗi ({e}) — dự phòng Supabase receivable_detail.")
-        engine = _alert_engine()
-        if engine is None:
-            return
-        try:
-            with engine.connect() as conn:
-                latest, _ = _two_latest_periods(conn)
-                if not latest:
-                    return
-                period_label = latest
-                since_row = conn.execute(text(
-                    'SELECT DATE_TRUNC(\'month\', MAX("DocDate"::date))::date FROM brv_hoadonhdr WHERE "IsActive"=TRUE'
-                )).fetchone()
-                since = since_row[0] if since_row and since_row[0] else None
-                if since is None:
-                    return
-                sql = text('''
-                    WITH overdue_cust AS (
-                        SELECT customer_code, customer_name, total_overdue, sales_channel
-                        FROM receivable_detail
-                        WHERE period = :p AND total_overdue > 10000000
-                    ),
-                    recent AS (
-                        SELECT "CustomerCode" AS cc, COUNT(*) AS n, SUM("TotalAmount") AS amt
-                        FROM brv_hoadonhdr WHERE "IsActive"=TRUE AND "IsHC"=FALSE AND "DocDate"::date >= :since
-                        GROUP BY "CustomerCode"
-                        UNION ALL
-                        SELECT "CustomerCode", COUNT(*), SUM("TotalAmount")
-                        FROM brvsx_hoadonhdr WHERE "IsActive"=TRUE AND "DocDate"::date >= :since
-                        GROUP BY "CustomerCode"
-                    ),
-                    recent_agg AS (SELECT cc, SUM(n) AS n, SUM(amt) AS amt FROM recent GROUP BY cc)
-                    SELECT o.customer_code, o.customer_name, o.total_overdue, o.sales_channel, r.n, r.amt
-                    FROM overdue_cust o JOIN recent_agg r ON o.customer_code = r.cc
-                    ORDER BY o.total_overdue DESC
-                ''')
-                joined = conn.execute(sql, {"p": latest, "since": since}).fetchall()
-        except Exception as e2:
-            print(f"[ALERTS][overdue_new_orders] Lỗi cả 2 nguồn: {e2}")
-            return
+        print(f"[ALERTS][overdue_new_orders] Bravo lỗi ({e}) — bỏ qua kỳ này.")
+        return
 
     if not joined:
         print("[ALERTS][overdue_new_orders] Không có khách quá hạn nào được lên đơn mới.")
@@ -1813,35 +1668,26 @@ def check_dead_stock_alert():
     """
     B2: Tồn "chết"/bán chậm — months_to_sell rất lớn + giá trị tồn cao (vốn đọng).
 
-    CHỦ ĐỘNG GIỮ SUPABASE (không chuyển Bravo-first, 10/07/2026): khảo sát Bravo cho thấy CÓ bảng
-    tồn kho (BRV_TheKho/BRV_TonKhoDK) nhưng số lượng nhập/xuất suy ra từ DebitAccount/CreditAccount
-    (quy ước kế toán kép, cần đọc đúng mã tài khoản mới biết chiều tăng/giảm) — RỦI RO tính sai tồn
-    kho hiện tại nếu suy đoán sai quy ước. BRV_TheKhoLot có cột ReceiptQuantity/IssueQuantity rõ
-    ràng hơn nhưng chưa verify được số dư tồn kho tính ra khớp với số liệu tồn kho thực tế đã biết
-    (khác hẳn công nợ — công thức TotalAmount-PaidAmount đã đối chiếu được số liệu thật trước khi
-    dùng). Để lại xác minh kỹ hơn trước khi chuyển, tránh báo sai tồn kho ảnh hưởng quyết định nhập
-    hàng.
+    20/07/2026: chuyển sang Bravo-first qua get_bravo_inventory_snapshot() — bảng Supabase
+    `inventory` trước đây thiếu cột `channel`, chưa từng nhận được dữ liệu đúng công thức đã sửa
+    17/07/2026 (usp_StockLotFinance_Report), khiến alert này lỗi/không chạy. Công thức tồn kho đã
+    được kiểm chứng đối chiếu SP gốc DNH (xem docstring build_inventory_dataframe trong
+    scripts/sync_from_bravo_to_supabase.py) nên không còn rủi ro "chưa verify" như ghi chú cũ
+    10/07/2026 nữa.
+
+    LƯU Ý: closing_value hiện luôn = 0 (chưa có nguồn giá trị tồn kho được DNH xác nhận) — alert
+    này (lọc theo closing_value > ngưỡng) sẽ KHÔNG bao giờ bắn cho tới khi có nguồn đó. Đây là gap
+    có từ trước, không phải lỗi phát sinh từ lần sửa này.
     """
-    from sqlalchemy import text
-    engine = _alert_engine()
-    if engine is None:
-        return
     dead_months = float(_biz_threshold('dead_stock_months', 12.0))
     min_value = float(_biz_threshold('dead_stock_min_value', 50000000))
     try:
-        with engine.connect() as conn:
-            if not _supabase_table_exists(conn, "inventory"):
-                print("[ALERTS][dead_stock] Bảng 'inventory' chưa có dữ liệu (chờ Excel/DNH) — bỏ qua.")
-                return
-            rows = conn.execute(text('''
-                SELECT item_code, item_name, unit, closing_qty, closing_value, months_to_sell, channel
-                FROM inventory
-                WHERE months_to_sell >= :m AND closing_value > :v
-                ORDER BY closing_value DESC LIMIT 10
-            '''), {"m": dead_months, "v": min_value}).fetchall()
+        snapshot = get_bravo_inventory_snapshot()
     except Exception as e:
-        print(f"[ALERTS][dead_stock] Lỗi: {e}")
+        print(f"[ALERTS][dead_stock] Lỗi lấy tồn kho từ Bravo: {e}")
         return
+    filtered = [r for r in snapshot if r.months_to_sell >= dead_months and r.closing_value > min_value]
+    rows = sorted(filtered, key=lambda r: r.closing_value, reverse=True)[:10]
     if not rows:
         print("[ALERTS][dead_stock] Không có mặt hàng tồn chết vượt ngưỡng.")
         return
@@ -1873,34 +1719,15 @@ def check_near_expiry_alert():
 
     XÁC NHẬN THÊM (10/07/2026): khảo sát trực tiếp Bravo (BRV_SanPham, BRV_TheKhoLot,
     BRV_TonKhoDKLot) cũng KHÔNG thấy cột hạn dùng/ExpiryDate nào — gap dữ liệu này không phải do
-    thiếu ở Supabase mà do bản thân Bravo cũng chưa lưu thông tin hạn dùng theo lô. Không có nguồn
-    nào để chuyển sang, kể cả Bravo.
+    thiếu ở Supabase mà do bản thân Bravo cũng chưa lưu thông tin hạn dùng theo lô.
+
+    TRẠNG THÁI (20/07/2026): NO-OP. Trước đây dò cột hạn dùng trên schema Supabase, nhưng đã bỏ hẳn
+    Supabase — và cả Bravo lẫn Supabase đều KHÔNG có cột hạn dùng theo lô. Cần DNH bổ sung map lô ->
+    hạn dùng (xem docs/Cau_hoi_can_DNH_xac_nhan.md) trước khi bật cảnh báo cận date.
     """
-    from sqlalchemy import text
-    engine = _alert_engine()
-    if engine is None:
-        return
-    try:
-        with engine.connect() as conn:
-            # Dò cột hạn dùng trên các bảng tồn kho/thẻ kho lô (không tính bảng trả hàng)
-            cols = conn.execute(text('''
-                SELECT table_name, column_name FROM information_schema.columns
-                WHERE table_schema='public'
-                  AND (lower(table_name) LIKE '%thekho%' OR lower(table_name) LIKE '%tonkho%' OR table_name='inventory')
-                  AND (lower(column_name) LIKE '%expir%' OR lower(column_name) LIKE '%handung%'
-                       OR lower(column_name) LIKE '%han_dung%' OR lower(column_name) LIKE '%hsd%')
-                LIMIT 1
-            ''')).fetchone()
-    except Exception as e:
-        print(f"[ALERTS][near_expiry] Lỗi khi dò cột hạn dùng: {e}")
-        return
-    if not cols:
-        print("[ALERTS][near_expiry] GAP DỮ LIỆU: tồn kho theo lô chưa có cột hạn dùng (ExpiryDate). "
-              "Cần DNH bổ sung map lô->hạn dùng từ Bravo/DMS vào mart trước khi bật cảnh báo cận date. Bỏ qua (no-op).")
-        return
-    print(f"[ALERTS][near_expiry] Tìm thấy cột hạn dùng: {cols[0]}.{cols[1]} — cần hoàn thiện logic tính tồn theo lô còn hạn.")
-    # Khi có cột: tính tồn hiện tại theo lô (SUM Receipt - Issue trên brvsx_thekholot) join hạn dùng,
-    # cảnh báo lô còn < N tháng hết hạn mà còn tồn > 0. Hoàn thiện khi xác nhận khóa join lô với DNH.
+    print("[ALERTS][near_expiry] GAP DỮ LIỆU: chưa có cột hạn dùng theo lô trên Bravo — "
+          "bỏ qua (no-op). Cần DNH bổ sung map lô->hạn dùng trước khi bật cảnh báo cận date.")
+    return
 
 
 # ---- Nhóm C: Doanh thu / khách hàng ----------------------------------------
@@ -2183,10 +2010,9 @@ def check_return_rate_alert():
 def check_zero_sales_rep_alert():
     """
     F: Nhân viên có chỉ tiêu nhưng doanh số = 0 trong kỳ (nghỉ ngầm / vấn đề địa bàn).
-    Ưu tiên tính TỨC THỜI từ Bravo (get_bravo_kpi_tdv_snapshot, chỉ TDV/QLV, 10/07/2026); Bravo lỗi
-    thì dự phòng đọc kpi_summary (Supabase, đủ mọi chức danh) như trước.
+    Tính TỨC THỜI từ Bravo (get_bravo_kpi_tdv_snapshot, chỉ TDV/QLV). 20/07/2026: bỏ hẳn fallback
+    Supabase kpi_summary (xác nhận chỉ có 6/20 QLV thật) — Bravo lỗi thì bỏ qua kỳ này.
     """
-    from sqlalchemy import text
     period_label = None
     rows = []
     try:
@@ -2201,22 +2027,8 @@ def check_zero_sales_rep_alert():
         rows = [(r.employee_code, r.employee_name, r.area_code, r.position_code, r.month_sale_target)
                 for r in filtered[:10]]
     except Exception as e:
-        print(f"[ALERTS][zero_sales] Bravo lỗi ({e}) — dự phòng Supabase kpi_summary.")
-        engine = _alert_engine()
-        if engine is None:
-            return
-        try:
-            with engine.connect() as conn:
-                rows = conn.execute(text('''
-                    SELECT employee_code, employee_name, area_code, position_code, month_sale_target
-                    FROM kpi_summary
-                    WHERE month_sale_target > 10000000 AND COALESCE(month_sale_amount,0) = 0
-                    ORDER BY month_sale_target DESC LIMIT 10
-                ''')).fetchall()
-                period_label = _month_period_label(_last_complete_data_day(), _last_complete_data_day())
-        except Exception as e2:
-            print(f"[ALERTS][zero_sales] Lỗi cả 2 nguồn: {e2}")
-            return
+        print(f"[ALERTS][zero_sales] Bravo lỗi ({e}) — bỏ qua kỳ này.")
+        return
     if not rows:
         print("[ALERTS][zero_sales] Không có nhân sự nào doanh số = 0.")
         return
@@ -2281,9 +2093,10 @@ def check_kpi_sales_force_risk_alert():
     liên quan (xem get_bravo_kpi_quarter_year_snapshot). RỦI RO CAO HƠN các cảnh báo công nợ/KPI
     tháng đã chuyển: KHÔNG có số liệu quý/năm "đã biết đúng" nào để đối chiếu (khác công nợ, đã so
     khớp được với số liệu quan sát trước đó) — dùng cho cảnh báo SỚM, KHÔNG dùng làm căn cứ chính
-    thức cho quyết định chấm dứt HĐLĐ mà không xác nhận lại với DNH. Bravo lỗi thì dự phòng
-    kpi_summary (Supabase) như cũ. CHỈ áp dụng TDV/QLV/CS/TK có trên Bravo — vai trò nào trong
-    risk_map KHÔNG có trên Bravo (nếu có) sẽ tự vắng mặt khỏi kết quả Bravo, không crash.
+    thức cho quyết định chấm dứt HĐLĐ mà không xác nhận lại với DNH. 20/07/2026: bỏ hẳn fallback
+    Supabase kpi_summary (xác nhận dữ liệu thiếu nghiêm trọng) — Bravo lỗi thì bỏ qua kỳ này. CHỈ
+    áp dụng TDV/QLV/CS/TK có trên Bravo — vai trò nào trong risk_map KHÔNG có trên Bravo (nếu có)
+    sẽ tự vắng mặt khỏi kết quả Bravo, không crash.
 
     GIỚI HẠN CẦN BIẾT:
       - 16/07/2026: điều kiện "2 tháng liên tiếp" dưới ngưỡng (chính thức đủ điều kiện xem xét
@@ -2332,7 +2145,7 @@ def check_kpi_sales_force_risk_alert():
         with bravo_engine.connect() as conn:
             pos_rows = conn.execute(text(f'''
                 SELECT [EmployeeCode], [PositionCode] FROM [DIM_NhanVien]
-                WHERE [PositionCode] IN ({pos_ph}) AND ([IsDuplicate] IS NULL OR [IsDuplicate] = 0)
+                WHERE [PositionCode] IN ({pos_ph}) AND {_is_duplicate_filter_sql('')}
             ''')).fetchall()
         pos_map = {r[0]: r[1] for r in pos_rows}
         kpi_force_data_day = datetime.now()
@@ -2347,24 +2160,8 @@ def check_kpi_sales_force_risk_alert():
             rows.append((emp_code, m.employee_name, area, pos, m.month_sale_percent,
                           qy.quarter_sale_percent if qy else None, qy.year_sale_percent if qy else None))
     except Exception as e:
-        print(f"[ALERTS][kpi_sales_force] Bravo lỗi ({e}) — dự phòng Supabase kpi_summary.")
-        engine = _alert_engine()
-        if engine is None:
-            return
-        try:
-            with engine.connect() as conn:
-                rows = conn.execute(text('''
-                    SELECT employee_code, employee_name, area_code, position_code,
-                           month_sale_percent, quarter_sale_percent, year_sale_percent
-                    FROM kpi_summary
-                    WHERE position_code = ANY(:roles)
-                      AND area_code LIKE 'MN%'
-                      AND COALESCE(month_sale_target, 0) > 0
-                '''), {"roles": list(risk_map.keys())}).fetchall()
-                kpi_force_data_day = _last_complete_data_day()
-        except Exception as e2:
-            print(f"[ALERTS][kpi_sales_force] Lỗi cả 2 nguồn: {e2}")
-            return
+        print(f"[ALERTS][kpi_sales_force] Bravo lỗi ({e}) — bỏ qua kỳ này.")
+        return
 
     if not rows:
         print("[ALERTS][kpi_sales_force] Không có dòng nào khớp (area_code LIKE 'MN%' + vai trò đã map) "
@@ -2424,23 +2221,15 @@ def check_daily_kpi_pace_alert():
     Chủ nhật LUÔN 100% Đỏ (10/10 Chủ nhật quan sát được đều 49/49 — công ty không kinh doanh ngày
     này) nên KHÔNG chạy report vào Chủ nhật, tránh gửi 1 báo cáo vô nghĩa mỗi tuần.
 
-    ƯU TIÊN BRAVO (10/07/2026): query nhiều JOIN đã dịch sang T-SQL (brv_hoadonct/hoadonhdr/
-    dim_nhanvien/trạng thái duyệt/hóa đơn điện tử), chỉ tiêu tháng lấy qua FACT_TongHopKhachHang
-    (giống get_bravo_kpi_tdv_snapshot) — đã kiểm chứng bảng/cột tồn tại + chạy thật trước khi ghép.
-    Bravo lỗi thì dự phòng nguyên vẹn logic Supabase cũ.
+    BRAVO TRỰC TIẾP (10/07/2026, bỏ hẳn fallback Supabase 20/07/2026 — bảng kpi_summary xác nhận
+    dữ liệu thiếu nghiêm trọng, chỉ 6/20 QLV thật): query nhiều JOIN dịch sang T-SQL (BRV_HoaDonCt/
+    HoaDonHdr/DIM_NhanVien/trạng thái duyệt/hóa đơn điện tử), chỉ tiêu tháng lấy qua
+    FACT_TongHopKhachHang (giống get_bravo_kpi_tdv_snapshot). Bravo lỗi thì bỏ qua kỳ này (không
+    còn số liệu cũ/thiếu nào để dùng tạm).
 
-    GIỚI HẠN DỮ LIỆU (đã xác minh trực tiếp trên Supabase 08/07/2026, ÁP DỤNG CHO NHÁNH DỰ PHÒNG
-    SUPABASE — nhánh Bravo chính KHÔNG còn bị giới hạn miền Bắc, xem bên dưới):
-      - CHỈ khả thi kênh OTC — brvsx_hoadonhdr (ETC) không có cột nhân viên nào trên hóa đơn.
-      - Chỉ tính TDV bắc cầu được brv_hoadonhdr.EmpDMSCode -> dim_nhanvien.DMSId ->
-        dim_nhanvien.EmployeeCode -> kpi_summary.employee_code (50/58 TDV có chỉ tiêu hiện bắc
-        cầu được — verify trực tiếp, KHÔNG suy đoán; EmpDMSCode KHÔNG khớp thẳng employee_code).
-      - kpi_summary hiện 100% area_code miền Bắc (gap dữ liệu đã biết, xem flag
-        kpi_sales_force_risk_check) -> nhánh dự phòng này chỉ áp dụng thực tế cho TDV miền Bắc.
-
-    CẢI THIỆN KHI DÙNG BRAVO (10/07/2026): FACT_TongHopKhachHang có đủ TDV mọi miền (không chỉ
-    Bắc) — xác nhận thực tế chạy ra 146 TDV đủ Bắc/Trung/Nam, nhiều hơn hẳn 50 TDV giới hạn miền
-    Bắc của nhánh Supabase cũ. Giới hạn "chỉ OTC" vẫn còn (ETC vẫn không có cột nhân viên trên Bravo).
+    GIỚI HẠN DỮ LIỆU: CHỈ khả thi kênh OTC — BRVSX_HoaDonHdr (ETC) không có cột nhân viên nào trên
+    hóa đơn. FACT_TongHopKhachHang có đủ TDV mọi miền (xác nhận thực tế chạy ra 146 TDV đủ Bắc/
+    Trung/Nam).
     """
     from sqlalchemy import text
     import types
@@ -2481,7 +2270,7 @@ def check_daily_kpi_pace_alert():
                 return
             target_day_str = target_day.strftime("%Y-%m-%d")
 
-            bravo_rows = conn.execute(text('''
+            bravo_rows = conn.execute(text(f'''
                 WITH daily_sales AS (
                     SELECT n.[EmployeeCode] AS employee_code,
                            SUM(CASE WHEN c.[CTKM] IS NULL OR c.[CTKM] = '' THEN c.[Amount9] ELSE 0 END) AS day_rev
@@ -2507,7 +2296,7 @@ def check_daily_kpi_pace_alert():
                 FROM tdv_target t
                 JOIN [DIM_NhanVien] n ON t.[EmployeeCode] = n.[EmployeeCode]
                 LEFT JOIN daily_sales ds ON ds.employee_code = t.[EmployeeCode]
-                WHERE n.[PositionCode] = 'TDV' AND (n.[IsDuplicate] IS NULL OR n.[IsDuplicate] = 0)
+                WHERE n.[PositionCode] = 'TDV' AND {_is_duplicate_filter_sql('n')}
                   AND t.[MonthSaleTarget] > 0
             '''), {"target_day": target_day_str}).fetchall()
         rows = [types.SimpleNamespace(
@@ -2515,56 +2304,8 @@ def check_daily_kpi_pace_alert():
             month_sale_target=float(r.month_sale_target or 0), day_rev=float(r.day_rev or 0))
             for r in bravo_rows]
     except Exception as e:
-        print(f"[ALERTS][kpi_pace] Bravo lỗi ({e}) — dự phòng Supabase.")
-        engine = _alert_engine()
-        if engine is None:
-            return
-        try:
-            with engine.connect() as conn:
-                overall_max_row = conn.execute(text(
-                    'SELECT MAX("DocDate"::date) FROM brv_hoadonhdr WHERE "IsActive"=TRUE'
-                )).fetchone()
-                overall_max = overall_max_row[0] if overall_max_row else None
-                if not overall_max:
-                    print("[ALERTS][kpi_pace] Chưa có dữ liệu hóa đơn OTC để tính nhịp KPI.")
-                    return
-
-                target_row = conn.execute(text(
-                    'SELECT MAX("DocDate"::date) FROM brv_hoadonhdr WHERE "IsActive"=TRUE AND "DocDate"::date < :overall_max'
-                ), {"overall_max": overall_max}).fetchone()
-                target_day = target_row[0] if target_row else None
-                if not target_day:
-                    print("[ALERTS][kpi_pace] Chưa đủ 2 ngày dữ liệu để xác định ngày đã đồng bộ xong — bỏ qua.")
-                    return
-                if target_day.weekday() == 6:
-                    print(f"[ALERTS][kpi_pace] Ngày {target_day} là Chủ nhật — không kinh doanh, bỏ qua report.")
-                    return
-
-                rows = conn.execute(text('''
-                    WITH daily_sales AS (
-                        SELECT n."EmployeeCode" AS employee_code,
-                               SUM(CASE WHEN c."CTKM" IS NULL OR c."CTKM" = '' THEN c."Amount9" ELSE 0 END) AS day_rev
-                        FROM brv_hoadonct c
-                        JOIN brv_hoadonhdr h ON c."Stt" = h."Stt"
-                        JOIN dim_nhanvien n ON h."EmpDMSCode" = n."DMSId"
-                        LEFT JOIN brv_trangthaiduyet d ON h."DocStatus" = d."DocStatusKey"
-                        LEFT JOIN brv_trangthaihoadon e ON h."EInvoiceStatus" = e."EInvoiceStatusKey"
-                        WHERE h."IsActive" = TRUE AND h."IsHC" = FALSE
-                          AND (d."IsCancelled" IS NULL OR d."IsCancelled" = FALSE)
-                          AND (e."IsCancelled" IS NULL OR e."IsCancelled" = FALSE)
-                          AND d."Post_TheKho" = TRUE
-                          AND h."DocDate"::date = :target_day
-                        GROUP BY n."EmployeeCode"
-                    )
-                    SELECT k.employee_code, k.employee_name, k.area_code, k.month_sale_target,
-                           COALESCE(ds.day_rev, 0) AS day_rev
-                    FROM kpi_summary k
-                    LEFT JOIN daily_sales ds ON ds.employee_code = k.employee_code
-                    WHERE k.position_code = 'TDV' AND COALESCE(k.month_sale_target,0) > 0
-                '''), {"target_day": target_day}).fetchall()
-        except Exception as e2:
-            print(f"[ALERTS][kpi_pace] Lỗi cả 2 nguồn: {e2}")
-            return
+        print(f"[ALERTS][kpi_pace] Bravo lỗi ({e}) — bỏ qua kỳ này.")
+        return
 
     if not rows:
         print("[ALERTS][kpi_pace] Không có TDV nào (position_code='TDV', có chỉ tiêu tháng) để tính nhịp KPI.")
@@ -2628,25 +2369,20 @@ def check_kpi_milestone_drop_alert():
     lẫn tổng lũy kế bị lệch/thiếu). Chỉ thực sự tính toán khi ngày đã đồng bộ xong đó ĐÚNG LÀ ngày
     10 hoặc 20, các ngày khác bỏ qua ngay để không tốn query vô ích mỗi lần sync (5 lần/ngày).
 
-    ƯU TIÊN NGUỒN (10/07/2026): phần (a) theo kênh dùng _period_revenue() (src/etl.py) — hàm này
-    ĐÃ tự Bravo-first qua run_with_failover() (đổi ưu tiên chung ở src/database.py), không cần sửa
-    gì thêm ở đây. Phần (b) theo từng TDV vẫn đọc thẳng Supabase (kpi_summary + brv_hoadonct/
-    brv_hoadonhdr) — cùng lý do với check_daily_kpi_pace_alert (query nhiều JOIN phức tạp, để lại
-    dịch T-SQL cẩn thận sau, chưa vội trong đợt này).
+    NGUỒN: phần (a) theo kênh dùng _period_revenue() (src/etl.py) — đã Bravo-first qua
+    run_with_failover(). Phần (b) theo từng TDV đọc Bravo trực tiếp (BRV_HoaDonCt/HoaDonHdr/
+    DIM_NhanVien + FACT_TongHopKhachHang, cùng cách với check_daily_kpi_pace_alert). 20/07/2026:
+    bỏ hẳn fallback Supabase kpi_summary cho phần (b) — Bravo lỗi thì bỏ qua phần TDV kỳ đó.
     """
     from sqlalchemy import text
     from src.etl import _period_revenue, _prev_month_tuple
-    engine = _alert_engine()
-    if engine is None:
-        return
 
     lookback = int(_biz_threshold('kpi_milestone_lookback_months', 5))
     drop_threshold = float(_biz_threshold('kpi_milestone_drop_pct', 0.05))
     min_prev = float(_biz_threshold('kpi_milestone_min_prev', 10000000))
 
     try:
-        with engine.connect() as conn:
-            data_max_date = _last_complete_data_day()
+        data_max_date = _last_complete_data_day()
     except Exception as e:
         print(f"[ALERTS][kpi_milestone] Lỗi lấy ngày dữ liệu mới nhất: {e}")
         return
@@ -2672,18 +2408,16 @@ def check_kpi_milestone_drop_alert():
         y, m = _prev_month_tuple(p_start)
 
     try:
-        with engine.connect() as conn:
-            # (a) Theo từng kênh — tái dùng _period_revenue (src/etl.py), ĐÃ tự Bravo-first qua
-            # run_with_failover() (đổi ưu tiên chung ở src/database.py) — không cần sửa gì thêm.
-            channel_series = {"OTC": [], "ETC": []}
-            for idx, p_start, p_end in periods:
-                otc_rev, etc_rev, _, _ = _period_revenue(p_start, p_end)
-                channel_series["OTC"].append((idx, otc_rev))
-                channel_series["ETC"].append((idx, etc_rev))
+        # (a) Theo từng kênh — tái dùng _period_revenue (src/etl.py), đọc thẳng Bravo (view gốc).
+        channel_series = {"OTC": [], "ETC": []}
+        for idx, p_start, p_end in periods:
+            otc_rev, etc_rev, _, _ = _period_revenue(p_start, p_end)
+            channel_series["OTC"].append((idx, otc_rev))
+            channel_series["ETC"].append((idx, etc_rev))
 
-        # (b) Theo từng TDV — ưu tiên Bravo (T-SQL, FACT_TongHopKhachHang cho danh sách TDV +
-        # dịch cùng query brv_hoadonct/hoadonhdr/dim_nhanvien như check_daily_kpi_pace_alert,
-        # 10/07/2026); Bravo lỗi thì dự phòng nguyên vẹn logic Supabase cũ.
+        # (b) Theo từng TDV — Bravo trực tiếp (T-SQL, FACT_TongHopKhachHang cho danh sách TDV +
+        # BRV_HoaDonCt/HoaDonHdr/DIM_NhanVien như check_daily_kpi_pace_alert). Bravo lỗi thì bỏ qua
+        # phần TDV kỳ này (đã bỏ hẳn fallback Supabase 20/07/2026).
         import types
         tdv_rows = []
         try:
@@ -2724,7 +2458,7 @@ def check_kpi_milestone_drop_alert():
                 FROM tdv_target t
                 JOIN [DIM_NhanVien] n ON t.[EmployeeCode] = n.[EmployeeCode]
                 JOIN tdv_periods tp ON tp.employee_code = t.[EmployeeCode]
-                WHERE n.[PositionCode] = 'TDV' AND (n.[IsDuplicate] IS NULL OR n.[IsDuplicate] = 0)
+                WHERE n.[PositionCode] = 'TDV' AND ''' + _is_duplicate_filter_sql('n') + '''
                   AND t.[MonthSaleTarget] > 0
             ''')
             with bravo_engine.connect() as bconn:
@@ -2734,41 +2468,8 @@ def check_kpi_milestone_drop_alert():
                 period_idx=r.period_idx, rev=float(r.rev or 0))
                 for r in raw_rows]
         except Exception as e:
-            print(f"[ALERTS][kpi_milestone] Bravo lỗi ({e}) — dự phòng Supabase cho phần TDV.")
-            union_blocks = []
-            params = {}
-            for idx, p_start, p_end in periods:
-                params[f"start_{idx}"] = p_start
-                params[f"end_{idx}"] = p_end
-                union_blocks.append(f'''
-                    SELECT {idx} AS period_idx, n."EmployeeCode" AS employee_code,
-                           SUM(CASE WHEN c."CTKM" IS NULL OR c."CTKM" = '' THEN c."Amount9" ELSE 0 END) AS rev
-                    FROM brv_hoadonct c
-                    JOIN brv_hoadonhdr h ON c."Stt" = h."Stt"
-                    JOIN dim_nhanvien n ON h."EmpDMSCode" = n."DMSId"
-                    LEFT JOIN brv_trangthaiduyet d ON h."DocStatus" = d."DocStatusKey"
-                    LEFT JOIN brv_trangthaihoadon e ON h."EInvoiceStatus" = e."EInvoiceStatusKey"
-                    WHERE h."IsActive" = TRUE AND h."IsHC" = FALSE
-                      AND (d."IsCancelled" IS NULL OR d."IsCancelled" = FALSE)
-                      AND (e."IsCancelled" IS NULL OR e."IsCancelled" = FALSE)
-                      AND d."Post_TheKho" = TRUE
-                      AND h."DocDate"::timestamp >= :start_{idx} AND h."DocDate"::timestamp < :end_{idx}
-                    GROUP BY n."EmployeeCode"
-                ''')
-            tdv_sql = text('''
-                WITH tdv_periods AS (''' + " UNION ALL ".join(union_blocks) + '''
-                )
-                SELECT k.employee_code, k.employee_name, k.area_code, tp.period_idx, tp.rev
-                FROM kpi_summary k
-                JOIN tdv_periods tp ON tp.employee_code = k.employee_code
-                WHERE k.position_code = 'TDV' AND COALESCE(k.month_sale_target,0) > 0
-            ''')
-            try:
-                with engine.connect() as conn2:
-                    tdv_rows = conn2.execute(tdv_sql, params).fetchall()
-            except Exception as e2:
-                print(f"[ALERTS][kpi_milestone] Lỗi cả 2 nguồn cho phần TDV: {e2}")
-                tdv_rows = []
+            print(f"[ALERTS][kpi_milestone] Bravo lỗi ({e}) — bỏ qua phần TDV kỳ này.")
+            tdv_rows = []
     except Exception as e:
         print(f"[ALERTS][kpi_milestone] Lỗi truy vấn lũy kế mốc ngày {milestone_day}: {e}")
         return
@@ -2859,39 +2560,38 @@ def check_kpi_milestone_drop_alert():
 def check_data_sanity_ok():
     """
     G2 (guard): Kiểm tra dữ liệu có "lành" không TRƯỚC khi chạy các alert nghiệp vụ.
-    Trả True nếu ổn. Nếu các chỉ số cốt lõi rơi về 0 bất thường (nghi ETL hỏng) -> gửi
+    Trả True nếu ổn. Nếu các chỉ số cốt lõi rơi về 0 bất thường (nghi ETL/Bravo hỏng) -> gửi
     cảnh báo meta + trả False để job KHÔNG gửi alert nghiệp vụ dựa trên dữ liệu rác.
+
+    20/07/2026: đổi hẳn sang kiểm tra Bravo trực tiếp (get_bravo_receivables_snapshot/
+    get_bravo_inventory_snapshot) thay vì đếm dòng bảng Supabase receivable_detail/inventory —
+    2 bảng đó xác nhận là dữ liệu Excel tĩnh nhập 1 lần đầu dự án, KHÔNG còn được pipeline nào ghi
+    vào nữa (receivable_detail chưa từng tự làm mới; inventory đã chủ động dừng đồng bộ), nên đếm
+    dòng ở đó không còn phản ánh được ETL/Bravo có đang sống hay không.
     """
-    from sqlalchemy import text
-    engine = _alert_engine()
-    if engine is None:
-        return True  # không có cloud -> để các hàm khác tự log, không chặn
     try:
-        with engine.connect() as conn:
-            cust = conn.execute(text("SELECT COUNT(*) FROM receivable_detail")).fetchone()[0]
-            # 'inventory' có thể CHỦ ĐỘNG để trống (chờ Excel/DNH — xem check_dead_stock_alert).
-            # Chỉ đếm nếu bảng THỰC SỰ tồn tại; bảng chưa dựng -> inv=None, KHÔNG coi là ETL lỗi
-            # (tránh làm guard "mù" toàn bộ chỉ vì 1 bảng đã biết là tạm vắng — hành vi cũ: query
-            # ném UndefinedTable -> except -> return True -> guard bị bỏ qua HOÀN TOÀN).
-            inv = conn.execute(text("SELECT COUNT(*) FROM inventory")).fetchone()[0] \
-                if _supabase_table_exists(conn, "inventory") else None
+        cust = len(get_bravo_receivables_snapshot())
     except Exception as e:
-        print(f"[ALERTS][data_sanity] Không kiểm tra được (bỏ qua guard): {e}")
+        print(f"[ALERTS][data_sanity] Không kiểm tra được công nợ Bravo (bỏ qua guard): {e}")
+        return True
+    try:
+        inv = len(get_bravo_inventory_snapshot())
+    except Exception as e:
+        print(f"[ALERTS][data_sanity] Không kiểm tra được tồn kho Bravo (bỏ qua guard): {e}")
         return True
     if cust == 0 or inv == 0:
-        inv_display = str(inv) if inv is not None else "N/A (bảng chưa dựng)"
         alert_key = "data_sanity_zero"
         if should_send_alert(alert_key, cooldown_hours=6, current_value="zero"):
             send_alert_to_all_channels(
                 alert_name="CẢNH BÁO HỆ THỐNG: DỮ LIỆU BẤT THƯỜNG (RỖNG)",
                 severity="CRITICAL",
-                summary=(f"Bảng công nợ ({cust} dòng) hoặc tồn kho ({inv_display} dòng) đang rỗng — nghi ETL lỗi. "
-                         f"Đã TẠM DỪNG gửi các cảnh báo nghiệp vụ để tránh báo sai."),
-                table_headers=["Bảng", "Số dòng"],
-                table_rows=[["receivable_detail", str(cust)], ["inventory", inv_display]],
+                summary=(f"Snapshot công nợ ({cust} dòng) hoặc tồn kho ({inv} dòng) từ Bravo đang rỗng — "
+                         f"nghi Bravo/ETL lỗi. Đã TẠM DỪNG gửi các cảnh báo nghiệp vụ để tránh báo sai."),
+                table_headers=["Nguồn", "Số dòng"],
+                table_rows=[["Công nợ (Bravo)", str(cust)], ["Tồn kho (Bravo)", str(inv)]],
                 channels=("teams",),
                 period=datetime.now().strftime("%d/%m/%Y %H:%M"), region="Toàn quốc (hệ thống)",
-                issue="Bảng công nợ hoặc tồn kho đang rỗng — nghi ETL lỗi, đã tạm dừng các cảnh báo nghiệp vụ"
+                issue="Snapshot công nợ/tồn kho từ Bravo đang rỗng — nghi Bravo/ETL lỗi, đã tạm dừng các cảnh báo nghiệp vụ"
             )
             record_alert_sent(alert_key, "zero")
         return False
@@ -2900,57 +2600,53 @@ def check_data_sanity_ok():
 
 def check_etl_freshness_alert():
     """
-    G1: Meta-alert — dữ liệu hậu-ETL không được refresh quá lâu (MAX SyncAt cũ hơn N giờ)
-    -> nghi ETL thượng nguồn bị đứng. Vừa là health-check, vừa là 'watermark' đã bàn.
+    G1: Meta-alert — kiểm tra Bravo có còn NHẬN DỮ LIỆU MỚI không.
+
+    20/07/2026: đổi hẳn sang kiểm tra Bravo trực tiếp (bỏ Supabase). TRƯỚC ĐÂY đọc MAX(SyncAt) của
+    bảng brv_hoadonct trên Supabase để biết pipeline Bravo->Supabase có đứng không — nhưng báo cáo/
+    cảnh báo giờ đọc THẲNG Bravo (không qua Supabase), nên độ tươi của bản sao Supabase không còn
+    ảnh hưởng gì tới số liệu. Điều còn ý nghĩa: bản thân Bravo có còn được TDV nhập hóa đơn mới
+    không (nếu ngày hóa đơn mới nhất quá cũ so với hôm nay -> nghi hệ thống nguồn/kết nối có vấn
+    đề, hoặc đơn giản là kỳ nghỉ). Dùng chung _last_complete_data_day() (đã Bravo-only).
     """
-    from sqlalchemy import text
-    from datetime import datetime as _dt
-    engine = _alert_engine()
-    if engine is None:
-        return
-    stale_hours = float(_biz_threshold('etl_stale_hours', 3))
+    # Ngưỡng theo NGÀY cho dữ liệu nguồn Bravo (khác ngưỡng giờ của sync cũ) — hóa đơn không phát
+    # sinh liên tục 24/7, cuối tuần/lễ có thể vài ngày không có; mặc định 2 ngày (config: bravo_stale_days).
+    stale_days = float(_biz_threshold('bravo_stale_days', 2))
     try:
-        with engine.connect() as conn:
-            row = conn.execute(text('SELECT MAX("SyncAt") FROM brv_hoadonct')).fetchone()
-            last_sync = row[0] if row else None
+        last_day = _last_complete_data_day()
     except Exception as e:
-        print(f"[ALERTS][etl_freshness] Lỗi đọc SyncAt: {e}")
+        print(f"[ALERTS][etl_freshness] Lỗi đọc ngày dữ liệu Bravo mới nhất: {e}")
         return
-    if last_sync is None:
-        print("[ALERTS][etl_freshness] Không có mốc SyncAt để đánh giá.")
+    if last_day is None:
+        print("[ALERTS][etl_freshness] Không có mốc dữ liệu Bravo để đánh giá.")
         return
-    if isinstance(last_sync, str):
-        try:
-            last_sync = _dt.fromisoformat(last_sync.replace('Z', '').split('.')[0])
-        except Exception:
-            print("[ALERTS][etl_freshness] Không parse được SyncAt.")
-            return
-    age_hours = (datetime.now() - last_sync).total_seconds() / 3600.0
-    print(f"[ALERTS][etl_freshness] Dữ liệu mới nhất cách đây {age_hours:.1f} giờ (ngưỡng {stale_hours:.0f} giờ).")
-    if age_hours > stale_hours:
+    age_days = (datetime.now().date() - last_day).days
+    print(f"[ALERTS][etl_freshness] Ngày hóa đơn Bravo mới nhất (đã đồng bộ xong): {last_day} — cách đây {age_days} ngày (ngưỡng {stale_days:.0f} ngày).")
+    if age_days > stale_days:
         alert_key = "etl_stale"
-        if should_send_alert(alert_key, cooldown_hours=2, current_value=str(int(age_hours))):
+        if should_send_alert(alert_key, cooldown_hours=6, current_value=str(int(age_days))):
             send_alert_to_all_channels(
-                alert_name="CẢNH BÁO HỆ THỐNG: ETL CÓ THỂ ĐÃ ĐỨNG",
+                alert_name="CẢNH BÁO HỆ THỐNG: BRAVO CÓ THỂ NGỪNG NHẬN DỮ LIỆU",
                 severity="CRITICAL",
-                summary=(f"Dữ liệu hậu-ETL không được cập nhật đã {age_hours:.1f} giờ "
-                         f"(ngưỡng {stale_hours:.0f} giờ). Kiểm tra tiến trình ETL thượng nguồn."),
-                table_headers=["Mốc dữ liệu mới nhất", "Đã cũ"],
-                table_rows=[[str(last_sync), f"{age_hours:.1f} giờ"]],
+                summary=(f"Hóa đơn Bravo mới nhất đã {age_days} ngày không phát sinh thêm "
+                         f"(ngưỡng {stale_days:.0f} ngày). Kiểm tra hệ thống nguồn/kết nối Bravo (hoặc kỳ nghỉ)."),
+                table_headers=["Ngày dữ liệu mới nhất", "Đã cũ"],
+                table_rows=[[str(last_day), f"{age_days} ngày"]],
                 channels=("teams",),
                 period=datetime.now().strftime("%d/%m/%Y %H:%M"), region="Toàn quốc (hệ thống)",
-                issue=f"Dữ liệu hậu-ETL không được cập nhật đã {age_hours:.1f} giờ — nghi ETL thượng nguồn bị đứng"
+                issue=f"Hóa đơn Bravo mới nhất đã {age_days} ngày không phát sinh — nghi hệ thống nguồn/kết nối bị đứng"
             )
-            record_alert_sent(alert_key, str(int(age_hours)))
+            record_alert_sent(alert_key, str(int(age_days)))
 
 
 def check_kpi_revenue_reconciliation_alert():
     """
     G3 (16/07/2026): Đối chiếu TỔNG doanh thu OTC tính từ hóa đơn Bravo (_period_revenue —
     vHoaDonTotal, công thức đã kiểm chứng khớp số liệu DNH) với TỔNG doanh số ghi nhận trong
-    bảng KPI (FACT_TongHopKhachHang.Amount_Cus, dự phòng kpi_summary/Supabase) tháng hiện tại —
-    bắt sớm nếu dữ liệu KPI lệch khỏi doanh thu thực tế, đúng yêu cầu "doanh số phải luôn so với
-    bảng KPI để đảm bảo tính chính xác".
+    bảng KPI (FACT_TongHopKhachHang.Amount_Cus) tháng hiện tại — bắt sớm nếu dữ liệu KPI lệch khỏi
+    doanh thu thực tế, đúng yêu cầu "doanh số phải luôn so với bảng KPI để đảm bảo tính chính xác".
+    20/07/2026: bỏ hẳn fallback Supabase kpi_summary (xác nhận dữ liệu thiếu nghiêm trọng) — Bravo
+    lỗi thì bỏ qua đối chiếu kỳ đó.
 
     CHỈ ĐỐI CHIẾU ĐƯỢC KÊNH OTC — FACT_TongHopKhachHang/kpi_summary chỉ có khái niệm nhân sự
     TDV/QLV cho OTC, không có cột nhân viên bên ETC (giống giới hạn đã biết ở
@@ -3010,25 +2706,8 @@ def check_kpi_revenue_reconciliation_alert():
         kpi_total = float(row[0]) if row and row[0] is not None else 0.0
         data_source = "Bravo (FACT_TongHopKhachHang, theo khách hàng)"
     except Exception as e:
-        print(f"[ALERTS][kpi_reconcile] Bravo lỗi ({e}) — dự phòng Supabase kpi_summary.")
-        engine = _alert_engine()
-        if engine is None:
-            return
-        try:
-            from sqlalchemy import text
-            # kpi_summary (Supabase) không có cột CustomerCode (đã là bảng phẳng theo nhân viên,
-            # xem docs/data_dictionary.md) -> không áp dụng được cách khử trùng theo khách hàng ở
-            # đây, đành dùng QLV (rollup quản lý) như phương án tốt nhất có thể với schema này.
-            with engine.connect() as conn:
-                row = conn.execute(text(
-                    "SELECT COALESCE(SUM(month_sale_amount),0) FROM kpi_summary "
-                    "WHERE position_code = 'QLV'"
-                )).fetchone()
-            kpi_total = float(row[0]) if row else 0.0
-            data_source = "Supabase (kpi_summary, rollup QLV)"
-        except Exception as e2:
-            print(f"[ALERTS][kpi_reconcile] Lỗi cả 2 nguồn: {e2}")
-            return
+        print(f"[ALERTS][kpi_reconcile] Bravo lỗi ({e}) — bỏ qua đối chiếu kỳ này.")
+        return
 
     if otc_rev <= 0:
         print("[ALERTS][kpi_reconcile] Chưa có doanh thu OTC tháng này để đối chiếu.")
