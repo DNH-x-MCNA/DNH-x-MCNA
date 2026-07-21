@@ -315,7 +315,9 @@ def main():
 
 
 if __name__ == "__main__":
-    _log_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs", "sync_warehouse.log")
+    _log_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs")
+    os.makedirs(_log_dir, exist_ok=True)
+    _log_path = os.path.join(_log_dir, "sync_warehouse.log")
     _logf = open(_log_path, "a", encoding="utf-8")
 
     class _Tee:

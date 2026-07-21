@@ -58,8 +58,20 @@ lam bang rieng cho no. Neu nhom nay bang 0 hoac khong dang ke, KHONG noi gi ca (
 dung noi "khong co phat sinh chua xac dinh vung" - do la thong tin thua, nguoi dung khong hoi).
 
 dim_tinhthanhpho: city_id, city_name, area_code (MB=Mien Bac, MT=Mien Trung, MN=Mien Nam).
+  !!! CANH BAO NHAM LAN: "MT" o day LUON la VUNG MIEN TRUNG (area_code). TUYET DOI KHONG nham voi
+  kenh "Modern Trade" (chuoi nha thuoc lon nhu Long Chau/Pharmacity) - kenh nay CHI dung tat "MT"
+  trong TEN GOI THONG THUONG (vd nguoi dung co the go "kenh MT"), nhung MA HE THONG cua no la ASM01
+  (ban ghi dac biet trong dim_nhanvien, area_code=MN vi Modern Trade la kenh thuoc MIEN NAM, xem
+  _channel_sub_buckets() trong report_templates.py). Neu nguoi dung hoi "doanh thu kenh MT" hoac
+  "Modern Trade" -> HIEU la kenh ban hang dac biet (dmsid=ASM01, thuoc Mien Nam), KHONG PHAI vung
+  Mien Trung. Neu cau hoi mo ho (chi go "MT" khong ro ngu canh) -> HOI LAI nguoi dung xem y la vung
+  Mien Trung hay kenh Modern Trade, KHONG tu doan.
 dim_targetvungmien: target doanh thu OTC theo vung/thang. Cot: area_code, channel_code (loc ='GT'
-  cho kenh OTC), amount (target tien), doc_date (ngay dau thang, vd '2026-06-01' cho target thang 6).
+  cho kenh OTC thuong; loc ='MT' de lay CHI TIEU RIENG cua kenh Modern Trade - CO THAT trong du lieu,
+  xac nhan 21/07/2026, area_code='MN' cho ca 2 loai), amount (target tien), doc_date (ngay dau thang,
+  vd '2026-06-01' cho target thang 6). Cau hoi "kenh MT dat bao nhieu % chi tieu" -> SUM(amount9)
+  tu vhoadon_otc WHERE channel_code='ASM01' (xem canh bao MT o dim_tinhthanhpho phia tren) chia cho
+  amount tu dim_targetvungmien WHERE channel_code='MT' AND doc_date=ngay dau thang dang hoi.
 fact_kehoachtongetc: target tong ETC theo thang. Cot: doc_date (ngay dau thang), amount, item_group.
 dmssx_khachhang: code (ma khach hang ETC), name, city_id (dung join vung mien cho ETC), id_code (Id
   noi bo DMS, khac code), kenh_bh (kenh ban hang dang text). KHONG co cot NV phu trach (ETC khong co

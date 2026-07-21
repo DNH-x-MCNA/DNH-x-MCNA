@@ -140,19 +140,32 @@ def get_conn() -> sqlite3.Connection:
     return conn
 
 
+# Cot da them vao SCHEMA SAU KHI bang da ton tai tu ban cu hon - CREATE TABLE IF NOT EXISTS khong tu
+# them cot moi vao bang da co san, va SCHEMA co CREATE INDEX tren cac cot nay nen se loi "no such
+# column" neu khong ALTER truoc. Moi lan them cot moi vao 1 bang da ton tai trong SCHEMA, PHAI khai
+# them vao day (chu KHONG duoc quen - da tung gay loi thieu dmsid/start_date/... khi warehouse.db cu
+# chua duoc --full lai sau khi SCHEMA doi).
+_COLUMN_MIGRATIONS = {
+    "vhoadon_otc": [("channel_code", "TEXT")],
+    "dim_nhanvien": [("dmsid", "TEXT"), ("start_date", "TEXT"), ("end_date", "TEXT"),
+                      ("is_resigned", "INTEGER"), ("manager_area_code", "TEXT")],
+    "brv_sanpham": [("id_code", "INTEGER")],
+}
+
+
 def init_schema():
     conn = get_conn()
     try:
-        # Migration: them cot channel_code TRUOC khi chay SCHEMA - SCHEMA co CREATE INDEX tren cot
-        # nay, se loi "no such column" neu bang vhoadon_otc da ton tai tu truoc (CREATE TABLE IF NOT
-        # EXISTS khong tu them cot moi vao bang da co san) ma chua duoc ALTER truoc.
-        has_table = conn.execute(
-            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='vhoadon_otc'").fetchone()
-        if has_table:
-            cols = [r[1] for r in conn.execute("PRAGMA table_info(vhoadon_otc)").fetchall()]
-            if "channel_code" not in cols:
-                conn.execute("ALTER TABLE vhoadon_otc ADD COLUMN channel_code TEXT")
-                conn.commit()
+        for table, new_cols in _COLUMN_MIGRATIONS.items():
+            has_table = conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)).fetchone()
+            if not has_table:
+                continue
+            existing = {r[1] for r in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+            for col_name, col_type in new_cols:
+                if col_name not in existing:
+                    conn.execute(f"ALTER TABLE {table} ADD COLUMN {col_name} {col_type}")
+                    conn.commit()
         conn.executescript(SCHEMA)
         conn.commit()
     finally:

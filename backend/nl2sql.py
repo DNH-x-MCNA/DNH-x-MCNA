@@ -84,7 +84,12 @@ TEMPLATE_TOOLS = [
                         "(no luon tra ve ca 3 vung) roi CHI trich/hien thi vung duoc hoi trong cau tra loi, "
                         "TUYET DOI KHONG tu viet SQL rieng voi dieu kien area_code=... vi se BO SOT khach "
                         "hang 'mo coi' (khong co ho so trong bang khach hang) ma CHI ham nay moi suy luan "
-                        "dung vung qua tien to ma khach hang.",
+                        "dung vung qua tien to ma khach hang. "
+                        "CANH BAO NHAM LAN: neu nguoi dung go 'MT' hoac hoi ve kenh 'Modern Trade' (chuoi nha "
+                        "thuoc lon nhu Long Chau/Pharmacity), DAY KHONG PHAI vung Mien Trung (area_code=MT) - "
+                        "Modern Trade la KENH BAN HANG DAC BIET thuoc VUNG MIEN NAM (dmsid=ASM01), duoc tra ve "
+                        "trong truong 'channel_breakdown' cua dong Mien Nam (KHONG PHAI dong rieng). Neu cau "
+                        "hoi mo ho chi go 'MT' khong ro ngu canh, HOI LAI nguoi dung truoc khi tra loi.",
         "input_schema": {
             "type": "object",
             "properties": {
