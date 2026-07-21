@@ -228,7 +228,13 @@ def _channel_sub_buckets():
     """Cac ban ghi 'kenh ao' trong dim_nhanvien (QLV gia dung de gan doanh thu kenh dac biet, vd
     Modern Trade/Long Chau - Name bat dau bang 'Kênh', IsDuplicate=1) - KHONG phai QLV that, chi la
     cho gan doanh thu theo kenh ban hang. dmsid cua ban ghi nay khop voi vhoadon_otc.channel_code
-    (tu EmpDMSCode2 tren Bravo, xem sync_warehouse.py) - CHI co o OTC, ETC khong co co che nay."""
+    (tu EmpDMSCode2 tren Bravo, xem sync_warehouse.py) - CHI co o OTC, ETC khong co co che nay.
+    LUU Y PHAN BIET: kenh Modern Trade dung dmsid='ASM01' va thuoc area_code='MN' (Mien Nam) - TUYET
+    DOI KHONG nham 'MT' (viet tat thong thuong cua "Modern Trade" ngoai doi) voi area_code='MT' la
+    VUNG MIEN TRUNG trong dim_tinhthanhpho (2 khai niem hoan toan khac nhau, tinh co trung ky tu viet
+    tat). Ham nay CHI loc theo name LIKE 'Kênh%' + dmsid tu DB, KHONG hardcode chuoi 'MT' o dau ca -
+    neu sau nay can loc/hien thi rieng Modern Trade, LUON dung dmsid='ASM01' hoac area_code cua ban ghi
+    (='MN'), KHONG duoc dung ky hieu 'MT' cho muc dich nay."""
     return _q("SELECT dmsid, name, area_code FROM dim_nhanvien "
               "WHERE position_code='QLV' AND is_duplicate=1 AND name LIKE 'Kênh%' AND dmsid IS NOT NULL")
 
