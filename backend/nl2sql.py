@@ -18,7 +18,7 @@ import os
 import anthropic
 from schema_context import SCHEMA_CONTEXT
 from query_engine import run_query
-from report_templates import call_template, latest_data_date
+from report_templates import call_template, latest_data_date, sync_freshness_note
 from conversation_memory import load_history, append_message, get_query_state, set_query_state
 from realtime_context import REALTIME_TOOLS, REALTIME_TOOL_NAMES, get_current_datetime, resolve_relative_date
 from glossary_memory import save_glossary_term, retrieve_relevant_glossary
@@ -414,6 +414,12 @@ def _dynamic_context_note(question: str = "", session_id: str = "", scope_area_c
     latest = latest_data_date()
     parts = [f'Ngay co du lieu moi nhat trong kho hien tai: {latest} (dung lam moc cho "hom nay"/'
              f'"gan day" neu nguoi dung khong noi ro ngay; kho local co the tre toi da ~15-30 phut so voi Bravo that).']
+
+    # 20/07/2026: kiem tra RIENG tien trinh sync co con song khong (khac dong tren - chi biet ngay
+    # du lieu, khong bat duoc sync treo/loi khi trung cuoi tuan/le khong co hoa don moi de lo ra).
+    freshness_warning = sync_freshness_note()
+    if freshness_warning:
+        parts.append(freshness_warning)
 
     if scope_area_code:
         parts.append(
