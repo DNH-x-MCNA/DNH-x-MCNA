@@ -106,6 +106,24 @@ CREATE TABLE IF NOT EXISTS fact_tonghopkhachhang (
 CREATE INDEX IF NOT EXISTS idx_ftk_savedate ON fact_tonghopkhachhang(save_date);
 CREATE INDEX IF NOT EXISTS idx_ftk_employee ON fact_tonghopkhachhang(employee_code);
 
+-- Du lieu hoa don CU HON 12 THANG duoc NEN ve day (KH x thang, KHONG giu item_code/quantity/unit_price/
+-- created_at/stt tung dong) de giam dung luong luu tru va giam rui ro lo du lieu chi tiet hoa don qua
+-- khu (xem sync_warehouse.py::_compress_old_months()). 12 thang gan nhat van giu nguyen chi tiet trong
+-- vhoadon_otc/vhoadon_etc nhu cu - CHI phan cu hon moi bi nen. Vi vay top_products/check_order_timing
+-- (can item_code/created_at tung dong) KHONG the chay dung cho khoang ngay nam ngoai 12 thang gan nhat.
+CREATE TABLE IF NOT EXISTS monthly_customer_summary (
+    year_month TEXT NOT NULL,   -- 'YYYY-MM'
+    channel TEXT NOT NULL,      -- 'OTC' hoac 'ETC'
+    customer_code TEXT,
+    employee_code TEXT,         -- giu lai de loc theo NV/vung (join qua bang khach hang/nhan vien)
+    revenue REAL,                -- SUM(amount9) trong thang do
+    invoice_count INTEGER        -- COUNT(DISTINCT stt) trong thang do
+);
+CREATE INDEX IF NOT EXISTS idx_mcs_yearmonth ON monthly_customer_summary(year_month);
+CREATE INDEX IF NOT EXISTS idx_mcs_customer ON monthly_customer_summary(customer_code);
+CREATE INDEX IF NOT EXISTS idx_mcs_employee ON monthly_customer_summary(employee_code);
+CREATE INDEX IF NOT EXISTS idx_mcs_channel ON monthly_customer_summary(channel, year_month);
+
 CREATE TABLE IF NOT EXISTS sync_meta (
     table_name TEXT PRIMARY KEY,
     last_synced_at TEXT,
