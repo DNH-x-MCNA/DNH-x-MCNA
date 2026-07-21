@@ -113,27 +113,43 @@ def sync_hoadon_recent(table_bravo, table_local, has_city, days=N_RECENT_DAYS, h
     today = dt.date.today()
     start = today - dt.timedelta(days=days)
     print(f"[{table_local}] Refresh gia tang {start} -> {today}...")
-    conn = get_conn()
-    conn.execute(f"DELETE FROM {table_local} WHERE doc_date >= ?", (str(start),))
-    conn.commit()
     # EmpDMSCode (KHONG PHAI EmpDMSCode2) - xem ghi chu chi tiet trong sync_hoadon_full()
     cols = ("DocDate, CustomerCode, ItemCode, Amount9, Quantity, UnitPrice, Stt, EmpDMSCode"
             + (", CityId" if has_city else "") + ", CreatedAt"
             + (", EmpDMSCode2" if has_channel else ""))
+    # Lay du lieu tu Bravo TRUOC (goi mang cham) - KHONG giu khoa ghi SQLite trong luc doi mang.
     _, rows = bravo_query(
         f"SELECT {cols} FROM dbo.{table_bravo} WHERE DocDate >= :a", a=str(start),
     )
-    if rows:
-        n_cols = 9 + (1 if has_city else 0) + (1 if has_channel else 0)
-        placeholders = ",".join(["?"] * n_cols)
-        cols_local = ("doc_date,customer_code,item_code,amount9,quantity,unit_price,stt,employee_code"
-                      + (",city_id" if has_city else "") + ",created_at"
-                      + (",channel_code" if has_channel else ""))
-        conn.executemany(
-            f"INSERT INTO {table_local} ({cols_local}) VALUES ({placeholders})", rows,
-        )
-        conn.commit()
-    conn.close()
+    # 21/07/2026: gop DELETE + INSERT vao 1 GIAO DICH DUY NHAT (BEGIN IMMEDIATE - khoa ghi ngay khi
+    # mo giao dich). Truoc day tach lam 2 buoc commit rieng, tao race condition: neu 2 tien trinh
+    # sync chay chong lap (thuc te tren may 24 co 2 supervisor run_supervisor.ps1 khac thu muc cung
+    # tro toi 1 warehouse.db, moi cai tu spawn 1 sync_scheduler.ps1), chung xen ke: A.DELETE ->
+    # B.DELETE (rong) -> A.INSERT -> B.INSERT = MOI DONG BI NHAN DOI (xac nhan 21/07/2026: doanh thu
+    # ngay 20/07 tren kho local gap DUNG 2 lan Bravo that, deu tam tap moi ngay). Voi BEGIN IMMEDIATE,
+    # tien trinh thu 2 bi khoa cho toi khi tien trinh thu 1 COMMIT xong, roi DELETE se xoa sach ban
+    # cua tien trinh 1 va INSERT lai dung 1 ban -> ket qua luon 1x du bao nhieu scheduler chay song
+    # song. Cung TU CHUA du lieu trung san co: lan sync sach dau tien se don sach cua so N_RECENT_DAYS.
+    conn = get_conn()
+    conn.execute("PRAGMA busy_timeout=30000")
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        conn.execute(f"DELETE FROM {table_local} WHERE doc_date >= ?", (str(start),))
+        if rows:
+            n_cols = 9 + (1 if has_city else 0) + (1 if has_channel else 0)
+            placeholders = ",".join(["?"] * n_cols)
+            cols_local = ("doc_date,customer_code,item_code,amount9,quantity,unit_price,stt,employee_code"
+                          + (",city_id" if has_city else "") + ",created_at"
+                          + (",channel_code" if has_channel else ""))
+            conn.executemany(
+                f"INSERT INTO {table_local} ({cols_local}) VALUES ({placeholders})", rows,
+            )
+        conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
+    finally:
+        conn.close()
     set_sync_meta(table_local, str(start), str(today))
     print(f"[{table_local}] Xong: {len(rows)} dong refresh")
 
