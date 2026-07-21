@@ -217,6 +217,25 @@ ngày đã nêu ở mục 2.
 quý, có khác nhau theo loại khách OTC/ETC không)? Bao lâu không mua thì DNH coi là "có dấu hiệu rời
 bỏ" đáng cảnh báo?
 
+## 16. QLV có chỉ tiêu cấp vùng nhưng không có TDV dưới quyền — mới phát hiện 21/07/2026
+
+**Hiện trạng**: Nguyễn Thị Thanh Thủy (mã `MBKV12`, DMSId `ASM11`) được gắn `PositionCode = QLV`
+trong DIM_NhanVien, nhưng **không có TDV nào báo cáo lên bà** (0 người có ManagerCode = MBKV12 hay
+ASM11). Bà có chỉ tiêu tháng **5,28 tỷ** (gần gấp đôi QLV tổ thường ~2,7-3 tỷ) và tự có doanh số
+1,54 tỷ từ 24 khách hàng phụ trách trực tiếp. Nhìn cấu trúc, bà giống **quản lý cấp vùng (ASM)** tự
+ôm một số khách lớn, chứ không phải tổ trưởng QLV. (Bà cũng nằm trong nhóm 2 mã bị gắn nhầm
+IsDuplicate=1 — xem mục 8.)
+
+**Ảnh hưởng**: Chỉ tiêu 5,28 tỷ của bà đang được cộng vào "Tổng Chỉ Tiêu" của báo cáo. Nếu đây là
+chỉ tiêu **cấp vùng bao trùm nhiều tổ** thì đang bị cộng CHỒNG với chỉ tiêu các QLV tổ khác, làm
+"% Hoàn Thành Toàn Đội" bị kéo xuống thấp giả tạo. Doanh số thực tế (1,54 tỷ) là khách riêng của
+bà, KHÔNG cộng trùng — chỉ có phần chỉ tiêu là nghi vấn.
+
+**Cần DNH xác nhận**: (1) Bà Thủy là quản lý cấp vùng (ASM) hay tổ trưởng QLV? (2) Chỉ tiêu 5,28
+tỷ là chỉ tiêu cá nhân bà (ôm khách lớn) hay chỉ tiêu rollup cả vùng? Nếu là rollup vùng thì cần
+loại khỏi tổng chỉ tiêu đội để không đếm chồng. (3) Có bao nhiêu trường hợp tương tự (QLV/ASM ôm
+khách trực tiếp không có tổ) cần xử lý riêng?
+
 ---
 
-*Chuẩn bị bởi: MCNA — 13/07/2026, cập nhật gần nhất 20/07/2026*
+*Chuẩn bị bởi: MCNA — 13/07/2026, cập nhật gần nhất 21/07/2026*

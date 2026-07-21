@@ -442,6 +442,10 @@ DIGEST_EMAIL_TEMPLATE = """
             rõ từng lớp thay vì chỉ 1 dòng tổng gộp (kpi_summary ở trên). QLV in đậm nền xanh nhạt,
             TDV thụt lề ngay dưới QLV quản lý mình (xem _build_kpi_hierarchy trong src/etl.py). -->
             <div class="section-title">Chi Tiết KPI Theo Vùng - QLV - TDV</div>
+            <!-- 21/07/2026: KPI đọc snapshot chỉ tiêu THÁNG lũy kế đến hiện tại (không cắt theo
+            khung tuần) — nên mục này GIỐNG NHAU ở báo cáo Tuần và Tháng, vì dữ liệu DNH không có
+            chỉ tiêu theo tuần. Ghi rõ để người đọc không tưởng là lỗi trùng. -->
+            <div class="no-data" style="margin-bottom: 8px;">KPI theo chỉ tiêu <strong>THÁNG</strong>, lũy kế đến hiện tại — phần này giống nhau ở báo cáo tuần và tháng (không có chỉ tiêu theo tuần).</div>
             {% for grp in metrics.kpi_breakdown %}
             <div style="font-weight: 800; color: #1f4a22; font-size: 13px; text-transform: uppercase; margin-top: 16px; margin-bottom: 6px;">{{ grp.region }}</div>
             <table class="data-table">
@@ -454,6 +458,12 @@ DIGEST_EMAIL_TEMPLATE = """
                         <td><strong>{{ "{:,.0f}".format(qlv.amount) }} đ</strong></td>
                         <td><strong>{% if qlv.pct is not none %}{{ "%.1f"|format(qlv.pct) }}%{% else %}—{% endif %}</strong></td>
                     </tr>
+                    {% if not qlv.tdvs and qlv.employee_code %}
+                    <!-- QLV có 0 TDV: thường là quản lý cấp vùng (ASM) tự ôm khách trực tiếp, bị gắn
+                    nhãn QLV — ghi rõ để không nhìn như "mất sạch đội". Không áp cho dòng gộp mồ côi
+                    (employee_code=None, vốn luôn có TDV). -->
+                    <tr><td colspan="4" style="padding-left: 28px; font-style: italic; color: #64748b;">QLV phụ trách khách hàng trực tiếp — không có TDV dưới quyền</td></tr>
+                    {% endif %}
                     {% for tdv in qlv.tdvs %}
                     <tr>
                         <td style="padding-left: 28px;">↳ {{ tdv.employee_name }} ({{ tdv.employee_code }})</td>
@@ -462,6 +472,28 @@ DIGEST_EMAIL_TEMPLATE = """
                         <td>{% if tdv.pct is not none %}{{ "%.1f"|format(tdv.pct) }}%{% else %}—{% endif %}</td>
                     </tr>
                     {% endfor %}
+                    {% endfor %}
+                </tbody>
+            </table>
+            {% endfor %}
+            {% endif %}
+
+            {% if metrics.etc_by_employee %}
+            <!-- 21/07/2026: doanh số ETC theo nhân viên — ETC không có chỉ tiêu cá nhân (kế hoạch
+            theo nhóm hàng), nên chỉ hiện doanh số trong kỳ, không % (xem _build_etc_revenue_by_employee). -->
+            <div class="section-title">Doanh Số ETC Theo Nhân Viên</div>
+            <div class="no-data" style="margin-bottom: 8px;">Kênh ETC không có chỉ tiêu cá nhân theo tháng (kế hoạch đặt theo nhóm hàng) — chỉ hiển thị doanh số <strong>trong kỳ báo cáo</strong>, không có % hoàn thành.</div>
+            {% for grp in metrics.etc_by_employee %}
+            <div style="font-weight: 800; color: #1f4a22; font-size: 13px; text-transform: uppercase; margin-top: 16px; margin-bottom: 6px;">{{ grp.region }}</div>
+            <table class="data-table">
+                <thead><tr><th>Nhân viên</th><th>Doanh số (trong kỳ)</th><th>Số hóa đơn</th></tr></thead>
+                <tbody>
+                    {% for e in grp.employees %}
+                    <tr>
+                        <td>{{ e.employee_name }} ({{ e.employee_code }})</td>
+                        <td>{{ "{:,.0f}".format(e.revenue) }} đ</td>
+                        <td>{{ e.invoices }}</td>
+                    </tr>
                     {% endfor %}
                 </tbody>
             </table>
