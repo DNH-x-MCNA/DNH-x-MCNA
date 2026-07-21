@@ -820,28 +820,30 @@ def get_digest_metrics(start_dt, end_dt, period_label, granularity=None, region=
                 raw_snap = [r for r in raw_snap if r.area_code in markers]
             snap = [r for r in raw_snap if r.month_sale_target > 0]
             if snap:
-                achieved = sum(1 for r in snap if (r.month_sale_percent or 0) >= 1.0)
-                # 21/07/2026: SỬA BUG CỘNG TRÙNG — trước đây total_target/total_amount cộng cả
-                # dòng TDV LẪN dòng QLV trong `snap`, nhưng TDV và QLV là 2 cách CẮT LÁT SONG
-                # SONG của CÙNG 1 khoản doanh thu (QLV.month_sale_amount ĐÃ LÀ rollup của các TDV
-                # dưới quyền — verify qua ManagerCode, xem _build_kpi_hierarchy), không phải 2
-                # phần cộng dồn -> ra số gần gấp đôi thật (đúng bug đã ghi nhận và sửa ở
-                # check_kpi_revenue_reconciliation_alert, nhưng sót chỗ này). Phát hiện qua báo
-                # cáo Monthly "Quản lý Miền Nam" 21/07/2026: "Tổng Doanh Số Đạt" 4,45 tỷ > cả
-                # Doanh Thu OTC thật cả tháng (3,32 tỷ) — vô lý vì KPI OTC không thể vượt doanh thu
-                # OTC thật. Giờ CHỈ cộng dòng QLV (đã là tổng đội) + cộng thêm TDV "mồ côi" (nếu
-                # có — manager_code không khớp QLV nào trong scope, xem _build_kpi_hierarchy) để
-                # không bỏ sót doanh số của họ mà cũng không đếm 2 lần.
                 qlv_rows = [r for r in snap if r.position_code == 'QLV']
                 tdv_rows = [r for r in snap if r.position_code == 'TDV']
                 qlv_codes = {q.employee_code for q in qlv_rows}
                 orphan_tdv_rows = [t for t in tdv_rows if t.manager_code not in qlv_codes]
+                # 21/07/2026 (mục 2): "Đạt Chỉ Tiêu N/M" ĐẾM Ở TẦNG CÁ NHÂN (TDV) — chỉ tiêu của
+                # QLV là mức rollup CẢ ĐỘI, không phải hạn mức cá nhân, nên gộp QLV vào phép đếm
+                # đầu người làm con số vô nghĩa (trước đây len(snap) trộn cả TDV lẫn QLV -> vd
+                # "0/36" = 31 TDV + 5 QLV). Giờ đếm riêng: bao nhiêu TDV đạt >=100% chỉ tiêu cá
+                # nhân / tổng TDV có chỉ tiêu — con số quản lý cần để biết mấy nhân viên on-track.
+                achieved = sum(1 for r in tdv_rows if (r.month_sale_percent or 0) >= 1.0)
+                total_count = len(tdv_rows)
+                # 21/07/2026: SỬA BUG CỘNG TRÙNG tiền — TDV và QLV là 2 cách CẮT LÁT SONG SONG của
+                # CÙNG 1 khoản doanh thu (QLV.month_sale_amount ĐÃ LÀ rollup của các TDV dưới quyền
+                # — verify qua ManagerCode, xem _build_kpi_hierarchy), không phải 2 phần cộng dồn.
+                # Cộng cả 2 -> gấp ~2× thật (phát hiện qua Monthly "Quản lý Miền Nam" 21/07/2026:
+                # "Tổng Doanh Số Đạt" 4,45 tỷ > Doanh Thu OTC thật cả tháng 3,32 tỷ — vô lý). Giờ
+                # CHỈ cộng dòng QLV (đã là tổng đội) + TDV "mồ côi" (không có QLV quản lý trong scope)
+                # để không bỏ sót mà cũng không đếm 2 lần.
                 money_rows = qlv_rows + orphan_tdv_rows
                 total_target = sum(r.month_sale_target for r in money_rows)
                 total_amount = sum(r.month_sale_amount for r in money_rows)
                 team_pct = (total_amount / total_target) if total_target else None
                 kpi_summary = {
-                    "achieved_count": achieved, "total_count": len(snap),
+                    "achieved_count": achieved, "total_count": total_count,
                     "team_pct": round(team_pct * 100, 1) if team_pct is not None else None,
                     "total_target": round(total_target, 2), "total_amount": round(total_amount, 2),
                 }
