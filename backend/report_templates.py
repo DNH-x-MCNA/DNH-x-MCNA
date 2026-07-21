@@ -10,7 +10,7 @@ lan dong bo gan nhat.
 """
 import datetime as dt
 from sqlalchemy import text
-from local_warehouse import get_conn
+from local_warehouse import get_conn, get_sync_meta
 from query_engine import _write_log, _get_engine
 from region_map import region_from_customer_code
 import org_hierarchy as oh
@@ -57,6 +57,39 @@ def latest_data_date() -> str:
     r = _q("SELECT MAX(doc_date) d FROM vhoadon_otc")
     d = r[0]["d"] if r else None
     return d if d else str(dt.date.today())
+
+
+def sync_freshness_note(stale_minutes: int = 60) -> str:
+    """20/07/2026: kiem tra sync CO DANG SONG khong - khac latest_data_date() (chi biet NGAY du lieu
+    moi nhat, khong biet tien trinh sync co dung/treo hay khong: cuoi tuan/le khong co hoa don moi
+    van trong "binh thuong" du sync da treo vai ngay - nguoi dung se duoc tra loi tu tin bang du lieu
+    cu/thieu ma khong ai biet). Doc sync_meta.last_synced_at (moc THOI GIAN THAT sync chay xong lan
+    cuoi, ghi boi set_sync_meta() trong sync_warehouse.py - KHAC voi ngay cua ban than du lieu) cho
+    2 bang giao dich quan trong nhat. Tra ve chuoi CANH BAO neu qua han (mac dinh >60 phut - gap doi
+    chu ky binh thuong 15-30 phut da ghi trong docstring dau file), rong neu van tuoi/khong xac dinh
+    duoc (KHONG chan cau tra loi, chi bo sung canh bao)."""
+    warnings = []
+    for table in ("vhoadon_otc", "vhoadon_etc"):
+        try:
+            last_synced_at, _, _ = get_sync_meta(table)
+        except Exception:
+            # Bang sync_meta moi them 20/07/2026 - se tu tao o lan sync ke tiep (init_schema() trong
+            # sync_warehouse.py). Truoc do "no such table" la binh thuong, khong duoc lam vo cau tra loi.
+            continue
+        if not last_synced_at:
+            continue
+        try:
+            last_dt = dt.datetime.fromisoformat(last_synced_at)
+        except ValueError:
+            continue
+        age_min = (dt.datetime.now() - last_dt).total_seconds() / 60
+        if age_min > stale_minutes:
+            warnings.append(f"{table}: lần đồng bộ gần nhất cách đây {age_min:.0f} phút ({last_synced_at})")
+    if not warnings:
+        return ""
+    return ("CẢNH BÁO ĐỒNG BỘ: có thể tiến trình sync đã TREO/LỖI — " + "; ".join(warnings) +
+            " (chu kỳ bình thường 15-30 phút). PHẢI cảnh báo rõ người dùng trong câu trả lời rằng "
+            "dữ liệu có thể CŨ HƠN BÌNH THƯỜNG, không chỉ nói ngày dữ liệu như bình thường.")
 
 
 def revenue_by_channel(date_from: str, date_to: str, scope_area_code: str = None,
