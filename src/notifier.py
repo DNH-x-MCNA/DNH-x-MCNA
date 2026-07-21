@@ -35,15 +35,21 @@ def _dnh_logo_data_uri():
     return DNH_LOGO_URL
 
 
-def _log_alert_severity(alert_name, severity):
+def _log_alert_severity(alert_name, severity, region=None):
     """
-    Ghi lại (tên alert, mức độ, thời điểm) vào data/alerts_state.db mỗi khi 1 alert THỰC SỰ được
-    gửi — phục vụ báo cáo Weekly/Monthly (main.py::_send_periodic_email_report) biết kỳ vừa qua
-    có alert CRITICAL nào không, để gắn cờ Outlook Importance:High cho đúng email digest đó.
+    Ghi lại (tên alert, mức độ, vùng, thời điểm) vào data/alerts_state.db mỗi khi 1 alert THỰC SỰ
+    được gửi — phục vụ báo cáo Weekly/Monthly (main.py::_send_periodic_email_report) biết kỳ vừa
+    qua có alert CRITICAL nào không, để gắn cờ Outlook Importance:High cho đúng email digest đó,
+    và để hiện đúng banner "có cảnh báo nghiêm trọng" cho báo cáo đã scope theo vùng
+    (xem src/etl.py::_period_has_critical).
 
     KHÔNG dùng chung bảng sent_alerts (src/alerts.py) vì bảng đó chỉ giữ TRẠNG THÁI MỚI NHẤT theo
     alert_key (ghi đè liên tục, phục vụ cooldown) — không phải lịch sử theo thời gian như cần ở
     đây. Lỗi ghi log không được chặn việc gửi alert thật (chỉ log + bỏ qua).
+
+    21/07/2026: thêm `region` — nhận đúng giá trị đã truyền vào send_alert_to_all_channels(region=...)
+    ở nơi gọi (vd "Miền Nam" nếu alert quy được về đúng 1 vùng cụ thể, "Toàn quốc"/"Nhiều miền" nếu
+    không) — xem lý do tương tự record_alert_sent(..., region=...) trong src/alerts.py.
     """
     try:
         os.makedirs(os.path.dirname(STATE_DB_PATH), exist_ok=True)
@@ -53,12 +59,17 @@ def _log_alert_severity(alert_name, severity):
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 alert_name TEXT NOT NULL,
                 severity TEXT NOT NULL,
-                sent_at TIMESTAMP NOT NULL
+                sent_at TIMESTAMP NOT NULL,
+                region TEXT
             )
         ''')
+        # Migration cho DB cũ đã tồn tại trước khi có cột `region`.
+        existing_cols = {row[1] for row in conn.execute("PRAGMA table_info(alert_severity_log)").fetchall()}
+        if "region" not in existing_cols:
+            conn.execute("ALTER TABLE alert_severity_log ADD COLUMN region TEXT")
         conn.execute(
-            'INSERT INTO alert_severity_log (alert_name, severity, sent_at) VALUES (?, ?, ?)',
-            (alert_name, severity, datetime.now())
+            'INSERT INTO alert_severity_log (alert_name, severity, sent_at, region) VALUES (?, ?, ?, ?)',
+            (alert_name, severity, datetime.now(), region)
         )
         conn.commit()
         conn.close()
@@ -424,6 +435,37 @@ DIGEST_EMAIL_TEMPLATE = """
                 <![endif]-->
                 {% endif %}
             </div>
+            {% endif %}
+
+            {% if metrics.kpi_breakdown %}
+            <!-- 21/07/2026: chi tiết Vùng->QLV->TDV — theo yêu cầu Trưởng kênh OTC/ETC cần thấy
+            rõ từng lớp thay vì chỉ 1 dòng tổng gộp (kpi_summary ở trên). QLV in đậm nền xanh nhạt,
+            TDV thụt lề ngay dưới QLV quản lý mình (xem _build_kpi_hierarchy trong src/etl.py). -->
+            <div class="section-title">Chi Tiết KPI Theo Vùng - QLV - TDV</div>
+            {% for grp in metrics.kpi_breakdown %}
+            <div style="font-weight: 800; color: #1f4a22; font-size: 13px; text-transform: uppercase; margin-top: 16px; margin-bottom: 6px;">{{ grp.region }}</div>
+            <table class="data-table">
+                <thead><tr><th>Nhân sự</th><th>Chỉ tiêu tháng</th><th>Doanh số đạt</th><th>% Hoàn thành</th></tr></thead>
+                <tbody>
+                    {% for qlv in grp.qlvs %}
+                    <tr style="background-color: #eef5ea;">
+                        <td><strong>{{ qlv.employee_name }}{% if qlv.employee_code %} ({{ qlv.employee_code }}){% endif %} — QLV</strong></td>
+                        <td><strong>{{ "{:,.0f}".format(qlv.target) }} đ</strong></td>
+                        <td><strong>{{ "{:,.0f}".format(qlv.amount) }} đ</strong></td>
+                        <td><strong>{% if qlv.pct is not none %}{{ "%.1f"|format(qlv.pct) }}%{% else %}—{% endif %}</strong></td>
+                    </tr>
+                    {% for tdv in qlv.tdvs %}
+                    <tr>
+                        <td style="padding-left: 28px;">↳ {{ tdv.employee_name }} ({{ tdv.employee_code }})</td>
+                        <td>{{ "{:,.0f}".format(tdv.target) }} đ</td>
+                        <td>{{ "{:,.0f}".format(tdv.amount) }} đ</td>
+                        <td>{% if tdv.pct is not none %}{{ "%.1f"|format(tdv.pct) }}%{% else %}—{% endif %}</td>
+                    </tr>
+                    {% endfor %}
+                    {% endfor %}
+                </tbody>
+            </table>
+            {% endfor %}
             {% endif %}
 
             {% if metrics.receivables %}
@@ -1266,7 +1308,7 @@ def send_alert_to_all_channels(alert_name, severity, summary, table_headers=None
     có hiện tượng dồn dập nên chủ động truyền require_critical_for_teams=False để bỏ qua bộ lọc.
     """
     print(f"\n--- BAT DAU GUI CANH BAO: {alert_name} [{severity}] (kenh: {', '.join(channels)}) ---")
-    _log_alert_severity(alert_name, severity)
+    _log_alert_severity(alert_name, severity, region=region)
     any_sent = False
 
     # 1. Gui qua Email
