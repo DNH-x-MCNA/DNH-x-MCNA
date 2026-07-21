@@ -357,22 +357,25 @@ def _highlight_matches_channel(alert_key, channel):
         return channel == "ETC"
     return True
 
-def _highlight_matches_region(prefix, region):
-    """17/07/2026: True nếu highlight loại `prefix` nên hiện cho audience đã lọc theo `region`
-    (None = không giới hạn vùng, C-Level/Toàn quốc — luôn hiện tất cả). Phát hiện qua Daily Digest
-    "Quản lý Miền Trung" 17/07/2026 vẫn hiện thẳng mã khách hàng NGOÀI vùng (HNA00274, HCM04298) từ
-    cảnh báo customer_churn.
+def _highlight_matches_region(region, alert_region):
+    """17/07/2026: True nếu highlight này nên hiện cho audience đã lọc theo `region` (None = không
+    giới hạn vùng, C-Level/Toàn quốc — luôn hiện tất cả). Phát hiện qua Daily Digest "Quản lý Miền
+    Trung" 17/07/2026 vẫn hiện thẳng mã khách hàng NGOÀI vùng (HNA00274, HCM04298) từ cảnh báo
+    customer_churn.
 
-    Khác _highlight_matches_channel (lọc được vì alert_key có gắn literal 'OTC'/'ETC'), bảng
-    sent_alerts KHÔNG lưu vùng của alert đã fire — chỉ lưu alert_key + giá trị cuối. Một số alert
-    (zero_sales_rep, kpi_daily_pace_red, kpi_milestone_tdv...) THẬT SỰ có tính vùng khi gửi Teams
-    (tham số region= suy ra động từ dữ liệu, xem send_alert_to_all_channels trong src/alerts.py),
-    nhưng giá trị vùng đó không được ghi lại vào sent_alerts nên không cách nào đọc lại được ở đây;
-    số còn lại hardcode region="Toàn quốc" (không có breakdown theo vùng trong kiến trúc hiện tại).
-    Vì KHÔNG có alert nào xác minh được đúng vùng audience đang xem, chọn fail-closed triệt để: ẩn
-    HẲN mọi highlight khỏi báo cáo đã scope theo vùng, thay vì hiện nhầm dữ liệu vùng khác (theo
-    yêu cầu — báo cáo vùng chỉ nên chứa đúng thứ thuộc vùng đó, thà trống còn hơn sai)."""
-    return region is None
+    21/07/2026: TRƯỚC ĐÂY bảng sent_alerts không lưu vùng của alert đã fire, nên hàm này fail-closed
+    TRIỆT ĐỂ (ẩn HẲN mọi highlight khỏi báo cáo theo vùng, bất kể alert nào — kể cả loại THẬT SỰ có
+    tính vùng như zero_sales_rep/kpi_daily_pace_red/kpi_milestone_tdv). Phát hiện qua báo cáo Weekly
+    "Quản lý Miền Nam" 13-19/07/2026: mục "Điểm Nổi Bật" trống dù tuần đó có cảnh báo thật liên quan
+    Miền Nam. Giờ record_alert_sent(..., region=...) đã ghi lại vùng THẬT (CHỈ khi alert quy được về
+    đúng 1 vùng cụ thể — xem docstring record_alert_sent trong src/alerts.py; alert gộp nhiều vùng/
+    toàn công ty vẫn ghi "Toàn quốc"/"Nhiều miền"/None), nên so khớp trực tiếp `alert_region` với tên
+    Việt hoá của `region` — vẫn giữ đúng tinh thần fail-closed cũ (KHÔNG chắc chắn -> ẩn), chỉ khác
+    là giờ hiện ĐÚNG khi thật sự xác định được, thay vì luôn luôn ẩn."""
+    if region is None:
+        return True
+    from src.region_map import REGION_NAMES_VI
+    return alert_region == REGION_NAMES_VI.get(region)
 
 def _format_highlight_date_part(part):
     """Nếu 1 mảnh suffix của alert_key là ngày/tháng (YYYY-MM-DD, YYYY-MM, hoặc "M_YYYY" — định
@@ -488,7 +491,7 @@ def _get_period_highlights(start_dt, end_dt, channel=None, region=None):
         conn = sqlite3.connect(STATE_DB_PATH)
         cursor = conn.cursor()
         cursor.execute(
-            "SELECT alert_key, last_sent_at, last_value FROM sent_alerts "
+            "SELECT alert_key, last_sent_at, last_value, region FROM sent_alerts "
             "WHERE last_sent_at >= ? AND last_sent_at < ? ORDER BY last_sent_at DESC",
             (start_dt.strftime("%Y-%m-%d %H:%M:%S"), end_dt.strftime("%Y-%m-%d %H:%M:%S"))
         )
@@ -506,7 +509,7 @@ def _get_period_highlights(start_dt, end_dt, channel=None, region=None):
             continue
         if not _highlight_matches_channel(r[0], channel):
             continue
-        if not _highlight_matches_region(prefix, region):
+        if not _highlight_matches_region(region, r[3]):
             continue
         group_key = _highlight_group_key(r[0])
         if group_key in seen_groups:
@@ -518,29 +521,144 @@ def _get_period_highlights(start_dt, end_dt, channel=None, region=None):
     return [_humanize_highlight(r[0], r[1], r[2]) for r in deduped]
 
 
-def _period_has_critical(start_dt, end_dt):
+def _period_has_critical(start_dt, end_dt, region=None):
     """
     True nếu có >=1 alert CRITICAL THỰC SỰ được gửi trong [start_dt, end_dt) — đọc bảng
     alert_severity_log (ghi bởi src/notifier.py::send_alert_to_all_channels, LỊCH SỬ đầy đủ theo
     thời gian, khác bảng sent_alerts chỉ giữ trạng thái mới nhất). Dùng để gắn cờ Outlook
-    Importance:High cho email digest Weekly/Monthly (xem main.py::_send_periodic_email_report).
+    Importance:High cho email digest Weekly/Monthly (xem main.py::_send_periodic_email_report), và
+    để hiện banner "Kỳ này có cảnh báo mức nghiêm trọng — xem mục Điểm Nổi Bật" trong template.
+
+    21/07/2026: thêm `region`. Phát hiện qua báo cáo Weekly "Quản lý Miền Nam" 13-19/07/2026:
+    banner "có cảnh báo nghiêm trọng, xem mục Điểm Nổi Bật" vẫn hiện dù mục đó trống rỗng — vì
+    has_critical đọc alert CRITICAL TOÀN CÔNG TY, không biết gì về scope vùng. Bản vá đầu tiên
+    (region is not None -> luôn False) chỉ tránh được banner NÓI DỐI, nhưng cũng khiến banner IM
+    LẶNG SAI khi có CRITICAL thật đúng vùng audience. Giờ alert_severity_log đã lưu vùng thật (xem
+    _log_alert_severity trong src/notifier.py, cùng cơ chế với record_alert_sent(..., region=...)
+    trong src/alerts.py — CHỈ ghi tên vùng cụ thể khi alert quy được về đúng 1 vùng, còn lại ghi
+    "Toàn quốc"/"Nhiều miền"/None), nên so khớp trực tiếp thay vì fail-closed mù.
     """
     if not os.path.exists(STATE_DB_PATH):
         return False
     try:
         conn = sqlite3.connect(STATE_DB_PATH)
         cursor = conn.cursor()
-        cursor.execute(
-            "SELECT COUNT(*) FROM alert_severity_log WHERE severity = 'CRITICAL' "
-            "AND sent_at >= ? AND sent_at < ?",
-            (start_dt.strftime("%Y-%m-%d %H:%M:%S"), end_dt.strftime("%Y-%m-%d %H:%M:%S"))
-        )
+        if region is None:
+            cursor.execute(
+                "SELECT COUNT(*) FROM alert_severity_log WHERE severity = 'CRITICAL' "
+                "AND sent_at >= ? AND sent_at < ?",
+                (start_dt.strftime("%Y-%m-%d %H:%M:%S"), end_dt.strftime("%Y-%m-%d %H:%M:%S"))
+            )
+        else:
+            from src.region_map import REGION_NAMES_VI
+            cursor.execute(
+                "SELECT COUNT(*) FROM alert_severity_log WHERE severity = 'CRITICAL' "
+                "AND sent_at >= ? AND sent_at < ? AND region = ?",
+                (start_dt.strftime("%Y-%m-%d %H:%M:%S"), end_dt.strftime("%Y-%m-%d %H:%M:%S"),
+                 REGION_NAMES_VI.get(region))
+            )
         count = cursor.fetchone()[0]
         conn.close()
         return count > 0
     except Exception as e:
         print(f"[DIGEST] Lỗi đọc alert_severity_log (bảng có thể chưa tồn tại nếu chưa có alert nào gửi): {e}")
         return False
+
+
+def _build_kpi_hierarchy(snap, region):
+    """Dựng cây Vùng -> QLV -> TDV từ snapshot KPI Bravo (get_bravo_kpi_tdv_snapshot, có
+    manager_code từ 21/07/2026) — phục vụ báo cáo Weekly/Monthly của Trưởng kênh OTC/ETC (thấy rõ
+    từng vùng) và Quản lý Vùng (thấy rõ từng QLV/TDV trong vùng mình), thay vì chỉ 1 dòng tổng gộp
+    (kpi_summary) không phân biệt được ai đang kéo/ai đang tụt. Thêm 21/07/2026 theo yêu cầu người
+    dùng ("các miền phải chia rõ ra theo từng lớp qlv-tdv để biết rõ thông tin về doanh số").
+
+    Dùng `snap` CHƯA lọc target>0 (khác kpi_summary — xem get_digest_metrics) — mục đích khác
+    nhau: kpi_summary là con số tổng để đối chiếu % hoàn thành đội, còn cây này là để XEM DANH
+    SÁCH đầy đủ ai thuộc QLV nào; ẩn bớt người (dù target=0) sẽ làm cây trông "thiếu" người, gây
+    hiểu lầm là họ không tồn tại/không thuộc quyền quản lý của QLV đó.
+
+    region=None (audience kênh, không giới hạn vùng): nhóm theo VÙNG trước, thứ tự đọc tự nhiên
+    Bắc-Trung-Nam, mỗi vùng liệt kê QLV rồi TDV dưới quyền (sắp theo doanh số đạt giảm dần).
+    region đã set (audience vùng): snap đã lọc sẵn đúng 1 vùng nên bỏ qua lớp nhóm vùng, trả thẳng
+    1 nhóm duy nhất mang tên vùng đó.
+
+    TDV có manager_code KHÔNG khớp QLV nào trong `snap` (QLV nghỉ việc/thiếu dữ liệu — hiếm, xác
+    minh thực tế 21/07/2026 là 0/148, nhưng không giả định mãi đúng) gộp vào 1 dòng giả
+    "(Chưa xác định QLV quản lý)" trong đúng vùng của họ — KHÔNG âm thầm bỏ qua, để phát hiện được
+    nếu dữ liệu tương lai có thay đổi. Tương tự, QLV có area_code không khớp 3 vùng đã biết rơi vào
+    nhóm "Không rõ vùng" thay vì bị loại khỏi cây.
+
+    Trả list [{"region": "Miền Nam", "qlvs": [{"employee_code", "employee_name", "target",
+    "amount", "pct", "tdvs": [{"employee_code", "employee_name", "target", "amount", "pct"}, ...]},
+    ...]}, ...] — rỗng nếu snap rỗng."""
+    from src.region_map import REGION_SQL_MARKERS, REGION_NAMES_VI
+
+    def _leaf(r):
+        pct = round(r.month_sale_percent * 100, 1) if r.month_sale_percent is not None else None
+        return {"employee_code": r.employee_code, "employee_name": r.employee_name,
+                "target": round(r.month_sale_target, 2), "amount": round(r.month_sale_amount, 2),
+                "pct": pct}
+
+    def _region_key(area_code):
+        val = (area_code or "").strip().upper()
+        for key, markers in REGION_SQL_MARKERS.items():
+            if val in markers:
+                return key
+        return None
+
+    def _unresolved_entry(orphans):
+        leaves = sorted([_leaf(t) for t in orphans], key=lambda e: e["amount"], reverse=True)
+        return {"employee_code": None, "employee_name": "(Chưa xác định QLV quản lý)",
+                "target": round(sum(t.month_sale_target for t in orphans), 2),
+                "amount": round(sum(t.month_sale_amount for t in orphans), 2),
+                "pct": None, "tdvs": leaves}
+
+    qlvs = [r for r in snap if r.position_code == 'QLV']
+    tdvs = [r for r in snap if r.position_code == 'TDV']
+    qlv_codes = {q.employee_code for q in qlvs}
+    tdvs_by_manager = {}
+    orphan_tdvs = []
+    for t in tdvs:
+        if t.manager_code in qlv_codes:
+            tdvs_by_manager.setdefault(t.manager_code, []).append(t)
+        else:
+            orphan_tdvs.append(t)
+
+    def _qlv_entry(q):
+        children = sorted(tdvs_by_manager.get(q.employee_code, []),
+                           key=lambda t: t.month_sale_amount, reverse=True)
+        entry = _leaf(q)
+        entry["tdvs"] = [_leaf(t) for t in children]
+        return entry
+
+    if region is not None:
+        qlv_list = sorted([_qlv_entry(q) for q in qlvs], key=lambda e: e["amount"], reverse=True)
+        if orphan_tdvs:
+            qlv_list.append(_unresolved_entry(orphan_tdvs))
+        return [{"region": REGION_NAMES_VI.get(region, region), "qlvs": qlv_list}] if qlv_list else []
+
+    groups_out = []
+    assigned_qlv_codes = set()
+    assigned_orphan_ids = set()
+    for region_key in ("bac", "trung", "nam"):
+        region_qlvs = [q for q in qlvs if _region_key(q.area_code) == region_key]
+        region_orphans = [t for t in orphan_tdvs if _region_key(t.area_code) == region_key]
+        assigned_qlv_codes.update(q.employee_code for q in region_qlvs)
+        assigned_orphan_ids.update(id(t) for t in region_orphans)
+        qlv_list = sorted([_qlv_entry(q) for q in region_qlvs], key=lambda e: e["amount"], reverse=True)
+        if region_orphans:
+            qlv_list.append(_unresolved_entry(region_orphans))
+        if qlv_list:
+            groups_out.append({"region": REGION_NAMES_VI[region_key], "qlvs": qlv_list})
+
+    leftover_qlvs = [q for q in qlvs if q.employee_code not in assigned_qlv_codes]
+    leftover_orphans = [t for t in orphan_tdvs if id(t) not in assigned_orphan_ids]
+    if leftover_qlvs or leftover_orphans:
+        qlv_list = sorted([_qlv_entry(q) for q in leftover_qlvs], key=lambda e: e["amount"], reverse=True)
+        if leftover_orphans:
+            qlv_list.append(_unresolved_entry(leftover_orphans))
+        groups_out.append({"region": "Không rõ vùng", "qlvs": qlv_list})
+    return groups_out
 
 
 def _month_tuple(dt):
@@ -692,24 +810,46 @@ def get_digest_metrics(start_dt, end_dt, period_label, granularity=None, region=
     # nhân viên trên hóa đơn, xác nhận thực tế trong docstring check_daily_kpi_pace_alert), nên
     # hiện "164 TDV/QLV" cho audience "Quản lý Kênh ETC" là dữ liệu hoàn toàn không liên quan tới
     # họ. channel=None (toàn công ty)/channel="OTC" vẫn hiện như cũ (đúng phạm vi sẵn có).
+    kpi_breakdown = []
     if granularity in ("weekly", "monthly") and channel != "ETC":
         try:
             from src.alerts import get_bravo_kpi_tdv_snapshot
-            snap = get_bravo_kpi_tdv_snapshot(position_codes=('TDV', 'QLV'))
+            raw_snap = get_bravo_kpi_tdv_snapshot(position_codes=('TDV', 'QLV'))
             markers = _region_markers(region)
             if markers:
-                snap = [r for r in snap if r.area_code in markers]
-            snap = [r for r in snap if r.month_sale_target > 0]
+                raw_snap = [r for r in raw_snap if r.area_code in markers]
+            snap = [r for r in raw_snap if r.month_sale_target > 0]
             if snap:
                 achieved = sum(1 for r in snap if (r.month_sale_percent or 0) >= 1.0)
-                total_target = sum(r.month_sale_target for r in snap)
-                total_amount = sum(r.month_sale_amount for r in snap)
+                # 21/07/2026: SỬA BUG CỘNG TRÙNG — trước đây total_target/total_amount cộng cả
+                # dòng TDV LẪN dòng QLV trong `snap`, nhưng TDV và QLV là 2 cách CẮT LÁT SONG
+                # SONG của CÙNG 1 khoản doanh thu (QLV.month_sale_amount ĐÃ LÀ rollup của các TDV
+                # dưới quyền — verify qua ManagerCode, xem _build_kpi_hierarchy), không phải 2
+                # phần cộng dồn -> ra số gần gấp đôi thật (đúng bug đã ghi nhận và sửa ở
+                # check_kpi_revenue_reconciliation_alert, nhưng sót chỗ này). Phát hiện qua báo
+                # cáo Monthly "Quản lý Miền Nam" 21/07/2026: "Tổng Doanh Số Đạt" 4,45 tỷ > cả
+                # Doanh Thu OTC thật cả tháng (3,32 tỷ) — vô lý vì KPI OTC không thể vượt doanh thu
+                # OTC thật. Giờ CHỈ cộng dòng QLV (đã là tổng đội) + cộng thêm TDV "mồ côi" (nếu
+                # có — manager_code không khớp QLV nào trong scope, xem _build_kpi_hierarchy) để
+                # không bỏ sót doanh số của họ mà cũng không đếm 2 lần.
+                qlv_rows = [r for r in snap if r.position_code == 'QLV']
+                tdv_rows = [r for r in snap if r.position_code == 'TDV']
+                qlv_codes = {q.employee_code for q in qlv_rows}
+                orphan_tdv_rows = [t for t in tdv_rows if t.manager_code not in qlv_codes]
+                money_rows = qlv_rows + orphan_tdv_rows
+                total_target = sum(r.month_sale_target for r in money_rows)
+                total_amount = sum(r.month_sale_amount for r in money_rows)
                 team_pct = (total_amount / total_target) if total_target else None
                 kpi_summary = {
                     "achieved_count": achieved, "total_count": len(snap),
                     "team_pct": round(team_pct * 100, 1) if team_pct is not None else None,
                     "total_target": round(total_target, 2), "total_amount": round(total_amount, 2),
                 }
+            # 21/07/2026: cây Vùng->QLV->TDV cho báo cáo Trưởng kênh OTC (thấy rõ từng vùng) và
+            # Quản lý Vùng (thấy rõ từng QLV/TDV) — dùng raw_snap (CHƯA lọc target>0, khác
+            # kpi_summary ở trên) để không "biến mất" người chỉ vì họ chưa có chỉ tiêu tháng này.
+            if raw_snap:
+                kpi_breakdown = _build_kpi_hierarchy(raw_snap, region)
         except Exception as e:
             # 20/07/2026: bỏ fallback Supabase kpi_summary — xác nhận bảng đó chỉ có 6/20 QLV
             # thật (import 1 lần từ đầu dự án, không refresh), hiện số liệu đó còn tệ hơn bỏ trống
@@ -774,7 +914,7 @@ def get_digest_metrics(start_dt, end_dt, period_label, granularity=None, region=
     # nợ quá hạn vẫn lên đơn mới...) đã bắn qua Teams. Bật cho mọi granularity — chi phí không đáng
     # kể (1 query SQLite cục bộ, không đụng Bravo/Supabase).
     highlights = _get_period_highlights(start_dt, end_dt, channel=channel, region=region)
-    has_critical = _period_has_critical(start_dt, end_dt)
+    has_critical = _period_has_critical(start_dt, end_dt, region=region)
 
     result = {
         "date": start_dt.strftime("%d/%m/%Y"),
@@ -813,6 +953,7 @@ def get_digest_metrics(start_dt, end_dt, period_label, granularity=None, region=
         result["trend"] = trend
         result["region_breakdown"] = region_breakdown
         result["kpi_summary"] = kpi_summary
+        result["kpi_breakdown"] = kpi_breakdown
     if granularity == "monthly":
         result["region_growth"] = region_growth
         result["channel_share"] = channel_share

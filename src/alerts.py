@@ -26,9 +26,17 @@ def init_state_db():
         CREATE TABLE IF NOT EXISTS sent_alerts (
             alert_key TEXT PRIMARY KEY,
             last_sent_at TIMESTAMP NOT NULL,
-            last_value TEXT NOT NULL
+            last_value TEXT NOT NULL,
+            region TEXT
         )
     ''')
+    # 21/07/2026: migration cho DB cũ đã tồn tại trước khi có cột `region` (dùng để mục "Điểm Nổi
+    # Bật Trong Kỳ" hiện được cho báo cáo theo vùng — xem record_alert_sent/_highlight_matches_region).
+    # CREATE TABLE IF NOT EXISTS không tự thêm cột mới vào bảng đã có sẵn, nên cần ALTER TABLE riêng.
+    cursor.execute("PRAGMA table_info(sent_alerts)")
+    existing_cols = {row[1] for row in cursor.fetchall()}
+    if "region" not in existing_cols:
+        cursor.execute("ALTER TABLE sent_alerts ADD COLUMN region TEXT")
     conn.commit()
     conn.close()
 
@@ -36,49 +44,82 @@ def should_send_alert(alert_key, cooldown_hours, current_value):
     """
     Kiểm tra xem có nên gửi cảnh báo hay không dựa trên thời gian cooldown
     và sự thay đổi của giá trị chỉ số.
+
+    21/07/2026: gộp luôn bước "ghi nhận đã gửi" (trước đây là record_alert_sent() gọi RIÊNG,
+    sau khi should_send_alert() trả True) vào NGAY TRONG transaction này (BEGIN IMMEDIATE — khoá
+    ghi ngay khi mở transaction, không đợi tới câu UPDATE/INSERT). Lý do: 2 bước tách rời tạo race
+    condition — nếu 2 tiến trình (vd task đồng bộ Bravo theo lịch 5 lần/ngày + service
+    DNH_Realtime_Alerts vừa crash-restart, xảy ra thật lúc 9h11-9h17 21/07/2026 do lỗi native
+    MSVCP140.dll) cùng gọi should_send_alert() gần như đồng thời, TRƯỚC KHI process nào kịp
+    record_alert_sent(), cả 2 đều thấy "chưa gửi" -> cả 2 đều gửi -> 2 alert Teams giống hệt
+    nhau. Giờ tiến trình thứ 2 sẽ bị khoá chờ tới khi tiến trình thứ 1 commit xong, rồi thấy đúng
+    trạng thái "đã gửi" -> trả False. record_alert_sent() ở các nơi gọi cũ vẫn giữ nguyên (gọi lại
+    vô hại, chỉ ghi đè timestamp mới hơn cùng giá trị).
     """
     init_state_db()
-    conn = sqlite3.connect(STATE_DB_PATH)
-    cursor = conn.cursor()
-    
-    cursor.execute("SELECT last_sent_at, last_value FROM sent_alerts WHERE alert_key = ?", (alert_key,))
-    row = cursor.fetchone()
-    conn.close()
-    
-    if not row:
-        return True # Chưa từng gửi cảnh báo này -> Gửi ngay
-        
-    last_sent_str, last_val_str = row
-    last_sent_at = datetime.strptime(last_sent_str.split('.')[0], "%Y-%m-%d %H:%M:%S")
-    
-    # Nếu đã quá thời gian cooldown -> Gửi lại để nhắc nhở
-    if datetime.now() - last_sent_at > timedelta(hours=cooldown_hours):
-        return True
-        
-    # Hoặc nếu giá trị lỗi tăng lên đáng kể (ví dụ: số đơn hàng lỗi tăng lên)
+    conn = sqlite3.connect(STATE_DB_PATH, timeout=30)
+    conn.isolation_level = None  # tự quản lý transaction bằng BEGIN/COMMIT bên dưới
     try:
-        if float(current_value) > float(last_val_str):
-            return True
-    except ValueError:
-        if current_value != last_val_str:
-            return True
-            
-    return False
+        conn.execute("BEGIN IMMEDIATE")
+        cursor = conn.execute(
+            "SELECT last_sent_at, last_value FROM sent_alerts WHERE alert_key = ?", (alert_key,)
+        )
+        row = cursor.fetchone()
 
-def record_alert_sent(alert_key, current_value):
+        if not row:
+            should_send = True  # Chưa từng gửi cảnh báo này -> Gửi ngay
+        else:
+            last_sent_str, last_val_str = row
+            last_sent_at = datetime.strptime(last_sent_str.split('.')[0], "%Y-%m-%d %H:%M:%S")
+
+            if datetime.now() - last_sent_at > timedelta(hours=cooldown_hours):
+                should_send = True  # Đã quá thời gian cooldown -> Gửi lại để nhắc nhở
+            else:
+                # Trong cooldown -> chỉ gửi nếu giá trị lỗi tăng lên đáng kể
+                try:
+                    should_send = float(current_value) > float(last_val_str)
+                except ValueError:
+                    should_send = current_value != last_val_str
+
+        if should_send:
+            conn.execute('''
+                INSERT INTO sent_alerts (alert_key, last_sent_at, last_value)
+                VALUES (?, ?, ?)
+                ON CONFLICT(alert_key) DO UPDATE SET
+                    last_sent_at = excluded.last_sent_at,
+                    last_value = excluded.last_value
+            ''', (alert_key, datetime.now(), str(current_value)))
+        conn.execute("COMMIT")
+        return should_send
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
+    finally:
+        conn.close()
+
+def record_alert_sent(alert_key, current_value, region=None):
     """
-    Ghi nhận trạng thái đã gửi cảnh báo để chống spam
+    Ghi nhận trạng thái đã gửi cảnh báo để chống spam.
+
+    21/07/2026: thêm `region` — vùng miền THẬT của alert này, CHỈ truyền khi alert đã quy được về
+    ĐÚNG 1 vùng cụ thể (vd "Miền Nam" — dùng lại đúng nhãn trả về bởi normalize_region_label/
+    REGION_NAMES_VI, y hệt giá trị đã truyền vào send_alert_to_all_channels(region=...) ở cùng nơi
+    gọi). Để None (mặc định) nếu alert gộp nhiều vùng hoặc toàn công ty (vd "Toàn quốc",
+    "Nhiều miền") — KHÔNG đoán bừa, vì mục "Điểm Nổi Bật Trong Kỳ" của báo cáo theo vùng
+    (_highlight_matches_region trong src/etl.py) dùng đúng giá trị này để quyết định hiện/ẩn; gán
+    sai vùng sẽ làm lộ dữ liệu vùng khác cho audience không có quyền xem.
     """
     init_state_db()
     conn = sqlite3.connect(STATE_DB_PATH)
     cursor = conn.cursor()
     cursor.execute('''
-        INSERT INTO sent_alerts (alert_key, last_sent_at, last_value)
-        VALUES (?, ?, ?)
-        ON CONFLICT(alert_key) DO UPDATE SET 
+        INSERT INTO sent_alerts (alert_key, last_sent_at, last_value, region)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(alert_key) DO UPDATE SET
             last_sent_at = excluded.last_sent_at,
-            last_value = excluded.last_value
-    ''', (alert_key, datetime.now(), str(current_value)))
+            last_value = excluded.last_value,
+            region = excluded.region
+    ''', (alert_key, datetime.now(), str(current_value), region))
     conn.commit()
     conn.close()
 
@@ -616,9 +657,11 @@ def get_bravo_kpi_tdv_snapshot(position_codes=('TDV',)):
     CHỈ áp dụng cho TDV/QLV — 'kpi_summary' (TP/PP/TBP/CS/CTV/TK) KHÔNG tồn tại trên Bravo, các vị
     trí đó BẮT BUỘC vẫn đọc Supabase (xem run_sales_kpi_insights_alert, không đổi).
 
-    Trả list object có field: employee_code, employee_name, area_code, month_sale_target,
-    month_sale_amount, month_sale_percent (0..1, None nếu target<=0). Raise exception nếu Bravo
-    không truy cập được — người gọi tự bắt để fallback sang kpi_summary (Supabase).
+    Trả list object có field: employee_code, employee_name, area_code, position_code, manager_code
+    (mã QLV quản lý trực tiếp — dùng để dựng cây Vùng->QLV->TDV, xem etl.py::_build_kpi_hierarchy;
+    thêm 21/07/2026), month_sale_target, month_sale_amount, month_sale_percent (0..1, None nếu
+    target<=0). Raise exception nếu Bravo không truy cập được — người gọi tự bắt để fallback sang
+    kpi_summary (Supabase).
     """
     from sqlalchemy import text
     import types
@@ -635,12 +678,12 @@ def get_bravo_kpi_tdv_snapshot(position_codes=('TDV',)):
             GROUP BY [EmployeeCode]
         ),
         tdv_target AS (
-            SELECT DISTINCT [EmployeeCode], [AreaCode], [MonthSaleTarget]
+            SELECT DISTINCT [EmployeeCode], [AreaCode], [MonthSaleTarget], [ManagerCode]
             FROM [FACT_TongHopKhachHang]
             WHERE [SaveDate] = (SELECT MAX([SaveDate]) FROM [FACT_TongHopKhachHang])
         )
         SELECT n.[EmployeeCode] AS employee_code, n.[Name] AS employee_name, t.[AreaCode] AS area_code,
-               n.[PositionCode] AS position_code,
+               n.[PositionCode] AS position_code, t.[ManagerCode] AS manager_code,
                t.[MonthSaleTarget] AS month_sale_target, ISNULL(a.TotalActual, 0) AS month_sale_amount
         FROM tdv_target t
         JOIN [DIM_NhanVien] n ON t.[EmployeeCode] = n.[EmployeeCode]
@@ -656,7 +699,7 @@ def get_bravo_kpi_tdv_snapshot(position_codes=('TDV',)):
         pct = (amount / target) if target > 0 else None
         result.append(types.SimpleNamespace(
             employee_code=r.employee_code, employee_name=r.employee_name, area_code=r.area_code,
-            position_code=r.position_code,
+            position_code=r.position_code, manager_code=r.manager_code,
             month_sale_target=target, month_sale_amount=amount, month_sale_percent=pct))
     return result
 
@@ -998,7 +1041,7 @@ def run_smart_business_alerts():
                 period=debt_period_label, channel=header_channel, region="Toàn quốc",
                 issue="Top 5 khách hàng/đại lý có nợ quá hạn lớn nhất vượt mức báo động đỏ"
             )
-            record_alert_sent(alert_key, top_overdue)
+            record_alert_sent(alert_key, top_overdue, region="Toàn quốc")
     else:
         print("[ALERTS][smart_debt] Không có khách hàng nào nợ quá hạn vượt ngưỡng 10 triệu.")
 
@@ -1050,7 +1093,7 @@ def run_smart_business_alerts():
                 period=datetime.now().strftime("%d/%m/%Y"), region="Toàn quốc",
                 issue="Tồn kho sắp cạn (dưới 1 tháng bán) do tốc độ bán quá nhanh"
             )
-            record_alert_sent(alert_key, top_qty)
+            record_alert_sent(alert_key, top_qty, region="Toàn quốc")
     else:
         print("[ALERTS][smart_inventory] Không có mặt hàng nào sắp cạn (dưới 1 tháng bán).")
 
@@ -1094,7 +1137,7 @@ def run_smart_business_alerts():
                 region=header_region,
                 issue="Trình dược viên đạt dưới 60% chỉ tiêu doanh số tháng"
             )
-            record_alert_sent(alert_key, lowest_pct)
+            record_alert_sent(alert_key, lowest_pct, region=header_region)
     else:
         print("[ALERTS][smart_kpi] Không có nhân sự nào đạt dưới 60% chỉ tiêu doanh số tháng.")
 
@@ -1187,7 +1230,7 @@ def run_sales_kpi_insights_alert():
             period=data['latest_period'], region="Toàn quốc",
             issue="Báo cáo định kỳ hiệu suất KPI doanh số theo cấp bậc quản lý"
         )
-        record_alert_sent(alert_key, "sent")
+        record_alert_sent(alert_key, "sent", region="Toàn quốc")
 
 # =============================================================================
 # TRIGGER 4 & 5 (Phase 1.2 — Go-Live Plan): Doanh thu giảm > ngưỡng + Nợ vượt hạn mức
@@ -1310,7 +1353,7 @@ def check_revenue_drop_alert():
                     period=cur_month_start.strftime('%m/%Y'), channel=channel_label, region="Toàn quốc",
                     issue=f"Doanh thu kênh {channel_label} giảm {ratio*100:.1f}% so với cùng số ngày kỳ trước"
                 )
-                record_alert_sent(alert_key, str(round(ratio, 4)))
+                record_alert_sent(alert_key, str(round(ratio, 4)), region="Toàn quốc")
 
 
 def check_credit_limit_exceeded_alert():
@@ -1468,7 +1511,7 @@ def check_company_overdue_ratio_alert():
                     period=period_label, channel=channel_label, region="Toàn quốc",
                     issue=f"Tỷ lệ nợ quá hạn/tổng dư nợ kênh {channel_label} đạt {ratio*100:.1f}%, vượt ngưỡng an toàn"
                 )
-                record_alert_sent(alert_key, str(round(ratio, 4)))
+                record_alert_sent(alert_key, str(round(ratio, 4)), region="Toàn quốc")
 
 
 def _bravo_recent_orders_by_customer(since):
@@ -1561,7 +1604,7 @@ def check_overdue_customer_new_orders_alert():
                 period=period_label, channel=channel_label, region="Toàn quốc",
                 issue=f"Khách hàng kênh {channel_label} đang nợ quá hạn lớn nhưng vẫn phát sinh đơn hàng mới chưa được kiểm duyệt"
             )
-            record_alert_sent(alert_key, str(top))
+            record_alert_sent(alert_key, str(top), region="Toàn quốc")
 
 
 def check_debt_aging_migration_alert():
@@ -1659,7 +1702,7 @@ def check_debt_aging_migration_alert():
             period=latest_label, region="Toàn quốc",
             issue=f"Khách hàng lần đầu rơi vào nhóm nợ quá hạn >45 ngày (kỳ trước {prev_label} chưa có) — nguy cơ nợ xấu"
         )
-        record_alert_sent(alert_key, str(top))
+        record_alert_sent(alert_key, str(top), region="Toàn quốc")
 
 
 # ---- Nhóm B: Tồn kho -------------------------------------------------------
@@ -1707,7 +1750,7 @@ def check_dead_stock_alert():
             period=datetime.now().strftime("%d/%m/%Y"), region="Toàn quốc",
             issue=f"Tồn kho bán chậm trên {dead_months:.0f} tháng, giá trị tồn đọng lớn — vốn bị đọng"
         )
-        record_alert_sent(alert_key, str(top))
+        record_alert_sent(alert_key, str(top), region="Toàn quốc")
 
 
 def check_near_expiry_alert():
@@ -1838,7 +1881,7 @@ def check_customer_churn_alert():
                 channel=channel_label, region="Toàn quốc",
                 issue=f"Khách hàng lớn kênh {channel_label} có doanh số tháng mới nhất sụt giảm mạnh so với tháng trước — nguy cơ mất khách"
             )
-            record_alert_sent(alert_key, str(top))
+            record_alert_sent(alert_key, str(top), region="Toàn quốc")
 
 
 def check_revenue_concentration_alert():
@@ -1928,7 +1971,7 @@ def check_revenue_concentration_alert():
                     channel=channel_label, region="Toàn quốc",
                     issue=f"Top {top_n} khách hàng kênh {channel_label} chiếm {ratio*100:.1f}% tổng doanh thu kênh này — rủi ro tập trung quá cao"
                 )
-                record_alert_sent(alert_key, str(round(ratio, 4)))
+                record_alert_sent(alert_key, str(round(ratio, 4)), region="Toàn quốc")
 
 
 # ---- Nhóm E: Hàng trả về ---------------------------------------------------
@@ -2002,7 +2045,7 @@ def check_return_rate_alert():
                 period=period_m, channel="ETC", region="Toàn quốc",
                 issue=f"Tỷ lệ giá trị hàng trả về/doanh số ETC đạt {rate*100:.2f}%, vượt ngưỡng — nghi vấn chất lượng lô/quá hạn/sai đơn"
             )
-            record_alert_sent(alert_key, str(round(rate, 4)))
+            record_alert_sent(alert_key, str(round(rate, 4)), region="Toàn quốc")
 
 
 # ---- Nhóm F: KPI / nhân sự -------------------------------------------------
@@ -2051,7 +2094,7 @@ def check_zero_sales_rep_alert():
             period=period_label, region=header_region,
             issue="Nhân sự có chỉ tiêu doanh số nhưng đạt 0 trong kỳ — nghi ngờ nghỉ ngầm/vấn đề địa bàn"
         )
-        record_alert_sent(alert_key, str(len(rows)))
+        record_alert_sent(alert_key, str(len(rows)), region=header_region)
 
 
 def kpi_sales_force_risk_reasons(position_code, month_pct, quarter_pct, year_pct,
@@ -2202,7 +2245,7 @@ def check_kpi_sales_force_risk_alert():
             period=_month_period_label(kpi_force_data_day, kpi_force_data_day), channel="OTC", region="Miền Nam",
             issue=f"{len(at_risk)} nhân sự vi phạm ít nhất 1 ngưỡng KPI theo QĐ 0429-2 (nguy cơ chấm dứt HĐLĐ/mất thưởng)"
         )
-        record_alert_sent(alert_key, current_value)
+        record_alert_sent(alert_key, current_value, region="Miền Nam")
 
 
 def check_daily_kpi_pace_alert():
@@ -2353,7 +2396,7 @@ def check_daily_kpi_pace_alert():
             issue=(f"Đỏ {len(reds)} · Vàng {len(yellows)} · Xanh {len(greens)} — báo cáo tóm tắt nhịp "
                    f"KPI ngày, không phải cảnh báo bất thường (xem ghi chú backtest trong docstring)")
         )
-        record_alert_sent(alert_key, str(len(reds)))
+        record_alert_sent(alert_key, str(len(reds)), region=header_region)
 
 
 def check_kpi_milestone_drop_alert():
@@ -2507,7 +2550,7 @@ def check_kpi_milestone_drop_alert():
                     period=month_start.strftime('%m/%Y'), channel=channel_label, region="Toàn quốc",
                     issue=f"Lũy kế đến ngày {milestone_day} kênh {channel_label} giảm {drop*100:.1f}% so với TB {lookback} tháng trước"
                 )
-                record_alert_sent(alert_key, str(round(drop, 4)))
+                record_alert_sent(alert_key, str(round(drop, 4)), region="Toàn quốc")
 
     # (b) Theo từng TDV (chỉ OTC — xem giới hạn dữ liệu)
     by_emp = {}
@@ -2552,7 +2595,7 @@ def check_kpi_milestone_drop_alert():
                 period=month_start.strftime('%m/%Y'), channel="OTC", region=header_region,
                 issue=f"{len(dropped_tdv)} TDV có lũy kế đến ngày {milestone_day} giảm >{drop_threshold*100:.0f}% so với TB {lookback} tháng trước"
             )
-            record_alert_sent(alert_key, current_value)
+            record_alert_sent(alert_key, current_value, region=header_region)
 
 
 # ---- Nhóm G: Meta-alert vận hành / chất lượng dữ liệu ----------------------
@@ -2593,7 +2636,7 @@ def check_data_sanity_ok():
                 period=datetime.now().strftime("%d/%m/%Y %H:%M"), region="Toàn quốc (hệ thống)",
                 issue="Snapshot công nợ/tồn kho từ Bravo đang rỗng — nghi Bravo/ETL lỗi, đã tạm dừng các cảnh báo nghiệp vụ"
             )
-            record_alert_sent(alert_key, "zero")
+            record_alert_sent(alert_key, "zero", region="Toàn quốc (hệ thống)")
         return False
     return True
 
@@ -2636,7 +2679,7 @@ def check_etl_freshness_alert():
                 period=datetime.now().strftime("%d/%m/%Y %H:%M"), region="Toàn quốc (hệ thống)",
                 issue=f"Hóa đơn Bravo mới nhất đã {age_days} ngày không phát sinh — nghi hệ thống nguồn/kết nối bị đứng"
             )
-            record_alert_sent(alert_key, str(int(age_days)))
+            record_alert_sent(alert_key, str(int(age_days)), region="Toàn quốc (hệ thống)")
 
 
 def check_kpi_revenue_reconciliation_alert():
@@ -2737,7 +2780,7 @@ def check_kpi_revenue_reconciliation_alert():
                 channel="OTC", region="Toàn quốc",
                 issue=f"Doanh thu KPI lệch {format_vietnamese_money(diff_vnd)} so với hóa đơn thực tế kênh OTC — nghi đồng bộ KPI có vấn đề"
             )
-            record_alert_sent(alert_key, str(round(diff_vnd, 0)))
+            record_alert_sent(alert_key, str(round(diff_vnd, 0)), region="Toàn quốc")
     else:
         print("[ALERTS][kpi_reconcile] Doanh thu KPI khớp hóa đơn thực tế trong ngưỡng cho phép.")
 
