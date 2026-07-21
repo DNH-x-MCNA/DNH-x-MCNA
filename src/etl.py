@@ -669,6 +669,73 @@ def _prev_month_tuple(dt):
     return (dt.year - 1, 12) if dt.month == 1 else (dt.year, dt.month - 1)
 
 
+def _build_etc_revenue_by_employee(start_dt, end_dt, region=None):
+    """Doanh số ETC theo nhân viên trong [start_dt, end_dt) — nhóm theo vùng, trong mỗi vùng liệt
+    kê nhân viên theo doanh số giảm dần. Thêm 21/07/2026 theo yêu cầu (trước đó báo cáo ETC hoàn
+    toàn không có mục nhân sự).
+
+    KHÁC HẲN mục KPI của OTC (_build_kpi_hierarchy):
+      - ETC KHÔNG có chỉ tiêu cá nhân theo tháng (kế hoạch ETC đặt theo NHÓM HÀNG — FACT_KeHoachTongETC,
+        xác nhận 21/07/2026), nên CHỈ hiện doanh số + số hóa đơn, KHÔNG có target/% hoàn thành.
+      - ETC KHÔNG có tầng QLV (DMSSX_NhanVien không có cột quản lý) — chỉ 1 lớp nhân viên phẳng.
+      - Nhân viên bán ở nhiều vùng xuất hiện 1 lần MỖI vùng (group theo AreaCode) — đúng cho báo
+        cáo theo vùng; ở báo cáo toàn quốc/kênh thì họ hiện ở đúng các vùng họ có bán.
+      - SCOPE THEO ĐÚNG KỲ báo cáo (hóa đơn trong [start_dt, end_dt)) — khác OTC (snapshot lũy kế
+        tháng), nên tuần/tháng KHÁC nhau (đúng bản chất doanh số theo kỳ).
+
+    Join: vHoaDonETCTotal.EmpDMSCode -> DMSSX_NhanVien.DMSCode (lấy tên); vùng qua CityId ->
+    DIM_TinhThanhPho.AreaCode (đã kiểm chứng 21/07/2026: 0 mã không tra được tên). Trả list
+    [{"region": "Miền Bắc", "employees": [{"employee_name","employee_code","revenue","invoices"}]}]."""
+    from sqlalchemy import text, bindparam
+    from src.database import _get_bravo_engine
+    from src.region_map import REGION_SQL_MARKERS, REGION_NAMES_VI
+
+    engine = _get_bravo_engine()
+    if engine is None:
+        return []
+    markers = _region_markers(region)
+    where_region = ""
+    params = {"start_dt": start_dt, "end_dt": end_dt}
+    if markers:
+        where_region = " AND tp.AreaCode IN :markers"
+        params["markers"] = tuple(markers)
+    sql = text(f'''
+        SELECT nv.Name AS emp_name, v.EmpDMSCode AS emp_code, tp.AreaCode AS area_code,
+               SUM(v.Amount9) AS rev, COUNT(DISTINCT v.Stt) AS so_hd
+        FROM dbo.vHoaDonETCTotal v
+        LEFT JOIN DMSSX_NhanVien nv ON nv.DMSCode = v.EmpDMSCode
+        LEFT JOIN DIM_TinhThanhPho tp ON tp.CityId = v.CityId
+        WHERE v.DocDate >= :start_dt AND v.DocDate < :end_dt{where_region}
+        GROUP BY nv.Name, v.EmpDMSCode, tp.AreaCode
+        HAVING SUM(v.Amount9) <> 0
+        ORDER BY SUM(v.Amount9) DESC
+    ''')
+    if markers:
+        sql = sql.bindparams(bindparam("markers", expanding=True))
+    with engine.connect() as conn:
+        rows = conn.execute(sql, params).fetchall()
+
+    def _region_name(area):
+        val = (area or "").strip().upper()
+        for key, ms in REGION_SQL_MARKERS.items():
+            if val in ms:
+                return REGION_NAMES_VI[key]
+        return "Không rõ vùng"
+
+    groups = {}
+    for r in rows:
+        rn = _region_name(r.area_code)
+        groups.setdefault(rn, []).append({
+            "employee_name": r.emp_name or f"(mã {r.emp_code})",
+            "employee_code": r.emp_code,
+            "revenue": round(float(r.rev), 2),
+            "invoices": int(r.so_hd),
+        })
+    region_order = ["Miền Bắc", "Miền Trung", "Miền Nam", "Không rõ vùng"]
+    return [{"region": rn, "employees": groups[rn]}
+            for rn in sorted(groups, key=lambda x: region_order.index(x) if x in region_order else 99)]
+
+
 def get_digest_metrics(start_dt, end_dt, period_label, granularity=None, region=None, channel=None):
     """
     Tổng hợp dữ liệu THẬT trong khoảng [start_dt, end_dt) phục vụ digest định kỳ (dùng chung cho
@@ -859,6 +926,16 @@ def get_digest_metrics(start_dt, end_dt, period_label, granularity=None, region=
             # doanh thu/công nợ/tồn kho).
             print(f"[DIGEST] Bravo lỗi khi lấy KPI đội ({e}) — bỏ trống mục này.")
 
+    # 21/07/2026: doanh số ETC theo nhân viên — bổ sung cho các báo cáo CÓ kênh ETC (channel != OTC:
+    # tức C-Level, các vùng, và riêng Kênh ETC). Đối xứng với KPI OTC ở trên nhưng đơn giản hơn
+    # (không target/%, không tầng QLV — xem docstring _build_etc_revenue_by_employee).
+    etc_by_employee = []
+    if granularity in ("weekly", "monthly") and channel != "OTC":
+        try:
+            etc_by_employee = _build_etc_revenue_by_employee(start_dt, end_dt, region)
+        except Exception as e:
+            print(f"[DIGEST] Bravo lỗi khi lấy doanh số ETC theo nhân viên ({e}) — bỏ trống mục này.")
+
     # 5. Phần mở rộng CHỈ cho weekly/monthly (không đổi hành vi/tải truy vấn của daily). Trend +
     #    region_breakdown tự failover nội bộ (xem _revenue_trend/_revenue_by_region).
     trend, region_breakdown = [], []
@@ -956,6 +1033,7 @@ def get_digest_metrics(start_dt, end_dt, period_label, granularity=None, region=
         result["region_breakdown"] = region_breakdown
         result["kpi_summary"] = kpi_summary
         result["kpi_breakdown"] = kpi_breakdown
+        result["etc_by_employee"] = etc_by_employee
     if granularity == "monthly":
         result["region_growth"] = region_growth
         result["channel_share"] = channel_share
@@ -983,7 +1061,14 @@ def get_weekly_digest_metrics(region=None, channel=None):
     today_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
     week_start = today_start - timedelta(days=today_start.weekday())  # weekday(): Thứ 2 = 0
     week_end = week_start + timedelta(days=7)  # exclusive — hết Chủ nhật tuần này (kể cả nếu chưa tới)
-    label = f"Tuần {week_start.strftime('%d/%m/%Y')} - {(week_end - timedelta(days=1)).strftime('%d/%m/%Y')}"
+    # 21/07/2026: nhãn hiện đúng khoảng ĐÃ CÓ DỮ LIỆU, không phải cả khung tuần theo lịch — trước
+    # đây ghi "Tuần 20/07 - 26/07" ngay cả khi gửi thử vào thứ Ba (21/07), nhìn như báo cả tuần
+    # trong khi 5/7 ngày chưa xảy ra. Lấy min(hôm nay, Chủ nhật) làm ngày cuối hiển thị; gắn thêm
+    # "(đang chạy)" nếu tuần chưa trọn (dữ liệu vẫn tính trên [week_start, week_end) như cũ — ngày
+    # tương lai đóng góp 0đ nên tổng không đổi, chỉ NHÃN trung thực hơn).
+    last_shown = min(today_start, week_end - timedelta(days=1))
+    running_suffix = " (đang chạy)" if today_start < week_end - timedelta(days=1) else ""
+    label = f"Tuần {week_start.strftime('%d/%m/%Y')} - {last_shown.strftime('%d/%m/%Y')}{running_suffix}"
     return get_digest_metrics(week_start, week_end, label, granularity="weekly", region=region, channel=channel)
 
 def get_monthly_digest_metrics(region=None, channel=None):
@@ -999,7 +1084,12 @@ def get_monthly_digest_metrics(region=None, channel=None):
     month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
     next_year, next_month = (month_start.year + 1, 1) if month_start.month == 12 else (month_start.year, month_start.month + 1)
     month_end = month_start.replace(year=next_year, month=next_month)  # exclusive — hết ngày cuối tháng này
-    label = f"Tháng {month_start.strftime('%m/%Y')} ({month_start.strftime('%d/%m')} - {(month_end - timedelta(days=1)).strftime('%d/%m/%Y')})"
+    # 21/07/2026: cùng lý do với Weekly — nhãn hiện đúng khoảng đã có dữ liệu (min(hôm nay, ngày
+    # cuối tháng)) thay vì luôn ghi hết tháng theo lịch (vd "01/07 - 31/07" khi mới 21/07).
+    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    last_shown = min(today_start, month_end - timedelta(days=1))
+    running_suffix = " — đang chạy" if today_start < month_end - timedelta(days=1) else ""
+    label = f"Tháng {month_start.strftime('%m/%Y')} ({month_start.strftime('%d/%m')} - {last_shown.strftime('%d/%m/%Y')}{running_suffix})"
     return get_digest_metrics(month_start, month_end, label, granularity="monthly", region=region, channel=channel)
 
 if __name__ == '__main__':
