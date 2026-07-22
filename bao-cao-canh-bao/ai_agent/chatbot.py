@@ -1227,9 +1227,10 @@ Câu hỏi/Lời chào của người dùng: "{user_question}"
         except ValueError:
             latest_q_start = earliest_date_str
 
-        # debt_aging.date_basis (config/config.yaml) — "ngày cơ sở" tính tuổi nợ CHƯA được DNH xác
-        # nhận chính thức (xem skill dnh-debt-aging-schema), đọc từ config theo đúng yêu cầu KHÔNG
-        # hardcode — đổi 1 dòng trong config.yaml khi có xác nhận thật, KHÔNG cần sửa code này.
+        # debt_aging.date_basis (config/config.yaml) — "ngày cơ sở" tính tuổi nợ ĐÃ ĐƯỢC XÁC NHẬN
+        # 22/07/2026 qua stored procedure gốc [dbo].[usp_DeptAccDueDate_GetData] trên Bravo (do
+        # người dùng cung cấp) - xem skill dnh-debt-aging-schema. Đọc từ config theo đúng yêu cầu
+        # KHÔNG hardcode - đổi 1 dòng trong config.yaml nếu có thay đổi, KHÔNG cần sửa code này.
         try:
             from src.database import load_config
             _debt_aging_cfg = load_config().get("debt_aging") or {}
@@ -1240,18 +1241,14 @@ Câu hỏi/Lời chào của người dùng: "{user_question}"
 
         if _debt_aging_date_basis == "doc_date_plus_term":
             _aging_instruction = """
-   TUỔI NỢ / BUCKET QUÁ HẠN (vd "nợ quá hạn 1-15 ngày", "nợ quá 45 ngày", "aging") — ĐÃ BẬT TẠM
-   THỜI theo cấu hình debt_aging.date_basis="doc_date_plus_term" (config/config.yaml). CÔNG THỨC
-   (TẠM THỜI, CHƯA được DNH xác nhận chính thức, xem skill dnh-debt-aging-schema): hạn thanh toán =
-   DATEADD(DAY, h.[DueDate], h.[DocDate]) (h.[DueDate] là SỐ NGÀY công nợ, KHÔNG PHẢI ngày). Số
-   ngày quá hạn = DATEDIFF(DAY, DATEADD(DAY, h.[DueDate], h.[DocDate]), GETDATE()). Bucket:
-   1-15/15-30/30-45/>45 ngày quá hạn (16/07/2026: quay lại mốc này theo yêu cầu — khớp với
+   TUỔI NỢ / BUCKET QUÁ HẠN (vd "nợ quá hạn 1-15 ngày", "nợ quá 45 ngày", "aging") — theo cấu hình
+   debt_aging.date_basis="doc_date_plus_term" (config/config.yaml). CÔNG THỨC (ĐÃ XÁC NHẬN 22/07/2026
+   qua stored procedure gốc [dbo].[usp_DeptAccDueDate_GetData] trên Bravo, xem skill
+   dnh-debt-aging-schema): hạn thanh toán = DATEADD(DAY, h.[DueDate], h.[DocDate]) (h.[DueDate] là
+   SỐ NGÀY công nợ, KHÔNG PHẢI ngày). Số ngày quá hạn = DATEDIFF(DAY, DATEADD(DAY, h.[DueDate],
+   h.[DocDate]), GETDATE()). Bucket: 1-15/15-30/30-45/>45 ngày quá hạn (khớp với
    src/alerts.py::_BRAVO_RECEIVABLES_SQL và receivable_detail/Supabase, tránh lệch giữa chatbot
    và card cảnh báo Teams cho cùng 1 câu hỏi "nợ quá hạn bao nhiêu ngày").
-   BẮT BUỘC — mọi câu trả lời có bucket/tuổi nợ PHẢI mở đầu bằng banner này (nối vào ĐẦU answer,
-   TRƯỚC phần trả lời chính, KHÔNG được bỏ qua):
-   ⚠️ <b>Số liệu tuổi nợ dưới đây tính theo giả định TẠM THỜI</b> (ngày cơ sở = ngày hóa đơn + số
-   ngày công nợ), CHƯA được DNH xác nhận chính thức — có thể thay đổi khi có xác nhận.
    Ví dụ đúng — bucket tuổi nợ theo khách hàng, kênh OTC:
      SELECT k.[Code] AS [Mã KH], k.[Name] AS [Tên khách hàng],
             CASE

@@ -1499,9 +1499,10 @@ def _overdue_ratio_threshold(channel_label):
     ở mức OTC ~93%, ETC ~81%, khiến ngưỡng 35% cũ luôn bị vi phạm, mất tác dụng phân biệt "bình
     thường" vs "bất thường" (alert lặp lại mỗi ngày dù không có gì mới). Ngưỡng mới đặt gần sát
     mức nền hiện tại của từng kênh (còn dư địa để bắt được nếu XẤU ĐI thêm), KHÔNG phải ngưỡng
-    nghiệp vụ đã được DNH xác nhận — vẫn phụ thuộc debt_aging.date_basis còn đang tạm (xem skill
-    dnh-debt-aging-schema). Đọc từ config.yaml (thresholds.business), có thể chỉnh mà không sửa
-    code khi có số liệu chính thức từ DNH."""
+    nghiệp vụ đã được DNH xác nhận (debt_aging.date_basis dùng để tính OverDue đã được xác nhận
+    22/07/2026, xem skill dnh-debt-aging-schema - nhưng bản thân NGƯỠNG % này vẫn là ước lượng
+    thống kê từ dữ liệu thực tế, chưa phải KPI chính thức DNH đặt ra). Đọc từ config.yaml
+    (thresholds.business), có thể chỉnh mà không sửa code khi có số liệu chính thức từ DNH."""
     if channel_label == 'OTC':
         return float(_biz_threshold('overdue_ratio_pct_otc', 0.80))
     if channel_label == 'ETC':
