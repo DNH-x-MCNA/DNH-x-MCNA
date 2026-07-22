@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 """FastAPI backend cho AI Chatbot DNH - Phase 2."""
 import os
+import threading
+import time
 from fastapi import Depends, FastAPI, HTTPException, Header
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -37,6 +39,37 @@ app.add_middleware(
 )
 
 BACKEND_API_KEY = os.environ.get("BACKEND_API_KEY")
+
+# === Gioi han so cau hoi / phut / nguoi (diem #6 gop y, 22/07/2026) ===
+# Moi cau hoi co the chay toi MAX_TOOL_ROUNDS=8 vong goi LLM -> 1 nguoi spam lien tuc co the doi
+# chi phi token len rat nhanh (dung moi lo anh Long neu o hop 16/07: chi phi API khi 10-20 nguoi
+# dung dong thoi). Cua so truot don gian, luu trong bo nho tien trinh: backend chay 1 tien trinh
+# uvicorn duy nhat (xem run_supervisor.ps1, khong dung --workers) nen khong can Redis.
+CHAT_RATE_LIMIT_PER_MIN = int(os.environ.get("CHAT_RATE_LIMIT_PER_MIN", "10"))
+_rate_lock = threading.Lock()
+_rate_hits: dict[str, list[float]] = {}
+
+
+def _check_rate_limit(username: str):
+    """Chan neu user vuot qua CHAT_RATE_LIMIT_PER_MIN cau trong 60 giay gan nhat. Dat = 0 de tat han.
+    Endpoint /chat chay trong threadpool cua FastAPI (ham sync) nen phai khoa khi sua dict dung chung."""
+    if CHAT_RATE_LIMIT_PER_MIN <= 0:
+        return
+    now = time.time()
+    with _rate_lock:
+        hits = [t for t in _rate_hits.get(username, []) if now - t < 60]
+        if len(hits) >= CHAT_RATE_LIMIT_PER_MIN:
+            wait = int(60 - (now - hits[0])) + 1
+            raise HTTPException(
+                429,
+                f"Ban dang hoi qua nhanh (toi da {CHAT_RATE_LIMIT_PER_MIN} cau/phut). "
+                f"Vui long thu lai sau {wait} giay.")
+        hits.append(now)
+        _rate_hits[username] = hits
+        # Don dep dinh ky de dict khong phinh mai theo so tai khoan da tung dung.
+        if len(_rate_hits) > 500:
+            for u in [u for u, ts in _rate_hits.items() if not any(now - t < 60 for t in ts)]:
+                _rate_hits.pop(u, None)
 
 
 def require_api_key(x_api_key: str = Header(default=None)):
@@ -185,6 +218,7 @@ def clear(session_id: str, user: dict = Depends(require_user)):
 def chat(req: ChatRequest, user: dict = Depends(require_user)):
     if not req.question or not req.question.strip():
         raise HTTPException(400, "Cau hoi khong duoc de trong")
+    _check_rate_limit(user["username"])
     _require_session_access(req.session_id, user)
     try:
         # regional_director/qlv bi gioi han xem theo vung (scope_value = MB/MT/MN) - c_level khong
