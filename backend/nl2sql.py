@@ -282,6 +282,26 @@ TEMPLATE_TOOLS = [
             "required": [],
         },
     },
+    {
+        "name": "get_revenue_reconciliation",
+        "description": "Doi chieu doanh thu OTC tinh TU TREN XUONG (tong hoa don toan vung) voi doanh "
+                        "thu CONG DON TU DUOI LEN (TDV -> QLV -> TP, tu KPI ca nhan) - dung khi nguoi "
+                        "dung hoi kieu 'so lieu nay co khop voi KPI nhan vien khong', 'doanh thu tong "
+                        "co dung khong', 'kiem tra chieo doanh thu tu duoi len', hoac nghi ngo so lieu "
+                        "tong the bi lech so voi tong hop tu cap duoi. Ket qua co 'coverage_pct' (cong "
+                        "don duoc bao nhieu % so tong tren xuong) - THAP HON 100% la BINH THUONG (kenh "
+                        "ETC + khach mo coi + cac 'to' chua xac dinh QLV khong the cong don duoc, xem "
+                        "'note' trong ket qua), CHI canh bao that neu co truong 'warning' rieng (dau "
+                        "hieu dem trung TDV).",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "as_of_date": {"type": "string", "description": "YYYY-MM-DD, mac dinh la hom nay (lay snapshot KPI gan nhat truoc/bang ngay nay)"},
+                "area_code": {"type": "string", "description": "Loc theo 1 vung MB/MT/MN (khong bat buoc - bo trong de doi chieu toan cong ty)"},
+            },
+            "required": [],
+        },
+    },
 ]
 
 QUERY_TOOL = {
@@ -365,18 +385,19 @@ hoi "doanh thu thang 6" roi hoi tiep "con thang 5?", hieu la van hoi doanh thu t
 tuong tu nhung doi sang thang 5) - KHONG hoi lai nguoi dung nhung gi da ro tu ngu canh truoc.
 
 QUAN TRONG VE CHON TOOL:
-- Neu cau hoi thuoc 1 trong 14 nhom: doanh thu theo kenh, top san pham, top khach hang, doanh thu
+- Neu cau hoi thuoc 1 trong 15 nhom: doanh thu theo kenh, top san pham, top khach hang, doanh thu
   theo vung mien, KPI/doanh so nhan vien (tong quan/thang), KPI THEO NGAY 1 nhan vien ca nhan, SO SANH
   2 khoang thoi gian, CHI TIET 1 khach hang cu the, TRA CUU ma/ten/vai tro nhan vien, KIEM TRA don hang
   bat thuong/chay don KPI, TON KHO THEO VUNG, LICH SU DOI QLV, CAY DOANH THU/KPI TP-QLV-TDV, XEP HANG
-  KPI -> BAT BUOC dung tool tuong ung (get_revenue_by_channel, get_top_products, get_top_customers,
-  get_revenue_by_region, get_employee_kpi, get_employee_daily_kpi, compare_periods, get_customer_detail,
-  get_employee_directory, check_order_timing, get_inventory_by_region, get_qlv_change_history,
-  get_revenue_tree, get_kpi_ranking).
+  KPI, DOI CHIEU doanh thu tu tren xuong vs cong don tu duoi len -> BAT BUOC dung tool tuong ung
+  (get_revenue_by_channel, get_top_products, get_top_customers, get_revenue_by_region, get_employee_kpi,
+  get_employee_daily_kpi, compare_periods, get_customer_detail, get_employee_directory, check_order_timing,
+  get_inventory_by_region, get_qlv_change_history, get_revenue_tree, get_kpi_ranking,
+  get_revenue_reconciliation).
   Day la cac truy van DA DUOC KIEM CHUNG khop voi du lieu goc, KHONG tu sinh SQL thay the.
 - Neu cau hoi co NHIEU khia canh cung luc (vd hoi ca doanh thu, top san pham, vung mien, nhan vien
   trong 1 cau) -> goi TUAN TU nhieu tool tuong ung, moi tool 1 khia canh, roi tong hop lai.
-- Voi phan cau hoi KHONG thuoc 14 nhom tren: neu la ve CONG NO -> dung query_inventory_receivables
+- Voi phan cau hoi KHONG thuoc 15 nhom tren: neu la ve CONG NO -> dung query_inventory_receivables
   (Supabase). Con lai (hoa don/doanh thu/san pham/khach hang/nhan vien/vung mien dang ad-hoc, tra hang...)
   -> dung query_database (kho local SQLite).
 - Cau hoi CO cum tu thoi gian TUONG DOI (hom nay, tuan nay, thang truoc, quy nay, quy truoc, cung ky

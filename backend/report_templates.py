@@ -947,6 +947,89 @@ def kpi_ranking(group_by: str = "qlv", as_of_date: str = None, limit: int = 20,
     return sorted(result, key=lambda x: -x["pct"])[:limit]
 
 
+def revenue_reconciliation_check(as_of_date: str = None, area_code: str = None,
+                                  scope_area_code: str = None) -> dict:
+    """Doi chieu doanh thu TU TREN XUONG (SUM(amount9) tren hoa don OTC, toan vung) voi doanh thu
+    CONG DON TU DUOI LEN (TDV -> QLV -> TP, dua tren snapshot fact_tonghopkhachhang qua revenue_tree)
+    - phat hien lech giua 2 nguon thay vi chi tin 1 chieu tu tren xuong.
+
+    QUAN TRONG - LY DO CO SAN 1 KHOANG LECH "BINH THUONG" (khong phai loi du lieu):
+    1. Doanh thu tren xuong tinh CA kenh ETC (khong co NV phu trach truc tiep tren hoa don, xem
+       vhoadon_etc/dmssx_khachhang) + khach hang 'mo coi' (khong co ho so trong dms_khachhang) - 2
+       nhom nay KHONG THE gan cho bat ky TDV nao nen KHONG BAO GIO xuat hien trong tong cong don tu
+       duoi len. Ham nay CHI so sanh rieng kenh OTC (co gan NV) de tranh lech "gia" do nhom nay.
+    2. Cay to chuc suy luan qua quy uoc dat ten (org_hierarchy.py) co ~30% 'to' KHONG xac dinh duoc
+       QLV phu trach (ghi "Chua xac dinh", BI LOAI khoi cong don) - day la GAP TO CHUC da biet, khong
+       phai bug. Vi vay tong cong don tu duoi len LUON <= tong tren xuong ve mat cau truc, KHONG bao
+       gio > - neu code sau nay thay > thi moi la dau hieu bug that (vd dem trung TDV).
+    Ket qua tra ve ca "coverage_pct" (cong don duoc bao nhieu % so voi tong tren xuong) de nguoi dung
+    tu danh gia gap co hop ly khong, THAY VI chi 1 con so "lech" kho dien giai.
+    scope_area_code: ep gioi han vung khi tai khoan bi han che (vd QLV/GD mien)."""
+    if scope_area_code:
+        area_code = scope_area_code
+    if as_of_date is None:
+        as_of_date = str(dt.date.today())
+
+    fdate_r = _q("SELECT MAX(save_date) d FROM fact_tonghopkhachhang WHERE save_date<=?", (as_of_date,))
+    fdate = fdate_r[0]["d"] if fdate_r else None
+    if not fdate:
+        return {"as_of": None, "error": "Khong co snapshot KPI nao truoc/bang ngay nay de doi chieu."}
+
+    # Doanh thu OTC TREN XUONG - CHI kenh OTC (ETC khong co NV phu trach truc tiep tren hoa don nen
+    # khong doi chieu cong don duoc, xem docstring). Neu loc theo area_code, PHAI xu ly khach hang
+    # "mo coi" (khong co ho so trong dms_khachhang) GIONG HET revenue_by_region(): LEFT JOIN that (KHONG
+    # duoc WHERE tp.area_code=? sau JOIN, se vo tinh bien thanh INNER JOIN va am tham loai khach mo coi
+    # khoi tong - day la bug thuc te da phat hien qua fixture test khi viet ham nay lan dau) + suy luan
+    # vung qua tien to ma KH (region_map.py) cho dong nao co area=NULL, roi moi loc theo area_code sau
+    # khi da xac dinh vung. Neu KHONG loc vung, don gian SUM toan bo (khong can quan tam khach mo coi
+    # thuoc vung nao vi dang tinh tong ca cong ty).
+    if area_code:
+        rows = _q("""
+            SELECT v.customer_code cc, tp.area_code area, SUM(v.amount9) rev
+            FROM vhoadon_otc v LEFT JOIN dms_khachhang kh ON kh.code=v.customer_code
+            LEFT JOIN dim_tinhthanhpho tp ON tp.city_id=kh.city_id
+            WHERE v.doc_date BETWEEN ? AND ? GROUP BY v.customer_code, tp.area_code
+            """, (fdate, fdate))
+        top_down_rev = sum(_f(r["rev"]) for r in rows
+                            if (r["area"] or region_from_customer_code(r["cc"])) == area_code)
+    else:
+        top_down_rev = _f(_q("SELECT COALESCE(SUM(amount9),0) rev FROM vhoadon_otc WHERE doc_date BETWEEN ? AND ?",
+                              (fdate, fdate))[0]["rev"])
+
+    # Doanh thu OTC CONG DON TU DUOI LEN: dung LAI cay to chuc cua revenue_tree() (TDV -> QLV -> TP)
+    # thay vi tu viet lai truy van rieng - tranh 2 noi dinh nghia khac nhau ve "ai thuoc doi ai".
+    tree = revenue_tree(as_of_date=fdate, area_code=area_code)
+    bottom_up_rev = 0.0
+    tdv_count = 0
+    undetermined_zones = 0
+    for tp in tree["tree"]:
+        for qlv in tp["qlv"]:
+            if not qlv["tdv"]:
+                undetermined_zones += 1
+            for t in qlv["tdv"]:
+                bottom_up_rev += t["sales"]
+                tdv_count += 1
+
+    coverage_pct = (bottom_up_rev / top_down_rev * 100) if top_down_rev else 0.0
+    result = {
+        "as_of": fdate, "area_code": area_code,
+        "top_down_revenue_otc": top_down_rev,
+        "bottom_up_revenue_otc": bottom_up_rev,
+        "coverage_pct": coverage_pct,
+        "tdv_count_in_tree": tdv_count,
+        "zones_without_qlv": undetermined_zones,
+        "note": ("Cong don tu duoi len LUON nho hon tong tren xuong (khong bao gio bang 100%) vi "
+                 "khong gom duoc khach ETC/mo coi + cac 'to' chua xac dinh QLV - day la GAP cau truc "
+                 "da biet, KHONG phai loi. coverage_pct qua thap bat thuong (vd giam dot ngot so ky "
+                 "truoc) moi dang nghi ngo co van de gan NV/vung sai."),
+    }
+    if coverage_pct > 100.5:  # dung sai nho cho lam tron, > han han moi la dau hieu bug that (dem trung)
+        result["warning"] = ("BAT THUONG: cong don tu duoi len VUOT QUA tong tren xuong - dau hieu co "
+                              "the dang dem trung TDV (vd 1 nguoi xuat hien o nhieu 'to') hoac loi join, "
+                              "can kiem tra lai truoc khi tin so lieu nay.")
+    return result
+
+
 TEMPLATES = {
     "get_revenue_by_channel": revenue_by_channel,
     "get_top_products": top_products,
@@ -962,6 +1045,7 @@ TEMPLATES = {
     "get_qlv_change_history": qlv_change_history,
     "get_revenue_tree": revenue_tree,
     "get_kpi_ranking": kpi_ranking,
+    "get_revenue_reconciliation": revenue_reconciliation_check,
 }
 
 
