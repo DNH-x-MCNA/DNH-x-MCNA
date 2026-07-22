@@ -8,12 +8,29 @@ Du lieu co the tre toi da ~15-30 phut (chu ky dong bo) so voi Bravo that - chap 
 cau hoi phan tich/bao cao. Neu can so lieu "ngay tuc thi", noi ro voi nguoi dung day la so lieu tai
 lan dong bo gan nhat.
 """
+import contextvars
 import datetime as dt
 from sqlalchemy import text
-from local_warehouse import get_conn
+from local_warehouse import get_conn, get_sync_meta
 from query_engine import _write_log, _get_engine
 from region_map import region_from_customer_code
 import org_hierarchy as oh
+
+
+# 22/07/2026 (diem #5 gop y): kenh CANH BAO tu tool len cau tra loi. Truoc day cac phep tu-doi-chieu
+# ben trong tool (vd revenue_by_region so tong theo vung vs tong tho) khi phat hien lech CHI ghi log -
+# nguoi dung van nhan breakdown SAI ma khong biet. Dung contextvars (KHONG dung bien module thuong)
+# vi backend phuc vu nhieu request dong thoi: bien module se ro ri canh bao cua request nay sang
+# request khac. call_template() reset dau moi lan goi va gom lai o cuoi (xem cuoi file).
+_tool_warnings = contextvars.ContextVar("tool_warnings", default=None)
+
+
+def _warn(msg: str):
+    """Ghi 1 canh bao de dinh kem vao ket qua tra ve cho AI (AI co trach nhiem noi lai voi nguoi dung).
+    An toan khi goi ngoai pham vi call_template (bo qua, khong loi)."""
+    bucket = _tool_warnings.get()
+    if bucket is not None:
+        bucket.append(msg)
 
 
 def _q(sql, params=()):
@@ -57,6 +74,39 @@ def latest_data_date() -> str:
     r = _q("SELECT MAX(doc_date) d FROM vhoadon_otc")
     d = r[0]["d"] if r else None
     return d if d else str(dt.date.today())
+
+
+def sync_freshness_note(stale_minutes: int = 60) -> str:
+    """20/07/2026: kiem tra sync CO DANG SONG khong - khac latest_data_date() (chi biet NGAY du lieu
+    moi nhat, khong biet tien trinh sync co dung/treo hay khong: cuoi tuan/le khong co hoa don moi
+    van trong "binh thuong" du sync da treo vai ngay - nguoi dung se duoc tra loi tu tin bang du lieu
+    cu/thieu ma khong ai biet). Doc sync_meta.last_synced_at (moc THOI GIAN THAT sync chay xong lan
+    cuoi, ghi boi set_sync_meta() trong sync_warehouse.py - KHAC voi ngay cua ban than du lieu) cho
+    2 bang giao dich quan trong nhat. Tra ve chuoi CANH BAO neu qua han (mac dinh >60 phut - gap doi
+    chu ky binh thuong 15-30 phut da ghi trong docstring dau file), rong neu van tuoi/khong xac dinh
+    duoc (KHONG chan cau tra loi, chi bo sung canh bao)."""
+    warnings = []
+    for table in ("vhoadon_otc", "vhoadon_etc"):
+        try:
+            last_synced_at, _, _ = get_sync_meta(table)
+        except Exception:
+            # Bang sync_meta moi them 20/07/2026 - se tu tao o lan sync ke tiep (init_schema() trong
+            # sync_warehouse.py). Truoc do "no such table" la binh thuong, khong duoc lam vo cau tra loi.
+            continue
+        if not last_synced_at:
+            continue
+        try:
+            last_dt = dt.datetime.fromisoformat(last_synced_at)
+        except ValueError:
+            continue
+        age_min = (dt.datetime.now() - last_dt).total_seconds() / 60
+        if age_min > stale_minutes:
+            warnings.append(f"{table}: lần đồng bộ gần nhất cách đây {age_min:.0f} phút ({last_synced_at})")
+    if not warnings:
+        return ""
+    return ("CẢNH BÁO ĐỒNG BỘ: có thể tiến trình sync đã TREO/LỖI — " + "; ".join(warnings) +
+            " (chu kỳ bình thường 15-30 phút). PHẢI cảnh báo rõ người dùng trong câu trả lời rằng "
+            "dữ liệu có thể CŨ HƠN BÌNH THƯỜNG, không chỉ nói ngày dữ liệu như bình thường.")
 
 
 # Hoa don CU HON 12 THANG duoc nen thanh KH x thang trong monthly_customer_summary (khong con
@@ -228,13 +278,7 @@ def _channel_sub_buckets():
     """Cac ban ghi 'kenh ao' trong dim_nhanvien (QLV gia dung de gan doanh thu kenh dac biet, vd
     Modern Trade/Long Chau - Name bat dau bang 'Kênh', IsDuplicate=1) - KHONG phai QLV that, chi la
     cho gan doanh thu theo kenh ban hang. dmsid cua ban ghi nay khop voi vhoadon_otc.channel_code
-    (tu EmpDMSCode2 tren Bravo, xem sync_warehouse.py) - CHI co o OTC, ETC khong co co che nay.
-    LUU Y PHAN BIET: kenh Modern Trade dung dmsid='ASM01' va thuoc area_code='MN' (Mien Nam) - TUYET
-    DOI KHONG nham 'MT' (viet tat thong thuong cua "Modern Trade" ngoai doi) voi area_code='MT' la
-    VUNG MIEN TRUNG trong dim_tinhthanhpho (2 khai niem hoan toan khac nhau, tinh co trung ky tu viet
-    tat). Ham nay CHI loc theo name LIKE 'Kênh%' + dmsid tu DB, KHONG hardcode chuoi 'MT' o dau ca -
-    neu sau nay can loc/hien thi rieng Modern Trade, LUON dung dmsid='ASM01' hoac area_code cua ban ghi
-    (='MN'), KHONG duoc dung ky hieu 'MT' cho muc dich nay."""
+    (tu EmpDMSCode2 tren Bravo, xem sync_warehouse.py) - CHI co o OTC, ETC khong co co che nay."""
     return _q("SELECT dmsid, name, area_code FROM dim_nhanvien "
               "WHERE position_code='QLV' AND is_duplicate=1 AND name LIKE 'Kênh%' AND dmsid IS NOT NULL")
 
@@ -297,12 +341,20 @@ def revenue_by_region(date_from: str, date_to: str, scope_area_code: str = None)
     else:
         # Tu doi chieu (re # 4): tong cong theo vung PHAI bang dung tong khong loc vung cung ky - neu
         # lech tuc la co JOIN nao do dang am tham lam roi du lieu (vd bi doi lai thanh INNER JOIN).
+        # Dung LAI revenue_by_channel() (da co san UNION nen du lieu >12 thang) thay vi tu SUM rieng,
+        # tranh 2 noi tinh "tong khong loc vung" khac cong thuc nhau (nhat la sau khi them nen du lieu).
         raw_total = revenue_by_channel(date_from, date_to)["total"]["revenue"]
         if abs(total - raw_total) > 1:
             _write_log({"ts": dt.datetime.now().isoformat(), "status": "warn",
                         "sql": "<revenue_by_region reconciliation check>",
                         "error": f"Tong theo vung ({total}) LECH voi tong khong loc vung ({raw_total}) - "
                                  f"co JOIN dang lam roi du lieu, kiem tra lai ngay."})
+            # 22/07/2026 (diem #5): truoc day CHI ghi log - nguoi dung van nhan breakdown sai ma
+            # khong he biet. Gio bao len tan cau tra loi.
+            _warn(f"SO LIEU THEO VUNG CO THE THIEU: tong cong theo vung ({total:,.0f} d) khong khop "
+                  f"tong doanh thu khong loc vung ({raw_total:,.0f} d), chenh {abs(total - raw_total):,.0f} d. "
+                  f"PHAI canh bao nguoi dung rang phan chia theo vung dang thieu/sai, KHONG duoc trinh bay "
+                  f"breakdown nay nhu so lieu chac chan.")
         result = [{"area": k, "revenue": v, "share_pct": (v / total * 100 if total else 0.0)}
                   for k, v in sorted(agg.items(), key=lambda x: -x[1])]
 
@@ -562,8 +614,18 @@ def compare_periods(date_from_a: str, date_to_a: str, date_from_b: str, date_to_
 
 def _customer_receivable(customer_code: str, channel: str) -> dict:
     """Tra du no/qua han tu Supabase (khong co tren Bravo). channel co the la 'OTC','ETC','OTC+ETC'
-    - neu ca 2 kenh, uu tien receivable_detail (OTC) truoc vi pho bien hon."""
-    empty = {"balance_end": None, "total_overdue": None, "overdue_pct": None}
+    - neu ca 2 kenh, uu tien receivable_detail (OTC) truoc vi pho bien hon.
+
+    22/07/2026 (diem #4 gop y): TRUOC DAY `except: pass` nuot MOI loi roi tra ve dict rong -
+    khong phan biet duoc "khach KHONG co no" voi "KHONG TRA CUU DUOC" (Supabase sap/mat mang).
+    Hau qua: chatbot tra loi tu tin "khach nay khong co cong no" trong khi that ra la loi tra cuu -
+    nguy hiem cho quyet dinh cong no. Gio them `receivable_status`:
+      - "ok"      : tra duoc, CO du lieu
+      - "no_data" : tra duoc, khach KHONG co ban ghi cong no (that su khong no)
+      - "error"   : KHONG tra cuu duoc (kem `receivable_warning` de AI canh bao nguoi dung)
+    """
+    empty = {"balance_end": None, "total_overdue": None, "overdue_pct": None,
+             "receivable_status": "no_data"}
     try:
         eng = _get_engine("supabase")
         with eng.connect() as conn:
@@ -581,16 +643,24 @@ def _customer_receivable(customer_code: str, channel: str) -> dict:
                     if r:
                         balance, overdue = float(r[0] or 0), float(r[1] or 0)
                         return {"balance_end": balance, "total_overdue": overdue,
-                                "overdue_pct": (overdue / balance * 100) if balance else 0.0}
+                                "overdue_pct": (overdue / balance * 100) if balance else 0.0,
+                                "receivable_status": "ok"}
             if "ETC" in channel:
                 r = conn.execute(text('SELECT "total_receivable", "total_overdue" FROM receivable_etc '
                                        'WHERE "customer_code"=:c'), {"c": customer_code}).fetchone()
                 if r:
                     balance, overdue = float(r[0] or 0), float(r[1] or 0)
                     return {"balance_end": balance, "total_overdue": overdue,
-                            "overdue_pct": (overdue / balance * 100) if balance else 0.0}
-    except Exception:
-        pass
+                            "overdue_pct": (overdue / balance * 100) if balance else 0.0,
+                            "receivable_status": "ok"}
+    except Exception as e:
+        # KHONG tra ve `empty` (se bi hieu nham la "khong no") - danh dau ro la LOI tra cuu.
+        return {"balance_end": None, "total_overdue": None, "overdue_pct": None,
+                "receivable_status": "error",
+                "receivable_warning": (
+                    f"KHONG tra cuu duoc cong no cua khach {customer_code} (loi he thong: "
+                    f"{type(e).__name__}). PHAI noi ro voi nguoi dung la CHUA XAC DINH duoc cong no, "
+                    f"TUYET DOI KHONG ket luan khach nay khong co no.")}
     return empty
 
 
@@ -1067,6 +1137,9 @@ def call_template(name: str, args: dict, question: str = "", username: str = Non
     che scope kia, ap dung duoc cho MOI role."""
     t0 = dt.datetime.now()
     entry = {"ts": t0.isoformat(), "username": username, "question": question, "sql": f"<template:{name}>({args})"}
+    # 22/07/2026 (diem #5): mo "hop" canh bao rieng cho lan goi nay - tool goi _warn() trong luc chay
+    # se duoc gom lai va dinh kem vao ket qua tra ve cho AI.
+    token = _tool_warnings.set([])
     try:
         fn = TEMPLATES[name]
         call_args = dict(args)
@@ -1080,8 +1153,14 @@ def call_template(name: str, args: dict, question: str = "", username: str = Non
         entry["status"] = "ok"
         entry["duration_ms"] = int((dt.datetime.now() - t0).total_seconds() * 1000)
         _write_log(entry)
-        return {"ok": True, "result": result}
+        payload = {"ok": True, "result": result}
+        warnings = _tool_warnings.get() or []
+        if warnings:
+            payload["canh_bao"] = warnings
+        return payload
     except Exception as e:
         entry["status"] = "error"; entry["error"] = str(e)[:300]
         _write_log(entry)
         return {"ok": False, "error": f"Loi khi chay bao cao chuan '{name}': {str(e)[:300]}"}
+    finally:
+        _tool_warnings.reset(token)

@@ -85,11 +85,15 @@ TEMPLATE_TOOLS = [
                         "TUYET DOI KHONG tu viet SQL rieng voi dieu kien area_code=... vi se BO SOT khach "
                         "hang 'mo coi' (khong co ho so trong bang khach hang) ma CHI ham nay moi suy luan "
                         "dung vung qua tien to ma khach hang. "
-                        "CANH BAO NHAM LAN: neu nguoi dung go 'MT' hoac hoi ve kenh 'Modern Trade' (chuoi nha "
-                        "thuoc lon nhu Long Chau/Pharmacity), DAY KHONG PHAI vung Mien Trung (area_code=MT) - "
-                        "Modern Trade la KENH BAN HANG DAC BIET thuoc VUNG MIEN NAM (dmsid=ASM01), duoc tra ve "
-                        "trong truong 'channel_breakdown' cua dong Mien Nam (KHONG PHAI dong rieng). Neu cau "
-                        "hoi mo ho chi go 'MT' khong ro ngu canh, HOI LAI nguoi dung truoc khi tra loi.",
+                        "CANH BAO NHAM LAN QUAN TRONG: 'Kenh MT' (Modern Trade - chuoi nha thuoc lon nhu "
+                        "Long Chau, Pharmacity) LA 1 KENH BAN HANG, HOAN TOAN KHAC voi ma vung 'MT'=Mien "
+                        "Trung (trung chu viet tat ngau nhien). Neu nguoi dung hoi 've doanh thu Kenh MT/"
+                        "Modern Trade/MN1' thi VAN goi tool NAY (KHONG phai get_revenue_by_channel, tool "
+                        "do chi biet OTC/ETC) - dong ket qua cua Mien Nam se co them truong 'channel_"
+                        "breakdown' (danh sach {name, revenue}) chua san doanh thu Kenh MT da tach rieng "
+                        "(SO NAY DA NAM SAN trong 'revenue' cua Mien Nam, KHONG duoc cong them) - lay so "
+                        "tu day de tra loi. TUYET DOI KHONG tra loi 'he thong khong co kenh MT' hay tu "
+                        "dong hieu nham sang doanh thu vung Mien Trung khi nguoi dung noi ro la 'kenh'.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -616,6 +620,12 @@ def ask(question: str, session_id: str = "default", username: str = None, scope_
                 last_result = tresult
                 last_tool_used = (tu.name, str(tu.input))
                 payload = tresult["result"] if tresult["ok"] else {"error": tresult["error"]}
+                # 22/07/2026 (diem #5): tool co the kem canh bao tu-doi-chieu (vd tong theo vung lech
+                # tong tho). TRUOC DAY chi lay ["result"] nen canh bao BI ROI MAT truoc khi toi model
+                # -> nguoi dung van nhan so lieu sai ma khong he biet. Chi boc them khi CO canh bao.
+                if tresult.get("canh_bao"):
+                    payload = {"du_lieu": payload,
+                               "CANH_BAO_BAT_BUOC_NOI_VOI_NGUOI_DUNG": tresult["canh_bao"]}
 
             tool_results.append({
                 "type": "tool_result",
