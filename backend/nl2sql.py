@@ -596,6 +596,13 @@ def ask(question: str, session_id: str = "default", username: str = None, scope_
                 last_result = tresult
                 last_tool_used = (tu.name, str(tu.input))
                 payload = tresult["result"] if tresult["ok"] else {"error": tresult["error"]}
+                # 22/07/2026 (diem #5): tool co the kem canh bao tu-doi-chieu (vd tong theo vung lech
+                # tong tho). TRUOC DAY chi lay ["result"] nen canh bao BI ROI MAT truoc khi toi model
+                # -> nguoi dung van nhan so lieu sai ma khong he biet. Chi boc them khi CO canh bao;
+                # truong hop binh thuong giu nguyen hinh dang cu (khong lam nhieu prompt).
+                if tresult.get("canh_bao"):
+                    payload = {"du_lieu": payload,
+                               "CANH_BAO_BAT_BUOC_NOI_VOI_NGUOI_DUNG": tresult["canh_bao"]}
 
             tool_results.append({
                 "type": "tool_result",
