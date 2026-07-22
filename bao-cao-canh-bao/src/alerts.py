@@ -1822,6 +1822,11 @@ def check_dead_stock_alert():
     (khác hẳn công nợ — công thức TotalAmount-PaidAmount đã đối chiếu được số liệu thật trước khi
     dùng). Để lại xác minh kỹ hơn trước khi chuyển, tránh báo sai tồn kho ảnh hưởng quyết định nhập
     hàng.
+
+    NGƯỠNG dead_stock_months=6.0 ĐÃ XÁC NHẬN 22/07/2026 qua stored procedure gốc trên Bravo
+    [dbo].[usp_StockLotFinance_Report] — xem docs/inventory_lot_schema.sql (do người dùng cung
+    cấp toàn văn SP). SP dùng RemainMonths=FLOOR(tồn hiện tại/TB bán 6 tháng gần nhất) >= 6 =
+    "Bán chậm" (@_ShortOfStockMonth mặc định), <= 1 = "Thiếu hàng" (@_OutOfStockMonth mặc định).
     """
     from sqlalchemy import text
     engine = _alert_engine()
@@ -1867,15 +1872,22 @@ def check_dead_stock_alert():
 
 def check_near_expiry_alert():
     """
-    B1: Hàng cận date / sắp hết hạn. TRẠNG THÁI: phòng thủ theo GAP DỮ LIỆU.
-    Tồn kho theo lô (brvsx_thekholot) hiện chỉ có ItemLotCode + số lượng, KHÔNG có cột
-    hạn dùng của lô. Cần bảng map lô -> hạn dùng (MfgDate/ExpiryDate) từ Bravo/DMS. Hàm tự
-    dò cột hạn dùng gắn với tồn kho lúc chạy; nếu chưa có -> no-op + log rõ (không crash).
+    B1: Hàng cận date / sắp hết hạn. TRẠNG THÁI: phòng thủ theo GAP DỮ LIỆU (Supabase) — nguồn Bravo
+    THẬT SỰ đã được xác định, chỉ chưa đồng bộ vào hệ thống.
 
-    XÁC NHẬN THÊM (10/07/2026): khảo sát trực tiếp Bravo (BRV_SanPham, BRV_TheKhoLot,
-    BRV_TonKhoDKLot) cũng KHÔNG thấy cột hạn dùng/ExpiryDate nào — gap dữ liệu này không phải do
-    thiếu ở Supabase mà do bản thân Bravo cũng chưa lưu thông tin hạn dùng theo lô. Không có nguồn
-    nào để chuyển sang, kể cả Bravo.
+    XÁC NHẬN LẠI 22/07/2026 — SỬA LẠI kết luận cũ (10/07/2026) "Bravo không có ExpiryDate": khảo sát
+    trước đó tìm sai bảng (chỉ tìm cột Expir*/HanDung* trên các bảng %thekho%/%tonkho%). Người dùng
+    cung cấp toàn văn stored procedure gốc [dbo].[usp_StockLotFinance_Report] xác nhận Bravo CÓ hạn
+    dùng theo lô, nằm ở bảng RIÊNG BRV_Lot (kênh TM/OTC) / BRVSX_Lot (kênh SX/ETC), cột ExpiryDate,
+    join qua ItemId + ItemLotCode với bảng tồn kho theo lô (vTonKhoDKLot/vTheKhoLot) — xem
+    docs/bravo_stored_procedures/README.md để có công thức đầy đủ + bucket theo tháng/ngày còn hạn.
+
+    VẪN LÀ NO-OP (chưa bật thật): BRV_Lot/BRVSX_Lot chưa được đồng bộ vào bất kỳ đâu trong hệ thống
+    (không có trong warehouse.db lẫn Supabase) — cần thêm ETL mới trước khi bật thật, đây là thay
+    đổi kiến trúc cần xác nhận riêng, không tự ý triển khai chỉ vì đã biết nguồn dữ liệu.
+    Tồn kho theo lô (brvsx_thekholot trên Supabase) hiện chỉ có ItemLotCode + số lượng, KHÔNG có cột
+    hạn dùng của lô — hàm tự dò cột hạn dùng gắn với tồn kho lúc chạy; nếu chưa có -> no-op + log rõ
+    (không crash).
     """
     from sqlalchemy import text
     engine = _alert_engine()

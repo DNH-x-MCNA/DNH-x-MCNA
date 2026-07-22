@@ -93,7 +93,11 @@ thresholds:
     # chờ DNH xác nhận date-basis chính thức (xem skill dnh-debt-aging-schema) mới chốt lại.
     overdue_ratio_pct_otc: 0.80   # Kênh OTC: nợ quá hạn/tổng dư nợ vượt 80%
     overdue_ratio_pct_etc: 0.65   # Kênh ETC: nợ quá hạn/tổng dư nợ vượt 65%
-    dead_stock_months: 12.0       # Tồn "chết": months_to_sell >= 12 tháng
+    # dead_stock_months=6.0: ĐÃ XÁC NHẬN 22/07/2026 qua stored procedure gốc trên Bravo
+    # [dbo].[usp_StockLotFinance_Report] (@_ShortOfStockMonth=6, phân loại "Bán chậm" khi
+    # RemainMonths=FLOOR(tồn hiện tại/TB bán 6 tháng gần nhất) >= 6) — đổi từ 12 xuống 6 để khớp
+    # đúng cách DNH tự định nghĩa "bán chậm" trong Bravo, không phải ước lượng của MCNA nữa.
+    dead_stock_months: 6.0        # Tồn "chết"/bán chậm: months_to_sell >= 6 tháng (khớp SP DNH)
     dead_stock_min_value: 50000000    # ...và giá trị tồn > 50 triệu (mới đáng cảnh báo vốn đọng)
     customer_churn_drop_pct: 0.50 # Khách lớn: doanh số tháng mới nhất rớt > 50% so tháng trước
     customer_churn_min_prev: 50000000 # ...và tháng trước từng mua > 50 triệu (mới coi là "khách lớn")
