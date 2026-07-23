@@ -66,12 +66,20 @@ dim_tinhthanhpho: city_id, city_name, area_code (MB=Mien Bac, MT=Mien Trung, MN=
   "Modern Trade" -> HIEU la kenh ban hang dac biet (dmsid=ASM01, thuoc Mien Nam), KHONG PHAI vung
   Mien Trung. Neu cau hoi mo ho (chi go "MT" khong ro ngu canh) -> HOI LAI nguoi dung xem y la vung
   Mien Trung hay kenh Modern Trade, KHONG tu doan.
-dim_targetvungmien: target doanh thu OTC theo vung/thang. Cot: area_code, channel_code (loc ='GT'
-  cho kenh OTC thuong; loc ='MT' de lay CHI TIEU RIENG cua kenh Modern Trade - CO THAT trong du lieu,
-  xac nhan 21/07/2026, area_code='MN' cho ca 2 loai), amount (target tien), doc_date (ngay dau thang,
-  vd '2026-06-01' cho target thang 6). Cau hoi "kenh MT dat bao nhieu % chi tieu" -> SUM(amount9)
-  tu vhoadon_otc WHERE channel_code='ASM01' (xem canh bao MT o dim_tinhthanhpho phia tren) chia cho
-  amount tu dim_targetvungmien WHERE channel_code='MT' AND doc_date=ngay dau thang dang hoi.
+dim_targetvungmien: target doanh thu OTC theo vung/thang. Cot: area_code, channel_code (2 gia tri:
+  'GT' = target kenh OTC thuong (nhieu dong/vung, moi dong 1 khu vuc nho); 'MT' = target RIENG cua
+  kenh Modern Trade, area_code='MN' - CO THAT trong du lieu, xac nhan 21/07/2026), amount (target
+  tien), doc_date (ngay dau thang, vd '2026-06-01' cho target thang 6).
+  !!! CANH BAO QUAN TRONG - LOI DA TUNG XAY RA (phat hien 23/07/2026): cau hoi "target/chi tieu vung
+  MN thang X la bao nhieu" hoac "target vung MN" (KHONG chi dinh rieng kenh) BAT BUOC phai SUM(amount)
+  CA channel_code='GT' VA channel_code='MT' cho area_code='MN' cung doc_date - CHI loc channel_code='GT'
+  se lam target vung MN bi THIEU ~40% (vd thang 7/2026: GT=7.89 ty, MT=5.29 ty rieng, tong dung phai
+  la 13.19 ty - da tung bao thieu MT khien target hien ra thap hon thuc te). CHI duoc loc rieng 1
+  channel_code khi nguoi dung hoi RO RANG ve 1 kenh cu the (vd "target kenh MT" hoac "target kenh
+  OTC thuong/GT khong tinh Modern Trade") - neu khong noi ro kenh, LUON cong ca 2. Cau hoi "kenh MT
+  dat bao nhieu % chi tieu" (chi rieng kenh MT) -> SUM(amount9) tu vhoadon_otc WHERE channel_code='ASM01'
+  (xem canh bao MT o dim_tinhthanhpho phia tren) chia cho amount tu dim_targetvungmien WHERE
+  channel_code='MT' AND doc_date=ngay dau thang dang hoi.
 fact_kehoachtongetc: target tong ETC theo thang. Cot: doc_date (ngay dau thang), amount, item_group.
 dmssx_khachhang: code (ma khach hang ETC), name, city_id (dung join vung mien cho ETC), id_code (Id
   noi bo DMS, khac code), kenh_bh (kenh ban hang dang text). KHONG co cot NV phu trach (ETC khong co
