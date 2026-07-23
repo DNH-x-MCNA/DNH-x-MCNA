@@ -285,6 +285,27 @@ def revenue_by_region(date_from: str, date_to: str, scope_area_code: str = None)
 KPI_ACHIEVED_THRESHOLD = 80  # % dat KPI nhan vien tinh la "dat" (theo yeu cau nghiep vu, KHONG phai 100%)
 KPI_WARN_THRESHOLD = 50      # duoi nguong nay coi la "nguy hiem" (do), giua 2 nguong la "trung binh" (vang)
 
+# 23/07/2026 - PORT tu repo bao cao D:\DNH (src/alerts.py::_KNOWN_MISFLAGGED_DUPLICATE_CODES +
+# _is_duplicate_filter_sql). 2 nhan vien THAT, dang lam viec binh thuong, bi Bravo gan nham co
+# "trung lap" (IsDuplicate=1) nen bi LOAI KHOI moi bao cao KPI/doanh so:
+#   MBKV12      Nguyen Thi Thanh Thuy  ~2,01 ty doanh so, target 5,28 ty
+#   TM25030101  Lac Ngoc Sam           ~389 trieu/thang
+# Da kiem chung day la loi gan co, KHONG phai nghi viec (khong co ngay ket thuc + van phat sinh doanh
+# so deu 15-17 thang lien tuc). Repo bao cao da va tu 20/07; chatbot thi CHUA -> chay thu 23/07 voi
+# tai khoan thuy.nguyen2 hoi "KPI cac QLV vung toi" chi ra 9/10 QLV, thieu dung MBKV12, va KHONG co
+# dong nao bao la da bo qua ai. Da de nghi DNH sua du lieu goc (muc C1 trong
+# docs/Cau_hoi_can_DNH_xac_nhan.md); den luc do giu ngoai le o day.
+# DUNG _not_duplicate_sql() thay vi viet tay "COALESCE(is_duplicate,0)<>1" - truoc do viet tay lap lai
+# 6 cho, sua 1 cho quen 5 cho la chuyen som muon.
+_KNOWN_MISFLAGGED_DUPLICATE_CODES = ("MBKV12", "TM25030101")
+
+
+def _not_duplicate_sql(alias: str = "nv") -> str:
+    """Manh SQL loc "khong bi danh dau trung lap", CO ngoai le cho _KNOWN_MISFLAGGED_DUPLICATE_CODES."""
+    codes = ",".join(f"'{c}'" for c in _KNOWN_MISFLAGGED_DUPLICATE_CODES)
+    p = f"{alias}." if alias else ""
+    return f"(COALESCE({p}is_duplicate,0)<>1 OR {p}employee_code IN ({codes}))"
+
 
 def _kpi_status(pct: float) -> str:
     """Phan loai mau theo % dat KPI: >=80 Tot (xanh), 50-79 Trung binh (vang), <50 Nguy hiem (do)."""
@@ -296,7 +317,8 @@ def _kpi_status(pct: float) -> str:
 
 
 def employee_kpi(as_of_date: str, limit: int = 10, order_by: str = "sales", filter: str = "all",
-                  position_code: str = None, scope_area_code: str = None) -> dict:
+                  position_code: str = None, scope_area_code: str = None,
+                  scope_employee_code: str = None) -> dict:
     """KPI nhan vien: snapshot fact_tonghopkhachhang gan nhat <= as_of_date.
     order_by: 'sales' hoac 'pct' (dung khi filter='all', luon xep TOT NHAT truoc).
     filter: 'all' (top N tot nhat), 'below_target' (CHUA dat KPI, pct<80, xep TE NHAT truoc),
@@ -304,19 +326,29 @@ def employee_kpi(as_of_date: str, limit: int = 10, order_by: str = "sales", filt
     position_code: loc theo vai tro (vd 'TDV','QLV') - LUON dung tham so nay khi cau hoi chi dinh ro
     vai tro (vd "top TDV"), KHONG tu loc thu cong tu ket qua day du vi de sot/thieu chinh xac.
     NGUONG DAT KPI la 80% (khong phai 100%). Moi dong co san "status" (🟢 Tot/🟡 Trung binh/🔴 Nguy hiem)
-    - LUON dung nguyen gia tri nay khi tra loi, khong tu tinh nguong khac."""
+    - LUON dung nguyen gia tri nay khi tra loi, khong tu tinh nguong khac.
+
+    scope_employee_code: CHI danh cho tai khoan qlv - ep chi tra ve CHINH HO + cac TDV THUOC DOI HO,
+    khong thay nhan su cua QLV khac (du lieu hieu suat CA NHAN dong nghiep).
+    23/07/2026 - VA LO HONG PHAN QUYEN: truoc do ham nay KHONG nhan scope_employee_code nen chi bi
+    loc theo VUNG. Chay thu that voi tai khoan tung.trinh (QLV, doi 10 TDV) hoi "cac TDV duoi quyen
+    toi" -> tra ve DU 87 TDV toan vung MB, gom ca nguoi cua doi MBKV1/MBKV2/MBKV3/MBKV9 kem doanh so
+    + % dat. Cung tai khoan do hoi thang "doi anh Pham Kim Tan the nao" thi BI CHAN (vi AI chon
+    get_kpi_ranking - tool DA co scope) -> tuc la phan quyen truoc day phu thuoc vao viec AI tinh co
+    chon tool nao, khong phai hang rao that. Xem docs/kich_ban_demo1_chatbot.md muc R-F (repo D:\\DNH).
+    """
     fdate_r = _q("SELECT MAX(save_date) d FROM fact_tonghopkhachhang WHERE save_date<=?", (as_of_date,))
     fdate = fdate_r[0]["d"] if fdate_r else None
     if fdate is None:
         return {"as_of": None, "total_employees": 0, "count_below_target": 0, "count_above_target": 0, "rows": []}
-    sql = """SELECT nv.name name, e.employee_code employee_code,
+    sql = f"""SELECT nv.name name, e.employee_code employee_code,
                     nv.position_code position_code, cv.description position_label,
                     SUM(e.amount_ct) sales, MAX(e.month_sale_target) target,
                     SUM(e.is_nc) new_customers
              FROM fact_tonghopkhachhang e
              LEFT JOIN dim_nhanvien nv ON nv.employee_code=e.employee_code
              LEFT JOIN dim_chucvu cv ON cv.position_code=nv.position_code
-             WHERE e.save_date=? AND COALESCE(nv.is_duplicate,0)<>1"""
+             WHERE e.save_date=? AND {_not_duplicate_sql('nv')}"""
     params = [fdate]
     if position_code:
         sql += " AND nv.position_code=?"
@@ -324,6 +356,13 @@ def employee_kpi(as_of_date: str, limit: int = 10, order_by: str = "sales", filt
     if scope_area_code:
         sql += " AND nv.area_code=?"
         params.append(scope_area_code)
+    if scope_employee_code:
+        # Doi cua QLV nay + chinh ho. Dung oh.team_of_qlv() - CUNG mot nguon xac dinh "doi" ma
+        # revenue_tree dang dung (qua zone/manager_area_code), de 2 tool khong tra ve 2 danh sach
+        # doi khac nhau cho cung 1 QLV.
+        allowed = [scope_employee_code] + [t["employee_code"] for t in oh.team_of_qlv(scope_employee_code)]
+        sql += f" AND e.employee_code IN ({','.join(['?'] * len(allowed))})"
+        params.extend(allowed)
     sql += """ GROUP BY nv.name, e.employee_code, nv.position_code, cv.description
                HAVING MAX(e.month_sale_target)>0"""
     rows = _q(sql, tuple(params))
@@ -358,7 +397,8 @@ def _daily_kpi_status(pct: float) -> str:
     return "🟢 Xanh"
 
 
-def employee_daily_kpi(employee_code: str, year_month: str, scope_area_code: str = None) -> dict:
+def employee_daily_kpi(employee_code: str, year_month: str, scope_area_code: str = None,
+                        scope_employee_code: str = None) -> dict:
     """KPI THEO NGAY cho 1 nhan vien CA NHAN (co ma truc tiep tren hoa don, vd EmpDMSCode nhu
     'tungtx') trong 1 thang (YYYY-MM). Target 1 ngay = 4% MonthSaleTarget cua nhan vien (tuong duong
     100% cua ngay). Phan loai tung ngay: 🔴 Do (<2.5%), 🟡 Vang (2.5%-3.5%), 🟢 Xanh (>3.5%). CHI tinh
@@ -374,13 +414,30 @@ def employee_daily_kpi(employee_code: str, year_month: str, scope_area_code: str
     vao co the la EmployeeCode HOAC DMSId (tra ca 2, giong employee_directory), ham tu quy doi sang
     DMSId that truoc khi truy van hoa don. NEU nhan vien khong co trong dim_nhanvien, tu dong thu
     tiep dmssx_nhanvien (bang rieng phia SX/ETC, xac nhan 20/07/2026 - xem _resolve_employee_identity())
-    - truong hop nay scope_area_code se LUON tu choi (vung khong xac dinh duoc, an toan hon cho qua)."""
+    - truong hop nay scope_area_code se LUON tu choi (vung khong xac dinh duoc, an toan hon cho qua).
+    scope_employee_code: CHI danh cho tai khoan qlv - chi cho xem nhan vien THUOC DOI ho (hoac chinh
+    ho); nguoi ngoai doi bi tu choi (them 23/07/2026 cung dot va R-F, xem docstring employee_kpi)."""
     ident = _resolve_employee_identity(employee_code)
     resolved_code = ident["code"]
     dms_code = ident["dmsid"]
     if scope_area_code:
         if ident["area_code"] != scope_area_code:
             return {"error": f"Ban khong co quyen xem du lieu nhan vien nay - ngoai vung {scope_area_code} ban phu trach."}
+    if scope_employee_code:
+        allowed = {scope_employee_code} | {t["employee_code"] for t in oh.team_of_qlv(scope_employee_code)}
+        if resolved_code not in allowed:
+            return {"error": "Ban chi duoc xem du lieu cua cac nhan vien trong doi minh phu trach."}
+    # 23/07/2026 (R-G): CHAN ma cap quan ly thay vi tra "0 dong moi ngay". Ma QLV/TP/PP khong xuat
+    # hien tren hoa don (hoa don ghi ma nhan vien ban hang ca nhan), nen ham nay se cong ra 0 va AI
+    # dien giai thanh "17/17 ngay do, van de nghiem trong" - da xay ra that voi tungtx (QLV thuc te
+    # dat 1,74 ty). So 0 do la THIEU DU LIEU, khong phai ket qua kinh doanh; tra ve loi ro rang de AI
+    # khong the hieu nham, thay vi tra so 0 kem chu thich (chu thich rat de bi bo qua).
+    if (ident["position_code"] or "").upper() in ("QLV", "TP", "PP", "TBP"):
+        return {"error": (
+            f"Ma '{employee_code}' la {ident['position_code']} (cap quan ly) - ma nay KHONG xuat hien "
+            "tren hoa don nen KHONG co doanh so theo ngay. Day la gioi han du lieu, TUYET DOI KHONG "
+            "duoc hieu la nhan vien nay ban duoc 0 dong. Dung get_employee_kpi (KPI thang) hoac "
+            "get_revenue_tree (doanh so ca doi) cho cap quan ly.")}
     year, month = int(year_month[:4]), int(year_month[5:7])
     month_start = dt.date(year, month, 1)
     month_end = (dt.date(year + 1, 1, 1) if month == 12 else dt.date(year, month + 1, 1)) - dt.timedelta(days=1)
@@ -526,8 +583,27 @@ def _customer_receivable(customer_code: str, channel: str) -> dict:
       - "no_data" : tra duoc, khach KHONG co ban ghi cong no (that su khong no)
       - "error"   : KHONG tra cuu duoc (kem `receivable_warning` de AI canh bao nguoi dung)
     """
+    # 23/07/2026 (R-B): moi cau tra loi ve cong no PHAI kem canh bao nguon. Nguon o day la 2 bang
+    # Supabase receivable_detail/receivable_etc - du lieu Excel nhap 1 lan dau du an, KHONG tu lam
+    # moi, va mang dong doi cong thuc cu (cong thuc do tung thoi no 1 khach len 9,17 ty trong khi
+    # that la 0,61 ty). Repo bao cao D:\DNH da chuyen sang goi thang usp_DeptAccDueDate_GetData - SP
+    # goc cua DNH - nen 2 he thong dang tra 2 so khac nhau.
+    # Bang chung thuc te 23/07/2026: hoi chatbot ve DTH00237 (Benh vien Da khoa Dong Thap, mua 1,53 ty
+    # trong 3 tuan) -> tra "Cong no: chua co du lieu". Mot benh vien tinh mua ngan do gan nhu chac
+    # chan CO cong no; do la bang RONG chu khong phai khach khong no.
+    # Xu ly tam: gan canh bao BAT BUOC vao moi ket qua (ca khi tra duoc so), de AI khong bao gio
+    # khang dinh mot minh. Xu ly goc (port SP): can lam truoc Demo #1 09/08.
+    _warn("CONG NO trong chatbot lay tu bang nhap tay tu dau du an, KHONG tu dong cap nhat va CO THE "
+          "SAI/THIEU. PHAI noi ro dieu nay khi tra loi. Neu khong tim thay du lieu, PHAI noi la "
+          "'chua tra cuu duoc/chua co trong bang du lieu', TUYET DOI KHONG ket luan 'khach khong co "
+          "no'. So cong no chuan hien nam o bao cao dinh ky gui qua email.")
     empty = {"balance_end": None, "total_overdue": None, "overdue_pct": None,
-             "receivable_status": "no_data"}
+             "receivable_status": "no_data",
+             "receivable_warning": (
+                 f"Khong tim thay ban ghi cong no cua khach {customer_code} trong bang du lieu "
+                 "(bang nay nhap tay tu dau du an, khong day du). Day KHONG co nghia la khach khong "
+                 "co no - PHAI tra loi la 'chua tra cuu duoc', va huong nguoi dung sang bao cao cong "
+                 "no dinh ky de co so chuan.")}
     try:
         eng = _get_engine("supabase")
         with eng.connect() as conn:
@@ -627,7 +703,7 @@ def customer_detail(customer_code: str, date_from: str, date_to: str, scope_area
         if city:
             city_name = city[0]["city_name"]; area_code = city[0]["area_code"]
         if emp_code:
-            nv = _q("SELECT name, position_code FROM dim_nhanvien WHERE employee_code=? AND COALESCE(is_duplicate,0)<>1",
+            nv = _q(f"SELECT name, position_code FROM dim_nhanvien WHERE employee_code=? AND {_not_duplicate_sql('')}",
                     (emp_code,))
             if nv:
                 emp_name = nv[0]["name"]; position_code = nv[0]["position_code"]
@@ -819,7 +895,7 @@ def revenue_tree(as_of_date: str = None, area_code: str = None, scope_area_code:
         return {"as_of": None, "tree": []}
 
     tp_sql = ("SELECT employee_code, name, area_code FROM dim_nhanvien WHERE position_code='TP' "
-              "AND end_date IS NULL AND COALESCE(is_resigned,0)<>1 AND COALESCE(is_duplicate,0)<>1")
+              f"AND end_date IS NULL AND COALESCE(is_resigned,0)<>1 AND {_not_duplicate_sql('')}")
     tp_params = ()
     if area_code:
         tp_sql += " AND area_code=?"
@@ -830,7 +906,7 @@ def revenue_tree(as_of_date: str = None, area_code: str = None, scope_area_code:
     for tp in tp_rows:
         tp_kpi = _kpi_snapshot(tp["employee_code"], fdate)
         qlv_sql = ("SELECT employee_code, name FROM dim_nhanvien WHERE position_code='QLV' AND area_code=? "
-                   "AND end_date IS NULL AND COALESCE(is_resigned,0)<>1 AND COALESCE(is_duplicate,0)<>1")
+                   f"AND end_date IS NULL AND COALESCE(is_resigned,0)<>1 AND {_not_duplicate_sql('')}")
         qlv_params = [tp["area_code"]]
         if scope_employee_code:
             qlv_sql += " AND employee_code=?"
@@ -871,12 +947,27 @@ def kpi_ranking(group_by: str = "qlv", as_of_date: str = None, limit: int = 20,
         # lai moi dong theo khach hang) roi moi SUM tiep theo vung - neu SUM(target) truc tiep tren
         # fact_tonghopkhachhang se dem target trung nhieu lan (1 lan/khach hang cua nhan vien do),
         # thoi phong target sai hang chuc lan, lam % KPI vung bi tinh sai (qua thap).
-        sql = """SELECT nv.area_code area_code, SUM(e.sales) sales, SUM(e.target) target
+        # 23/07/2026 (R-D): gop o "TANG LA" = moi TDV + nhung QLV KHONG co TDV nao duoi quyen.
+        # TRUOC DAY chi lay position_code='TDV' -> BO SOT hoan toan QLV tu om khach khong co doi
+        # (vd MBKV12: doanh so 2,01 ty, target 5,28 ty bien mat khoi KPI mien Bac). Nhung cung KHONG
+        # duoc lay ca tang QLV: fact_tonghopkhachhang da rollup san doanh so doi len dong QLV, cong ca
+        # 2 tang la gap doi. Tang la vua khong sot vua khong trung.
+        # Repo bao cao D:\DNH (src/etl.py, cung ngay) da doi sang DUNG cach nay - 2 he thong phai gop
+        # giong nhau, neu khong khach mo song song chatbot va email se thay 2 bo so khac nhau.
+        childless_qlv = [q["employee_code"] for q in _q(
+            "SELECT employee_code FROM dim_nhanvien WHERE position_code='QLV' "
+            f"AND end_date IS NULL AND COALESCE(is_resigned,0)<>1 AND {_not_duplicate_sql('')}")
+            if not oh.team_of_qlv(q["employee_code"])]
+        leaf_clause = "nv.position_code='TDV'"
+        if childless_qlv:
+            leaf_clause = (f"(nv.position_code='TDV' OR nv.employee_code IN "
+                           f"({','.join(['?'] * len(childless_qlv))}))")
+        sql = f"""SELECT nv.area_code area_code, SUM(e.sales) sales, SUM(e.target) target
                   FROM (SELECT employee_code, SUM(amount_ct) sales, MAX(month_sale_target) target
                         FROM fact_tonghopkhachhang WHERE save_date=? GROUP BY employee_code) e
-                  JOIN dim_nhanvien nv ON nv.employee_code=e.employee_code AND COALESCE(nv.is_duplicate,0)<>1
-                  WHERE nv.position_code='TDV'"""
-        params = [fdate]
+                  JOIN dim_nhanvien nv ON nv.employee_code=e.employee_code AND {_not_duplicate_sql('nv')}
+                  WHERE {leaf_clause}"""
+        params = [fdate] + childless_qlv
         if scope_area_code:
             sql += " AND nv.area_code=?"
             params.append(scope_area_code)
@@ -890,7 +981,7 @@ def kpi_ranking(group_by: str = "qlv", as_of_date: str = None, limit: int = 20,
 
     # group_by == "qlv"
     qlv_sql = ("SELECT employee_code, name, area_code FROM dim_nhanvien WHERE position_code='QLV' "
-               "AND end_date IS NULL AND COALESCE(is_resigned,0)<>1 AND COALESCE(is_duplicate,0)<>1")
+               f"AND end_date IS NULL AND COALESCE(is_resigned,0)<>1 AND {_not_duplicate_sql('')}")
     params = []
     if scope_area_code:
         qlv_sql += " AND area_code=?"
@@ -926,7 +1017,24 @@ TEMPLATES = {
 }
 
 
-_EMPLOYEE_SCOPED_TEMPLATES = {"get_revenue_tree", "get_kpi_ranking"}
+# 23/07/2026 - DOI SANG CO CHE "DANH SACH CHO PHEP, FAIL-CLOSED" sau khi phat hien lo hong R-F
+# (xem docstring employee_kpi). TRUOC DAY chi co _EMPLOYEE_SCOPED_TEMPLATES: tool NAO co ten trong do
+# thi duoc ep scope, tool nao KHONG co ten thi... chay tu do. Nghia la MOI tool moi them vao he thong
+# deu MAC DINH HO cho toi khi co ai do nho bo sung ten vao set - va da quen that voi get_employee_kpi.
+#
+# Gio tach lam 2 khai niem:
+#   _PERSON_LEVEL_TEMPLATES = tool tra du lieu HIEU SUAT THEO TUNG NGUOI (nhay cam voi tai khoan qlv)
+#   _EMPLOYEE_SCOPED_TEMPLATES = tool DA nhan duoc tham so scope_employee_code
+# Tool nam trong nhom 1 nhung KHONG nam trong nhom 2 -> CHAN HAN lan goi (khong tra du lieu), thay vi
+# am tham tra du lieu toan vung. Them tool moi ma quen khai bao -> bi chan, khong bi ho.
+_PERSON_LEVEL_TEMPLATES = {"get_revenue_tree", "get_kpi_ranking", "get_employee_kpi",
+                            "get_employee_daily_kpi", "check_order_timing"}
+_EMPLOYEE_SCOPED_TEMPLATES = {"get_revenue_tree", "get_kpi_ranking", "get_employee_kpi",
+                               "get_employee_daily_kpi"}
+# check_order_timing CO Y de ngoai _EMPLOYEE_SCOPED_TEMPLATES: day la bao cao CHONG GIAN LAN neu dich
+# danh nhan su nghi "chay don don KPI" - chua co xac nhan nghiep vu ai duoc phep xem, nen voi tai khoan
+# qlv thi CHAN han (fail-closed) cho toi khi DNH chot. Xem D1 trong docs/Cau_hoi_can_DNH_xac_nhan.md.
+
 _CHANNEL_SCOPED_TEMPLATES = {"get_revenue_by_channel", "get_top_products", "get_top_customers",
                               "compare_periods", "get_customer_detail", "check_order_timing"}
 
@@ -952,8 +1060,18 @@ def call_template(name: str, args: dict, question: str = "", username: str = Non
         call_args = dict(args)
         if scope_area_code:
             call_args["scope_area_code"] = scope_area_code
-        if scope_employee_code and name in _EMPLOYEE_SCOPED_TEMPLATES:
-            call_args["scope_employee_code"] = scope_employee_code
+        if scope_employee_code and name in _PERSON_LEVEL_TEMPLATES:
+            if name in _EMPLOYEE_SCOPED_TEMPLATES:
+                call_args["scope_employee_code"] = scope_employee_code
+            else:
+                # Fail-closed: tool tra du lieu theo tung nguoi nhung chua ho tro gioi han theo doi
+                # -> KHONG chay. Tha tu choi con hon lo hieu suat ca nhan cua doi khac.
+                entry["status"] = "blocked"
+                _write_log(entry)
+                return {"ok": False, "error": (
+                    f"Bao cao '{name}' chua ho tro gioi han theo doi cua rieng ban nen khong the chay "
+                    "voi tai khoan quan ly vung. Hay hoi ve doi cua chinh ban, hoac lien he cap quan ly "
+                    "cao hon (Truong phong/Giam doc vung) neu can pham vi rong hon.")}
         if scope_channel and name in _CHANNEL_SCOPED_TEMPLATES:
             call_args["scope_channel"] = scope_channel
         result = fn(**call_args)

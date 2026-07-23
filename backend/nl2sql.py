@@ -122,8 +122,13 @@ TEMPLATE_TOOLS = [
     },
     {
         "name": "get_employee_daily_kpi",
-        "description": "KPI THEO NGAY cho 1 nhan vien BAN HANG CA NHAN (co ma truc tiep tren hoa don, "
-                        "vd 'tungtx') trong 1 thang. Target 1 ngay = 4% MonthSaleTarget cua nhan vien do "
+        "description": "KPI THEO NGAY cho 1 nhan vien BAN HANG CA NHAN - tuc TRINH DUOC VIEN (TDV), "
+                        "ma co xuat hien truc tiep tren hoa don, vd 'TM25010199'. TUYET DOI KHONG dung "
+                        "cho cap QUAN LY (QLV/TP/PP/TBP, vd 'tungtx', 'MBKV1', 'ASM*'): ma quan ly khong "
+                        "nam tren hoa don nen ket qua se ra 0 dong MOI NGAY - do la THIEU DU LIEU, khong "
+                        "phai ho ban duoc 0 dong. Voi cap quan ly PHAI dung get_employee_kpi (KPI thang) "
+                        "hoac get_revenue_tree (doanh so ca doi). "
+                        "Trong 1 thang. Target 1 ngay = 4% MonthSaleTarget cua nhan vien do "
                         "(4% = 100% cua ngay). Ket qua co san 'days' (danh sach tung ngay T2-T6 trong thang, "
                         "moi ngay co 'status': 🔴 Do <2.5%, 🟡 Vang 2.5%-3.5%, 🟢 Xanh >3.5% - LUON dung "
                         "nguyen status nay, khong tu tinh nguong khac) va dem san count_red/count_yellow/"
@@ -134,7 +139,7 @@ TEMPLATE_TOOLS = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "employee_code": {"type": "string", "description": "Ma nhan vien ban hang ca nhan, vd 'tungtx' (KHONG dung ma khu vuc)"},
+                "employee_code": {"type": "string", "description": "Ma TDV ban hang ca nhan, vd 'TM25010199' (KHONG dung ma quan ly QLV/TP/PP hay ma khu vuc)"},
                 "year_month": {"type": "string", "description": "Thang can xem, dinh dang YYYY-MM"},
             },
             "required": ["employee_code", "year_month"],
