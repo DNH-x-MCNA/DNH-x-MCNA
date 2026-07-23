@@ -98,12 +98,16 @@ TEMPLATE_TOOLS = [
         "name": "get_employee_kpi",
         "description": "KPI nhan vien tinh tu snapshot gan nhat <= as_of_date - LUON tra ve san so luong "
                         "total_employees/count_below_target/count_above_target (khong can lay het danh sach moi biet tong quan). "
-                        "NGUONG DAT KPI KHAC NHAU THEO VAI TRO: TDV 65% (QD 0107/2026), QLV va cac cap "
-                        "quan ly 70% (QD 0429/.25). Moi dong ket qua co san truong 'status' "
-                        "(🟢 Tot = dat nguong cua vai tro do, 🟡 Trung binh = tu 50% den duoi nguong, "
-                        "🔴 Nguy hiem = <50%) VA truong 'threshold' = nguong ap dung cho DUNG dong do - LUON "
-                        "hien thi nguyen gia tri status kem ten/ma NV, va khi noi ro nguong thi lay tu "
-                        "'threshold', KHONG tu tinh nguong mau khac, KHONG ap nguong vai tro nay sang vai tro kia. "
+                        "PHAN BIET 2 MOC: (a) 'DAT CHI TIEU' = >=100% chi tieu thang -> dung "
+                        "'count_full_target'; giua thang con so nay gan nhu luon ~0 va do la DUNG (doanh so "
+                        "luy ke toi hom nay vs chi tieu ca thang). (b) 'DAT MUC HUONG THUONG doanh so' = "
+                        ">= truong 'threshold' cua tung dong (TDV 65% theo QD 0107/2026, QLV va cac cap quan ly "
+                        "70% theo QD 0429/.25) -> dung 'count_above_target'/'count_below_target'. Hoi 'ai chua "
+                        "dat chi tieu' thi tra loi theo moc 100%; hoi 'ai duoc thuong' thi tra loi theo "
+                        "'threshold'; cau hoi mo ho thi dua CA HAI va noi ro tung cai la gi. Truong 'status' "
+                        "(🟢 Tot / 🟡 Trung binh / 🔴 Nguy hiem) chia theo muc HUONG THUONG chu khong theo moc "
+                        "100% - LUON hien thi nguyen status kem ten/ma NV, KHONG tu tinh nguong khac, KHONG ap "
+                        "nguong cua vai tro nay sang vai tro kia. "
                         "UU TIEN dung tool nay cho moi cau hoi ve KPI/doanh so nhan vien/sales. "
                         "Voi cau hoi 'ai chua dat KPI/target' -> dung filter='below_target' (KHONG dung limit lon roi tu loc thu cong, "
                         "gay ton du lieu va co the khong tra loi duoc). "
@@ -117,7 +121,7 @@ TEMPLATE_TOOLS = [
                 "limit": {"type": "integer", "description": "So luong nhan vien can lay trong danh sach ket qua, mac dinh 10"},
                 "order_by": {"type": "string", "enum": ["sales", "pct"], "description": "Chi ap dung khi filter='all': xep hang theo doanh so tuyet doi hay % dat target, mac dinh sales"},
                 "filter": {"type": "string", "enum": ["all", "below_target", "above_target"],
-                           "description": "'all'=top N tot nhat (mac dinh), 'below_target'=CHUA dat KPI (te nhat truoc), 'above_target'=DA dat KPI (tot nhat truoc). Nguong dat lay THEO VAI TRO cua tung nguoi (TDV 65%, quan ly 70%), khong phai 1 con so chung"},
+                           "description": "'all'=top N tot nhat (mac dinh), 'below_target'=CHUA toi muc huong thuong (te nhat truoc), 'above_target'=DA toi muc huong thuong (tot nhat truoc). Muc huong thuong lay THEO VAI TRO cua tung nguoi (TDV 65%, quan ly 70%). LUU Y day KHONG phai moc 'dat chi tieu' (=100%) - muon dem so nguoi dat chi tieu thi doc 'count_full_target' trong ket qua"},
                 "position_code": {"type": "string", "description": "Loc theo vai tro cu the: TDV/QLV/CTV/CS/TP/PP/TBP/TK (khong bat buoc - de trong neu hoi chung tat ca vai tro)"},
             },
             "required": ["as_of_date"],
@@ -390,12 +394,18 @@ QUAN TRONG VE CHON TOOL:
 - Neu nguoi dung dinh nghia 1 thuat ngu nghiep vu moi trong cau hoi (vd "doanh thu rong la doanh thu
   tru chiet khau") -> goi save_business_term de luu lai, roi tiep tuc tra loi cau hoi nhu binh thuong.
 - Voi KPI nhan vien TONG QUAN/xep hang/nhieu nhan vien cung luc (ke ca ma khu vuc nhu MBKV*, ASM*):
-  dung get_employee_kpi. NGUONG DAT KPI KHAC NHAU THEO VAI TRO, khong phai 1 con so chung:
-  TDV 65% (Quyet dinh 0107/2026), con QLV va cac cap quan ly 70% (Quyet dinh 0429/.25 - van hieu luc
-  voi cap quan ly). Ket qua da co san truong "status" (🟢 Tot / 🟡 Trung binh / 🔴 Nguy hiem) VA truong
-  "threshold" = nguong ap dung cho DUNG dong do - LUON dat emoji canh ten/ma NV va dung nguyen
-  "threshold" khi can noi ro nguong, TUYET DOI khong tu nghi ra nguong khac va khong ap nguong cua
-  vai tro nay sang vai tro kia. Vi du dung: "QLV Nguyen Van A dat 67%, chua toi nguong 70%".
+  dung get_employee_kpi. TUYET DOI khong goi moc 65%/70% la "dat chi tieu" - do la moc BAT DAU DUOC
+  HUONG THUONG doanh so, khac han. "Dat chi tieu" nghia la lam duoc >=100% chi tieu thang.
+    - Hoi "ai chua dat chi tieu / bao nhieu nguoi dat chi tieu" -> dung "count_full_target" (moc 100%).
+      Giua thang con so nay gan nhu luon ~0 va DO LA DUNG, khong phai loi: doanh so moi luy ke toi hom
+      nay con chi tieu la ca thang. Noi ro dieu do thay vi de nguoi doc tuong he thong hong.
+    - Hoi "ai duoc thuong / ai toi muc thuong" -> dung "count_above_target"/"count_below_target",
+      nguong lay tu truong "threshold" cua tung dong (TDV 65% theo QD 0107/2026, QLV va cac cap quan ly
+      70% theo QD 0429/.25 - van hieu luc voi cap quan ly).
+    - Cau hoi mo ho -> dua CA HAI con so kem nhan ro rang, dung tu chon 1 cai roi im lang.
+  Truong "status" (🟢 Tot / 🟡 Trung binh / 🔴 Nguy hiem) chia theo muc HUONG THUONG - LUON dat emoji
+  canh ten/ma NV, khong ap nguong cua vai tro nay sang vai tro kia. Vi du dung: "QLV Nguyen Van A dat
+  67% chi tieu - chua toi muc huong thuong 70%, va con cach xa moc dat chi tieu 100%".
 - Voi KPI THEO NGAY cua 1 nhan vien CA NHAN cu the trong 1 thang (vd "hieu suat hang ngay cua tungtx
   thang 7", "ngay nao tungtx do KPI") -> dung get_employee_daily_kpi. Nguong theo NGAY khac hoan toan
   nguong thang: 🔴 Do <2.5%, 🟡 Vang 2.5%-3.5%, 🟢 Xanh >3.5% (target ngay = 4% MonthSaleTarget). Tool

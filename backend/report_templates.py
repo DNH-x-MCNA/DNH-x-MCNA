@@ -288,8 +288,16 @@ def revenue_by_region(date_from: str, date_to: str, scope_area_code: str = None)
 #     TDV -> 65% (bac 65/75/85/95)   |   QLV,CS,TP,PP,TBP,TK -> 70% (bac 70/80/90/100/120)
 # Giong nhau ca 3 mien MB/MT/MN. Con so 80 truoc day la MCNA tu dat, khong co can cu nghiep vu.
 # Repo bao cao D:\DNH (src/etl.py) doi cung ngay, cung gia tri - 2 he thong PHAI giong nhau.
+#
+# ⚠️ 23/07/2026 (chieu) - PHAN BIET 2 KHAI NIEM BI GOP NHAM SUOT TU DAU:
+#   "DAT CHI TIEU"          = lam duoc >= 100% chi tieu thang. Giua thang gan nhu luon ~0 nguoi, vi
+#                             doanh so moi luy ke toi hom nay con chi tieu la CA THANG.
+#   "DAT MUC HUONG THUONG"  = >= nguong bat dau duoc tinh thuong doanh so (TDV 65%, quan ly 70%).
+# Hai cau hoi KHAC NHAU, ra 2 con so khac nhau. Nhan cu "Dat Chi Tieu (>=65%)" tu no da mau thuan:
+# dat chi tieu ma moi lam duoc 65% chi tieu. Tra ve CA HAI, va noi ro dang tra loi cai nao.
 KPI_ACHIEVED_THRESHOLD = 65      # TDV (tang ca nhan - phan lon cau hoi KPI roi vao day)
 KPI_ACHIEVED_THRESHOLD_MGR = 70  # QLV va cac vai tro quan ly/kenh
+KPI_FULL_TARGET = 100            # "dat chi tieu" dung nghia den - khong lien quan nguong thuong
 KPI_WARN_THRESHOLD = 50          # duoi nguong nay coi la "nguy hiem" (do), giua 2 nguong la "trung binh" (vang)
 
 # 23/07/2026 - PORT tu repo bao cao D:\DNH (src/alerts.py::_KNOWN_MISFLAGGED_DUPLICATE_CODES +
@@ -346,14 +354,21 @@ def employee_kpi(as_of_date: str, limit: int = 10, order_by: str = "sales", filt
                   scope_employee_code: str = None) -> dict:
     """KPI nhan vien: snapshot fact_tonghopkhachhang gan nhat <= as_of_date.
     order_by: 'sales' hoac 'pct' (dung khi filter='all', luon xep TOT NHAT truoc).
-    filter: 'all' (top N tot nhat), 'below_target' (CHUA dat KPI, xep TE NHAT truoc),
-            'above_target' (DA dat KPI, xep TOT NHAT truoc).
+    filter: 'all' (top N tot nhat), 'below_target' (CHUA toi muc huong thuong, xep TE NHAT truoc),
+            'above_target' (DA toi muc huong thuong, xep TOT NHAT truoc).
     position_code: loc theo vai tro (vd 'TDV','QLV') - LUON dung tham so nay khi cau hoi chi dinh ro
     vai tro (vd "top TDV"), KHONG tu loc thu cong tu ket qua day du vi de sot/thieu chinh xac.
-    NGUONG DAT KPI KHAC NHAU THEO VAI TRO: TDV 65% (QD 0107/2026), QLV va cac cap quan ly 70%
-    (QD 0429/.25). Moi dong co san "status" (🟢 Tot/🟡 Trung binh/🔴 Nguy hiem) VA "threshold" (nguong
-    ap dung cho chinh dong do) - LUON dung nguyen 2 gia tri nay khi tra loi, khong tu tinh nguong khac.
-    Khi neu con so trong cau tra loi thi noi ro nguong, vd "dat 67% - chua toi nguong 70% cua QLV".
+
+    ⚠️ PHAN BIET 2 MOC, DUNG GOP LAM MOT:
+      - "DAT CHI TIEU" = >=100% chi tieu thang -> dung "count_full_target" (va co "meets_full_target"
+        tren tung dong). Giua thang con so nay gan nhu luon ~0 va DO LA DUNG: doanh so moi luy ke toi
+        hom nay, con chi tieu la ca thang.
+      - "DAT MUC HUONG THUONG doanh so" = >= "threshold" cua tung dong (TDV 65% theo QD 0107/2026,
+        QLV va cac cap quan ly 70% theo QD 0429/.25) -> dung "count_above_target"/"count_below_target".
+    Hoi "ai chua dat chi tieu" thi tra loi theo moc 100%; hoi "ai duoc thuong / ai toi muc thuong"
+    thi tra loi theo "threshold". Neu cau hoi mo ho thi dua CA HAI con so va noi ro tung cai la gi.
+    Moi dong con co "status" (🟢 Tot/🟡 Trung binh/🔴 Nguy hiem) - mau nay chia theo muc HUONG THUONG,
+    khong phai theo moc 100%. LUON dung nguyen cac gia tri nay, khong tu tinh nguong khac.
 
     scope_employee_code: CHI danh cho tai khoan qlv - ep chi tra ve CHINH HO + cac TDV THUOC DOI HO,
     khong thay nhan su cua QLV khac (du lieu hieu suat CA NHAN dong nghiep).
@@ -413,6 +428,8 @@ def employee_kpi(as_of_date: str, limit: int = 10, order_by: str = "sales", filt
         # co the tra ve lan lon TDV (65%) va QLV (70%) khi khong loc position_code.
         r["threshold"] = _kpi_threshold(r["position_code"])
         r["status"] = _kpi_status(r["pct"], r["position_code"])
+        # "Dat chi tieu" dung nghia den (>=100%) - KHAC voi "dat muc huong thuong" (>=threshold).
+        r["meets_full_target"] = r["pct"] >= KPI_FULL_TARGET
     below = [r for r in rows if r["pct"] < r["threshold"]]
     above = [r for r in rows if r["pct"] >= r["threshold"]]
     if filter == "below_target":
@@ -422,8 +439,15 @@ def employee_kpi(as_of_date: str, limit: int = 10, order_by: str = "sales", filt
     else:
         key = "sales" if order_by == "sales" else "pct"
         selected = sorted(rows, key=lambda r: -r[key])[:limit]
-    return {"as_of": fdate, "total_employees": len(rows), "count_below_target": len(below),
-            "count_above_target": len(above), "rows": selected}
+    return {"as_of": fdate, "total_employees": len(rows),
+            # count_below/above_target = so nguoi DUOI/DAT MUC HUONG THUONG doanh so (65% hoac 70%
+            # tuy vai tro). Ten cu giu nguyen de khong pha cac cho dang goi, nhung Y NGHIA la "muc
+            # huong thuong", KHONG phai "dat chi tieu".
+            "count_below_target": len(below), "count_above_target": len(above),
+            # Con day moi la "DAT CHI TIEU" dung nghia den: lam duoc >=100% chi tieu thang.
+            "count_full_target": sum(1 for r in rows if r["meets_full_target"]),
+            "full_target_pct": KPI_FULL_TARGET,
+            "rows": selected}
 
 
 DAILY_KPI_TARGET_PCT = 4.0  # 4% MonthSaleTarget = "100%" cua 1 ngay lam viec (yeu cau nghiep vu)
