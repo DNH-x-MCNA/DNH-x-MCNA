@@ -941,6 +941,13 @@ def get_digest_metrics(start_dt, end_dt, period_label, granularity=None, region=
                 # rộng sang QLV thì tự động chấm ở 70% thay vì âm thầm chấm sai ở 65%.
                 achieved = sum(1 for r in tdv_rows
                                if (r.month_sale_percent or 0) >= kpi_threshold_for(r.position_code))
+                # 23/07/2026 (chiều): tách hẳn 2 khái niệm từng bị gộp làm một. `achieved` ở trên là
+                # số người TỚI MỨC ĐƯỢC HƯỞNG THƯỞNG doanh số (65%/70%) — KHÔNG phải "đạt chỉ tiêu".
+                # Đạt chỉ tiêu đúng nghĩa đen là làm được ≥100% chỉ tiêu tháng. Nhãn cũ
+                # "Đạt Chỉ Tiêu (≥65%)" tự nó đã mâu thuẫn: đạt chỉ tiêu mà mới làm được 65% chỉ tiêu.
+                # Giữa tháng con số 100% gần như luôn ~0 và ĐÓ LÀ ĐÚNG (doanh số lũy kế tới hôm nay
+                # so với chỉ tiêu cả tháng) — đưa ra cả hai để người đọc thấy được bức tranh thật.
+                full_target = sum(1 for r in tdv_rows if (r.month_sale_percent or 0) >= 1.0)
                 total_count = len(tdv_rows)
                 # 21/07/2026: SỬA BUG CỘNG TRÙNG tiền — TDV và QLV là 2 cách CẮT LÁT SONG SONG của
                 # CÙNG 1 khoản doanh thu (QLV.month_sale_amount ĐÃ LÀ rollup của các TDV dưới quyền
@@ -974,6 +981,8 @@ def get_digest_metrics(start_dt, end_dt, period_label, granularity=None, region=
                     # biết vì sao 2 con số lệch. Số khác nhau mà giải thích được thì không phá niềm
                     # tin; số khác nhau mà im lặng thì có.
                     "achieved_threshold_pct": round(KPI_ACHIEVED_THRESHOLD * 100),
+                    # Số người ĐẠT CHỈ TIÊU đúng nghĩa (≥100%) — khác achieved_count ở trên.
+                    "full_target_count": full_target,
                     "team_pct": round(team_pct * 100, 1) if team_pct is not None else None,
                     "total_target": round(total_target, 2), "total_amount": round(total_amount, 2),
                 }
