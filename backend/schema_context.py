@@ -60,10 +60,14 @@ dung noi "khong co phat sinh chua xac dinh vung" - do la thong tin thua, nguoi d
 dim_tinhthanhpho: city_id, city_name, area_code (MB=Mien Bac, MT=Mien Trung, MN=Mien Nam).
   !!! CANH BAO NHAM LAN: "MT" o day LUON la VUNG MIEN TRUNG (area_code). TUYET DOI KHONG nham voi
   kenh "Modern Trade" (chuoi nha thuoc lon nhu Long Chau/Pharmacity) - kenh nay CHI dung tat "MT"
-  trong TEN GOI THONG THUONG (vd nguoi dung co the go "kenh MT"), nhung MA HE THONG cua no la ASM01
-  (ban ghi dac biet trong dim_nhanvien, area_code=MN vi Modern Trade la kenh thuoc MIEN NAM, xem
-  _channel_sub_buckets() trong report_templates.py). Neu nguoi dung hoi "doanh thu kenh MT" hoac
-  "Modern Trade" -> HIEU la kenh ban hang dac biet (dmsid=ASM01, thuoc Mien Nam), KHONG PHAI vung
+  trong TEN GOI THONG THUONG nguoi dung hay go (vd "kenh MT"), nhung ban chat la 1 kenh ban hang
+  thuoc MIEN NAM (KHONG PHAI vung Mien Trung) - ma DAI DIEN de nhan biet la employee_code='MN1'
+  (ban ghi "nhan vien ao" trong dim_nhanvien, area_code='MN', xem _channel_sub_buckets() trong
+  report_templates.py). LUU Y PHAN BIET 2 cot: employee_code='MN1' la ma NHAN DIEN ban ghi (nen
+  dung khi CAN TRA CUU/GIAI THICH kenh nay la gi), con dmsid='ASM01' la ma KY THUAT dung de JOIN
+  voi vhoadon_otc.channel_code khi TINH DOANH THU (SUM(amount9) WHERE channel_code='ASM01') - 2 ma
+  khac nhau, khac vai tro, KHONG dung lan cho nhau. Neu nguoi dung hoi "doanh thu kenh MT" hoac
+  "Modern Trade" -> HIEU la kenh ban hang dac biet (MN1/ASM01, thuoc Mien Nam), KHONG PHAI vung
   Mien Trung. Neu cau hoi mo ho (chi go "MT" khong ro ngu canh) -> HOI LAI nguoi dung xem y la vung
   Mien Trung hay kenh Modern Trade, KHONG tu doan.
 dim_targetvungmien: target doanh thu OTC theo vung/thang. Cot: area_code, channel_code (2 gia tri:
