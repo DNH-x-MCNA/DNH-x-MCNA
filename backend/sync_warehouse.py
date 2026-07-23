@@ -198,18 +198,20 @@ def sync_small_table(bravo_tbl, local_tbl, bravo_cols, local_cols):
 
 
 def sync_fact_tonghopkhachhang(days=90):
-    """Chi dong bo N ngay gan nhat (snapshot SaveDate) - lich su xa hon it gia tri cho KPI hien tai."""
+    """Chi dong bo N ngay gan nhat (snapshot SaveDate) - lich su xa hon it gia tri cho KPI hien tai.
+    23/07/2026: them ManagerCode - cot THAT tu Bravo xac dinh "TDV nay bao cao truc tiep len QLV nao",
+    dung de thay the suy luan qua ma khu vuc (kem chinh xac hon, xem local_warehouse.py::SCHEMA)."""
     start = dt.date.today() - dt.timedelta(days=days)
     _, rows = bravo_query(
-        "SELECT EmployeeCode, CustomerCode, Amount_CT, MonthSaleTarget, SaveDate, IsNC "
+        "SELECT EmployeeCode, CustomerCode, Amount_CT, MonthSaleTarget, SaveDate, IsNC, ManagerCode "
         "FROM dbo.FACT_TongHopKhachHang WHERE SaveDate >= :a", a=str(start),
     )
     conn = get_conn()
     conn.execute("DELETE FROM fact_tonghopkhachhang")
     if rows:
         conn.executemany(
-            "INSERT INTO fact_tonghopkhachhang (employee_code,customer_code,amount_ct,month_sale_target,save_date,is_nc) "
-            "VALUES (?,?,?,?,?,?)", rows,
+            "INSERT INTO fact_tonghopkhachhang (employee_code,customer_code,amount_ct,month_sale_target,save_date,is_nc,manager_code) "
+            "VALUES (?,?,?,?,?,?,?)", rows,
         )
     conn.commit()
     conn.close()

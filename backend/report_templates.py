@@ -357,20 +357,21 @@ def employee_kpi(as_of_date: str, limit: int = 10, order_by: str = "sales", filt
         sql += " AND nv.area_code=?"
         params.append(scope_area_code)
     if scope_employee_code:
-        # Doi cua QLV nay + chinh ho. Dung oh.team_of_qlv() - CUNG mot nguon xac dinh "doi" ma
-        # revenue_tree dang dung (qua zone/manager_area_code), de 2 tool khong tra ve 2 danh sach
-        # doi khac nhau cho cung 1 QLV.
-        team = oh.team_of_qlv(scope_employee_code)
+        # Doi cua QLV nay + chinh ho, tai DUNG snapshot dang xet (fdate) - dung manager_code THAT tu
+        # Bravo (_team_of_qlv), KHONG con suy luan qua zone nua (xem docstring _team_of_qlv - suy luan
+        # zone tung lam 5 QLV bi hieu nham "khong co doi", gay cong trung KPI vung).
+        team = _team_of_qlv(scope_employee_code, fdate)
         if not team:
-            # KHONG tra ve rong am tham: zone->QLV la suy luan gian tiep tu quy uoc dat ten (Bravo
-            # khong co bang lich su nhan su chinh thuc) va ~30% khu vuc khong tra duoc - xem
-            # qlv_change_history(). Tra rong o day se bi doc thanh "doi ban khong co ai", sai hoan
-            # toan va rat kho phat hien. Bao loi ro rang de AI noi dung ban chat: THIEU DU LIEU.
-            return {"error": (
-                f"Khong xac dinh duoc danh sach TDV thuoc doi cua ma quan ly '{scope_employee_code}' "
-                "(he thong suy ra doi qua ma khu vuc, mot so khu vuc chua map duoc). PHAI noi ro voi "
-                "nguoi dung day la HAN CHE DU LIEU, TUYET DOI KHONG ket luan la doi khong co nhan vien "
-                "nao. De nghi lien he MCNA de bo sung anh xa khu vuc cho ma quan ly nay.")}
+            # Khac voi truoc (khi con dung zone, ~30% khong map duoc): gio manager_code la du lieu
+            # THAT tren tung dong hoa don/snapshot, nen "khong co doi" o day PHAN LON la dung that
+            # (vd QLV tu om khach, khong co TDV duoi quyen - vd MBKV12). Van tra loi mem thay vi loi
+            # cung, vi khong loai tru truong hop hiem thieu du lieu dong bo.
+            return {"as_of": fdate, "total_employees": 0, "count_below_target": 0, "count_above_target": 0,
+                    "rows": [], "note": (
+                        f"Khong tim thay TDV nao bao cao truc tiep len ma quan ly '{scope_employee_code}' "
+                        f"tai snapshot {fdate}. Neu ban biet minh CO quan ly TDV, day co the la han che "
+                        "dong bo du lieu - lien he MCNA. Neu ban tu phu trach khach hang truc tiep (khong "
+                        "co doi), day la dung.")}
         allowed = [scope_employee_code] + [t["employee_code"] for t in team]
         sql += f" AND e.employee_code IN ({','.join(['?'] * len(allowed))})"
         params.extend(allowed)
@@ -435,7 +436,9 @@ def employee_daily_kpi(employee_code: str, year_month: str, scope_area_code: str
         if ident["area_code"] != scope_area_code:
             return {"error": f"Ban khong co quyen xem du lieu nhan vien nay - ngoai vung {scope_area_code} ban phu trach."}
     if scope_employee_code:
-        allowed = {scope_employee_code} | {t["employee_code"] for t in oh.team_of_qlv(scope_employee_code)}
+        # Snapshot gan nhat (khong co "as_of_date" rieng o day, chi co year_month cua doanh so can
+        # xem) - cau truc quan ly it doi trong pham vi vai thang nen dung gan nhat la du.
+        allowed = {scope_employee_code} | {t["employee_code"] for t in _team_of_qlv(scope_employee_code)}
         if resolved_code not in allowed:
             return {"error": "Ban chi duoc xem du lieu cua cac nhan vien trong doi minh phu trach."}
     # 23/07/2026 (R-G): CHAN ma cap quan ly thay vi tra "0 dong moi ngay". Ma QLV/TP/PP khong xuat
@@ -847,6 +850,33 @@ def _kpi_snapshot(employee_code: str, fdate: str):
     return {"sales": sales, "target": target, "pct": pct, "status": _kpi_status(pct)}
 
 
+def _fact_latest_date() -> str:
+    r = _q("SELECT MAX(save_date) d FROM fact_tonghopkhachhang")
+    return r[0]["d"] if r and r[0]["d"] else None
+
+
+def _team_of_qlv(qlv_employee_code: str, fdate: str = None) -> list:
+    """TDV bao cao TRUC TIEP len 1 QLV, xac dinh qua manager_code THAT tu Bravo
+    (FACT_TongHopKhachHang.ManagerCode, dong bo 23/07/2026 - xem local_warehouse.py::SCHEMA).
+    THAY THE org_hierarchy.team_of_qlv() (suy luan qua ma khu vuc) cho MOI cho can biet "doi cua 1
+    QLV de gioi han quyen xem/tong hop KPI" - suy luan zone KEM CHINH XAC hon nhieu (~30% khu vuc
+    khong map duoc QLV, xem qlv_change_history()), phat hien qua kiem chung thuc te 23/07/2026: 5 QLV
+    bi hieu nham la "khong co doi" trong khi 4/5 nguoi co that 6-8 TDV, lam KPI vung Mien Trung bi
+    CONG TRUNG doanh so ca doi ho (11,82 ty thay vi 6,79 ty that). manager_code la CUNG mot nguon ma
+    repo bao cao D:\\DNH dang dung (src/alerts.py::get_bravo_kpi_tdv_snapshot) - 2 he thong gio xac
+    dinh "doi" giong het nhau.
+    org_hierarchy.py (zone-based) VAN con dung rieng cho qlv_change_history() - do la lich su AI TUNG
+    phu trach 1 khu vuc theo thoi gian, ban chat khac voi "doi hien tai bao cao len ai"."""
+    if fdate is None:
+        fdate = _fact_latest_date()
+    if not fdate:
+        return []
+    return _q(
+        "SELECT DISTINCT e.employee_code, nv.name FROM fact_tonghopkhachhang e "
+        "LEFT JOIN dim_nhanvien nv ON nv.employee_code=e.employee_code "
+        "WHERE e.manager_code=? AND e.save_date=?", (qlv_employee_code, fdate))
+
+
 def qlv_change_history(area_code: str = None, qlv_search: str = None, scope_area_code: str = None) -> list:
     """Lich su ai tung/dang phu trach tung 'to' (zone noi bo V01-V22) - CHI suy luan duoc tu quy uoc
     dat ten (xem org_hierarchy.py), KHONG phai du lieu audit chinh thuc (Bravo khong co bang lich su
@@ -927,7 +957,7 @@ def revenue_tree(as_of_date: str = None, area_code: str = None, scope_area_code:
         qlv_list = []
         for qlv in qlv_rows:
             q_kpi = _kpi_snapshot(qlv["employee_code"], fdate)
-            team = oh.team_of_qlv(qlv["employee_code"])
+            team = _team_of_qlv(qlv["employee_code"], fdate)
             tdv_list = []
             for t in team:
                 t_kpi = _kpi_snapshot(t["employee_code"], fdate)
@@ -965,10 +995,18 @@ def kpi_ranking(group_by: str = "qlv", as_of_date: str = None, limit: int = 20,
         # 2 tang la gap doi. Tang la vua khong sot vua khong trung.
         # Repo bao cao D:\DNH (src/etl.py, cung ngay) da doi sang DUNG cach nay - 2 he thong phai gop
         # giong nhau, neu khong khach mo song song chatbot va email se thay 2 bo so khac nhau.
+        #
+        # 23/07/2026 SUA LOI: ban dau dung oh.team_of_qlv() (suy luan qua zone) de xac dinh "khong co
+        # doi" - kiem chung thuc te phat hien 5 QLV bi tinh nham la khong co doi (dung ra chi 1),
+        # trong khi 4/5 nguoi co that 6-8 TDV. Hau qua: doanh so+target CA DOI ho bi cong THEM vao
+        # tang la (vi ho lot vao leaf_clause nhu the la QLV don le), CONG TRUNG voi chinh cac TDV cua
+        # ho da nam trong nhanh position_code='TDV' -> KPI Mien Trung phong tu 6,79 len 11,82 ty.
+        # Doi sang _team_of_qlv() (manager_code THAT tu Bravo, DUNG fdate dang xet - khac voi truoc
+        # day khong truyen fdate, mac dinh lay "gan nhat" co the khac snapshot dang gop) sua dut diem.
         childless_qlv = [q["employee_code"] for q in _q(
             "SELECT employee_code FROM dim_nhanvien WHERE position_code='QLV' "
             f"AND end_date IS NULL AND COALESCE(is_resigned,0)<>1 AND {_not_duplicate_sql('')}")
-            if not oh.team_of_qlv(q["employee_code"])]
+            if not _team_of_qlv(q["employee_code"], fdate)]
         leaf_clause = "nv.position_code='TDV'"
         if childless_qlv:
             leaf_clause = (f"(nv.position_code='TDV' OR nv.employee_code IN "
