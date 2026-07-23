@@ -282,8 +282,15 @@ def revenue_by_region(date_from: str, date_to: str, scope_area_code: str = None)
     return result
 
 
-KPI_ACHIEVED_THRESHOLD = 80  # % dat KPI nhan vien tinh la "dat" (theo yeu cau nghiep vu, KHONG phai 100%)
-KPI_WARN_THRESHOLD = 50      # duoi nguong nay coi la "nguy hiem" (do), giua 2 nguong la "trung binh" (vang)
+# 23/07/2026: doi tu 80 sang 65 - lay theo CAU HINH THAT cua DNH trong bang `dbo.DIM_BacThuong`
+# (Bravo), bang ma chinh thu tuc tinh luong `usp_SaleSalary_Calculation_Ver2` doc de quyet dinh ty le
+# thuong. Bac dau tien co Earn1>0 = moc bat dau duoc thuong:
+#     TDV -> 65% (bac 65/75/85/95)   |   QLV,CS,TP,PP,TBP,TK -> 70% (bac 70/80/90/100/120)
+# Giong nhau ca 3 mien MB/MT/MN. Con so 80 truoc day la MCNA tu dat, khong co can cu nghiep vu.
+# Repo bao cao D:\DNH (src/etl.py) doi cung ngay, cung gia tri - 2 he thong PHAI giong nhau.
+KPI_ACHIEVED_THRESHOLD = 65      # TDV (tang ca nhan - phan lon cau hoi KPI roi vao day)
+KPI_ACHIEVED_THRESHOLD_MGR = 70  # QLV va cac vai tro quan ly/kenh
+KPI_WARN_THRESHOLD = 50          # duoi nguong nay coi la "nguy hiem" (do), giua 2 nguong la "trung binh" (vang)
 
 # 23/07/2026 - PORT tu repo bao cao D:\DNH (src/alerts.py::_KNOWN_MISFLAGGED_DUPLICATE_CODES +
 # _is_duplicate_filter_sql). 2 nhan vien THAT, dang lam viec binh thuong, bi Bravo gan nham co
