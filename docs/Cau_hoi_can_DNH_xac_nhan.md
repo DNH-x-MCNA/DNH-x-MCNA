@@ -8,7 +8,7 @@ Hệ thống báo cáo / cảnh báo / chatbot **đã chạy trên dữ liệu t
 
 | Mức | Mục | Vì sao gấp |
 |---|---|---|
-| 🔴 **Chốt trước Demo #1 (09/08)** | A1, A2, A3, A4, A5 | Ảnh hưởng trực tiếp con số hiển thị; sửa sau Demo sẽ phải làm lại số liệu đã trình bày |
+| 🔴 **Chốt trước Demo #1 (09/08)** | A1, A2, A3, A4, A5, **A6** | Ảnh hưởng trực tiếp con số hiển thị; sửa sau Demo sẽ phải làm lại số liệu đã trình bày |
 | 🟠 **Nên chốt trong tháng 8** | B1, B2, B3, D1 | Quyết định ngưỡng cảnh báo — sai ngưỡng gây nhiễu hoặc bỏ sót, nhưng không sai số liệu gốc |
 | 🟡 **Cần DNH sửa dữ liệu gốc** | C1, C2 | MCNA đã vá tạm ở tầng code; cần sửa gốc để không tái diễn |
 | 🟢 **Phối hợp vận hành** | D2, D3, E1, E2, E3 | Không chặn kỹ thuật, nhưng cần để nghiệm thu & vận hành lâu dài |
@@ -78,6 +78,41 @@ Doanh thu ETC tháng 7/2026 là **25,2 tỷ** — lớn hơn OTC (16,2 tỷ), nh
 MCNA đã bổ sung tạm bảng **"Doanh số ETC theo nhân viên"** (chỉ có doanh số + số hóa đơn, **không có % hoàn thành**) — đã kiểm chứng tổng khớp tuyệt đối doanh thu ETC thật (lệch 0 đồng).
 
 **❓ Cần xác nhận**: (1) ETC có giao chỉ tiêu doanh số cho từng nhân viên không? Nếu có thì lưu ở đâu (bảng nào / file nào)? (2) Nếu không có, DNH có muốn theo dõi ETC theo tiêu chí nào khác (theo nhóm hàng, theo bệnh viện/thầu, theo vùng)?
+
+## A6. Thế nào là "đạt chỉ tiêu"? — ngưỡng % và cách tính giữa tháng
+
+**Phát hiện 23/07/2026**, gồm **2 câu hỏi tách bạch** nhưng cùng ảnh hưởng đến một con số mà lãnh đạo hỏi nhiều nhất: *"có bao nhiêu nhân viên đạt chỉ tiêu?"*
+
+### (a) Ngưỡng đạt — bao nhiêu phần trăm thì tính là "đạt"?
+
+**Đã phát hiện và xử lý ngay trong ngày**: báo cáo email và chatbot đang dùng **hai ngưỡng khác nhau** (≥100% và ≥80%) → cùng một dữ liệu ra hai con số khác nhau. Đo trên tháng 6/2026 (đã trọn vẹn): **25/150** ở ngưỡng 100% so với **52/150** ở ngưỡng 80% — chênh **27 người**, đủ để hai báo cáo mâu thuẫn nhau ngay trước mặt lãnh đạo.
+
+**MCNA đã thống nhất tạm về ngưỡng ≥ 80%** cho cả hai hệ thống, và **hiện rõ ngưỡng ngay trên báo cáo** — ô "Đạt Chỉ Tiêu" nay ghi *"(≥80%)"* để người đọc luôn biết con số dựa trên mốc nào.
+
+**❓ Cần xác nhận**: DNH coi bao nhiêu phần trăm chỉ tiêu là "đạt" — 80% có đúng quy ước nội bộ không? *(Nếu DNH có nhiều mức — vd ≥100% là hoàn thành, 80–99% là gần đạt — xin nêu rõ để hệ thống hiển thị đúng từng mức thay vì gộp làm một.)* Ngưỡng đã tách thành một tham số duy nhất, **đổi rất nhanh khi có xác nhận**.
+
+### (b) Đánh giá "đạt chỉ tiêu" **giữa tháng** thì so với cái gì?
+
+Chỉ tiêu (`MonthSaleTarget`) là chỉ tiêu **cả tháng**, còn doanh số là **lũy kế tới thời điểm xem**. Vì vậy càng xem sớm trong tháng thì tỷ lệ "đạt" càng gần **0** — không phản ánh năng lực thật:
+
+| Kỳ | Đạt ≥100% | Đạt ≥80% | TB toàn đội |
+|---|---|---|---|
+| Tháng 4/2026 *(trọn tháng)* | 64/150 | 109/150 | 88,1% |
+| Tháng 5/2026 *(trọn tháng)* | 19/149 | 50/149 | 67,3% |
+| Tháng 6/2026 *(trọn tháng)* | 25/150 | 52/150 | 65,5% |
+| **Tháng 7/2026 *(mới 23/31 ngày)*** | **0/147** | **10/147** | **41,6%** |
+
+*(Cột ≥80% là ngưỡng hệ thống đang dùng sau khi thống nhất ở mục (a); cột ≥100% để đối chiếu.)*
+
+Nghĩa là: nếu ai đó mở báo cáo vào ngày 5 hàng tháng, hệ thống sẽ báo *"0 nhân viên đạt chỉ tiêu"* — **đúng về mặt số học nhưng vô nghĩa về mặt quản trị.**
+
+**❓ Cần xác nhận**: Khi xem **giữa tháng**, DNH muốn đánh giá theo cách nào?
+
+1. **Theo nhịp độ** — so doanh số lũy kế với phần chỉ tiêu tương ứng số ngày đã trôi qua *(vd đến ngày 15/30 thì mốc là 50% chỉ tiêu)*. **MCNA khuyến nghị phương án này** — hiện đã có sẵn cơ chế tương tự trong cảnh báo nhịp KPI theo ngày (mục B2).
+2. **Chỉ đánh giá tháng đã kết thúc**, trong tháng chỉ hiển thị doanh số lũy kế, không hiển thị "% đạt".
+3. Giữ nguyên cách hiện tại *(so với chỉ tiêu cả tháng)* và chấp nhận con số thấp đầu tháng.
+
+*Trong lúc chờ DNH chốt, MCNA sẽ ghi rõ ngưỡng và cách tính ngay trong mỗi báo cáo/câu trả lời — để hai con số khác nhau vẫn **giải thích được**, thay vì im lặng gây nghi ngờ số liệu.*
 
 ---
 
@@ -233,4 +268,4 @@ Con số này **rất nhạy với cách chọn mẫu số** (thử một cách 
 
 ---
 
-*Chuẩn bị bởi: MCNA — khởi tạo 13/07/2026, soạn lại toàn bộ 21/07/2026*
+*Chuẩn bị bởi: MCNA — khởi tạo 13/07/2026, soạn lại toàn bộ 21/07/2026, bổ sung mục A6 ngày 23/07/2026*
