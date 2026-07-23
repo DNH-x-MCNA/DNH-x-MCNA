@@ -25,9 +25,29 @@ STATE_DB_PATH = os.path.join(PROJECT_ROOT, 'data', 'alerts_state.db')
 # nếu sau này cần thể hiện đúng bậc thang thì phải đọc thẳng DIM_BacThuong, không dùng hằng số này.
 # LƯU Ý 2: khi đọc con số giữa tháng, xem docstring get_digest_metrics — chỉ tiêu là CẢ THÁNG còn
 # doanh số là lũy kế tới hiện tại, nên đầu tháng tỷ lệ đạt luôn gần 0 dù ngưỡng nào.
+# 23/07/2026 (chiều): xác nhận thêm bằng VĂN BẢN GỐC, không chỉ suy từ DIM_BacThuong nữa —
+# QĐ 0429-1 (MB) phụ lục 02, QĐ 0429-2 (MN), QĐ 0429-3 (MT), đều có chữ ký, đều chặn dưới 70% cho
+# QLV. TDV thì đã chuyển sang QĐ 0107/2026 (hiệu lực 01/07/2026) nên chặn dưới 65%.
 KPI_ACHIEVED_THRESHOLD_TDV = 0.65   # Trình dược viên
 KPI_ACHIEVED_THRESHOLD_MGR = 0.70   # QLV và các vai trò quản lý/kênh khác
 KPI_ACHIEVED_THRESHOLD = KPI_ACHIEVED_THRESHOLD_TDV  # mặc định: kpi_summary đếm ở tầng TDV
+
+
+def kpi_threshold_for(position_code):
+    """Ngưỡng đạt chỉ tiêu THEO VAI TRÒ (tỷ lệ, không phải %). TDV 0.65, các vai trò khác 0.70.
+
+    Dùng hàm này thay vì gọi thẳng KPI_ACHIEVED_THRESHOLD ở bất kỳ chỗ nào đếm/phân loại "đạt hay
+    chưa". Lý do có hàm: bên chatbot (D:\\DNH-x-MCNA) từng khai báo đủ 2 hằng số nhưng KHÔNG gọi tới
+    hằng số quản lý ở đâu cả, nên mọi vai trò đều bị chấm ở 65% — một QLV đạt 67% được gắn nhãn
+    "đã đạt" trong khi theo QĐ 0429 họ hưởng 0% thưởng danh mục. Phát hiện 23/07/2026. Ở repo này
+    chưa sinh ra số sai (kpi_summary chỉ đếm tdv_rows), nhưng để hằng số nằm chơi là mời gọi đúng
+    lỗi đó lặp lại khi ai đó mở rộng phép đếm sang QLV.
+
+    position_code rỗng/None -> ngưỡng TDV: giữ nguyên hành vi cũ, và không gắn nhãn "chưa đạt" cho
+    người thật chỉ vì thiếu dữ liệu vai trò."""
+    if position_code and str(position_code).strip().upper() != 'TDV':
+        return KPI_ACHIEVED_THRESHOLD_MGR
+    return KPI_ACHIEVED_THRESHOLD_TDV
 
 def get_low_inventory(erp_engine, limit):
     """
@@ -916,7 +936,11 @@ def get_digest_metrics(start_dt, end_dt, period_label, granularity=None, region=
                 # đầu người làm con số vô nghĩa (trước đây len(snap) trộn cả TDV lẫn QLV -> vd
                 # "0/36" = 31 TDV + 5 QLV). Giờ đếm riêng: bao nhiêu TDV đạt ngưỡng chỉ tiêu cá
                 # nhân / tổng TDV có chỉ tiêu — con số quản lý cần để biết mấy nhân viên on-track.
-                achieved = sum(1 for r in tdv_rows if (r.month_sale_percent or 0) >= KPI_ACHIEVED_THRESHOLD)
+                # Ngưỡng lấy theo vai trò của TỪNG dòng (kpi_threshold_for) chứ không dùng hằng số
+                # phẳng: hiện tdv_rows chỉ có TDV nên kết quả y hệt, nhưng nếu sau này phép đếm mở
+                # rộng sang QLV thì tự động chấm ở 70% thay vì âm thầm chấm sai ở 65%.
+                achieved = sum(1 for r in tdv_rows
+                               if (r.month_sale_percent or 0) >= kpi_threshold_for(r.position_code))
                 total_count = len(tdv_rows)
                 # 21/07/2026: SỬA BUG CỘNG TRÙNG tiền — TDV và QLV là 2 cách CẮT LÁT SONG SONG của
                 # CÙNG 1 khoản doanh thu (QLV.month_sale_amount ĐÃ LÀ rollup của các TDV dưới quyền
