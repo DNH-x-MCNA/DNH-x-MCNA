@@ -99,12 +99,22 @@ CREATE INDEX IF NOT EXISTS idx_tk_item ON brv_tonkhodk(item_id);
 CREATE TABLE IF NOT EXISTS brvsx_tralai (doc_date TEXT, amount9 REAL, is_active INTEGER, stt TEXT, customer_code TEXT);
 CREATE INDEX IF NOT EXISTS idx_tralai_docdate ON brvsx_tralai(doc_date);
 
+-- manager_code: 23/07/2026, dung de xac dinh "doi cua 1 QLV" (bao nhieu TDV bao cao truc tiep len
+-- ho) - TRUOC DAY chatbot suy doi qua ma khu vuc (dim_nhanvien.manager_area_code, xem
+-- org_hierarchy.py::team_of_qlv), nhung suy luan do KEM CHINH XAC hon nhieu so voi manager_code that
+-- (~30% khu vuc khong map duoc QLV, xem qlv_change_history() trong repo). Phat hien qua kiem chung
+-- 23/07/2026: dung zone lam 5 QLV bi hieu nham la "khong co doi" (thuc te co 6-8 TDV moi nguoi), lam
+-- KPI vung Mien Trung/Mien Nam bi CONG TRUNG doanh so ca doi ho (MT phong tu 6,79 len 11,82 ty).
+-- manager_code la cot THAT tu Bravo (FACT_TongHopKhachHang.ManagerCode), CUNG mot nguon ma repo bao
+-- cao D:/DNH dang dung (src/alerts.py::get_bravo_kpi_tdv_snapshot) - dung cot nay thi 2 he thong xac
+-- dinh "doi" giong het nhau, khong con lech.
 CREATE TABLE IF NOT EXISTS fact_tonghopkhachhang (
     employee_code TEXT, customer_code TEXT, amount_ct REAL,
-    month_sale_target REAL, save_date TEXT, is_nc INTEGER
+    month_sale_target REAL, save_date TEXT, is_nc INTEGER, manager_code TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_ftk_savedate ON fact_tonghopkhachhang(save_date);
 CREATE INDEX IF NOT EXISTS idx_ftk_employee ON fact_tonghopkhachhang(employee_code);
+CREATE INDEX IF NOT EXISTS idx_ftk_manager ON fact_tonghopkhachhang(manager_code);
 
 CREATE TABLE IF NOT EXISTS sync_meta (
     table_name TEXT PRIMARY KEY,
@@ -134,6 +144,15 @@ def init_schema():
             cols = [r[1] for r in conn.execute("PRAGMA table_info(vhoadon_otc)").fetchall()]
             if "channel_code" not in cols:
                 conn.execute("ALTER TABLE vhoadon_otc ADD COLUMN channel_code TEXT")
+                conn.commit()
+        # 23/07/2026: cung ly do voi channel_code o tren - fact_tonghopkhachhang da ton tai tu truoc
+        # tren may live nen can ALTER truoc khi CREATE INDEX idx_ftk_manager trong SCHEMA.
+        has_ftk = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='fact_tonghopkhachhang'").fetchone()
+        if has_ftk:
+            ftk_cols = [r[1] for r in conn.execute("PRAGMA table_info(fact_tonghopkhachhang)").fetchall()]
+            if "manager_code" not in ftk_cols:
+                conn.execute("ALTER TABLE fact_tonghopkhachhang ADD COLUMN manager_code TEXT")
                 conn.commit()
         conn.executescript(SCHEMA)
         conn.commit()
