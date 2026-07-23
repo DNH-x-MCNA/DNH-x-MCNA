@@ -1,5 +1,12 @@
-# === Giam sat & tu khoi dong lai: Backend + Telegram Bot + Sync Scheduler + Cloudflared ===
+# === Giam sat & tu khoi dong lai: Backend + Sync Scheduler + Cloudflared ===
 # (May chu DNH - ket noi Bravo TRUC TIEP, khong qua VPN)
+# 23/07/2026: BO HAN Telegram Bot khoi bundle nay - kenh chat da chuyen han sang web (dnh-bot.vercel.app),
+# Telegram khong con dung. Day cung la nguon sinh tien trinh mo coi: moi lan supervisor nay tu khoi dong
+# lai (reboot/restart thu cong) se spawn 1 the he telegram_bot.py MOI ma KHONG kill the he cu (bien
+# $botProc chi ton tai trong phien PowerShell hien tai, tien trinh con cu bi "mo coi" khi cha restart) -
+# phat hien thuc te 23/07/2026: 4 tien trinh telegram_bot.py song song, tao ngay 16/07, 20/07, 21/07,
+# 22/07, khong cai nao chet. Xem docs/kich_ban_demo1_chatbot.md (repo D:\DNH) va memory
+# may24_orphan_process_duplication cho boi canh day du ve lop loi nay.
 $BACKEND_DIR = "C:\dnh_chatbot\backend"
 $LOG_DIR = "$BACKEND_DIR\logs"
 $SUPERVISOR_LOG = "$LOG_DIR\supervisor.log"
@@ -19,12 +26,6 @@ function Start-Backend {
         -RedirectStandardOutput "$LOG_DIR\uvicorn.log" -RedirectStandardError "$LOG_DIR\uvicorn.err.log"
 }
 
-function Start-Bot {
-    Start-Process -FilePath "python" -ArgumentList "telegram_bot.py" `
-        -WorkingDirectory $BACKEND_DIR -WindowStyle Hidden -PassThru `
-        -RedirectStandardOutput "$LOG_DIR\telegram_bot.log" -RedirectStandardError "$LOG_DIR\telegram_bot.err.log"
-}
-
 function Start-SyncScheduler {
     Start-Process -FilePath "powershell.exe" `
         -ArgumentList @("-WindowStyle", "Hidden", "-ExecutionPolicy", "Bypass", "-File", "`"$BACKEND_DIR\sync_scheduler.ps1`"") `
@@ -39,9 +40,7 @@ function Start-CloudflaredSupervisor {
 
 Log "=== Supervisor khoi dong ==="
 $backendProc = Start-Backend
-Log "Backend (uvicorn :8000) started, PID=$($backendProc.Id)"
-$botProc = Start-Bot
-Log "Telegram bot started, PID=$($botProc.Id)"
+Log "Backend (uvicorn :8010) started, PID=$($backendProc.Id)"
 $syncProc = Start-SyncScheduler
 Log "Sync scheduler started, PID=$($syncProc.Id)"
 $cfProc = Start-CloudflaredSupervisor
@@ -54,11 +53,6 @@ while ($true) {
         Log "CANH BAO: Backend da thoat (ExitCode=$($backendProc.ExitCode)) -> khoi dong lai"
         $backendProc = Start-Backend
         Log "Backend restarted, PID=$($backendProc.Id)"
-    }
-    if ($botProc.HasExited) {
-        Log "CANH BAO: Telegram bot da thoat (ExitCode=$($botProc.ExitCode)) -> khoi dong lai"
-        $botProc = Start-Bot
-        Log "Telegram bot restarted, PID=$($botProc.Id)"
     }
     if ($syncProc.HasExited) {
         Log "CANH BAO: Sync scheduler da thoat (ExitCode=$($syncProc.ExitCode)) -> khoi dong lai"
