@@ -6,6 +6,29 @@ file này là của 23/07, chỉ dùng để tập dượt và dò lỗi trướ
 
 ---
 
+## ✅ Trạng thái sau ngày 23/07/2026
+
+Đã vá và **deploy lên máy 24 lúc 09:51**, kiểm chứng trực tiếp trên chatbot thật:
+
+| Mã | Vấn đề | Kết quả kiểm chứng |
+|---|---|---|
+| **R-F** | QLV xem được hiệu suất TDV đội khác | ✅ **87 → 10 TDV**, 9 người chưa đạt, khớp từng số thập phân |
+| **R-E** | Cờ trùng lặp ẩn 2 nhân viên thật | ✅ Xếp hạng QLV miền Bắc **9 → 10**, MBKV12 quay lại (2,04 tỷ) |
+| **R-G** | KPI ngày trả "0đ" cho mã QLV | ✅ Báo đúng *"mã không có trên hóa đơn, thiếu dữ liệu, không phải bán được 0đ"* |
+| **R-B** | Công nợ đọc bảng cũ, im lặng | ✅ Trả *"chưa tra cứu được… không thể kết luận khách không có nợ"* |
+| **R-C** | Ngưỡng đạt 100% vs 80% | ✅ Thống nhất 80%, hiện ngưỡng trên email |
+| **R-D** | Tầng gộp KPI vùng khác nhau | ✅ Tầng lá cả 3 nơi, **sửa gốc bằng `ManagerCode` thật** — xem chi tiết bên dưới |
+
+Commit: `acfd828` + `2487806` (repo DNH-x-MCNA) · `7811f76` (repo DNH).
+
+> ⚠️ **BÀI HỌC KIỂM CHỨNG — đọc trước khi test bất kỳ bản vá chatbot nào.**
+> Lần thử đầu sau deploy vẫn ra 87 TDV, tưởng bản vá hỏng. Thực ra chatbot **trả lời lại từ bộ
+> nhớ hội thoại, không gọi tool** — nhật ký `backend/logs/audit_log.jsonl` không có dòng nào.
+> Quy tắc: **phiên chat MỚI + câu hỏi khác chữ + đối chiếu audit log**. Câu trả lời trông đúng mà
+> không có dòng log tương ứng thì **không tính là đã kiểm**.
+
+---
+
 ## 0. Ba rủi ro phải xử lý TRƯỚC ngày demo
 
 ### 🔴 R-A. Câu "ai đạt chỉ tiêu" sẽ ra 0/147 vào ngày demo
@@ -77,15 +100,48 @@ mỗi cách đều có khuyết điểm thật:
   tỷ, trong đó MBKV12 chiếm 5,28 tỷ, **còn 1,75 tỷ chưa giải thích được** (nghi vấn mục A4).
 
 **Đã chọn "tầng lá"** = mọi TDV + những QLV **không có** TDV nào dưới quyền. Không bỏ sót ai, không
-cộng chồng. Áp cho **cả ba nơi**, đã kiểm chứng ra cùng con số:
+cộng chồng. Áp cho **cả ba nơi**, đã kiểm chứng ra cùng con số trên chatbot LIVE:
 
 | Nơi | Trạng thái |
 |---|---|
 | `src/etl.py::get_digest_metrics` (báo cáo) | ✅ toàn đội **44,7%** |
-| `report_templates.py::kpi_ranking` (chatbot) | ✅ đã sửa, chờ deploy |
+| `report_templates.py::kpi_ranking` (chatbot) | ✅ Deploy + kiểm chứng trên chatbot thật |
 | `scripts/demo1_ground_truth.py` (đối chiếu) | ✅ |
 
 > ⚠️ Sửa cách gộp thì phải sửa **đủ cả 3 nơi** — sót một chỗ là lệch lại như cũ.
+
+### Nhật ký sửa gốc R-D (3 vòng, cùng ngày)
+
+Cách gộp "tầng lá" đúng về mặt logic nhưng lần đầu triển khai ở chatbot dùng sai nguồn xác định
+"đội của 1 QLV" — 2 lỗi liên tiếp phát hiện qua kiểm chứng trực tiếp trên máy 24, không phải qua đọc
+code:
+
+1. **Vòng 1 — dùng suy luận zone (`org_hierarchy.team_of_qlv`)**: kho local không đồng bộ
+   `ManagerCode`, nên tạm suy luận đội qua mã khu vực. Suy luận này tự nhận kém chính xác (~30% khu
+   vực không map được). Kết quả: **5 QLV bị coi nhầm là "không có đội"** trong khi 4/5 người thật sự
+   có 6-8 TDV — làm KPI vùng **Miền Trung phồng từ 6,79 lên 11,82 tỷ** (cộng trùng cả đội của QLV đó).
+
+2. **Sửa gốc — đồng bộ `ManagerCode` thật từ Bravo**: thêm cột `manager_code` vào kho local
+   (`fact_tonghopkhachhang`), viết `_team_of_qlv()` dùng đúng cột này — cùng nguồn mà báo cáo D:\DNH
+   đang dùng. MN/MT về đúng ngay; nhưng **MB lại lệch theo hướng khác** (46,2% thay vì 44,8%), và
+   "QLV không có đội" ra **0 người** thay vì đúng 1.
+
+3. **Vòng 2 — thiếu lọc vai trò**: `fact_tonghopkhachhang` đồng bộ **mọi vai trò** (TDV/QLV/CS/TP/PP),
+   không lọc gì, khác hẳn Bravo ground truth (`get_bravo_kpi_tdv_snapshot` chỉ lấy
+   `position_codes=('TDV','QLV')` ngay từ câu SQL). MBKV12 có 2 nhân viên **CS** báo cáo lên (Nguyễn
+   Thị Ngọc Thoa, Nguyễn Văn Giỏi) → bị tính nhầm là "có đội" → bị loại khỏi danh sách cộng thêm.
+   Nhưng 2 người CS đó cũng không được tính là "lá" (chỉ nhận `position_code='TDV'`) → **doanh số
+   2,01 tỷ của MBKV12 biến mất hoàn toàn khỏi KPI vùng** — lỗi mới còn khó phát hiện hơn lỗi cũ, vì
+   lần này là **mất số** chứ không phải **thừa số** (không có con số bất thường nào để nghi ngờ).
+
+4. **Sửa dứt điểm**: thêm `AND position_code='TDV'` vào `_team_of_qlv()`. Kiểm chứng cuối trên
+   chatbot thật (tài khoản `thuy.nguyen2`, hội thoại mới): **10 QLV**, MBKV12 hạng 7 với đúng
+   2,04 tỷ/5,28 tỷ = 38,6%, khớp `<template:get_kpi_ranking>` trong audit log lúc 10:42:34.
+
+**Bài học**: "tầng lá" là quyết định đúng, nhưng **định nghĩa "đội"** phải giống hệt nhau ở mọi nơi
+dùng nó — khác nguồn (zone vs `ManagerCode`) hoặc khác phạm vi lọc (mọi vai trò vs chỉ TDV) đều cho
+ra kết quả sai theo 2 kiểu khác hẳn nhau (thừa số / mất số). Không có cách nào phát hiện 2 lỗi này
+chỉ bằng đọc code — phải đối chiếu số cụ thể với ground truth sau mỗi lần deploy.
 
 ### 🔴 R-E. Bản vá cờ "trùng lặp" chưa được áp cho chatbot *(phát hiện 23/07 — nguyên nhân gốc của R-D)*
 
