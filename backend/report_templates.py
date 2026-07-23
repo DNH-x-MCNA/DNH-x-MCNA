@@ -314,9 +314,27 @@ def _not_duplicate_sql(alias: str = "nv") -> str:
     return f"(COALESCE({p}is_duplicate,0)<>1 OR {p}employee_code IN ({codes}))"
 
 
-def _kpi_status(pct: float) -> str:
-    """Phan loai mau theo % dat KPI: >=80 Tot (xanh), 50-79 Trung binh (vang), <50 Nguy hiem (do)."""
-    if pct >= KPI_ACHIEVED_THRESHOLD:
+# 23/07/2026 - VA LOI "nguong quan ly khai bao nhung khong dung": KPI_ACHIEVED_THRESHOLD_MGR ton tai
+# tu ban va 65% buoi sang nhung KHONG duoc goi o BAT KY dau - moi vai tro deu bi cham o 65%. Hau qua
+# that: 1 QLV dat 67% duoc gan nhan "🟢 Tot"/"da dat", trong khi QD 0429/QD-HDQT.25 (van hieu luc voi
+# cap QLV) quy dinh duoi 70% huong 0% thuong danh muc - tuc la BAO SAI theo huong co loi.
+# Nguon: QD 0429-1 (MB) phu luc 02 bang 01, QD 0429-2 (MN), QD 0429-3 (MT) - deu co chu ky, deu chan
+# duoi o 70%. Rieng TDV da chuyen sang QD 0107/2026 (hieu luc 01/07/2026) nen chan duoi 65%.
+def _kpi_threshold(position_code: str = None) -> int:
+    """Nguong % dat chi tieu de bat dau huong thuong doanh so, THEO VAI TRO.
+    TDV -> 65 (QD 0107/2026). QLV/TP/PP/TBP/TK/CS -> 70 (QD 0429/.25, van hieu luc).
+    position_code=None -> 65: giu nguyen hanh vi cu cho cac dong khong biet vai tro, va vi tuyet dai
+    da so dong trong fact_tonghopkhachhang la TDV. KHONG doan bua sang 70 vi lam vay se bao "chua dat"
+    cho nguoi that ma minh chi khong tra duoc vai tro."""
+    if position_code and position_code.strip().upper() != "TDV":
+        return KPI_ACHIEVED_THRESHOLD_MGR
+    return KPI_ACHIEVED_THRESHOLD
+
+
+def _kpi_status(pct: float, position_code: str = None) -> str:
+    """Phan loai mau theo % dat KPI, nguong dat LAY THEO VAI TRO (_kpi_threshold):
+    >=nguong Tot (xanh), tu KPI_WARN_THRESHOLD den duoi nguong Trung binh (vang), <50 Nguy hiem (do)."""
+    if pct >= _kpi_threshold(position_code):
         return "🟢 Tốt"
     if pct >= KPI_WARN_THRESHOLD:
         return "🟡 Trung bình"
@@ -328,12 +346,14 @@ def employee_kpi(as_of_date: str, limit: int = 10, order_by: str = "sales", filt
                   scope_employee_code: str = None) -> dict:
     """KPI nhan vien: snapshot fact_tonghopkhachhang gan nhat <= as_of_date.
     order_by: 'sales' hoac 'pct' (dung khi filter='all', luon xep TOT NHAT truoc).
-    filter: 'all' (top N tot nhat), 'below_target' (CHUA dat KPI, pct<80, xep TE NHAT truoc),
-            'above_target' (DA dat KPI, pct>=80, xep TOT NHAT truoc).
+    filter: 'all' (top N tot nhat), 'below_target' (CHUA dat KPI, xep TE NHAT truoc),
+            'above_target' (DA dat KPI, xep TOT NHAT truoc).
     position_code: loc theo vai tro (vd 'TDV','QLV') - LUON dung tham so nay khi cau hoi chi dinh ro
     vai tro (vd "top TDV"), KHONG tu loc thu cong tu ket qua day du vi de sot/thieu chinh xac.
-    NGUONG DAT KPI la 80% (khong phai 100%). Moi dong co san "status" (🟢 Tot/🟡 Trung binh/🔴 Nguy hiem)
-    - LUON dung nguyen gia tri nay khi tra loi, khong tu tinh nguong khac.
+    NGUONG DAT KPI KHAC NHAU THEO VAI TRO: TDV 65% (QD 0107/2026), QLV va cac cap quan ly 70%
+    (QD 0429/.25). Moi dong co san "status" (🟢 Tot/🟡 Trung binh/🔴 Nguy hiem) VA "threshold" (nguong
+    ap dung cho chinh dong do) - LUON dung nguyen 2 gia tri nay khi tra loi, khong tu tinh nguong khac.
+    Khi neu con so trong cau tra loi thi noi ro nguong, vd "dat 67% - chua toi nguong 70% cua QLV".
 
     scope_employee_code: CHI danh cho tai khoan qlv - ep chi tra ve CHINH HO + cac TDV THUOC DOI HO,
     khong thay nhan su cua QLV khac (du lieu hieu suat CA NHAN dong nghiep).
@@ -389,9 +409,12 @@ def employee_kpi(as_of_date: str, limit: int = 10, order_by: str = "sales", filt
         r["sales"] = _f(r["sales"]); r["target"] = _f(r["target"])
         r["pct"] = (r["sales"] / r["target"] * 100) if r["target"] else 0.0
         r["new_customers"] = int(r["new_customers"] or 0)
-        r["status"] = _kpi_status(r["pct"])
-    below = [r for r in rows if r["pct"] < KPI_ACHIEVED_THRESHOLD]
-    above = [r for r in rows if r["pct"] >= KPI_ACHIEVED_THRESHOLD]
+        # Nguong theo VAI TRO cua chinh dong do, khong dung 1 nguong phang cho ca bang: 1 truy van
+        # co the tra ve lan lon TDV (65%) va QLV (70%) khi khong loc position_code.
+        r["threshold"] = _kpi_threshold(r["position_code"])
+        r["status"] = _kpi_status(r["pct"], r["position_code"])
+    below = [r for r in rows if r["pct"] < r["threshold"]]
+    above = [r for r in rows if r["pct"] >= r["threshold"]]
     if filter == "below_target":
         selected = sorted(below, key=lambda r: r["pct"])[:limit]
     elif filter == "above_target":
@@ -424,7 +447,8 @@ def employee_daily_kpi(employee_code: str, year_month: str, scope_area_code: str
     T2-T6 (bo qua T7/CN). Rieng "month_pct_of_target" la % TONG thang (thuc te/target*100, cach tinh
     CU khong lien quan 4%/ngay, KHONG co mau/nguong - chi la con so tham khao cuoi thang.
     KHONG dung cho ma khu vuc/quan ly vung (MBKV*, ASM*...) - cac ma nay khong xuat hien tren hoa don,
-    dung get_employee_kpi (snapshot thang, nguong 80%/50%) thay the cho nhom do.
+    dung get_employee_kpi (snapshot thang, nguong theo vai tro: TDV 65% / quan ly 70%, canh bao 50%)
+    thay the cho nhom do.
     scope_area_code: NEU co, chi cho xem KPI cua nhan vien CUNG vung - tra ve loi neu khac vung
     (an toan hon la mac dinh cho phep khi khong xac dinh duoc vung cua nhan vien).
     LUU Y KY THUAT: hoa don (vhoadon_otc/etc.employee_code) ghi theo DMSId cua nhan vien, KHONG PHAI
@@ -846,15 +870,18 @@ def inventory_by_region(area_code: str = None, scope_area_code: str = None) -> l
     return rows
 
 
-def _kpi_snapshot(employee_code: str, fdate: str):
+def _kpi_snapshot(employee_code: str, fdate: str, position_code: str = None):
     """Sales/target/pct cua 1 nhan vien (QLV/TDV deu dung duoc) tai 1 snapshot da biet - fact_tonghopkhachhang
-    da tinh san rollup cho ca cap QLV (Bravo tu tong hop), khong can tu cong tay tu doanh thu TDV."""
+    da tinh san rollup cho ca cap QLV (Bravo tu tong hop), khong can tu cong tay tu doanh thu TDV.
+    position_code: BAT BUOC truyen khi da biet vai tro - nguong dat khac nhau (TDV 65% / quan ly 70%),
+    de trong se cham nham cap quan ly o nguong TDV."""
     r = _q("SELECT SUM(amount_ct) sales, MAX(month_sale_target) target FROM fact_tonghopkhachhang "
            "WHERE employee_code=? AND save_date=?", (employee_code, fdate))
     sales = _f(r[0]["sales"]) if r else 0.0
     target = _f(r[0]["target"]) if r else 0.0
     pct = (sales / target * 100) if target else 0.0
-    return {"sales": sales, "target": target, "pct": pct, "status": _kpi_status(pct)}
+    return {"sales": sales, "target": target, "pct": pct,
+            "threshold": _kpi_threshold(position_code), "status": _kpi_status(pct, position_code)}
 
 
 def _fact_latest_date() -> str:
@@ -961,7 +988,7 @@ def revenue_tree(as_of_date: str = None, area_code: str = None, scope_area_code:
 
     tree = []
     for tp in tp_rows:
-        tp_kpi = _kpi_snapshot(tp["employee_code"], fdate)
+        tp_kpi = _kpi_snapshot(tp["employee_code"], fdate, "TP")
         qlv_sql = ("SELECT employee_code, name FROM dim_nhanvien WHERE position_code='QLV' AND area_code=? "
                    f"AND end_date IS NULL AND COALESCE(is_resigned,0)<>1 AND {_not_duplicate_sql('')}")
         qlv_params = [tp["area_code"]]
@@ -972,11 +999,12 @@ def revenue_tree(as_of_date: str = None, area_code: str = None, scope_area_code:
         qlv_rows = _q(qlv_sql, tuple(qlv_params))
         qlv_list = []
         for qlv in qlv_rows:
-            q_kpi = _kpi_snapshot(qlv["employee_code"], fdate)
+            q_kpi = _kpi_snapshot(qlv["employee_code"], fdate, "QLV")
             team = _team_of_qlv(qlv["employee_code"], fdate)
             tdv_list = []
             for t in team:
-                t_kpi = _kpi_snapshot(t["employee_code"], fdate)
+                # _team_of_qlv da loc san position_code='TDV' nen o day chac chan la TDV (nguong 65%).
+                t_kpi = _kpi_snapshot(t["employee_code"], fdate, "TDV")
                 tdv_list.append({"employee_code": t["employee_code"], "name": t["name"], **t_kpi})
             qlv_list.append({"employee_code": qlv["employee_code"], "name": qlv["name"], **q_kpi,
                               "tdv_count": len(tdv_list), "tdv": tdv_list})
@@ -1041,6 +1069,10 @@ def kpi_ranking(group_by: str = "qlv", as_of_date: str = None, limit: int = 20,
         for r in rows:
             r["sales"] = _f(r["sales"]); r["target"] = _f(r["target"])
             r["pct"] = (r["sales"] / r["target"] * 100) if r["target"] else 0.0
+            # CO Y dung nguong TDV (65%) cho dong TONG HOP theo VUNG: 1 vung khong phai 1 con nguoi
+            # nen khong co nguong chinh sach nao ap cho no. Tang la dang gop o day gan nhu toan bo la
+            # TDV, nen 65% la moc de hieu nhat. Day la quy uoc trinh bay, KHONG phai nguong tra thuong.
+            r["threshold"] = KPI_ACHIEVED_THRESHOLD
             r["status"] = _kpi_status(r["pct"])
         return sorted(rows, key=lambda x: -x["pct"])[:limit]
 
@@ -1057,7 +1089,7 @@ def kpi_ranking(group_by: str = "qlv", as_of_date: str = None, limit: int = 20,
     qlv_rows = _q(qlv_sql, tuple(params))
     result = []
     for qlv in qlv_rows:
-        kpi = _kpi_snapshot(qlv["employee_code"], fdate)
+        kpi = _kpi_snapshot(qlv["employee_code"], fdate, "QLV")
         if kpi["target"] <= 0:
             continue
         result.append({"employee_code": qlv["employee_code"], "name": qlv["name"], "area_code": qlv["area_code"], **kpi})
