@@ -338,9 +338,22 @@ if __name__ == "__main__":
 
     sys.stdout = sys.stderr = _Tee(getattr(sys, "__stdout__", None), _logf)
     print(f"\n===== RUN {dt.datetime.now():%Y-%m-%d %H:%M:%S} =====")
+    # 23/07/2026: PowerShell 5.1 co bug da biet - Process.ExitCode tra ve $null (khong throw, khong
+    # sua duoc bang Refresh()/goi lai WaitForExit()) khi Start-Process dung -PassThru ket hop
+    # -RedirectStandardOutput/-RedirectStandardError, du process da HasExited=True. sync_scheduler.ps1
+    # tung dua vao $proc.ExitCode -eq 0 de biet lan sync co thanh cong khong -> ExitCode luon $null
+    # khien scheduler tuong lan nao cung that bai, khong bao gio cap nhat $lastRunTime, va chay lai
+    # MOI 5 PHUT (chu ky kiem tra) thay vi moi 60 phut (chu ky dong bo that su). Ghi file danh dau ket
+    # qua RIENG (khong phu thuoc PowerShell doc dung exit code hay khong) de scheduler doc thay the.
+    _result_path = os.path.join(_log_dir, "_sync_result.txt")
     try:
         main()
     except Exception:
         import traceback
         print("LOI:", traceback.format_exc())
+        with open(_result_path, "w", encoding="utf-8") as rf:
+            rf.write("FAIL")
         sys.exit(1)
+    else:
+        with open(_result_path, "w", encoding="utf-8") as rf:
+            rf.write("OK")
