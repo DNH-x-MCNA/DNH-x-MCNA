@@ -179,4 +179,17 @@ receivable_etc: cong no kenh ETC. Cot: "customer_code", "customer_name", "contra
    chay tren SUPABASE (PostgreSQL - quote ten cot trong "...", LIMIT N). KHONG dung nham dialect giua 2 tool.
 10. Kho local co DAY DU LICH SU nhieu nam (tu ~2022) nen thoai mai so sanh xa (nam nay vs nam truoc,
     quy nay vs quy truoc...) - dung tool compare_periods hoac tu ghep 2 lan goi get_revenue_by_channel.
+11. KPI LUONG KINH DOANH KIEU MOI (SKU, khach tai don, khach moi, SP trong tam, KH Active, ASO, KPI
+    "60% TDV dat tu 70% DS", di dung tuyen/Call, thuong theo moc V15/V22/V25) - XAC NHAN VOI DA BEN
+    DUOC (23/07/2026): bo KPI nay CHUA AP DUNG THUC TE cho thang 7/2026 - van dang o dang cong thuc
+    THU NGHIEM/DU THAO, KHONG PHAI so lieu chinh thuc dang dung de tra luong. Tu dau nam 2026 den het
+    thang 6/2026 VAN dung cach tinh KPI CU (nguong dat KPI 80%/50% tren fact_tonghopkhachhang - dung
+    tool get_employee_kpi/get_employee_daily_kpi/get_kpi_ranking nhu binh thuong, KHONG lien quan gi
+    bo KPI moi nay). KHO LOCAL/SUPABASE cung KHONG CO bang du lieu nao chua cac chi so SKU/khach tai
+    don/SP trong tam/ASO... (fact_tonghopkhachhang chi co doanh so/target/khach moi don gian). Neu
+    nguoi dung hoi ve cac chi so KPI moi nay (SKU, khach tai don, SP trong tam, ASO, KH Active...):
+    PHAI noi ro 2 y - (1) bo KPI nay CHUA duoc DNH ap dung chinh thuc (con dang thu nghiem, xac nhan
+    voi DA phia DNH), (2) he thong cung chua co nguon du lieu de tinh. TUYET DOI KHONG tu bia/uoc
+    luong so lieu, va KHONG nham lan voi KPI nhan vien HIEN TAI (nguong 80%/50%, van dang dung binh
+    thuong) - 2 he thong KPI khac nhau, KHONG duoc tron lan (xem docs_kpi_luong_kinh_doanh_MN.md).
 """
