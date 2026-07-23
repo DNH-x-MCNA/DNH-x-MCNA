@@ -865,6 +865,15 @@ def _team_of_qlv(qlv_employee_code: str, fdate: str = None) -> list:
     CONG TRUNG doanh so ca doi ho (11,82 ty thay vi 6,79 ty that). manager_code la CUNG mot nguon ma
     repo bao cao D:\\DNH dang dung (src/alerts.py::get_bravo_kpi_tdv_snapshot) - 2 he thong gio xac
     dinh "doi" giong het nhau.
+
+    BAT BUOC loc position_code='TDV' - phat hien 23/07/2026 (cung ngay, vong 2): fact_tonghopkhachhang
+    dong bo TAT CA vai tro (TDV/QLV/CS/TP/PP/...) khong loc gi, khac han Bravo ground truth ben repo
+    bao cao (get_bravo_kpi_tdv_snapshot chi lay position_codes=('TDV','QLV') NGAY TU CAU SQL, CS/TP/PP
+    chua bao gio duoc dua vao snapshot). Neu khong loc o day, 1 QLV co NHAN VIEN CS bao cao len (vd
+    MBKV12 co 2 CS: Nguyen Thi Ngoc Thoa, Nguyen Van Gioi) se bi tinh nham la "co doi" -> bi loai khoi
+    childless_qlv trong kpi_ranking(region), NHUNG ban than 2 nguoi CS do cung KHONG duoc dem la la
+    (leaf_clause chi nhan position_code='TDV') -> ca nhanh doanh so cua QLV do BIEN MAT HOAN TOAN khoi
+    tong vung (con te hon loi cong trung ban dau - lan nay la MAT so, khong phai THUA so).
     org_hierarchy.py (zone-based) VAN con dung rieng cho qlv_change_history() - do la lich su AI TUNG
     phu trach 1 khu vuc theo thoi gian, ban chat khac voi "doi hien tai bao cao len ai"."""
     if fdate is None:
@@ -874,7 +883,7 @@ def _team_of_qlv(qlv_employee_code: str, fdate: str = None) -> list:
     return _q(
         "SELECT DISTINCT e.employee_code, nv.name FROM fact_tonghopkhachhang e "
         "LEFT JOIN dim_nhanvien nv ON nv.employee_code=e.employee_code "
-        "WHERE e.manager_code=? AND e.save_date=?", (qlv_employee_code, fdate))
+        "WHERE e.manager_code=? AND e.save_date=? AND nv.position_code='TDV'", (qlv_employee_code, fdate))
 
 
 def qlv_change_history(area_code: str = None, qlv_search: str = None, scope_area_code: str = None) -> list:
