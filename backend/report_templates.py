@@ -290,11 +290,23 @@ def revenue_by_region(date_from: str, date_to: str, scope_area_code: str = None)
 # Repo bao cao D:\DNH (src/etl.py) doi cung ngay, cung gia tri - 2 he thong PHAI giong nhau.
 #
 # ⚠️ 23/07/2026 (chieu) - PHAN BIET 2 KHAI NIEM BI GOP NHAM SUOT TU DAU:
-#   "DAT CHI TIEU"          = lam duoc >= 100% chi tieu thang. Giua thang gan nhu luon ~0 nguoi, vi
-#                             doanh so moi luy ke toi hom nay con chi tieu la CA THANG.
-#   "DAT MUC HUONG THUONG"  = >= nguong bat dau duoc tinh thuong doanh so (TDV 65%, quan ly 70%).
+#   "DAT CHI TIEU"              = lam duoc >= 100% chi tieu thang. Giua thang gan nhu luon ~0 nguoi,
+#                                 vi doanh so moi luy ke toi hom nay con chi tieu la CA THANG.
+#   "DAT MUC THUONG NHOM HANG"  = >= nguong bat dau duoc tinh THUONG NHOM HANG (TDV 65%, quan ly 70%).
 # Hai cau hoi KHAC NHAU, ra 2 con so khac nhau. Nhan cu "Dat Chi Tieu (>=65%)" tu no da mau thuan:
 # dat chi tieu ma moi lam duoc 65% chi tieu. Tra ve CA HAI, va noi ro dang tra loi cai nao.
+#
+# ⚠️⚠️ VA DUNG GOI 65%/70% LA "NGUONG HUONG THUONG" CHUNG CHUNG. Do CHI la cong cua THUONG NHOM HANG
+# (DS.DM1/DM2/DM3). Trong dbo.DIM_BacThuong con it nhat 5 ho thuong khac, moc khac nhau va TRA THEO
+# CHI SO KHAC NHAU:
+#   V15  - dat 25% doanh so thang vao ngay 15        (moc giua ky, KHONG phai % ca thang)
+#   V22  - 55% doanh so thang + ty le target >=75/80%
+#   V25  - >=70% tinh den ngay 25 (the he QD 0429)
+#   ASO  - theo SO LUONG khach hang hoat dong (MB 40, MT 35, MN 25) - KHONG phai %
+#   QB/YB- thuong quy >=80% quy, thuong nam >=75% nam
+# Chua ke LUONG CO BAN: tu 60% tro len van huong 100% LCB, duoi 60% moi bi cat theo ty le.
+# => Nguoi duoi 65% VAN CO THE duoc V15/ASO va VAN huong du luong co ban. TUYET DOI khong dien dat
+# thanh "khong duoc thuong" / "khong dat KPI" - do la noi sai ve tien luong cua nguoi that.
 KPI_ACHIEVED_THRESHOLD = 65      # TDV (tang ca nhan - phan lon cau hoi KPI roi vao day)
 KPI_ACHIEVED_THRESHOLD_MGR = 70  # QLV va cac vai tro quan ly/kenh
 KPI_FULL_TARGET = 100            # "dat chi tieu" dung nghia den - khong lien quan nguong thuong
@@ -354,8 +366,8 @@ def employee_kpi(as_of_date: str, limit: int = 10, order_by: str = "sales", filt
                   scope_employee_code: str = None) -> dict:
     """KPI nhan vien: snapshot fact_tonghopkhachhang gan nhat <= as_of_date.
     order_by: 'sales' hoac 'pct' (dung khi filter='all', luon xep TOT NHAT truoc).
-    filter: 'all' (top N tot nhat), 'below_target' (CHUA toi muc huong thuong, xep TE NHAT truoc),
-            'above_target' (DA toi muc huong thuong, xep TOT NHAT truoc).
+    filter: 'all' (top N tot nhat), 'below_target' (CHUA toi muc thuong nhom hang, xep TE NHAT truoc),
+            'above_target' (DA toi muc thuong nhom hang, xep TOT NHAT truoc).
     position_code: loc theo vai tro (vd 'TDV','QLV') - LUON dung tham so nay khi cau hoi chi dinh ro
     vai tro (vd "top TDV"), KHONG tu loc thu cong tu ket qua day du vi de sot/thieu chinh xac.
 
@@ -363,12 +375,19 @@ def employee_kpi(as_of_date: str, limit: int = 10, order_by: str = "sales", filt
       - "DAT CHI TIEU" = >=100% chi tieu thang -> dung "count_full_target" (va co "meets_full_target"
         tren tung dong). Giua thang con so nay gan nhu luon ~0 va DO LA DUNG: doanh so moi luy ke toi
         hom nay, con chi tieu la ca thang.
-      - "DAT MUC HUONG THUONG doanh so" = >= "threshold" cua tung dong (TDV 65% theo QD 0107/2026,
+      - "DAT MUC THUONG NHOM HANG" = >= "threshold" cua tung dong (TDV 65% theo QD 0107/2026,
         QLV va cac cap quan ly 70% theo QD 0429/.25) -> dung "count_above_target"/"count_below_target".
-    Hoi "ai chua dat chi tieu" thi tra loi theo moc 100%; hoi "ai duoc thuong / ai toi muc thuong"
-    thi tra loi theo "threshold". Neu cau hoi mo ho thi dua CA HAI con so va noi ro tung cai la gi.
-    Moi dong con co "status" (🟢 Tot/🟡 Trung binh/🔴 Nguy hiem) - mau nay chia theo muc HUONG THUONG,
-    khong phai theo moc 100%. LUON dung nguyen cac gia tri nay, khong tu tinh nguong khac.
+    Hoi "ai chua dat chi tieu" thi tra loi theo moc 100%; hoi "ai toi muc thuong nhom hang" thi tra
+    loi theo "threshold". Neu cau hoi mo ho thi dua CA HAI con so va noi ro tung cai la gi.
+    Moi dong con co "status" (🟢 Tot/🟡 Trung binh/🔴 Nguy hiem) - mau nay chia theo muc THUONG NHOM
+    HANG, khong phai theo moc 100%. LUON dung nguyen cac gia tri nay, khong tu tinh nguong khac.
+
+    ⚠️ 65%/70% CHI la cong cua THUONG NHOM HANG (DM1/DM2/DM3), KHONG phai "nguong huong thuong" noi
+    chung. Con V15 (25% doanh so vao ngay 15), V22, V25, ASO (theo SO LUONG khach hang: MB 40/MT 35/
+    MN 25, khong phai %), thuong quy, thuong nam - moc khac va tra theo chi so khac. Luong co ban tu
+    60% tro len van huong 100%. Nguoi duoi 65% VAN CO THE duoc cac khoan kia va VAN co luong co ban,
+    nen TUYET DOI khong dien dat "khong duoc thuong" / "khong dat KPI" - do la noi sai ve tien luong
+    cua nguoi that. He thong hien CHUA co du lieu de tinh V15/V22/ASO (xem schema_context).
 
     scope_employee_code: CHI danh cho tai khoan qlv - ep chi tra ve CHINH HO + cac TDV THUOC DOI HO,
     khong thay nhan su cua QLV khac (du lieu hieu suat CA NHAN dong nghiep).
