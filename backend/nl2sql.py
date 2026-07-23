@@ -441,12 +441,27 @@ def _dynamic_context_note(question: str = "", session_id: str = "", scope_area_c
         )
     if scope_employee_code:
         parts.append(
-            f'QUAN TRONG THEM - rieng get_revenue_tree/get_kpi_ranking: tai khoan nay CHI xem duoc du '
-            f'lieu hieu suat CA NHAN cua CHINH DOI CUA HO (khong thay ten/so lieu KPI ca nhan cua cac '
-            f'QLV khac trong cung vung, du van cung vung {scope_area_code or ""}) - day la du lieu hieu '
-            f'suat nhay cam cua dong nghiep, khac voi so lieu doanh thu/ton kho tong hop thong thuong. '
+            # 23/07/2026: PHAI noi ro AI dang phuc vu AI - truoc day note nay khong he cho biet ma nhan
+            # vien cua chinh nguoi dung, nen khi ho hoi "doi TOI co ai chua dat chi tieu" thi AI khong
+            # biet "toi" la ai va HOI NGUOC LAI xin ma nhan vien, du he thong DA tu ep loc dung doi ho.
+            # Nguoi dung phai tu khai ma nhan vien cua chinh minh la trai nghiem rat te (va ho thuong
+            # khong nho ma).
+            f'BAN DANG PHUC VU TAI KHOAN CUA QUAN LY VUNG (QLV) CO MA NHAN VIEN "{scope_employee_code}". '
+            f'Khi nguoi dung noi "toi"/"doi toi"/"nhan vien cua toi", ho dang noi ve chinh QLV nay va '
+            f'doi TDV duoi quyen ho. TUYET DOI KHONG hoi nguoc lai xin ma nhan vien cua ho - he thong '
+            f'DA biet va DA tu dong gioi han moi bao cao ve dung doi cua ho o tang code. Cu goi tool '
+            f'binh thuong, ket qua tra ve DA duoc loc san. '
+            # 23/07/2026: truoc day chi liet ke 2 tool; nay moi bao cao hieu suat theo tung nguoi deu bi
+            # gioi han theo doi (xem _PERSON_LEVEL_TEMPLATES trong report_templates.py).
+            f'MOI bao cao hieu suat theo tung nguoi (get_employee_kpi, get_employee_daily_kpi, '
+            f'get_revenue_tree, get_kpi_ranking) deu CHI tra ve du lieu CUA CHINH DOI HO - khong thay '
+            f'ten/so lieu KPI ca nhan cua QLV khac hay TDV doi khac trong cung vung '
+            f'{scope_area_code or ""} - day la du lieu hieu suat nhay cam cua dong nghiep, khac voi so '
+            f'lieu doanh thu/ton kho tong hop thong thuong. '
             f'Neu nguoi dung hoi "so sanh voi QLV khac" hoac "QLV nao tot nhat vung", PHAI TU CHOI ro '
-            f'rang phan so sanh voi nguoi khac, chi dua duoc so lieu cua chinh ho.'
+            f'rang phan so sanh voi nguoi khac, chi dua duoc so lieu cua chinh ho. '
+            f'Mot so bao cao (vd check_order_timing) bi CHAN han voi tai khoan nay - neu tool tra ve loi '
+            f'noi vay thi giai thich lai cho nguoi dung, dung tim cach lach bang tool khac.'
         )
     if scope_channel:
         parts.append(

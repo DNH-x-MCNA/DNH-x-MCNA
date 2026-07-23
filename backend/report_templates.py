@@ -360,7 +360,18 @@ def employee_kpi(as_of_date: str, limit: int = 10, order_by: str = "sales", filt
         # Doi cua QLV nay + chinh ho. Dung oh.team_of_qlv() - CUNG mot nguon xac dinh "doi" ma
         # revenue_tree dang dung (qua zone/manager_area_code), de 2 tool khong tra ve 2 danh sach
         # doi khac nhau cho cung 1 QLV.
-        allowed = [scope_employee_code] + [t["employee_code"] for t in oh.team_of_qlv(scope_employee_code)]
+        team = oh.team_of_qlv(scope_employee_code)
+        if not team:
+            # KHONG tra ve rong am tham: zone->QLV la suy luan gian tiep tu quy uoc dat ten (Bravo
+            # khong co bang lich su nhan su chinh thuc) va ~30% khu vuc khong tra duoc - xem
+            # qlv_change_history(). Tra rong o day se bi doc thanh "doi ban khong co ai", sai hoan
+            # toan va rat kho phat hien. Bao loi ro rang de AI noi dung ban chat: THIEU DU LIEU.
+            return {"error": (
+                f"Khong xac dinh duoc danh sach TDV thuoc doi cua ma quan ly '{scope_employee_code}' "
+                "(he thong suy ra doi qua ma khu vuc, mot so khu vuc chua map duoc). PHAI noi ro voi "
+                "nguoi dung day la HAN CHE DU LIEU, TUYET DOI KHONG ket luan la doi khong co nhan vien "
+                "nao. De nghi lien he MCNA de bo sung anh xa khu vuc cho ma quan ly nay.")}
+        allowed = [scope_employee_code] + [t["employee_code"] for t in team]
         sql += f" AND e.employee_code IN ({','.join(['?'] * len(allowed))})"
         params.extend(allowed)
     sql += """ GROUP BY nv.name, e.employee_code, nv.position_code, cv.description
