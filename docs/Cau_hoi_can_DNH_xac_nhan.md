@@ -83,13 +83,22 @@ MCNA đã bổ sung tạm bảng **"Doanh số ETC theo nhân viên"** (chỉ c�
 
 **Phát hiện 23/07/2026**, gồm **2 câu hỏi tách bạch** nhưng cùng ảnh hưởng đến một con số mà lãnh đạo hỏi nhiều nhất: *"có bao nhiêu nhân viên đạt chỉ tiêu?"*
 
-### (a) Ngưỡng đạt — bao nhiêu phần trăm thì tính là "đạt"?
+### (a) Ngưỡng đạt — ✅ ĐÃ TỰ TÌM ĐƯỢC ĐÁP ÁN, KHÔNG CẦN DNH TRẢ LỜI
 
-**Đã phát hiện và xử lý ngay trong ngày**: báo cáo email và chatbot đang dùng **hai ngưỡng khác nhau** (≥100% và ≥80%) → cùng một dữ liệu ra hai con số khác nhau. Đo trên tháng 6/2026 (đã trọn vẹn): **25/150** ở ngưỡng 100% so với **52/150** ở ngưỡng 80% — chênh **27 người**, đủ để hai báo cáo mâu thuẫn nhau ngay trước mặt lãnh đạo.
+Ban đầu MCNA phát hiện báo cáo email và chatbot dùng **hai ngưỡng khác nhau** (≥100% và ≥80%) — cả hai đều là con số MCNA tự đặt, không có căn cứ nghiệp vụ.
 
-**MCNA đã thống nhất tạm về ngưỡng ≥ 80%** cho cả hai hệ thống, và **hiện rõ ngưỡng ngay trên báo cáo** — ô "Đạt Chỉ Tiêu" nay ghi *"(≥80%)"* để người đọc luôn biết con số dựa trên mốc nào.
+**Đã tìm được ngưỡng chính thức của DNH** trong bảng cấu hình bậc thưởng `DIM_BacThuong` trên Bravo — chính bảng mà thủ tục tính lương `usp_SaleSalary_Calculation_Ver2` đọc để quyết định tỷ lệ thưởng:
 
-**❓ Cần xác nhận**: DNH coi bao nhiêu phần trăm chỉ tiêu là "đạt" — 80% có đúng quy ước nội bộ không? *(Nếu DNH có nhiều mức — vd ≥100% là hoàn thành, 80–99% là gần đạt — xin nêu rõ để hệ thống hiển thị đúng từng mức thay vì gộp làm một.)* Ngưỡng đã tách thành một tham số duy nhất, **đổi rất nhanh khi có xác nhận**.
+| Vai trò | Ngưỡng bắt đầu được thưởng | Các bậc |
+|---|---|---|
+| **Trình dược viên (TDV)** | **65%** | 65 · 75 · 85 · 95% |
+| **QLV, CS, TP, PP, TBP, TK** | **70%** | 70 · 80 · 90 · 100 · 120% |
+
+Giống nhau ở **cả 3 miền** Bắc/Trung/Nam. Hệ thống đã đổi theo đúng cấu hình này (báo cáo tháng 7 tại 23/07: 27/147 TDV đạt, thay vì 10/147 khi dùng ngưỡng 80% cũ).
+
+**Lưu ý về bản chất**: DNH dùng **bậc thang** (càng vượt càng hưởng tỷ lệ cao), không phải ngưỡng đạt/không-đạt nhị phân. Con số "Đạt Chỉ Tiêu N/M" trên báo cáo chỉ là mốc sàn để tóm tắt nhanh.
+
+**❓ Chỉ cần DNH xác nhận lại**: dùng "mốc bắt đầu được thưởng" làm định nghĩa "đạt chỉ tiêu" trong báo cáo quản trị có phù hợp không, hay DNH muốn một mốc khác cho mục đích theo dõi (vd vẫn lấy 100% là "hoàn thành kế hoạch")?
 
 ### (b) Đánh giá "đạt chỉ tiêu" **giữa tháng** thì so với cái gì?
 

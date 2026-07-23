@@ -7,15 +7,27 @@ from src.database import get_db_engines, load_config
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 STATE_DB_PATH = os.path.join(PROJECT_ROOT, 'data', 'alerts_state.db')
 
-# 23/07/2026: ngưỡng % chỉ tiêu tháng để tính 1 TDV là "đạt". TRƯỚC ĐÂY hardcode 1.0 (100%) ngay
-# trong get_digest_metrics, trong khi chatbot (DNH-x-MCNA/backend/report_templates.py::
-# KPI_ACHIEVED_THRESHOLD) dùng 0.80 — CÙNG dữ liệu ra 2 con số khác nhau (đo tháng 6/2026: 25/150
-# ở 100% vs 52/150 ở 80%, chênh 27 người), đủ để 2 báo cáo mâu thuẫn nhau trước mặt lãnh đạo.
-# Đã thống nhất về 0.80 cho khớp chatbot. DNH CHƯA xác nhận đây là ngưỡng nghiệp vụ đúng — đang
-# hỏi ở docs/Cau_hoi_can_DNH_xac_nhan.md mục A6; tách hằng số ra đây để đổi 1 chỗ khi có trả lời.
-# LƯU Ý khi đọc con số này giữa tháng: xem docstring get_digest_metrics — chỉ tiêu là CẢ THÁNG còn
+# Ngưỡng % chỉ tiêu tháng để tính là "đạt" — LẤY THEO ĐÚNG CẤU HÌNH THẬT CỦA DNH.
+#
+# Lịch sử: ban đầu hardcode 1.0 (100%); 23/07/2026 đổi sang 0.80 cho khớp chatbot (chatbot đang dùng
+# 80) — nhưng CẢ HAI đều là con số MCNA tự đặt, không có căn cứ nghiệp vụ.
+#
+# 23/07/2026 (cùng ngày, sau khi đọc mã nguồn SP tính lương): tìm được ngưỡng THẬT trong bảng cấu
+# hình bậc thưởng `dbo.DIM_BacThuong` của Bravo — bảng mà chính `usp_SaleSalary_Calculation_Ver2`
+# (thủ tục DNH dùng tính lương thật) đọc để quyết định tỷ lệ thưởng. Bậc đầu tiên có `Earn1 > 0`
+# chính là mốc "bắt đầu được ghi nhận/được thưởng":
+#     TDV                          -> 65%   (bậc: 65 / 75 / 85 / 95%)
+#     QLV, CS, TP, PP, TBP, TK     -> 70%   (bậc: 70 / 80 / 90 / 100 / 120%)
+# Đã kiểm chứng: giống nhau ở CẢ 3 miền MB/MT/MN (không có ngoại lệ theo vùng).
+#
+# LƯU Ý 1: bản chất DNH dùng BẬC THANG (càng vượt càng hưởng tỷ lệ cao), không phải ngưỡng nhị phân
+# đạt/không đạt. Con số dưới đây chỉ là mốc SÀN để đếm "bao nhiêu người đạt" cho báo cáo tóm tắt —
+# nếu sau này cần thể hiện đúng bậc thang thì phải đọc thẳng DIM_BacThuong, không dùng hằng số này.
+# LƯU Ý 2: khi đọc con số giữa tháng, xem docstring get_digest_metrics — chỉ tiêu là CẢ THÁNG còn
 # doanh số là lũy kế tới hiện tại, nên đầu tháng tỷ lệ đạt luôn gần 0 dù ngưỡng nào.
-KPI_ACHIEVED_THRESHOLD = 0.80
+KPI_ACHIEVED_THRESHOLD_TDV = 0.65   # Trình dược viên
+KPI_ACHIEVED_THRESHOLD_MGR = 0.70   # QLV và các vai trò quản lý/kênh khác
+KPI_ACHIEVED_THRESHOLD = KPI_ACHIEVED_THRESHOLD_TDV  # mặc định: kpi_summary đếm ở tầng TDV
 
 def get_low_inventory(erp_engine, limit):
     """
