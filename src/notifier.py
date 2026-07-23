@@ -785,42 +785,6 @@ def build_digest_email(metrics, period_label="Daily", audience=None, scope_label
         dnh_logo_data_uri=_dnh_logo_data_uri(),
     )
 
-def send_telegram_alert(text):
-    """
-    Gửi tin nhắn cảnh báo qua Telegram Bot API (sử dụng urllib)
-    """
-    token = os.getenv("TELEGRAM_BOT_TOKEN")
-    chat_id = os.getenv("TELEGRAM_CHAT_ID")
-    
-    if not token or not chat_id:
-        print("[WARNING] Telegram credentials are not configured in .env. Skipping Telegram alert.")
-        return False
-        
-    url = f"https://api.telegram.org/bot{token}/sendMessage"
-    payload = {
-        "chat_id": chat_id,
-        "text": text,
-        "parse_mode": "HTML"
-    }
-    
-    try:
-        data = json.dumps(payload).encode('utf-8')
-        req = urllib.request.Request(
-            url, 
-            data=data, 
-            headers={'Content-Type': 'application/json'}
-        )
-        with urllib.request.urlopen(req, timeout=10) as response:
-            res = json.loads(response.read().decode('utf-8'))
-            if res.get("ok"):
-                print("[TELEGRAM] Gui canh bao thanh cong!")
-                return True
-            else:
-                print(f"[TELEGRAM] Loi gui: {res}")
-                return False
-    except Exception as e:
-        print(f"[TELEGRAM] Loi ket noi: {e}")
-        return False
 
 def _severity_to_card_style(severity):
     """Map severity -> Adaptive Card Container style (mau sac)."""
@@ -1325,12 +1289,11 @@ def send_alert_to_all_channels(alert_name, severity, summary, table_headers=None
     """
     Gửi cảnh báo qua các kênh được chỉ định trong `channels` (mặc định: Email, Teams).
     Dùng `channels` để định tuyến theo loại nội dung — vd. alert tức thời/daily digest chỉ đi
-    Teams, báo cáo tuần/tháng chỉ đi Email (xem main.py/src/alerts.py). Kênh Telegram đã ngừng
-    dùng (chuyển hẳn qua web) — code gửi Telegram vẫn còn bên dưới nhưng không còn được gọi tới
-    vì không nơi nào truyền "telegram" vào `channels` nữa.
+    Teams, báo cáo tuần/tháng chỉ đi Email (xem main.py/src/alerts.py). Kênh Telegram đã bỏ hẳn
+    23/07/2026 (chuyển hoàn toàn qua web) — không còn code gửi Telegram trong hàm này.
 
     period/channel/region/issue: các trường có cấu trúc (tùy chọn) chỉ áp dụng cho card Teams —
-    xem _build_teams_adaptive_card. Không đổi định dạng Email/Telegram hiện có.
+    xem _build_teams_adaptive_card. Không đổi định dạng Email hiện có.
 
     require_critical_for_teams (mặc định True, thêm 10/07/2026): chống nhiễu — CHỈ severity
     CRITICAL mới thực sự bắn Teams, WARNING/INFO vẫn được LOG (_log_alert_severity, không đổi)
@@ -1357,41 +1320,7 @@ def send_alert_to_all_channels(alert_name, severity, summary, table_headers=None
         except Exception as e:
             print(f"[ERROR] Loi gui Email: {e}")
 
-    # 2. Gui qua Telegram
-    if "telegram" in channels:
-        try:
-            def escape_html(text):
-                if not isinstance(text, str):
-                    text = str(text)
-                return text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
-
-            # Format text cho Telegram cực đẹp mắt và chuyên nghiệp (Sử dụng tiếng Việt có dấu)
-            emoji = "🔴" if severity == "CRITICAL" else "🟡" if severity == "WARNING" else "ℹ️"
-
-            telegram_text = f"{emoji} <b>{escape_html(alert_name)}</b>\n"
-            telegram_text += f"━━━━━━━━━━━━━━━━━━━━━\n"
-            telegram_text += f"📝 <b>Mô tả:</b> {escape_html(summary)}\n"
-            telegram_text += f"⚠️ <b>Độ nghiêm trọng:</b> <code>{escape_html(severity)}</code>\n"
-            telegram_text += f"📅 <b>Thời gian:</b> <code>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</code>\n"
-            telegram_text += f"━━━━━━━━━━━━━━━━━━━━━\n\n"
-
-            if table_headers and table_rows:
-                telegram_text += "📊 <b>CHI TIẾT DỮ LIỆU CẢNH BÁO:</b>\n"
-                for idx, row in enumerate(table_rows):
-                    telegram_text += f"\n<b>Hồ sơ #{idx+1}:</b>\n"
-                    for col_idx, header in enumerate(table_headers):
-                        telegram_text += f"   • {escape_html(header)}: <b>{escape_html(row[col_idx])}</b>\n"
-                telegram_text += "\n━━━━━━━━━━━━━━━━━━━━━\n\n"
-
-            telegram_text += "🤖 <i>Hệ thống Giám sát DWH Dược Nam Hà (DNH)</i>"
-
-            telegram_sent = _send_with_retry(send_telegram_alert, telegram_text)
-            if telegram_sent:
-                any_sent = True
-        except Exception as e:
-            print(f"[ERROR] Loi gui Telegram: {e}")
-
-    # 3. Gui qua Teams — định tuyến theo audience khớp region/channel của alert (Phần 3 phân
+    # 2. Gui qua Teams — định tuyến theo audience khớp region/channel của alert (Phần 3 phân
     #    quyền). Khi các audience còn trỏ chung 1 webhook mặc định (chưa điền Flow riêng),
     #    _resolve_teams_webhooks tự khử trùng nên hành vi giống hệt "1 webhook chung" trước đây.
     if "teams" in channels and require_critical_for_teams and severity != "CRITICAL":
