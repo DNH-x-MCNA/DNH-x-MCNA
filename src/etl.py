@@ -942,7 +942,12 @@ def get_digest_metrics(start_dt, end_dt, period_label, granularity=None, region=
                 achieved = sum(1 for r in tdv_rows
                                if (r.month_sale_percent or 0) >= kpi_threshold_for(r.position_code))
                 # 23/07/2026 (chiều): tách hẳn 2 khái niệm từng bị gộp làm một. `achieved` ở trên là
-                # số người TỚI MỨC ĐƯỢC HƯỞNG THƯỞNG doanh số (65%/70%) — KHÔNG phải "đạt chỉ tiêu".
+                # số người TỚI MỨC THƯỞNG NHÓM HÀNG (65%/70%) — KHÔNG phải "đạt chỉ tiêu", và cũng
+                # KHÔNG phải "được thưởng" nói chung: 65%/70% chỉ là cổng của thưởng nhóm hàng
+                # (DM1/DM2/DM3). DNH còn V15/V22/V25, ASO (tính theo SỐ LƯỢNG khách hàng chứ không
+                # phải %), thưởng quý, thưởng năm — mốc khác hẳn. Lương cơ bản từ 60% trở lên vẫn
+                # hưởng 100%. Nên người dưới 65% VẪN có thể được các khoản kia và vẫn có đủ lương
+                # cơ bản; đừng để nhãn báo cáo ám chỉ họ không được gì.
                 # Đạt chỉ tiêu đúng nghĩa đen là làm được ≥100% chỉ tiêu tháng. Nhãn cũ
                 # "Đạt Chỉ Tiêu (≥65%)" tự nó đã mâu thuẫn: đạt chỉ tiêu mà mới làm được 65% chỉ tiêu.
                 # Giữa tháng con số 100% gần như luôn ~0 và ĐÓ LÀ ĐÚNG (doanh số lũy kế tới hôm nay
