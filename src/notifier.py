@@ -384,8 +384,9 @@ DIGEST_EMAIL_TEMPLATE = """
                 <![endif]-->
                 <div class="col" style="width: 100%; max-width: 190px; padding: 8px;">
                     <div class="kpi-card success">
-                        <div class="lbl">Đạt Chỉ Tiêu{% if metrics.kpi_summary.achieved_threshold_pct %} (≥{{ metrics.kpi_summary.achieved_threshold_pct }}%){% endif %}</div>
+                        <div class="lbl">Tới Mức Hưởng Thưởng{% if metrics.kpi_summary.achieved_threshold_pct %} (≥{{ metrics.kpi_summary.achieved_threshold_pct }}%){% endif %}</div>
                         <div class="val" style="color: #337337;">{{ metrics.kpi_summary.achieved_count }}/{{ metrics.kpi_summary.total_count }}</div>
+                        {% if metrics.kpi_summary.full_target_count is not none %}<div class="lbl" style="margin-top: 6px; font-weight: 400;">Đạt chỉ tiêu (≥100%): {{ metrics.kpi_summary.full_target_count }}/{{ metrics.kpi_summary.total_count }}</div>{% endif %}
                     </div>
                 </div>
                 <!--[if mso]>
