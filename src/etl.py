@@ -7,6 +7,16 @@ from src.database import get_db_engines, load_config
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 STATE_DB_PATH = os.path.join(PROJECT_ROOT, 'data', 'alerts_state.db')
 
+# 23/07/2026: ngưỡng % chỉ tiêu tháng để tính 1 TDV là "đạt". TRƯỚC ĐÂY hardcode 1.0 (100%) ngay
+# trong get_digest_metrics, trong khi chatbot (DNH-x-MCNA/backend/report_templates.py::
+# KPI_ACHIEVED_THRESHOLD) dùng 0.80 — CÙNG dữ liệu ra 2 con số khác nhau (đo tháng 6/2026: 25/150
+# ở 100% vs 52/150 ở 80%, chênh 27 người), đủ để 2 báo cáo mâu thuẫn nhau trước mặt lãnh đạo.
+# Đã thống nhất về 0.80 cho khớp chatbot. DNH CHƯA xác nhận đây là ngưỡng nghiệp vụ đúng — đang
+# hỏi ở docs/Cau_hoi_can_DNH_xac_nhan.md mục A6; tách hằng số ra đây để đổi 1 chỗ khi có trả lời.
+# LƯU Ý khi đọc con số này giữa tháng: xem docstring get_digest_metrics — chỉ tiêu là CẢ THÁNG còn
+# doanh số là lũy kế tới hiện tại, nên đầu tháng tỷ lệ đạt luôn gần 0 dù ngưỡng nào.
+KPI_ACHIEVED_THRESHOLD = 0.80
+
 def get_low_inventory(erp_engine, limit):
     """
     Trích xuất các sản phẩm có tồn kho thấp dưới ngưỡng limit
@@ -889,28 +899,45 @@ def get_digest_metrics(start_dt, end_dt, period_label, granularity=None, region=
             if snap:
                 qlv_rows = [r for r in snap if r.position_code == 'QLV']
                 tdv_rows = [r for r in snap if r.position_code == 'TDV']
-                qlv_codes = {q.employee_code for q in qlv_rows}
-                orphan_tdv_rows = [t for t in tdv_rows if t.manager_code not in qlv_codes]
                 # 21/07/2026 (mục 2): "Đạt Chỉ Tiêu N/M" ĐẾM Ở TẦNG CÁ NHÂN (TDV) — chỉ tiêu của
                 # QLV là mức rollup CẢ ĐỘI, không phải hạn mức cá nhân, nên gộp QLV vào phép đếm
                 # đầu người làm con số vô nghĩa (trước đây len(snap) trộn cả TDV lẫn QLV -> vd
-                # "0/36" = 31 TDV + 5 QLV). Giờ đếm riêng: bao nhiêu TDV đạt >=100% chỉ tiêu cá
+                # "0/36" = 31 TDV + 5 QLV). Giờ đếm riêng: bao nhiêu TDV đạt ngưỡng chỉ tiêu cá
                 # nhân / tổng TDV có chỉ tiêu — con số quản lý cần để biết mấy nhân viên on-track.
-                achieved = sum(1 for r in tdv_rows if (r.month_sale_percent or 0) >= 1.0)
+                achieved = sum(1 for r in tdv_rows if (r.month_sale_percent or 0) >= KPI_ACHIEVED_THRESHOLD)
                 total_count = len(tdv_rows)
                 # 21/07/2026: SỬA BUG CỘNG TRÙNG tiền — TDV và QLV là 2 cách CẮT LÁT SONG SONG của
                 # CÙNG 1 khoản doanh thu (QLV.month_sale_amount ĐÃ LÀ rollup của các TDV dưới quyền
                 # — verify qua ManagerCode, xem _build_kpi_hierarchy), không phải 2 phần cộng dồn.
                 # Cộng cả 2 -> gấp ~2× thật (phát hiện qua Monthly "Quản lý Miền Nam" 21/07/2026:
-                # "Tổng Doanh Số Đạt" 4,45 tỷ > Doanh Thu OTC thật cả tháng 3,32 tỷ — vô lý). Giờ
-                # CHỈ cộng dòng QLV (đã là tổng đội) + TDV "mồ côi" (không có QLV quản lý trong scope)
-                # để không bỏ sót mà cũng không đếm 2 lần.
-                money_rows = qlv_rows + orphan_tdv_rows
+                # "Tổng Doanh Số Đạt" 4,45 tỷ > Doanh Thu OTC thật cả tháng 3,32 tỷ — vô lý).
+                #
+                # 23/07/2026: đổi từ "tầng QLV + TDV mồ côi" sang "TẦNG LÁ" = mọi TDV + những QLV
+                # KHÔNG có TDV nào dưới quyền. Lý do: chatbot cộng ở tầng TDV còn báo cáo cộng ở tầng
+                # QLV — cùng dữ liệu ra 2 bộ số (MB 45,9% vs 42,1%), sẽ mâu thuẫn ngay tại Demo #1 nếu
+                # khách mở song song 2 thứ. Chọn tầng lá vì:
+                #   - Không bỏ sót ai: QLV tự ôm khách, không có đội (vd MBKV12, doanh số 2,01 tỷ) vẫn
+                #     được tính — cộng ở tầng TDV thuần thì mất hẳn số này.
+                #   - Không cộng chồng chỉ tiêu cấp quản lý: tổng target tầng QLV ở MB là 30,78 tỷ so
+                #     với 23,75 tỷ ở tầng TDV — phần chênh ngoài MBKV12 (~1,75 tỷ) chưa giải thích
+                #     được, nghi chỉ tiêu cấp vùng chồng lên chỉ tiêu cá nhân (đúng nghi vấn mục A4
+                #     trong docs/Cau_hoi_can_DNH_xac_nhan.md, DNH chưa trả lời).
+                # Xác định "có đội hay không" dựa trên raw_snap (CHƯA lọc target>0) — nếu dùng snap đã
+                # lọc thì 1 QLV có đội mà cả đội chưa được giao chỉ tiêu sẽ bị hiểu nhầm là không có
+                # đội, rồi cộng thêm rollup của chính đội đó vào -> lại cộng trùng.
+                managers_with_team = {t.manager_code for t in raw_snap if t.position_code == 'TDV'}
+                childless_qlv_rows = [q for q in qlv_rows if q.employee_code not in managers_with_team]
+                money_rows = tdv_rows + childless_qlv_rows
                 total_target = sum(r.month_sale_target for r in money_rows)
                 total_amount = sum(r.month_sale_amount for r in money_rows)
                 team_pct = (total_amount / total_target) if total_target else None
                 kpi_summary = {
                     "achieved_count": achieved, "total_count": total_count,
+                    # 23/07/2026: đưa ngưỡng ra tận email — 2 hệ thống từng dùng 2 ngưỡng khác nhau
+                    # và không chỗ nào ghi rõ đang dùng ngưỡng nào, nên người đọc không có cách nào
+                    # biết vì sao 2 con số lệch. Số khác nhau mà giải thích được thì không phá niềm
+                    # tin; số khác nhau mà im lặng thì có.
+                    "achieved_threshold_pct": round(KPI_ACHIEVED_THRESHOLD * 100),
                     "team_pct": round(team_pct * 100, 1) if team_pct is not None else None,
                     "total_target": round(total_target, 2), "total_amount": round(total_amount, 2),
                 }
