@@ -98,9 +98,12 @@ TEMPLATE_TOOLS = [
         "name": "get_employee_kpi",
         "description": "KPI nhan vien tinh tu snapshot gan nhat <= as_of_date - LUON tra ve san so luong "
                         "total_employees/count_below_target/count_above_target (khong can lay het danh sach moi biet tong quan). "
-                        "NGUONG DAT KPI LA 80% (khong phai 100%). Moi dong ket qua co san truong 'status' "
-                        "(🟢 Tot = pct>=80, 🟡 Trung binh = 50-79%, 🔴 Nguy hiem = <50%) - LUON hien thi nguyen "
-                        "gia tri status nay kem ten/ma NV trong cau tra loi, KHONG tu tinh nguong mau khac. "
+                        "NGUONG DAT KPI KHAC NHAU THEO VAI TRO: TDV 65% (QD 0107/2026), QLV va cac cap "
+                        "quan ly 70% (QD 0429/.25). Moi dong ket qua co san truong 'status' "
+                        "(🟢 Tot = dat nguong cua vai tro do, 🟡 Trung binh = tu 50% den duoi nguong, "
+                        "🔴 Nguy hiem = <50%) VA truong 'threshold' = nguong ap dung cho DUNG dong do - LUON "
+                        "hien thi nguyen gia tri status kem ten/ma NV, va khi noi ro nguong thi lay tu "
+                        "'threshold', KHONG tu tinh nguong mau khac, KHONG ap nguong vai tro nay sang vai tro kia. "
                         "UU TIEN dung tool nay cho moi cau hoi ve KPI/doanh so nhan vien/sales. "
                         "Voi cau hoi 'ai chua dat KPI/target' -> dung filter='below_target' (KHONG dung limit lon roi tu loc thu cong, "
                         "gay ton du lieu va co the khong tra loi duoc). "
@@ -114,7 +117,7 @@ TEMPLATE_TOOLS = [
                 "limit": {"type": "integer", "description": "So luong nhan vien can lay trong danh sach ket qua, mac dinh 10"},
                 "order_by": {"type": "string", "enum": ["sales", "pct"], "description": "Chi ap dung khi filter='all': xep hang theo doanh so tuyet doi hay % dat target, mac dinh sales"},
                 "filter": {"type": "string", "enum": ["all", "below_target", "above_target"],
-                           "description": "'all'=top N tot nhat (mac dinh), 'below_target'=CHUA dat KPI (pct<80, te nhat truoc), 'above_target'=DA dat KPI (pct>=80, tot nhat truoc)"},
+                           "description": "'all'=top N tot nhat (mac dinh), 'below_target'=CHUA dat KPI (te nhat truoc), 'above_target'=DA dat KPI (tot nhat truoc). Nguong dat lay THEO VAI TRO cua tung nguoi (TDV 65%, quan ly 70%), khong phai 1 con so chung"},
                 "position_code": {"type": "string", "description": "Loc theo vai tro cu the: TDV/QLV/CTV/CS/TP/PP/TBP/TK (khong bat buoc - de trong neu hoi chung tat ca vai tro)"},
             },
             "required": ["as_of_date"],
@@ -387,8 +390,12 @@ QUAN TRONG VE CHON TOOL:
 - Neu nguoi dung dinh nghia 1 thuat ngu nghiep vu moi trong cau hoi (vd "doanh thu rong la doanh thu
   tru chiet khau") -> goi save_business_term de luu lai, roi tiep tuc tra loi cau hoi nhu binh thuong.
 - Voi KPI nhan vien TONG QUAN/xep hang/nhieu nhan vien cung luc (ke ca ma khu vuc nhu MBKV*, ASM*):
-  dung get_employee_kpi, nguong DAT KPI la 80% (khong phai 100%). Ket qua da co san truong "status"
-  (🟢 Tot / 🟡 Trung binh / 🔴 Nguy hiem) - LUON dat emoji nay canh ten/ma NV, khong tu nghi nguong khac.
+  dung get_employee_kpi. NGUONG DAT KPI KHAC NHAU THEO VAI TRO, khong phai 1 con so chung:
+  TDV 65% (Quyet dinh 0107/2026), con QLV va cac cap quan ly 70% (Quyet dinh 0429/.25 - van hieu luc
+  voi cap quan ly). Ket qua da co san truong "status" (🟢 Tot / 🟡 Trung binh / 🔴 Nguy hiem) VA truong
+  "threshold" = nguong ap dung cho DUNG dong do - LUON dat emoji canh ten/ma NV va dung nguyen
+  "threshold" khi can noi ro nguong, TUYET DOI khong tu nghi ra nguong khac va khong ap nguong cua
+  vai tro nay sang vai tro kia. Vi du dung: "QLV Nguyen Van A dat 67%, chua toi nguong 70%".
 - Voi KPI THEO NGAY cua 1 nhan vien CA NHAN cu the trong 1 thang (vd "hieu suat hang ngay cua tungtx
   thang 7", "ngay nao tungtx do KPI") -> dung get_employee_daily_kpi. Nguong theo NGAY khac hoan toan
   nguong thang: 🔴 Do <2.5%, 🟡 Vang 2.5%-3.5%, 🟢 Xanh >3.5% (target ngay = 4% MonthSaleTarget). Tool
