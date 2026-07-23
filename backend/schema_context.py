@@ -94,10 +94,13 @@ fact_tonghopkhachhang: 1 dong = 1 (nhan vien, khach hang, ngay snapshot). Cot: e
   thang, MAX vi lap lai moi dong), save_date (ngay snapshot - dung MAX(save_date) <= ngay can xem de
   lay snapshot gan nhat), is_nc (=1 neu la KH moi trong thang). CHI CO ~90 NGAY GAN NHAT trong kho
   local (lich su xa hon khong dong bo vi it gia tri cho KPI hien tai).
-  PHAN BIET 2 MOC tren amount_ct/month_sale_target: "DAT CHI TIEU" = >=100%. "DAT MUC HUONG THUONG
-  doanh so" = >=65% voi TDV (QD 0107/2026), >=70% voi QLV va cac cap quan ly (QD 0429/.25) - moc nay
-  KHAC NHAU THEO VAI TRO nen khi tu viet SQL phai JOIN dim_nhanvien.position_code moi lay dung. Dung
-  goi moc 65%/70% la "dat chi tieu".
+  PHAN BIET 2 MOC tren amount_ct/month_sale_target: "DAT CHI TIEU" = >=100%. "DAT MUC THUONG NHOM
+  HANG" = >=65% voi TDV (QD 0107/2026), >=70% voi QLV va cac cap quan ly (QD 0429/.25) - moc nay KHAC
+  NHAU THEO VAI TRO nen khi tu viet SQL phai JOIN dim_nhanvien.position_code moi lay dung. Dung goi
+  moc 65%/70% la "dat chi tieu", cung dung goi la "nguong huong thuong" chung chung: do chi la cong
+  cua THUONG NHOM HANG (DM1/DM2/DM3). Cac khoan khac (V15/V22/V25, ASO tinh theo SO LUONG khach hang,
+  thuong quy, thuong nam) co moc rieng va kho local KHONG co du lieu de tinh. Luong co ban tu 60% tro
+  len van huong 100%. => KHONG duoc ket luan nguoi duoi 65% la "khong duoc thuong".
 
 brv_sanpham: code, name, group_code (nhom SP), unit (don vi tinh), id_code (khoa noi bo - dung de
   JOIN voi brv_tonkhodk.item_id, KHAC code la ma san pham dang text).

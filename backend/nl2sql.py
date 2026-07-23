@@ -100,12 +100,18 @@ TEMPLATE_TOOLS = [
                         "total_employees/count_below_target/count_above_target (khong can lay het danh sach moi biet tong quan). "
                         "PHAN BIET 2 MOC: (a) 'DAT CHI TIEU' = >=100% chi tieu thang -> dung "
                         "'count_full_target'; giua thang con so nay gan nhu luon ~0 va do la DUNG (doanh so "
-                        "luy ke toi hom nay vs chi tieu ca thang). (b) 'DAT MUC HUONG THUONG doanh so' = "
+                        "luy ke toi hom nay vs chi tieu ca thang). (b) 'DAT MUC THUONG NHOM HANG' = "
                         ">= truong 'threshold' cua tung dong (TDV 65% theo QD 0107/2026, QLV va cac cap quan ly "
                         "70% theo QD 0429/.25) -> dung 'count_above_target'/'count_below_target'. Hoi 'ai chua "
-                        "dat chi tieu' thi tra loi theo moc 100%; hoi 'ai duoc thuong' thi tra loi theo "
-                        "'threshold'; cau hoi mo ho thi dua CA HAI va noi ro tung cai la gi. Truong 'status' "
-                        "(🟢 Tot / 🟡 Trung binh / 🔴 Nguy hiem) chia theo muc HUONG THUONG chu khong theo moc "
+                        "dat chi tieu' thi tra loi theo moc 100%; hoi 'ai toi muc thuong nhom hang' thi tra loi "
+                        "theo 'threshold'; cau hoi mo ho thi dua CA HAI va noi ro tung cai la gi. "
+                        "⚠️ 65%/70% CHI la cong cua THUONG NHOM HANG (DM1/DM2/DM3), KHONG phai 'nguong huong "
+                        "thuong' noi chung: con V15/V22/V25, ASO (tinh theo SO LUONG khach hang hoat dong - MB 40 "
+                        "/ MT 35 / MN 25, khong phai %), thuong quy, thuong nam - moc khac han va tra theo chi so "
+                        "khac; luong co ban tu 60% tro len van huong 100%. Nguoi duoi 65% VAN CO THE duoc cac "
+                        "khoan kia, nen TUYET DOI khong noi ho 'khong duoc thuong' / 'khong dat KPI'. "
+                        "Truong 'status' "
+                        "(🟢 Tot / 🟡 Trung binh / 🔴 Nguy hiem) chia theo muc THUONG NHOM HANG chu khong theo moc "
                         "100% - LUON hien thi nguyen status kem ten/ma NV, KHONG tu tinh nguong khac, KHONG ap "
                         "nguong cua vai tro nay sang vai tro kia. "
                         "UU TIEN dung tool nay cho moi cau hoi ve KPI/doanh so nhan vien/sales. "
@@ -399,10 +405,19 @@ QUAN TRONG VE CHON TOOL:
     - Hoi "ai chua dat chi tieu / bao nhieu nguoi dat chi tieu" -> dung "count_full_target" (moc 100%).
       Giua thang con so nay gan nhu luon ~0 va DO LA DUNG, khong phai loi: doanh so moi luy ke toi hom
       nay con chi tieu la ca thang. Noi ro dieu do thay vi de nguoi doc tuong he thong hong.
-    - Hoi "ai duoc thuong / ai toi muc thuong" -> dung "count_above_target"/"count_below_target",
-      nguong lay tu truong "threshold" cua tung dong (TDV 65% theo QD 0107/2026, QLV va cac cap quan ly
-      70% theo QD 0429/.25 - van hieu luc voi cap quan ly).
+    - Hoi "ai toi muc thuong nhom hang" -> dung "count_above_target"/"count_below_target", nguong lay
+      tu truong "threshold" cua tung dong (TDV 65% theo QD 0107/2026, QLV va cac cap quan ly 70% theo
+      QD 0429/.25 - van hieu luc voi cap quan ly).
     - Cau hoi mo ho -> dua CA HAI con so kem nhan ro rang, dung tu chon 1 cai roi im lang.
+  ⚠️ 65%/70% CHI la cong cua THUONG NHOM HANG (DM1/DM2/DM3). DNH con it nhat 5 ho thuong khac, moc
+  khac va tra theo CHI SO KHAC: V15 (dat 25% doanh so thang vao ngay 15), V22 (55% + ty le target
+  >=75/80%), V25 (>=70% tinh den ngay 25), ASO (theo SO LUONG khach hang hoat dong: MB 40 / MT 35 /
+  MN 25 - KHONG phai %), thuong quy (>=80% quy), thuong nam (>=75% nam). Luong co ban: tu 60% tro len
+  van huong 100%, duoi 60% moi bi cat ty le. => Nguoi duoi 65% VAN CO THE duoc V15/ASO va VAN huong
+  du luong co ban. TUYET DOI KHONG duoc dien dat thanh "khong duoc thuong", "khong dat KPI", "bi cat
+  thuong" - do la noi SAI ve tien luong cua nguoi that. Chi duoc noi dung pham vi: "chua toi muc
+  thuong nhom hang". He thong hien CHUA co du lieu de tinh V15/V22/ASO nen KHONG duoc suy doan ho co
+  duoc cac khoan do hay khong.
   Truong "status" (🟢 Tot / 🟡 Trung binh / 🔴 Nguy hiem) chia theo muc HUONG THUONG - LUON dat emoji
   canh ten/ma NV, khong ap nguong cua vai tro nay sang vai tro kia. Vi du dung: "QLV Nguyen Van A dat
   67% chi tieu - chua toi muc huong thuong 70%, va con cach xa moc dat chi tieu 100%".
