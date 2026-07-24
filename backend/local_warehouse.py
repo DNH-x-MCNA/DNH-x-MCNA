@@ -99,15 +99,6 @@ CREATE INDEX IF NOT EXISTS idx_tk_item ON brv_tonkhodk(item_id);
 CREATE TABLE IF NOT EXISTS brvsx_tralai (doc_date TEXT, amount9 REAL, is_active INTEGER, stt TEXT, customer_code TEXT);
 CREATE INDEX IF NOT EXISTS idx_tralai_docdate ON brvsx_tralai(doc_date);
 
--- manager_code: 23/07/2026, dung de xac dinh "doi cua 1 QLV" (bao nhieu TDV bao cao truc tiep len
--- ho) - TRUOC DAY chatbot suy doi qua ma khu vuc (dim_nhanvien.manager_area_code, xem
--- org_hierarchy.py::team_of_qlv), nhung suy luan do KEM CHINH XAC hon nhieu so voi manager_code that
--- (~30% khu vuc khong map duoc QLV, xem qlv_change_history() trong repo). Phat hien qua kiem chung
--- 23/07/2026: dung zone lam 5 QLV bi hieu nham la "khong co doi" (thuc te co 6-8 TDV moi nguoi), lam
--- KPI vung Mien Trung/Mien Nam bi CONG TRUNG doanh so ca doi ho (MT phong tu 6,79 len 11,82 ty).
--- manager_code la cot THAT tu Bravo (FACT_TongHopKhachHang.ManagerCode), CUNG mot nguon ma repo bao
--- cao D:/DNH dang dung (src/alerts.py::get_bravo_kpi_tdv_snapshot) - dung cot nay thi 2 he thong xac
--- dinh "doi" giong het nhau, khong con lech.
 CREATE TABLE IF NOT EXISTS fact_tonghopkhachhang (
     employee_code TEXT, customer_code TEXT, amount_ct REAL,
     month_sale_target REAL, save_date TEXT, is_nc INTEGER, manager_code TEXT
@@ -115,6 +106,24 @@ CREATE TABLE IF NOT EXISTS fact_tonghopkhachhang (
 CREATE INDEX IF NOT EXISTS idx_ftk_savedate ON fact_tonghopkhachhang(save_date);
 CREATE INDEX IF NOT EXISTS idx_ftk_employee ON fact_tonghopkhachhang(employee_code);
 CREATE INDEX IF NOT EXISTS idx_ftk_manager ON fact_tonghopkhachhang(manager_code);
+
+-- Du lieu hoa don CU HON 12 THANG duoc NEN ve day (KH x thang, KHONG giu item_code/quantity/unit_price/
+-- created_at/stt tung dong) de giam dung luong luu tru va giam rui ro lo du lieu chi tiet hoa don qua
+-- khu (xem sync_warehouse.py::_compress_old_months()). 12 thang gan nhat van giu nguyen chi tiet trong
+-- vhoadon_otc/vhoadon_etc nhu cu - CHI phan cu hon moi bi nen. Vi vay top_products/check_order_timing
+-- (can item_code/created_at tung dong) KHONG the chay dung cho khoang ngay nam ngoai 12 thang gan nhat.
+CREATE TABLE IF NOT EXISTS monthly_customer_summary (
+    year_month TEXT NOT NULL,   -- 'YYYY-MM'
+    channel TEXT NOT NULL,      -- 'OTC' hoac 'ETC'
+    customer_code TEXT,
+    employee_code TEXT,         -- giu lai de loc theo NV/vung (join qua bang khach hang/nhan vien)
+    revenue REAL,                -- SUM(amount9) trong thang do
+    invoice_count INTEGER        -- COUNT(DISTINCT stt) trong thang do
+);
+CREATE INDEX IF NOT EXISTS idx_mcs_yearmonth ON monthly_customer_summary(year_month);
+CREATE INDEX IF NOT EXISTS idx_mcs_customer ON monthly_customer_summary(customer_code);
+CREATE INDEX IF NOT EXISTS idx_mcs_employee ON monthly_customer_summary(employee_code);
+CREATE INDEX IF NOT EXISTS idx_mcs_channel ON monthly_customer_summary(channel, year_month);
 
 CREATE TABLE IF NOT EXISTS sync_meta (
     table_name TEXT PRIMARY KEY,
@@ -132,28 +141,33 @@ def get_conn() -> sqlite3.Connection:
     return conn
 
 
+# Cot da them vao SCHEMA SAU KHI bang da ton tai tu ban cu hon - CREATE TABLE IF NOT EXISTS khong tu
+# them cot moi vao bang da co san, va SCHEMA co CREATE INDEX tren cac cot nay nen se loi "no such
+# column" neu khong ALTER truoc. Moi lan them cot moi vao 1 bang da ton tai trong SCHEMA, PHAI khai
+# them vao day (chu KHONG duoc quen - da tung gay loi thieu dmsid/start_date/... khi warehouse.db cu
+# chua duoc --full lai sau khi SCHEMA doi).
+_COLUMN_MIGRATIONS = {
+    "vhoadon_otc": [("channel_code", "TEXT")],
+    "dim_nhanvien": [("dmsid", "TEXT"), ("start_date", "TEXT"), ("end_date", "TEXT"),
+                      ("is_resigned", "INTEGER"), ("manager_area_code", "TEXT")],
+    "brv_sanpham": [("id_code", "INTEGER")],
+    "fact_tonghopkhachhang": [("manager_code", "TEXT")],
+}
+
+
 def init_schema():
     conn = get_conn()
     try:
-        # Migration: them cot channel_code TRUOC khi chay SCHEMA - SCHEMA co CREATE INDEX tren cot
-        # nay, se loi "no such column" neu bang vhoadon_otc da ton tai tu truoc (CREATE TABLE IF NOT
-        # EXISTS khong tu them cot moi vao bang da co san) ma chua duoc ALTER truoc.
-        has_table = conn.execute(
-            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='vhoadon_otc'").fetchone()
-        if has_table:
-            cols = [r[1] for r in conn.execute("PRAGMA table_info(vhoadon_otc)").fetchall()]
-            if "channel_code" not in cols:
-                conn.execute("ALTER TABLE vhoadon_otc ADD COLUMN channel_code TEXT")
-                conn.commit()
-        # 23/07/2026: cung ly do voi channel_code o tren - fact_tonghopkhachhang da ton tai tu truoc
-        # tren may live nen can ALTER truoc khi CREATE INDEX idx_ftk_manager trong SCHEMA.
-        has_ftk = conn.execute(
-            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='fact_tonghopkhachhang'").fetchone()
-        if has_ftk:
-            ftk_cols = [r[1] for r in conn.execute("PRAGMA table_info(fact_tonghopkhachhang)").fetchall()]
-            if "manager_code" not in ftk_cols:
-                conn.execute("ALTER TABLE fact_tonghopkhachhang ADD COLUMN manager_code TEXT")
-                conn.commit()
+        for table, new_cols in _COLUMN_MIGRATIONS.items():
+            has_table = conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)).fetchone()
+            if not has_table:
+                continue
+            existing = {r[1] for r in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+            for col_name, col_type in new_cols:
+                if col_name not in existing:
+                    conn.execute(f"ALTER TABLE {table} ADD COLUMN {col_name} {col_type}")
+                    conn.commit()
         conn.executescript(SCHEMA)
         conn.commit()
     finally:

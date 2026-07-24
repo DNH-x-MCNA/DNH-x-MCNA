@@ -18,7 +18,7 @@ import os
 import anthropic
 from schema_context import SCHEMA_CONTEXT
 from query_engine import run_query
-from report_templates import call_template, latest_data_date, sync_freshness_note
+from report_templates import call_template, latest_data_date
 from conversation_memory import load_history, append_message, get_query_state, set_query_state
 from realtime_context import REALTIME_TOOLS, REALTIME_TOOL_NAMES, get_current_datetime, resolve_relative_date
 from glossary_memory import save_glossary_term, retrieve_relevant_glossary
@@ -84,7 +84,16 @@ TEMPLATE_TOOLS = [
                         "(no luon tra ve ca 3 vung) roi CHI trich/hien thi vung duoc hoi trong cau tra loi, "
                         "TUYET DOI KHONG tu viet SQL rieng voi dieu kien area_code=... vi se BO SOT khach "
                         "hang 'mo coi' (khong co ho so trong bang khach hang) ma CHI ham nay moi suy luan "
-                        "dung vung qua tien to ma khach hang.",
+                        "dung vung qua tien to ma khach hang. "
+                        "CANH BAO NHAM LAN QUAN TRONG: 'Kenh MT' (Modern Trade - chuoi nha thuoc lon nhu "
+                        "Long Chau, Pharmacity) LA 1 KENH BAN HANG, HOAN TOAN KHAC voi ma vung 'MT'=Mien "
+                        "Trung (trung chu viet tat ngau nhien). Neu nguoi dung hoi 've doanh thu Kenh MT/"
+                        "Modern Trade/MN1' thi VAN goi tool NAY (KHONG phai get_revenue_by_channel, tool "
+                        "do chi biet OTC/ETC) - dong ket qua cua Mien Nam se co them truong 'channel_"
+                        "breakdown' (danh sach {name, revenue}) chua san doanh thu Kenh MT da tach rieng "
+                        "(SO NAY DA NAM SAN trong 'revenue' cua Mien Nam, KHONG duoc cong them) - lay so "
+                        "tu day de tra loi. TUYET DOI KHONG tra loi 'he thong khong co kenh MT' hay tu "
+                        "dong hieu nham sang doanh thu vung Mien Trung khi nguoi dung noi ro la 'kenh'.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -295,6 +304,26 @@ TEMPLATE_TOOLS = [
             "required": [],
         },
     },
+    {
+        "name": "get_revenue_reconciliation",
+        "description": "Doi chieu doanh thu OTC tinh TU TREN XUONG (tong hoa don toan vung) voi doanh "
+                        "thu CONG DON TU DUOI LEN (TDV -> QLV -> TP, tu KPI ca nhan) - dung khi nguoi "
+                        "dung hoi kieu 'so lieu nay co khop voi KPI nhan vien khong', 'doanh thu tong "
+                        "co dung khong', 'kiem tra chieo doanh thu tu duoi len', hoac nghi ngo so lieu "
+                        "tong the bi lech so voi tong hop tu cap duoi. Ket qua co 'coverage_pct' (cong "
+                        "don duoc bao nhieu % so tong tren xuong) - THAP HON 100% la BINH THUONG (kenh "
+                        "ETC + khach mo coi + cac 'to' chua xac dinh QLV khong the cong don duoc, xem "
+                        "'note' trong ket qua), CHI canh bao that neu co truong 'warning' rieng (dau "
+                        "hieu dem trung TDV).",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "as_of_date": {"type": "string", "description": "YYYY-MM-DD, mac dinh la hom nay (lay snapshot KPI gan nhat truoc/bang ngay nay)"},
+                "area_code": {"type": "string", "description": "Loc theo 1 vung MB/MT/MN (khong bat buoc - bo trong de doi chieu toan cong ty)"},
+            },
+            "required": [],
+        },
+    },
 ]
 
 QUERY_TOOL = {
@@ -378,18 +407,19 @@ hoi "doanh thu thang 6" roi hoi tiep "con thang 5?", hieu la van hoi doanh thu t
 tuong tu nhung doi sang thang 5) - KHONG hoi lai nguoi dung nhung gi da ro tu ngu canh truoc.
 
 QUAN TRONG VE CHON TOOL:
-- Neu cau hoi thuoc 1 trong 14 nhom: doanh thu theo kenh, top san pham, top khach hang, doanh thu
+- Neu cau hoi thuoc 1 trong 15 nhom: doanh thu theo kenh, top san pham, top khach hang, doanh thu
   theo vung mien, KPI/doanh so nhan vien (tong quan/thang), KPI THEO NGAY 1 nhan vien ca nhan, SO SANH
   2 khoang thoi gian, CHI TIET 1 khach hang cu the, TRA CUU ma/ten/vai tro nhan vien, KIEM TRA don hang
   bat thuong/chay don KPI, TON KHO THEO VUNG, LICH SU DOI QLV, CAY DOANH THU/KPI TP-QLV-TDV, XEP HANG
-  KPI -> BAT BUOC dung tool tuong ung (get_revenue_by_channel, get_top_products, get_top_customers,
-  get_revenue_by_region, get_employee_kpi, get_employee_daily_kpi, compare_periods, get_customer_detail,
-  get_employee_directory, check_order_timing, get_inventory_by_region, get_qlv_change_history,
-  get_revenue_tree, get_kpi_ranking).
+  KPI, DOI CHIEU doanh thu tu tren xuong vs cong don tu duoi len -> BAT BUOC dung tool tuong ung
+  (get_revenue_by_channel, get_top_products, get_top_customers, get_revenue_by_region, get_employee_kpi,
+  get_employee_daily_kpi, compare_periods, get_customer_detail, get_employee_directory, check_order_timing,
+  get_inventory_by_region, get_qlv_change_history, get_revenue_tree, get_kpi_ranking,
+  get_revenue_reconciliation).
   Day la cac truy van DA DUOC KIEM CHUNG khop voi du lieu goc, KHONG tu sinh SQL thay the.
 - Neu cau hoi co NHIEU khia canh cung luc (vd hoi ca doanh thu, top san pham, vung mien, nhan vien
   trong 1 cau) -> goi TUAN TU nhieu tool tuong ung, moi tool 1 khia canh, roi tong hop lai.
-- Voi phan cau hoi KHONG thuoc 14 nhom tren: neu la ve CONG NO -> dung query_inventory_receivables
+- Voi phan cau hoi KHONG thuoc 15 nhom tren: neu la ve CONG NO -> dung query_inventory_receivables
   (Supabase). Con lai (hoa don/doanh thu/san pham/khach hang/nhan vien/vung mien dang ad-hoc, tra hang...)
   -> dung query_database (kho local SQLite).
 - Cau hoi CO cum tu thoi gian TUONG DOI (hom nay, tuan nay, thang truoc, quy nay, quy truoc, cung ky
@@ -453,12 +483,6 @@ def _dynamic_context_note(question: str = "", session_id: str = "", scope_area_c
     latest = latest_data_date()
     parts = [f'Ngay co du lieu moi nhat trong kho hien tai: {latest} (dung lam moc cho "hom nay"/'
              f'"gan day" neu nguoi dung khong noi ro ngay; kho local co the tre toi da ~15-30 phut so voi Bravo that).']
-
-    # 20/07/2026: kiem tra RIENG tien trinh sync co con song khong (khac dong tren - chi biet ngay
-    # du lieu, khong bat duoc sync treo/loi khi trung cuoi tuan/le khong co hoa don moi de lo ra).
-    freshness_warning = sync_freshness_note()
-    if freshness_warning:
-        parts.append(freshness_warning)
 
     if scope_area_code:
         parts.append(
@@ -652,8 +676,7 @@ def ask(question: str, session_id: str = "default", username: str = None, scope_
                 payload = tresult["result"] if tresult["ok"] else {"error": tresult["error"]}
                 # 22/07/2026 (diem #5): tool co the kem canh bao tu-doi-chieu (vd tong theo vung lech
                 # tong tho). TRUOC DAY chi lay ["result"] nen canh bao BI ROI MAT truoc khi toi model
-                # -> nguoi dung van nhan so lieu sai ma khong he biet. Chi boc them khi CO canh bao;
-                # truong hop binh thuong giu nguyen hinh dang cu (khong lam nhieu prompt).
+                # -> nguoi dung van nhan so lieu sai ma khong he biet. Chi boc them khi CO canh bao.
                 if tresult.get("canh_bao"):
                     payload = {"du_lieu": payload,
                                "CANH_BAO_BAT_BUOC_NOI_VOI_NGUOI_DUNG": tresult["canh_bao"]}
