@@ -1,4 +1,8 @@
-# KPI lương kinh doanh vùng MN — trạng thái xác nhận công thức
+# KPI lương kinh doanh vùng MN — báo cáo thử nghiệm (xem docs_chinh_sach_thu_nhap_TDV_OTC.md để có công thức CHÍNH THỨC)
+
+**23/07/2026: đã có văn bản chính sách chính thức (3 Quyết định HĐQT, ký 01/07/2026) xác nhận đúng
+hầu hết công thức từng "CHƯA XÁC ĐỊNH" bên dưới — xem `docs_chinh_sach_thu_nhap_TDV_OTC.md` làm
+nguồn chính, file này giữ lại chỉ để tham chiếu lịch sử/đối chiếu dữ liệu mẫu.**
 
 Nguồn: file `Báo cáo KPI lương kinh doanh_MN.csv` (báo cáo 22/07/2026, ngày chốt V25 25/07/2026),
 người dùng cung cấp 23/07/2026.
