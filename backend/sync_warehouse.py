@@ -66,17 +66,34 @@ def month_ranges(start: dt.date, end: dt.date):
         cur = nxt
 
 
+DETAIL_WINDOW_MONTHS = 12  # so thang gan nhat giu CHI TIET tung dong hoa don - xa hon bi NEN
+
+
+def _detail_cutoff_date(today: dt.date = None) -> dt.date:
+    """Ngay dau tien cua thang batdau cua-so 12 thang gan nhat - hoa don TRUOC ngay nay bi nen,
+    TU ngay nay tro di van giu chi tiet nhu cu."""
+    today = today or dt.date.today()
+    y, m = today.year, today.month - DETAIL_WINDOW_MONTHS
+    while m <= 0:
+        m += 12
+        y -= 1
+    return dt.date(y, m, 1)
+
+
 # ==================== BANG HOA DON (lon, co lich su) ====================
-def sync_hoadon_full(table_bravo, table_local, has_city, has_channel=False):
+def sync_hoadon_full(table_bravo, table_local, has_city, has_channel=False, channel_label=""):
     print(f"[{table_local}] Dong bo FULL lich su...")
     cols_sql, rows = bravo_query(f"SELECT MIN(DocDate) mn, MAX(DocDate) mx FROM dbo.{table_bravo}")
     mn, mx = rows[0]
     mn = dt.datetime.strptime(mn, "%Y-%m-%d").date() if isinstance(mn, str) else mn
     mx = dt.datetime.strptime(mx, "%Y-%m-%d").date() if isinstance(mx, str) else mx
+    cutoff = _detail_cutoff_date()
     conn = get_conn()
     conn.execute(f"DELETE FROM {table_local}")
+    conn.execute("DELETE FROM monthly_customer_summary WHERE channel=?", (channel_label,))
     conn.commit()
     total = 0
+    total_compressed = 0
     t0 = time.time()
     for a, b in month_ranges(mn, mx):
         # EmpDMSCode (KHONG PHAI EmpDMSCode2) - da xac minh 17/07/2026: EmpDMSCode2 tren hoa don la
@@ -92,44 +109,67 @@ def sync_hoadon_full(table_bravo, table_local, has_city, has_channel=False):
             f"SELECT {cols} FROM dbo.{table_bravo} WHERE DocDate BETWEEN :a AND :b",
             a=str(a), b=str(b),
         )
-        if rows:
-            n_cols = 9 + (1 if has_city else 0) + (1 if has_channel else 0)
-            placeholders = ",".join(["?"] * n_cols)
-            cols_local = ("doc_date,customer_code,item_code,amount9,quantity,unit_price,stt,employee_code"
-                          + (",city_id" if has_city else "") + ",created_at"
-                          + (",channel_code" if has_channel else ""))
-            conn.executemany(
-                f"INSERT INTO {table_local} ({cols_local}) VALUES ({placeholders})", rows,
-            )
-            conn.commit()
-            total += len(rows)
+        if not rows:
+            print(f"  {a} -> {b}: 0 dong (tong {total}, {time.time()-t0:.0f}s)")
+            continue
+        if a < cutoff:
+            # Thang cu hon cua so chi tiet (12 thang gan nhat) - NEN thang KH x thang, KHONG insert
+            # tung dong vao vhoadon_otc/etc (item_code/quantity/unit_price/created_at/stt bi bo qua).
+            n_compressed = _compress_rows_to_summary(conn, rows, channel_label, a.strftime("%Y-%m"))
+            total_compressed += n_compressed
+            print(f"  {a} -> {b}: {len(rows)} dong -> NEN thanh {n_compressed} dong KH x thang "
+                  f"(tong nen {total_compressed}, {time.time()-t0:.0f}s)")
+            continue
+        n_cols = 9 + (1 if has_city else 0) + (1 if has_channel else 0)
+        placeholders = ",".join(["?"] * n_cols)
+        cols_local = ("doc_date,customer_code,item_code,amount9,quantity,unit_price,stt,employee_code"
+                      + (",city_id" if has_city else "") + ",created_at"
+                      + (",channel_code" if has_channel else ""))
+        conn.executemany(
+            f"INSERT INTO {table_local} ({cols_local}) VALUES ({placeholders})", rows,
+        )
+        conn.commit()
+        total += len(rows)
         print(f"  {a} -> {b}: {len(rows)} dong (tong {total}, {time.time()-t0:.0f}s)")
     conn.close()
     set_sync_meta(table_local, str(mn), str(mx))
-    print(f"[{table_local}] Xong FULL: {total} dong, {time.time()-t0:.0f}s")
+    print(f"[{table_local}] Xong FULL: {total} dong chi tiet (>={cutoff}) + {total_compressed} dong "
+          f"nen KHxthang (<{cutoff}), {time.time()-t0:.0f}s")
+
+
+def _compress_rows_to_summary(conn, rows, channel_label: str, year_month: str) -> int:
+    """Gop danh sach dong hoa don THO (tuple tu bravo_query, cung thu tu cot nhu sync_hoadon_full/
+    sync_hoadon_recent) thanh {(customer_code, employee_code): (revenue, so_hoa_don_distinct)} roi
+    INSERT vao monthly_customer_summary. Vi tri cot: 0=DocDate,1=CustomerCode,2=ItemCode,3=Amount9,
+    4=Quantity,5=UnitPrice,6=Stt,7=EmpDMSCode (cac cot sau la CityId/CreatedAt/EmpDMSCode2 tuy bang,
+    KHONG can cho buoc nen nay)."""
+    agg = {}
+    for r in rows:
+        customer_code, amount9, stt, employee_code = r[1], r[3], r[6], r[7]
+        key = (customer_code, employee_code)
+        rev, stts = agg.get(key, (0.0, set()))
+        agg[key] = (rev + (float(amount9) if amount9 is not None else 0.0), stts | {stt})
+    if not agg:
+        return 0
+    conn.executemany(
+        "INSERT INTO monthly_customer_summary (year_month, channel, customer_code, employee_code, "
+        "revenue, invoice_count) VALUES (?,?,?,?,?,?)",
+        [(year_month, channel_label, cc, ec, rev, len(stts)) for (cc, ec), (rev, stts) in agg.items()],
+    )
+    conn.commit()
+    return len(agg)
 
 
 def sync_hoadon_recent(table_bravo, table_local, has_city, days=N_RECENT_DAYS, has_channel=False):
     today = dt.date.today()
     start = today - dt.timedelta(days=days)
     print(f"[{table_local}] Refresh gia tang {start} -> {today}...")
-    # EmpDMSCode (KHONG PHAI EmpDMSCode2) - xem ghi chu chi tiet trong sync_hoadon_full()
     cols = ("DocDate, CustomerCode, ItemCode, Amount9, Quantity, UnitPrice, Stt, EmpDMSCode"
             + (", CityId" if has_city else "") + ", CreatedAt"
             + (", EmpDMSCode2" if has_channel else ""))
-    # Lay du lieu tu Bravo TRUOC (goi mang cham) - KHONG giu khoa ghi SQLite trong luc doi mang.
     _, rows = bravo_query(
         f"SELECT {cols} FROM dbo.{table_bravo} WHERE DocDate >= :a", a=str(start),
     )
-    # 21/07/2026: gop DELETE + INSERT vao 1 GIAO DICH DUY NHAT (BEGIN IMMEDIATE - khoa ghi ngay khi
-    # mo giao dich). Truoc day tach lam 2 buoc commit rieng, tao race condition: neu 2 tien trinh
-    # sync chay chong lap (thuc te tren may 24 co 2 supervisor run_supervisor.ps1 khac thu muc cung
-    # tro toi 1 warehouse.db, moi cai tu spawn 1 sync_scheduler.ps1), chung xen ke: A.DELETE ->
-    # B.DELETE (rong) -> A.INSERT -> B.INSERT = MOI DONG BI NHAN DOI (xac nhan 21/07/2026: doanh thu
-    # ngay 20/07 tren kho local gap DUNG 2 lan Bravo that, deu tam tap moi ngay). Voi BEGIN IMMEDIATE,
-    # tien trinh thu 2 bi khoa cho toi khi tien trinh thu 1 COMMIT xong, roi DELETE se xoa sach ban
-    # cua tien trinh 1 va INSERT lai dung 1 ban -> ket qua luon 1x du bao nhieu scheduler chay song
-    # song. Cung TU CHUA du lieu trung san co: lan sync sach dau tien se don sach cua so N_RECENT_DAYS.
     conn = get_conn()
     conn.execute("PRAGMA busy_timeout=30000")
     try:
@@ -197,6 +237,35 @@ def sync_small_table(bravo_tbl, local_tbl, bravo_cols, local_cols):
     print(f"[{local_tbl}] Reload: {len(rows)} dong")
 
 
+def compress_aged_out_months():
+    """Chay MOI LAN sync (ca --full lan incremental): nen cac dong CON SOT LAI trong vhoadon_otc/etc
+    ma DocDate da roi khoi cua so 12 thang gan nhat (vd lan sync FULL truoc chay luc thang nay con
+    "moi", nay thoi gian troi qua khien no thanh "cu") - nen vao monthly_customer_summary roi XOA khoi
+    bang chi tiet, giu warehouse.db luon dung dinh nghia 'chi giu chi tiet 12 thang gan nhat'. Doc/ghi
+    hoan toan tren warehouse.db, KHONG can goi lai Bravo."""
+    cutoff = _detail_cutoff_date()
+    conn = get_conn()
+    for table_local, channel_label in (("vhoadon_otc", "OTC"), ("vhoadon_etc", "ETC")):
+        rows = conn.execute(
+            f"SELECT doc_date, customer_code, item_code, amount9, quantity, unit_price, stt, employee_code "
+            f"FROM {table_local} WHERE doc_date < ?", (str(cutoff),),
+        ).fetchall()
+        if not rows:
+            continue
+        by_month = {}
+        for r in rows:
+            ym = str(r[0])[:7]
+            by_month.setdefault(ym, []).append(r)
+        total_compressed = 0
+        for ym, ym_rows in by_month.items():
+            total_compressed += _compress_rows_to_summary(conn, ym_rows, channel_label, ym)
+        conn.execute(f"DELETE FROM {table_local} WHERE doc_date < ?", (str(cutoff),))
+        conn.commit()
+        print(f"[{table_local}] Da nen {len(rows)} dong chi tiet qua han (< {cutoff}) thanh "
+              f"{total_compressed} dong KH x thang, xoa khoi bang chi tiet.")
+    conn.close()
+
+
 def sync_fact_tonghopkhachhang(days=90):
     """Chi dong bo N ngay gan nhat (snapshot SaveDate) - lich su xa hon it gia tri cho KPI hien tai.
     23/07/2026: them ManagerCode - cot THAT tu Bravo xac dinh "TDV nay bao cao truc tiep len QLV nao",
@@ -235,11 +304,14 @@ def main():
     # ETC cung dong bo tu vHoaDonETCTotal (KHONG PHAI vHoaDonETC) - cung ly do nhu OTC: vHoaDonETC
     # thieu cac dong dieu chinh/hoan (DocCode='HC'), da xac nhan lech ~1.13 ty rieng nam 2025 toan quoc.
     if a.full:
-        sync_hoadon_full("vHoaDonTotal", "vhoadon_otc", has_city=False, has_channel=True)
-        sync_hoadon_full("vHoaDonETCTotal", "vhoadon_etc", has_city=False)
+        sync_hoadon_full("vHoaDonTotal", "vhoadon_otc", has_city=False, has_channel=True, channel_label="OTC")
+        sync_hoadon_full("vHoaDonETCTotal", "vhoadon_etc", has_city=False, channel_label="ETC")
     else:
         sync_hoadon_recent("vHoaDonTotal", "vhoadon_otc", has_city=False, has_channel=True)
         sync_hoadon_recent("vHoaDonETCTotal", "vhoadon_etc", has_city=False)
+        # Dong bo incremental chi cham N_RECENT_DAYS gan nhat, KHONG tu dong nen - goi rieng o day de
+        # don dan cac thang da "gia" khoi cua so 12 thang gan nhat ke tu lan --full truoc.
+        compress_aged_out_months()
 
     for bravo_tbl, local_tbl, bravo_cols, local_cols in SMALL_TABLES:
         sync_small_table(bravo_tbl, local_tbl, bravo_cols, local_cols)
@@ -250,7 +322,9 @@ def main():
 
 
 if __name__ == "__main__":
-    _log_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs", "sync_warehouse.log")
+    _log_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs")
+    os.makedirs(_log_dir, exist_ok=True)
+    _log_path = os.path.join(_log_dir, "sync_warehouse.log")
     _logf = open(_log_path, "a", encoding="utf-8")
 
     class _Tee:
@@ -266,9 +340,22 @@ if __name__ == "__main__":
 
     sys.stdout = sys.stderr = _Tee(getattr(sys, "__stdout__", None), _logf)
     print(f"\n===== RUN {dt.datetime.now():%Y-%m-%d %H:%M:%S} =====")
+    # 23/07/2026: PowerShell 5.1 co bug da biet - Process.ExitCode tra ve $null (khong throw, khong
+    # sua duoc bang Refresh()/goi lai WaitForExit()) khi Start-Process dung -PassThru ket hop
+    # -RedirectStandardOutput/-RedirectStandardError, du process da HasExited=True. sync_scheduler.ps1
+    # tung dua vao $proc.ExitCode -eq 0 de biet lan sync co thanh cong khong -> ExitCode luon $null
+    # khien scheduler tuong lan nao cung that bai, khong bao gio cap nhat $lastRunTime, va chay lai
+    # MOI 5 PHUT (chu ky kiem tra) thay vi moi 60 phut (chu ky dong bo that su). Ghi file danh dau ket
+    # qua RIENG (khong phu thuoc PowerShell doc dung exit code hay khong) de scheduler doc thay the.
+    _result_path = os.path.join(_log_dir, "_sync_result.txt")
     try:
         main()
     except Exception:
         import traceback
         print("LOI:", traceback.format_exc())
+        with open(_result_path, "w", encoding="utf-8") as rf:
+            rf.write("FAIL")
         sys.exit(1)
+    else:
+        with open(_result_path, "w", encoding="utf-8") as rf:
+            rf.write("OK")

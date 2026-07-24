@@ -109,6 +109,33 @@ def sync_freshness_note(stale_minutes: int = 60) -> str:
             "dữ liệu có thể CŨ HƠN BÌNH THƯỜNG, không chỉ nói ngày dữ liệu như bình thường.")
 
 
+# Hoa don CU HON 12 THANG duoc nen thanh KH x thang trong monthly_customer_summary (khong con
+# item_code/quantity/unit_price/created_at/stt tung dong) - xem sync_warehouse.py::DETAIL_WINDOW_MONTHS/
+# _detail_cutoff_date(). Cac ham chi can TONG doanh thu/so hoa don (revenue_by_channel, top_customers,
+# revenue_by_region, compare_periods qua revenue_by_channel) UNION them nguon nen nay khi khoang ngay
+# duoc hoi vuot qua 12 thang gan nhat, de van ra dung so cho ca giai doan xa (vd "so voi cung ky nam
+# ngoai"). Cac ham can CHI TIET tung dong (top_products: item_code; check_order_timing: created_at)
+# KHONG the bu duoc bang nguon nen - xem canh bao rieng trong 2 ham do.
+def _detail_cutoff() -> str:
+    today = dt.date.today()
+    y, m = today.year, today.month - 12
+    while m <= 0:
+        m += 12
+        y -= 1
+    return f"{y:04d}-{m:02d}-01"
+
+
+def _monthly_summary_scope_clause(scope_area_code: str, channel: str):
+    """Tuong duong _scope_clause() nhung cho monthly_customer_summary - bang nay KHONG co san city_id
+    nen phai join qua dms_khachhang (OTC) / dmssx_khachhang (ETC) qua customer_code de suy ra vung,
+    giong het cach lam voi vhoadon_otc/etc chi tiet (xem _otc_area_join/_etc_area_join)."""
+    if not scope_area_code:
+        return "", ()
+    kh_table = "dms_khachhang" if channel == "OTC" else "dmssx_khachhang"
+    return (f" AND EXISTS (SELECT 1 FROM {kh_table} kh JOIN dim_tinhthanhpho tp ON tp.city_id=kh.city_id "
+            f"WHERE kh.code=m.customer_code AND tp.area_code=?)", (scope_area_code,))
+
+
 def revenue_by_channel(date_from: str, date_to: str, scope_area_code: str = None,
                         scope_channel: str = None) -> dict:
     """Doanh thu + so hoa don theo kenh OTC/ETC trong khoang [date_from, date_to].
@@ -130,6 +157,25 @@ def revenue_by_channel(date_from: str, date_to: str, scope_area_code: str = None
         e = _q(f"SELECT COALESCE(SUM(v.amount9),0) rev, COUNT(DISTINCT v.stt) hd FROM vhoadon_etc v {join_e} "
                f"WHERE v.doc_date BETWEEN ? AND ?{scope_sql}", (date_from, date_to) + scope_params)[0]
         etc_rev, etc_hd = _f(e["rev"]), int(e["hd"])
+
+    # date_from truoc cua so 12 thang chi tiet -> phan xa hon da bi nen, cong them tu
+    # monthly_customer_summary (vhoadon_otc/etc chi con giu 12 thang gan nhat, xem sync_warehouse.py).
+    cutoff = _detail_cutoff()
+    if date_from < cutoff:
+        summary_to = min(date_to, cutoff)
+        ym_from, ym_to = date_from[:7], summary_to[:7]
+        msc_o, msc_o_params = _monthly_summary_scope_clause(scope_area_code, "OTC")
+        so = _q(f"SELECT COALESCE(SUM(m.revenue),0) rev, COALESCE(SUM(m.invoice_count),0) hd "
+                f"FROM monthly_customer_summary m WHERE m.channel='OTC' AND m.year_month BETWEEN ? AND ?{msc_o}",
+                (ym_from, ym_to) + msc_o_params)[0]
+        otc_rev += _f(so["rev"]); otc_hd += int(so["hd"] or 0)
+        if scope_channel != "OTC":
+            msc_e, msc_e_params = _monthly_summary_scope_clause(scope_area_code, "ETC")
+            se = _q(f"SELECT COALESCE(SUM(m.revenue),0) rev, COALESCE(SUM(m.invoice_count),0) hd "
+                    f"FROM monthly_customer_summary m WHERE m.channel='ETC' AND m.year_month BETWEEN ? AND ?{msc_e}",
+                    (ym_from, ym_to) + msc_e_params)[0]
+            etc_rev += _f(se["rev"]); etc_hd += int(se["hd"] or 0)
+
     result = {
         "date_from": date_from, "date_to": date_to,
         "otc": {"revenue": otc_rev, "invoices": otc_hd},
@@ -170,8 +216,18 @@ def top_products(date_from: str, date_to: str, limit: int = 10, channel: str = "
               GROUP BY c.item_code, sp.name ORDER BY rev DESC LIMIT ?"""
     params = tuple(p for pp in part_params for p in pp) + (limit,)
     rows = _q(sql, params)
-    return [{"item_code": r["item_code"], "name": r["name"] or f'(chua co ten - ma {r["item_code"]})',
-             "revenue": _f(r["rev"]), "qty": _f(r["qty"])} for r in rows]
+    result = [{"item_code": r["item_code"], "name": r["name"] or f'(chua co ten - ma {r["item_code"]})',
+               "revenue": _f(r["rev"]), "qty": _f(r["qty"])} for r in rows]
+    # Du lieu cu hon 12 thang da bi NEN thanh KH x thang (khong con item_code) - top san pham KHONG
+    # the tinh dung cho phan xa hon cua so nay, phai bao ro thay vi am tham tra ve so thieu.
+    cutoff = _detail_cutoff()
+    if date_from < cutoff:
+        return {"warning": f"Cau hoi vuot qua cua so 12 thang gan nhat (truoc {cutoff}) - du lieu chi tiet "
+                            f"tung san pham cho giai doan cu hon KHONG con duoc luu (chi con tong doanh thu "
+                            f"theo khach hang/thang). Ket qua duoi day CHI tinh tu {max(date_from, cutoff)} "
+                            f"tro di, KHONG dai dien cho toan bo khoang thoi gian da hoi.",
+                "date_from_actually_used": max(date_from, cutoff), "products": result}
+    return result
 
 
 def top_customers(date_from: str, date_to: str, limit: int = 10, channel: str = "ALL",
@@ -192,6 +248,24 @@ def top_customers(date_from: str, date_to: str, limit: int = 10, channel: str = 
         parts.append(f"SELECT v.customer_code, v.amount9 FROM vhoadon_etc v {join} "
                       f"WHERE v.doc_date BETWEEN ? AND ?{scope_sql}")
         part_params.append((date_from, date_to) + scope_params)
+
+    # date_from truoc cua so 12 thang chi tiet -> cong them phan da NEN tu monthly_customer_summary
+    # (khong con item/created_at nhung van co customer_code + revenue nen top_customers tinh dung duoc).
+    cutoff = _detail_cutoff()
+    if date_from < cutoff:
+        summary_to = min(date_to, cutoff)
+        ym_from, ym_to = date_from[:7], summary_to[:7]
+        if channel in ("OTC", "ALL"):
+            msc_sql, msc_params = _monthly_summary_scope_clause(scope_area_code, "OTC")
+            parts.append(f"SELECT m.customer_code, m.revenue AS amount9 FROM monthly_customer_summary m "
+                         f"WHERE m.channel='OTC' AND m.year_month BETWEEN ? AND ?{msc_sql}")
+            part_params.append((ym_from, ym_to) + msc_params)
+        if channel in ("ETC", "ALL"):
+            msc_sql, msc_params = _monthly_summary_scope_clause(scope_area_code, "ETC")
+            parts.append(f"SELECT m.customer_code, m.revenue AS amount9 FROM monthly_customer_summary m "
+                         f"WHERE m.channel='ETC' AND m.year_month BETWEEN ? AND ?{msc_sql}")
+            part_params.append((ym_from, ym_to) + msc_params)
+
     sql = f"""WITH combined AS ({" UNION ALL ".join(parts)})
               SELECT customer_code, SUM(amount9) rev
               FROM combined GROUP BY customer_code ORDER BY rev DESC LIMIT ?"""
@@ -234,6 +308,25 @@ def revenue_by_region(date_from: str, date_to: str, scope_area_code: str = None)
         LEFT JOIN dim_tinhthanhpho tp ON tp.city_id=kh.city_id
         WHERE e.doc_date BETWEEN ? AND ? GROUP BY e.customer_code, tp.area_code
         """, (date_from, date_to, date_from, date_to))
+
+    # date_from truoc cua so 12 thang chi tiet -> cong them phan da NEN (monthly_customer_summary co
+    # customer_code nen van suy luan vung qua dms_khachhang/dmssx_khachhang giong nhu tren).
+    cutoff = _detail_cutoff()
+    if date_from < cutoff:
+        summary_to = min(date_to, cutoff)
+        ym_from, ym_to = date_from[:7], summary_to[:7]
+        rows = list(rows) + _q("""
+            SELECT m.customer_code cc, tp.area_code area, SUM(m.revenue) rev
+            FROM monthly_customer_summary m LEFT JOIN dms_khachhang kh ON kh.code=m.customer_code
+            LEFT JOIN dim_tinhthanhpho tp ON tp.city_id=kh.city_id
+            WHERE m.channel='OTC' AND m.year_month BETWEEN ? AND ? GROUP BY m.customer_code, tp.area_code
+            UNION ALL
+            SELECT m.customer_code cc, tp.area_code area, SUM(m.revenue) rev
+            FROM monthly_customer_summary m LEFT JOIN dmssx_khachhang kh ON kh.code=m.customer_code
+            LEFT JOIN dim_tinhthanhpho tp ON tp.city_id=kh.city_id
+            WHERE m.channel='ETC' AND m.year_month BETWEEN ? AND ? GROUP BY m.customer_code, tp.area_code
+            """, (ym_from, ym_to, ym_from, ym_to))
+
     agg = {}
     for r in rows:
         area = r["area"] or region_from_customer_code(r["cc"]) or "Khac/chua xac dinh"
@@ -248,10 +341,9 @@ def revenue_by_region(date_from: str, date_to: str, scope_area_code: str = None)
     else:
         # Tu doi chieu (re # 4): tong cong theo vung PHAI bang dung tong khong loc vung cung ky - neu
         # lech tuc la co JOIN nao do dang am tham lam roi du lieu (vd bi doi lai thanh INNER JOIN).
-        raw_total = _f(_q("SELECT COALESCE(SUM(amount9),0) t FROM vhoadon_otc WHERE doc_date BETWEEN ? AND ?",
-                           (date_from, date_to))[0]["t"]) + \
-                    _f(_q("SELECT COALESCE(SUM(amount9),0) t FROM vhoadon_etc WHERE doc_date BETWEEN ? AND ?",
-                           (date_from, date_to))[0]["t"])
+        # Dung LAI revenue_by_channel() (da co san UNION nen du lieu >12 thang) thay vi tu SUM rieng,
+        # tranh 2 noi tinh "tong khong loc vung" khac cong thuc nhau (nhat la sau khi them nen du lieu).
+        raw_total = revenue_by_channel(date_from, date_to)["total"]["revenue"]
         if abs(total - raw_total) > 1:
             _write_log({"ts": dt.datetime.now().isoformat(), "status": "warn",
                         "sql": "<revenue_by_region reconciliation check>",
@@ -267,7 +359,9 @@ def revenue_by_region(date_from: str, date_to: str, scope_area_code: str = None)
                   for k, v in sorted(agg.items(), key=lambda x: -x[1])]
 
     # Tach rieng cac kenh dac biet (vd Modern Trade) da NAM SAN trong "revenue" cua vung - chi de
-    # bao cao minh bach, KHONG cong them vao tong (xem _channel_sub_buckets()).
+    # bao cao minh bach, KHONG cong them vao tong (xem _channel_sub_buckets()). CHI tinh duoc tu du
+    # lieu CHI TIET (channel_code khong duoc luu trong monthly_customer_summary da nen) - neu date_from
+    # vuot cua so 12 thang, breakdown nay se THIEU phan da nen, ghi ro trong "note" de khong hieu nham.
     buckets = _channel_sub_buckets()
     if buckets:
         for row in result:
@@ -276,9 +370,13 @@ def revenue_by_region(date_from: str, date_to: str, scope_area_code: str = None)
                 breakdown = []
                 for b in row_buckets:
                     r = _q("SELECT COALESCE(SUM(amount9),0) rev FROM vhoadon_otc WHERE channel_code=? "
-                           "AND doc_date BETWEEN ? AND ?", (b["dmsid"], date_from, date_to))
+                           "AND doc_date BETWEEN ? AND ?", (b["dmsid"], max(date_from, cutoff), date_to))
                     breakdown.append({"name": b["name"], "revenue": _f(r[0]["rev"])})
                 row["channel_breakdown"] = breakdown
+                if date_from < cutoff:
+                    row["channel_breakdown_note"] = (
+                        f"Chi tinh tu {cutoff} tro di - du lieu truoc {cutoff} da bi nen va khong con "
+                        f"tach duoc theo kenh dac biet (vd Modern Trade).")
     return result
 
 
@@ -869,13 +967,24 @@ def order_timing_check(date_from: str, date_to: str, threshold_days: int = 2, li
         by_employee[key]["total_amount"] += r["amount9"]
     summary = sorted(by_employee.values(), key=lambda x: -x["count"])
 
-    return {
+    result = {
         "date_from": date_from, "date_to": date_to, "threshold_days": threshold_days,
         "total_flagged": len(rows),
         "summary_by_employee": summary,
         "top_detail": rows[:limit],
         "data_as_of": latest_data_date(),
     }
+    # Du lieu cu hon 12 thang da bi NEN thanh KH x thang (khong con created_at tung dong) - tool nay
+    # KHONG the phat hien "chay don don KPI" cho giai doan cu hon, phai bao ro thay vi am tham thieu.
+    cutoff = _detail_cutoff()
+    if date_from < cutoff:
+        result["warning"] = (f"Cau hoi vuot qua cua so 12 thang gan nhat (truoc {cutoff}) - du lieu "
+                              f"created_at tung hoa don cho giai doan cu hon KHONG con duoc luu (da nen "
+                              f"thanh tong theo khach hang/thang). Ket qua tren CHI kiem tra duoc tu "
+                              f"{max(date_from, cutoff)} tro di, KHONG dai dien cho toan bo khoang thoi "
+                              f"gian da hoi.")
+        result["date_from_actually_used"] = max(date_from, cutoff)
+    return result
 
 
 _AREA_TO_BRANCH = {"MB": "B02", "MT": "B03", "MN": "B04"}
@@ -942,15 +1051,6 @@ def _team_of_qlv(qlv_employee_code: str, fdate: str = None) -> list:
     CONG TRUNG doanh so ca doi ho (11,82 ty thay vi 6,79 ty that). manager_code la CUNG mot nguon ma
     repo bao cao D:\\DNH dang dung (src/alerts.py::get_bravo_kpi_tdv_snapshot) - 2 he thong gio xac
     dinh "doi" giong het nhau.
-
-    BAT BUOC loc position_code='TDV' - phat hien 23/07/2026 (cung ngay, vong 2): fact_tonghopkhachhang
-    dong bo TAT CA vai tro (TDV/QLV/CS/TP/PP/...) khong loc gi, khac han Bravo ground truth ben repo
-    bao cao (get_bravo_kpi_tdv_snapshot chi lay position_codes=('TDV','QLV') NGAY TU CAU SQL, CS/TP/PP
-    chua bao gio duoc dua vao snapshot). Neu khong loc o day, 1 QLV co NHAN VIEN CS bao cao len (vd
-    MBKV12 co 2 CS: Nguyen Thi Ngoc Thoa, Nguyen Van Gioi) se bi tinh nham la "co doi" -> bi loai khoi
-    childless_qlv trong kpi_ranking(region), NHUNG ban than 2 nguoi CS do cung KHONG duoc dem la la
-    (leaf_clause chi nhan position_code='TDV') -> ca nhanh doanh so cua QLV do BIEN MAT HOAN TOAN khoi
-    tong vung (con te hon loi cong trung ban dau - lan nay la MAT so, khong phai THUA so).
     org_hierarchy.py (zone-based) VAN con dung rieng cho qlv_change_history() - do la lich su AI TUNG
     phu trach 1 khu vuc theo thoi gian, ban chat khac voi "doi hien tai bao cao len ai"."""
     if fdate is None:
@@ -1139,6 +1239,89 @@ def kpi_ranking(group_by: str = "qlv", as_of_date: str = None, limit: int = 20,
     return sorted(result, key=lambda x: -x["pct"])[:limit]
 
 
+def revenue_reconciliation_check(as_of_date: str = None, area_code: str = None,
+                                  scope_area_code: str = None) -> dict:
+    """Doi chieu doanh thu TU TREN XUONG (SUM(amount9) tren hoa don OTC, toan vung) voi doanh thu
+    CONG DON TU DUOI LEN (TDV -> QLV -> TP, dua tren snapshot fact_tonghopkhachhang qua revenue_tree)
+    - phat hien lech giua 2 nguon thay vi chi tin 1 chieu tu tren xuong.
+
+    QUAN TRONG - LY DO CO SAN 1 KHOANG LECH "BINH THUONG" (khong phai loi du lieu):
+    1. Doanh thu tren xuong tinh CA kenh ETC (khong co NV phu trach truc tiep tren hoa don, xem
+       vhoadon_etc/dmssx_khachhang) + khach hang 'mo coi' (khong co ho so trong dms_khachhang) - 2
+       nhom nay KHONG THE gan cho bat ky TDV nao nen KHONG BAO GIO xuat hien trong tong cong don tu
+       duoi len. Ham nay CHI so sanh rieng kenh OTC (co gan NV) de tranh lech "gia" do nhom nay.
+    2. Cay to chuc suy luan qua quy uoc dat ten (org_hierarchy.py) co ~30% 'to' KHONG xac dinh duoc
+       QLV phu trach (ghi "Chua xac dinh", BI LOAI khoi cong don) - day la GAP TO CHUC da biet, khong
+       phai bug. Vi vay tong cong don tu duoi len LUON <= tong tren xuong ve mat cau truc, KHONG bao
+       gio > - neu code sau nay thay > thi moi la dau hieu bug that (vd dem trung TDV).
+    Ket qua tra ve ca "coverage_pct" (cong don duoc bao nhieu % so voi tong tren xuong) de nguoi dung
+    tu danh gia gap co hop ly khong, THAY VI chi 1 con so "lech" kho dien giai.
+    scope_area_code: ep gioi han vung khi tai khoan bi han che (vd QLV/GD mien)."""
+    if scope_area_code:
+        area_code = scope_area_code
+    if as_of_date is None:
+        as_of_date = str(dt.date.today())
+
+    fdate_r = _q("SELECT MAX(save_date) d FROM fact_tonghopkhachhang WHERE save_date<=?", (as_of_date,))
+    fdate = fdate_r[0]["d"] if fdate_r else None
+    if not fdate:
+        return {"as_of": None, "error": "Khong co snapshot KPI nao truoc/bang ngay nay de doi chieu."}
+
+    # Doanh thu OTC TREN XUONG - CHI kenh OTC (ETC khong co NV phu trach truc tiep tren hoa don nen
+    # khong doi chieu cong don duoc, xem docstring). Neu loc theo area_code, PHAI xu ly khach hang
+    # "mo coi" (khong co ho so trong dms_khachhang) GIONG HET revenue_by_region(): LEFT JOIN that (KHONG
+    # duoc WHERE tp.area_code=? sau JOIN, se vo tinh bien thanh INNER JOIN va am tham loai khach mo coi
+    # khoi tong - day la bug thuc te da phat hien qua fixture test khi viet ham nay lan dau) + suy luan
+    # vung qua tien to ma KH (region_map.py) cho dong nao co area=NULL, roi moi loc theo area_code sau
+    # khi da xac dinh vung. Neu KHONG loc vung, don gian SUM toan bo (khong can quan tam khach mo coi
+    # thuoc vung nao vi dang tinh tong ca cong ty).
+    if area_code:
+        rows = _q("""
+            SELECT v.customer_code cc, tp.area_code area, SUM(v.amount9) rev
+            FROM vhoadon_otc v LEFT JOIN dms_khachhang kh ON kh.code=v.customer_code
+            LEFT JOIN dim_tinhthanhpho tp ON tp.city_id=kh.city_id
+            WHERE v.doc_date BETWEEN ? AND ? GROUP BY v.customer_code, tp.area_code
+            """, (fdate, fdate))
+        top_down_rev = sum(_f(r["rev"]) for r in rows
+                            if (r["area"] or region_from_customer_code(r["cc"])) == area_code)
+    else:
+        top_down_rev = _f(_q("SELECT COALESCE(SUM(amount9),0) rev FROM vhoadon_otc WHERE doc_date BETWEEN ? AND ?",
+                              (fdate, fdate))[0]["rev"])
+
+    # Doanh thu OTC CONG DON TU DUOI LEN: dung LAI cay to chuc cua revenue_tree() (TDV -> QLV -> TP)
+    # thay vi tu viet lai truy van rieng - tranh 2 noi dinh nghia khac nhau ve "ai thuoc doi ai".
+    tree = revenue_tree(as_of_date=fdate, area_code=area_code)
+    bottom_up_rev = 0.0
+    tdv_count = 0
+    undetermined_zones = 0
+    for tp in tree["tree"]:
+        for qlv in tp["qlv"]:
+            if not qlv["tdv"]:
+                undetermined_zones += 1
+            for t in qlv["tdv"]:
+                bottom_up_rev += t["sales"]
+                tdv_count += 1
+
+    coverage_pct = (bottom_up_rev / top_down_rev * 100) if top_down_rev else 0.0
+    result = {
+        "as_of": fdate, "area_code": area_code,
+        "top_down_revenue_otc": top_down_rev,
+        "bottom_up_revenue_otc": bottom_up_rev,
+        "coverage_pct": coverage_pct,
+        "tdv_count_in_tree": tdv_count,
+        "zones_without_qlv": undetermined_zones,
+        "note": ("Cong don tu duoi len LUON nho hon tong tren xuong (khong bao gio bang 100%) vi "
+                 "khong gom duoc khach ETC/mo coi + cac 'to' chua xac dinh QLV - day la GAP cau truc "
+                 "da biet, KHONG phai loi. coverage_pct qua thap bat thuong (vd giam dot ngot so ky "
+                 "truoc) moi dang nghi ngo co van de gan NV/vung sai."),
+    }
+    if coverage_pct > 100.5:  # dung sai nho cho lam tron, > han han moi la dau hieu bug that (dem trung)
+        result["warning"] = ("BAT THUONG: cong don tu duoi len VUOT QUA tong tren xuong - dau hieu co "
+                              "the dang dem trung TDV (vd 1 nguoi xuat hien o nhieu 'to') hoac loi join, "
+                              "can kiem tra lai truoc khi tin so lieu nay.")
+    return result
+
+
 TEMPLATES = {
     "get_revenue_by_channel": revenue_by_channel,
     "get_top_products": top_products,
@@ -1154,6 +1337,7 @@ TEMPLATES = {
     "get_qlv_change_history": qlv_change_history,
     "get_revenue_tree": revenue_tree,
     "get_kpi_ranking": kpi_ranking,
+    "get_revenue_reconciliation": revenue_reconciliation_check,
 }
 
 

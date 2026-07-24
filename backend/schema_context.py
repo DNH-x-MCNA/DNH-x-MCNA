@@ -58,8 +58,32 @@ lam bang rieng cho no. Neu nhom nay bang 0 hoac khong dang ke, KHONG noi gi ca (
 dung noi "khong co phat sinh chua xac dinh vung" - do la thong tin thua, nguoi dung khong hoi).
 
 dim_tinhthanhpho: city_id, city_name, area_code (MB=Mien Bac, MT=Mien Trung, MN=Mien Nam).
-dim_targetvungmien: target doanh thu OTC theo vung/thang. Cot: area_code, channel_code (loc ='GT'
-  cho kenh OTC), amount (target tien), doc_date (ngay dau thang, vd '2026-06-01' cho target thang 6).
+  !!! CANH BAO NHAM LAN: "MT" o day LUON la VUNG MIEN TRUNG (area_code). TUYET DOI KHONG nham voi
+  kenh "Modern Trade" (chuoi nha thuoc lon nhu Long Chau/Pharmacity) - kenh nay CHI dung tat "MT"
+  trong TEN GOI THONG THUONG nguoi dung hay go (vd "kenh MT"), nhung ban chat la 1 kenh ban hang
+  thuoc MIEN NAM (KHONG PHAI vung Mien Trung) - ma DAI DIEN de nhan biet la employee_code='MN1'
+  (ban ghi "nhan vien ao" trong dim_nhanvien, area_code='MN', xem _channel_sub_buckets() trong
+  report_templates.py). LUU Y PHAN BIET 2 cot: employee_code='MN1' la ma NHAN DIEN ban ghi (nen
+  dung khi CAN TRA CUU/GIAI THICH kenh nay la gi), con dmsid='ASM01' la ma KY THUAT dung de JOIN
+  voi vhoadon_otc.channel_code khi TINH DOANH THU (SUM(amount9) WHERE channel_code='ASM01') - 2 ma
+  khac nhau, khac vai tro, KHONG dung lan cho nhau. Neu nguoi dung hoi "doanh thu kenh MT" hoac
+  "Modern Trade" -> HIEU la kenh ban hang dac biet (MN1/ASM01, thuoc Mien Nam), KHONG PHAI vung
+  Mien Trung. Neu cau hoi mo ho (chi go "MT" khong ro ngu canh) -> HOI LAI nguoi dung xem y la vung
+  Mien Trung hay kenh Modern Trade, KHONG tu doan.
+dim_targetvungmien: target doanh thu OTC theo vung/thang. Cot: area_code, channel_code (2 gia tri:
+  'GT' = target kenh OTC thuong (nhieu dong/vung, moi dong 1 khu vuc nho); 'MT' = target RIENG cua
+  kenh Modern Trade, area_code='MN' - CO THAT trong du lieu, xac nhan 21/07/2026), amount (target
+  tien), doc_date (ngay dau thang, vd '2026-06-01' cho target thang 6).
+  !!! CANH BAO QUAN TRONG - LOI DA TUNG XAY RA (phat hien 23/07/2026): cau hoi "target/chi tieu vung
+  MN thang X la bao nhieu" hoac "target vung MN" (KHONG chi dinh rieng kenh) BAT BUOC phai SUM(amount)
+  CA channel_code='GT' VA channel_code='MT' cho area_code='MN' cung doc_date - CHI loc channel_code='GT'
+  se lam target vung MN bi THIEU ~40% (vd thang 7/2026: GT=7.89 ty, MT=5.29 ty rieng, tong dung phai
+  la 13.19 ty - da tung bao thieu MT khien target hien ra thap hon thuc te). CHI duoc loc rieng 1
+  channel_code khi nguoi dung hoi RO RANG ve 1 kenh cu the (vd "target kenh MT" hoac "target kenh
+  OTC thuong/GT khong tinh Modern Trade") - neu khong noi ro kenh, LUON cong ca 2. Cau hoi "kenh MT
+  dat bao nhieu % chi tieu" (chi rieng kenh MT) -> SUM(amount9) tu vhoadon_otc WHERE channel_code='ASM01'
+  (xem canh bao MT o dim_tinhthanhpho phia tren) chia cho amount tu dim_targetvungmien WHERE
+  channel_code='MT' AND doc_date=ngay dau thang dang hoi.
 fact_kehoachtongetc: target tong ETC theo thang. Cot: doc_date (ngay dau thang), amount, item_group.
 dmssx_khachhang: code (ma khach hang ETC), name, city_id (dung join vung mien cho ETC), id_code (Id
   noi bo DMS, khac code), kenh_bh (kenh ban hang dang text). KHONG co cot NV phu trach (ETC khong co
@@ -94,13 +118,7 @@ fact_tonghopkhachhang: 1 dong = 1 (nhan vien, khach hang, ngay snapshot). Cot: e
   thang, MAX vi lap lai moi dong), save_date (ngay snapshot - dung MAX(save_date) <= ngay can xem de
   lay snapshot gan nhat), is_nc (=1 neu la KH moi trong thang). CHI CO ~90 NGAY GAN NHAT trong kho
   local (lich su xa hon khong dong bo vi it gia tri cho KPI hien tai).
-  PHAN BIET 2 MOC tren amount_ct/month_sale_target: "DAT CHI TIEU" = >=100%. "DAT MUC THUONG NHOM
-  HANG" = >=65% voi TDV (QD 0107/2026), >=70% voi QLV va cac cap quan ly (QD 0429/.25) - moc nay KHAC
-  NHAU THEO VAI TRO nen khi tu viet SQL phai JOIN dim_nhanvien.position_code moi lay dung. Dung goi
-  moc 65%/70% la "dat chi tieu", cung dung goi la "nguong huong thuong" chung chung: do chi la cong
-  cua THUONG NHOM HANG (DM1/DM2/DM3). Cac khoan khac (V15/V22/V25, ASO tinh theo SO LUONG khach hang,
-  thuong quy, thuong nam) co moc rieng va kho local KHONG co du lieu de tinh. Luong co ban tu 60% tro
-  len van huong 100%. => KHONG duoc ket luan nguoi duoi 65% la "khong duoc thuong".
+  NGUONG DAT KPI nhan vien la >=80% (amount_ct/month_sale_target), KHONG PHAI 100%.
 
 brv_sanpham: code, name, group_code (nhom SP), unit (don vi tinh), id_code (khoa noi bo - dung de
   JOIN voi brv_tonkhodk.item_id, KHAC code la ma san pham dang text).
@@ -161,4 +179,19 @@ receivable_etc: cong no kenh ETC. Cot: "customer_code", "customer_name", "contra
    chay tren SUPABASE (PostgreSQL - quote ten cot trong "...", LIMIT N). KHONG dung nham dialect giua 2 tool.
 10. Kho local co DAY DU LICH SU nhieu nam (tu ~2022) nen thoai mai so sanh xa (nam nay vs nam truoc,
     quy nay vs quy truoc...) - dung tool compare_periods hoac tu ghep 2 lan goi get_revenue_by_channel.
+11. CHINH SACH THU NHAP TDV OTC MOI (Level/LCB, SKU, KH tai don, KH moi, SP trong tam/DM1-3, ASO/KH
+    hoat dong, thuong tien do V15/V22, thuong Quy/Nam) - XAC NHAN 23/07/2026: co VAN BAN CHINH THUC
+    (3 Quyet dinh HDQT rieng Nam/Trung/Bac, hieu luc van ban tu 01/07/2026, cong thuc chi tiet xem
+    docs_chinh_sach_thu_nhap_TDV_OTC.md) NHUNG theo DA phia DNH xac nhan, CHUA duoc ap dung THUC TE
+    de tinh luong thang 7/2026 - co do tre giua ngay hieu luc van ban va ngay van hanh that. Tu dau
+    nam 2026 den het thang 6/2026 VAN dung cach tinh KPI CU (nguong dat KPI 80%/50% tren
+    fact_tonghopkhachhang - dung tool get_employee_kpi/get_employee_daily_kpi/get_kpi_ranking nhu
+    binh thuong, KHONG lien quan gi chinh sach moi nay). KHO LOCAL/SUPABASE cung KHONG CO bang du
+    lieu nao chua cac chi so SKU/khach tai don/SP trong tam/ASO/Call... (fact_tonghopkhachhang chi
+    co doanh so/target/khach moi don gian). Neu nguoi dung hoi ve luong/KPI theo chinh sach moi nay:
+    PHAI noi ro 2 y - (1) chinh sach CHUA duoc ap dung thuc te (xac nhan voi DA phia DNH, du van ban
+    da co hieu luc), (2) he thong cung chua co nguon du lieu de tinh. TUYET DOI KHONG tu tinh/bia so
+    lieu du BIET RO cong thuc tu van ban - cong thuc dung khong co nghia du lieu dau vao dang duoc
+    ghi nhan theo chinh sach nay. KHONG nham lan voi KPI nhan vien HIEN TAI (nguong 80%/50%, van
+    dang dung binh thuong) - 2 he thong hoan toan tach biet, KHONG duoc tron lan.
 """
