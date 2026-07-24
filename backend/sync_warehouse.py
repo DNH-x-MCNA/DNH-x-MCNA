@@ -226,14 +226,25 @@ SMALL_TABLES = [
 
 
 def sync_small_table(bravo_tbl, local_tbl, bravo_cols, local_cols):
+    """Reload toan bo bang tu Bravo. Query Bravo XONG TRUOC roi moi mo transaction xoa+ghi local -
+    neu bravo_query() loi/mat ket noi giua chung, bang local KHONG bi dong (van con nguyen du lieu
+    cu) thay vi bi xoa sach ma khong nap lai duoc (da tung xay ra voi dim_targetvungmien, gay thieu
+    du lieu target MT mot thang ma khong ai biet cho toi khi nguoi dung phat hien so lieu sai)."""
     _, rows = bravo_query(f"SELECT {bravo_cols} FROM dbo.{bravo_tbl}")
     conn = get_conn()
-    conn.execute(f"DELETE FROM {local_tbl}")
-    if rows:
-        placeholders = ",".join(["?"] * len(local_cols.split(",")))
-        conn.executemany(f"INSERT INTO {local_tbl} ({local_cols}) VALUES ({placeholders})", rows)
-    conn.commit()
-    conn.close()
+    conn.execute("PRAGMA busy_timeout=30000")
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        conn.execute(f"DELETE FROM {local_tbl}")
+        if rows:
+            placeholders = ",".join(["?"] * len(local_cols.split(",")))
+            conn.executemany(f"INSERT INTO {local_tbl} ({local_cols}) VALUES ({placeholders})", rows)
+        conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
+    finally:
+        conn.close()
     print(f"[{local_tbl}] Reload: {len(rows)} dong")
 
 
