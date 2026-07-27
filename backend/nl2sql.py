@@ -107,9 +107,26 @@ TEMPLATE_TOOLS = [
         "name": "get_employee_kpi",
         "description": "KPI nhan vien tinh tu snapshot gan nhat <= as_of_date - LUON tra ve san so luong "
                         "total_employees/count_below_target/count_above_target (khong can lay het danh sach moi biet tong quan). "
-                        "NGUONG DAT KPI LA 80% (khong phai 100%). Moi dong ket qua co san truong 'status' "
-                        "(🟢 Tot = pct>=80, 🟡 Trung binh = 50-79%, 🔴 Nguy hiem = <50%) - LUON hien thi nguyen "
-                        "gia tri status nay kem ten/ma NV trong cau tra loi, KHONG tu tinh nguong mau khac. "
+                        "PHAN BIET 3 MOC KHAC NHAU, TUYET DOI KHONG GOP: (a) 'DAT CHI TIEU' = >=100% chi "
+                        "tieu thang -> dung 'count_full_target'; giua thang con so nay gan nhu luon ~0 va do la "
+                        "DUNG (doanh so luy ke toi hom nay vs chi tieu ca thang). (b) 'DAT KPI' = >=80% "
+                        "('kpi_threshold_pct', CHUNG cho moi vai tro) -> dung 'count_kpi_achieved'; day cung la "
+                        "moc quyet dinh mau 🟢/🟡/🔴 o truong 'status'. (c) 'TOI MUC THUONG NHOM HANG' = "
+                        ">= truong 'threshold' cua tung dong (TDV 65% theo QD 0107/2026, QLV va cac cap quan ly "
+                        "70% theo QD 0429/.25) -> dung 'count_above_target'/'count_below_target'. Hoi 'ai chua "
+                        "dat chi tieu' -> moc 100%; hoi 'ai dat KPI' -> moc 80%; hoi 'ai toi muc thuong nhom "
+                        "hang' -> 'threshold'. Cau hoi mo ho thi dua CA BA va noi ro tung cai la gi. "
+                        "⚠️ TUYET DOI khong goi 65%/70% la 'dat KPI' - do chi la cong THUONG. Nguoi dat 67% la "
+                        "'da toi muc thuong nhom hang nhung CHUA dat KPI (80%)'. "
+                        "⚠️ 65%/70% CHI la cong cua THUONG NHOM HANG (DM1/DM2/DM3), KHONG phai 'nguong huong "
+                        "thuong' noi chung: con V15/V22/V25, ASO (tinh theo SO LUONG khach hang hoat dong - MB 40 "
+                        "/ MT 35 / MN 25, khong phai %), thuong quy, thuong nam - moc khac han va tra theo chi so "
+                        "khac; luong co ban tu 60% tro len van huong 100%. Nguoi duoi 65% VAN CO THE duoc cac "
+                        "khoan kia, nen TUYET DOI khong noi ho 'khong duoc thuong' / 'khong dat KPI'. "
+                        "Truong 'status' "
+                        "(🟢 Tot / 🟡 Trung binh / 🔴 Nguy hiem) chia theo muc THUONG NHOM HANG chu khong theo moc "
+                        "100% - LUON hien thi nguyen status kem ten/ma NV, KHONG tu tinh nguong khac, KHONG ap "
+                        "nguong cua vai tro nay sang vai tro kia. "
                         "UU TIEN dung tool nay cho moi cau hoi ve KPI/doanh so nhan vien/sales. "
                         "Voi cau hoi 'ai chua dat KPI/target' -> dung filter='below_target' (KHONG dung limit lon roi tu loc thu cong, "
                         "gay ton du lieu va co the khong tra loi duoc). "
@@ -123,7 +140,7 @@ TEMPLATE_TOOLS = [
                 "limit": {"type": "integer", "description": "So luong nhan vien can lay trong danh sach ket qua, mac dinh 10"},
                 "order_by": {"type": "string", "enum": ["sales", "pct"], "description": "Chi ap dung khi filter='all': xep hang theo doanh so tuyet doi hay % dat target, mac dinh sales"},
                 "filter": {"type": "string", "enum": ["all", "below_target", "above_target"],
-                           "description": "'all'=top N tot nhat (mac dinh), 'below_target'=CHUA dat KPI (pct<80, te nhat truoc), 'above_target'=DA dat KPI (pct>=80, tot nhat truoc)"},
+                           "description": "'all'=top N tot nhat (mac dinh), 'below_target'=CHUA toi muc huong thuong (te nhat truoc), 'above_target'=DA toi muc huong thuong (tot nhat truoc). Muc huong thuong lay THEO VAI TRO cua tung nguoi (TDV 65%, quan ly 70%). LUU Y day KHONG phai moc 'dat chi tieu' (=100%) - muon dem so nguoi dat chi tieu thi doc 'count_full_target' trong ket qua"},
                 "position_code": {"type": "string", "description": "Loc theo vai tro cu the: TDV/QLV/CTV/CS/TP/PP/TBP/TK (khong bat buoc - de trong neu hoi chung tat ca vai tro)"},
             },
             "required": ["as_of_date"],
@@ -131,8 +148,13 @@ TEMPLATE_TOOLS = [
     },
     {
         "name": "get_employee_daily_kpi",
-        "description": "KPI THEO NGAY cho 1 nhan vien BAN HANG CA NHAN (co ma truc tiep tren hoa don, "
-                        "vd 'tungtx') trong 1 thang. Target 1 ngay = 4% MonthSaleTarget cua nhan vien do "
+        "description": "KPI THEO NGAY cho 1 nhan vien BAN HANG CA NHAN - tuc TRINH DUOC VIEN (TDV), "
+                        "ma co xuat hien truc tiep tren hoa don, vd 'TM25010199'. TUYET DOI KHONG dung "
+                        "cho cap QUAN LY (QLV/TP/PP/TBP, vd 'tungtx', 'MBKV1', 'ASM*'): ma quan ly khong "
+                        "nam tren hoa don nen ket qua se ra 0 dong MOI NGAY - do la THIEU DU LIEU, khong "
+                        "phai ho ban duoc 0 dong. Voi cap quan ly PHAI dung get_employee_kpi (KPI thang) "
+                        "hoac get_revenue_tree (doanh so ca doi). "
+                        "Trong 1 thang. Target 1 ngay = 4% MonthSaleTarget cua nhan vien do "
                         "(4% = 100% cua ngay). Ket qua co san 'days' (danh sach tung ngay T2-T6 trong thang, "
                         "moi ngay co 'status': 🔴 Do <2.5%, 🟡 Vang 2.5%-3.5%, 🟢 Xanh >3.5% - LUON dung "
                         "nguyen status nay, khong tu tinh nguong khac) va dem san count_red/count_yellow/"
@@ -143,7 +165,7 @@ TEMPLATE_TOOLS = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "employee_code": {"type": "string", "description": "Ma nhan vien ban hang ca nhan, vd 'tungtx' (KHONG dung ma khu vuc)"},
+                "employee_code": {"type": "string", "description": "Ma TDV ban hang ca nhan, vd 'TM25010199' (KHONG dung ma quan ly QLV/TP/PP hay ma khu vuc)"},
                 "year_month": {"type": "string", "description": "Thang can xem, dinh dang YYYY-MM"},
             },
             "required": ["employee_code", "year_month"],
@@ -241,6 +263,23 @@ TEMPLATE_TOOLS = [
         },
     },
     {
+        "name": "get_receivables_overview",
+        "description": "Tong quan CONG NO toan cong ty (hoac 1 vung neu tai khoan bi gioi han): tong du "
+                        "no, tong no qua han, ty le qua han, tach theo kenh OTC/ETC va theo vung, va top N "
+                        "khach no qua han nhieu nhat. Nguon: bao cao cong no GOC cua DNH (SP), dong bo dinh "
+                        "ky vao kho local. BAT BUOC dung tool nay cho cau hoi cong no TONG HOP/NHIEU KHACH "
+                        "(vd 'tong no qua han', 'top khach no', 'ty le qua han theo vung') - KHONG tu sinh "
+                        "SQL va KHONG dung bang receivable_detail/receivable_etc cu (da ngung). Cong no cua "
+                        "MOT khach cu the -> dung get_customer_detail.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "top_n": {"type": "integer", "description": "So khach no qua han nhieu nhat can liet ke (mac dinh 10)"},
+            },
+            "required": [],
+        },
+    },
+    {
         "name": "get_qlv_change_history",
         "description": "Lich su ai tung/dang phu trach tung khu vuc nho (zone noi bo) - dung khi hoi "
                         "'QLV vung X tung doi qua ai', 'QLV nay lam tu bao gio'. CANH BAO: day la suy "
@@ -330,10 +369,10 @@ QUERY_TOOL = {
 QUERY_SUPABASE_TOOL = {
     "name": "query_inventory_receivables",
     "description": (
-        "CHI dung cho cau hoi ve TON KHO (inventory) hoac CONG NO (receivable_detail/receivable_etc) - "
-        "day la du lieu do dong nghiep tu nhap, CHI CO tren Supabase, Bravo KHONG CO nguon tuong duong. "
-        "Chay 1 cau SQL SELECT (chi doc) tren Supabase (PostgreSQL - ten cot phan biet hoa/thuong, "
-        "PHAI dat trong dau ngoac kep \"...\"). Chi duoc dung SELECT/WITH, khong duoc INSERT/UPDATE/DELETE/DROP."
+        "CHI dung cho cau hoi ve TON KHO (inventory) - du lieu do dong nghiep tu nhap tren Supabase. "
+        "CONG NO KHONG dung tool nay nua (da chuyen sang bang fact_congno_khachhang o kho local - dung "
+        "query_database). Chay 1 cau SQL SELECT (chi doc) tren Supabase (PostgreSQL - ten cot phan biet "
+        "hoa/thuong, PHAI dat trong dau ngoac kep \"...\"). Chi duoc dung SELECT/WITH, khong INSERT/UPDATE/DELETE/DROP."
     ),
     "input_schema": {
         "type": "object",
@@ -389,6 +428,11 @@ hoi "doanh thu thang 6" roi hoi tiep "con thang 5?", hieu la van hoi doanh thu t
 tuong tu nhung doi sang thang 5) - KHONG hoi lai nguoi dung nhung gi da ro tu ngu canh truoc.
 
 QUAN TRONG VE CHON TOOL:
+- ⚠️ KHONG BAO GIO nhac ten tool/ham/truong ky thuat trong cau tra loi cho nguoi dung. Nguoi doc la
+  lanh dao kinh doanh, khong phai lap trinh vien. VD SAI: "tra cuu chi tiet (get_customer_detail)",
+  "count_full_target = 0", "[tien ich] resolve_relative_date(...)". VD DUNG: "toi co the tra cuu chi
+  tiet tung khach hang de xem ai phu trach". Mo ta viec lam bang ngon ngu nghiep vu, giau het ten ky
+  thuat ben trong.
 - Neu cau hoi thuoc 1 trong 15 nhom: doanh thu theo kenh, top san pham, top khach hang, doanh thu
   theo vung mien, KPI/doanh so nhan vien (tong quan/thang), KPI THEO NGAY 1 nhan vien ca nhan, SO SANH
   2 khoang thoi gian, CHI TIET 1 khach hang cu the, TRA CUU ma/ten/vai tro nhan vien, KIEM TRA don hang
@@ -397,13 +441,17 @@ QUAN TRONG VE CHON TOOL:
   (get_revenue_by_channel, get_top_products, get_top_customers, get_revenue_by_region, get_employee_kpi,
   get_employee_daily_kpi, compare_periods, get_customer_detail, get_employee_directory, check_order_timing,
   get_inventory_by_region, get_qlv_change_history, get_revenue_tree, get_kpi_ranking,
-  get_revenue_reconciliation).
+  get_revenue_reconciliation, get_receivables_overview).
   Day la cac truy van DA DUOC KIEM CHUNG khop voi du lieu goc, KHONG tu sinh SQL thay the.
 - Neu cau hoi co NHIEU khia canh cung luc (vd hoi ca doanh thu, top san pham, vung mien, nhan vien
   trong 1 cau) -> goi TUAN TU nhieu tool tuong ung, moi tool 1 khia canh, roi tong hop lai.
-- Voi phan cau hoi KHONG thuoc 15 nhom tren: neu la ve CONG NO -> dung query_inventory_receivables
-  (Supabase). Con lai (hoa don/doanh thu/san pham/khach hang/nhan vien/vung mien dang ad-hoc, tra hang...)
-  -> dung query_database (kho local SQLite).
+- CONG NO: cau hoi TONG HOP/nhieu khach (tong no qua han, top khach no, ty le qua han theo vung/kenh)
+  -> dung get_receivables_overview. Cong no cua 1 khach cu the -> get_customer_detail. CONG NO da
+  KHONG con tren Supabase - TUYET DOI khong truy van receivable_detail/receivable_etc (bang cu, da chan).
+- Voi phan cau hoi KHONG thuoc cac nhom tren: neu la ve TON KHO (inventory) -> dung
+  query_inventory_receivables (Supabase). Con lai (hoa don/doanh thu/san pham/khach hang/nhan vien/vung
+  mien ad-hoc, tra hang...) -> dung query_database (kho local SQLite). Neu can boc tach cong no ad-hoc
+  ngoai 2 tool cong no tren, dung query_database tren bang fact_congno_khachhang (LUON SUM theo khach).
 - Cau hoi CO cum tu thoi gian TUONG DOI (hom nay, tuan nay, thang truoc, quy nay, quy truoc, cung ky
   nam ngoai, N thang/ngay gan nhat...) -> BAT BUOC goi resolve_relative_date TRUOC de lay khoang ngay
   cu the, roi moi dung ket qua do lam date_from/date_to cho tool khac - TUYET DOI KHONG tu suy luan
@@ -412,8 +460,33 @@ QUAN TRONG VE CHON TOOL:
 - Neu nguoi dung dinh nghia 1 thuat ngu nghiep vu moi trong cau hoi (vd "doanh thu rong la doanh thu
   tru chiet khau") -> goi save_business_term de luu lai, roi tiep tuc tra loi cau hoi nhu binh thuong.
 - Voi KPI nhan vien TONG QUAN/xep hang/nhieu nhan vien cung luc (ke ca ma khu vuc nhu MBKV*, ASM*):
-  dung get_employee_kpi, nguong DAT KPI la 80% (khong phai 100%). Ket qua da co san truong "status"
-  (🟢 Tot / 🟡 Trung binh / 🔴 Nguy hiem) - LUON dat emoji nay canh ten/ma NV, khong tu nghi nguong khac.
+  dung get_employee_kpi. CO BA MOC KHAC NHAU, TUYET DOI KHONG GOP - va dung goi moc 65%/70% la
+  "dat chi tieu" HAY "dat KPI": do chi la cong BAT DAU DUOC HUONG THUONG NHOM HANG.
+    - Hoi "ai chua dat chi tieu / bao nhieu nguoi dat chi tieu" -> dung "count_full_target" (moc 100%).
+      Giua thang con so nay gan nhu luon ~0 va DO LA DUNG, khong phai loi: doanh so moi luy ke toi hom
+      nay con chi tieu la ca thang. Noi ro dieu do thay vi de nguoi doc tuong he thong hong.
+    - Hoi "ai dat KPI / bao nhieu nguoi dat KPI" -> dung "count_kpi_achieved" (moc 80%, truong
+      "kpi_threshold_pct"), AP DUNG CHUNG cho moi vai tro. Day cung la moc quyet dinh mau 🟢/🟡/🔴.
+    - Hoi "ai toi muc thuong nhom hang" -> dung "count_above_target"/"count_below_target", nguong lay
+      tu truong "threshold" cua tung dong (TDV 65% theo QD 0107/2026, QLV va cac cap quan ly 70% theo
+      QD 0429/.25 - van hieu luc voi cap quan ly).
+    - Nguoi dat 67%: dien dat dung la "da toi muc thuong nhom hang (65%) nhung CHUA dat KPI (80%)".
+    - Cau hoi mo ho -> dua CA BA con so kem nhan ro rang, dung tu chon 1 cai roi im lang.
+    - KHONG bao gio in ten truong ky thuat ra cho nguoi dung (vd dung viet "count_full_target = 0").
+      Nguoi doc la lanh dao kinh doanh, khong phai lap trinh vien - noi "0/87 nguoi dat chi tieu".
+  ⚠️ 65%/70% CHI la cong cua THUONG NHOM HANG (DM1/DM2/DM3). DNH con it nhat 5 ho thuong khac, moc
+  khac va tra theo CHI SO KHAC: V15 (dat 25% doanh so thang vao ngay 15), V22 (55% + ty le target
+  >=75/80%), V25 (>=70% tinh den ngay 25), ASO (theo SO LUONG khach hang hoat dong: MB 40 / MT 35 /
+  MN 25 - KHONG phai %), thuong quy (>=80% quy), thuong nam (>=75% nam). Luong co ban: tu 60% tro len
+  van huong 100%, duoi 60% moi bi cat ty le. => Nguoi duoi 65% VAN CO THE duoc V15/ASO va VAN huong
+  du luong co ban. TUYET DOI KHONG duoc dien dat thanh "khong duoc thuong", "khong dat KPI", "bi cat
+  thuong" - do la noi SAI ve tien luong cua nguoi that. Chi duoc noi dung pham vi: "chua toi muc
+  thuong nhom hang". He thong hien CHUA co du lieu de tinh V15/V22/ASO nen KHONG duoc suy doan ho co
+  duoc cac khoan do hay khong.
+  Truong "status" (🟢 Tot / 🟡 Trung binh / 🔴 Nguy hiem) chia theo moc DAT KPI 80% (KHONG phai muc
+  huong thuong 65/70%) - LUON dat emoji nay canh ten/ma NV, khong tu nghi nguong khac. Vi du dung:
+  "QLV Nguyen Van A dat 67% chi tieu - da toi muc huong thuong nhom hang (70%) nhung CHUA dat KPI
+  (80%), va con cach xa moc dat chi tieu 100%".
 - Voi KPI THEO NGAY cua 1 nhan vien CA NHAN cu the trong 1 thang (vd "hieu suat hang ngay cua tungtx
   thang 7", "ngay nao tungtx do KPI") -> dung get_employee_daily_kpi. Nguong theo NGAY khac hoan toan
   nguong thang: 🔴 Do <2.5%, 🟡 Vang 2.5%-3.5%, 🟢 Xanh >3.5% (target ngay = 4% MonthSaleTarget). Tool
@@ -460,12 +533,27 @@ def _dynamic_context_note(question: str = "", session_id: str = "", scope_area_c
         )
     if scope_employee_code:
         parts.append(
-            f'QUAN TRONG THEM - rieng get_revenue_tree/get_kpi_ranking: tai khoan nay CHI xem duoc du '
-            f'lieu hieu suat CA NHAN cua CHINH DOI CUA HO (khong thay ten/so lieu KPI ca nhan cua cac '
-            f'QLV khac trong cung vung, du van cung vung {scope_area_code or ""}) - day la du lieu hieu '
-            f'suat nhay cam cua dong nghiep, khac voi so lieu doanh thu/ton kho tong hop thong thuong. '
+            # 23/07/2026: PHAI noi ro AI dang phuc vu AI - truoc day note nay khong he cho biet ma nhan
+            # vien cua chinh nguoi dung, nen khi ho hoi "doi TOI co ai chua dat chi tieu" thi AI khong
+            # biet "toi" la ai va HOI NGUOC LAI xin ma nhan vien, du he thong DA tu ep loc dung doi ho.
+            # Nguoi dung phai tu khai ma nhan vien cua chinh minh la trai nghiem rat te (va ho thuong
+            # khong nho ma).
+            f'BAN DANG PHUC VU TAI KHOAN CUA QUAN LY VUNG (QLV) CO MA NHAN VIEN "{scope_employee_code}". '
+            f'Khi nguoi dung noi "toi"/"doi toi"/"nhan vien cua toi", ho dang noi ve chinh QLV nay va '
+            f'doi TDV duoi quyen ho. TUYET DOI KHONG hoi nguoc lai xin ma nhan vien cua ho - he thong '
+            f'DA biet va DA tu dong gioi han moi bao cao ve dung doi cua ho o tang code. Cu goi tool '
+            f'binh thuong, ket qua tra ve DA duoc loc san. '
+            # 23/07/2026: truoc day chi liet ke 2 tool; nay moi bao cao hieu suat theo tung nguoi deu bi
+            # gioi han theo doi (xem _PERSON_LEVEL_TEMPLATES trong report_templates.py).
+            f'MOI bao cao hieu suat theo tung nguoi (get_employee_kpi, get_employee_daily_kpi, '
+            f'get_revenue_tree, get_kpi_ranking) deu CHI tra ve du lieu CUA CHINH DOI HO - khong thay '
+            f'ten/so lieu KPI ca nhan cua QLV khac hay TDV doi khac trong cung vung '
+            f'{scope_area_code or ""} - day la du lieu hieu suat nhay cam cua dong nghiep, khac voi so '
+            f'lieu doanh thu/ton kho tong hop thong thuong. '
             f'Neu nguoi dung hoi "so sanh voi QLV khac" hoac "QLV nao tot nhat vung", PHAI TU CHOI ro '
-            f'rang phan so sanh voi nguoi khac, chi dua duoc so lieu cua chinh ho.'
+            f'rang phan so sanh voi nguoi khac, chi dua duoc so lieu cua chinh ho. '
+            f'Mot so bao cao (vd check_order_timing) bi CHAN han voi tai khoan nay - neu tool tra ve loi '
+            f'noi vay thi giai thich lai cho nguoi dung, dung tim cach lach bang tool khac.'
         )
     if scope_channel:
         parts.append(
