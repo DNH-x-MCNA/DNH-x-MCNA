@@ -16,10 +16,29 @@ file này là của 23/07, chỉ dùng để tập dượt và dò lỗi trướ
 | **R-E** | Cờ trùng lặp ẩn 2 nhân viên thật | ✅ Xếp hạng QLV miền Bắc **9 → 10**, MBKV12 quay lại (2,04 tỷ) |
 | **R-G** | KPI ngày trả "0đ" cho mã QLV | ✅ Báo đúng *"mã không có trên hóa đơn, thiếu dữ liệu, không phải bán được 0đ"* |
 | **R-B** | Công nợ đọc bảng cũ, im lặng | ✅ Trả *"chưa tra cứu được… không thể kết luận khách không có nợ"* |
-| **R-C** | Ngưỡng đạt 100% vs 80% | ✅ Thống nhất 80%, hiện ngưỡng trên email |
-| **R-D** | Tầng gộp KPI vùng khác nhau | ✅ Tầng lá cả 3 nơi, **sửa gốc bằng `ManagerCode` thật** — xem chi tiết bên dưới |
+| **R-C** | Ngưỡng đạt 100% vs 80% | ⚠️ **ĐÃ SỬA LẠI 27/07 — xem mục R-C bên dưới**: có **BA** mốc (100% đạt chỉ tiêu · **80% đạt KPI** · 65/70% thưởng nhóm hàng). Bản 23/07 gộp nhầm 65/70 thành "đạt KPI" |
+| **R-D** | Tầng gộp KPI vùng khác nhau | ⚠️ **ĐÃ ĐỔI 27/07**: tầng lá → **tầng rollup QLV**, khớp báo cáo gốc 0 đồng cả 3 miền — xem mục R-D bên dưới |
 
-Commit: `acfd828` + `2487806` (repo DNH-x-MCNA) · `7811f76` (repo DNH).
+Commit sáng: `acfd828` + `2487806` (repo DNH-x-MCNA) · `7811f76` (repo DNH).
+
+> ⚠️ **Buổi chiều 23/07 vá tiếp 3 vòng, thay hẳn nội dung R-C bên dưới** (commit `532f0ae`/`e074349`
+> repo DNH · `7653507`/`1f3c5a7`/`36ae9dc`/`76b4e92`/`9982bd4` repo DNH-x-MCNA — deploy máy 24 làm
+> 2 đợt, 21/21 hunk, restart sạch cả 2 lần). Ba việc:
+> 1. Ngưỡng thưởng **THEO VAI TRÒ đọc từ văn bản có chữ ký**: TDV 65% (QĐ 0107/2026),
+>    QLV/TP/PP/TBP/chợ sĩ 70% (QĐ 0429/.25) — quy tắc "văn bản mới nhất theo từng vị trí". Trước đó
+>    hằng số QLV có khai báo nhưng KHÔNG được gọi ở đâu, mọi vai trò bị chấm chung ở 65%.
+>    *(⚠️ 27/07 đính chính: hôm 23/07 đã **bỏ nhầm** mốc 80% và lấy 65/70 làm "đạt KPI". 80% mới là
+>    ngưỡng đạt KPI — nay khôi phục thành mốc riêng, xem R-C.)*
+> 2. Tách "**đạt chỉ tiêu**" (≥100%) khỏi "**tới mức thưởng nhóm hàng**" (65%/70%) — nhãn cũ
+>    "Đạt Chỉ Tiêu (≥65%)" tự mâu thuẫn. *(27/07 thêm mốc thứ ba: **đạt KPI ≥80%**.)*
+> 3. Cấm gọi 65%/70% là "ngưỡng hưởng thưởng" nói chung — đó CHỈ là cổng của thưởng nhóm hàng
+>    (DM1/DM2/DM3). Còn V15/V22/V25, ASO (theo SỐ LƯỢNG khách, không phải %), thưởng quý/năm, và
+>    lương cơ bản (≥60% vẫn hưởng 100%) — người dưới 65% vẫn có thể được các khoản đó. Chatbot bị
+>    cấm nói "không được thưởng"/"không đạt KPI" khi chỉ dưới mốc nhóm hàng.
+>
+> **Kiểm chứng live tối 23/07 (phiên mới, tài khoản `tungtx`)**: câu bẫy *"TDV nào không được thưởng
+> tháng này?"* — chatbot từ chối kết luận, chỉ nói đúng phạm vi "chưa tới mức thưởng nhóm hàng",
+> tự nêu lương cơ bản + các khoản khác chưa tính được. Xem chi tiết bảng X6 mục 4.
 
 > ⚠️ **BÀI HỌC KIỂM CHỨNG — đọc trước khi test bất kỳ bản vá chatbot nào.**
 > Lần thử đầu sau deploy vẫn ra 87 TDV, tưởng bản vá hỏng. Thực ra chatbot **trả lời lại từ bộ
@@ -38,16 +57,20 @@ Commit: `acfd828` + `2487806` (repo DNH-x-MCNA) · `7811f76` (repo DNH).
 
 Kiểm chứng thực tế 23/07/2026 (`get_bravo_last_n_complete_months`):
 
-| Kỳ | Đạt ≥100% | Đạt ≥80% | TB toàn đội |
+| Kỳ | Đạt chỉ tiêu ≥100% | Tới mức thưởng nhóm hàng (TDV ≥65%) | TB toàn đội |
 |---|---|---|---|
-| Tháng 4/2026 (trọn tháng) | 64/150 | 109/150 | 88,1% |
-| Tháng 5/2026 (trọn tháng) | 19/149 | 50/149 | 67,3% |
-| Tháng 6/2026 (trọn tháng) | 25/150 | 52/150 | 65,5% |
-| Tháng 7/2026 (mới 23/31 ngày) | **0/147** | **10/147** | 41,6% |
+| Tháng 4/2026 (trọn tháng) | 64/150 | 109/150 *(ở mốc 80% cũ)* | 88,1% |
+| Tháng 5/2026 (trọn tháng) | 19/149 | 50/149 *(ở mốc 80% cũ)* | 67,3% |
+| Tháng 6/2026 (trọn tháng) | 25/150 | 52/150 *(ở mốc 80% cũ)* | 65,5% |
+| Tháng 7/2026 (mới 23/31 ngày) | **0/147** | **27/147** *(mốc 65% mới, thay 10/147 ở 80% cũ)* | 41,6% |
 
 **Demo 09/08 rơi vào ngày thứ 9 của tháng 8** → tỷ lệ ngày đã trôi qua chỉ ~29% → hỏi "ai đạt chỉ
-tiêu tháng này" gần như chắc chắn ra **0/147 ở CẢ HAI ngưỡng**. Khách sẽ hiểu là hệ thống hỏng, hoặc
-là cả đội bán hàng đang thảm hoạ — cả hai đều sai.
+tiêu tháng này" gần như chắc chắn ra **0/147**. Khách sẽ hiểu là hệ thống hỏng, hoặc là cả đội bán
+hàng đang thảm hoạ — cả hai đều sai. **Nay hệ thống tự trả thêm số "tới mức thưởng nhóm hàng"** song
+song, đỡ hẳn cảm giác "tất cả đều = 0" — nhưng vẫn nên chủ động dẫn dắt như bên dưới.
+
+*(Cột "80% cũ" ở 3 tháng trước giữ nguyên để đối chiếu lịch sử — script `demo1_ground_truth.py`
+chưa chạy lại theo ngưỡng 65% mới cho các tháng này, chỉ tháng 7 đã có số mới.)*
 
 > **✅ Xử lý (bắt buộc)**: mọi câu hỏi KPI trong demo **phải hỏi tháng 7/2026** — tại thời điểm
 > 09/08 thì tháng 7 đã trọn vẹn, số liệu có ý nghĩa (~25/150 đạt 100%). Với chatbot, truyền
@@ -66,49 +89,100 @@ là cả đội bán hàng đang thảm hoạ — cả hai đều sai.
 Chính công thức cũ này từng thổi nợ 1 khách lên **9,17 tỷ** trong khi thật là **0,61 tỷ**.
 → Xem mục 4, câu X1. **Không đưa câu hỏi công nợ vào kịch bản demo cho tới khi xử lý xong.**
 
-### ✅ R-C. Ngưỡng "đạt KPI" — ĐÃ THỐNG NHẤT VỀ 80% (23/07/2026)
+### ✅ R-C. BA MỐC KPI — ĐÃ CHỐT VỚI DNH (27/07/2026, bổ sung mốc "đạt KPI" 80%)
 
-Trước đó 2 hệ thống dùng 2 ngưỡng khác nhau (báo cáo ≥100%, chatbot ≥80%) → cùng dữ liệu tháng 6
-ra **25/150** vs **52/150**, chênh **27 người**. Đã đưa báo cáo định kỳ về **≥ 80%** cho khớp
-chatbot (`src/etl.py::KPI_ACHIEVED_THRESHOLD`), và **hiện ngưỡng ngay trên email** — ô "Đạt Chỉ
-Tiêu" giờ ghi rõ *"(≥80%)"*.
+> ⚠️ **Đính chính bản 23/07:** hôm đó kết luận *"80% không có căn cứ — bỏ hoàn toàn"* và lấy 65/70
+> làm ngưỡng "đạt KPI". **Sai ở chỗ gộp khái niệm.** DNH xác nhận 27/07: **80% CHÍNH LÀ ngưỡng đạt
+> KPI** (đánh giá hiệu quả công việc), còn 65/70 chỉ là **cổng thưởng nhóm hàng**. Hai thứ khác nhau,
+> tồn tại song song. Hậu quả của bản cũ: người đạt 67% bị báo là **"đã đạt KPI"** trong khi thực tế
+> mới qua cổng thưởng — đã sửa 27/07 ở cả 3 nơi.
 
-Kiểm chứng sau khi sửa (tháng 7, tại 23/07): báo cáo trả **10/147**, đúng bằng con số ngưỡng 80%
-trong `scripts/demo1_ground_truth.py`.
+**Ba mốc riêng biệt, tuyệt đối không gộp:**
 
-> ⚠️ **Vẫn cần DNH xác nhận** 80% có đúng là quy ước nghiệp vụ không — đang hỏi ở
-> `docs/Cau_hoi_can_DNH_xac_nhan.md` mục A6. Ngưỡng đã tách thành hằng số, đổi 1 chỗ khi có trả lời.
-> Tại demo, khi trình câu KPI **vẫn phải nói rõ đang dùng ngưỡng 80%** — số nào cũng phải giải thích
-> được, đừng đưa số trần.
-
-### ✅ R-D. KPI theo vùng — ĐÃ THỐNG NHẤT VỀ "TẦNG LÁ" (23/07/2026)
-
-Phát hiện khi chạy thử: hai hệ thống gộp ở hai tầng khác nhau nên ra hai bộ số.
-
-| Cách gộp | MB | MN | MT |
+| Khái niệm | Mốc | Áp dụng | Ý nghĩa |
 |---|---|---|---|
-| Chỉ tầng TDV — chatbot *(cũ)* | 10,89 / 23,75 tỷ = 45,9% | 2,79 / 5,26 = 53,0% | 2,54 / 6,79 = 37,4% |
-| QLV + TDV mồ côi — báo cáo *(cũ)* | 12,97 / 30,78 tỷ = 42,1% | 2,88 / 6,39 = 45,0% | 2,55 / 7,00 = 36,4% |
-| ✅ **Tầng lá — cả hai *(mới)*** | **13,01 / 29,04 tỷ = 44,8%** | **2,79 / 5,26 = 53,1%** | **2,54 / 6,79 = 37,5%** |
+| **Đạt chỉ tiêu** | **≥100%** | mọi vai trò | Làm đủ chỉ tiêu tháng được giao (nghĩa đen) |
+| **Đạt KPI** | **≥80%** | **chung mọi vai trò** | Mốc đánh giá hiệu quả công việc — **cũng là mốc chấm 🟢/🟡/🔴** |
+| **Tới mức thưởng nhóm hàng** | TDV **65%** / quản lý **70%** | theo vai trò | Cổng bắt đầu được tính thưởng DM1/DM2/DM3 — **không phải "đạt KPI", cũng không phải "được thưởng" nói chung** |
 
-**Không bên nào sai công thức** — hai lát cắt song song hợp lệ của cùng một khoản doanh thu. Nhưng
-mỗi cách đều có khuyết điểm thật:
+Ngưỡng thưởng 65/70 lấy từ `dbo.DIM_BacThuong` (bảng cấu hình mà thủ tục tính lương thật
+`usp_SaleSalary_Calculation_Ver2` đọc) + văn bản có chữ ký:
 
-- Tầng TDV thuần **bỏ sót** QLV tự ôm khách, không có đội — **Nguyễn Thị Thanh Thủy (MBKV12)**,
-  doanh số **2,01 tỷ** biến mất khỏi KPI miền Bắc.
-- Tầng QLV **cộng chồng target cấp quản lý**: MB 30,78 tỷ so với 23,75 tỷ ở tầng TDV — chênh 7,03
-  tỷ, trong đó MBKV12 chiếm 5,28 tỷ, **còn 1,75 tỷ chưa giải thích được** (nghi vấn mục A4).
+| Vai trò | Ngưỡng thưởng nhóm hàng | Văn bản |
+|---|---|---|
+| **TDV** | **65%** | QĐ 0107/2026 (hiệu lực 01/07/2026) |
+| **QLV, TP, PP, TBP, TDV chợ sĩ** | **70%** | QĐ 0429/QĐ-HĐQT.25 (chưa có văn bản mới hơn) |
 
-**Đã chọn "tầng lá"** = mọi TDV + những QLV **không có** TDV nào dưới quyền. Không bỏ sót ai, không
-cộng chồng. Áp cho **cả ba nơi**, đã kiểm chứng ra cùng con số trên chatbot LIVE:
+Quy tắc áp dụng: **văn bản mới nhất theo từng vị trí**. Giống nhau ở cả 3 miền MB/MT/MN.
+
+Cả email lẫn chatbot giờ trả **CẢ BA** con số (kiểm chứng 27/07, tháng 7: **39/147** tới mức thưởng ·
+**22/147** đạt KPI · **7/147** đạt chỉ tiêu — hai hệ thống khớp tuyệt đối), và bị cấm nói "không được
+thưởng"/"không đạt KPI" khi chỉ đang dưới mốc thưởng nhóm hàng — vì DNH còn V15/V22/V25, ASO (theo số
+lượng khách), thưởng quý/năm với mốc riêng, và lương cơ bản vẫn 100% từ 60% trở lên.
+
+Kiểm chứng live tối 23/07 (tài khoản `tungtx`, phiên mới): ngưỡng QLV báo đúng **70%**; câu "TDV nào
+chưa đạt chỉ tiêu" trả về **cả** số đạt chỉ tiêu (0/10) **và** số tới mức thưởng (6/10); câu bẫy "TDV
+nào không được thưởng" bị từ chối đúng cách — xem X6 mục 4.
+
+> ⚠️ Tại demo, khi trình câu KPI **luôn nói rõ đang dùng mốc nào trong ba mốc** (đạt chỉ tiêu 100% ·
+> đạt KPI 80% · thưởng nhóm hàng 65%/70%) — đừng đưa 1 số trần khiến khách tưởng đó là "đạt/không
+> đạt" nhị phân. Người đạt 67% phải diễn đạt đúng là *"đã tới mức thưởng nhóm hàng nhưng chưa đạt
+> KPI"*.
+
+### ✅ R-D. KPI theo vùng — ĐÃ CHUYỂN SANG "TẦNG ROLLUP QLV" (27/07/2026, thay quyết định 23/07)
+
+**Kết luận cuối:** gộp ở **tầng rollup QLV** (mỗi QLV đã gồm đội của họ **+ chỉ tiêu cá nhân của
+chính họ**). Đây là cách **duy nhất** khớp báo cáo gốc của DNH.
+
+| Cách gộp | MB | MN | MT | Khớp báo cáo gốc? |
+|---|---|---|---|---|
+| Chỉ tầng TDV *(bỏ)* | 23,75 tỷ | 5,26 tỷ | 6,79 tỷ | ❌ |
+| Tầng lá — quyết định 23/07 *(bỏ)* | 29,04 tỷ | 5,26 tỷ | 6,79 tỷ | ❌ |
+| ✅ **Tầng rollup QLV *(dùng từ 27/07)*** | **30,78 tỷ** | **13,19 tỷ** | **7,00 tỷ** | ✅ **lệch 0 đồng** |
+
+**Vì sao bỏ "tầng lá":** quyết định 23/07 chọn tầng lá vì phần chênh ~1,75 tỷ ở MB *"chưa giải thích
+được"*. Ngày 27/07 đã **truy ra**: đó là tổng **5 dòng chỉ tiêu cá nhân của chính QLV** (QLV vừa quản
+đội vừa tự ôm một địa bàn) = 1.744.361.395đ — hoàn toàn hợp lệ, **không phải** chỉ tiêu cấp vùng chồng
+lên. Kiểm chứng: target rollup của `tungtx` 3.016.493.346 = tổng 10 TDV dưới quyền 2.756.994.289 +
+phần tự thân 259.499.057.
+
+Quan trọng hơn: **tầng lá về bản chất không thể đếm đủ.** Người có chỉ tiêu nhưng chưa được giao khách
+nào thì **không có dòng nào** trong `FACT_TongHopKhachHang` (bảng chỉ có dòng theo từng khách) → vô
+hình với mọi cách cộng từ dưới lên. Riêng MB mất 626.173.042đ. Vá allowlist bao nhiêu lần cũng không
+sửa được điều này.
+
+**Miền Nam là ca nặng nhất:** tầng lá chỉ ra 5,26 tỷ / thực tế 13,19 tỷ — **hụt 7,93 tỷ**, khiến MN
+nhảy lên **61,0% và đứng hạng 1** trong khi báo cáo gốc xếp hạng 2 (47,3%). Sai cả con số lẫn **thứ
+hạng** — C-level đối chiếu là thấy ngay.
+
+**Cách xác định tầng rollup:** bằng **`ManagerCode` lấy từ toàn bộ FACT**, *cố ý* không lọc
+`PositionCode` lẫn `IsDuplicate` — cả hai đều **sai nhãn** trên Bravo:
+- `PositionCode`: Dương Thị Hồng Huệ (Modern Trade, 5,29 tỷ) mang chức danh **TK**, Đặng Trường Lol
+  (Chợ sỉ, 1,5 tỷ) mang **CS** → lọc `IN ('TDV','QLV')` làm bay hơi 6,79 tỷ của MN.
+- `IsDuplicate`: **4 QLV thật** bị Bravo gắn cờ trùng lặp (MN1 Kênh MT 5,29 tỷ · MN4 Chợ sỉ 1,5 tỷ ·
+  MBKV12 5,28 tỷ · TM25030101 Lạc Ngọc Sâm 0,935 tỷ). Danh sách miễn trừ tay chỉ liệt kê được 2/4.
+
+**Đã sửa đủ cả 3 nơi** (27/07), cùng một quy tắc, kiểm chứng ra **cùng một số**:
 
 | Nơi | Trạng thái |
 |---|---|
-| `src/etl.py::get_digest_metrics` (báo cáo) | ✅ toàn đội **44,7%** |
-| `report_templates.py::kpi_ranking` (chatbot) | ✅ Deploy + kiểm chứng trên chatbot thật |
-| `scripts/demo1_ground_truth.py` (đối chiếu) | ✅ |
+| `src/etl.py::get_digest_metrics` (báo cáo email) | ✅ MB 30,78 / MN 13,19 / MT 7,00 tỷ |
+| `report_templates.py::kpi_ranking` (chatbot) | ✅ bằng đúng số trên, lệch 0 đồng |
+| `scripts/demo1_ground_truth.py` (đối chiếu) | ✅ toàn đội **48,0%**, tổng 50.967.586.921đ |
 
-> ⚠️ Sửa cách gộp thì phải sửa **đủ cả 3 nơi** — sót một chỗ là lệch lại như cũ.
+**Độ bền đã kiểm:** 7 tháng liên tiếp (2026-01 → 07), **21/21** cặp tháng×vùng khớp 0 đồng; tổng toàn
+quốc = đúng dòng Total báo cáo gốc. Các tháng 2025 lệch (do `ManagerCode` thời đó chưa điền đủ) nhưng
+nằm ngoài cửa sổ đồng bộ 90 ngày nên chatbot không tra tới.
+
+**Hai chốt an toàn đã cài** (test bằng cách cố tình phá dữ liệu, cả hai đều bắt được):
+1. **Chống lồng tầng** — nếu Bravo thêm cấp trên (vd TP quản lý QLV) thì cộng cả 2 cấp sẽ gấp đôi
+   âm thầm → cảnh báo rõ thay vì trả số sai. Hiện 21/21 đều là QLV, không ai bị lồng.
+2. **Đối chiếu `DIM_TargetVungMien`** — bảng chỉ tiêu vùng chính thức của DNH. Lệch quá 0,5% → gắn
+   cảnh báo vào câu trả lời. Lưới độc lập, bắt được sai lệch tương lai mà không cần ai nhớ ra.
+
+> ⚠️ Sửa cách gộp thì vẫn phải sửa **đủ cả 3 nơi**. Riêng chatbot nay dùng chung helper
+> `_rollup_tier_codes()` cho cả `group_by='region'` lẫn `group_by='qlv'`, nên hai nhánh **không thể
+> lệch nhau** — cộng tay danh sách 21 QLV ra đúng tổng vùng.
 
 ### Nhật ký sửa gốc R-D (3 vòng, cùng ngày)
 
@@ -233,8 +307,8 @@ lời rõ *"mã này là QLV, hãy dùng KPI tháng"* thay vì trả 0đ.
 | C3 | Doanh thu tháng này chia theo ba miền thế nào? | `get_revenue_by_region` | Bắc 22,77 tỷ · Nam 21,15 tỷ · Trung 3,79 tỷ (cộng = 47,71 tỷ ✔) | ⬜ |
 | C4 | Top 10 khách hàng lớn nhất tháng này? | `get_top_customers` | 1. DTH00237 1,53 tỷ · 2. HCM13368 1,32 tỷ · 3. NDI00720 1,32 tỷ | ⬜ |
 | C5 | Top 10 sản phẩm bán chạy nhất tháng này? | `get_top_products` | 1. An cung ngưu hoàng hoàn 3,68 tỷ · 2. Siro bổ phế Nam Hà 3,52 tỷ | ⬜ |
-| C6 | **Xếp hạng các vùng theo mức đạt KPI tháng 7?** | `get_kpi_ranking(group_by="region")` | MN 45,0% · MB 42,1% · MT 36,4% — toàn đội 41,6% | ⬜ |
-| C7 | **Tháng 7 có bao nhiêu TDV chưa đạt chỉ tiêu?** | `get_employee_kpi(filter="below_target", position_code="TDV", as_of_date="2026-07-31")` | Ngưỡng ≥80%: **đạt 10/147 · chưa đạt 137/147** *(số tại 23/07 — chạy lại sát ngày demo)* | ⬜ |
+| C6 | **Xếp hạng các vùng theo mức đạt KPI tháng 7?** | `get_kpi_ranking(group_by="region")` | **MB 49,6% · MN 47,4% · MT 42,6% — toàn đội 48,0%** *(số tại 27/07; chỉ tiêu MB 30,78 / MN 13,19 / MT 7,00 tỷ khớp tuyệt đối báo cáo gốc)* | ⬜ |
+| C7 | **Tháng 7 có bao nhiêu TDV chưa đạt chỉ tiêu?** | `get_employee_kpi(filter="below_target", position_code="TDV", as_of_date="2026-07-31")` | **BA mốc, phải nêu đủ, không gộp** *(số tại 27/07 — chạy lại sát ngày demo)*: Đạt chỉ tiêu (≥100%) **7/147** · Đạt KPI (≥80%) **22/147** · Tới mức thưởng nhóm hàng (≥65%) **39/147** | ⬜ |
 | C8 | Cây doanh thu miền Bắc theo QLV và TDV? | `get_revenue_tree(area_code="MB")` | 10 QLV. Dẫn đầu: Trịnh Xuân Tùng 1,72 tỷ/3,02 tỷ = 57,1% (10 TDV) | ⬜ |
 
 > ⚠️ **C2 — phải có lời dẫn.** Tháng 7 mới chạy 23/31 ngày, so với tháng 6 trọn vẹn thì đương nhiên
@@ -289,6 +363,11 @@ lời rõ *"mã này là QLV, hãy dùng KPI tháng"* thay vì trả 0đ.
 | X3 | Doanh thu kênh MT tháng này? | MT = Modern Trade hay Miền Trung | Thử xem chatbot **có hỏi lại không**. Tự đoán = phải sửa | ⬜ |
 | X4 | Có ai chạy đơn dồn cuối tháng không? | `check_order_timing` **nêu đích danh nhân viên** | Nhạy cảm — **không demo trước đông người** | ⬜ |
 | X5 | Doanh số ETC theo từng nhân viên? | Chatbot **không có tool** cho mục này → sẽ tự ghép SQL hoặc trả thiếu | Né; mục này chỉ trình qua báo cáo email | ⬜ |
+| **X6** | 🎯 **TDV nào không được thưởng tháng này?** | Câu bẫy — dễ khiến chatbot kết luận sai về tiền lương người thật nếu chỉ nhìn 1 chỉ số | Phải từ chối kết luận, chỉ nói đúng phạm vi "chưa tới mức thưởng nhóm hàng" | ✅ **ĐẠT** — kiểm tối 23/07, xem mục 6 |
+
+> **X6 — có thể đưa vào demo chính thức, không phải câu né.** Đây là câu kiểm tra chất lượng trả
+> lời rất tốt: nếu khách tự hỏi kiểu này (rất có khả năng, vì đây là câu QLV thật sẽ hỏi), chatbot
+> cần thể hiện đúng sự cẩn trọng thay vì kết luận thẳng về lương của nhân viên.
 
 **Lời dẫn sẵn khi khách hỏi "tháng này thì sao?" (câu KPI):**
 > *"Chỉ tiêu là chỉ tiêu cả tháng, còn doanh số mới lũy kế tới hôm nay — nên giữa tháng thì tỷ lệ
@@ -321,16 +400,21 @@ lời rõ *"mã này là QLV, hãy dùng KPI tháng"* thay vì trả 0đ.
 
 **Lô A (`dnh`, c_level) — chạy 23/07/2026: 6/7 khớp.**
 
+> ⚠️ **Đính chính mã câu (27/07):** mã ở cột "Mã" bên dưới là mã ghi tay lúc chạy, lệch so với bảng
+> kịch bản mục 1 — **đọc theo nội dung mới đúng**. Đã sửa 2 dòng KPI được xác nhận chắc chắn theo nội
+> dung: dòng "xếp hạng vùng theo KPI" là **C6** (không phải C5), dòng "TDV đạt chỉ tiêu" là **C7**
+> (không phải C6). Các dòng còn lại (top khách/top sản phẩm/chi tiết KH DTH00237) sẽ được chạy lại
+> đúng ngưỡng theo vai trò trước demo (xem cảnh báo cuối mục), nên chưa đánh số lại cứng ở đây.
+
 | Mã | ✅/❌ | Thời gian trả lời | Phân loại lỗi | Ghi chú |
 |---|---|---|---|---|
 | C1 | ✅ | — | *(lệch nhỏ)* | OTC khớp tuyệt đối. ETC 27,40 vs 27,38 tỷ — **lệch 20 triệu (0,07%)** giữa kho local chatbot và Bravo. Không nghiêm trọng nhưng có thật, cần theo dõi |
-| C2 | ✅ | — | — | MB/MT khớp; MN lệch 20 triệu (cùng nguồn ETC ở C1). **Bonus:** chatbot tự tách "MT = Modern Trade 1,83 tỷ" → **trả lời sẵn câu X3**, phân biệt đúng MT-kênh với MT-miền Trung |
-| C3 | ✅ | — | — | Khớp hoàn toàn top 10 |
-| C4 | ✅ | — | — | Khớp hoàn toàn top 10 |
-| **C5** | ❌ | — | **Khác tầng gộp** | Chatbot MB 45,9% / MN 53,0% / MT 37,4%; báo cáo MB 42,1% / MN 45,0% / MT 36,4%. **Xem mục R-D bên dưới** |
-| C6 | ✅ | — | — | 137/147 chưa đạt, 10 đạt ≥80% — **khớp hoàn hảo** sau khi đồng bộ ngưỡng 80% sáng 23/07 |
-| C7 | ✅ | — | *(xác nhận R-B)* | 1,53 tỷ đúng, bonus tên "BV Đa khoa Đồng Tháp". Nhưng trả *"Công nợ: chưa có dữ liệu"* cho một bệnh viện tỉnh — **bằng chứng sống của R-B** |
-| C8 | | | | *(chưa hỏi)* |
+| C3 *(ghi tay: C2)* | ✅ | — | — | Doanh thu 3 miền: MB/MT khớp; MN lệch 20 triệu (cùng nguồn ETC ở C1). **Bonus:** chatbot tự tách "MT = Modern Trade 1,83 tỷ" → **trả lời sẵn câu X3**, phân biệt đúng MT-kênh với MT-miền Trung |
+| C4/C5 *(ghi tay: C3, C4)* | ✅ | — | — | Top khách hàng + top sản phẩm — khớp hoàn toàn top 10 |
+| **C6** *(ghi tay: C5)* | ❌ | — | **Khác tầng gộp** | Xếp hạng vùng theo KPI: chatbot MB 45,9% / MN 53,0% / MT 37,4%; báo cáo MB 42,1% / MN 45,0% / MT 36,4%. **Xem mục R-D bên dưới** |
+| **C7** *(ghi tay: C6)* | ✅ | — | — | TDV đạt chỉ tiêu: 137/147 chưa đạt, 10 đạt ≥80% — khớp sau khi đồng bộ ngưỡng 80% sáng 23/07. **Lưu ý: đây là ngưỡng 80% cũ, phải chạy lại ở ngưỡng đúng theo vai trò** |
+| Chi tiết KH DTH00237 *(ghi tay: C7)* | ✅ | — | *(xác nhận R-B)* | 1,53 tỷ đúng, bonus tên "BV Đa khoa Đồng Tháp". Nhưng trả *"Công nợ: chưa có dữ liệu"* cho một bệnh viện tỉnh — **bằng chứng sống của R-B** (sau khi đổi nguồn công nợ 29/07 phải ra số cụ thể) |
+| C8 | | | | *(chưa hỏi — cây doanh thu MB)* |
 **Lô B (`thuy.nguyen2`, regional_director MB) — chạy 23/07/2026: bảo mật PASS, 1 lỗi dữ liệu.**
 
 | R1 | ✅ | — | — | 22,77 tỷ — khớp tuyệt đối. Chatbot còn tự nói rõ *"tài khoản chỉ có quyền xem vùng MB"* |
@@ -349,6 +433,25 @@ lời rõ *"mã này là QLV, hãy dùng KPI tháng"* thay vì trả 0đ.
 | X3 | | | | |
 | X4 | | | | |
 | X5 | | | | |
+
+**Lô D (`tungtx`, qlv MB) — chạy TỐI 23/07/2026, SAU bản vá ngưỡng theo vai trò: 4/4 đạt.**
+
+| Mã | ✅/❌ | Ghi chú |
+|---|---|---|
+| R3 (chấm lại) | ✅ | Ngưỡng QLV báo đúng **70%**, trước đó (sáng) live vẫn nói 80%. 10 QLV, MBKV12 có mặt (2,09 tỷ) — ngoại lệ IsDuplicate vẫn sống qua deploy |
+| C7 (chấm lại) | ✅ | Trả **cả 2 con số** tách bạch: 87/87 chưa đạt chỉ tiêu (100%) · 15/87 tới mức thưởng (65%). Tự giải thích "giữa tháng, không phải lỗi" |
+| **X6** | ✅ | Câu bẫy "TDV nào không được thưởng" — chatbot từ chối kết luận, nói đúng phạm vi "chưa tới mức thưởng nhóm hàng", tự nêu lương cơ bản + V15/ASO chưa tính được |
+| Q2 | ✅ | KPI ngày TM25010199, 18 ngày (bỏ 3 cuối tuần) cộng lại đúng khớp lũy kế tháng (202,3 tr, lệch 6,5 tr = đúng phần cuối tuần không hiện trong bảng ngày) |
+| Q3 | ✅ | Directory đúng: THO4 / TM25010199 / TDV / MB |
+| Q4 | ✅ | Top khách hàng ép đúng scope MB; tự nhận hạn chế "không lọc được theo đội", không suy đoán |
+
+> ⚠️ **Sau lô D phát hiện 2 rò rỉ nhỏ, đã vá nhưng CHƯA deploy** (không sinh số sai, chỉ lộ chi tiết
+> kỹ thuật — gộp vào lần deploy kế tiếp): câu trả lời từng in thẳng `count_full_target = 0` và
+> `(get_customer_detail)` ra cho người dùng. Đã cấm cả tên trường lẫn tên tool trong câu trả lời
+> (commit `76b4e92`, `9982bd4`).
+>
+> ⚠️ **Toàn bộ Lô A/B/C ở trên chạy khi live còn ngưỡng 80% phẳng — cần hỏi lại các câu dính KPI
+> (C6, C7, R3, Q1) trước khi dùng làm bằng chứng cho demo thật.** Chỉ Lô D là đã kiểm ở ngưỡng đúng.
 
 **Phân loại lỗi** (mỗi ❌ phải rơi vào đúng 1 nhóm, không để trống):
 
