@@ -7,6 +7,55 @@ from src.database import get_db_engines, load_config
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 STATE_DB_PATH = os.path.join(PROJECT_ROOT, 'data', 'alerts_state.db')
 
+# Ngưỡng % chỉ tiêu tháng để tính là "đạt" — LẤY THEO ĐÚNG CẤU HÌNH THẬT CỦA DNH.
+#
+# Lịch sử: ban đầu hardcode 1.0 (100%); 23/07/2026 đổi sang 0.80 cho khớp chatbot (chatbot đang dùng
+# 80) — nhưng CẢ HAI đều là con số MCNA tự đặt, không có căn cứ nghiệp vụ.
+#
+# 23/07/2026 (cùng ngày, sau khi đọc mã nguồn SP tính lương): tìm được ngưỡng THẬT trong bảng cấu
+# hình bậc thưởng `dbo.DIM_BacThuong` của Bravo — bảng mà chính `usp_SaleSalary_Calculation_Ver2`
+# (thủ tục DNH dùng tính lương thật) đọc để quyết định tỷ lệ thưởng. Bậc đầu tiên có `Earn1 > 0`
+# chính là mốc "bắt đầu được ghi nhận/được thưởng":
+#     TDV                          -> 65%   (bậc: 65 / 75 / 85 / 95%)
+#     QLV, CS, TP, PP, TBP, TK     -> 70%   (bậc: 70 / 80 / 90 / 100 / 120%)
+# Đã kiểm chứng: giống nhau ở CẢ 3 miền MB/MT/MN (không có ngoại lệ theo vùng).
+#
+# LƯU Ý 1: bản chất DNH dùng BẬC THANG (càng vượt càng hưởng tỷ lệ cao), không phải ngưỡng nhị phân
+# đạt/không đạt. Con số dưới đây chỉ là mốc SÀN để đếm "bao nhiêu người đạt" cho báo cáo tóm tắt —
+# nếu sau này cần thể hiện đúng bậc thang thì phải đọc thẳng DIM_BacThuong, không dùng hằng số này.
+# LƯU Ý 2: khi đọc con số giữa tháng, xem docstring get_digest_metrics — chỉ tiêu là CẢ THÁNG còn
+# doanh số là lũy kế tới hiện tại, nên đầu tháng tỷ lệ đạt luôn gần 0 dù ngưỡng nào.
+# 23/07/2026 (chiều): xác nhận thêm bằng VĂN BẢN GỐC, không chỉ suy từ DIM_BacThuong nữa —
+# QĐ 0429-1 (MB) phụ lục 02, QĐ 0429-2 (MN), QĐ 0429-3 (MT), đều có chữ ký, đều chặn dưới 70% cho
+# QLV. TDV thì đã chuyển sang QĐ 0107/2026 (hiệu lực 01/07/2026) nên chặn dưới 65%.
+# ⚠️⚠️⚠️ 27/07/2026 — XÁC NHẬN VỚI DNH: có BA MỐC KHÁC NHAU, TUYỆT ĐỐI KHÔNG GỘP:
+#   >= 100%  ĐẠT CHỈ TIÊU   — làm đủ chỉ tiêu tháng được giao (nghĩa đen).
+#   >=  80%  ĐẠT KPI        — mốc đánh giá HIỆU QUẢ CÔNG VIỆC, ÁP DỤNG CHUNG cho MỌI vai trò.
+#   >=65/70% TỚI MỨC THƯỞNG — CỔNG bắt đầu được tính THƯỞNG NHÓM HÀNG (DM1/DM2/DM3), theo
+#                             DIM_BacThuong: TDV 65% (QĐ 0107/2026), quản lý 70% (QĐ 0429/.25).
+# Lỗi từng mắc: 65/70 bị đặt tên KPI_ACHIEVED_* và gọi là "đạt KPI", khiến người đạt 67% bị báo là
+# "đã đạt KPI" trong khi thực tế mới qua cổng thưởng, CHƯA đạt KPI (80%). Nay tách hẳn tên gọi.
+BONUS_THRESHOLD_TDV = 0.65          # Trình dược viên — cổng thưởng nhóm hàng
+BONUS_THRESHOLD_MGR = 0.70          # QLV và các vai trò quản lý/kênh khác — cổng thưởng
+KPI_ACHIEVED_THRESHOLD = 0.80       # ĐẠT KPI — chung cho mọi vai trò
+KPI_FULL_TARGET = 1.00              # ĐẠT CHỈ TIÊU đúng nghĩa đen
+
+
+def bonus_threshold_for(position_code):
+    """Ngưỡng TỚI MỨC THƯỞNG NHÓM HÀNG theo VAI TRÒ (tỷ lệ, không phải %). TDV 0.65, vai trò khác
+    0.70. KHÔNG PHẢI ngưỡng "đạt KPI" — đạt KPI là 0.80 chung cho mọi vai trò (KPI_ACHIEVED_THRESHOLD).
+
+    Dùng hàm này thay vì gọi thẳng hằng số ở bất kỳ chỗ nào đếm/phân loại "tới mức thưởng hay chưa".
+    Lý do có hàm: bên chatbot (D:\\DNH-x-MCNA) từng khai báo đủ 2 hằng số nhưng KHÔNG gọi tới hằng số
+    quản lý ở đâu cả, nên mọi vai trò đều bị chấm ở 65% — một QLV đạt 67% được gắn nhãn "đã đạt"
+    trong khi theo QĐ 0429 họ hưởng 0% thưởng danh mục. Phát hiện 23/07/2026.
+
+    position_code rỗng/None -> ngưỡng TDV: giữ nguyên hành vi cũ, và không gắn nhãn "chưa tới mức
+    thưởng" cho người thật chỉ vì thiếu dữ liệu vai trò."""
+    if position_code and str(position_code).strip().upper() != 'TDV':
+        return BONUS_THRESHOLD_MGR
+    return BONUS_THRESHOLD_TDV
+
 def get_low_inventory(erp_engine, limit):
     """
     Trích xuất các sản phẩm có tồn kho thấp dưới ngưỡng limit
@@ -295,44 +344,6 @@ def _revenue_trend(start_dt, end_dt, granularity, region=None, channel=None):
     return trend
 
 
-def _kpi_summary(conn, region=None):
-    """Tóm tắt KPI toàn đội từ kpi_summary — LƯU Ý: bảng này là SNAPSHOT hiện tại, không lưu
-    lịch sử theo kỳ (xem ghi chú trong config.yaml), nên số liệu luôn là "tính đến hiện tại",
-    không thực sự bó hẹp trong [start_dt, end_dt) của báo cáo tuần/tháng."""
-    from sqlalchemy import text, bindparam
-    markers = _region_markers(region)
-    where = 'month_sale_target > 0'
-    params = {}
-    if markers:
-        where += ' AND area_code IN :region_markers'
-        params["region_markers"] = tuple(markers)
-    sql = text(f'''
-        SELECT COUNT(*) FILTER (WHERE month_sale_percent >= 1.0) AS achieved,
-               COUNT(*) AS total,
-               COALESCE(SUM(month_sale_target),0) AS total_target,
-               COALESCE(SUM(month_sale_amount),0) AS total_amount
-        FROM kpi_summary WHERE {where}
-    ''')
-    if markers:
-        sql = sql.bindparams(bindparam("region_markers", expanding=True))
-    try:
-        row = conn.execute(sql, params).fetchone()
-    except Exception as e:
-        print(f"[DIGEST] Lỗi truy vấn tóm tắt KPI: {e}")
-        return None
-    if not row or not row[1]:
-        return None
-    achieved, total, total_target, total_amount = row
-    team_pct = (float(total_amount) / float(total_target)) if total_target else None
-    return {
-        "achieved_count": int(achieved or 0),
-        "total_count": int(total or 0),
-        "team_pct": round(team_pct * 100, 1) if team_pct is not None else None,
-        "total_target": round(float(total_target), 2),
-        "total_amount": round(float(total_amount), 2),
-    }
-
-
 # Tên tiếng Việt + kiểu định dạng giá trị cho từng loại alert_key (prefix trước dấu ":" đầu
 # tiên) — dùng để "dịch" các dòng "Điểm Nổi Bật Trong Kỳ" từ key/số thô sang câu chữ đọc được.
 # Kiểu giá trị: money (tiền VNĐ) | ratio/percent (0-1 -> %) | qty (số lượng) | count (số nguyên)
@@ -395,22 +406,25 @@ def _highlight_matches_channel(alert_key, channel):
         return channel == "ETC"
     return True
 
-def _highlight_matches_region(prefix, region):
-    """17/07/2026: True nếu highlight loại `prefix` nên hiện cho audience đã lọc theo `region`
-    (None = không giới hạn vùng, C-Level/Toàn quốc — luôn hiện tất cả). Phát hiện qua Daily Digest
-    "Quản lý Miền Trung" 17/07/2026 vẫn hiện thẳng mã khách hàng NGOÀI vùng (HNA00274, HCM04298) từ
-    cảnh báo customer_churn.
+def _highlight_matches_region(region, alert_region):
+    """17/07/2026: True nếu highlight này nên hiện cho audience đã lọc theo `region` (None = không
+    giới hạn vùng, C-Level/Toàn quốc — luôn hiện tất cả). Phát hiện qua Daily Digest "Quản lý Miền
+    Trung" 17/07/2026 vẫn hiện thẳng mã khách hàng NGOÀI vùng (HNA00274, HCM04298) từ cảnh báo
+    customer_churn.
 
-    Khác _highlight_matches_channel (lọc được vì alert_key có gắn literal 'OTC'/'ETC'), bảng
-    sent_alerts KHÔNG lưu vùng của alert đã fire — chỉ lưu alert_key + giá trị cuối. Một số alert
-    (zero_sales_rep, kpi_daily_pace_red, kpi_milestone_tdv...) THẬT SỰ có tính vùng khi gửi Teams
-    (tham số region= suy ra động từ dữ liệu, xem send_alert_to_all_channels trong src/alerts.py),
-    nhưng giá trị vùng đó không được ghi lại vào sent_alerts nên không cách nào đọc lại được ở đây;
-    số còn lại hardcode region="Toàn quốc" (không có breakdown theo vùng trong kiến trúc hiện tại).
-    Vì KHÔNG có alert nào xác minh được đúng vùng audience đang xem, chọn fail-closed triệt để: ẩn
-    HẲN mọi highlight khỏi báo cáo đã scope theo vùng, thay vì hiện nhầm dữ liệu vùng khác (theo
-    yêu cầu — báo cáo vùng chỉ nên chứa đúng thứ thuộc vùng đó, thà trống còn hơn sai)."""
-    return region is None
+    21/07/2026: TRƯỚC ĐÂY bảng sent_alerts không lưu vùng của alert đã fire, nên hàm này fail-closed
+    TRIỆT ĐỂ (ẩn HẲN mọi highlight khỏi báo cáo theo vùng, bất kể alert nào — kể cả loại THẬT SỰ có
+    tính vùng như zero_sales_rep/kpi_daily_pace_red/kpi_milestone_tdv). Phát hiện qua báo cáo Weekly
+    "Quản lý Miền Nam" 13-19/07/2026: mục "Điểm Nổi Bật" trống dù tuần đó có cảnh báo thật liên quan
+    Miền Nam. Giờ record_alert_sent(..., region=...) đã ghi lại vùng THẬT (CHỈ khi alert quy được về
+    đúng 1 vùng cụ thể — xem docstring record_alert_sent trong src/alerts.py; alert gộp nhiều vùng/
+    toàn công ty vẫn ghi "Toàn quốc"/"Nhiều miền"/None), nên so khớp trực tiếp `alert_region` với tên
+    Việt hoá của `region` — vẫn giữ đúng tinh thần fail-closed cũ (KHÔNG chắc chắn -> ẩn), chỉ khác
+    là giờ hiện ĐÚNG khi thật sự xác định được, thay vì luôn luôn ẩn."""
+    if region is None:
+        return True
+    from src.region_map import REGION_NAMES_VI
+    return alert_region == REGION_NAMES_VI.get(region)
 
 def _format_highlight_date_part(part):
     """Nếu 1 mảnh suffix của alert_key là ngày/tháng (YYYY-MM-DD, YYYY-MM, hoặc "M_YYYY" — định
@@ -526,7 +540,7 @@ def _get_period_highlights(start_dt, end_dt, channel=None, region=None):
         conn = sqlite3.connect(STATE_DB_PATH)
         cursor = conn.cursor()
         cursor.execute(
-            "SELECT alert_key, last_sent_at, last_value FROM sent_alerts "
+            "SELECT alert_key, last_sent_at, last_value, region FROM sent_alerts "
             "WHERE last_sent_at >= ? AND last_sent_at < ? ORDER BY last_sent_at DESC",
             (start_dt.strftime("%Y-%m-%d %H:%M:%S"), end_dt.strftime("%Y-%m-%d %H:%M:%S"))
         )
@@ -544,7 +558,7 @@ def _get_period_highlights(start_dt, end_dt, channel=None, region=None):
             continue
         if not _highlight_matches_channel(r[0], channel):
             continue
-        if not _highlight_matches_region(prefix, region):
+        if not _highlight_matches_region(region, r[3]):
             continue
         group_key = _highlight_group_key(r[0])
         if group_key in seen_groups:
@@ -556,29 +570,144 @@ def _get_period_highlights(start_dt, end_dt, channel=None, region=None):
     return [_humanize_highlight(r[0], r[1], r[2]) for r in deduped]
 
 
-def _period_has_critical(start_dt, end_dt):
+def _period_has_critical(start_dt, end_dt, region=None):
     """
     True nếu có >=1 alert CRITICAL THỰC SỰ được gửi trong [start_dt, end_dt) — đọc bảng
     alert_severity_log (ghi bởi src/notifier.py::send_alert_to_all_channels, LỊCH SỬ đầy đủ theo
     thời gian, khác bảng sent_alerts chỉ giữ trạng thái mới nhất). Dùng để gắn cờ Outlook
-    Importance:High cho email digest Weekly/Monthly (xem main.py::_send_periodic_email_report).
+    Importance:High cho email digest Weekly/Monthly (xem main.py::_send_periodic_email_report), và
+    để hiện banner "Kỳ này có cảnh báo mức nghiêm trọng — xem mục Điểm Nổi Bật" trong template.
+
+    21/07/2026: thêm `region`. Phát hiện qua báo cáo Weekly "Quản lý Miền Nam" 13-19/07/2026:
+    banner "có cảnh báo nghiêm trọng, xem mục Điểm Nổi Bật" vẫn hiện dù mục đó trống rỗng — vì
+    has_critical đọc alert CRITICAL TOÀN CÔNG TY, không biết gì về scope vùng. Bản vá đầu tiên
+    (region is not None -> luôn False) chỉ tránh được banner NÓI DỐI, nhưng cũng khiến banner IM
+    LẶNG SAI khi có CRITICAL thật đúng vùng audience. Giờ alert_severity_log đã lưu vùng thật (xem
+    _log_alert_severity trong src/notifier.py, cùng cơ chế với record_alert_sent(..., region=...)
+    trong src/alerts.py — CHỈ ghi tên vùng cụ thể khi alert quy được về đúng 1 vùng, còn lại ghi
+    "Toàn quốc"/"Nhiều miền"/None), nên so khớp trực tiếp thay vì fail-closed mù.
     """
     if not os.path.exists(STATE_DB_PATH):
         return False
     try:
         conn = sqlite3.connect(STATE_DB_PATH)
         cursor = conn.cursor()
-        cursor.execute(
-            "SELECT COUNT(*) FROM alert_severity_log WHERE severity = 'CRITICAL' "
-            "AND sent_at >= ? AND sent_at < ?",
-            (start_dt.strftime("%Y-%m-%d %H:%M:%S"), end_dt.strftime("%Y-%m-%d %H:%M:%S"))
-        )
+        if region is None:
+            cursor.execute(
+                "SELECT COUNT(*) FROM alert_severity_log WHERE severity = 'CRITICAL' "
+                "AND sent_at >= ? AND sent_at < ?",
+                (start_dt.strftime("%Y-%m-%d %H:%M:%S"), end_dt.strftime("%Y-%m-%d %H:%M:%S"))
+            )
+        else:
+            from src.region_map import REGION_NAMES_VI
+            cursor.execute(
+                "SELECT COUNT(*) FROM alert_severity_log WHERE severity = 'CRITICAL' "
+                "AND sent_at >= ? AND sent_at < ? AND region = ?",
+                (start_dt.strftime("%Y-%m-%d %H:%M:%S"), end_dt.strftime("%Y-%m-%d %H:%M:%S"),
+                 REGION_NAMES_VI.get(region))
+            )
         count = cursor.fetchone()[0]
         conn.close()
         return count > 0
     except Exception as e:
         print(f"[DIGEST] Lỗi đọc alert_severity_log (bảng có thể chưa tồn tại nếu chưa có alert nào gửi): {e}")
         return False
+
+
+def _build_kpi_hierarchy(snap, region):
+    """Dựng cây Vùng -> QLV -> TDV từ snapshot KPI Bravo (get_bravo_kpi_tdv_snapshot, có
+    manager_code từ 21/07/2026) — phục vụ báo cáo Weekly/Monthly của Trưởng kênh OTC/ETC (thấy rõ
+    từng vùng) và Quản lý Vùng (thấy rõ từng QLV/TDV trong vùng mình), thay vì chỉ 1 dòng tổng gộp
+    (kpi_summary) không phân biệt được ai đang kéo/ai đang tụt. Thêm 21/07/2026 theo yêu cầu người
+    dùng ("các miền phải chia rõ ra theo từng lớp qlv-tdv để biết rõ thông tin về doanh số").
+
+    Dùng `snap` CHƯA lọc target>0 (khác kpi_summary — xem get_digest_metrics) — mục đích khác
+    nhau: kpi_summary là con số tổng để đối chiếu % hoàn thành đội, còn cây này là để XEM DANH
+    SÁCH đầy đủ ai thuộc QLV nào; ẩn bớt người (dù target=0) sẽ làm cây trông "thiếu" người, gây
+    hiểu lầm là họ không tồn tại/không thuộc quyền quản lý của QLV đó.
+
+    region=None (audience kênh, không giới hạn vùng): nhóm theo VÙNG trước, thứ tự đọc tự nhiên
+    Bắc-Trung-Nam, mỗi vùng liệt kê QLV rồi TDV dưới quyền (sắp theo doanh số đạt giảm dần).
+    region đã set (audience vùng): snap đã lọc sẵn đúng 1 vùng nên bỏ qua lớp nhóm vùng, trả thẳng
+    1 nhóm duy nhất mang tên vùng đó.
+
+    TDV có manager_code KHÔNG khớp QLV nào trong `snap` (QLV nghỉ việc/thiếu dữ liệu — hiếm, xác
+    minh thực tế 21/07/2026 là 0/148, nhưng không giả định mãi đúng) gộp vào 1 dòng giả
+    "(Chưa xác định QLV quản lý)" trong đúng vùng của họ — KHÔNG âm thầm bỏ qua, để phát hiện được
+    nếu dữ liệu tương lai có thay đổi. Tương tự, QLV có area_code không khớp 3 vùng đã biết rơi vào
+    nhóm "Không rõ vùng" thay vì bị loại khỏi cây.
+
+    Trả list [{"region": "Miền Nam", "qlvs": [{"employee_code", "employee_name", "target",
+    "amount", "pct", "tdvs": [{"employee_code", "employee_name", "target", "amount", "pct"}, ...]},
+    ...]}, ...] — rỗng nếu snap rỗng."""
+    from src.region_map import REGION_SQL_MARKERS, REGION_NAMES_VI
+
+    def _leaf(r):
+        pct = round(r.month_sale_percent * 100, 1) if r.month_sale_percent is not None else None
+        return {"employee_code": r.employee_code, "employee_name": r.employee_name,
+                "target": round(r.month_sale_target, 2), "amount": round(r.month_sale_amount, 2),
+                "pct": pct}
+
+    def _region_key(area_code):
+        val = (area_code or "").strip().upper()
+        for key, markers in REGION_SQL_MARKERS.items():
+            if val in markers:
+                return key
+        return None
+
+    def _unresolved_entry(orphans):
+        leaves = sorted([_leaf(t) for t in orphans], key=lambda e: e["amount"], reverse=True)
+        return {"employee_code": None, "employee_name": "(Chưa xác định QLV quản lý)",
+                "target": round(sum(t.month_sale_target for t in orphans), 2),
+                "amount": round(sum(t.month_sale_amount for t in orphans), 2),
+                "pct": None, "tdvs": leaves}
+
+    qlvs = [r for r in snap if r.position_code == 'QLV']
+    tdvs = [r for r in snap if r.position_code == 'TDV']
+    qlv_codes = {q.employee_code for q in qlvs}
+    tdvs_by_manager = {}
+    orphan_tdvs = []
+    for t in tdvs:
+        if t.manager_code in qlv_codes:
+            tdvs_by_manager.setdefault(t.manager_code, []).append(t)
+        else:
+            orphan_tdvs.append(t)
+
+    def _qlv_entry(q):
+        children = sorted(tdvs_by_manager.get(q.employee_code, []),
+                           key=lambda t: t.month_sale_amount, reverse=True)
+        entry = _leaf(q)
+        entry["tdvs"] = [_leaf(t) for t in children]
+        return entry
+
+    if region is not None:
+        qlv_list = sorted([_qlv_entry(q) for q in qlvs], key=lambda e: e["amount"], reverse=True)
+        if orphan_tdvs:
+            qlv_list.append(_unresolved_entry(orphan_tdvs))
+        return [{"region": REGION_NAMES_VI.get(region, region), "qlvs": qlv_list}] if qlv_list else []
+
+    groups_out = []
+    assigned_qlv_codes = set()
+    assigned_orphan_ids = set()
+    for region_key in ("bac", "trung", "nam"):
+        region_qlvs = [q for q in qlvs if _region_key(q.area_code) == region_key]
+        region_orphans = [t for t in orphan_tdvs if _region_key(t.area_code) == region_key]
+        assigned_qlv_codes.update(q.employee_code for q in region_qlvs)
+        assigned_orphan_ids.update(id(t) for t in region_orphans)
+        qlv_list = sorted([_qlv_entry(q) for q in region_qlvs], key=lambda e: e["amount"], reverse=True)
+        if region_orphans:
+            qlv_list.append(_unresolved_entry(region_orphans))
+        if qlv_list:
+            groups_out.append({"region": REGION_NAMES_VI[region_key], "qlvs": qlv_list})
+
+    leftover_qlvs = [q for q in qlvs if q.employee_code not in assigned_qlv_codes]
+    leftover_orphans = [t for t in orphan_tdvs if id(t) not in assigned_orphan_ids]
+    if leftover_qlvs or leftover_orphans:
+        qlv_list = sorted([_qlv_entry(q) for q in leftover_qlvs], key=lambda e: e["amount"], reverse=True)
+        if leftover_orphans:
+            qlv_list.append(_unresolved_entry(leftover_orphans))
+        groups_out.append({"region": "Không rõ vùng", "qlvs": qlv_list})
+    return groups_out
 
 
 def _month_tuple(dt):
@@ -589,10 +718,78 @@ def _prev_month_tuple(dt):
     return (dt.year - 1, 12) if dt.month == 1 else (dt.year, dt.month - 1)
 
 
+def _build_etc_revenue_by_employee(start_dt, end_dt, region=None):
+    """Doanh số ETC theo nhân viên trong [start_dt, end_dt) — nhóm theo vùng, trong mỗi vùng liệt
+    kê nhân viên theo doanh số giảm dần. Thêm 21/07/2026 theo yêu cầu (trước đó báo cáo ETC hoàn
+    toàn không có mục nhân sự).
+
+    KHÁC HẲN mục KPI của OTC (_build_kpi_hierarchy):
+      - ETC KHÔNG có chỉ tiêu cá nhân theo tháng (kế hoạch ETC đặt theo NHÓM HÀNG — FACT_KeHoachTongETC,
+        xác nhận 21/07/2026), nên CHỈ hiện doanh số + số hóa đơn, KHÔNG có target/% hoàn thành.
+      - ETC KHÔNG có tầng QLV (DMSSX_NhanVien không có cột quản lý) — chỉ 1 lớp nhân viên phẳng.
+      - Nhân viên bán ở nhiều vùng xuất hiện 1 lần MỖI vùng (group theo AreaCode) — đúng cho báo
+        cáo theo vùng; ở báo cáo toàn quốc/kênh thì họ hiện ở đúng các vùng họ có bán.
+      - SCOPE THEO ĐÚNG KỲ báo cáo (hóa đơn trong [start_dt, end_dt)) — khác OTC (snapshot lũy kế
+        tháng), nên tuần/tháng KHÁC nhau (đúng bản chất doanh số theo kỳ).
+
+    Join: vHoaDonETCTotal.EmpDMSCode -> DMSSX_NhanVien.DMSCode (lấy tên); vùng qua CityId ->
+    DIM_TinhThanhPho.AreaCode (đã kiểm chứng 21/07/2026: 0 mã không tra được tên). Trả list
+    [{"region": "Miền Bắc", "employees": [{"employee_name","employee_code","revenue","invoices"}]}]."""
+    from sqlalchemy import text, bindparam
+    from src.database import _get_bravo_engine
+    from src.region_map import REGION_SQL_MARKERS, REGION_NAMES_VI
+
+    engine = _get_bravo_engine()
+    if engine is None:
+        return []
+    markers = _region_markers(region)
+    where_region = ""
+    params = {"start_dt": start_dt, "end_dt": end_dt}
+    if markers:
+        where_region = " AND tp.AreaCode IN :markers"
+        params["markers"] = tuple(markers)
+    sql = text(f'''
+        SELECT nv.Name AS emp_name, v.EmpDMSCode AS emp_code, tp.AreaCode AS area_code,
+               SUM(v.Amount9) AS rev, COUNT(DISTINCT v.Stt) AS so_hd
+        FROM dbo.vHoaDonETCTotal v
+        LEFT JOIN DMSSX_NhanVien nv ON nv.DMSCode = v.EmpDMSCode
+        LEFT JOIN DIM_TinhThanhPho tp ON tp.CityId = v.CityId
+        WHERE v.DocDate >= :start_dt AND v.DocDate < :end_dt{where_region}
+        GROUP BY nv.Name, v.EmpDMSCode, tp.AreaCode
+        HAVING SUM(v.Amount9) <> 0
+        ORDER BY SUM(v.Amount9) DESC
+    ''')
+    if markers:
+        sql = sql.bindparams(bindparam("markers", expanding=True))
+    with engine.connect() as conn:
+        rows = conn.execute(sql, params).fetchall()
+
+    def _region_name(area):
+        val = (area or "").strip().upper()
+        for key, ms in REGION_SQL_MARKERS.items():
+            if val in ms:
+                return REGION_NAMES_VI[key]
+        return "Không rõ vùng"
+
+    groups = {}
+    for r in rows:
+        rn = _region_name(r.area_code)
+        groups.setdefault(rn, []).append({
+            "employee_name": r.emp_name or f"(mã {r.emp_code})",
+            "employee_code": r.emp_code,
+            "revenue": round(float(r.rev), 2),
+            "invoices": int(r.so_hd),
+        })
+    region_order = ["Miền Bắc", "Miền Trung", "Miền Nam", "Không rõ vùng"]
+    return [{"region": rn, "employees": groups[rn]}
+            for rn in sorted(groups, key=lambda x: region_order.index(x) if x in region_order else 99)]
+
+
 def get_digest_metrics(start_dt, end_dt, period_label, granularity=None, region=None, channel=None):
     """
-    Tổng hợp dữ liệu THẬT (Supabase: brv_*/brvsx_*/receivable_detail/inventory/kpi_summary)
-    trong khoảng [start_dt, end_dt) phục vụ digest định kỳ (dùng chung cho daily/weekly/monthly).
+    Tổng hợp dữ liệu THẬT trong khoảng [start_dt, end_dt) phục vụ digest định kỳ (dùng chung cho
+    daily/weekly/monthly). 20/07/2026: doanh thu/công nợ/tồn kho/KPI đội đều đọc Bravo trực tiếp
+    — không còn phụ thuộc Supabase (brv_*/brvsx_*/receivable_detail/inventory/kpi_summary).
 
     granularity: None (Daily — giữ nguyên hành vi/cấu trúc cũ) hoặc "weekly"/"monthly" (bật thêm
     trend theo ngày/tuần, breakdown vùng, tóm tắt KPI, điểm nổi bật — xem Phần 2 kế hoạch báo cáo).
@@ -603,7 +800,6 @@ def get_digest_metrics(start_dt, end_dt, period_label, granularity=None, region=
         chưa xác nhận định dạng gốc — để nguyên toàn công ty, tránh suy đoán sai).
     """
     from sqlalchemy import text
-    from src.database import _get_fast_cloud_engine
 
     # 13/07/2026: kẹp end_dt tại hết hôm nay ngay từ đầu hàm. Từ khi get_weekly/monthly_digest_metrics
     # dùng kỳ ĐANG CHẠY (chưa hết tuần/tháng), end_dt truyền vào có thể là ngày TƯƠNG LAI — phát
@@ -651,10 +847,8 @@ def get_digest_metrics(start_dt, end_dt, period_label, granularity=None, region=
     change_pct = ((total_rev - prev_total_rev) / prev_total_rev) if prev_total_rev > 0 else None
 
 
-    # 3. Công nợ — ưu tiên TỨC THỜI từ Bravo (get_bravo_receivables_snapshot, 10/07/2026), dự
-    #    phòng receivable_detail (Supabase) nếu Bravo lỗi. Bravo không có khái niệm "kỳ" (luôn
-    #    tức thời) nên bỏ hẳn bước kiểm tra độ mới của kỳ khi dùng Bravo — chỉ áp dụng khi rơi
-    #    xuống nhánh dự phòng Supabase.
+    # 3. Công nợ — TỨC THỜI từ Bravo (get_bravo_receivables_snapshot). 20/07/2026: bỏ hẳn fallback
+    #    Supabase receivable_detail (dữ liệu Excel tĩnh, không tự làm mới) — Bravo lỗi thì để None.
     receivables = None
     try:
         from src.alerts import get_bravo_receivables_snapshot
@@ -696,138 +890,174 @@ def get_digest_metrics(start_dt, end_dt, period_label, granularity=None, region=
             "period": f"Tức thời (đến {datetime.now().strftime('%d/%m/%Y %H:%M')})",
         }
     except Exception as e:
-        print(f"[DIGEST] Bravo lỗi ({e}) — dự phòng Supabase receivable_detail.")
-        try:
-            fast_engine = _get_fast_cloud_engine()
-            if fast_engine is not None:
-                with fast_engine.connect() as conn:
-                    periods = [r[0] for r in conn.execute(text("SELECT DISTINCT period FROM receivable_detail")).fetchall() if r[0]]
-                    if periods:
-                        latest_period = max(periods, key=_latest_period_key)
-                        month_str, year_str = latest_period.split('_')
-                        latest_tuple = (int(year_str), int(month_str))
-                        report_last_day = end_dt - timedelta(days=1)
-                        if latest_tuple in (_month_tuple(report_last_day), _prev_month_tuple(report_last_day)):
-                            # 14/07/2026: lọc theo vùng qua JOIN dms_khachhang/dmssx_khachhang (theo
-                            # đúng kênh, xem comment schema — customer_code là không gian mã hỗn hợp)
-                            # -> dim_tinhthanhpho, cùng cách đã kiểm chứng ở nhánh Bravo phía trên.
-                            from sqlalchemy import bindparam
-                            params_rd = {"p": latest_period}
-                            otc_join = etc_join = region_where = ""
-                            if region_markers:
-                                otc_join = 'JOIN dms_khachhang k ON rd.customer_code = k."Code" JOIN dim_tinhthanhpho rt ON k."CityId" = rt."CityId"'
-                                etc_join = 'JOIN dmssx_khachhang k ON rd.customer_code = k."Code" JOIN dim_tinhthanhpho rt ON k."CityId" = rt."CityId"'
-                                region_where = ' AND rt."AreaCode" IN :region_markers'
-                                params_rd["region_markers"] = tuple(region_markers)
-
-                            def _rd_sql(extra_join, channel_where):
-                                s = text(
-                                    f'SELECT COALESCE(SUM(rd.total_overdue),0), COALESCE(SUM(rd.balance_end),0) '
-                                    f'FROM receivable_detail rd {extra_join} '
-                                    f'WHERE rd.period = :p AND {channel_where} {region_where}'
-                                )
-                                return s.bindparams(bindparam("region_markers", expanding=True)) if region_markers else s
-
-                            otc_row = conn.execute(_rd_sql(otc_join, "(rd.sales_channel = 'OTC' OR rd.sales_channel = '0')"), params_rd).fetchone()
-                            etc_row = conn.execute(_rd_sql(etc_join, "rd.sales_channel = 'ETC'"), params_rd).fetchone()
-                            deb_row = (float(otc_row[0]) + float(etc_row[0]), float(otc_row[1]) + float(etc_row[1]))
-
-                            receivables = {
-                                "total_overdue": round(float(deb_row[0]), 2),
-                                "balance_end": round(float(deb_row[1]), 2),
-                                "otc_overdue": round(float(otc_row[0]), 2),
-                                "otc_balance": round(float(otc_row[1]), 2),
-                                "etc_overdue": round(float(etc_row[0]), 2),
-                                "etc_balance": round(float(etc_row[1]), 2),
-                                "period": latest_period,
-                            }
-                        # else: dữ liệu công nợ quá cũ so với kỳ báo cáo -> để None, KHÔNG hiển thị
-        except Exception as e2:
-            print(f"[DIGEST] Lỗi cả 2 nguồn khi lấy công nợ: {e2}")
+        print(f"[DIGEST] Bravo lỗi khi lấy công nợ ({e}) — bỏ trống mục này.")
 
     # 14/07/2026: khi báo cáo đã lọc theo 1 kênh cụ thể (audience "Quản lý Kênh OTC/ETC"),
     # total_overdue/balance_end (2 field hiển thị chính trong email — mục "Công Nợ") phải đúng
-    # PHẠM VI kênh đó, không phải tổng công ty — cả 2 nhánh (Bravo/Supabase) đều đã tính sẵn
-    # otc_overdue/etc_overdue/otc_balance/etc_balance, chỉ cần chọn đúng cặp thay cho tổng.
+    # PHẠM VI kênh đó, không phải tổng công ty — đã tính sẵn otc_overdue/etc_overdue/otc_balance/
+    # etc_balance, chỉ cần chọn đúng cặp thay cho tổng.
     if receivables and channel in ("OTC", "ETC"):
         receivables["total_overdue"] = receivables[f"{channel.lower()}_overdue"]
         receivables["balance_end"] = receivables[f"{channel.lower()}_balance"]
 
-    # 4. Tồn kho — VẪN Supabase (chưa verify công thức Bravo BRV_TheKho/TonKhoDK khớp số liệu thật
-    #    — xem docstring check_dead_stock_alert trong src/alerts.py, cùng lý do). KPI đội — ưu
-    #    tiên Bravo (TDV/QLV, get_bravo_kpi_tdv_snapshot), dự phòng kpi_summary (Supabase, đủ mọi
-    #    chức danh) nếu Bravo lỗi.
+    # 4. Tồn kho — 20/07/2026: chuyển sang Bravo-first qua get_bravo_inventory_snapshot() (src/
+    #    alerts.py), bỏ hẳn bảng Supabase `inventory` (thiếu cột channel, chưa từng nhận đúng dữ
+    #    liệu sau khi công thức được sửa 17/07/2026 — xem docstring get_bravo_inventory_snapshot).
+    #    KPI đội — Bravo trực tiếp (TDV/QLV, get_bravo_kpi_tdv_snapshot); bỏ hẳn fallback
+    #    Supabase kpi_summary (xác nhận chỉ có 6/20 QLV thật, thiếu nghiêm trọng).
     dead_stock_count = near_stockout_count = 0
     dead_items = []
     kpi_summary = None
-    fast_engine = _get_fast_cloud_engine()
-    if fast_engine is not None:
-        try:
-            with fast_engine.connect() as conn:
-                # Filter inventory by channel if specified
-                channel_clause = ""
-                if channel in ("OTC", "ETC"):
-                    channel_clause = " WHERE channel = :channel"
-                
-                q_count = f'''
-                    SELECT
-                        COUNT(*) FILTER (WHERE months_to_sell >= :dead_months AND closing_value > :dead_min_value),
-                        COUNT(*) FILTER (WHERE months_to_sell > 0 AND months_to_sell <= 1.0 AND closing_qty > 0)
-                    FROM inventory
-                    {channel_clause}
-                '''
-                
-                q_items = f'''
-                    SELECT item_code, item_name, closing_value, months_to_sell, channel
-                    FROM inventory
-                    WHERE months_to_sell >= :dead_months AND closing_value > :dead_min_value
-                    {"AND channel = :channel" if channel in ("OTC", "ETC") else ""}
-                    ORDER BY closing_value DESC LIMIT 5
-                '''
-                
-                params = {"dead_months": dead_months, "dead_min_value": dead_min_value}
-                if channel in ("OTC", "ETC"):
-                    params["channel"] = channel
+    try:
+        from src.alerts import get_bravo_inventory_snapshot
+        inv_snapshot = get_bravo_inventory_snapshot()
+        if channel in ("OTC", "ETC"):
+            inv_snapshot = [r for r in inv_snapshot if r.channel == channel]
 
-                inv_row = conn.execute(text(q_count), params).fetchone()
-                dead_stock_count = int(inv_row[0] or 0)
-                near_stockout_count = int(inv_row[1] or 0)
-
-                dead_items = conn.execute(text(q_items), params).fetchall()
-        except Exception as e:
-            print(f"[DIGEST] Supabase lỗi/timeout khi lấy tồn kho (chưa có Bravo để fallback) — bỏ trống mục này: {e}")
+        dead_filtered = [r for r in inv_snapshot if r.months_to_sell >= dead_months and r.closing_value > dead_min_value]
+        dead_stock_count = len(dead_filtered)
+        near_stockout_count = sum(1 for r in inv_snapshot if 0 < r.months_to_sell <= 1.0 and r.closing_qty > 0)
+        dead_items = sorted(dead_filtered, key=lambda r: r.closing_value, reverse=True)[:5]
+    except Exception as e:
+        print(f"[DIGEST] Lỗi lấy tồn kho từ Bravo — bỏ trống mục này: {e}")
 
     # 14/07/2026: bỏ qua hẳn mục KPI đội khi báo cáo lọc riêng kênh ETC — kpi_summary/TDV/QLV
     # BẢN CHẤT chỉ có ở OTC (nhân viên bán hàng field-force; brvsx_hoadonhdr/ETC không có cột
     # nhân viên trên hóa đơn, xác nhận thực tế trong docstring check_daily_kpi_pace_alert), nên
     # hiện "164 TDV/QLV" cho audience "Quản lý Kênh ETC" là dữ liệu hoàn toàn không liên quan tới
     # họ. channel=None (toàn công ty)/channel="OTC" vẫn hiện như cũ (đúng phạm vi sẵn có).
+    kpi_breakdown = []
     if granularity in ("weekly", "monthly") and channel != "ETC":
         try:
             from src.alerts import get_bravo_kpi_tdv_snapshot
-            snap = get_bravo_kpi_tdv_snapshot(position_codes=('TDV', 'QLV'))
+            raw_snap = get_bravo_kpi_tdv_snapshot(position_codes=('TDV', 'QLV'))
             markers = _region_markers(region)
             if markers:
-                snap = [r for r in snap if r.area_code in markers]
-            snap = [r for r in snap if r.month_sale_target > 0]
+                raw_snap = [r for r in raw_snap if r.area_code in markers]
+            snap = [r for r in raw_snap if r.month_sale_target > 0]
             if snap:
-                achieved = sum(1 for r in snap if (r.month_sale_percent or 0) >= 1.0)
-                total_target = sum(r.month_sale_target for r in snap)
-                total_amount = sum(r.month_sale_amount for r in snap)
+                qlv_rows = [r for r in snap if r.position_code == 'QLV']
+                tdv_rows = [r for r in snap if r.position_code == 'TDV']
+                # 21/07/2026 (mục 2): "Đạt Chỉ Tiêu N/M" ĐẾM Ở TẦNG CÁ NHÂN (TDV) — chỉ tiêu của
+                # QLV là mức rollup CẢ ĐỘI, không phải hạn mức cá nhân, nên gộp QLV vào phép đếm
+                # đầu người làm con số vô nghĩa (trước đây len(snap) trộn cả TDV lẫn QLV -> vd
+                # "0/36" = 31 TDV + 5 QLV). Giờ đếm riêng: bao nhiêu TDV đạt ngưỡng chỉ tiêu cá
+                # nhân / tổng TDV có chỉ tiêu — con số quản lý cần để biết mấy nhân viên on-track.
+                # Ngưỡng lấy theo vai trò của TỪNG dòng (bonus_threshold_for) chứ không dùng hằng số
+                # phẳng: hiện tdv_rows chỉ có TDV nên kết quả y hệt, nhưng nếu sau này phép đếm mở
+                # rộng sang QLV thì tự động chấm ở 70% thay vì âm thầm chấm sai ở 65%.
+                achieved = sum(1 for r in tdv_rows
+                               if (r.month_sale_percent or 0) >= bonus_threshold_for(r.position_code))
+                # 27/07/2026: ĐẠT KPI = >=80%, mốc riêng, chung cho mọi vai trò — KHÁC hẳn cổng
+                # thưởng 65/70 ở trên và khác "đạt chỉ tiêu" (>=100%) ở dưới. Ba con số, ba nhãn.
+                kpi_achieved = sum(1 for r in tdv_rows
+                                   if (r.month_sale_percent or 0) >= KPI_ACHIEVED_THRESHOLD)
+                # 23/07/2026 (chiều): tách hẳn 2 khái niệm từng bị gộp làm một. `achieved` ở trên là
+                # số người TỚI MỨC THƯỞNG NHÓM HÀNG (65%/70%) — KHÔNG phải "đạt chỉ tiêu", và cũng
+                # KHÔNG phải "được thưởng" nói chung: 65%/70% chỉ là cổng của thưởng nhóm hàng
+                # (DM1/DM2/DM3). DNH còn V15/V22/V25, ASO (tính theo SỐ LƯỢNG khách hàng chứ không
+                # phải %), thưởng quý, thưởng năm — mốc khác hẳn. Lương cơ bản từ 60% trở lên vẫn
+                # hưởng 100%. Nên người dưới 65% VẪN có thể được các khoản kia và vẫn có đủ lương
+                # cơ bản; đừng để nhãn báo cáo ám chỉ họ không được gì.
+                # Đạt chỉ tiêu đúng nghĩa đen là làm được ≥100% chỉ tiêu tháng. Nhãn cũ
+                # "Đạt Chỉ Tiêu (≥65%)" tự nó đã mâu thuẫn: đạt chỉ tiêu mà mới làm được 65% chỉ tiêu.
+                # Giữa tháng con số 100% gần như luôn ~0 và ĐÓ LÀ ĐÚNG (doanh số lũy kế tới hôm nay
+                # so với chỉ tiêu cả tháng) — đưa ra cả hai để người đọc thấy được bức tranh thật.
+                full_target = sum(1 for r in tdv_rows if (r.month_sale_percent or 0) >= 1.0)
+                total_count = len(tdv_rows)
+                # 21/07/2026: SỬA BUG CỘNG TRÙNG tiền — TDV và QLV là 2 cách CẮT LÁT SONG SONG của
+                # CÙNG 1 khoản doanh thu (QLV.month_sale_amount ĐÃ LÀ rollup của các TDV dưới quyền
+                # — verify qua ManagerCode, xem _build_kpi_hierarchy), không phải 2 phần cộng dồn.
+                # Cộng cả 2 -> gấp ~2× thật (phát hiện qua Monthly "Quản lý Miền Nam" 21/07/2026:
+                # "Tổng Doanh Số Đạt" 4,45 tỷ > Doanh Thu OTC thật cả tháng 3,32 tỷ — vô lý).
+                #
+                # 27/07/2026: đổi từ "TẦNG LÁ" sang "TẦNG ROLLUP QLV" — và đổi ĐỒNG THỜI bên chatbot
+                # (backend/report_templates.py::kpi_ranking nhánh region), 2 hệ thống PHẢI gộp giống
+                # nhau, nếu không khách mở song song email và chatbot sẽ thấy 2 bộ số khác nhau.
+                #
+                # Vì sao bỏ tầng lá: bản ghi chú 23/07 chọn tầng lá vì phần chênh ~1,75 tỷ ở MB
+                # "chưa giải thích được". NAY ĐÃ GIẢI THÍCH ĐƯỢC (27/07, đối chiếu từng dòng với báo
+                # cáo gốc "Tiến độ doanh số tháng theo NVKD" tháng 7): đó là tổng 5 dòng CHỈ TIÊU CÁ
+                # NHÂN CỦA CHÍNH QLV (QLV vừa quản đội vừa tự ôm một địa bàn) — 1.744.361.395đ, hoàn
+                # toàn hợp lệ, KHÔNG phải chỉ tiêu cấp vùng chồng lên. Kiểm chứng: target rollup của
+                # tungtx 3.016.493.346 = tổng 10 TDV dưới quyền 2.756.994.289 + phần tự thân 259.499.057.
+                #
+                # Tầng lá VỀ BẢN CHẤT không thể đếm đủ: người có chỉ tiêu nhưng không được giao khách
+                # nào thì KHÔNG có dòng nào trong FACT_TongHopKhachHang (bảng này chỉ có dòng theo
+                # từng khách), nên vô hình với mọi cách cộng từ dưới lên — riêng MB mất 626.173.042đ.
+                #
+                # Đối chiếu thực tế 27/07/2026 (target cả tháng) với báo cáo gốc + DIM_TargetVungMien:
+                #   tầng lá   : MB 23,75 tỷ | MN  5,26 tỷ | MT 6,79 tỷ  -> lệch rất lớn
+                #   tầng rollup: MB 30,78 tỷ | MN 13,19 tỷ | MT 7,00 tỷ -> KHỚP TUYỆT ĐỐI cả 3 miền,
+                #   tổng toàn quốc 50.967.586.921đ = đúng dòng Total của báo cáo gốc. Kiểm thêm 7
+                #   tháng (2026-01..07): 21/21 cặp tháng×vùng khớp 0 đồng.
+                #
+                # Tầng rollup xác định bằng MANAGER_CODE (quan hệ dữ liệu THẬT), CỐ Ý không dùng
+                # position_code lẫn IsDuplicate — cả hai đều sai nhãn trên Bravo: Dương Thị Hồng Huệ
+                # (Modern Trade, 5,29 tỷ) mang chức danh 'TK', và 4 QLV thật bị gắn cờ IsDuplicate=1.
+                # Vì vậy phải lấy snapshot include_duplicates=True cho phép gộp TIỀN này (an toàn: các
+                # dòng "tự thân QLV" cũng IsDuplicate=1 nhưng KHÔNG quản lý ai nên tự bị loại khỏi
+                # tầng rollup, không gây cộng trùng). Các phép ĐẾM ĐẦU NGƯỜI ở trên vẫn dùng snap đã
+                # lọc trùng như cũ — không đổi.
+                # Tập quản lý phải lấy từ TOÀN BỘ FACT (get_bravo_manager_codes, KHÔNG lọc chức danh)
+                # chứ không suy từ chính money_snap: cấp dưới của một số QLV mang chức danh ngoài
+                # ('TDV','QLV') nên bị snapshot lọc mất, khiến QLV đó không bao giờ được nhận ra là
+                # quản lý (MN1 'Kênh MT' và MN4 'Chợ sỉ' — hụt 6,79 tỷ chỉ tiêu Miền Nam).
+                from src.alerts import get_bravo_manager_codes
+                money_snap = get_bravo_kpi_tdv_snapshot(position_codes=('TDV', 'QLV'),
+                                                        include_duplicates=True)
+                if markers:
+                    money_snap = [r for r in money_snap if r.area_code in markers]
+                managers_with_team = get_bravo_manager_codes()
+                money_rows = [r for r in money_snap if r.employee_code in managers_with_team]
+                # CHỐT AN TOÀN — chống LỒNG TẦNG: nếu sau này Bravo thêm cấp trên (vd TP quản lý QLV)
+                # thì cộng cả 2 cấp sẽ GẤP ĐÔI âm thầm. Hiện 21/21 đều là QLV, không ai bị lồng.
+                nested = [r.employee_code for r in money_rows
+                          if r.manager_code and r.manager_code in managers_with_team]
+                if nested:
+                    print(f"[DIGEST][kpi_summary] CẢNH BÁO CẤU TRÚC: {len(nested)} người ở tầng quản lý "
+                          f"lại có cấp trên ({', '.join(nested[:5])}) — cây tổ chức đã có thêm tầng, "
+                          f"tổng chỉ tiêu vùng CÓ THỂ bị đếm trùng. Cần kiểm tra lại cách gộp.")
+                total_target = sum(r.month_sale_target for r in money_rows)
+                total_amount = sum(r.month_sale_amount for r in money_rows)
                 team_pct = (total_amount / total_target) if total_target else None
                 kpi_summary = {
-                    "achieved_count": achieved, "total_count": len(snap),
+                    # achieved_count = số người TỚI MỨC THƯỞNG NHÓM HÀNG (65%/70% tuỳ vai trò).
+                    "achieved_count": achieved, "total_count": total_count,
+                    # 23/07/2026: đưa ngưỡng ra tận email — 2 hệ thống từng dùng 2 ngưỡng khác nhau
+                    # và không chỗ nào ghi rõ đang dùng ngưỡng nào, nên người đọc không có cách nào
+                    # biết vì sao 2 con số lệch. Số khác nhau mà giải thích được thì không phá niềm
+                    # tin; số khác nhau mà im lặng thì có.
+                    "achieved_threshold_pct": round(BONUS_THRESHOLD_TDV * 100),
+                    # 27/07/2026: ĐẠT KPI (≥80%) — mốc RIÊNG, chung mọi vai trò. Đừng nhầm với 2 cái kia.
+                    "kpi_achieved_count": kpi_achieved,
+                    "kpi_threshold_pct": round(KPI_ACHIEVED_THRESHOLD * 100),
+                    # Số người ĐẠT CHỈ TIÊU đúng nghĩa (≥100%) — khác cả 2 con số trên.
+                    "full_target_count": full_target,
                     "team_pct": round(team_pct * 100, 1) if team_pct is not None else None,
                     "total_target": round(total_target, 2), "total_amount": round(total_amount, 2),
                 }
+            # 21/07/2026: cây Vùng->QLV->TDV cho báo cáo Trưởng kênh OTC (thấy rõ từng vùng) và
+            # Quản lý Vùng (thấy rõ từng QLV/TDV) — dùng raw_snap (CHƯA lọc target>0, khác
+            # kpi_summary ở trên) để không "biến mất" người chỉ vì họ chưa có chỉ tiêu tháng này.
+            if raw_snap:
+                kpi_breakdown = _build_kpi_hierarchy(raw_snap, region)
         except Exception as e:
-            print(f"[DIGEST] Bravo lỗi khi lấy KPI đội ({e}) — dự phòng Supabase kpi_summary.")
-            if fast_engine is not None:
-                try:
-                    with fast_engine.connect() as conn:
-                        kpi_summary = _kpi_summary(conn, region=region)
-                except Exception as e2:
-                    print(f"[DIGEST] Lỗi cả 2 nguồn khi lấy KPI đội: {e2}")
+            # 20/07/2026: bỏ fallback Supabase kpi_summary — xác nhận bảng đó chỉ có 6/20 QLV
+            # thật (import 1 lần từ đầu dự án, không refresh), hiện số liệu đó còn tệ hơn bỏ trống
+            # mục này (cùng nguyên tắc "báo lỗi rõ ràng hơn số liệu có thể sai" đã áp dụng cho
+            # doanh thu/công nợ/tồn kho).
+            print(f"[DIGEST] Bravo lỗi khi lấy KPI đội ({e}) — bỏ trống mục này.")
+
+    # 21/07/2026: doanh số ETC theo nhân viên — bổ sung cho các báo cáo CÓ kênh ETC (channel != OTC:
+    # tức C-Level, các vùng, và riêng Kênh ETC). Đối xứng với KPI OTC ở trên nhưng đơn giản hơn
+    # (không target/%, không tầng QLV — xem docstring _build_etc_revenue_by_employee).
+    etc_by_employee = []
+    if granularity in ("weekly", "monthly") and channel != "OTC":
+        try:
+            etc_by_employee = _build_etc_revenue_by_employee(start_dt, end_dt, region)
+        except Exception as e:
+            print(f"[DIGEST] Bravo lỗi khi lấy doanh số ETC theo nhân viên ({e}) — bỏ trống mục này.")
 
     # 5. Phần mở rộng CHỈ cho weekly/monthly (không đổi hành vi/tải truy vấn của daily). Trend +
     #    region_breakdown tự failover nội bộ (xem _revenue_trend/_revenue_by_region).
@@ -886,7 +1116,7 @@ def get_digest_metrics(start_dt, end_dt, period_label, granularity=None, region=
     # nợ quá hạn vẫn lên đơn mới...) đã bắn qua Teams. Bật cho mọi granularity — chi phí không đáng
     # kể (1 query SQLite cục bộ, không đụng Bravo/Supabase).
     highlights = _get_period_highlights(start_dt, end_dt, channel=channel, region=region)
-    has_critical = _period_has_critical(start_dt, end_dt)
+    has_critical = _period_has_critical(start_dt, end_dt, region=region)
 
     result = {
         "date": start_dt.strftime("%d/%m/%Y"),
@@ -913,7 +1143,8 @@ def get_digest_metrics(start_dt, end_dt, period_label, granularity=None, region=
             "dead_stock_count": dead_stock_count,
             "near_stockout_count": near_stockout_count,
             "dead_stock_items": [
-                {"item_code": r[0], "item_name": r[1], "closing_value": round(float(r[2]), 2), "months_to_sell": round(float(r[3]), 1), "channel": r[4]}
+                {"item_code": r.item_code, "item_name": r.item_name, "closing_value": round(float(r.closing_value), 2),
+                 "months_to_sell": round(float(r.months_to_sell), 1), "channel": r.channel}
                 for r in dead_items
             ],
         },
@@ -924,6 +1155,8 @@ def get_digest_metrics(start_dt, end_dt, period_label, granularity=None, region=
         result["trend"] = trend
         result["region_breakdown"] = region_breakdown
         result["kpi_summary"] = kpi_summary
+        result["kpi_breakdown"] = kpi_breakdown
+        result["etc_by_employee"] = etc_by_employee
     if granularity == "monthly":
         result["region_growth"] = region_growth
         result["channel_share"] = channel_share
@@ -951,7 +1184,14 @@ def get_weekly_digest_metrics(region=None, channel=None):
     today_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
     week_start = today_start - timedelta(days=today_start.weekday())  # weekday(): Thứ 2 = 0
     week_end = week_start + timedelta(days=7)  # exclusive — hết Chủ nhật tuần này (kể cả nếu chưa tới)
-    label = f"Tuần {week_start.strftime('%d/%m/%Y')} - {(week_end - timedelta(days=1)).strftime('%d/%m/%Y')}"
+    # 21/07/2026: nhãn hiện đúng khoảng ĐÃ CÓ DỮ LIỆU, không phải cả khung tuần theo lịch — trước
+    # đây ghi "Tuần 20/07 - 26/07" ngay cả khi gửi thử vào thứ Ba (21/07), nhìn như báo cả tuần
+    # trong khi 5/7 ngày chưa xảy ra. Lấy min(hôm nay, Chủ nhật) làm ngày cuối hiển thị; gắn thêm
+    # "(đang chạy)" nếu tuần chưa trọn (dữ liệu vẫn tính trên [week_start, week_end) như cũ — ngày
+    # tương lai đóng góp 0đ nên tổng không đổi, chỉ NHÃN trung thực hơn).
+    last_shown = min(today_start, week_end - timedelta(days=1))
+    running_suffix = " (đang chạy)" if today_start < week_end - timedelta(days=1) else ""
+    label = f"Tuần {week_start.strftime('%d/%m/%Y')} - {last_shown.strftime('%d/%m/%Y')}{running_suffix}"
     return get_digest_metrics(week_start, week_end, label, granularity="weekly", region=region, channel=channel)
 
 def get_monthly_digest_metrics(region=None, channel=None):
@@ -967,7 +1207,12 @@ def get_monthly_digest_metrics(region=None, channel=None):
     month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
     next_year, next_month = (month_start.year + 1, 1) if month_start.month == 12 else (month_start.year, month_start.month + 1)
     month_end = month_start.replace(year=next_year, month=next_month)  # exclusive — hết ngày cuối tháng này
-    label = f"Tháng {month_start.strftime('%m/%Y')} ({month_start.strftime('%d/%m')} - {(month_end - timedelta(days=1)).strftime('%d/%m/%Y')})"
+    # 21/07/2026: cùng lý do với Weekly — nhãn hiện đúng khoảng đã có dữ liệu (min(hôm nay, ngày
+    # cuối tháng)) thay vì luôn ghi hết tháng theo lịch (vd "01/07 - 31/07" khi mới 21/07).
+    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    last_shown = min(today_start, month_end - timedelta(days=1))
+    running_suffix = " — đang chạy" if today_start < month_end - timedelta(days=1) else ""
+    label = f"Tháng {month_start.strftime('%m/%Y')} ({month_start.strftime('%d/%m')} - {last_shown.strftime('%d/%m/%Y')}{running_suffix})"
     return get_digest_metrics(month_start, month_end, label, granularity="monthly", region=region, channel=channel)
 
 if __name__ == '__main__':
