@@ -24,17 +24,32 @@ load_dotenv()
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 STATE_DB_PATH = os.path.join(PROJECT_ROOT, 'data', 'alerts_state.db')
+# Logo DNH host tại repo public riêng (danglvmcna/dnh-assets) — KHÔNG chứa code/business logic,
+# chỉ 1 file ảnh — để Teams webhook/Outlook Desktop tải được qua HTTPS công khai (base64 nhúng
+# trực tiếp không hiển thị được trên Outlook Desktop và không được Teams Adaptive Card hỗ trợ ổn
+# định). Đổi logo: push file mới vào repo đó, giữ nguyên tên/đường dẫn file.
+DNH_LOGO_URL = "https://raw.githubusercontent.com/danglvmcna/dnh-assets/main/dnh_logo.png"
 
 
-def _log_alert_severity(alert_name, severity):
+def _dnh_logo_data_uri():
+    return DNH_LOGO_URL
+
+
+def _log_alert_severity(alert_name, severity, region=None):
     """
-    Ghi lại (tên alert, mức độ, thời điểm) vào data/alerts_state.db mỗi khi 1 alert THỰC SỰ được
-    gửi — phục vụ báo cáo Weekly/Monthly (main.py::_send_periodic_email_report) biết kỳ vừa qua
-    có alert CRITICAL nào không, để gắn cờ Outlook Importance:High cho đúng email digest đó.
+    Ghi lại (tên alert, mức độ, vùng, thời điểm) vào data/alerts_state.db mỗi khi 1 alert THỰC SỰ
+    được gửi — phục vụ báo cáo Weekly/Monthly (main.py::_send_periodic_email_report) biết kỳ vừa
+    qua có alert CRITICAL nào không, để gắn cờ Outlook Importance:High cho đúng email digest đó,
+    và để hiện đúng banner "có cảnh báo nghiêm trọng" cho báo cáo đã scope theo vùng
+    (xem src/etl.py::_period_has_critical).
 
     KHÔNG dùng chung bảng sent_alerts (src/alerts.py) vì bảng đó chỉ giữ TRẠNG THÁI MỚI NHẤT theo
     alert_key (ghi đè liên tục, phục vụ cooldown) — không phải lịch sử theo thời gian như cần ở
     đây. Lỗi ghi log không được chặn việc gửi alert thật (chỉ log + bỏ qua).
+
+    21/07/2026: thêm `region` — nhận đúng giá trị đã truyền vào send_alert_to_all_channels(region=...)
+    ở nơi gọi (vd "Miền Nam" nếu alert quy được về đúng 1 vùng cụ thể, "Toàn quốc"/"Nhiều miền" nếu
+    không) — xem lý do tương tự record_alert_sent(..., region=...) trong src/alerts.py.
     """
     try:
         os.makedirs(os.path.dirname(STATE_DB_PATH), exist_ok=True)
@@ -44,12 +59,17 @@ def _log_alert_severity(alert_name, severity):
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 alert_name TEXT NOT NULL,
                 severity TEXT NOT NULL,
-                sent_at TIMESTAMP NOT NULL
+                sent_at TIMESTAMP NOT NULL,
+                region TEXT
             )
         ''')
+        # Migration cho DB cũ đã tồn tại trước khi có cột `region`.
+        existing_cols = {row[1] for row in conn.execute("PRAGMA table_info(alert_severity_log)").fetchall()}
+        if "region" not in existing_cols:
+            conn.execute("ALTER TABLE alert_severity_log ADD COLUMN region TEXT")
         conn.execute(
-            'INSERT INTO alert_severity_log (alert_name, severity, sent_at) VALUES (?, ?, ?)',
-            (alert_name, severity, datetime.now())
+            'INSERT INTO alert_severity_log (alert_name, severity, sent_at, region) VALUES (?, ?, ?, ?)',
+            (alert_name, severity, datetime.now(), region)
         )
         conn.commit()
         conn.close()
@@ -86,32 +106,39 @@ ALERT_EMAIL_TEMPLATE = """
     <meta charset="utf-8">
     <style>
         body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; color: #333333; margin: 0; padding: 20px; background-color: #f9f9fb; }
-        .card { max-width: 600px; margin: 0 auto; background: #ffffff; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.05); overflow: hidden; border: 1px solid #e1e1e7; }
-        .header { padding: 24px; color: #ffffff; font-weight: bold; font-size: 20px; text-transform: uppercase; letter-spacing: 0.5px; }
-        .header.critical { background-color: #e53e3e; background: linear-gradient(135deg, #e53e3e 0%, #b7791f 100%); }
-        .header.warning { background-color: #dd6b20; background: linear-gradient(135deg, #dd6b20 0%, #d69e2e 100%); }
-        .header.info { background-color: #059669; background: linear-gradient(135deg, #059669 0%, #10b981 100%); }
+        .card { max-width: 600px; margin: 0 auto; background: #ffffff; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.05); overflow: hidden; border: 1px solid #e1e1e7; border-top: 5px solid #f15a25; }
+        .header { padding: 18px 24px 22px; color: #ffffff; }
+        .header.critical { background-color: #b7392f; background: linear-gradient(135deg, #7a2119 0%, #9c2c22 40%, #b7392f 75%, #c94a3a 100%); }
+        .header.warning { background-color: #b3691a; background: linear-gradient(135deg, #7a4210 0%, #96540f 40%, #b3691a 75%, #d9822b 100%); }
+        .header.info { background-color: #1f4a22; background: linear-gradient(135deg, #153a1a 0%, #1f4a22 38%, #2f6b32 72%, #3c8a3f 100%); }
+        .header-top { display: table; width: 100%; margin-bottom: 10px; }
+        .logo-chip { display: inline-block; background: #ffffff; border-radius: 8px; padding: 5px 9px; box-shadow: 0 1px 3px rgba(0,0,0,0.18); }
+        .logo-chip img { height: 20px; width: auto; display: block; }
+        .header-name { font-weight: bold; font-size: 19px; text-transform: uppercase; letter-spacing: 0.5px; }
         .content { padding: 24px; line-height: 1.6; }
         .alert-title { font-size: 18px; font-weight: bold; margin-bottom: 8px; color: #1a202c; }
         .alert-desc { font-size: 14px; color: #718096; margin-bottom: 20px; }
         .kpi-table { width: 100%; border-collapse: collapse; margin-bottom: 20px; }
-        .kpi-table th { text-align: left; padding: 8px; background-color: #f7fafc; border-bottom: 2px solid #edf2f7; font-size: 12px; color: #4a5568; text-transform: uppercase; }
+        .kpi-table th { text-align: left; padding: 8px; background-color: #1f4a22; color: #ffffff; border-bottom: 2px solid #153a1a; font-size: 12px; text-transform: uppercase; }
         .kpi-table td { padding: 10px 8px; border-bottom: 1px solid #edf2f7; font-size: 14px; color: #2d3748; }
         .badge { display: inline-block; padding: 4px 8px; border-radius: 4px; font-size: 11px; font-weight: bold; text-transform: uppercase; }
-        .badge.critical { background-color: #fed7d7; color: #9b2c2c; }
-        .badge.warning { background-color: #feebc8; color: #9c4221; }
+        .badge.critical { background-color: #fbe2e2; color: #9b2c2c; }
+        .badge.warning { background-color: #fde7dc; color: #9c4221; }
         .footer { background: #f7fafc; padding: 16px 24px; text-align: center; font-size: 12px; color: #a0aec0; border-top: 1px solid #edf2f7; }
     </style>
 </head>
 <body>
     <div class="card">
         <div class="header {{ severity.lower() }}">
-            {{ alert_name }}
+            <div class="header-top">
+                <span class="logo-chip"><img src="{{ dnh_logo_data_uri }}" alt="" /></span>
+            </div>
+            <div class="header-name">{{ alert_name }}</div>
         </div>
         <div class="content">
             <div class="alert-title">{{ summary }}</div>
             <div class="alert-desc">Hệ thống phát hiện chỉ số đã vượt ngưỡng cảnh báo an toàn. Chi tiết bên dưới:</div>
-            
+
             <table class="kpi-table">
                 <thead>
                     <tr>
@@ -130,8 +157,8 @@ ALERT_EMAIL_TEMPLATE = """
                     {% endfor %}
                 </tbody>
             </table>
-            
-            <p style="font-size: 13px; color: #e53e3e; font-weight: bold; background: #fff5f5; padding: 10px; border-radius: 6px; border-left: 4px solid #e53e3e;">
+
+            <p style="font-size: 13px; color: #c63232; font-weight: bold; background: #fbe2e2; padding: 10px; border-radius: 6px; border-left: 4px solid #c63232;">
                 Lưu ý: Cảnh báo này sẽ tạm thời bị khóa gửi lặp trong vòng 1-4 giờ tới để tránh spam hộp thư của bạn, trừ khi lỗi nghiêm trọng hơn xảy ra.
             </p>
         </div>
@@ -151,26 +178,30 @@ DIGEST_EMAIL_TEMPLATE = """
     <meta charset="utf-8">
     <style>
         body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; color: #333333; margin: 0; padding: 20px; background-color: #f4f5f8; }
-        .container { max-width: 650px; margin: 0 auto; background: #ffffff; border-radius: 16px; box-shadow: 0 4px 20px rgba(0,0,0,0.06); overflow: hidden; border: 1px solid #e2e8f0; }
-        .header { background-color: #1e3a8a; background: linear-gradient(135deg, #1e3a8a 0%, #3b82f6 100%); padding: 30px 24px; color: #ffffff; }
-        .header.header-monthly { background-color: #4c1d95; background: linear-gradient(135deg, #4c1d95 0%, #7c3aed 100%); }
+        .container { max-width: 650px; margin: 0 auto; background: #ffffff; border-radius: 16px; box-shadow: 0 4px 20px rgba(0,0,0,0.06); overflow: hidden; border: 1px solid #e2e8f0; border-top: 5px solid #f15a25; }
+        .header { background-color: #1f4a22; background: linear-gradient(135deg, #153a1a 0%, #1f4a22 35%, #2f6b32 70%, #3c8a3f 100%); padding: 24px 24px 26px; color: #ffffff; }
+        .header.header-monthly { background-color: #1f4a22; background: linear-gradient(135deg, #153a1a 0%, #1f4a22 35%, #2f6b32 70%, #3c8a3f 100%); }
+        .header-top { display: table; width: 100%; margin-bottom: 14px; }
+        .logo-chip { display: inline-block; background: #ffffff; border-radius: 8px; padding: 6px 10px; box-shadow: 0 1px 3px rgba(0,0,0,0.18); }
+        .logo-chip img { height: 24px; width: auto; display: block; }
         .header-badge { display: inline-block; font-size: 11px; font-weight: 700; letter-spacing: 0.8px; text-transform: uppercase; background: rgba(255,255,255,0.18); padding: 4px 10px; border-radius: 999px; margin-bottom: 10px; }
         .header h1 { margin: 0; font-size: 22px; font-weight: 700; letter-spacing: 0.5px; }
         .header p { margin: 5px 0 0 0; font-size: 14px; opacity: 0.9; }
         .content { padding: 24px; }
-        .section-title { font-size: 16px; font-weight: 700; color: #1e3a8a; margin-top: 24px; margin-bottom: 12px; border-bottom: 2px solid #e2e8f0; padding-bottom: 6px; text-transform: uppercase; letter-spacing: 0.5px; }
+        .section-title { font-size: 15px; font-weight: 800; color: #1f4a22; margin-top: 24px; margin-bottom: 12px; border-bottom: 2.5px solid #337337; padding-bottom: 7px; text-transform: uppercase; letter-spacing: 0.5px; }
+        .section-title::before { content: "\25A0"; color: #f15a25; font-size: 10px; margin-right: 7px; }
         .grid { display: block; width: 100%; margin: -8px 0; }
         .col { display: inline-block; vertical-align: top; box-sizing: border-box; }
-        .kpi-card { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 16px; text-align: center; height: 100%; box-sizing: border-box; }
+        .kpi-card { background: #eef5ea; border: 1px solid #d6e6cd; border-radius: 8px; padding: 16px; text-align: center; height: 100%; box-sizing: border-box; }
         .kpi-card .val { font-size: 20px; font-weight: 700; color: #1e293b; margin: 5px 0; }
-        .kpi-card .lbl { font-size: 11px; color: #64748b; font-weight: 600; text-transform: uppercase; }
-        .kpi-card.failed { border-left: 4px solid #ef4444; }
-        .kpi-card.success { border-left: 4px solid #10b981; }
+        .kpi-card .lbl { font-size: 11px; color: #54604f; font-weight: 600; text-transform: uppercase; }
+        .kpi-card.failed { background: #fdece3; border-color: #f6c7ac; border-left: 4px solid #ef4444; }
+        .kpi-card.success { background: #e3f0dc; border-color: #bfdcaf; border-left: 4px solid #337337; }
         .data-table { width: 100%; border-collapse: collapse; margin-top: 10px; margin-bottom: 20px; }
-        .data-table th { text-align: left; padding: 10px; background-color: #f1f5f9; border-bottom: 2px solid #e2e8f0; font-size: 12px; color: #475569; text-transform: uppercase; }
+        .data-table th { text-align: left; padding: 10px; background-color: #1f4a22; color: #ffffff; border-bottom: 2px solid #153a1a; font-size: 12px; text-transform: uppercase; }
         .data-table td { padding: 12px 10px; border-bottom: 1px solid #f1f5f9; font-size: 13px; color: #334155; }
         .no-data { font-size: 13px; color: #64748b; font-style: italic; padding: 10px 0; }
-        .trend-up { color: #10b981; font-size: 13px; font-weight: 600; }
+        .trend-up { color: #337337; font-size: 13px; font-weight: 600; }
         .trend-down { color: #ef4444; font-size: 13px; font-weight: 600; }
         .footer { background: #f8fafc; padding: 20px; text-align: center; font-size: 12px; color: #94a3b8; border-top: 1px solid #e2e8f0; }
     </style>
@@ -178,6 +209,9 @@ DIGEST_EMAIL_TEMPLATE = """
 <body>
     <div class="container">
         <div class="header{% if period_label == 'Monthly' %} header-monthly{% endif %}">
+            <div class="header-top">
+                <span class="logo-chip"><img src="{{ dnh_logo_data_uri }}" alt="" /></span>
+            </div>
             <span class="header-badge">{% if period_label == 'Weekly' %}Báo cáo Tuần{% elif period_label == 'Monthly' %}Báo cáo Tháng{% else %}Báo cáo Ngày{% endif %}</span>
             <h1>BÁO CÁO TỔNG HỢP HOẠT ĐỘNG {% if period_label == 'Weekly' %}TUẦN{% elif period_label == 'Monthly' %}THÁNG{% else %}{{ period_label|upper }}{% endif %}</h1>
             <p>{{ metrics.period_range or metrics.date }}</p>
@@ -247,7 +281,7 @@ DIGEST_EMAIL_TEMPLATE = """
                 <div class="col" style="width: 100%; max-width: 145px; padding: 8px;">
                     <div class="kpi-card success">
                         <div class="lbl">Tổng Doanh Thu</div>
-                        <div class="val" style="color: #10b981;">{{ "{:,.0f}".format(metrics.revenue.total) }} đ</div>
+                        <div class="val" style="color: #337337;">{{ "{:,.0f}".format(metrics.revenue.total) }} đ</div>
                         {% if metrics.revenue.change_pct is not none %}
                         <div class="{{ 'trend-up' if metrics.revenue.change_pct >= 0 else 'trend-down' }}">
                             {{ "%+.1f"|format(metrics.revenue.change_pct) }}% so kỳ {{ metrics.revenue.prev_period_label }}
@@ -350,8 +384,10 @@ DIGEST_EMAIL_TEMPLATE = """
                 <![endif]-->
                 <div class="col" style="width: 100%; max-width: 190px; padding: 8px;">
                     <div class="kpi-card success">
-                        <div class="lbl">Đạt Chỉ Tiêu</div>
-                        <div class="val" style="color: #10b981;">{{ metrics.kpi_summary.achieved_count }}/{{ metrics.kpi_summary.total_count }}</div>
+                        <div class="lbl">Tới Mức Thưởng Nhóm Hàng{% if metrics.kpi_summary.achieved_threshold_pct %} (≥{{ metrics.kpi_summary.achieved_threshold_pct }}%){% endif %}</div>
+                        <div class="val" style="color: #337337;">{{ metrics.kpi_summary.achieved_count }}/{{ metrics.kpi_summary.total_count }}</div>
+                        {% if metrics.kpi_summary.kpi_achieved_count is not none %}<div class="lbl" style="margin-top: 6px; font-weight: 400;">Đạt KPI (≥{{ metrics.kpi_summary.kpi_threshold_pct }}%): {{ metrics.kpi_summary.kpi_achieved_count }}/{{ metrics.kpi_summary.total_count }}</div>{% endif %}
+                        {% if metrics.kpi_summary.full_target_count is not none %}<div class="lbl" style="margin-top: 6px; font-weight: 400;">Đạt chỉ tiêu (≥100%): {{ metrics.kpi_summary.full_target_count }}/{{ metrics.kpi_summary.total_count }}</div>{% endif %}
                     </div>
                 </div>
                 <!--[if mso]>
@@ -403,6 +439,69 @@ DIGEST_EMAIL_TEMPLATE = """
             </div>
             {% endif %}
 
+            {% if metrics.kpi_breakdown %}
+            <!-- 21/07/2026: chi tiết Vùng->QLV->TDV — theo yêu cầu Trưởng kênh OTC/ETC cần thấy
+            rõ từng lớp thay vì chỉ 1 dòng tổng gộp (kpi_summary ở trên). QLV in đậm nền xanh nhạt,
+            TDV thụt lề ngay dưới QLV quản lý mình (xem _build_kpi_hierarchy trong src/etl.py). -->
+            <div class="section-title">Chi Tiết KPI Theo Vùng - QLV - TDV</div>
+            <!-- 21/07/2026: KPI đọc snapshot chỉ tiêu THÁNG lũy kế đến hiện tại (không cắt theo
+            khung tuần) — nên mục này GIỐNG NHAU ở báo cáo Tuần và Tháng, vì dữ liệu DNH không có
+            chỉ tiêu theo tuần. Ghi rõ để người đọc không tưởng là lỗi trùng. -->
+            <div class="no-data" style="margin-bottom: 8px;">KPI theo chỉ tiêu <strong>THÁNG</strong>, lũy kế đến hiện tại — phần này giống nhau ở báo cáo tuần và tháng (không có chỉ tiêu theo tuần).</div>
+            {% for grp in metrics.kpi_breakdown %}
+            <div style="font-weight: 800; color: #1f4a22; font-size: 13px; text-transform: uppercase; margin-top: 16px; margin-bottom: 6px;">{{ grp.region }}</div>
+            <table class="data-table">
+                <thead><tr><th>Nhân sự</th><th>Chỉ tiêu tháng</th><th>Doanh số đạt</th><th>% Hoàn thành</th></tr></thead>
+                <tbody>
+                    {% for qlv in grp.qlvs %}
+                    <tr style="background-color: #eef5ea;">
+                        <td><strong>{{ qlv.employee_name }}{% if qlv.employee_code %} ({{ qlv.employee_code }}){% endif %} — QLV</strong></td>
+                        <td><strong>{{ "{:,.0f}".format(qlv.target) }} đ</strong></td>
+                        <td><strong>{{ "{:,.0f}".format(qlv.amount) }} đ</strong></td>
+                        <td><strong>{% if qlv.pct is not none %}{{ "%.1f"|format(qlv.pct) }}%{% else %}—{% endif %}</strong></td>
+                    </tr>
+                    {% if not qlv.tdvs and qlv.employee_code %}
+                    <!-- QLV có 0 TDV: thường là quản lý cấp vùng (ASM) tự ôm khách trực tiếp, bị gắn
+                    nhãn QLV — ghi rõ để không nhìn như "mất sạch đội". Không áp cho dòng gộp mồ côi
+                    (employee_code=None, vốn luôn có TDV). -->
+                    <tr><td colspan="4" style="padding-left: 28px; font-style: italic; color: #64748b;">QLV phụ trách khách hàng trực tiếp — không có TDV dưới quyền</td></tr>
+                    {% endif %}
+                    {% for tdv in qlv.tdvs %}
+                    <tr>
+                        <td style="padding-left: 28px;">↳ {{ tdv.employee_name }} ({{ tdv.employee_code }})</td>
+                        <td>{{ "{:,.0f}".format(tdv.target) }} đ</td>
+                        <td>{{ "{:,.0f}".format(tdv.amount) }} đ</td>
+                        <td>{% if tdv.pct is not none %}{{ "%.1f"|format(tdv.pct) }}%{% else %}—{% endif %}</td>
+                    </tr>
+                    {% endfor %}
+                    {% endfor %}
+                </tbody>
+            </table>
+            {% endfor %}
+            {% endif %}
+
+            {% if metrics.etc_by_employee %}
+            <!-- 21/07/2026: doanh số ETC theo nhân viên — ETC không có chỉ tiêu cá nhân (kế hoạch
+            theo nhóm hàng), nên chỉ hiện doanh số trong kỳ, không % (xem _build_etc_revenue_by_employee). -->
+            <div class="section-title">Doanh Số ETC Theo Nhân Viên</div>
+            <div class="no-data" style="margin-bottom: 8px;">Kênh ETC không có chỉ tiêu cá nhân theo tháng (kế hoạch đặt theo nhóm hàng) — chỉ hiển thị doanh số <strong>trong kỳ báo cáo</strong>, không có % hoàn thành.</div>
+            {% for grp in metrics.etc_by_employee %}
+            <div style="font-weight: 800; color: #1f4a22; font-size: 13px; text-transform: uppercase; margin-top: 16px; margin-bottom: 6px;">{{ grp.region }}</div>
+            <table class="data-table">
+                <thead><tr><th>Nhân viên</th><th>Doanh số (trong kỳ)</th><th>Số hóa đơn</th></tr></thead>
+                <tbody>
+                    {% for e in grp.employees %}
+                    <tr>
+                        <td>{{ e.employee_name }} ({{ e.employee_code }})</td>
+                        <td>{{ "{:,.0f}".format(e.revenue) }} đ</td>
+                        <td>{{ e.invoices }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            {% endfor %}
+            {% endif %}
+
             {% if metrics.receivables %}
             <!-- Công nợ Section (chỉ hiện khi dữ liệu còn mới — cùng tháng hoặc tháng liền trước kỳ báo cáo) -->
             <div class="section-title">Công Nợ (Kỳ {{ metrics.receivables.period }})</div>
@@ -440,7 +539,7 @@ DIGEST_EMAIL_TEMPLATE = """
                 <div class="col" style="width: 100%; max-width: 290px; padding: 8px;">
                     <div class="kpi-card failed">
                         <div class="lbl">Tồn Chết (&ge;12 tháng)</div>
-                        <div class="val" style="color: #ea580c;">{{ metrics.inventory.dead_stock_count }}</div>
+                        <div class="val" style="color: #d94e1c;">{{ metrics.inventory.dead_stock_count }}</div>
                     </div>
                 </div>
                 <!--[if mso]>
@@ -465,7 +564,7 @@ DIGEST_EMAIL_TEMPLATE = """
                         <td><strong>{{ item.item_code }} ({% if item.channel %}{{ item.channel }}{% else %}—{% endif %})</strong></td>
                         <td>{{ item.item_name }}</td>
                         <td>{{ "{:,.0f}".format(item.closing_value) }} đ</td>
-                        <td style="color: #ea580c; font-weight: bold;">{{ item.months_to_sell }} tháng</td>
+                        <td style="color: #d94e1c; font-weight: bold;">{{ item.months_to_sell }} tháng</td>
                     </tr>
                     {% endfor %}
                 </tbody>
@@ -474,7 +573,7 @@ DIGEST_EMAIL_TEMPLATE = """
 
             {% if chatbot_url %}
             <div style="text-align: center; margin-top: 28px; padding-top: 20px; border-top: 1px solid #e2e8f0;">
-                <a href="{{ chatbot_url }}" style="display: inline-block; background-color: #1e3a8a; background: linear-gradient(135deg, #1e3a8a 0%, #3b82f6 100%); color: #ffffff; text-decoration: none; font-size: 14px; font-weight: 700; padding: 12px 28px; border-radius: 8px;">
+                <a href="{{ chatbot_url }}" style="display: inline-block; background-color: #1f4a22; background: linear-gradient(135deg, #1f4a22, #337337); color: #ffffff; text-decoration: none; font-size: 14px; font-weight: 700; padding: 12px 28px; border-radius: 8px;">
                     Mở Chatbot DNH để hỏi thêm
                 </a>
                 <p style="margin: 10px 0 0 0; font-size: 12px; color: #94a3b8;">Đăng nhập đúng tài khoản của bạn để xem đúng phạm vi vùng/kênh được phân quyền.</p>
@@ -666,7 +765,8 @@ def build_alert_email(alert_name, severity, summary, table_headers, table_rows):
         summary=summary,
         table_headers=table_headers,
         table_rows=table_rows,
-        timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        dnh_logo_data_uri=_dnh_logo_data_uri()
     )
 
 def build_digest_email(metrics, period_label="Daily", audience=None, scope_label=None):
@@ -684,44 +784,9 @@ def build_digest_email(metrics, period_label="Daily", audience=None, scope_label
         audience=audience,
         scope_label=scope_label,
         chatbot_url=_chatbot_deep_link(),
+        dnh_logo_data_uri=_dnh_logo_data_uri(),
     )
 
-def send_telegram_alert(text):
-    """
-    Gửi tin nhắn cảnh báo qua Telegram Bot API (sử dụng urllib)
-    """
-    token = os.getenv("TELEGRAM_BOT_TOKEN")
-    chat_id = os.getenv("TELEGRAM_CHAT_ID")
-    
-    if not token or not chat_id:
-        print("[WARNING] Telegram credentials are not configured in .env. Skipping Telegram alert.")
-        return False
-        
-    url = f"https://api.telegram.org/bot{token}/sendMessage"
-    payload = {
-        "chat_id": chat_id,
-        "text": text,
-        "parse_mode": "HTML"
-    }
-    
-    try:
-        data = json.dumps(payload).encode('utf-8')
-        req = urllib.request.Request(
-            url, 
-            data=data, 
-            headers={'Content-Type': 'application/json'}
-        )
-        with urllib.request.urlopen(req, timeout=10) as response:
-            res = json.loads(response.read().decode('utf-8'))
-            if res.get("ok"):
-                print("[TELEGRAM] Gui canh bao thanh cong!")
-                return True
-            else:
-                print(f"[TELEGRAM] Loi gui: {res}")
-                return False
-    except Exception as e:
-        print(f"[TELEGRAM] Loi ket noi: {e}")
-        return False
 
 def _severity_to_card_style(severity):
     """Map severity -> Adaptive Card Container style (mau sac)."""
@@ -819,8 +884,28 @@ def _build_teams_adaptive_card(title, summary, severity, table_headers=None, tab
             "style": style,
             "bleed": True,
             "items": [
-                {"type": "TextBlock", "text": _severity_label_vi(severity), "weight": "Bolder", "size": "Small",
-                 "color": style, "spacing": "None"},
+                {
+                    "type": "ColumnSet",
+                    "columns": [
+                        {
+                            "type": "Column",
+                            "width": "auto",
+                            "verticalContentAlignment": "Center",
+                            "items": [
+                                {"type": "Image", "url": DNH_LOGO_URL, "width": "90px", "altText": "Dược Nam Hà"}
+                            ]
+                        },
+                        {
+                            "type": "Column",
+                            "width": "stretch",
+                            "verticalContentAlignment": "Center",
+                            "items": [
+                                {"type": "TextBlock", "text": _severity_label_vi(severity), "weight": "Bolder",
+                                 "size": "Small", "color": style, "horizontalAlignment": "Right", "spacing": "None"}
+                            ]
+                        }
+                    ]
+                },
                 {"type": "TextBlock", "text": title, "weight": "Bolder", "size": "Large", "wrap": True, "spacing": "Small"},
             ]
         }
@@ -1077,7 +1162,28 @@ def _build_teams_consolidated_card(alerts):
             "style": "attention",
             "bleed": True,
             "items": [
-                {"type": "TextBlock", "text": "NGHIÊM TRỌNG", "weight": "Bolder", "size": "Small", "color": "attention", "spacing": "None"},
+                {
+                    "type": "ColumnSet",
+                    "columns": [
+                        {
+                            "type": "Column",
+                            "width": "auto",
+                            "verticalContentAlignment": "Center",
+                            "items": [
+                                {"type": "Image", "url": DNH_LOGO_URL, "width": "90px", "altText": "Dược Nam Hà"}
+                            ]
+                        },
+                        {
+                            "type": "Column",
+                            "width": "stretch",
+                            "verticalContentAlignment": "Center",
+                            "items": [
+                                {"type": "TextBlock", "text": "NGHIÊM TRỌNG", "weight": "Bolder", "size": "Small",
+                                 "color": "attention", "horizontalAlignment": "Right", "spacing": "None"}
+                            ]
+                        }
+                    ]
+                },
                 {"type": "TextBlock", "text": f"{len(alerts)} cảnh báo nghiêm trọng", "weight": "Bolder", "size": "Large", "wrap": True, "spacing": "Small"},
                 {"type": "TextBlock", "text": f"Phát hiện lúc {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", "isSubtle": True, "size": "Small", "wrap": True}
             ]
@@ -1185,12 +1291,11 @@ def send_alert_to_all_channels(alert_name, severity, summary, table_headers=None
     """
     Gửi cảnh báo qua các kênh được chỉ định trong `channels` (mặc định: Email, Teams).
     Dùng `channels` để định tuyến theo loại nội dung — vd. alert tức thời/daily digest chỉ đi
-    Teams, báo cáo tuần/tháng chỉ đi Email (xem main.py/src/alerts.py). Kênh Telegram đã ngừng
-    dùng (chuyển hẳn qua web) — code gửi Telegram vẫn còn bên dưới nhưng không còn được gọi tới
-    vì không nơi nào truyền "telegram" vào `channels` nữa.
+    Teams, báo cáo tuần/tháng chỉ đi Email (xem main.py/src/alerts.py). Kênh Telegram đã bỏ hẳn
+    23/07/2026 (chuyển hoàn toàn qua web) — không còn code gửi Telegram trong hàm này.
 
     period/channel/region/issue: các trường có cấu trúc (tùy chọn) chỉ áp dụng cho card Teams —
-    xem _build_teams_adaptive_card. Không đổi định dạng Email/Telegram hiện có.
+    xem _build_teams_adaptive_card. Không đổi định dạng Email hiện có.
 
     require_critical_for_teams (mặc định True, thêm 10/07/2026): chống nhiễu — CHỈ severity
     CRITICAL mới thực sự bắn Teams, WARNING/INFO vẫn được LOG (_log_alert_severity, không đổi)
@@ -1200,7 +1305,7 @@ def send_alert_to_all_channels(alert_name, severity, summary, table_headers=None
     có hiện tượng dồn dập nên chủ động truyền require_critical_for_teams=False để bỏ qua bộ lọc.
     """
     print(f"\n--- BAT DAU GUI CANH BAO: {alert_name} [{severity}] (kenh: {', '.join(channels)}) ---")
-    _log_alert_severity(alert_name, severity)
+    _log_alert_severity(alert_name, severity, region=region)
     any_sent = False
 
     # 1. Gui qua Email
@@ -1217,41 +1322,7 @@ def send_alert_to_all_channels(alert_name, severity, summary, table_headers=None
         except Exception as e:
             print(f"[ERROR] Loi gui Email: {e}")
 
-    # 2. Gui qua Telegram
-    if "telegram" in channels:
-        try:
-            def escape_html(text):
-                if not isinstance(text, str):
-                    text = str(text)
-                return text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
-
-            # Format text cho Telegram cực đẹp mắt và chuyên nghiệp (Sử dụng tiếng Việt có dấu)
-            emoji = "🔴" if severity == "CRITICAL" else "🟡" if severity == "WARNING" else "ℹ️"
-
-            telegram_text = f"{emoji} <b>{escape_html(alert_name)}</b>\n"
-            telegram_text += f"━━━━━━━━━━━━━━━━━━━━━\n"
-            telegram_text += f"📝 <b>Mô tả:</b> {escape_html(summary)}\n"
-            telegram_text += f"⚠️ <b>Độ nghiêm trọng:</b> <code>{escape_html(severity)}</code>\n"
-            telegram_text += f"📅 <b>Thời gian:</b> <code>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</code>\n"
-            telegram_text += f"━━━━━━━━━━━━━━━━━━━━━\n\n"
-
-            if table_headers and table_rows:
-                telegram_text += "📊 <b>CHI TIẾT DỮ LIỆU CẢNH BÁO:</b>\n"
-                for idx, row in enumerate(table_rows):
-                    telegram_text += f"\n<b>Hồ sơ #{idx+1}:</b>\n"
-                    for col_idx, header in enumerate(table_headers):
-                        telegram_text += f"   • {escape_html(header)}: <b>{escape_html(row[col_idx])}</b>\n"
-                telegram_text += "\n━━━━━━━━━━━━━━━━━━━━━\n\n"
-
-            telegram_text += "🤖 <i>Hệ thống Giám sát DWH Dược Nam Hà (DNH)</i>"
-
-            telegram_sent = _send_with_retry(send_telegram_alert, telegram_text)
-            if telegram_sent:
-                any_sent = True
-        except Exception as e:
-            print(f"[ERROR] Loi gui Telegram: {e}")
-
-    # 3. Gui qua Teams — định tuyến theo audience khớp region/channel của alert (Phần 3 phân
+    # 2. Gui qua Teams — định tuyến theo audience khớp region/channel của alert (Phần 3 phân
     #    quyền). Khi các audience còn trỏ chung 1 webhook mặc định (chưa điền Flow riêng),
     #    _resolve_teams_webhooks tự khử trùng nên hành vi giống hệt "1 webhook chung" trước đây.
     if "teams" in channels and require_critical_for_teams and severity != "CRITICAL":
