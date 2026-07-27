@@ -93,7 +93,11 @@ thresholds:
     # chờ DNH xác nhận date-basis chính thức (xem skill dnh-debt-aging-schema) mới chốt lại.
     overdue_ratio_pct_otc: 0.80   # Kênh OTC: nợ quá hạn/tổng dư nợ vượt 80%
     overdue_ratio_pct_etc: 0.65   # Kênh ETC: nợ quá hạn/tổng dư nợ vượt 65%
-    dead_stock_months: 12.0       # Tồn "chết": months_to_sell >= 12 tháng
+    # dead_stock_months=6.0: ĐÃ XÁC NHẬN 22/07/2026 qua stored procedure gốc trên Bravo
+    # [dbo].[usp_StockLotFinance_Report] (@_ShortOfStockMonth=6, phân loại "Bán chậm" khi
+    # RemainMonths=FLOOR(tồn hiện tại/TB bán 6 tháng gần nhất) >= 6) — đổi từ 12 xuống 6 để khớp
+    # đúng cách DNH tự định nghĩa "bán chậm" trong Bravo, không phải ước lượng của MCNA nữa.
+    dead_stock_months: 6.0        # Tồn "chết"/bán chậm: months_to_sell >= 6 tháng (khớp SP DNH)
     dead_stock_min_value: 50000000    # ...và giá trị tồn > 50 triệu (mới đáng cảnh báo vốn đọng)
     customer_churn_drop_pct: 0.50 # Khách lớn: doanh số tháng mới nhất rớt > 50% so tháng trước
     customer_churn_min_prev: 50000000 # ...và tháng trước từng mua > 50 triệu (mới coi là "khách lớn")
@@ -137,14 +141,16 @@ thresholds:
     year_floor_pct: 0.75          # <75% năm/target năm -> hệ số thưởng năm = 0%, mức sàn (chung cả 5 vai trò)
 
 # Tuổi nợ (debt aging bucket) trên Bravo — xem skill dnh-debt-aging-schema. "Ngày cơ sở" (date_basis)
-# để tính số ngày quá hạn CHƯA được DNH xác nhận chính thức (open item từ khảo sát 07/07/2026, từng
-# gây tranh cãi hợp đồng ở bản thử nghiệm đầu — KHÔNG tự đổi giá trị này mà không hỏi lại DNH trước).
+# ĐÃ XÁC NHẬN 22/07/2026 qua stored procedure gốc [dbo].[usp_DeptAccDueDate_GetData] trên Bravo
+# (NH_Report_TM) do người dùng cung cấp — công thức TẠM THỜI trước đây khớp đúng với cách DNH tự
+# tính nội bộ, không phải giả định của MCNA. KHÔNG tự đổi giá trị này mà không có xác nhận tương
+# đương (SP gốc khác, hoặc xác nhận trực tiếp từ DNH).
 # date_basis="doc_date_plus_term": hạn thanh toán = DocDate + số ngày công nợ (DueDate trên
-# BRV_HTTDuDK/BRVSX_HTTDuDK) — lựa chọn TẠM THỜI, phổ biến nhất trong kế toán nhưng CHƯA xác nhận.
-# provisional=true: bắt buộc chatbot luôn cảnh báo số liệu tuổi nợ là tạm thời trong mọi câu trả lời.
+# BRV_HTTDuDK/BRVSX_HTTDuDK).
+# provisional=false: chatbot không còn cần cảnh báo số liệu tuổi nợ là tạm thời.
 debt_aging:
   date_basis: "doc_date_plus_term"
-  provisional: true
+  provisional: false
 
 # Bật/tắt các trigger đang bị DATA GAP (thiếu cột nguồn) — tắt để đỡ tốn 1 query Supabase mỗi
 # chu kỳ quét cho việc chỉ để in "chưa có dữ liệu". Bật lại (đổi thành true) ngay khi DNH bổ

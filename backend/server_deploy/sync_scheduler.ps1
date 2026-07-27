@@ -14,6 +14,7 @@ $SCRIPT = "C:\dnh_chatbot\backend\sync_warehouse.py"
 $LOG = "C:\dnh_chatbot\backend\logs\sync_scheduler.log"
 $TMP_OUT = "C:\dnh_chatbot\backend\logs\sync_scheduler_run.log"
 $TMP_ERR = "C:\dnh_chatbot\backend\logs\sync_scheduler_run.err.log"
+$RESULT_FILE = "C:\dnh_chatbot\backend\logs\_sync_result.txt"
 
 function Log($msg) {
     $line = "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') $msg"
@@ -24,6 +25,7 @@ function Do-Sync {
     try {
         if (Test-Path $TMP_OUT) { Remove-Item $TMP_OUT -Force }
         if (Test-Path $TMP_ERR) { Remove-Item $TMP_ERR -Force }
+        if (Test-Path $RESULT_FILE) { Remove-Item $RESULT_FILE -Force }
 
         $proc = Start-Process -FilePath $PYTHON -ArgumentList "`"$SCRIPT`"" -WindowStyle Hidden -PassThru `
             -WorkingDirectory "C:\dnh_chatbot\backend" -RedirectStandardOutput $TMP_OUT -RedirectStandardError $TMP_ERR
@@ -35,13 +37,18 @@ function Do-Sync {
             Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
             return $false
         }
-        # Goi lai WaitForExit() khong tham so de dam bao ExitCode da dong bo day du truoc khi doc -
-        # tranh doc phai $null ngay sau khi tien trinh vua ket thuc thanh cong.
-        $proc.WaitForExit()
         Get-Content $TMP_OUT -ErrorAction SilentlyContinue | ForEach-Object { Log "  $_" }
         Get-Content $TMP_ERR -ErrorAction SilentlyContinue | ForEach-Object { Log "  $_" }
-        Log "Dong bo xong (ExitCode=$($proc.ExitCode))."
-        return ($proc.ExitCode -eq 0)
+        # 23/07/2026: KHONG dung $proc.ExitCode - PowerShell 5.1 tren may nay co bug da biet khien no
+        # LUON tra ve $null (khong throw, khong sua duoc bang Refresh()/goi lai WaitForExit()) khi
+        # Start-Process dung -PassThru ket hop -RedirectStandardOutput/-RedirectStandardError, du
+        # process da HasExited=True (da xac nhan qua debug script rieng). Hau qua thuc te: $ok luon
+        # $false, $lastRunTime khong bao gio cap nhat, scheduler chay lai MOI 5 PHUT (CHECK_INTERVAL_SEC)
+        # thay vi 60 phut nhu thiet ke. Dung file danh dau ket qua RIENG do chinh sync_warehouse.py ghi
+        # ("OK"/"FAIL", xem cuoi file do) - khong phu thuoc PowerShell doc dung exit code hay khong.
+        $result = if (Test-Path $RESULT_FILE) { (Get-Content $RESULT_FILE -Raw).Trim() } else { "" }
+        Log "Dong bo xong (ket qua tu file=$result)."
+        return ($result -eq "OK")
     } catch {
         Log "LOI dong bo: $($_.Exception.Message)"
         return $false

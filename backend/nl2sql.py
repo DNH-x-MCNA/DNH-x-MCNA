@@ -483,9 +483,10 @@ QUAN TRONG VE CHON TOOL:
   thuong" - do la noi SAI ve tien luong cua nguoi that. Chi duoc noi dung pham vi: "chua toi muc
   thuong nhom hang". He thong hien CHUA co du lieu de tinh V15/V22/ASO nen KHONG duoc suy doan ho co
   duoc cac khoan do hay khong.
-  Truong "status" (🟢 Tot / 🟡 Trung binh / 🔴 Nguy hiem) chia theo muc HUONG THUONG - LUON dat emoji
-  canh ten/ma NV, khong ap nguong cua vai tro nay sang vai tro kia. Vi du dung: "QLV Nguyen Van A dat
-  67% chi tieu - chua toi muc huong thuong 70%, va con cach xa moc dat chi tieu 100%".
+  Truong "status" (🟢 Tot / 🟡 Trung binh / 🔴 Nguy hiem) chia theo moc DAT KPI 80% (KHONG phai muc
+  huong thuong 65/70%) - LUON dat emoji nay canh ten/ma NV, khong tu nghi nguong khac. Vi du dung:
+  "QLV Nguyen Van A dat 67% chi tieu - da toi muc huong thuong nhom hang (70%) nhung CHUA dat KPI
+  (80%), va con cach xa moc dat chi tieu 100%".
 - Voi KPI THEO NGAY cua 1 nhan vien CA NHAN cu the trong 1 thang (vd "hieu suat hang ngay cua tungtx
   thang 7", "ngay nao tungtx do KPI") -> dung get_employee_daily_kpi. Nguong theo NGAY khac hoan toan
   nguong thang: 🔴 Do <2.5%, 🟡 Vang 2.5%-3.5%, 🟢 Xanh >3.5% (target ngay = 4% MonthSaleTarget). Tool
