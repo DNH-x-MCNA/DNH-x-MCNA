@@ -37,13 +37,16 @@ from src.etl import (
 )
 from src.alerts import get_bravo_kpi_tdv_snapshot, get_bravo_receivables_snapshot
 
-# Ngưỡng "đạt chỉ tiêu" — CỐ Ý in ra cả 2 vì 2 hệ thống đang dùng 2 ngưỡng khác nhau:
-#   - Báo cáo định kỳ (src/etl.py:899):                >= 100%
-#   - Chatbot (DNH-x-MCNA/backend/report_templates.py): >= 80%  (KPI_ACHIEVED_THRESHOLD)
-# Chưa có xác nhận nghiệp vụ từ DNH ngưỡng nào đúng (đã bổ sung thành mục hỏi trong
-# docs/Cau_hoi_can_DNH_xac_nhan.md). Trong lúc chờ, in cả 2 để biết chênh lệch THẬT là bao nhiêu
-# người — có con số cụ thể thì mới hỏi khách được, và tại demo mới giải thích được vì sao lệch.
-KPI_THRESHOLDS = (1.00, 0.80)
+# BA mốc KHÁC NHAU, tuyệt đối không gộp (xác nhận với DNH 27/07/2026):
+#   >= 100%  ĐẠT CHỈ TIÊU  — làm đủ chỉ tiêu tháng được giao, đúng nghĩa đen.
+#   >=  80%  ĐẠT KPI       — mốc đánh giá hiệu quả công việc.
+#   >=  65%  TỚI MỨC THƯỞNG NHÓM HÀNG (TDV; QLV và các cấp quản lý là 70%) — CỔNG bắt đầu được
+#            tính thưởng nhóm hàng DM1/DM2/DM3, lấy theo bảng `dbo.DIM_BacThuong` mà thủ tục tính
+#            lương thật của DNH đang đọc (QĐ 0107/2026 cho TDV, QĐ 0429/.25 cho cấp quản lý).
+# 65%/70% CHỈ là cổng của thưởng nhóm hàng — DNH còn V15/V22/V25/ASO/thưởng quý/năm mốc khác hẳn,
+# và lương cơ bản từ 60% trở lên vẫn hưởng 100%. Nên người dưới 65% VẪN có thể được các khoản kia:
+# TUYỆT ĐỐI không diễn đạt thành "không được thưởng"/"không đạt KPI".
+KPI_THRESHOLDS = (1.00, 0.80, 0.65)
 
 SEP = "=" * 78
 
@@ -198,31 +201,44 @@ def section_kpi(p):
     tdv_rows = [r for r in snap if r.position_code == 'TDV']
     qlv_rows = [r for r in snap if r.position_code == 'QLV']
 
-    # --- C7: ngưỡng đạt chỉ tiêu — BẰNG CHỨNG cho mâu thuẫn 80% vs 100% ---
+    # --- C7: PHÂN BIỆT "đạt chỉ tiêu" (>=100%) với "tới mức thưởng nhóm hàng" (>=65% TDV) ---
     lines = [f"Tổng TDV có chỉ tiêu tháng: {len(tdv_rows)} người", ""]
     for th in KPI_THRESHOLDS:
         ok = sum(1 for r in tdv_rows if (r.month_sale_percent or 0) >= th)
-        note = "  <<< NGƯỠNG ĐANG DÙNG (cả báo cáo lẫn chatbot)" if th == 0.80 else ""
+        note = {1.00: "  <<< ĐẠT CHỈ TIÊU (làm đủ chỉ tiêu tháng)",
+                0.80: "  <<< ĐẠT KPI (mốc đánh giá hiệu quả công việc)",
+                0.65: "  <<< TỚI MỨC THƯỞNG NHÓM HÀNG (TDV 65% / quản lý 70%)"}.get(th, "")
         lines.append(f"Ngưỡng >= {th*100:.0f}%:  ĐẠT {ok}/{len(tdv_rows)}  —  "
                      f"CHƯA đạt {len(tdv_rows) - ok}/{len(tdv_rows)}{note}")
     lines += [
         "",
-        ">>> 2 hệ thống ĐÃ thống nhất ngưỡng 80% (23/07/2026). Vẫn in cả 2 ngưỡng vì DNH CHƯA xác",
-        "    nhận 80% có đúng quy ước nghiệp vụ không (mục A6, docs/Cau_hoi_can_DNH_xac_nhan.md) —",
-        "    có sẵn cả 2 con số thì lúc DNH hỏi mới trả lời được ngay là đổi ngưỡng thì lệch bao nhiêu.",
-        ">>> Tại demo VẪN phải nói rõ đang dùng ngưỡng 80%, đừng đưa số trần.",
+        ">>> BA mốc này KHÁC NHAU, khi trả lời PHẢI nói rõ đang dùng mốc nào:",
+        "      100% = đạt chỉ tiêu · 80% = đạt KPI · 65%/70% = tới mức thưởng nhóm hàng.",
+        ">>> 65%/70% CHỈ là cổng thưởng nhóm hàng (DM1/DM2/DM3), lấy theo DIM_BacThuong — KHÔNG phải",
+        "    'đạt KPI'. Người dưới 65% vẫn có thể được V15/ASO và vẫn đủ lương cơ bản (>=60%).",
+        ">>> Giữa tháng, số đạt >=100% gần như luôn ~0 và ĐÓ LÀ ĐÚNG (lũy kế tới hôm nay so với chỉ",
+        "    tiêu CẢ tháng) — phải giải thích, đừng để người đọc tưởng hệ thống hỏng.",
     ]
     answer("C7", "Hiện có bao nhiêu TDV chưa đạt chỉ tiêu tháng?", lines)
 
     # --- C6: xếp hạng vùng theo % đạt KPI ---
-    # Cộng tiền ở TẦNG LÁ: mọi TDV + những QLV không có TDV nào dưới quyền. Không cộng cả 2 tầng
-    # (QLV.month_sale_amount ĐÃ là rollup của TDV dưới quyền -> gấp đôi), cũng không cộng thuần TDV
-    # (bỏ sót QLV tự ôm khách, vd MBKV12). Cách này đã thống nhất cho CẢ báo cáo (src/etl.py) lẫn
-    # chatbot (report_templates.py::kpi_ranking) ngày 23/07/2026 — xem docs/kich_ban_demo1_chatbot.md
-    # mục R-D. Nếu sửa cách gộp thì phải sửa đủ 3 chỗ, nếu không lại lệch như trước.
-    managers_with_team = {t.manager_code for t in snap_all if t.position_code == 'TDV'}
-    childless_qlv_rows = [q for q in qlv_rows if q.employee_code not in managers_with_team]
-    money_rows = tdv_rows + childless_qlv_rows
+    # 27/07/2026: cộng tiền ở TẦNG ROLLUP QLV (mỗi QLV đã gồm đội của họ + chỉ tiêu cá nhân của
+    # chính họ), thay cho "tầng lá" dùng từ 23/07. Lý do đổi: tầng lá VỀ BẢN CHẤT không đếm đủ —
+    # người có chỉ tiêu nhưng chưa được giao khách nào thì không có dòng nào trong
+    # FACT_TongHopKhachHang nên vô hình (riêng MB mất 626.173.042đ); và phần chênh 1,75 tỷ từng ghi
+    # là "chưa giải thích được" NAY ĐÃ RÕ: đó là tổng 5 dòng chỉ tiêu cá nhân của QLV, hợp lệ.
+    # Kiểm chứng: tầng rollup khớp TUYỆT ĐỐI báo cáo gốc "Tiến độ doanh số tháng theo NVKD" và bảng
+    # DIM_TargetVungMien ở cả 3 miền (MB 30,78 / MN 13,19 / MT 7,00 tỷ; tổng 50.967.586.921đ), và
+    # khớp suốt 7 tháng 2026-01..07 (21/21 cặp tháng×vùng lệch 0 đồng).
+    # Tầng rollup xác định bằng ManagerCode lấy từ TOÀN BỘ FACT (get_bravo_manager_codes) — CỐ Ý
+    # không lọc PositionCode/IsDuplicate: cấp dưới của 'Kênh MT'/'Chợ sỉ' mang chức danh TK/CS, lọc
+    # theo chức danh sẽ làm 2 QLV này biến mất (hụt 6,79 tỷ Miền Nam).
+    # ĐÃ SỬA ĐỦ CẢ 3 CHỖ (23/07 dặn: sót 1 chỗ là lệch lại): src/etl.py::get_digest_metrics,
+    # backend/report_templates.py::kpi_ranking (repo DNH-x-MCNA), và file này.
+    from src.alerts import get_bravo_manager_codes
+    money_snap = get_bravo_kpi_tdv_snapshot(position_codes=('TDV', 'QLV'), include_duplicates=True)
+    managers_with_team = get_bravo_manager_codes()
+    money_rows = [r for r in money_snap if r.employee_code in managers_with_team]
     by_area = {}
     for r in money_rows:
         a = by_area.setdefault(r.area_code or "(không rõ)", {"target": 0.0, "amount": 0.0})

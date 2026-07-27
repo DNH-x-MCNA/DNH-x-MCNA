@@ -647,12 +647,46 @@ def _is_duplicate_filter_sql(alias="n"):
             f"OR {prefix}[EmployeeCode] IN ({codes}))")
 
 
-def get_bravo_kpi_tdv_snapshot(position_codes=('TDV',)):
+def get_bravo_manager_codes():
+    """Tập mã nhân viên ĐANG quản lý người khác, lấy từ cột ManagerCode của FACT_TongHopKhachHang tại
+    snapshot mới nhất — KHÔNG lọc PositionCode, KHÔNG lọc IsDuplicate. Đây là điểm mấu chốt: nếu lọc
+    theo chức danh thì QLV nào có cấp dưới mang chức danh lạ sẽ KHÔNG được nhận ra là quản lý
+    (xác nhận 27/07/2026: MN1 'Kênh MT' quản lý TM23100133 chức danh 'TK', MN4 'Chợ sỉ' quản lý
+    TM23100153 chức danh 'CS' — lọc IN ('TDV','QLV') làm mất cả 2 QLV này khỏi tầng rollup, hụt
+    6,79 tỷ chỉ tiêu Miền Nam).
+
+    Dùng để xác định TẦNG ROLLUP khi cộng tiền theo vùng (xem etl.py::get_digest_metrics) — cùng
+    quy tắc với chatbot (backend/report_templates.py::kpi_ranking nhánh region) để 2 hệ thống ra
+    cùng một số. Raise exception nếu Bravo không truy cập được.
+    """
+    from sqlalchemy import text
+    from src.database import _get_bravo_engine
+    engine = _get_bravo_engine()
+    if engine is None:
+        raise RuntimeError("Không có Bravo engine (thiếu BRAVO_SQL_* trong .env)")
+    with engine.connect() as conn:
+        rows = conn.execute(text('''
+            SELECT DISTINCT [ManagerCode] FROM [FACT_TongHopKhachHang]
+            WHERE [SaveDate] = (SELECT MAX([SaveDate]) FROM [FACT_TongHopKhachHang])
+              AND [ManagerCode] IS NOT NULL AND [ManagerCode] <> ''
+        ''')).fetchall()
+    return {r[0] for r in rows}
+
+
+def get_bravo_kpi_tdv_snapshot(position_codes=('TDV',), include_duplicates=False):
     """
     Snapshot KPI TỨC THỜI từ Bravo (FACT_TongHopKhachHang + DIM_NhanVien) — tái dùng đúng công
     thức đã kiểm chứng bên chatbot (ai_agent/chatbot.py::kpi_tdv_instruction nhánh bravo,
     10/07/2026): MAX(SaveDate) làm mốc kỳ mới nhất (KHÔNG hardcode tháng), loại IsDuplicate,
     SELECT DISTINCT target trước khi so — tránh cộng trùng khi 1 NV lặp nhiều dòng theo khách hàng.
+
+    include_duplicates=True: GIỮ LẠI cả bản ghi IsDuplicate=1. CHỈ dùng cho phép gộp ở TẦNG ROLLUP
+    (xem etl.py::get_digest_metrics, khối kpi_summary) — Bravo gắn nhầm cờ trùng lặp cho một số QLV
+    THẬT mang chỉ tiêu vùng (27/07/2026: MN1 'Kênh MT' 5,29 tỷ; MN4 'Chợ sỉ' 1,5 tỷ; MBKV12 5,28 tỷ;
+    TM25030101 0,935 tỷ), lọc đi thì tổng chỉ tiêu vùng hụt hẳn phần đó. An toàn vì tầng rollup chỉ
+    lấy người CÓ quản lý người khác — các dòng "tự thân QLV" (cũng IsDuplicate=1) không quản lý ai
+    nên tự động bị loại, không gây cộng trùng. TUYỆT ĐỐI KHÔNG bật cờ này cho phép đếm đầu người
+    hay xếp hạng cá nhân (sẽ hiện cả bản ghi ảo/trùng ra cho người dùng).
 
     CHỈ áp dụng cho TDV/QLV — 'kpi_summary' (TP/PP/TBP/CS/CTV/TK) KHÔNG tồn tại trên Bravo, các vị
     trí đó BẮT BUỘC vẫn đọc Supabase (xem run_sales_kpi_insights_alert, không đổi).
@@ -688,7 +722,8 @@ def get_bravo_kpi_tdv_snapshot(position_codes=('TDV',)):
         FROM tdv_target t
         JOIN [DIM_NhanVien] n ON t.[EmployeeCode] = n.[EmployeeCode]
         LEFT JOIN tdv_actual a ON t.[EmployeeCode] = a.[EmployeeCode]
-        WHERE n.[PositionCode] IN ({placeholders}) AND {_is_duplicate_filter_sql('n')}
+        WHERE n.[PositionCode] IN ({placeholders})
+              {"" if include_duplicates else "AND " + _is_duplicate_filter_sql('n')}
     ''')
     with engine.connect() as conn:
         rows = conn.execute(sql).fetchall()

@@ -28,26 +28,33 @@ STATE_DB_PATH = os.path.join(PROJECT_ROOT, 'data', 'alerts_state.db')
 # 23/07/2026 (chiều): xác nhận thêm bằng VĂN BẢN GỐC, không chỉ suy từ DIM_BacThuong nữa —
 # QĐ 0429-1 (MB) phụ lục 02, QĐ 0429-2 (MN), QĐ 0429-3 (MT), đều có chữ ký, đều chặn dưới 70% cho
 # QLV. TDV thì đã chuyển sang QĐ 0107/2026 (hiệu lực 01/07/2026) nên chặn dưới 65%.
-KPI_ACHIEVED_THRESHOLD_TDV = 0.65   # Trình dược viên
-KPI_ACHIEVED_THRESHOLD_MGR = 0.70   # QLV và các vai trò quản lý/kênh khác
-KPI_ACHIEVED_THRESHOLD = KPI_ACHIEVED_THRESHOLD_TDV  # mặc định: kpi_summary đếm ở tầng TDV
+# ⚠️⚠️⚠️ 27/07/2026 — XÁC NHẬN VỚI DNH: có BA MỐC KHÁC NHAU, TUYỆT ĐỐI KHÔNG GỘP:
+#   >= 100%  ĐẠT CHỈ TIÊU   — làm đủ chỉ tiêu tháng được giao (nghĩa đen).
+#   >=  80%  ĐẠT KPI        — mốc đánh giá HIỆU QUẢ CÔNG VIỆC, ÁP DỤNG CHUNG cho MỌI vai trò.
+#   >=65/70% TỚI MỨC THƯỞNG — CỔNG bắt đầu được tính THƯỞNG NHÓM HÀNG (DM1/DM2/DM3), theo
+#                             DIM_BacThuong: TDV 65% (QĐ 0107/2026), quản lý 70% (QĐ 0429/.25).
+# Lỗi từng mắc: 65/70 bị đặt tên KPI_ACHIEVED_* và gọi là "đạt KPI", khiến người đạt 67% bị báo là
+# "đã đạt KPI" trong khi thực tế mới qua cổng thưởng, CHƯA đạt KPI (80%). Nay tách hẳn tên gọi.
+BONUS_THRESHOLD_TDV = 0.65          # Trình dược viên — cổng thưởng nhóm hàng
+BONUS_THRESHOLD_MGR = 0.70          # QLV và các vai trò quản lý/kênh khác — cổng thưởng
+KPI_ACHIEVED_THRESHOLD = 0.80       # ĐẠT KPI — chung cho mọi vai trò
+KPI_FULL_TARGET = 1.00              # ĐẠT CHỈ TIÊU đúng nghĩa đen
 
 
-def kpi_threshold_for(position_code):
-    """Ngưỡng đạt chỉ tiêu THEO VAI TRÒ (tỷ lệ, không phải %). TDV 0.65, các vai trò khác 0.70.
+def bonus_threshold_for(position_code):
+    """Ngưỡng TỚI MỨC THƯỞNG NHÓM HÀNG theo VAI TRÒ (tỷ lệ, không phải %). TDV 0.65, vai trò khác
+    0.70. KHÔNG PHẢI ngưỡng "đạt KPI" — đạt KPI là 0.80 chung cho mọi vai trò (KPI_ACHIEVED_THRESHOLD).
 
-    Dùng hàm này thay vì gọi thẳng KPI_ACHIEVED_THRESHOLD ở bất kỳ chỗ nào đếm/phân loại "đạt hay
-    chưa". Lý do có hàm: bên chatbot (D:\\DNH-x-MCNA) từng khai báo đủ 2 hằng số nhưng KHÔNG gọi tới
-    hằng số quản lý ở đâu cả, nên mọi vai trò đều bị chấm ở 65% — một QLV đạt 67% được gắn nhãn
-    "đã đạt" trong khi theo QĐ 0429 họ hưởng 0% thưởng danh mục. Phát hiện 23/07/2026. Ở repo này
-    chưa sinh ra số sai (kpi_summary chỉ đếm tdv_rows), nhưng để hằng số nằm chơi là mời gọi đúng
-    lỗi đó lặp lại khi ai đó mở rộng phép đếm sang QLV.
+    Dùng hàm này thay vì gọi thẳng hằng số ở bất kỳ chỗ nào đếm/phân loại "tới mức thưởng hay chưa".
+    Lý do có hàm: bên chatbot (D:\\DNH-x-MCNA) từng khai báo đủ 2 hằng số nhưng KHÔNG gọi tới hằng số
+    quản lý ở đâu cả, nên mọi vai trò đều bị chấm ở 65% — một QLV đạt 67% được gắn nhãn "đã đạt"
+    trong khi theo QĐ 0429 họ hưởng 0% thưởng danh mục. Phát hiện 23/07/2026.
 
-    position_code rỗng/None -> ngưỡng TDV: giữ nguyên hành vi cũ, và không gắn nhãn "chưa đạt" cho
-    người thật chỉ vì thiếu dữ liệu vai trò."""
+    position_code rỗng/None -> ngưỡng TDV: giữ nguyên hành vi cũ, và không gắn nhãn "chưa tới mức
+    thưởng" cho người thật chỉ vì thiếu dữ liệu vai trò."""
     if position_code and str(position_code).strip().upper() != 'TDV':
-        return KPI_ACHIEVED_THRESHOLD_MGR
-    return KPI_ACHIEVED_THRESHOLD_TDV
+        return BONUS_THRESHOLD_MGR
+    return BONUS_THRESHOLD_TDV
 
 def get_low_inventory(erp_engine, limit):
     """
@@ -936,11 +943,15 @@ def get_digest_metrics(start_dt, end_dt, period_label, granularity=None, region=
                 # đầu người làm con số vô nghĩa (trước đây len(snap) trộn cả TDV lẫn QLV -> vd
                 # "0/36" = 31 TDV + 5 QLV). Giờ đếm riêng: bao nhiêu TDV đạt ngưỡng chỉ tiêu cá
                 # nhân / tổng TDV có chỉ tiêu — con số quản lý cần để biết mấy nhân viên on-track.
-                # Ngưỡng lấy theo vai trò của TỪNG dòng (kpi_threshold_for) chứ không dùng hằng số
+                # Ngưỡng lấy theo vai trò của TỪNG dòng (bonus_threshold_for) chứ không dùng hằng số
                 # phẳng: hiện tdv_rows chỉ có TDV nên kết quả y hệt, nhưng nếu sau này phép đếm mở
                 # rộng sang QLV thì tự động chấm ở 70% thay vì âm thầm chấm sai ở 65%.
                 achieved = sum(1 for r in tdv_rows
-                               if (r.month_sale_percent or 0) >= kpi_threshold_for(r.position_code))
+                               if (r.month_sale_percent or 0) >= bonus_threshold_for(r.position_code))
+                # 27/07/2026: ĐẠT KPI = >=80%, mốc riêng, chung cho mọi vai trò — KHÁC hẳn cổng
+                # thưởng 65/70 ở trên và khác "đạt chỉ tiêu" (>=100%) ở dưới. Ba con số, ba nhãn.
+                kpi_achieved = sum(1 for r in tdv_rows
+                                   if (r.month_sale_percent or 0) >= KPI_ACHIEVED_THRESHOLD)
                 # 23/07/2026 (chiều): tách hẳn 2 khái niệm từng bị gộp làm một. `achieved` ở trên là
                 # số người TỚI MỨC THƯỞNG NHÓM HÀNG (65%/70%) — KHÔNG phải "đạt chỉ tiêu", và cũng
                 # KHÔNG phải "được thưởng" nói chung: 65%/70% chỉ là cổng của thưởng nhóm hàng
@@ -960,33 +971,68 @@ def get_digest_metrics(start_dt, end_dt, period_label, granularity=None, region=
                 # Cộng cả 2 -> gấp ~2× thật (phát hiện qua Monthly "Quản lý Miền Nam" 21/07/2026:
                 # "Tổng Doanh Số Đạt" 4,45 tỷ > Doanh Thu OTC thật cả tháng 3,32 tỷ — vô lý).
                 #
-                # 23/07/2026: đổi từ "tầng QLV + TDV mồ côi" sang "TẦNG LÁ" = mọi TDV + những QLV
-                # KHÔNG có TDV nào dưới quyền. Lý do: chatbot cộng ở tầng TDV còn báo cáo cộng ở tầng
-                # QLV — cùng dữ liệu ra 2 bộ số (MB 45,9% vs 42,1%), sẽ mâu thuẫn ngay tại Demo #1 nếu
-                # khách mở song song 2 thứ. Chọn tầng lá vì:
-                #   - Không bỏ sót ai: QLV tự ôm khách, không có đội (vd MBKV12, doanh số 2,01 tỷ) vẫn
-                #     được tính — cộng ở tầng TDV thuần thì mất hẳn số này.
-                #   - Không cộng chồng chỉ tiêu cấp quản lý: tổng target tầng QLV ở MB là 30,78 tỷ so
-                #     với 23,75 tỷ ở tầng TDV — phần chênh ngoài MBKV12 (~1,75 tỷ) chưa giải thích
-                #     được, nghi chỉ tiêu cấp vùng chồng lên chỉ tiêu cá nhân (đúng nghi vấn mục A4
-                #     trong docs/Cau_hoi_can_DNH_xac_nhan.md, DNH chưa trả lời).
-                # Xác định "có đội hay không" dựa trên raw_snap (CHƯA lọc target>0) — nếu dùng snap đã
-                # lọc thì 1 QLV có đội mà cả đội chưa được giao chỉ tiêu sẽ bị hiểu nhầm là không có
-                # đội, rồi cộng thêm rollup của chính đội đó vào -> lại cộng trùng.
-                managers_with_team = {t.manager_code for t in raw_snap if t.position_code == 'TDV'}
-                childless_qlv_rows = [q for q in qlv_rows if q.employee_code not in managers_with_team]
-                money_rows = tdv_rows + childless_qlv_rows
+                # 27/07/2026: đổi từ "TẦNG LÁ" sang "TẦNG ROLLUP QLV" — và đổi ĐỒNG THỜI bên chatbot
+                # (backend/report_templates.py::kpi_ranking nhánh region), 2 hệ thống PHẢI gộp giống
+                # nhau, nếu không khách mở song song email và chatbot sẽ thấy 2 bộ số khác nhau.
+                #
+                # Vì sao bỏ tầng lá: bản ghi chú 23/07 chọn tầng lá vì phần chênh ~1,75 tỷ ở MB
+                # "chưa giải thích được". NAY ĐÃ GIẢI THÍCH ĐƯỢC (27/07, đối chiếu từng dòng với báo
+                # cáo gốc "Tiến độ doanh số tháng theo NVKD" tháng 7): đó là tổng 5 dòng CHỈ TIÊU CÁ
+                # NHÂN CỦA CHÍNH QLV (QLV vừa quản đội vừa tự ôm một địa bàn) — 1.744.361.395đ, hoàn
+                # toàn hợp lệ, KHÔNG phải chỉ tiêu cấp vùng chồng lên. Kiểm chứng: target rollup của
+                # tungtx 3.016.493.346 = tổng 10 TDV dưới quyền 2.756.994.289 + phần tự thân 259.499.057.
+                #
+                # Tầng lá VỀ BẢN CHẤT không thể đếm đủ: người có chỉ tiêu nhưng không được giao khách
+                # nào thì KHÔNG có dòng nào trong FACT_TongHopKhachHang (bảng này chỉ có dòng theo
+                # từng khách), nên vô hình với mọi cách cộng từ dưới lên — riêng MB mất 626.173.042đ.
+                #
+                # Đối chiếu thực tế 27/07/2026 (target cả tháng) với báo cáo gốc + DIM_TargetVungMien:
+                #   tầng lá   : MB 23,75 tỷ | MN  5,26 tỷ | MT 6,79 tỷ  -> lệch rất lớn
+                #   tầng rollup: MB 30,78 tỷ | MN 13,19 tỷ | MT 7,00 tỷ -> KHỚP TUYỆT ĐỐI cả 3 miền,
+                #   tổng toàn quốc 50.967.586.921đ = đúng dòng Total của báo cáo gốc. Kiểm thêm 7
+                #   tháng (2026-01..07): 21/21 cặp tháng×vùng khớp 0 đồng.
+                #
+                # Tầng rollup xác định bằng MANAGER_CODE (quan hệ dữ liệu THẬT), CỐ Ý không dùng
+                # position_code lẫn IsDuplicate — cả hai đều sai nhãn trên Bravo: Dương Thị Hồng Huệ
+                # (Modern Trade, 5,29 tỷ) mang chức danh 'TK', và 4 QLV thật bị gắn cờ IsDuplicate=1.
+                # Vì vậy phải lấy snapshot include_duplicates=True cho phép gộp TIỀN này (an toàn: các
+                # dòng "tự thân QLV" cũng IsDuplicate=1 nhưng KHÔNG quản lý ai nên tự bị loại khỏi
+                # tầng rollup, không gây cộng trùng). Các phép ĐẾM ĐẦU NGƯỜI ở trên vẫn dùng snap đã
+                # lọc trùng như cũ — không đổi.
+                # Tập quản lý phải lấy từ TOÀN BỘ FACT (get_bravo_manager_codes, KHÔNG lọc chức danh)
+                # chứ không suy từ chính money_snap: cấp dưới của một số QLV mang chức danh ngoài
+                # ('TDV','QLV') nên bị snapshot lọc mất, khiến QLV đó không bao giờ được nhận ra là
+                # quản lý (MN1 'Kênh MT' và MN4 'Chợ sỉ' — hụt 6,79 tỷ chỉ tiêu Miền Nam).
+                from src.alerts import get_bravo_manager_codes
+                money_snap = get_bravo_kpi_tdv_snapshot(position_codes=('TDV', 'QLV'),
+                                                        include_duplicates=True)
+                if markers:
+                    money_snap = [r for r in money_snap if r.area_code in markers]
+                managers_with_team = get_bravo_manager_codes()
+                money_rows = [r for r in money_snap if r.employee_code in managers_with_team]
+                # CHỐT AN TOÀN — chống LỒNG TẦNG: nếu sau này Bravo thêm cấp trên (vd TP quản lý QLV)
+                # thì cộng cả 2 cấp sẽ GẤP ĐÔI âm thầm. Hiện 21/21 đều là QLV, không ai bị lồng.
+                nested = [r.employee_code for r in money_rows
+                          if r.manager_code and r.manager_code in managers_with_team]
+                if nested:
+                    print(f"[DIGEST][kpi_summary] CẢNH BÁO CẤU TRÚC: {len(nested)} người ở tầng quản lý "
+                          f"lại có cấp trên ({', '.join(nested[:5])}) — cây tổ chức đã có thêm tầng, "
+                          f"tổng chỉ tiêu vùng CÓ THỂ bị đếm trùng. Cần kiểm tra lại cách gộp.")
                 total_target = sum(r.month_sale_target for r in money_rows)
                 total_amount = sum(r.month_sale_amount for r in money_rows)
                 team_pct = (total_amount / total_target) if total_target else None
                 kpi_summary = {
+                    # achieved_count = số người TỚI MỨC THƯỞNG NHÓM HÀNG (65%/70% tuỳ vai trò).
                     "achieved_count": achieved, "total_count": total_count,
                     # 23/07/2026: đưa ngưỡng ra tận email — 2 hệ thống từng dùng 2 ngưỡng khác nhau
                     # và không chỗ nào ghi rõ đang dùng ngưỡng nào, nên người đọc không có cách nào
                     # biết vì sao 2 con số lệch. Số khác nhau mà giải thích được thì không phá niềm
                     # tin; số khác nhau mà im lặng thì có.
-                    "achieved_threshold_pct": round(KPI_ACHIEVED_THRESHOLD * 100),
-                    # Số người ĐẠT CHỈ TIÊU đúng nghĩa (≥100%) — khác achieved_count ở trên.
+                    "achieved_threshold_pct": round(BONUS_THRESHOLD_TDV * 100),
+                    # 27/07/2026: ĐẠT KPI (≥80%) — mốc RIÊNG, chung mọi vai trò. Đừng nhầm với 2 cái kia.
+                    "kpi_achieved_count": kpi_achieved,
+                    "kpi_threshold_pct": round(KPI_ACHIEVED_THRESHOLD * 100),
+                    # Số người ĐẠT CHỈ TIÊU đúng nghĩa (≥100%) — khác cả 2 con số trên.
                     "full_target_count": full_target,
                     "team_pct": round(team_pct * 100, 1) if team_pct is not None else None,
                     "total_target": round(total_target, 2), "total_amount": round(total_amount, 2),
