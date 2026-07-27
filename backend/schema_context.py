@@ -7,8 +7,9 @@ NGUON DU LIEU (tu 2026-07-08):
   (moi 15-30 phut) tu Bravo qua sync_warehouse.py, co INDEX + DAY DU LICH SU NHIEU NAM, tra loi
   nhanh (<=10s). Dung tool query_database cho cau hoi tu do ve doanh thu/san pham/khach hang/
   nhan vien/vung mien/tra hang khong thuoc 5 tool bao cao chuan.
-- Supabase CHI con dung cho inventory/receivable_detail/receivable_etc (bang do dong nghiep tu
-  nhap, Bravo KHONG CO nguon tuong duong) - dung tool query_inventory_receivables.
+- Supabase CHI con dung cho inventory (bang do dong nghiep tu nhap) - dung tool
+  query_inventory_receivables. CONG NO da chuyen HAN sang kho local (bang fact_congno_khachhang,
+  snapshot tu SP goc DNH) tu 29/07/2026 - KHONG con doc receivable_detail/receivable_etc tren Supabase.
 - Bravo (SQL Server song, may chu that cua khach hang) KHONG con duoc chatbot goi truc tiep nua -
   chi co job dong bo nen moi cham toi, giup chatbot khong phu thuoc VPN on dinh moi luc.
 !!! Du lieu "local" co the tre toi da ~15-30 phut so voi Bravo that - neu nguoi dung hoi so lieu
@@ -144,6 +145,16 @@ brv_tonkhodk: TON KHO THAT tinh den hien tai (snapshot, khong theo ngay) - THAY 
   Muon hoi "ton kho vung X": JOIN ca 3 bang (brv_tonkhodk + brv_kho + brv_sanpham), GROUP BY
   k.branch_code, loc WHERE k.branch_code='B0x' VA t.is_active=1.
 
+fact_congno_khachhang: CONG NO theo khach hang, snapshot TUC THOI tu bao cao cong no GOC cua DNH (SP
+  usp_DeptAccDueDate_GetData) - day la NGUON DUNG DUY NHAT cho cong no, dong bo dinh ky. MOT DONG =
+  (khach hang x kenh): khach ban ca OTC lan ETC co 2 dong, nen truy van du no/qua han theo khach PHAI
+  SUM(...) GROUP BY customer_code, TUYET DOI KHONG gia dinh 1 dong/khach. Cot: snapshot_date, snapshot_at
+  (ISO datetime, dung de biet snapshot cu chua), customer_code, customer_name, sales_channel ('OTC'/'ETC'),
+  area_code (MB/MB2/MN/MT), balance_end (tong du no), overdue_1_15, overdue_15_30, overdue_30_45,
+  overdue_gt_45 (4 muc tuoi no theo ngay), total_overdue (=tong 4 muc, da tinh san). Ty le qua han =
+  SUM(total_overdue)/SUM(balance_end). Loc vung: WHERE area_code='MB'/'MN'/'MT' (dung REGION_SQL_MARKERS,
+  MB gom MB va MB2). Top khach no qua han: ORDER BY SUM(total_overdue) DESC.
+
 === SUPABASE (PostgreSQL) - CHI dung voi tool query_inventory_receivables ===
 (Ten cot phan biet hoa/thuong, PHAI dat trong dau ngoac kep "...", dung LIMIT N)
 
@@ -154,14 +165,9 @@ inventory (snapshot ton kho MOI NHAT, khong theo ngay): "item_code", "item_name"
   NULL, KHONG dung duoc de loc/nhom theo vung - neu cau hoi co yeu to VUNG MIEN, chuyen sang dung
   query_database voi brv_tonkhodk/brv_kho/brv_sanpham o kho local thay vi bang nay).
 
-receivable_detail: cong no kenh OTC/chung, theo tung ky (thang). Cot: "period" (dang "thang_nam"
-  vd "9_2025"), "customer_code", "customer_name", "balance_end" (du no cuoi ky), "in_term",
-  "overdue_1_15","overdue_15_30","overdue_30_45","overdue_gt_45", "total_overdue", "sales_channel".
-  LUU Y: chi co toi ky gan nhat hien co (dung MAX de tim ky moi nhat, KHONG gia dinh la thang hien tai).
-receivable_etc: cong no kenh ETC. Cot: "customer_code", "customer_name", "contract_value",
-  "total_paid", "in_term", "overdue_1_7","overdue_8_14","overdue_15_21","overdue_gt_21",
-  "total_overdue", "total_receivable", "province_code", "sales_manager". KHONG co cot "period"
-  (la snapshot hien tai, khong chia theo ky).
+(CONG NO: KHONG con tren Supabase - da chuyen sang bang fact_congno_khachhang o kho local, hoi qua
+ query_database. TUYET DOI KHONG truy van receivable_detail/receivable_etc - 2 bang do la du lieu
+ Excel nhap tay cu, sai lech lon, DA NGUNG dung tu 29/07/2026.)
 
 === QUY TAC QUAN TRONG ===
 1. Doanh thu = SUM(amount9), KHONG dung cot nao khac.

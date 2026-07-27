@@ -30,6 +30,12 @@ _FORBIDDEN = re.compile(
     re.IGNORECASE,
 )
 
+# 29/07/2026 (R-B): CHOT FAIL-CLOSED - chan cung moi SQL dung 2 bang cong no Excel cu tren Supabase.
+# Cong no da chuyen HAN sang kho local (fact_congno_khachhang). 2 bang nay tung thoi no 1 khach len
+# 9,17 ty (that la 0,61 ty). Day la lop bao ve KHONG phu thuoc AI co doc dung prompt hay khong (bai
+# hoc tu ban va phan quyen: chan o tang thuc thi, khong chi o tang mo ta).
+_BLOCKED_TABLES = re.compile(r"\b(receivable_detail|receivable_etc)\b", re.IGNORECASE)
+
 _engines = {}
 
 
@@ -78,6 +84,9 @@ def validate_sql(sql: str, db: str = "local") -> str:
         raise SqlRejected("Chi cho phep cau lenh SELECT (hoac WITH ... SELECT).")
     if _FORBIDDEN.search(s):
         raise SqlRejected("SQL chua tu khoa khong duoc phep (chi cho phep doc du lieu).")
+    if _BLOCKED_TABLES.search(s):
+        raise SqlRejected("Bang cong no receivable_detail/receivable_etc da ngung dung (du lieu cu "
+                          "sai lech lon). Cong no hien lay tu bang fact_congno_khachhang o kho local.")
     if db in ("supabase", "local") and not re.search(r"\bLIMIT\s+\d+\b", s, re.IGNORECASE):
         s = f"{s}\nLIMIT {MAX_ROWS}"
     # db == "bravo" (T-SQL): khong tu dong them TOP N (cu phap SELECT...LIMIT khong hop le voi SQL Server,
