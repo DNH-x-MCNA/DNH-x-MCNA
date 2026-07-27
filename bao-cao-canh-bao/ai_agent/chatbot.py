@@ -1650,12 +1650,14 @@ Key Business Logic & Tables & Strict Mapping Rules:
 
 3. Chỉ tiêu Doanh thu (Revenue Targets):
    - CRITICAL DATE FILTER: 'dim_targetvungmien' và 'fact_kehoachtongetc' lưu chỉ tiêu THEO THÁNG — mỗi tháng có NHIỀU dòng (theo từng nhân viên/khu vực chi tiết trong dim_targetvungmien, hoặc theo ItemGroup trong fact_kehoachtongetc). Cột "DocDate" là TEXT dạng 'YYYY-MM-01T00:00:00' (luôn là ngày 01 đầu tháng kèm giờ). BẮT BUỘC lọc "DocDate"::date = 'YYYY-MM-01' (ép kiểu date rồi so sánh) khi cần chỉ tiêu của MỘT tháng cụ thể — KHÔNG so sánh chuỗi thô kiểu "DocDate" = 'YYYY-MM-01' (thiếu phần 'T00:00:00' sẽ không khớp dòng nào, trả về SUM = 0, dẫn tới báo sai "chưa có target"). Nếu quên lọc "DocDate" hoàn toàn, kết quả sẽ CỘNG DỒN target của TẤT CẢ các tháng có trong bảng (sai, bị nhân lên nhiều lần).
-   - Target OTC Region: Query 'dim_targetvungmien' (column 'Amount'). Grouped by 'AreaCode' ('MB', 'MT', 'MN'). ALWAYS filter: "ChannelCode" = 'GT' for OTC region targets. Ví dụ target OTC miền Bắc của tháng hiện tại:
+   - Target OTC Region: Query 'dim_targetvungmien' (column 'Amount'). Grouped by 'AreaCode' ('MB', 'MT', 'MN'). "ChannelCode" ở bảng này CHỈ có 2 giá trị 'GT' (target kênh OTC thường) và 'MT' (target riêng kênh Modern Trade — chuỗi nhà thuốc lớn như Long Châu/Pharmacity, KHÔNG PHẢI vùng Miền Trung, KHÔNG PHẢI kênh ETC). Cả 2 giá trị đều thuộc phạm vi OTC — bảng này KHÔNG chứa target ETC.
+     * Khi người dùng hỏi target OTC vùng X mà KHÔNG chỉ định riêng kênh: PHẢI SUM cả "ChannelCode" IN ('GT','MT') — chỉ lọc riêng 'GT' sẽ làm target bị thiếu (đã từng gây báo sai target Miền Nam thấp hơn thực tế ~40%, xem chi tiết trong schema_context.py). Ví dụ target OTC toàn bộ miền Bắc của tháng hiện tại:
      SELECT COALESCE(SUM("Amount"), 0) AS target_amount
      FROM dim_targetvungmien
-     WHERE "AreaCode" = 'MB' AND "ChannelCode" = 'GT'
+     WHERE "AreaCode" = 'MB'
        AND "DocDate"::date = '{latest_year}-{latest_month}-01'
-   - Target ETC Region: Query 'dim_targetvungmien' with "ChannelCode" = 'MT', áp dụng cùng cách lọc "DocDate"::date như trên.
+     * Chỉ lọc riêng "ChannelCode" = 'GT' hoặc = 'MT' khi người dùng hỏi RÕ RÀNG về 1 kênh cụ thể (vd "target kênh MT/Modern Trade" hoặc "target kênh GT/OTC thường không tính Modern Trade").
+   - Target ETC: bảng 'dim_targetvungmien' KHÔNG có target ETC theo vùng — dùng 'fact_kehoachtongetc' (xem mục target ETC toàn công ty bên dưới, không có breakdown theo vùng miền).
    - Target ETC toàn công ty: Query 'fact_kehoachtongetc' (column 'Amount', có cột 'ItemGroup' nhưng KHÔNG có cột vùng miền), cũng phải lọc "DocDate"::date = 'YYYY-MM-01' như trên.
    - Employee targets: Query 'fact_tonghopkhachhang' (column 'MonthSaleTarget').
      * VERY IMPORTANT: Since fact_tonghopkhachhang has duplicate target values per customer row for each employee, ALWAYS group by EmployeeCode and SaveDate to get the unique employee targets before summing them:
@@ -1679,14 +1681,17 @@ Key Business Logic & Tables & Strict Mapping Rules:
        GROUP BY DATE_TRUNC('month', h."DocDate"::timestamp)::date
      ),
      target_monthly AS (
-       SELECT 
+       SELECT
          "DocDate"::date AS month_start,
          COALESCE(SUM("Amount"), 0) AS target_revenue
        FROM dim_targetvungmien
-       WHERE "AreaCode" = 'MB' AND "ChannelCode" = 'GT'
+       WHERE "AreaCode" = 'MB'
          AND "DocDate"::date >= '2026-04-01' AND "DocDate"::date <= '2026-06-30'
        GROUP BY "DocDate"::date
      )
+     -- Không lọc ChannelCode: mặc định cộng cả 'GT' (OTC thường) và 'MT' (Modern Trade) vì cả 2 đều
+     -- thuộc phạm vi target OTC theo vùng. Chỉ thêm AND "ChannelCode" = 'GT' hoặc = 'MT' nếu người
+     -- dùng hỏi rõ 1 kênh cụ thể.
      SELECT 
        TO_CHAR(COALESCE(a.month_start, t.month_start), 'MM-YYYY') AS "Tháng",
        COALESCE(a.actual_revenue, 0) AS "Doanh số thực tế",
