@@ -13,7 +13,7 @@ import datetime as dt
 from sqlalchemy import text
 from local_warehouse import get_conn, get_sync_meta
 from query_engine import _write_log, _get_engine
-from region_map import region_from_customer_code
+from region_map import region_from_customer_code, REGION_SQL_MARKERS, REGION_NAMES_VI
 import org_hierarchy as oh
 
 
@@ -380,12 +380,94 @@ def revenue_by_region(date_from: str, date_to: str, scope_area_code: str = None)
     return result
 
 
-KPI_ACHIEVED_THRESHOLD = 80  # % dat KPI nhan vien tinh la "dat" (theo yeu cau nghiep vu, KHONG phai 100%)
-KPI_WARN_THRESHOLD = 50      # duoi nguong nay coi la "nguy hiem" (do), giua 2 nguong la "trung binh" (vang)
+# 23/07/2026: doi tu 80 sang 65 - lay theo CAU HINH THAT cua DNH trong bang `dbo.DIM_BacThuong`
+# (Bravo), bang ma chinh thu tuc tinh luong `usp_SaleSalary_Calculation_Ver2` doc de quyet dinh ty le
+# thuong. Bac dau tien co Earn1>0 = moc bat dau duoc thuong:
+#     TDV -> 65% (bac 65/75/85/95)   |   QLV,CS,TP,PP,TBP,TK -> 70% (bac 70/80/90/100/120)
+# Giong nhau ca 3 mien MB/MT/MN. Con so 80 truoc day la MCNA tu dat, khong co can cu nghiep vu.
+# Repo bao cao D:\DNH (src/etl.py) doi cung ngay, cung gia tri - 2 he thong PHAI giong nhau.
+#
+# ⚠️ 23/07/2026 (chieu) - PHAN BIET 2 KHAI NIEM BI GOP NHAM SUOT TU DAU:
+#   "DAT CHI TIEU"              = lam duoc >= 100% chi tieu thang. Giua thang gan nhu luon ~0 nguoi,
+#                                 vi doanh so moi luy ke toi hom nay con chi tieu la CA THANG.
+#   "DAT MUC THUONG NHOM HANG"  = >= nguong bat dau duoc tinh THUONG NHOM HANG (TDV 65%, quan ly 70%).
+# Hai cau hoi KHAC NHAU, ra 2 con so khac nhau. Nhan cu "Dat Chi Tieu (>=65%)" tu no da mau thuan:
+# dat chi tieu ma moi lam duoc 65% chi tieu. Tra ve CA HAI, va noi ro dang tra loi cai nao.
+#
+# ⚠️⚠️ VA DUNG GOI 65%/70% LA "NGUONG HUONG THUONG" CHUNG CHUNG. Do CHI la cong cua THUONG NHOM HANG
+# (DS.DM1/DM2/DM3). Trong dbo.DIM_BacThuong con it nhat 5 ho thuong khac, moc khac nhau va TRA THEO
+# CHI SO KHAC NHAU:
+#   V15  - dat 25% doanh so thang vao ngay 15        (moc giua ky, KHONG phai % ca thang)
+#   V22  - 55% doanh so thang + ty le target >=75/80%
+#   V25  - >=70% tinh den ngay 25 (the he QD 0429)
+#   ASO  - theo SO LUONG khach hang hoat dong (MB 40, MT 35, MN 25) - KHONG phai %
+#   QB/YB- thuong quy >=80% quy, thuong nam >=75% nam
+# Chua ke LUONG CO BAN: tu 60% tro len van huong 100% LCB, duoi 60% moi bi cat theo ty le.
+# => Nguoi duoi 65% VAN CO THE duoc V15/ASO va VAN huong du luong co ban. TUYET DOI khong dien dat
+# thanh "khong duoc thuong" / "khong dat KPI" - do la noi sai ve tien luong cua nguoi that.
+#
+# ⚠️⚠️⚠️ 27/07/2026 - XAC NHAN VOI DNH: co BA MOC KHAC NHAU, TUYET DOI KHONG GOP:
+#   >= 100%  DAT CHI TIEU        - lam du chi tieu thang duoc giao (nghia den).
+#   >=  80%  DAT KPI             - moc danh gia HIEU QUA CONG VIEC. AP DUNG CHO MOI VAI TRO
+#                                  (khong chia theo TDV/quan ly). Day la moc de cham 🟢/🟡/🔴.
+#   >=65/70% TOI MUC THUONG      - CONG bat dau duoc tinh THUONG NHOM HANG (DM1/DM2/DM3), theo
+#                                  DIM_BacThuong: TDV 65%, quan ly 70%. KHONG PHAI "dat KPI".
+#
+# LOI TUNG MAC (23/07 -> 27/07): 65/70 bi dat ten KPI_ACHIEVED_THRESHOLD va duoc goi la "dat KPI",
+# lam nguoi dat 67% bi bao la "DA DAT KPI" trong khi thuc te moi qua cong thuong, chua dat KPI (80%).
+# Nay tach han: BONUS_THRESHOLD* = cong thuong (65/70), KPI_ACHIEVED_THRESHOLD = dat KPI (80).
+BONUS_THRESHOLD = 65             # TDV - cong THUONG NHOM HANG (QD 0107/2026)
+BONUS_THRESHOLD_MGR = 70         # QLV va cac vai tro quan ly/kenh - cong thuong (QD 0429/.25)
+KPI_ACHIEVED_THRESHOLD = 80      # DAT KPI - moc danh gia hieu qua, CHUNG cho moi vai tro
+KPI_FULL_TARGET = 100            # "dat chi tieu" dung nghia den - khong lien quan 2 moc tren
+KPI_WARN_THRESHOLD = 50          # duoi nguong nay coi la "nguy hiem" (do), giua 2 nguong la "trung binh" (vang)
+
+# 23/07/2026 - PORT tu repo bao cao D:\DNH (src/alerts.py::_KNOWN_MISFLAGGED_DUPLICATE_CODES +
+# _is_duplicate_filter_sql). 2 nhan vien THAT, dang lam viec binh thuong, bi Bravo gan nham co
+# "trung lap" (IsDuplicate=1) nen bi LOAI KHOI moi bao cao KPI/doanh so:
+#   MBKV12      Nguyen Thi Thanh Thuy  ~2,01 ty doanh so, target 5,28 ty
+#   TM25030101  Lac Ngoc Sam           ~389 trieu/thang
+# Da kiem chung day la loi gan co, KHONG phai nghi viec (khong co ngay ket thuc + van phat sinh doanh
+# so deu 15-17 thang lien tuc). Repo bao cao da va tu 20/07; chatbot thi CHUA -> chay thu 23/07 voi
+# tai khoan thuy.nguyen2 hoi "KPI cac QLV vung toi" chi ra 9/10 QLV, thieu dung MBKV12, va KHONG co
+# dong nao bao la da bo qua ai. Da de nghi DNH sua du lieu goc (muc C1 trong
+# docs/Cau_hoi_can_DNH_xac_nhan.md); den luc do giu ngoai le o day.
+# DUNG _not_duplicate_sql() thay vi viet tay "COALESCE(is_duplicate,0)<>1" - truoc do viet tay lap lai
+# 6 cho, sua 1 cho quen 5 cho la chuyen som muon.
+_KNOWN_MISFLAGGED_DUPLICATE_CODES = ("MBKV12", "TM25030101")
 
 
-def _kpi_status(pct: float) -> str:
-    """Phan loai mau theo % dat KPI: >=80 Tot (xanh), 50-79 Trung binh (vang), <50 Nguy hiem (do)."""
+def _not_duplicate_sql(alias: str = "nv") -> str:
+    """Manh SQL loc "khong bi danh dau trung lap", CO ngoai le cho _KNOWN_MISFLAGGED_DUPLICATE_CODES."""
+    codes = ",".join(f"'{c}'" for c in _KNOWN_MISFLAGGED_DUPLICATE_CODES)
+    p = f"{alias}." if alias else ""
+    return f"(COALESCE({p}is_duplicate,0)<>1 OR {p}employee_code IN ({codes}))"
+
+
+# 23/07/2026 - VA LOI "nguong quan ly khai bao nhung khong dung": KPI_ACHIEVED_THRESHOLD_MGR ton tai
+# tu ban va 65% buoi sang nhung KHONG duoc goi o BAT KY dau - moi vai tro deu bi cham o 65%. Hau qua
+# that: 1 QLV dat 67% duoc gan nhan "🟢 Tot"/"da dat", trong khi QD 0429/QD-HDQT.25 (van hieu luc voi
+# cap QLV) quy dinh duoi 70% huong 0% thuong danh muc - tuc la BAO SAI theo huong co loi.
+# Nguon: QD 0429-1 (MB) phu luc 02 bang 01, QD 0429-2 (MN), QD 0429-3 (MT) - deu co chu ky, deu chan
+# duoi o 70%. Rieng TDV da chuyen sang QD 0107/2026 (hieu luc 01/07/2026) nen chan duoi 65%.
+def _bonus_threshold(position_code: str = None) -> int:
+    """Nguong % de bat dau duoc tinh THUONG NHOM HANG, THEO VAI TRO. KHONG PHAI nguong "dat KPI"
+    (dat KPI = 80% cho moi vai tro, xem _kpi_status).
+    TDV -> 65 (QD 0107/2026). QLV/TP/PP/TBP/TK/CS -> 70 (QD 0429/.25, van hieu luc).
+    position_code=None -> 65: giu nguyen hanh vi cu cho cac dong khong biet vai tro, va vi tuyet dai
+    da so dong trong fact_tonghopkhachhang la TDV. KHONG doan bua sang 70 vi lam vay se bao "chua toi
+    muc thuong" cho nguoi that ma minh chi khong tra duoc vai tro."""
+    if position_code and position_code.strip().upper() != "TDV":
+        return BONUS_THRESHOLD_MGR
+    return BONUS_THRESHOLD
+
+
+def _kpi_status(pct: float, position_code: str = None) -> str:
+    """Phan loai mau theo moc DAT KPI = 80% (KPI_ACHIEVED_THRESHOLD), CHUNG cho moi vai tro - xac
+    nhan voi DNH 27/07/2026. CO Y khong cham theo 65/70: do la cong THUONG, khong phai thuoc do hieu
+    qua cong viec; cham theo 65/70 tung lam nguoi dat 67% duoc gan nhan "🟢 Tot"/"dat KPI" sai.
+    >=80 Tot (xanh), 50..79 Trung binh (vang), <50 Nguy hiem (do).
+    position_code giu lai cho tuong thich chu ky ham (khong con dung) - moc nay khong theo vai tro."""
     if pct >= KPI_ACHIEVED_THRESHOLD:
         return "🟢 Tốt"
     if pct >= KPI_WARN_THRESHOLD:
@@ -394,27 +476,56 @@ def _kpi_status(pct: float) -> str:
 
 
 def employee_kpi(as_of_date: str, limit: int = 10, order_by: str = "sales", filter: str = "all",
-                  position_code: str = None, scope_area_code: str = None) -> dict:
+                  position_code: str = None, scope_area_code: str = None,
+                  scope_employee_code: str = None) -> dict:
     """KPI nhan vien: snapshot fact_tonghopkhachhang gan nhat <= as_of_date.
     order_by: 'sales' hoac 'pct' (dung khi filter='all', luon xep TOT NHAT truoc).
-    filter: 'all' (top N tot nhat), 'below_target' (CHUA dat KPI, pct<80, xep TE NHAT truoc),
-            'above_target' (DA dat KPI, pct>=80, xep TOT NHAT truoc).
+    filter: 'all' (top N tot nhat), 'below_target' (CHUA toi muc thuong nhom hang, xep TE NHAT truoc),
+            'above_target' (DA toi muc thuong nhom hang, xep TOT NHAT truoc).
     position_code: loc theo vai tro (vd 'TDV','QLV') - LUON dung tham so nay khi cau hoi chi dinh ro
     vai tro (vd "top TDV"), KHONG tu loc thu cong tu ket qua day du vi de sot/thieu chinh xac.
-    NGUONG DAT KPI la 80% (khong phai 100%). Moi dong co san "status" (🟢 Tot/🟡 Trung binh/🔴 Nguy hiem)
-    - LUON dung nguyen gia tri nay khi tra loi, khong tu tinh nguong khac."""
+
+    ⚠️ PHAN BIET BA MOC, TUYET DOI KHONG GOP:
+      - "DAT CHI TIEU" = >=100% chi tieu thang -> dung "count_full_target" (va co "meets_full_target"
+        tren tung dong). Giua thang con so nay gan nhu luon ~0 va DO LA DUNG: doanh so moi luy ke toi
+        hom nay, con chi tieu la ca thang.
+      - "DAT KPI" = >=80% ("kpi_threshold_pct", CHUNG cho moi vai tro) -> dung "count_kpi_achieved";
+        day cung la moc quyet dinh mau 🟢/🟡/🔴 o truong "status".
+      - "TOI MUC THUONG NHOM HANG" = >= "threshold" cua tung dong (TDV 65% theo QD 0107/2026,
+        QLV va cac cap quan ly 70% theo QD 0429/.25) -> dung "count_above_target"/"count_below_target".
+    Hoi "ai chua dat chi tieu" -> moc 100%; hoi "ai dat KPI" -> moc 80%; hoi "ai toi muc thuong nhom
+    hang" -> "threshold". Neu cau hoi mo ho thi dua CA BA con so va noi ro tung cai la gi.
+    ⚠️ TUYET DOI khong goi 65%/70% la "dat KPI" - do chi la cong THUONG. Nguoi dat 67% la "da toi muc
+    thuong nhom hang nhung CHUA dat KPI (80%)".
+
+    ⚠️ 65%/70% CHI la cong cua THUONG NHOM HANG (DM1/DM2/DM3), KHONG phai "nguong huong thuong" noi
+    chung. Con V15 (25% doanh so vao ngay 15), V22, V25, ASO (theo SO LUONG khach hang: MB 40/MT 35/
+    MN 25, khong phai %), thuong quy, thuong nam - moc khac va tra theo chi so khac. Luong co ban tu
+    60% tro len van huong 100%. Nguoi duoi 65% VAN CO THE duoc cac khoan kia va VAN co luong co ban,
+    nen TUYET DOI khong dien dat "khong duoc thuong" / "khong dat KPI" - do la noi sai ve tien luong
+    cua nguoi that. He thong hien CHUA co du lieu de tinh V15/V22/ASO (xem schema_context).
+
+    scope_employee_code: CHI danh cho tai khoan qlv - ep chi tra ve CHINH HO + cac TDV THUOC DOI HO,
+    khong thay nhan su cua QLV khac (du lieu hieu suat CA NHAN dong nghiep).
+    23/07/2026 - VA LO HONG PHAN QUYEN: truoc do ham nay KHONG nhan scope_employee_code nen chi bi
+    loc theo VUNG. Chay thu that voi tai khoan tung.trinh (QLV, doi 10 TDV) hoi "cac TDV duoi quyen
+    toi" -> tra ve DU 87 TDV toan vung MB, gom ca nguoi cua doi MBKV1/MBKV2/MBKV3/MBKV9 kem doanh so
+    + % dat. Cung tai khoan do hoi thang "doi anh Pham Kim Tan the nao" thi BI CHAN (vi AI chon
+    get_kpi_ranking - tool DA co scope) -> tuc la phan quyen truoc day phu thuoc vao viec AI tinh co
+    chon tool nao, khong phai hang rao that. Xem docs/kich_ban_demo1_chatbot.md muc R-F (repo D:\\DNH).
+    """
     fdate_r = _q("SELECT MAX(save_date) d FROM fact_tonghopkhachhang WHERE save_date<=?", (as_of_date,))
     fdate = fdate_r[0]["d"] if fdate_r else None
     if fdate is None:
         return {"as_of": None, "total_employees": 0, "count_below_target": 0, "count_above_target": 0, "rows": []}
-    sql = """SELECT nv.name name, e.employee_code employee_code,
+    sql = f"""SELECT nv.name name, e.employee_code employee_code,
                     nv.position_code position_code, cv.description position_label,
                     SUM(e.amount_ct) sales, MAX(e.month_sale_target) target,
                     SUM(e.is_nc) new_customers
              FROM fact_tonghopkhachhang e
              LEFT JOIN dim_nhanvien nv ON nv.employee_code=e.employee_code
              LEFT JOIN dim_chucvu cv ON cv.position_code=nv.position_code
-             WHERE e.save_date=? AND COALESCE(nv.is_duplicate,0)<>1"""
+             WHERE e.save_date=? AND {_not_duplicate_sql('nv')}"""
     params = [fdate]
     if position_code:
         sql += " AND nv.position_code=?"
@@ -422,6 +533,25 @@ def employee_kpi(as_of_date: str, limit: int = 10, order_by: str = "sales", filt
     if scope_area_code:
         sql += " AND nv.area_code=?"
         params.append(scope_area_code)
+    if scope_employee_code:
+        # Doi cua QLV nay + chinh ho, tai DUNG snapshot dang xet (fdate) - dung manager_code THAT tu
+        # Bravo (_team_of_qlv), KHONG con suy luan qua zone nua (xem docstring _team_of_qlv - suy luan
+        # zone tung lam 5 QLV bi hieu nham "khong co doi", gay cong trung KPI vung).
+        team = _team_of_qlv(scope_employee_code, fdate)
+        if not team:
+            # Khac voi truoc (khi con dung zone, ~30% khong map duoc): gio manager_code la du lieu
+            # THAT tren tung dong hoa don/snapshot, nen "khong co doi" o day PHAN LON la dung that
+            # (vd QLV tu om khach, khong co TDV duoi quyen - vd MBKV12). Van tra loi mem thay vi loi
+            # cung, vi khong loai tru truong hop hiem thieu du lieu dong bo.
+            return {"as_of": fdate, "total_employees": 0, "count_below_target": 0, "count_above_target": 0,
+                    "rows": [], "note": (
+                        f"Khong tim thay TDV nao bao cao truc tiep len ma quan ly '{scope_employee_code}' "
+                        f"tai snapshot {fdate}. Neu ban biet minh CO quan ly TDV, day co the la han che "
+                        "dong bo du lieu - lien he MCNA. Neu ban tu phu trach khach hang truc tiep (khong "
+                        "co doi), day la dung.")}
+        allowed = [scope_employee_code] + [t["employee_code"] for t in team]
+        sql += f" AND e.employee_code IN ({','.join(['?'] * len(allowed))})"
+        params.extend(allowed)
     sql += """ GROUP BY nv.name, e.employee_code, nv.position_code, cv.description
                HAVING MAX(e.month_sale_target)>0"""
     rows = _q(sql, tuple(params))
@@ -429,9 +559,18 @@ def employee_kpi(as_of_date: str, limit: int = 10, order_by: str = "sales", filt
         r["sales"] = _f(r["sales"]); r["target"] = _f(r["target"])
         r["pct"] = (r["sales"] / r["target"] * 100) if r["target"] else 0.0
         r["new_customers"] = int(r["new_customers"] or 0)
-        r["status"] = _kpi_status(r["pct"])
-    below = [r for r in rows if r["pct"] < KPI_ACHIEVED_THRESHOLD]
-    above = [r for r in rows if r["pct"] >= KPI_ACHIEVED_THRESHOLD]
+        # BA MOC TACH BACH (xac nhan voi DNH 27/07/2026) - dung gop khi tra loi:
+        #  threshold      = cong THUONG NHOM HANG, theo VAI TRO tung dong (TDV 65% / quan ly 70%).
+        #                   1 truy van co the tra ve lan lon 2 vai tro nen khong dung 1 nguong phang.
+        #  kpi_threshold  = moc DAT KPI = 80%, CHUNG cho moi vai tro. status cham theo moc nay.
+        #  meets_full_target = DAT CHI TIEU dung nghia den (>=100%).
+        r["threshold"] = _bonus_threshold(r["position_code"])
+        r["kpi_threshold"] = KPI_ACHIEVED_THRESHOLD
+        r["meets_kpi"] = r["pct"] >= KPI_ACHIEVED_THRESHOLD
+        r["status"] = _kpi_status(r["pct"], r["position_code"])
+        r["meets_full_target"] = r["pct"] >= KPI_FULL_TARGET
+    below = [r for r in rows if r["pct"] < r["threshold"]]
+    above = [r for r in rows if r["pct"] >= r["threshold"]]
     if filter == "below_target":
         selected = sorted(below, key=lambda r: r["pct"])[:limit]
     elif filter == "above_target":
@@ -439,8 +578,18 @@ def employee_kpi(as_of_date: str, limit: int = 10, order_by: str = "sales", filt
     else:
         key = "sales" if order_by == "sales" else "pct"
         selected = sorted(rows, key=lambda r: -r[key])[:limit]
-    return {"as_of": fdate, "total_employees": len(rows), "count_below_target": len(below),
-            "count_above_target": len(above), "rows": selected}
+    return {"as_of": fdate, "total_employees": len(rows),
+            # count_below/above_target = so nguoi DUOI/DAT MUC HUONG THUONG doanh so (65% hoac 70%
+            # tuy vai tro). Ten cu giu nguyen de khong pha cac cho dang goi, nhung Y NGHIA la "muc
+            # huong thuong", KHONG phai "dat chi tieu".
+            "count_below_target": len(below), "count_above_target": len(above),
+            # DAT KPI = >=80%, moc danh gia hieu qua cong viec (chung moi vai tro).
+            "count_kpi_achieved": sum(1 for r in rows if r["meets_kpi"]),
+            "kpi_threshold_pct": KPI_ACHIEVED_THRESHOLD,
+            # Con day moi la "DAT CHI TIEU" dung nghia den: lam duoc >=100% chi tieu thang.
+            "count_full_target": sum(1 for r in rows if r["meets_full_target"]),
+            "full_target_pct": KPI_FULL_TARGET,
+            "rows": selected}
 
 
 DAILY_KPI_TARGET_PCT = 4.0  # 4% MonthSaleTarget = "100%" cua 1 ngay lam viec (yeu cau nghiep vu)
@@ -456,14 +605,16 @@ def _daily_kpi_status(pct: float) -> str:
     return "🟢 Xanh"
 
 
-def employee_daily_kpi(employee_code: str, year_month: str, scope_area_code: str = None) -> dict:
+def employee_daily_kpi(employee_code: str, year_month: str, scope_area_code: str = None,
+                        scope_employee_code: str = None) -> dict:
     """KPI THEO NGAY cho 1 nhan vien CA NHAN (co ma truc tiep tren hoa don, vd EmpDMSCode nhu
     'tungtx') trong 1 thang (YYYY-MM). Target 1 ngay = 4% MonthSaleTarget cua nhan vien (tuong duong
     100% cua ngay). Phan loai tung ngay: 🔴 Do (<2.5%), 🟡 Vang (2.5%-3.5%), 🟢 Xanh (>3.5%). CHI tinh
     T2-T6 (bo qua T7/CN). Rieng "month_pct_of_target" la % TONG thang (thuc te/target*100, cach tinh
     CU khong lien quan 4%/ngay, KHONG co mau/nguong - chi la con so tham khao cuoi thang.
     KHONG dung cho ma khu vuc/quan ly vung (MBKV*, ASM*...) - cac ma nay khong xuat hien tren hoa don,
-    dung get_employee_kpi (snapshot thang, nguong 80%/50%) thay the cho nhom do.
+    dung get_employee_kpi (snapshot thang, nguong theo vai tro: TDV 65% / quan ly 70%, canh bao 50%)
+    thay the cho nhom do.
     scope_area_code: NEU co, chi cho xem KPI cua nhan vien CUNG vung - tra ve loi neu khac vung
     (an toan hon la mac dinh cho phep khi khong xac dinh duoc vung cua nhan vien).
     LUU Y KY THUAT: hoa don (vhoadon_otc/etc.employee_code) ghi theo DMSId cua nhan vien, KHONG PHAI
@@ -472,13 +623,32 @@ def employee_daily_kpi(employee_code: str, year_month: str, scope_area_code: str
     vao co the la EmployeeCode HOAC DMSId (tra ca 2, giong employee_directory), ham tu quy doi sang
     DMSId that truoc khi truy van hoa don. NEU nhan vien khong co trong dim_nhanvien, tu dong thu
     tiep dmssx_nhanvien (bang rieng phia SX/ETC, xac nhan 20/07/2026 - xem _resolve_employee_identity())
-    - truong hop nay scope_area_code se LUON tu choi (vung khong xac dinh duoc, an toan hon cho qua)."""
+    - truong hop nay scope_area_code se LUON tu choi (vung khong xac dinh duoc, an toan hon cho qua).
+    scope_employee_code: CHI danh cho tai khoan qlv - chi cho xem nhan vien THUOC DOI ho (hoac chinh
+    ho); nguoi ngoai doi bi tu choi (them 23/07/2026 cung dot va R-F, xem docstring employee_kpi)."""
     ident = _resolve_employee_identity(employee_code)
     resolved_code = ident["code"]
     dms_code = ident["dmsid"]
     if scope_area_code:
         if ident["area_code"] != scope_area_code:
             return {"error": f"Ban khong co quyen xem du lieu nhan vien nay - ngoai vung {scope_area_code} ban phu trach."}
+    if scope_employee_code:
+        # Snapshot gan nhat (khong co "as_of_date" rieng o day, chi co year_month cua doanh so can
+        # xem) - cau truc quan ly it doi trong pham vi vai thang nen dung gan nhat la du.
+        allowed = {scope_employee_code} | {t["employee_code"] for t in _team_of_qlv(scope_employee_code)}
+        if resolved_code not in allowed:
+            return {"error": "Ban chi duoc xem du lieu cua cac nhan vien trong doi minh phu trach."}
+    # 23/07/2026 (R-G): CHAN ma cap quan ly thay vi tra "0 dong moi ngay". Ma QLV/TP/PP khong xuat
+    # hien tren hoa don (hoa don ghi ma nhan vien ban hang ca nhan), nen ham nay se cong ra 0 va AI
+    # dien giai thanh "17/17 ngay do, van de nghiem trong" - da xay ra that voi tungtx (QLV thuc te
+    # dat 1,74 ty). So 0 do la THIEU DU LIEU, khong phai ket qua kinh doanh; tra ve loi ro rang de AI
+    # khong the hieu nham, thay vi tra so 0 kem chu thich (chu thich rat de bi bo qua).
+    if (ident["position_code"] or "").upper() in ("QLV", "TP", "PP", "TBP"):
+        return {"error": (
+            f"Ma '{employee_code}' la {ident['position_code']} (cap quan ly) - ma nay KHONG xuat hien "
+            "tren hoa don nen KHONG co doanh so theo ngay. Day la gioi han du lieu, TUYET DOI KHONG "
+            "duoc hieu la nhan vien nay ban duoc 0 dong. Dung get_employee_kpi (KPI thang) hoac "
+            "get_revenue_tree (doanh so ca doi) cho cap quan ly.")}
     year, month = int(year_month[:4]), int(year_month[5:7])
     month_start = dt.date(year, month, 1)
     month_end = (dt.date(year + 1, 1, 1) if month == 12 else dt.date(year, month + 1, 1)) - dt.timedelta(days=1)
@@ -613,55 +783,84 @@ def compare_periods(date_from_a: str, date_to_a: str, date_from_b: str, date_to_
 
 
 def _customer_receivable(customer_code: str, channel: str) -> dict:
-    """Tra du no/qua han tu Supabase (khong co tren Bravo). channel co the la 'OTC','ETC','OTC+ETC'
-    - neu ca 2 kenh, uu tien receivable_detail (OTC) truoc vi pho bien hon.
+    """Tra du no/qua han cua 1 khach tu KHO LOCAL fact_congno_khachhang - snapshot tuc thoi tu SP goc
+    DNH usp_DeptAccDueDate_GetData (xem sync_warehouse.py::sync_fact_congno). Truoc 29/07/2026 doc tu
+    2 bang Supabase receivable_detail/receivable_etc (Excel nhap tay 1 lan dau du an, mang dong doi
+    cong thuc cu tung thoi no 1 khach len 9,17 ty trong khi that la 0,61 ty) - da BO nguon do.
 
-    22/07/2026 (diem #4 gop y): TRUOC DAY `except: pass` nuot MOI loi roi tra ve dict rong -
-    khong phan biet duoc "khach KHONG co no" voi "KHONG TRA CUU DUOC" (Supabase sap/mat mang).
-    Hau qua: chatbot tra loi tu tin "khach nay khong co cong no" trong khi that ra la loi tra cuu -
-    nguy hiem cho quyet dinh cong no. Gio them `receivable_status`:
-      - "ok"      : tra duoc, CO du lieu
-      - "no_data" : tra duoc, khach KHONG co ban ghi cong no (that su khong no)
-      - "error"   : KHONG tra cuu duoc (kem `receivable_warning` de AI canh bao nguoi dung)
+    THAY DOI HANH VI CO CHU Y (so voi ban Supabase cu): khach co CA 2 kenh -> ban cu chi tra OTC;
+    ban moi CONG CA HAI (mot dong = khach x kenh trong kho, nen SUM). channel loc pham vi: 'OTC' ->
+    chi OTC, 'ETC' -> chi ETC, 'OTC+ETC'/None -> ca hai (giu dung channel-scoping cua customer_detail).
+
+    Giu 5 khoa cu (balance_end, total_overdue, overdue_pct, receivable_status, receivable_warning) de
+    KHONG phai sua nl2sql.py; them khoa moi khong pha tuong thich: receivable_as_of, receivable_source,
+    va 4 bucket overdue_1_15/15_30/30_45/gt_45 (de tra loi "qua han bao lau").
+
+    4 trang thai (receivable_status):
+      - "unavailable": bang CHUA co du lieu (chua dong bo/SP loi) -> canh bao BAT BUOC "chua tra cuu
+                       duoc", TUYET DOI khong noi "khach khong co no".
+      - "ok" + canh bao moc thoi gian: snapshot cu > 6 gio.
+      - "no_data": khach KHONG co dong nao -> "khong co du no tai thoi diem X theo bao cao cong no goc"
+                   (dang tin cay vi nguon la SP goc, khac ban Supabase cu).
+      - "ok": binh thuong, tra so + moc snapshot.
     """
-    empty = {"balance_end": None, "total_overdue": None, "overdue_pct": None,
-             "receivable_status": "no_data"}
-    try:
-        eng = _get_engine("supabase")
-        with eng.connect() as conn:
-            if "OTC" in channel:
-                periods = conn.execute(text('SELECT DISTINCT "period" FROM receivable_detail WHERE "customer_code"=:c'),
-                                        {"c": customer_code}).fetchall()
-                if periods:
-                    def _period_key(p):
-                        m, y = p.split("_")
-                        return (int(y), int(m))
-                    latest = max((p[0] for p in periods), key=_period_key)
-                    r = conn.execute(text('SELECT "balance_end", "total_overdue" FROM receivable_detail '
-                                           'WHERE "customer_code"=:c AND "period"=:p'),
-                                      {"c": customer_code, "p": latest}).fetchone()
-                    if r:
-                        balance, overdue = float(r[0] or 0), float(r[1] or 0)
-                        return {"balance_end": balance, "total_overdue": overdue,
-                                "overdue_pct": (overdue / balance * 100) if balance else 0.0,
-                                "receivable_status": "ok"}
-            if "ETC" in channel:
-                r = conn.execute(text('SELECT "total_receivable", "total_overdue" FROM receivable_etc '
-                                       'WHERE "customer_code"=:c'), {"c": customer_code}).fetchone()
-                if r:
-                    balance, overdue = float(r[0] or 0), float(r[1] or 0)
-                    return {"balance_end": balance, "total_overdue": overdue,
-                            "overdue_pct": (overdue / balance * 100) if balance else 0.0,
-                            "receivable_status": "ok"}
-    except Exception as e:
-        # KHONG tra ve `empty` (se bi hieu nham la "khong no") - danh dau ro la LOI tra cuu.
+    # 29/07/2026 (R-B da xu ly goc): GO canh bao "bang nhap tay CO THE SAI" cu - sau khi doi nguon
+    # sang SP goc thi canh bao do thanh SAI SU THAT va lam mat uy tin tai demo.
+    channels = []
+    if "OTC" in channel:
+        channels.append("OTC")
+    if "ETC" in channel:
+        channels.append("ETC")
+    if not channels:
+        channels = ["OTC", "ETC"]
+
+    meta = _q("SELECT COUNT(*) n, MAX(snapshot_at) at FROM fact_congno_khachhang")
+    total_rows = int(meta[0]["n"]) if meta else 0
+    if total_rows == 0:
+        _warn("Bang cong no (fact_congno_khachhang) CHUA co du lieu (chua dong bo hoac SP loi). PHAI "
+              "tra loi 'chua tra cuu duoc cong no', TUYET DOI KHONG ket luan 'khach khong co no'.")
         return {"balance_end": None, "total_overdue": None, "overdue_pct": None,
-                "receivable_status": "error",
+                "receivable_status": "unavailable", "receivable_source": "bao cao cong no goc DNH (SP)",
+                "receivable_as_of": None,
                 "receivable_warning": (
-                    f"KHONG tra cuu duoc cong no cua khach {customer_code} (loi he thong: "
-                    f"{type(e).__name__}). PHAI noi ro voi nguoi dung la CHUA XAC DINH duoc cong no, "
-                    f"TUYET DOI KHONG ket luan khach nay khong co no.")}
-    return empty
+                    "Chua tra cuu duoc cong no (kho cong no chua co du lieu tai thoi diem nay). PHAI "
+                    "noi ro la 'chua tra cuu duoc', TUYET DOI KHONG ket luan khach khong co no.")}
+
+    snapshot_at = meta[0]["at"]
+    stale = False
+    try:
+        age_h = (dt.datetime.now() - dt.datetime.fromisoformat(snapshot_at)).total_seconds() / 3600.0
+        stale = age_h > 6
+    except Exception:
+        pass
+
+    ph = ",".join(["?"] * len(channels))
+    r = _q(f"SELECT COALESCE(SUM(balance_end),0) bal, COALESCE(SUM(total_overdue),0) od, "
+           f"COALESCE(SUM(overdue_1_15),0) b1, COALESCE(SUM(overdue_15_30),0) b2, "
+           f"COALESCE(SUM(overdue_30_45),0) b3, COALESCE(SUM(overdue_gt_45),0) b4, COUNT(*) n "
+           f"FROM fact_congno_khachhang WHERE customer_code=? AND sales_channel IN ({ph})",
+           (customer_code, *channels))[0]
+
+    if int(r["n"]) == 0:
+        return {"balance_end": None, "total_overdue": None, "overdue_pct": None,
+                "receivable_status": "no_data",
+                "receivable_source": "bao cao cong no goc DNH (SP)", "receivable_as_of": snapshot_at,
+                "receivable_warning": (
+                    f"Khach {customer_code} KHONG co du no tai thoi diem {snapshot_at} theo bao cao "
+                    "cong no goc cua DNH.")}
+
+    balance, overdue = _f(r["bal"]), _f(r["od"])
+    result = {"balance_end": balance, "total_overdue": overdue,
+              "overdue_pct": (overdue / balance * 100) if balance else 0.0,
+              "receivable_status": "ok",
+              "receivable_source": "bao cao cong no goc DNH (SP)", "receivable_as_of": snapshot_at,
+              "overdue_1_15": _f(r["b1"]), "overdue_15_30": _f(r["b2"]),
+              "overdue_30_45": _f(r["b3"]), "overdue_gt_45": _f(r["b4"])}
+    if stale:
+        result["receivable_warning"] = (
+            f"So cong no lay tu snapshot luc {snapshot_at} (da cu hon 6 gio) - nen luu y moc thoi gian "
+            "khi tra loi.")
+    return result
 
 
 def customer_detail(customer_code: str, date_from: str, date_to: str, scope_area_code: str = None,
@@ -725,7 +924,7 @@ def customer_detail(customer_code: str, date_from: str, date_to: str, scope_area
         if city:
             city_name = city[0]["city_name"]; area_code = city[0]["area_code"]
         if emp_code:
-            nv = _q("SELECT name, position_code FROM dim_nhanvien WHERE employee_code=? AND COALESCE(is_duplicate,0)<>1",
+            nv = _q(f"SELECT name, position_code FROM dim_nhanvien WHERE employee_code=? AND {_not_duplicate_sql('')}",
                     (emp_code,))
             if nv:
                 emp_name = nv[0]["name"]; position_code = nv[0]["position_code"]
@@ -858,15 +1057,148 @@ def inventory_by_region(area_code: str = None, scope_area_code: str = None) -> l
     return rows
 
 
-def _kpi_snapshot(employee_code: str, fdate: str):
+# area_code (MB/MB2/MN/MT) -> ten mien tieng Viet, gom MB+MB2 thanh Mien Bac (theo REGION_SQL_MARKERS).
+_AREA_TO_REGION_VI = {m: REGION_NAMES_VI[key] for key, ms in REGION_SQL_MARKERS.items() for m in ms}
+
+
+def receivables_overview(top_n: int = 10, scope_area_code: str = None) -> dict:
+    """Tong quan CONG NO tu kho local fact_congno_khachhang (snapshot tuc thoi tu SP goc DNH
+    usp_DeptAccDueDate_GetData): tong du no, tong qua han, ty le qua han, tach theo KENH (OTC/ETC)
+    va theo VUNG, top N khach no qua han nhieu nhat.
+
+    MOT DONG = (khach x kenh) nen luon SUM. scope_area_code: EP LOC theo vung khi tai khoan bi gioi
+    han (regional_director/qlv) - dung REGION_SQL_MARKERS de gom ca MB va MB2 cho mien Bac.
+
+    4 trang thai giong _customer_receivable:
+      - unavailable: bang chua co du lieu -> canh bao BAT BUOC, khong ket luan "khong co no".
+      - ok + canh bao moc thoi gian: snapshot cu > 6 gio.
+      - ok: binh thuong.
+    (khong co trang thai no_data rieng: neu co du lieu ma vung nay = 0 thi cac tong = 0, van la 'ok'.)
+    """
+    meta = _q("SELECT COUNT(*) n, MAX(snapshot_at) at FROM fact_congno_khachhang")
+    total_rows = int(meta[0]["n"]) if meta else 0
+    if total_rows == 0:
+        _warn("Bang cong no (fact_congno_khachhang) CHUA co du lieu (chua dong bo hoac SP loi). PHAI "
+              "tra loi 'chua tra cuu duoc cong no', TUYET DOI KHONG ket luan 'khong co no'.")
+        return {"receivable_status": "unavailable", "receivable_as_of": None,
+                "receivable_source": "bao cao cong no goc DNH (SP)",
+                "receivable_warning": (
+                    "Chua tra cuu duoc cong no (kho cong no chua co du lieu tai thoi diem nay).")}
+
+    snapshot_at = meta[0]["at"]
+    # Loc vung: gom cac ma area cua mien (MB -> MB,MB2). Khong scope -> tra toan cong ty.
+    where, params = "", []
+    if scope_area_code:
+        region_key = next((k for k, ms in REGION_SQL_MARKERS.items() if scope_area_code in ms), None)
+        markers = REGION_SQL_MARKERS.get(region_key, [scope_area_code])
+        where = f"WHERE area_code IN ({','.join(['?'] * len(markers))})"
+        params = list(markers)
+
+    tot = _q(f"SELECT COALESCE(SUM(balance_end),0) bal, COALESCE(SUM(total_overdue),0) od, "
+             f"COALESCE(SUM(overdue_1_15),0) b1, COALESCE(SUM(overdue_15_30),0) b2, "
+             f"COALESCE(SUM(overdue_30_45),0) b3, COALESCE(SUM(overdue_gt_45),0) b4 "
+             f"FROM fact_congno_khachhang {where}", tuple(params))[0]
+    total_balance, total_overdue = _f(tot["bal"]), _f(tot["od"])
+
+    by_channel = _q(f"SELECT sales_channel, COALESCE(SUM(balance_end),0) bal, "
+                    f"COALESCE(SUM(total_overdue),0) od FROM fact_congno_khachhang {where} "
+                    f"GROUP BY sales_channel", tuple(params))
+    channels = [{"channel": r["sales_channel"], "balance_end": _f(r["bal"]),
+                 "total_overdue": _f(r["od"]),
+                 "overdue_pct": (_f(r["od"]) / _f(r["bal"]) * 100) if _f(r["bal"]) else 0.0}
+                for r in by_channel]
+
+    regions = []
+    if not scope_area_code:  # scope roi thi chi con 1 vung, khong can tach
+        by_area = _q("SELECT area_code, COALESCE(SUM(balance_end),0) bal, "
+                     "COALESCE(SUM(total_overdue),0) od FROM fact_congno_khachhang "
+                     "GROUP BY area_code")
+        agg = {}
+        for r in by_area:
+            label = _AREA_TO_REGION_VI.get(r["area_code"], "Khac/chua xac dinh")
+            b, o = agg.get(label, (0.0, 0.0))
+            agg[label] = (b + _f(r["bal"]), o + _f(r["od"]))
+        regions = [{"region": lbl, "balance_end": b, "total_overdue": o,
+                    "overdue_pct": (o / b * 100) if b else 0.0}
+                   for lbl, (b, o) in sorted(agg.items(), key=lambda x: -x[1][1])]
+
+    top = _q(f"SELECT customer_code, MAX(customer_name) name, "
+             f"COALESCE(SUM(balance_end),0) bal, COALESCE(SUM(total_overdue),0) od "
+             f"FROM fact_congno_khachhang {where} GROUP BY customer_code "
+             f"HAVING SUM(total_overdue) > 0 ORDER BY SUM(total_overdue) DESC LIMIT ?",
+             tuple(params) + (int(top_n),))
+    top_customers = [{"customer_code": r["customer_code"], "customer_name": r["name"],
+                      "balance_end": _f(r["bal"]), "total_overdue": _f(r["od"])} for r in top]
+
+    result = {
+        "receivable_status": "ok",
+        "receivable_source": "bao cao cong no goc DNH (SP)",
+        "receivable_as_of": snapshot_at,
+        "scope_area_code": scope_area_code,
+        "total_balance_end": total_balance,
+        "total_overdue": total_overdue,
+        "overdue_pct": (total_overdue / total_balance * 100) if total_balance else 0.0,
+        "overdue_1_15": _f(tot["b1"]), "overdue_15_30": _f(tot["b2"]),
+        "overdue_30_45": _f(tot["b3"]), "overdue_gt_45": _f(tot["b4"]),
+        "by_channel": channels,
+        "by_region": regions,
+        "top_overdue_customers": top_customers,
+    }
+    try:
+        age_h = (dt.datetime.now() - dt.datetime.fromisoformat(snapshot_at)).total_seconds() / 3600.0
+        if age_h > 6:
+            result["receivable_warning"] = (
+                f"So cong no lay tu snapshot luc {snapshot_at} (da cu hon 6 gio) - luu y moc thoi gian.")
+    except Exception:
+        pass
+    if scope_area_code:
+        result["scope_note"] = f"(chi vung {scope_area_code})"
+    return result
+
+
+def _kpi_snapshot(employee_code: str, fdate: str, position_code: str = None):
     """Sales/target/pct cua 1 nhan vien (QLV/TDV deu dung duoc) tai 1 snapshot da biet - fact_tonghopkhachhang
-    da tinh san rollup cho ca cap QLV (Bravo tu tong hop), khong can tu cong tay tu doanh thu TDV."""
+    da tinh san rollup cho ca cap QLV (Bravo tu tong hop), khong can tu cong tay tu doanh thu TDV.
+    position_code: BAT BUOC truyen khi da biet vai tro - nguong THUONG khac nhau (TDV 65% / quan ly
+    70%), de trong se cham nham cap quan ly o nguong TDV. (Moc DAT KPI 80% thi chung moi vai tro.)"""
     r = _q("SELECT SUM(amount_ct) sales, MAX(month_sale_target) target FROM fact_tonghopkhachhang "
            "WHERE employee_code=? AND save_date=?", (employee_code, fdate))
     sales = _f(r[0]["sales"]) if r else 0.0
     target = _f(r[0]["target"]) if r else 0.0
     pct = (sales / target * 100) if target else 0.0
-    return {"sales": sales, "target": target, "pct": pct, "status": _kpi_status(pct)}
+    return {"sales": sales, "target": target, "pct": pct,
+            "threshold": _bonus_threshold(position_code),      # cong thuong nhom hang (65/70)
+            "kpi_threshold": KPI_ACHIEVED_THRESHOLD,           # dat KPI (80, chung moi vai tro)
+            "meets_kpi": pct >= KPI_ACHIEVED_THRESHOLD,
+            "status": _kpi_status(pct, position_code)}
+
+
+
+def _fact_latest_date() -> str:
+    r = _q("SELECT MAX(save_date) d FROM fact_tonghopkhachhang")
+    return r[0]["d"] if r and r[0]["d"] else None
+
+
+def _team_of_qlv(qlv_employee_code: str, fdate: str = None) -> list:
+    """TDV bao cao TRUC TIEP len 1 QLV, xac dinh qua manager_code THAT tu Bravo
+    (FACT_TongHopKhachHang.ManagerCode, dong bo 23/07/2026 - xem local_warehouse.py::SCHEMA).
+    THAY THE org_hierarchy.team_of_qlv() (suy luan qua ma khu vuc) cho MOI cho can biet "doi cua 1
+    QLV de gioi han quyen xem/tong hop KPI" - suy luan zone KEM CHINH XAC hon nhieu (~30% khu vuc
+    khong map duoc QLV, xem qlv_change_history()), phat hien qua kiem chung thuc te 23/07/2026: 5 QLV
+    bi hieu nham la "khong co doi" trong khi 4/5 nguoi co that 6-8 TDV, lam KPI vung Mien Trung bi
+    CONG TRUNG doanh so ca doi ho (11,82 ty thay vi 6,79 ty that). manager_code la CUNG mot nguon ma
+    repo bao cao D:\\DNH dang dung (src/alerts.py::get_bravo_kpi_tdv_snapshot) - 2 he thong gio xac
+    dinh "doi" giong het nhau.
+    org_hierarchy.py (zone-based) VAN con dung rieng cho qlv_change_history() - do la lich su AI TUNG
+    phu trach 1 khu vuc theo thoi gian, ban chat khac voi "doi hien tai bao cao len ai"."""
+    if fdate is None:
+        fdate = _fact_latest_date()
+    if not fdate:
+        return []
+    return _q(
+        "SELECT DISTINCT e.employee_code, nv.name FROM fact_tonghopkhachhang e "
+        "LEFT JOIN dim_nhanvien nv ON nv.employee_code=e.employee_code "
+        "WHERE e.manager_code=? AND e.save_date=? AND nv.position_code='TDV'", (qlv_employee_code, fdate))
 
 
 def qlv_change_history(area_code: str = None, qlv_search: str = None, scope_area_code: str = None) -> list:
@@ -928,7 +1260,7 @@ def revenue_tree(as_of_date: str = None, area_code: str = None, scope_area_code:
         return {"as_of": None, "tree": []}
 
     tp_sql = ("SELECT employee_code, name, area_code FROM dim_nhanvien WHERE position_code='TP' "
-              "AND end_date IS NULL AND COALESCE(is_resigned,0)<>1 AND COALESCE(is_duplicate,0)<>1")
+              f"AND end_date IS NULL AND COALESCE(is_resigned,0)<>1 AND {_not_duplicate_sql('')}")
     tp_params = ()
     if area_code:
         tp_sql += " AND area_code=?"
@@ -937,9 +1269,9 @@ def revenue_tree(as_of_date: str = None, area_code: str = None, scope_area_code:
 
     tree = []
     for tp in tp_rows:
-        tp_kpi = _kpi_snapshot(tp["employee_code"], fdate)
+        tp_kpi = _kpi_snapshot(tp["employee_code"], fdate, "TP")
         qlv_sql = ("SELECT employee_code, name FROM dim_nhanvien WHERE position_code='QLV' AND area_code=? "
-                   "AND end_date IS NULL AND COALESCE(is_resigned,0)<>1 AND COALESCE(is_duplicate,0)<>1")
+                   f"AND end_date IS NULL AND COALESCE(is_resigned,0)<>1 AND {_not_duplicate_sql('')}")
         qlv_params = [tp["area_code"]]
         if scope_employee_code:
             qlv_sql += " AND employee_code=?"
@@ -948,11 +1280,12 @@ def revenue_tree(as_of_date: str = None, area_code: str = None, scope_area_code:
         qlv_rows = _q(qlv_sql, tuple(qlv_params))
         qlv_list = []
         for qlv in qlv_rows:
-            q_kpi = _kpi_snapshot(qlv["employee_code"], fdate)
-            team = oh.team_of_qlv(qlv["employee_code"])
+            q_kpi = _kpi_snapshot(qlv["employee_code"], fdate, "QLV")
+            team = _team_of_qlv(qlv["employee_code"], fdate)
             tdv_list = []
             for t in team:
-                t_kpi = _kpi_snapshot(t["employee_code"], fdate)
+                # _team_of_qlv da loc san position_code='TDV' nen o day chac chan la TDV (nguong 65%).
+                t_kpi = _kpi_snapshot(t["employee_code"], fdate, "TDV")
                 tdv_list.append({"employee_code": t["employee_code"], "name": t["name"], **t_kpi})
             qlv_list.append({"employee_code": qlv["employee_code"], "name": qlv["name"], **q_kpi,
                               "tdv_count": len(tdv_list), "tdv": tdv_list})
@@ -961,14 +1294,67 @@ def revenue_tree(as_of_date: str = None, area_code: str = None, scope_area_code:
     return {"as_of": fdate, "tree": tree}
 
 
+def _rollup_tier_codes(fdate: str) -> list:
+    """Ma cua TANG ROLLUP tai snapshot fdate = nhung nguoi CO quan ly nguoi khac (xuat hien o cot
+    manager_code). CO Y khong loc position_code lan is_duplicate - ca hai deu sai nhan tren Bravo:
+    cap duoi cua 'Kenh MT'/'Cho si' mang chuc danh TK/CS, va 4 QLV that bi gan co trung lap. Loc
+    theo 2 truong do lam bay hoi ca QLV that khoi bao cao (da tung mat 7,93 ty chi tieu Mien Nam).
+
+    Dung CHUNG cho ca group_by='region' va group_by='qlv' de 2 nhanh LUON khop nhau - nguoi dung
+    cong tay danh sach QLV phai ra dung tong vung. Cung quy tac voi bao cao email ben D:/DNH
+    (src/alerts.py::get_bravo_manager_codes) de 2 he thong khong bao gio lech.
+    """
+    return [m["manager_code"] for m in _q(
+        "SELECT DISTINCT manager_code FROM fact_tonghopkhachhang "
+        "WHERE save_date=? AND manager_code IS NOT NULL AND manager_code<>''", (fdate,))]
+
+
+def _warn_region_target_mismatch(rows: list, fdate: str, tolerance_pct: float = 0.5) -> None:
+    """CHOT AN TOAN 2 cho KPI theo vung: doi chieu tong target vua gop (tu fact_tonghopkhachhang,
+    tang rollup QLV) voi bang dim_targetvungmien - chi tieu vung CHINH THUC do DNH dat top-down.
+
+    Day la LUOI AN TOAN DOC LAP: 2 nguon hoan toan khac nhau (mot ben cong tu tung nhan vien, mot ben
+    la con so cong ty cong bo). Binh thuong chung khop tuyet doi (kiem chung 27/07/2026: MB
+    30.781.764.408 | MN 13.185.822.513 | MT 7.000.000.000 - khop ca 3 mien voi bao cao goc). Neu lech
+    qua nguong -> cau truc du lieu Bravo da doi (them tang, doi cach gan manager_code, them kenh moi...)
+    va cach gop dang dung KHONG con dung nua. Canh bao de nguoi doc biet, thay vi am tham tra so sai -
+    dung bai hoc tu chinh lo nay: so sai suot nhieu ngay ma khong ai phat hien vi khong co doi chieu.
+
+    Chi CANH BAO, khong sua so: nguoi dung van thay du lieu, kem loi nhac kiem tra lai.
+    """
+    if not rows or not fdate:
+        return
+    ym = str(fdate)[:7]
+    official = {r["area_code"]: _f(r["amount"]) for r in _q(
+        "SELECT area_code, SUM(amount) amount FROM dim_targetvungmien "
+        "WHERE substr(doc_date,1,7)=? GROUP BY area_code", (ym,))}
+    if not official:
+        return  # chua dong bo bang target vung - khong the doi chieu, khong canh bao bua
+    for r in rows:
+        ref = official.get(r["area_code"])
+        if not ref or not r["target"]:
+            continue
+        diff_pct = abs(r["target"] - ref) / ref * 100
+        if diff_pct > tolerance_pct:
+            _warn(f"DOI CHIEU LECH ({r['area_code']}): tong chi tieu gop tu nhan vien "
+                  f"{r['target']:,.0f}d vs chi tieu vung chinh thuc (dim_targetvungmien) {ref:,.0f}d "
+                  f"- lech {diff_pct:.1f}%. Cau truc du lieu co the da doi; PHAI noi ro con so dang "
+                  f"can doi chieu lai, KHONG khang dinh chac chan voi nguoi dung.")
+
+
 def kpi_ranking(group_by: str = "qlv", as_of_date: str = None, limit: int = 20,
                  scope_area_code: str = None, scope_employee_code: str = None) -> list:
     """Xep hang KPI (% dat target) giua cac QLV hoac giua cac vung, TOT NHAT truoc. group_by: 'qlv'
-    (xep hang tung QLV, dung khi hoi 'QLV nao dat KPI tot nhat') hoac 'region' (gop tat ca nhan vien
-    theo vung MB/MT/MN, dung khi hoi 'vung nao dat KPI tot nhat'). scope_area_code: ep gioi han vung
+    (xep hang tung QLV, dung khi hoi 'QLV nao dat KPI tot nhat') hoac 'region' (gop theo vung
+    MB/MT/MN, dung khi hoi 'vung nao dat KPI tot nhat'). scope_area_code: ep gioi han vung
     khi tai khoan bi han che - voi group_by='region' se chi con 1 dong (vung cua chinh ho). scope_employee_code:
     CHI danh cho qlv - voi group_by='qlv' se chi tra ve DUNG 1 dong (chinh ho), khong xep hang so sanh
-    voi cac QLV khac (du lieu hieu suat CA NHAN dong nghiep, khong duoc xem)."""
+    voi cac QLV khac (du lieu hieu suat CA NHAN dong nghiep, khong duoc xem).
+
+    group_by='region' gop o TANG ROLLUP QLV (moi QLV da bao gom doi cua ho + chi tieu ca nhan cua
+    chinh ho) - KHOP TUYET DOI voi bao cao goc "Tien do doanh so thang theo NVKD" cua DNH va bang
+    chi tieu vung DIM_TargetVungMien. KHONG cong them tang TDV vao (se gap doi). Xem ghi chu chi tiet
+    trong than ham va _warn_region_target_mismatch()."""
     fdate_r = _q("SELECT MAX(save_date) d FROM fact_tonghopkhachhang WHERE save_date<=?",
                  (as_of_date or str(dt.date.today()),))
     fdate = fdate_r[0]["d"] if fdate_r else None
@@ -980,12 +1366,56 @@ def kpi_ranking(group_by: str = "qlv", as_of_date: str = None, limit: int = 20,
         # lai moi dong theo khach hang) roi moi SUM tiep theo vung - neu SUM(target) truc tiep tren
         # fact_tonghopkhachhang se dem target trung nhieu lan (1 lan/khach hang cua nhan vien do),
         # thoi phong target sai hang chuc lan, lam % KPI vung bi tinh sai (qua thap).
-        sql = """SELECT nv.area_code area_code, SUM(e.sales) sales, SUM(e.target) target
+        #
+        # 27/07/2026 - DOI TU "TANG LA" SANG "TANG ROLLUP QLV". Ly do (da kiem chung tren Bravo that,
+        # doi chieu bao cao goc "Tien do doanh so thang theo NVKD" thang 7 va bang DIM_TargetVungMien):
+        #
+        #   Tang la KHONG THE dem du target, du co va bao nhieu lan. Co nhung nguoi CO chi tieu nhung
+        #   KHONG co dong nao trong fact_tonghopkhachhang (khong duoc giao khach nao) - vd 2 dong tu
+        #   than QLV o MB tong 626.173.042d. Bang fact chi co dong theo TUNG KHACH HANG, nen nguoi
+        #   khong co khach thi vo hinh voi moi cach gop tu duoi len. Rollup cua QLV da bao gom san
+        #   phan chi tieu ca nhan nay (kiem chung: target rollup tungtx 3.016.493.346 = tong 10 TDV
+        #   duoi quyen 2.756.994.289 + chi tieu tu than 259.499.057).
+        #
+        #   Doi chieu thuc te 27/07/2026 (target ca thang):
+        #     tang la (ban cu)  : MB 23,75 ty | MN  5,26 ty | MT 6,79 ty  -> lech bao cao goc rat lon
+        #     tang rollup (nay) : MB 30,78 ty | MN 13,19 ty | MT 7,00 ty  -> KHOP TUYET DOI ca 3 mien
+        #   Hau qua cua ban cu: Mien Nam bi thieu 7,93 ty mau so -> nhay len 61% va DUNG HANG 1 trong
+        #   khi bao cao goc xep hang 2 (47,3%, sau MB 48,9%) - sai ca con so lan THU HANG.
+        #
+        # Tang rollup duoc xac dinh bang MANAGER_CODE (quan he du lieu THAT), CO Y khong dung
+        # position_code lan is_duplicate - CA HAI DEU SAI NHAN tren Bravo va da tung gay dung lo nay:
+        #   - position_code: Duong Thi Hong Hue (Modern Trade, target 5,29 ty) mang chuc danh 'TK',
+        #     Dang Truong Lol (Cho si, 1,5 ty) mang 'CS' -> loc 'TDV' lam bay hoi 6,79 ty cua MN.
+        #   - is_duplicate: 4 QLV THAT bi Bravo gan co trung lap (MN1 Kenh MT 5,29 ty, MN4 Cho si
+        #     1,5 ty, MBKV12 5,28 ty, TM25030101 Lac Ngoc Sam 0,935 ty). Danh sach mien tru tay
+        #     _KNOWN_MISFLAGGED_DUPLICATE_CODES chi liet ke duoc 2/4 - va se lai thieu khi DNH them
+        #     kenh moi. Gop theo manager_code khong phu thuoc nhan nen khong con phai va tiep.
+        managers = _rollup_tier_codes(fdate)
+        if not managers:
+            _warn("Khong xac dinh duoc tang quan ly (manager_code rong) nen KHONG tinh duoc KPI theo "
+                  "vung. PHAI noi ro la chua tra cuu duoc, KHONG duoc tra ve 0 nhu the la khong dat.")
+            return []
+        ph = ",".join(["?"] * len(managers))
+
+        # CHOT AN TOAN 1 - chong LONG TANG: gop tang rollup chi dung khi cac rollup KHONG chua nhau.
+        # Neu sau nay Bravo them cap tren (vd TP quan ly QLV), cong ca 2 cap se GAP DOI am tham.
+        # Thay vi tra ve so sai, bao ro rang. Hien tai (27/07/2026): 21/21 deu la QLV, khong ai bi long.
+        nested = _q(f"SELECT DISTINCT employee_code FROM fact_tonghopkhachhang WHERE save_date=? "
+                    f"AND employee_code IN ({ph}) AND manager_code IS NOT NULL AND manager_code<>''",
+                    (fdate, *managers))
+        if nested:
+            _warn(f"CANH BAO CAU TRUC: {len(nested)} nguoi o tang quan ly lai co cap tren "
+                  f"({', '.join(n['employee_code'] for n in nested[:5])}...) - cay to chuc da co them "
+                  "tang moi, cach gop KPI theo vung hien tai CO THE DEM TRUNG. PHAI noi ro so lieu "
+                  "dang can kiem tra lai, khong khang dinh chac chan.")
+
+        sql = f"""SELECT nv.area_code area_code, SUM(e.sales) sales, SUM(e.target) target
                   FROM (SELECT employee_code, SUM(amount_ct) sales, MAX(month_sale_target) target
                         FROM fact_tonghopkhachhang WHERE save_date=? GROUP BY employee_code) e
-                  JOIN dim_nhanvien nv ON nv.employee_code=e.employee_code AND COALESCE(nv.is_duplicate,0)<>1
-                  WHERE nv.position_code='TDV'"""
-        params = [fdate]
+                  JOIN dim_nhanvien nv ON nv.employee_code=e.employee_code
+                  WHERE e.employee_code IN ({ph})"""
+        params = [fdate] + managers
         if scope_area_code:
             sql += " AND nv.area_code=?"
             params.append(scope_area_code)
@@ -994,13 +1424,32 @@ def kpi_ranking(group_by: str = "qlv", as_of_date: str = None, limit: int = 20,
         for r in rows:
             r["sales"] = _f(r["sales"]); r["target"] = _f(r["target"])
             r["pct"] = (r["sales"] / r["target"] * 100) if r["target"] else 0.0
+            # Dong TONG HOP theo VUNG cham theo moc DAT KPI 80% - 1 vung khong phai 1 con nguoi nen
+            # khong co cong thuong nao ap cho no; 80% la moc danh gia hieu qua, dung ban chat o day.
+            r["threshold"] = KPI_ACHIEVED_THRESHOLD
+            r["kpi_threshold"] = KPI_ACHIEVED_THRESHOLD
             r["status"] = _kpi_status(r["pct"])
+        _warn_region_target_mismatch(rows, fdate)
         return sorted(rows, key=lambda x: -x["pct"])[:limit]
 
     # group_by == "qlv"
-    qlv_sql = ("SELECT employee_code, name, area_code FROM dim_nhanvien WHERE position_code='QLV' "
-               "AND end_date IS NULL AND COALESCE(is_resigned,0)<>1 AND COALESCE(is_duplicate,0)<>1")
-    params = []
+    # 27/07/2026: dung CUNG tang rollup voi nhanh 'region' (_rollup_tier_codes) thay vi loc
+    # position_code='QLV' + bo is_duplicate. Truoc day tra ve 19 dong trong khi bao cao goc cua DNH
+    # co 21 - thieu dung 'Kenh MT' (5,29 ty) va 'Cho si' (1,5 ty) do bi co IsDuplicate loc mat, nen
+    # nguoi dung cong tay danh sach QLV se KHONG ra tong vung (venh 6,79 ty o Mien Nam). Bao cao goc
+    # CO liet ke 2 don vi nay nhu mot dong QLV, nen dua vao la dung - kem co danh dau ro day la
+    # NHOM/KENH chu khong phai ca nhan, de khong ai hieu nham dang xep hang mot con nguoi.
+    # CO Y khong loc end_date/is_resigned nua: pham vi phai TRUNG KHIT nhanh 'region', them bat ky
+    # dieu kien nao chi co o day se lam 2 con so lech nhau tro lai.
+    managers = _rollup_tier_codes(fdate)
+    if not managers:
+        _warn("Khong xac dinh duoc tang quan ly (manager_code rong) nen KHONG xep hang duoc QLV. "
+              "PHAI noi ro la chua tra cuu duoc, KHONG tra ve danh sach rong nhu the la khong co ai.")
+        return []
+    ph = ",".join(["?"] * len(managers))
+    qlv_sql = (f"SELECT employee_code, name, area_code, COALESCE(is_duplicate,0) dup "
+               f"FROM dim_nhanvien WHERE employee_code IN ({ph})")
+    params = list(managers)
     if scope_area_code:
         qlv_sql += " AND area_code=?"
         params.append(scope_area_code)
@@ -1010,10 +1459,20 @@ def kpi_ranking(group_by: str = "qlv", as_of_date: str = None, limit: int = 20,
     qlv_rows = _q(qlv_sql, tuple(params))
     result = []
     for qlv in qlv_rows:
-        kpi = _kpi_snapshot(qlv["employee_code"], fdate)
+        kpi = _kpi_snapshot(qlv["employee_code"], fdate, "QLV")
         if kpi["target"] <= 0:
             continue
-        result.append({"employee_code": qlv["employee_code"], "name": qlv["name"], "area_code": qlv["area_code"], **kpi})
+        # Ban ghi bi Bravo gan co trung lap MA KHONG nam trong danh sach "nguoi that bi gan nham"
+        # (_KNOWN_MISFLAGGED_DUPLICATE_CODES) thi la don vi ao/nhom kenh, khong phai ca nhan:
+        # vd MN1 'Kenh MT' (Modern Trade - Long Chau/Pharmacity...), MN4 'Cho si'.
+        is_unit = (int(qlv["dup"] or 0) == 1
+                   and qlv["employee_code"] not in _KNOWN_MISFLAGGED_DUPLICATE_CODES)
+        row = {"employee_code": qlv["employee_code"], "name": qlv["name"],
+               "area_code": qlv["area_code"], **kpi, "la_nhom_kenh": is_unit}
+        if is_unit:
+            row["ghi_chu"] = (f"'{qlv['name']}' la NHOM/KENH ban hang (khong phai mot ca nhan) - khi "
+                              "tra loi phai goi dung la kenh/nhom, KHONG duoc noi nhu mot nhan vien.")
+        result.append(row)
     return sorted(result, key=lambda x: -x["pct"])[:limit]
 
 
@@ -1116,10 +1575,28 @@ TEMPLATES = {
     "get_revenue_tree": revenue_tree,
     "get_kpi_ranking": kpi_ranking,
     "get_revenue_reconciliation": revenue_reconciliation_check,
+    "get_receivables_overview": receivables_overview,
 }
 
 
-_EMPLOYEE_SCOPED_TEMPLATES = {"get_revenue_tree", "get_kpi_ranking"}
+# 23/07/2026 - DOI SANG CO CHE "DANH SACH CHO PHEP, FAIL-CLOSED" sau khi phat hien lo hong R-F
+# (xem docstring employee_kpi). TRUOC DAY chi co _EMPLOYEE_SCOPED_TEMPLATES: tool NAO co ten trong do
+# thi duoc ep scope, tool nao KHONG co ten thi... chay tu do. Nghia la MOI tool moi them vao he thong
+# deu MAC DINH HO cho toi khi co ai do nho bo sung ten vao set - va da quen that voi get_employee_kpi.
+#
+# Gio tach lam 2 khai niem:
+#   _PERSON_LEVEL_TEMPLATES = tool tra du lieu HIEU SUAT THEO TUNG NGUOI (nhay cam voi tai khoan qlv)
+#   _EMPLOYEE_SCOPED_TEMPLATES = tool DA nhan duoc tham so scope_employee_code
+# Tool nam trong nhom 1 nhung KHONG nam trong nhom 2 -> CHAN HAN lan goi (khong tra du lieu), thay vi
+# am tham tra du lieu toan vung. Them tool moi ma quen khai bao -> bi chan, khong bi ho.
+_PERSON_LEVEL_TEMPLATES = {"get_revenue_tree", "get_kpi_ranking", "get_employee_kpi",
+                            "get_employee_daily_kpi", "check_order_timing"}
+_EMPLOYEE_SCOPED_TEMPLATES = {"get_revenue_tree", "get_kpi_ranking", "get_employee_kpi",
+                               "get_employee_daily_kpi"}
+# check_order_timing CO Y de ngoai _EMPLOYEE_SCOPED_TEMPLATES: day la bao cao CHONG GIAN LAN neu dich
+# danh nhan su nghi "chay don don KPI" - chua co xac nhan nghiep vu ai duoc phep xem, nen voi tai khoan
+# qlv thi CHAN han (fail-closed) cho toi khi DNH chot. Xem D1 trong docs/Cau_hoi_can_DNH_xac_nhan.md.
+
 _CHANNEL_SCOPED_TEMPLATES = {"get_revenue_by_channel", "get_top_products", "get_top_customers",
                               "compare_periods", "get_customer_detail", "check_order_timing"}
 
@@ -1145,8 +1622,18 @@ def call_template(name: str, args: dict, question: str = "", username: str = Non
         call_args = dict(args)
         if scope_area_code:
             call_args["scope_area_code"] = scope_area_code
-        if scope_employee_code and name in _EMPLOYEE_SCOPED_TEMPLATES:
-            call_args["scope_employee_code"] = scope_employee_code
+        if scope_employee_code and name in _PERSON_LEVEL_TEMPLATES:
+            if name in _EMPLOYEE_SCOPED_TEMPLATES:
+                call_args["scope_employee_code"] = scope_employee_code
+            else:
+                # Fail-closed: tool tra du lieu theo tung nguoi nhung chua ho tro gioi han theo doi
+                # -> KHONG chay. Tha tu choi con hon lo hieu suat ca nhan cua doi khac.
+                entry["status"] = "blocked"
+                _write_log(entry)
+                return {"ok": False, "error": (
+                    f"Bao cao '{name}' chua ho tro gioi han theo doi cua rieng ban nen khong the chay "
+                    "voi tai khoan quan ly vung. Hay hoi ve doi cua chinh ban, hoac lien he cap quan ly "
+                    "cao hon (Truong phong/Giam doc vung) neu can pham vi rong hon.")}
         if scope_channel and name in _CHANNEL_SCOPED_TEMPLATES:
             call_args["scope_channel"] = scope_channel
         result = fn(**call_args)
