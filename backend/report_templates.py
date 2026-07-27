@@ -485,16 +485,18 @@ def employee_kpi(as_of_date: str, limit: int = 10, order_by: str = "sales", filt
     position_code: loc theo vai tro (vd 'TDV','QLV') - LUON dung tham so nay khi cau hoi chi dinh ro
     vai tro (vd "top TDV"), KHONG tu loc thu cong tu ket qua day du vi de sot/thieu chinh xac.
 
-    ⚠️ PHAN BIET 2 MOC, DUNG GOP LAM MOT:
+    ⚠️ PHAN BIET BA MOC, TUYET DOI KHONG GOP:
       - "DAT CHI TIEU" = >=100% chi tieu thang -> dung "count_full_target" (va co "meets_full_target"
         tren tung dong). Giua thang con so nay gan nhu luon ~0 va DO LA DUNG: doanh so moi luy ke toi
         hom nay, con chi tieu la ca thang.
-      - "DAT MUC THUONG NHOM HANG" = >= "threshold" cua tung dong (TDV 65% theo QD 0107/2026,
+      - "DAT KPI" = >=80% ("kpi_threshold_pct", CHUNG cho moi vai tro) -> dung "count_kpi_achieved";
+        day cung la moc quyet dinh mau 🟢/🟡/🔴 o truong "status".
+      - "TOI MUC THUONG NHOM HANG" = >= "threshold" cua tung dong (TDV 65% theo QD 0107/2026,
         QLV va cac cap quan ly 70% theo QD 0429/.25) -> dung "count_above_target"/"count_below_target".
-    Hoi "ai chua dat chi tieu" thi tra loi theo moc 100%; hoi "ai toi muc thuong nhom hang" thi tra
-    loi theo "threshold". Neu cau hoi mo ho thi dua CA HAI con so va noi ro tung cai la gi.
-    Moi dong con co "status" (🟢 Tot/🟡 Trung binh/🔴 Nguy hiem) - mau nay chia theo muc THUONG NHOM
-    HANG, khong phai theo moc 100%. LUON dung nguyen cac gia tri nay, khong tu tinh nguong khac.
+    Hoi "ai chua dat chi tieu" -> moc 100%; hoi "ai dat KPI" -> moc 80%; hoi "ai toi muc thuong nhom
+    hang" -> "threshold". Neu cau hoi mo ho thi dua CA BA con so va noi ro tung cai la gi.
+    ⚠️ TUYET DOI khong goi 65%/70% la "dat KPI" - do chi la cong THUONG. Nguoi dat 67% la "da toi muc
+    thuong nhom hang nhung CHUA dat KPI (80%)".
 
     ⚠️ 65%/70% CHI la cong cua THUONG NHOM HANG (DM1/DM2/DM3), KHONG phai "nguong huong thuong" noi
     chung. Con V15 (25% doanh so vao ngay 15), V22, V25, ASO (theo SO LUONG khach hang: MB 40/MT 35/
@@ -1169,6 +1171,7 @@ def _kpi_snapshot(employee_code: str, fdate: str, position_code: str = None):
             "kpi_threshold": KPI_ACHIEVED_THRESHOLD,           # dat KPI (80, chung moi vai tro)
             "meets_kpi": pct >= KPI_ACHIEVED_THRESHOLD,
             "status": _kpi_status(pct, position_code)}
+
 
 
 def _fact_latest_date() -> str:

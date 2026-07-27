@@ -119,11 +119,13 @@ fact_tonghopkhachhang: 1 dong = 1 (nhan vien, khach hang, ngay snapshot). Cot: e
   thang, MAX vi lap lai moi dong), save_date (ngay snapshot - dung MAX(save_date) <= ngay can xem de
   lay snapshot gan nhat), is_nc (=1 neu la KH moi trong thang). CHI CO ~90 NGAY GAN NHAT trong kho
   local (lich su xa hon khong dong bo vi it gia tri cho KPI hien tai).
-  NGUONG tren amount_ct/month_sale_target - PHAN BIET 2 MOC: "DAT CHI TIEU" = >=100%; "DAT MUC
-  THUONG NHOM HANG" = >=65% voi TDV (QD 0107/2026), >=70% voi QLV va cac cap quan ly (QD 0429/.25) -
-  moc nay KHAC NHAU THEO VAI TRO nen khi tu viet SQL phai JOIN dim_nhanvien.position_code moi lay dung.
-  Dung goi moc 65%/70% la "dat chi tieu"; cung dung goi la "nguong huong thuong" chung chung (do chi
-  la cong cua thuong nhom hang DM1/DM2/DM3, con V15/V22/ASO/thuong quy-nam co moc rieng).
+  NGUONG tren amount_ct/month_sale_target - PHAN BIET BA MOC, TUYET DOI KHONG GOP:
+  "DAT CHI TIEU" = >=100%. "DAT KPI" = >=80% (CHUNG cho moi vai tro - moc danh gia hieu qua cong
+  viec). "DAT MUC THUONG NHOM HANG" = >=65% voi TDV (QD 0107/2026), >=70% voi QLV va cac cap quan ly
+  (QD 0429/.25) - moc nay KHAC NHAU THEO VAI TRO nen khi tu viet SQL phai JOIN dim_nhanvien.position_code
+  moi lay dung. Dung goi moc 65%/70% la "dat chi tieu" hay "dat KPI"; cung dung goi la "nguong huong
+  thuong" chung chung (do chi la cong cua thuong nhom hang DM1/DM2/DM3, con V15/V22/ASO/thuong
+  quy-nam co moc rieng).
 
 brv_sanpham: code, name, group_code (nhom SP), unit (don vi tinh), id_code (khoa noi bo - dung de
   JOIN voi brv_tonkhodk.item_id, KHAC code la ma san pham dang text).
@@ -189,22 +191,27 @@ inventory (snapshot ton kho MOI NHAT, khong theo ngay): "item_code", "item_name"
    chay tren SUPABASE (PostgreSQL - quote ten cot trong "...", LIMIT N). KHONG dung nham dialect giua 2 tool.
 10. Kho local co DAY DU LICH SU nhieu nam (tu ~2022) nen thoai mai so sanh xa (nam nay vs nam truoc,
     quy nay vs quy truoc...) - dung tool compare_periods hoac tu ghep 2 lan goi get_revenue_by_channel.
-11. CHINH SACH THU NHAP TDV OTC - PHAN BIET 2 THU KHAC NHAU, DUNG GOP:
-    (A) NGUONG % de tinh thuong: DA theo van ban co chu ky, KHAC NHAU THEO VAI TRO. TDV 65% (QD
-        0107/2026, hieu luc 01/07/2026 - XAC NHAN CUNG qua bang DIM_BacThuong ma thu tuc tinh luong
-        that cua DNH doc: bac thuong TDV co StartDate=2026-07-01). QLV va cac cap quan ly 70% (QD
-        0429/.25, chua co van ban moi thay the). Con so 80% dung truoc day la MCNA TU DAT, KHONG co
-        can cu - da bo. Moc "dat chi tieu" thuc su la 100%; 50% chi la nguong canh bao (mau vang/do).
-    (B) Cac CHI SO CHI TIET cua chinh sach (SKU, KH tai don, KH moi, SP trong tam/DM1-3, ASO/KH hoat
-        dong, thuong tien do V15/V22, thuong Quy/Nam): KHO LOCAL/SUPABASE KHONG CO bang du lieu nao
-        chua cac chi so nay (fact_tonghopkhachhang chi co doanh so/target/khach moi don gian). Nen du
-        BIET cong thuc tu van ban, TUYET DOI KHONG tu tinh/bia so lieu - cong thuc dung khong co nghia
-        du lieu dau vao dang duoc ghi nhan day du de tinh. Neu nguoi dung hoi ve cac chi so nay: noi ro
-        he thong chua co nguon du lieu de tinh.
-    (Ghi chu doi chieu: mot ghi chu noi bo cu tung neu "BA phia DNH xac nhan chinh sach moi chua ap
-    dung thuc te thang 7" - nhung DIM_BacThuong, bang chinh thu tuc luong doc, cho thay bac TDV DA
-    hieu luc tu 01/07/2026. Neu co sai khac, doi chieu lai voi DNH; hien he thong theo DIM_BacThuong.)
+11. CHINH SACH THU NHAP TDV OTC - PHAN BIET RO BA THU KHAC NHAU, DUNG GOP:
+    (A) BA MOC KPI (xac nhan voi DNH 27/07/2026): "DAT CHI TIEU" = >=100%. "DAT KPI" = >=80%, CHUNG
+        cho MOI vai tro (moc danh gia hieu qua cong viec, tool get_employee_kpi/get_kpi_ranking cham
+        theo moc nay). "TOI MUC THUONG NHOM HANG" = >=65% TDV (QD 0107/2026, hieu luc 01/07/2026 -
+        XAC NHAN qua bang DIM_BacThuong ma thu tuc tinh luong that cua DNH doc: bac thuong TDV co
+        StartDate=2026-07-01), >=70% QLV va cac cap quan ly (QD 0429/.25). 50% chi la nguong canh
+        bao mau (do/vang), khong phai 1 trong 3 moc tren. TUYET DOI KHONG goi 65%/70% la "dat KPI"
+        hay "dat chi tieu" - do CHI la cong cua thuong nhom hang DM1/DM2/DM3.
+    (B) CHINH SACH THU NHAP TDV OTC MOI (Level/LCB, SKU, KH tai don, KH moi, SP trong tam/DM1-3,
+        ASO/KH hoat dong, thuong tien do V15/V22, thuong Quy/Nam) - day la BO CHI SO CHI TIET HON,
+        KHAC voi moc (A) o tren. XAC NHAN 23/07/2026: co VAN BAN CHINH THUC (3 Quyet dinh HDQT rieng
+        Nam/Trung/Bac, hieu luc van ban tu 01/07/2026, cong thuc chi tiet xem
+        docs_chinh_sach_thu_nhap_TDV_OTC.md) NHUNG theo DA phia DNH xac nhan, CHUA duoc ap dung THUC
+        TE de tinh luong thang 7/2026 - co do tre giua ngay hieu luc van ban va ngay van hanh that.
+        KHO LOCAL/SUPABASE KHONG CO bang du lieu nao chua cac chi so nay (fact_tonghopkhachhang chi
+        co doanh so/target/khach moi don gian). Neu nguoi dung hoi ve cac chi so chi tiet nay: PHAI
+        noi ro 2 y - (1) chinh sach CHUA duoc ap dung thuc te (du van ban da co hieu luc), (2) he
+        thong cung chua co nguon du lieu de tinh. TUYET DOI KHONG tu tinh/bia so lieu du BIET RO
+        cong thuc tu van ban - cong thuc dung khong co nghia du lieu dau vao dang duoc ghi nhan.
+        KHONG nham lan voi BA MOC KPI o muc (A) - 2 thu hoan toan tach biet, KHONG duoc tron lan.
     Voi cau hoi KPI/doanh so thong thuong (ai dat, xep hang, % hoan thanh) van dung tool
-    get_employee_kpi/get_employee_daily_kpi/get_kpi_ranking binh thuong - chung da ap nguong theo vai
-    tro dung (65/70%) va tach san "dat chi tieu 100%".
+    get_employee_kpi/get_employee_daily_kpi/get_kpi_ranking binh thuong - chung da ap dung ca 3 moc
+    o muc (A) va tra ve du ca 3 (count_full_target/count_kpi_achieved/count_above_target).
 """
