@@ -22,7 +22,11 @@ TOP N cua T-SQL). Ham ngay thang: date(), julianday() - cot doc_date/save_date l
 
 vhoadon_otc (moi dong la 1 dong hoa don chi tiet, kenh OTC - nha thuoc/nha phan phoi. Dong bo tu
   vHoaDonTotal ben Bravo - DA xac nhan day la nguon DAY DU, co ca cac dong dieu chinh/hoan don
-  (Amount9 am) ma nguon cu (vHoaDon) am tham loai bo gay overstate doanh thu):
+  (Amount9 am) ma nguon cu (vHoaDon) am tham loai bo gay overstate doanh thu). !!! KHI QUERY TRUC
+  TIEP SANG BRAVO (SQL Server that, khong phai qua tool query_database) DE DOI CHIEU/DEBUG: CHI
+  dung view vHoaDonTotal (OTC) / vHoaDonETCTotal (ETC) - TUYET DOI KHONG dung vHoaDonPBI (khac
+  nguon, cho ra doanh thu LECH ~7% so voi vHoaDonTotal do cach tinh khac nhau, da phat hien
+  27/07/2026 khi doi chieu doanh thu Mien Nam bi lech ~460 trieu vi dung nham view nay):
   doc_date (text 'YYYY-MM-DD', so sanh truc tiep vd doc_date BETWEEN '2026-07-01' AND '2026-07-03'),
   customer_code, item_code, amount9 (doanh thu - dung SUM(amount9) de tinh doanh thu - CO THE AM
   neu la dong dieu chinh/hoan, dung SUM binh thuong la tu dong tru dung, KHONG duoc loc amount9>0),
