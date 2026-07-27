@@ -345,6 +345,22 @@ TEMPLATE_TOOLS = [
             "required": [],
         },
     },
+    {
+        "name": "get_audit_log",
+        "description": "Lich su truy van (cau hoi, SQL/bao cao da chay, ket qua) va token/chi phi AI "
+                        "CUA CHINH NGUOI DANG HOI - dung khi nguoi dung hoi 'lich su truy van cua toi', "
+                        "'toi da hoi nhung gi gan day', 'toi da ton bao nhieu token/chi phi'. CHI tra ve "
+                        "du lieu cua tai khoan dang dang nhap (server tu dong gan username, KHONG the "
+                        "xem lich su nguoi khac du truyen tham so gi).",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "days": {"type": "integer", "description": "So ngay gan nhat can xem, mac dinh 7"},
+                "limit": {"type": "integer", "description": "So dong lich su gan nhat toi da tra ve, mac dinh 30"},
+            },
+            "required": [],
+        },
+    },
 ]
 
 QUERY_TOOL = {
@@ -433,15 +449,16 @@ QUAN TRONG VE CHON TOOL:
   "count_full_target = 0", "[tien ich] resolve_relative_date(...)". VD DUNG: "toi co the tra cuu chi
   tiet tung khach hang de xem ai phu trach". Mo ta viec lam bang ngon ngu nghiep vu, giau het ten ky
   thuat ben trong.
-- Neu cau hoi thuoc 1 trong 15 nhom: doanh thu theo kenh, top san pham, top khach hang, doanh thu
+- Neu cau hoi thuoc 1 trong 16 nhom: doanh thu theo kenh, top san pham, top khach hang, doanh thu
   theo vung mien, KPI/doanh so nhan vien (tong quan/thang), KPI THEO NGAY 1 nhan vien ca nhan, SO SANH
   2 khoang thoi gian, CHI TIET 1 khach hang cu the, TRA CUU ma/ten/vai tro nhan vien, KIEM TRA don hang
   bat thuong/chay don KPI, TON KHO THEO VUNG, LICH SU DOI QLV, CAY DOANH THU/KPI TP-QLV-TDV, XEP HANG
-  KPI, DOI CHIEU doanh thu tu tren xuong vs cong don tu duoi len -> BAT BUOC dung tool tuong ung
+  KPI, DOI CHIEU doanh thu tu tren xuong vs cong don tu duoi len, LICH SU TRUY VAN/CHI PHI AI cua chinh
+  nguoi dang hoi -> BAT BUOC dung tool tuong ung
   (get_revenue_by_channel, get_top_products, get_top_customers, get_revenue_by_region, get_employee_kpi,
   get_employee_daily_kpi, compare_periods, get_customer_detail, get_employee_directory, check_order_timing,
   get_inventory_by_region, get_qlv_change_history, get_revenue_tree, get_kpi_ranking,
-  get_revenue_reconciliation, get_receivables_overview).
+  get_revenue_reconciliation, get_receivables_overview, get_audit_log).
   Day la cac truy van DA DUOC KIEM CHUNG khop voi du lieu goc, KHONG tu sinh SQL thay the.
 - Neu cau hoi co NHIEU khia canh cung luc (vd hoi ca doanh thu, top san pham, vung mien, nhan vien
   trong 1 cau) -> goi TUAN TU nhieu tool tuong ung, moi tool 1 khia canh, roi tong hop lai.
