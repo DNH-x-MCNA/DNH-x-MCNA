@@ -287,10 +287,122 @@ def sync_fact_tonghopkhachhang(days=90):
     print(f"[fact_tonghopkhachhang] Reload {days} ngay gan nhat: {len(rows)} dong")
 
 
+def sync_fact_congno():
+    """Snapshot cong no THEO KHACH HANG x KENH tu SP goc DNH usp_DeptAccDueDate_GetData vao
+    fact_congno_khachhang. PORT NGUYEN VAN tu D:\\DNH\\src\\alerts.py::get_bravo_receivables_snapshot
+    (da verify khop 100% bao cao noi bo DNH) - KHONG duoc don gian hoa 3 diem sau:
+
+      1. SP tra NHIEU result set -> dung raw_connection() + vong cur.nextset(), chon result set co
+         DONG THOI CustomerCode va OverDueAmount. bravo_query() se lay nham set dau tien.
+      2. raw.rollback() trong finally -> SP tao bang tam, rollback dam bao read-only tuyet doi voi Bravo.
+      3. Map cot giu y nguyen: ClassCode='TM'->OTC (khac->ETC), AreaCode='MB1'->'MB', NULL->suy tu
+         tien to ma KH (region_from_customer_code).
+
+    HAI CHOT AN TOAN BAT BUOC (day la du lieu nguoi dung hoi truc tiep):
+      - KHONG BAO GIO ghi de bang bang rong. SP loi quyen/VPN chap co the tra 0 dong; ghi de se lam
+        chatbot mat kha nang tra loi cong no ma khong ai biet. 0 dong -> GIU snapshot cu, raise loi.
+      - BEGIN IMMEDIATE + PRAGMA busy_timeout - backend doc song song, tranh 'database is locked'.
+    """
+    from region_map import region_from_customer_code
+
+    def _norm_area(raw_area, customer_code):
+        # SP dung DIM_TinhThanhPho.AreaCode2 (MB1/MB2/MN/MT); phan con lai cua he thong theo quy uoc
+        # MB/MB2/MN/MT. Chi 'MB1' lech -> map ve 'MB'. NULL -> suy tu tien to ma KH (cuu khach "mo coi").
+        if raw_area == "MB1":
+            return "MB"
+        if raw_area:
+            return raw_area
+        return region_from_customer_code(customer_code)
+
+    today = dt.datetime.now()
+    d1 = dt.datetime(today.year, 1, 1).strftime("%Y-%m-%d")   # dau nam - khong anh huong CloseBal/tuoi no cuoi
+    d2 = today.strftime("%Y-%m-%d")
+
+    eng = _get_engine("bravo")
+    raw = eng.raw_connection()
+    try:
+        cur = raw.cursor()
+        cur.execute(
+            "EXEC dbo.usp_DeptAccDueDate_GetData "
+            "@_DocDate1=?, @_DocDate2=?, @_Period1=?, @_Period2=?, @_RepType=?, @_IsPrepaymentInclude=?",
+            d1, d2, 7, 15, 1, 1)
+        cols, data = None, None
+        while True:
+            if cur.description is not None:
+                c = [dsc[0] for dsc in cur.description]
+                if "CustomerCode" in c and "OverDueAmount" in c:
+                    cols = c
+                    data = cur.fetchall()
+                    break
+            if not cur.nextset():
+                break
+        if cols is None:
+            raise RuntimeError("SP usp_DeptAccDueDate_GetData khong tra ve result set cong no mong doi.")
+        ix = {name: i for i, name in enumerate(cols)}
+
+        def _f(v):
+            return float(v) if isinstance(v, decimal.Decimal) else (v if v is not None else 0.0)
+
+        snapshot_date = today.strftime("%Y-%m-%d")
+        snapshot_at = today.isoformat()
+        prepared = []
+        for rec in data:
+            b1 = _f(rec[ix["CloseBal5"]]); b2 = _f(rec[ix["CloseBal6"]])
+            b3 = _f(rec[ix["CloseBal7"]]); b4 = _f(rec[ix["CloseBal8"]])
+            prepared.append((
+                snapshot_date, snapshot_at,
+                rec[ix["CustomerCode"]], rec[ix["CustomerName"]],
+                "OTC" if rec[ix["ClassCode"]] == "TM" else "ETC",
+                _norm_area(rec[ix["AreaCode"]], rec[ix["CustomerCode"]]),
+                _f(rec[ix["CloseBal"]]), b1, b2, b3, b4, b1 + b2 + b3 + b4,
+            ))
+    finally:
+        try:
+            raw.rollback()  # bo moi thay doi temp-table, KHONG dung du lieu that
+        except Exception:
+            pass
+        raw.close()
+
+    # CHOT AN TOAN 1: khong bao gio ghi de bang rong - giu snapshot cu, bao loi len tren.
+    if not prepared:
+        raise RuntimeError(
+            "SP tra ve 0 dong cong no - GIU NGUYEN snapshot cu, KHONG ghi de. "
+            "Kiem tra quyen EXECUTE / VPN / BRAVO_DATABASE.")
+
+    conn = get_conn()
+    conn.execute("PRAGMA busy_timeout=30000")   # CHOT AN TOAN 2: tranh 'database is locked'
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        conn.execute("DELETE FROM fact_congno_khachhang")
+        conn.executemany(
+            "INSERT INTO fact_congno_khachhang (snapshot_date, snapshot_at, customer_code, "
+            "customer_name, sales_channel, area_code, balance_end, overdue_1_15, overdue_15_30, "
+            "overdue_30_45, overdue_gt_45, total_overdue) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            prepared)
+        conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
+    finally:
+        conn.close()
+    set_sync_meta("fact_congno_khachhang", snapshot_date, snapshot_date)
+    tot = sum(r[6] for r in prepared)
+    tot_od = sum(r[11] for r in prepared)
+    print(f"[fact_congno_khachhang] Snapshot {snapshot_date}: {len(prepared)} dong "
+          f"(du no {tot:,.0f}, qua han {tot_od:,.0f})")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--full", action="store_true", help="Dong bo toan bo lich su (thay vi chi gan day)")
+    ap.add_argument("--congno-only", action="store_true",
+                    help="Chi dong bo cong no (fact_congno_khachhang) - dung cho lich rieng neu SP chay lau")
     a = ap.parse_args()
+
+    if a.congno_only:
+        init_schema()
+        sync_fact_congno()
+        return
 
     init_schema()
     t0 = time.time()
@@ -317,6 +429,15 @@ def main():
         sync_small_table(bravo_tbl, local_tbl, bravo_cols, local_cols)
 
     sync_fact_tonghopkhachhang()
+
+    # Cong no: boc try/except rieng - SP loi (quyen/VPN/timeout) KHONG duoc lam hong phan sync con lai.
+    # Neu spike (muc 1.3) do SP > 60s: chuyen sang chay lich rieng bang --congno-only (timeout 300s) va
+    # BO dong duoi day de tranh nhet SP cham vao vong sync chung (timeout 90s cua sync_scheduler.ps1).
+    try:
+        sync_fact_congno()
+    except Exception:
+        import traceback
+        print("[fact_congno_khachhang] LOI (bo qua, giu snapshot cu):", traceback.format_exc())
 
     print(f"===== HOAN TAT DONG BO trong {time.time()-t0:.0f}s =====")
 

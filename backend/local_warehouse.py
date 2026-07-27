@@ -12,7 +12,7 @@ import os, sqlite3, datetime as dt
 
 DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "warehouse.db")
 
-SCHEMA = """
+SCHEMA = r"""
 -- employee_code (tu EmpDMSCode tren Bravo) - la DMSId CUA CHINH nguoi ban hang (TDV), CHI dung tin
 -- cay cho nhan vien CA NHAN (vd "tungtx", "HYE_02"...). Ma khu vuc/quan ly vung (MBKV*, ASM*, MN*...)
 -- KHONG xuat hien truc tiep tren hoa don qua cot nay - xem employee_kpi() (snapshot thang) cho nhom do.
@@ -124,6 +124,30 @@ CREATE INDEX IF NOT EXISTS idx_mcs_yearmonth ON monthly_customer_summary(year_mo
 CREATE INDEX IF NOT EXISTS idx_mcs_customer ON monthly_customer_summary(customer_code);
 CREATE INDEX IF NOT EXISTS idx_mcs_employee ON monthly_customer_summary(employee_code);
 CREATE INDEX IF NOT EXISTS idx_mcs_channel ON monthly_customer_summary(channel, year_month);
+
+-- Cong no THEO KHACH HANG x KENH, snapshot tuc thoi tu SP goc DNH usp_DeptAccDueDate_GetData
+-- (xem sync_warehouse.py::sync_fact_congno + D:\DNH\src\alerts.py::get_bravo_receivables_snapshot).
+-- MOT DONG = (khach hang x kenh): khach ban ca OTC lan ETC co 2 dong -> moi truy van PHAI SUM,
+-- KHONG duoc gia dinh 1 dong/khach. total_overdue tinh SAN khi ghi = overdue_1_15+15_30+30_45+gt_45.
+-- Dinh nghia bucket theo @_Period2=15: 1-15 / 16-30 / 31-45 / >45 ngay (khop bucket cu).
+-- KHONG dat UNIQUE/PRIMARY KEY (Bravo co the tra ma trung, va bang bi ghi de nguyen khoi moi snapshot).
+CREATE TABLE IF NOT EXISTS fact_congno_khachhang (
+    snapshot_date TEXT,          -- 'YYYY-MM-DD' ngay chay SP (mot snapshot/lan sync)
+    snapshot_at TEXT,            -- ISO datetime day du (de biet snapshot cach day bao lau -> canh bao > 6h)
+    customer_code TEXT,
+    customer_name TEXT,
+    sales_channel TEXT,          -- 'OTC' (ClassCode='TM') hoac 'ETC' ('SX')
+    area_code TEXT,              -- MB/MB2/MN/MT (MB1 da map ve MB), NULL -> suy tu tien to ma KH
+    balance_end REAL,            -- CloseBal (tong du no cuoi ky)
+    overdue_1_15 REAL,           -- CloseBal5
+    overdue_15_30 REAL,          -- CloseBal6
+    overdue_30_45 REAL,          -- CloseBal7
+    overdue_gt_45 REAL,          -- CloseBal8
+    total_overdue REAL           -- tinh san = tong 4 bucket tren
+);
+CREATE INDEX IF NOT EXISTS idx_congno_customer ON fact_congno_khachhang(customer_code);
+CREATE INDEX IF NOT EXISTS idx_congno_channel ON fact_congno_khachhang(sales_channel);
+CREATE INDEX IF NOT EXISTS idx_congno_area ON fact_congno_khachhang(area_code);
 
 CREATE TABLE IF NOT EXISTS sync_meta (
     table_name TEXT PRIMARY KEY,
