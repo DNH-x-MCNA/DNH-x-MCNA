@@ -44,8 +44,14 @@ def _is_alert_business_hours(config):
     if not start_str or not end_str or not days:
         return True
     now = datetime.now()
-    if now.isoweekday() not in days:
-        return False
+    try:
+        int_days = [int(d) for d in days]
+        if now.isoweekday() not in int_days:
+            return False
+    except Exception:
+        if now.isoweekday() not in days:
+            return False
+
     start_h, start_m = (int(x) for x in start_str.split(':'))
     end_h, end_m = (int(x) for x in end_str.split(':'))
     start_t = now.replace(hour=start_h, minute=start_m, second=0, microsecond=0)
@@ -71,22 +77,17 @@ def run_all_alert_checks(config, erp_engine=None, crm_engine=None):
 
     flags = config.get('alert_feature_flags', {}) or {}
 
-    # G1: health-check ETL trước (không phụ thuộc dữ liệu nghiệp vụ) — tắt tạm khi trỏ vào
-    # Supabase dev/test (snapshot tĩnh, SyncAt không tăng nên sẽ báo "ETL đứng" liên tục sai).
     if flags.get('etl_freshness_check', True):
         check_etl_freshness_alert()
 
-    # G2: guard — nếu dữ liệu cốt lõi rỗng/hỏng thì DỪNG, không gửi alert nghiệp vụ sai
     if not check_data_sanity_ok():
         print("[ALERTS] Dữ liệu bất thường (rỗng) — bỏ qua các cảnh báo nghiệp vụ lần này.")
         return
 
     print("[ALERTS] Chạy các cảnh báo nghiệp vụ thật...")
 
-    # Nhóm cảnh báo gốc
     run_smart_business_alerts()          # nợ quá hạn / cháy kho / KPI thấp
     run_sales_kpi_insights_alert()       # phân tích doanh số & KPI
-    # Trigger mở rộng — mỗi hàm tự try/except, lỗi 1 cái không chặn cái khác
     check_revenue_drop_alert()
     if flags.get('credit_limit_check', True):
         check_credit_limit_exceeded_alert()
@@ -110,25 +111,15 @@ def run_all_alert_checks(config, erp_engine=None, crm_engine=None):
         print("[ALERTS] (môi trường 'local') Chạy thêm bộ MOCK ERP/CRM để dev test...")
         run_alert_checks(erp_engine, crm_engine)
 
-    # Gửi hết card CRITICAL đã gom trong hàng đợi (xem src/notifier.py::flush_critical_teams_queue)
-    # — BẮT BUỘC gọi ở CUỐI, sau khi TẤT CẢ check_*_alert() ở trên đã chạy xong, để gộp đúng mọi
-    # alert CRITICAL phát hiện được trong CÙNG 1 chu kỳ quét thành 1 card duy nhất/webhook.
     flush_critical_teams_queue()
 
 load_dotenv()
 
 def _digest_table(metrics):
-    """Chuyển metrics dict (doanh thu/công nợ/tồn kho THẬT từ Supabase) thành
-    table_headers/table_rows để gửi qua Email (dùng cho bản tóm tắt dạng bảng đơn giản —
-    email HTML đầy đủ hơn thì xem build_digest_email/DIGEST_EMAIL_TEMPLATE)."""
     headers = ["Chỉ số", "Giá trị"]
     change_pct = metrics['revenue']['change_pct']
     prev_label = metrics['revenue'].get('prev_period_label', '')
     change_str = f"{change_pct:+.1f}% so kỳ {prev_label}" if change_pct is not None else "chưa đủ dữ liệu kỳ trước"
-    # 17/07/2026: audience đã lọc theo 1 kênh (vd "Quản lý Kênh OTC") thì etc_rev/etc_invoice_count
-    # đã bị ép về 0 ở get_digest_metrics (đúng) — nhưng hiện thẳng "Doanh thu ETC: 0đ" trong báo cáo
-    # OTC là rác hiển thị vô nghĩa, dễ gây hiểu lầm là "ETC thật sự bằng 0". Ẩn hẳn dòng kênh không
-    # thuộc scope thay vì hiện số 0 giả.
     scoped_channel = metrics.get('channel')
     rows = []
     if scoped_channel != "ETC":
@@ -143,36 +134,12 @@ def _digest_table(metrics):
     rows.append(["Tổng số hóa đơn", str(metrics['revenue']['invoice_count'])])
     rows.append(["Mặt hàng tồn chết", str(metrics['inventory']['dead_stock_count'])])
     rows.append(["Mặt hàng sắp hết hàng", str(metrics['inventory']['near_stockout_count'])])
-    # 14/07/2026: bỏ hẳn khối công nợ chi tiết (5 dòng Nợ quá hạn/Dư nợ OTC/ETC/Tổng) — Daily
-    # Digest chỉ còn doanh thu + tồn kho, ngắn gọn xem nhanh. Cảnh báo nợ quá hạn nghiêm trọng
-    # (vượt ngưỡng) vẫn tự bắn CARD RIÊNG qua Teams khi phát sinh (check_company_overdue_ratio_alert
-    # trong src/alerts.py), độc lập với Daily Digest này.
-    #
-    # 16/07/2026: THÊM LẠI mục cảnh báo — nhưng khác bản cũ đã bỏ: giờ chỉ liệt kê cảnh báo THẬT
-    # SỰ có ý nghĩa nghiệp vụ (metrics['highlights'], đã lọc bỏ data_sanity_zero/etl_stale/
-    # sales_kpi_insights_report ở _get_period_highlights — xem src/etl.py), scope ĐÚNG NGÀY hôm
-    # nay (không phải toàn bộ lịch sử), không phải liệt kê thô mọi alert_key kỹ thuật như trước.
     for h in metrics.get('highlights', []):
         rows.append([f"Cảnh báo: {h['label']}", f"{h['value_display']} (lúc {h['sent_at_display']})"])
 
     return headers, rows
 
 def send_daily_digest():
-    """
-    Trích xuất dữ liệu tổng hợp trong ngày và gửi qua Teams —
-    quy tắc kênh: ALERT nghiệp vụ (src/alerts.py) và Daily Digest đi Teams (cần ngắn gọn, xem
-    nhanh); Weekly/Monthly Report đi Outlook (báo cáo dài, đọc kỹ không cần đọc ngay). Đổi từ
-    Email sang Teams 10/07/2026 theo yêu cầu — trước đó Daily Digest từng đi Email, nay khớp với
-    ghi chú kênh đã có sẵn trong send_alert_to_all_channels().
-
-    13/07/2026: đổi từ gửi 1 bản chung (không lọc region/channel -> chỉ khớp audience "C-Level
-    Toàn quốc", 5 audience còn lại không nhận được Daily Digest) sang lặp qua report_recipients
-    (giống _send_periodic_email_report của Weekly/Monthly) — mỗi audience nhận đúng phạm vi dữ
-    liệu của mình. Gửi TRỰC TIẾP tới đúng teams_webhook của từng audience (send_teams_alert +
-    webhook_url_override) thay vì qua send_alert_to_all_channels/_resolve_teams_webhooks — cơ chế
-    đó tự fan-out theo region/channel KHỚP nên nếu gọi lặp sẽ khiến C-Level nhận trùng cả 6 bản
-    (audience không giới hạn vùng/kênh luôn khớp mọi lần gọi).
-    """
     print(f"[{datetime.now()}] Đang chuẩn bị báo cáo Daily Digest...")
     from src.region_map import REGION_NAMES_VI
 
@@ -219,7 +186,6 @@ def send_daily_digest():
     return overall_ok
 
 def _scope_label(region, channel):
-    """Nhãn phạm vi hiển thị trong email — dùng chung tên miền tiếng Việt đã kiểm chứng."""
     parts = []
     if region:
         from src.region_map import REGION_NAMES_VI
@@ -229,14 +195,6 @@ def _scope_label(region, channel):
     return " — ".join(parts) if parts else "Toàn quốc, tất cả kênh"
 
 def _send_periodic_email_report(get_metrics_fn, period_label, report_title):
-    """
-    Dùng chung cho Weekly/Monthly report — CHỈ gửi qua Email (báo cáo lớn, đọc kỹ không cần đọc
-    ngay). Lặp qua config['report_recipients'] (Phần 3 — phân quyền theo cấp quản lý), gọi
-    get_metrics_fn(region=.., channel=..) cho từng audience rồi gửi RIÊNG tới email của audience
-    đó — mỗi audience nhận đúng phạm vi dữ liệu của mình, không gộp chung 1 bản như trước.
-    Nếu config chưa có report_recipients (vd môi trường cũ chưa cập nhật) thì fallback gửi 1 bản
-    không lọc như hành vi cũ, để không phá vỡ nơi gọi khác.
-    """
     config = load_config()
     recipients = config.get('report_recipients') or []
     if not recipients:
@@ -254,10 +212,6 @@ def _send_periodic_email_report(get_metrics_fn, period_label, report_title):
             metrics = get_metrics_fn(region=region, channel=channel)
             scope = _scope_label(region, channel)
             subject_suffix = f" ({audience})" if audience else ""
-            # 13/07/2026: bỏ emoji 🔴/📊 ở tiêu đề + Outlook Importance:High — báo cáo ĐỊNH KỲ
-            # không cần "hét" mức khẩn cấp giống alert thời gian thực (Teams đã lo việc đó); vẫn
-            # giữ banner text nhắc nhở trong nội dung (xem metrics.has_critical trong template)
-            # để người đọc biết cần xem kỹ mục "Điểm Nổi Bật", chỉ không dùng màu/cờ gắt nữa.
             subject = f"{report_title}{subject_suffix} — {metrics.get('period_range', metrics['date'])}"
             html_content = build_digest_email(metrics, period_label=period_label, audience=audience, scope_label=scope)
             if send_email(subject, html_content, recipient_override=emails or None, importance=None):
@@ -287,7 +241,6 @@ def main():
     config = load_config()
     is_local = str(config.get('environment', 'local')).lower() == 'local'
 
-    # Chỉ tạo mock ERP/CRM engine ở môi trường 'local' (production đọc dữ liệu thật, không cần mock).
     erp_engine = crm_engine = None
     if is_local:
         try:
@@ -295,7 +248,6 @@ def main():
         except Exception as e:
             print(f"[{datetime.now()}] Cảnh báo: không tạo được mock ERP/CRM engine (bỏ qua bản mock): {e}")
 
-    # 1. Nếu yêu cầu gửi báo cáo ngay lập tức
     if args.send_daily:
         send_daily_digest()
         sys.exit(0)
@@ -306,21 +258,12 @@ def main():
         send_monthly_report()
         sys.exit(0)
 
-    # 2. Nếu yêu cầu chạy check 1 lần duy nhất
     if args.once:
         print(f"[{datetime.now()}] Bắt đầu quét cảnh báo nghiệp vụ DNH một lần...")
         run_all_alert_checks(config, erp_engine, crm_engine)
         print(f"[{datetime.now()}] Quét cảnh báo hoàn thành.")
         sys.exit(0)
 
-    # 3. Chạy dạng Vòng lặp/Dịch vụ nền liên tục — vai trò LƯỚI AN TOÀN DỰ PHÒNG.
-    # Cảnh báo thời gian thực chính được trigger NGAY sau mỗi lần đồng bộ Bravo (xem
-    # scripts/sync_from_bravo_to_supabase.py::run_alert_checks_after_sync) — độ trễ gần như
-    # bằng 0 vì chạy đúng lúc dữ liệu vừa cập nhật, thay vì đoán chu kỳ poll. Vòng lặp này chỉ
-    # chạy lại định kỳ để bắt các trường hợp lỡ (sync thất bại giữa chừng, ETL bị đứng — xem
-    # check_etl_freshness_alert). Báo cáo Daily/Weekly/Monthly đã tách sang scheduled task riêng
-    # (DNH_Daily_Digest_1745/DNH_Weekly_Report/DNH_Monthly_Report — scripts/register_digest_schedule.bat),
-    # không còn phụ thuộc vòng lặp này nên không cần poll theo phút nữa.
     interval = int(config['scheduler'].get('etl_check_interval_seconds', 3600))
 
     print("=" * 60)
@@ -342,7 +285,6 @@ def main():
         except Exception as e:
             print(f"[{datetime.now()}] Lỗi hệ thống trong vòng lặp chính: {e}")
 
-        # Chờ đến chu kỳ quét tiếp theo
         time.sleep(interval)
 
 if __name__ == '__main__':

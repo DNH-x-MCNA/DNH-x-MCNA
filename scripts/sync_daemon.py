@@ -19,8 +19,6 @@ def main():
     print(" Dich vu chay nen de giu du lieu luon cap nhat va phat alert.")
     print("=" * 60)
 
-    # 23/07/2026: bỏ hẳn Telegram Bot (send_telegram_photo/start_telegram_bot_thread) — kênh chat
-    # đã chuyển hoàn toàn qua web, không còn dùng.
     load_dotenv()
 
     # Luu moc thoi gian cua lan dong bo cuoi (epoch time)
@@ -44,8 +42,11 @@ def main():
     
     # Chay canh bao khoi tao 1 lan duy nhat khi vua bat dich vu de check ket noi
     print(f"\n[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Kiem tra canh bao khoi tao luc bat dau...")
-    run_smart_business_alerts()
-    run_sales_kpi_insights_alert()
+    try:
+        run_smart_business_alerts()
+        run_sales_kpi_insights_alert()
+    except Exception as e:
+        print(f"[DAEMON] Error running initial alerts: {e}")
     
     while True:
         try:
@@ -55,7 +56,7 @@ def main():
             if now - last_sync["fast"] >= 60:
                 print(f"\n[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] --- Bat dau dong bo NHANH (chu ky 60s) ---")
                 sync_tables(groups["fast"])
-                last_sync["fast"] = now
+                last_sync["fast"] = time.time()  # Set AFTER execution to avoid tight loop thrashing
                 
             # 2. Dong bo TRUNG BINH (Moi 5 phut - 300 giay): Cong no thay doi & Phat canh bao
             if now - last_sync["medium"] >= 300:
@@ -65,13 +66,13 @@ def main():
                 print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Dang quet canh bao nghiep vu...")
                 run_smart_business_alerts()
                 run_sales_kpi_insights_alert()
-                last_sync["medium"] = now
+                last_sync["medium"] = time.time()  # Set AFTER execution
                 
             # 3. Dong bo CHAM (Moi 30 phut - 1800 giay): Ton kho thuc te, KPIs luong va Danh muc
             if now - last_sync["slow"] >= 1800:
                 print(f"\n[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] --- Bat dau dong bo CHAM (chu ky 30m) ---")
                 sync_tables(groups["slow"])
-                last_sync["slow"] = now
+                last_sync["slow"] = time.time()  # Set AFTER execution
                 
         except Exception as e:
             print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Loi trong vong lap cua Daemon: {e}")
