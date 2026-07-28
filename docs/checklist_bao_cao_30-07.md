@@ -1,6 +1,6 @@
 # Checklist chuẩn bị buổi báo cáo tiến độ 30/07/2026
 
-Báo cáo chính: [`bao_cao_tien_do_16-30-07.md`](bao_cao_tien_do_16-30-07.md) · kỳ **16/07 → 30/07** (2 tuần, kể từ họp 16/07) — số liệu chốt đến
+Báo cáo chính: [`bao_cao_tien_do_30-07.md`](bao_cao_tien_do_30-07.md) — bản 7 slide theo template Google Slides. Kỳ **16/07 → 30/07** (2 tuần, kể từ họp 16/07). Số liệu chốt đến
 **28/07**, cần chạy lại để lấy số của ngày báo cáo.
 
 ---
@@ -11,7 +11,7 @@ Báo cáo chính: [`bao_cao_tien_do_16-30-07.md`](bao_cao_tien_do_16-30-07.md) �
 set PYTHONIOENCODING=utf-8 && python scripts/demo1_ground_truth.py
 ```
 
-Lấy từ output và thay vào bảng **"Số liệu hệ thống"** ở cuối báo cáo:
+Lấy từ output và thay vào bảng **"Số liệu hệ thống"** ở Slide 5:
 
 | Lấy từ mục | Điền vào |
 |---|---|
@@ -31,7 +31,7 @@ Hỏi chatbot bằng tài khoản `dnh`, **phiên chat mới**:
 
 > Báo cáo chi phí AI toàn công ty
 
-Điền vào Trang 1 mục D: tổng chi phí (USD + VNĐ), tổng số truy vấn, số phiên.
+Điền vào Slide 4 mục chi phí AI: tổng chi phí (USD + VNĐ), tổng số truy vấn, số phiên.
 
 > Lưu ý khi trình bày: chi phí chỉ tính được cho các phiên **từ 28/07 trở đi** (trước đó hệ thống
 > không nối được chi phí với người dùng). Nếu khách hỏi tổng chi phí từ đầu dự án thì phải nói rõ điều
@@ -52,7 +52,7 @@ bên kho chatbot.
 | Việc | Ảnh hưởng nếu để nguyên |
 |---|---|
 | **Giao diện Bảng điều khiển Chi phí AI** chưa lên web (chờ cập nhật lại phía nhà cung cấp hosting) | Không demo được màn hình này tại buổi báo cáo — chỉ trình bày qua chatbot dạng chữ |
-| **Kiểm chứng trọn bộ 17 câu Demo #1** mới chạy được một phần | Chưa khẳng định được "đã kiểm chứng đầy đủ" ở Trang 3 |
+| **Kiểm chứng trọn bộ 17 câu Demo #1** mới chạy được một phần | Chưa khẳng định được "đã kiểm chứng đầy đủ" ở Slide 5 |
 
 ---
 
