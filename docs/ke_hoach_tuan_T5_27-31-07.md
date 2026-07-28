@@ -22,13 +22,13 @@ không còn ô trống, dữ liệu chi phí AI đã an toàn và đọc đượ
 
 ## Phân bổ theo ngày
 
-| Ngày | Trọng tâm |
-|---|---|
-| **T2 27/07** | 🔴 Spike quyền chạy SP (chặn) · sao lưu dữ liệu chi phí · soi secret |
-| **T3 28/07** | R-B P0: bảng local + hàm đồng bộ + đối chiếu số |
-| **T4 29/07** | R-B P0: đổi nguồn `_customer_receivable` + chặn đường về nguồn cũ · deploy |
-| **T5 30/07** | R-B P1: tool báo cáo công nợ tổng hợp · kiểm chứng demo 9 câu |
-| **T6 31/07** | Truy 2 chênh lệch · công cụ đọc chi phí AI · dọn máy 24 · báo cáo tuần |
+| Ngày | Trọng tâm | Thực tế |
+|---|---|---|
+| **T2 27/07** | 🔴 Spike quyền chạy SP (chặn) · sao lưu dữ liệu chi phí · soi secret | ✅ Spike xong (SP 15,1s). **Làm luôn TOÀN BỘ R-B 1.1→1.6** (vượt kế hoạch 2 ngày) + sửa tầng rollup KPI + tách 3 mốc + gộp 2 repo |
+| **T3 28/07** | ~~R-B P0: bảng local + hàm đồng bộ + đối chiếu số~~ | ✅ Đã xong từ T2 → **xếp lại việc**: sửa 2 bug đang sai số thật (chỉ tiêu daily KPI sai tháng = chênh 1,13 tỷ; `get_audit_log` crash với tài khoản giới hạn vùng) + vá 3 lỗ hổng script ground truth + bổ sung đáp án R2/R4 |
+| **T4 29/07** | ~~R-B P0: đổi nguồn + chặn đường cũ · deploy~~ → **Kiểm chứng demo** | Đã xong T2. Chuyển sang: hỏi lại 5 câu KPI (C6, C7, R3, Q1, **Q2**) ở phiên mới |
+| **T5 30/07** | ~~R-B P1: tool công nợ tổng hợp~~ → **Kiểm chứng demo (tiếp)** | Đã xong T2. Chuyển sang: 7 câu chưa từng hỏi (C8, R2, R4, X1, X2, X4, X5) |
+| **T6 31/07** | ~~Truy 2 chênh lệch~~ · công cụ đọc chi phí AI · dọn máy 24 · báo cáo tuần | ✅ 2 chênh lệch **đã đóng cả hai** (27/07 và 28/07) |
 
 ---
 
@@ -172,16 +172,45 @@ Kèm theo: xoá 2 thư mục backup cũ (`_093544`, `_095101`) và `telegram_bot
 
 ---
 
-## Hạng mục 5 — Truy 2 chênh lệch còn treo
+## ✅ Hạng mục 5 — Truy 2 chênh lệch còn treo — **ĐÃ ĐÓNG CẢ HAI**
 
-Cả hai đều có thể bị hỏi tại demo:
+- ✅ **1,75 tỷ** *(đóng 27/07)*: **không phải lỗi**. Đó là tổng **5 dòng chỉ tiêu cá nhân của chính
+  QLV** (QLV vừa quản đội vừa tự ôm một địa bàn) = **1.744.361.395đ**, hoàn toàn hợp lệ — hệ quả tất
+  yếu của việc so tầng lá với tầng rollup, **không phải** chỉ tiêu cấp vùng chồng lên chỉ tiêu cá
+  nhân. Kiểm chứng số học: `tungtx` 3.016.493.346 = 2.756.994.289 (10 TDV) + 259.499.057 (tự thân).
+  Việc chuyển sang tầng rollup cũng **bác luôn nghi vấn A4** ở mức số học: tổng rollup khớp **tuyệt
+  đối** `DIM_TargetVungMien` — nếu có cộng chồng thì tổng phải vượt.
 
-- **1,13 tỷ**: chỉ tiêu một QLV chatbot báo 4,15 tỷ vs nguồn gốc 3,02 tỷ.
-- **1,75 tỷ**: chênh tổng chỉ tiêu giữa tầng QLV và tầng TDV ở miền Bắc, sau khi đã trừ phần giải
-  thích được — nghi chỉ tiêu cấp vùng chồng lên chỉ tiêu cá nhân (liên quan mục A4 đang chờ DNH).
+- ✅ **1,13 tỷ** *(đóng 28/07)*: **là bug thật, đã sửa**. `get_employee_daily_kpi` lấy chỉ tiêu bằng
+  `MAX(month_sale_target) WHERE save_date <= <hết tháng>` — **không có cận dưới** → nhặt chỉ tiêu
+  cao nhất từng có thay vì chỉ tiêu tháng đang hỏi. Xác nhận trên Bravo: `tungtx` snapshot
+  `2026-04-30` = 4.149.931.306đ (đúng con số sai), `2026-07-27` = 3.016.493.346đ (đúng số thật).
+  Bản vá R-G trước đây chỉ **che triệu chứng** (chặn mã cấp quản lý) — bug vẫn sống với **mọi mã
+  TDV**, đúng đối tượng của câu demo Q2. Đã ghim vào snapshot trong đúng tháng được hỏi.
 
-Nếu truy ra nguyên nhân kỹ thuật → sửa. Nếu là vấn đề dữ liệu gốc → bổ sung bằng chứng vào bộ câu hỏi
-gửi DNH.
+---
+
+## Rủi ro đang theo dõi (phát hiện 28/07, chưa xử lý — có chủ ý)
+
+- 🔴 **Cloudflare Quick Tunnel có thể làm chatbot chết giữa demo.**
+  `backend/server_deploy/cloudflared_supervisor.ps1` dùng quick tunnel → URL `*.trycloudflare.com`
+  **đổi mỗi lần khởi động lại**, và dòng 2 ghi rõ phần tự động cập nhật Vercel *"tạm thời BỎ QUA
+  theo yêu cầu"*. Mỗi lần backend/tunnel restart phải **sửa tay** `BACKEND_API_URL` trên Vercel rồi
+  redeploy — đã xảy ra **4 lần** chiều 27/07. Nếu trúng sáng 09/08, chatbot chết tới khi có người
+  vào Vercel sửa. → **Cần báo anh Triệu** (người quản Vercel/máy chủ). Cách khắc phục triệt để: nối
+  lại phần tự cập nhật qua Vercel API, hoặc chuyển sang named tunnel có hostname cố định.
+
+- 🟠 **Bug tiềm ẩn chưa phát tác** — `src/alerts.py` (`get_bravo_kpi_tdv_snapshot`, CTE `tdv_target`)
+  dùng `SELECT DISTINCT` trên **bộ 4 cột** thay vì gộp theo `EmployeeCode`. Nếu một nhân viên có 2
+  giá trị `AreaCode`/`ManagerCode` khác nhau trong cùng snapshot → CTE trả 2 dòng cho cùng người →
+  `sum(month_sale_target)` bên `etl.py` **cộng đôi chỉ tiêu** người đó, âm thầm. Hiện tổng 3 miền
+  vẫn khớp 0 đồng nên **chưa xảy ra**; chỉ cần Bravo đổi `AreaCode`/`ManagerCode` giữa tháng là
+  phồng. Sửa: `GROUP BY [EmployeeCode]` + `MAX(...)` cho 3 cột còn lại.
+
+- 🟡 **Tồn kho Miền Trung có 132 mặt hàng nhưng giá trị = 0đ** (phát hiện khi dựng đáp án R4 ngày
+  28/07 — lần đầu tồn kho được đối chiếu theo vùng). MB 2,80 tỷ và MN 2,54 tỷ đều có giá trị bình
+  thường, riêng MT bằng 0 dù có 9.014.691 đơn vị số lượng. Cần xác định là thiếu giá vốn cho kho MT
+  hay lỗi dữ liệu gốc — **nếu khách hỏi tồn kho MT tại demo thì đây là câu trả lời khó**.
 
 ---
 

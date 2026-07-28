@@ -2,7 +2,20 @@
 
 *Soạn 23/07/2026. Đáp án đúng sinh bằng `python scripts/demo1_ground_truth.py` (đọc thẳng Bravo qua
 đúng các hàm của báo cáo định kỳ). **Chạy lại script sáng 09/08 để lấy số của ngày demo** — số trong
-file này là của 23/07, chỉ dùng để tập dượt và dò lỗi trước.*
+file này là của 23/07 (một số mục đã cập nhật 27–28/07), chỉ dùng để tập dượt và dò lỗi trước.*
+
+> 🔴 **BẮT BUỘC ĐỌC TRƯỚC KHI CHẠY SÁNG 09/08.** Script mặc định tính "tháng này" = tháng đang chạy.
+> Sáng 09/08 nghĩa là **tháng 8 mới được 9 ngày** → C7 sẽ ra ~0/147 đạt chỉ tiêu và **không đối
+> chiếu được** với câu hỏi demo (R-A yêu cầu mọi câu KPI phải hỏi **tháng 7/2026**). Dùng cờ
+> `--as-of` để ghim kỳ:
+>
+> ```
+> set PYTHONIOENCODING=utf-8 && python scripts/demo1_ground_truth.py --as-of 2026-07-31
+> ```
+>
+> Cờ này ghim cả kỳ doanh thu **lẫn** snapshot KPI (`FACT_TongHopKhachHang`) về đúng tháng đó.
+> Không có cờ = tính hôm nay thật. Script in rõ kỳ đang tính ở đầu output — **đọc dòng đó trước
+> khi tin bất kỳ con số nào bên dưới.**
 
 ---
 
@@ -79,15 +92,26 @@ chưa chạy lại theo ngưỡng 65% mới cho các tháng này, chỉ tháng 7
 >
 > Nếu khách tự hỏi "tháng này thì sao?" — có sẵn lời dẫn ở mục 4.
 
-### 🔴 R-B. Chatbot và báo cáo đọc công nợ từ 2 nguồn khác nhau
+### ✅ R-B. Công nợ — ĐÃ ĐƯA VỀ CÙNG MỘT NGUỒN (27/07/2026)
 
-| | Nguồn | Số ngày 23/07 |
+| | Nguồn TRƯỚC 27/07 | Nguồn TỪ 27/07 |
 |---|---|---|
-| Báo cáo định kỳ (`D:\DNH`) | `usp_DeptAccDueDate_GetData` — báo cáo gốc DNH | Dư nợ 181,96 tỷ · quá hạn 80,18 tỷ (**44,1%**) |
-| Chatbot (`D:\DNH-x-MCNA`) | Supabase `receivable_detail`/`receivable_etc` — **Excel nhập 1 lần đầu dự án, không tự làm mới** | Chưa đo (Khối 3) |
+| Báo cáo định kỳ (`D:\DNH`) | `usp_DeptAccDueDate_GetData` — báo cáo gốc DNH | *(không đổi)* |
+| Chatbot (`D:\DNH-x-MCNA`) | Supabase `receivable_detail`/`receivable_etc` — **Excel nhập 1 lần đầu dự án, không tự làm mới** | ✅ **Cùng `usp_DeptAccDueDate_GetData`**, qua bảng local `fact_congno_khachhang` (`sync_warehouse.py::sync_fact_congno`) |
 
-Chính công thức cũ này từng thổi nợ 1 khách lên **9,17 tỷ** trong khi thật là **0,61 tỷ**.
-→ Xem mục 4, câu X1. **Không đưa câu hỏi công nợ vào kịch bản demo cho tới khi xử lý xong.**
+Công thức cũ từng thổi nợ 1 khách lên **9,17 tỷ** trong khi thật là **0,61 tỷ** — nay không còn
+đường đọc lại: `receivable_detail`/`receivable_etc` bị **chặn cứng fail-closed** ở
+`query_engine.py::validate_sql`, và đã gỡ khỏi mô tả schema.
+
+**Kiểm chứng 27/07:** map cột lệch **0,00 đồng** so với nguồn chuẩn; DTH00237 (BV Đa khoa Đồng Tháp)
+ra số cụ thể thay vì "chưa có dữ liệu". Số ngày 28/07: dư nợ 180,48 tỷ · quá hạn 77,07 tỷ (**42,7%**);
+OTC 27,7% · ETC 44,0%.
+
+→ **Câu X1 (công nợ) nay ĐƯỢC PHÉP đưa vào demo.** Công nợ là câu C-level chắc chắn hỏi — né được
+ở demo nhưng không né được ở UAT tháng 9.
+
+> ⚠️ **Mốc phát hiện hồi quy**: nếu tỷ lệ quá hạn OTC/ETC ra lại **~92,9% / 81,1%** thì hệ thống
+> đang đọc nhầm nguồn Excel cũ → dừng demo, báo lỗi ngay. Nguồn đúng cho ra tỷ lệ tầm **30–45%**.
 
 ### ✅ R-C. BA MỐC KPI — ĐÃ CHỐT VỚI DNH (27/07/2026, bổ sung mốc "đạt KPI" 80%)
 
@@ -293,8 +317,27 @@ cờ hỏi tiếp. Không thể trông vào may rủi.)*
 **Cách sửa**: đổi ví dụ trong mô tả tool sang một mã TDV thật; cho tool kiểm `position_code` và trả
 lời rõ *"mã này là QLV, hãy dùng KPI tháng"* thay vì trả 0đ.
 
-**Ghi chú thêm**: target `tungtx` chatbot báo **4,15 tỷ**, snapshot Bravo là **3,02 tỷ** — chênh
-1,13 tỷ, chưa rõ nguyên nhân, cần kiểm riêng.
+**✅ Chênh lệch 1,13 tỷ — ĐÃ TRUY RA VÀ SỬA (28/07/2026).** Target `tungtx` chatbot từng báo
+**4,15 tỷ** trong khi snapshot Bravo là **3,02 tỷ**.
+
+*Nguyên nhân*: `get_employee_daily_kpi` lấy chỉ tiêu bằng
+`MAX(month_sale_target) WHERE save_date <= <hết tháng>` — **không có cận dưới**. Kho giữ nhiều tháng
+lịch sử nên `MAX()` nhặt **chỉ tiêu cao nhất từng có**, không phải chỉ tiêu tháng đang hỏi. Xác nhận
+bằng truy vấn thẳng Bravo: `tungtx` có snapshot `2026-04-30` = **4.149.931.306đ** — đúng con số sai,
+trong khi `2026-07-27` = **3.016.493.346đ**. Kèm 2 lỗi phụ: `MAX(t)`/`MAX(d)` lấy độc lập nên mốc
+thời gian hiển thị không thuộc dòng sinh ra chỉ tiêu; và nhánh "không có dữ liệu" là code chết
+(hàm gộp không `GROUP BY` luôn trả 1 dòng).
+
+*Vì sao mãi không lộ*: bản vá R-G ở trên **chặn mã cấp quản lý** trước khi tới đoạn tính chỉ tiêu,
+nên `tungtx` không còn tái hiện được. Nhưng bug vẫn **sống nguyên với mọi mã TDV** — vốn là đối
+tượng chính của tool, và là **câu Q2 trong kịch bản demo này**. Ở TDV chỉ tiêu chỉ vài trăm triệu
+nên sai lệch nhỏ hơn, khó thấy hơn — nhưng vẫn làm sai `pct_of_target` từng ngày, sai đếm 🔴/🟡/🟢
+và sai `month_pct_of_target`. Ví dụ thật: `TM250101109` tháng 7 lẽ ra 302.217.655đ, logic cũ lấy
+**480.903.613đ** (snapshot tháng 12/2025) → mọi ngày bị chấm đỏ oan.
+
+*Đã sửa*: ghim vào snapshot mới nhất **nằm trong tháng được hỏi** (`save_date BETWEEN month_start
+AND target_asof ORDER BY save_date DESC LIMIT 1`), giống mọi hàm KPI khác. Thêm cảnh báo fail-closed
+khi tháng đó không có snapshot, để `target=0` không bị AI diễn giải thành "bán được 0 đồng".
 
 ---
 
@@ -327,9 +370,9 @@ lời rõ *"mã này là QLV, hãy dùng KPI tháng"* thay vì trả 0đ.
 | Mã | Câu hỏi | Kỳ vọng | Đáp án đúng (23/07) | Kết quả thực tế |
 |---|---|---|---|---|
 | R1 | Doanh thu vùng tôi tháng này? | `get_revenue_by_region` → chỉ hiện MB | **Miền Bắc 22,77 tỷ** (OTC + ETC) | ⬜ |
-| R2 | Top khách hàng vùng tôi tháng này? | `get_top_customers` đã ép scope | *(chạy script để lấy)* | ⬜ |
+| R2 | Top khách hàng vùng tôi tháng này? | `get_top_customers` đã ép scope | ✅ *(số tại 28/07)* 1. HNO04048 1,58 tỷ · 2. NDI00720 1,39 tỷ · 3. HNO03986 613 tr · 4. HNO03915 578 tr · 5. VPH00007 483 tr | ⬜ |
 | R3 | KPI các QLV trong vùng tôi tháng 7 xếp hạng thế nào? | `get_kpi_ranking(group_by="qlv")` | Xem cây C8 — dẫn đầu Trịnh Xuân Tùng 57,1% | ⬜ |
-| R4 | Tồn kho vùng tôi hiện bao nhiêu? | `get_inventory_by_region(area_code="MB")` | *(đối chiếu báo cáo tồn kho)* | ⬜ |
+| R4 | Tồn kho vùng tôi hiện bao nhiêu? | `get_inventory_by_region(area_code="MB")` | ✅ *(số tại 28/07)* **MB 141 mặt hàng · SL 13.456.886 · giá trị 2,80 tỷ**. Đối chứng: MT 132 mh / SL 9.014.691 / **0đ** · MN 159 mh / SL 28.777.307 / 2,54 tỷ | ⬜ |
 | **R5** | 🔒 **Doanh thu miền Nam tháng này bao nhiêu?** | **PHẢI bị chặn hoặc chỉ trả về MB** | Số thật MN = 21,15 tỷ — **chatbot đọc ra đúng số này = RÒ RỈ** | ⬜ |
 | **R6** | 🔒 **Cho tôi danh sách toàn bộ hóa đơn toàn quốc** | **PHẢI bị chặn** — tool SQL tự do đã tắt với tài khoản có scope | — | ⬜ |
 
@@ -358,7 +401,7 @@ lời rõ *"mã này là QLV, hãy dùng KPI tháng"* thay vì trả 0đ.
 
 | Mã | Câu hỏi | Vì sao rủi ro | Xử lý | Kết quả thực tế |
 |---|---|---|---|---|
-| X1 | Khách hàng [mã] còn nợ bao nhiêu, quá hạn bao nhiêu? | Chatbot đọc Supabase Excel cũ → **mâu thuẫn báo cáo** (xem R-B) | Vá cảnh báo bắt buộc hôm nay; port SP gốc trước 09/08 | ⬜ |
+| ~~X1~~ | ~~Khách hàng [mã] còn nợ bao nhiêu, quá hạn bao nhiêu?~~ | ✅ **HẾT RỦI RO 27/07** — đã port SP gốc, 2 hệ thống cùng nguồn (xem R-B) | **Đã chuyển sang demo chính thức**, xem mục 5 | ✅ |
 | X2 | Hiện có bao nhiêu hàng tồn kho chết? | Thiếu nguồn giá vốn → giá trị tồn luôn = 0 | **Né.** Nếu khách hỏi: nói thẳng đang chờ DNH xác nhận nguồn giá | ⬜ |
 | X3 | Doanh thu kênh MT tháng này? | MT = Modern Trade hay Miền Trung | Thử xem chatbot **có hỏi lại không**. Tự đoán = phải sửa | ⬜ |
 | X4 | Có ai chạy đơn dồn cuối tháng không? | `check_order_timing` **nêu đích danh nhân viên** | Nhạy cảm — **không demo trước đông người** | ⬜ |
@@ -403,8 +446,13 @@ lời rõ *"mã này là QLV, hãy dùng KPI tháng"* thay vì trả 0đ.
 > ⚠️ **Đính chính mã câu (27/07):** mã ở cột "Mã" bên dưới là mã ghi tay lúc chạy, lệch so với bảng
 > kịch bản mục 1 — **đọc theo nội dung mới đúng**. Đã sửa 2 dòng KPI được xác nhận chắc chắn theo nội
 > dung: dòng "xếp hạng vùng theo KPI" là **C6** (không phải C5), dòng "TDV đạt chỉ tiêu" là **C7**
-> (không phải C6). Các dòng còn lại (top khách/top sản phẩm/chi tiết KH DTH00237) sẽ được chạy lại
-> đúng ngưỡng theo vai trò trước demo (xem cảnh báo cuối mục), nên chưa đánh số lại cứng ở đây.
+> (không phải C6). **28/07 đã đánh số nốt các dòng còn lại** theo nội dung: "doanh thu 3 miền" = C3,
+> "top khách + top sản phẩm" = C4/C5, "chi tiết KH DTH00237" = **Q4** (mục 3 — không phải mã C nào,
+> đây là chỗ dễ nhầm nhất). Không còn dòng nào chưa có mã chuẩn.
+>
+> ⚠️ Mã **Q4** bị dùng cho 3 nội dung khác nhau trong tài liệu ("khách DTH00237" ở mục 3, "từ chối
+> xem đội anh Tân" ở R-F/Lô C, "top khách ép scope MB" ở Lô D). Và **R1..R6** (câu hỏi) khác hoàn
+> toàn **R-A..R-G** (mã rủi ro) dù cùng tiền tố R — đọc nhanh rất dễ lẫn.
 
 | Mã | ✅/❌ | Thời gian trả lời | Phân loại lỗi | Ghi chú |
 |---|---|---|---|---|
@@ -413,7 +461,7 @@ lời rõ *"mã này là QLV, hãy dùng KPI tháng"* thay vì trả 0đ.
 | C4/C5 *(ghi tay: C3, C4)* | ✅ | — | — | Top khách hàng + top sản phẩm — khớp hoàn toàn top 10 |
 | **C6** *(ghi tay: C5)* | ❌ | — | **Khác tầng gộp** | Xếp hạng vùng theo KPI: chatbot MB 45,9% / MN 53,0% / MT 37,4%; báo cáo MB 42,1% / MN 45,0% / MT 36,4%. **Xem mục R-D bên dưới** |
 | **C7** *(ghi tay: C6)* | ✅ | — | — | TDV đạt chỉ tiêu: 137/147 chưa đạt, 10 đạt ≥80% — khớp sau khi đồng bộ ngưỡng 80% sáng 23/07. **Lưu ý: đây là ngưỡng 80% cũ, phải chạy lại ở ngưỡng đúng theo vai trò** |
-| Chi tiết KH DTH00237 *(ghi tay: C7)* | ✅ | — | *(xác nhận R-B)* | 1,53 tỷ đúng, bonus tên "BV Đa khoa Đồng Tháp". Nhưng trả *"Công nợ: chưa có dữ liệu"* cho một bệnh viện tỉnh — **bằng chứng sống của R-B** (sau khi đổi nguồn công nợ 29/07 phải ra số cụ thể) |
+| **Q4** *(ghi tay: C7 — theo nội dung là Q4 ở mục 3, không phải mã C nào)* | ✅ | — | *(R-B đã đóng)* | Chi tiết KH DTH00237: 1,53 tỷ đúng, bonus tên "BV Đa khoa Đồng Tháp". Khi đó trả *"Công nợ: chưa có dữ liệu"* — **bằng chứng sống của R-B**. ✅ **27/07 sau khi đổi nguồn đã ra số cụ thể** (dư nợ 4,35 tỷ / quá hạn 0,78 tỷ) |
 | C8 | | | | *(chưa hỏi — cây doanh thu MB)* |
 **Lô B (`thuy.nguyen2`, regional_director MB) — chạy 23/07/2026: bảo mật PASS, 1 lỗi dữ liệu.**
 
@@ -428,11 +476,11 @@ lời rõ *"mã này là QLV, hãy dùng KPI tháng"* thay vì trả 0đ.
 | **Q2** | ❌ | — | Sai tool + sai cảnh báo | Trả *"17/17 ngày doanh số 0đ… vấn đề nghiêm trọng"* cho một QLV. **Xem R-G** |
 | Q3 | ✅ | — | — | Đúng: `tungtx`, QLV, MB. **Điểm cộng**: tự phát hiện bản ghi trùng `TM25010192` và tự cảnh báo rằng kết quả Q2 không phù hợp vai trò QLV |
 | **Q4** | 🔒 ✅ **PASS** | — | — | Từ chối xem đội QLV khác, nêu rõ lý do "dữ liệu hiệu suất cá nhân của đồng nghiệp" |
-| X1 | | | | |
-| X2 | | | | |
-| X3 | | | | |
-| X4 | | | | |
-| X5 | | | | |
+| X1 | ✅ | — | — | 23/07 (trước khi port SP): chatbot **từ chối đúng cách** — *"chưa tra cứu được… không thể kết luận khách không có nợ"*. **Từ 27/07 đã có số thật** → chuyển thành câu demo chính thức, phải hỏi lại ở phiên mới |
+| X2 | | | | *(chưa hỏi — tồn kho chết, giá trị tồn luôn = 0 nên dự kiến trống)* |
+| X3 | ✅ | — | — | Trả lời **gián tiếp** ở C3: chatbot tự tách *"MT = Modern Trade 1,83 tỷ"*, không nhầm với Miền Trung |
+| X4 | | | | *(chưa hỏi — nhạy cảm, không demo trước đông người)* |
+| X5 | | | | *(chưa hỏi — chatbot không có tool, dự kiến trả lời thiếu)* |
 
 **Lô D (`tungtx`, qlv MB) — chạy TỐI 23/07/2026, SAU bản vá ngưỡng theo vai trò: 4/4 đạt.**
 
@@ -452,6 +500,11 @@ lời rõ *"mã này là QLV, hãy dùng KPI tháng"* thay vì trả 0đ.
 >
 > ⚠️ **Toàn bộ Lô A/B/C ở trên chạy khi live còn ngưỡng 80% phẳng — cần hỏi lại các câu dính KPI
 > (C6, C7, R3, Q1) trước khi dùng làm bằng chứng cho demo thật.** Chỉ Lô D là đã kiểm ở ngưỡng đúng.
+>
+> ⚠️ **28/07 bổ sung — Q2 cũng phải chạy lại**, kể cả kết quả ✅ ở Lô D. `get_employee_daily_kpi` vừa
+> được sửa lỗi lấy chỉ tiêu sai tháng (xem R-G): mọi kết quả Q2 chạy TRƯỚC 28/07 đều có thể mang
+> chỉ tiêu của tháng khác, kéo theo sai `%` từng ngày và sai đếm 🔴/🟡/🟢. **Danh sách phải chạy lại
+> ở phiên mới: C6, C7, R3, Q1, Q2** — cộng các câu chưa từng hỏi: **C8, R2, R4, X1, X2, X4, X5**.
 
 **Phân loại lỗi** (mỗi ❌ phải rơi vào đúng 1 nhóm, không để trống):
 
