@@ -1,0 +1,19 @@
+[project]
+name = "dnh-portal"
+version = "1.0.0"
+description = "Dược Nam Hà Portal & AI Chatbot"
+requires-python = ">=3.9"
+dependencies = [
+    "fastapi>=0.100.0",
+    "uvicorn>=0.20.0",
+    "pydantic>=2.0",
+    "openai>=1.0.0",
+    "anthropic>=0.25.0",
+    "python-dotenv>=1.0.0",
+    "sqlalchemy>=2.0",
+    "psycopg2-binary>=2.9",
+    "pyyaml>=6.0",
+]
+
+[tool.vercel]
+entrypoint = "backend.main:app"

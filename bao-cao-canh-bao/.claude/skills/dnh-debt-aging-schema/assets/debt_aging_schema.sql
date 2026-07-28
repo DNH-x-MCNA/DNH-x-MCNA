@@ -1,0 +1,76 @@
+-- =====================================================================
+-- DNH Debt Aging Schema (T-SQL) — nguồn xác nhận: stored procedure gốc
+-- trên Bravo, [dbo].[usp_DeptAccDueDate_GetData] (NH_Report_TM,
+-- 172.16.0.26). Người dùng cung cấp toàn văn SP này 22/07/2026 — đây là
+-- nguồn CHÂN LÝ cho cách DNH tự tính công nợ/tuổi nợ trong hệ thống Bravo
+-- của họ, không phải suy đoán từ phía MCNA.
+-- =====================================================================
+
+-- ---------------------------------------------------------------------
+-- 1. NGÀY CƠ SỞ TÍNH TUỔI NỢ (date basis) — ĐÃ XÁC NHẬN, không còn
+--    provisional. Khớp CHÍNH XÁC với config.yaml debt_aging.date_basis
+--    = "doc_date_plus_term" đã dùng tạm trước đó — SP gốc xác nhận đây
+--    đúng là công thức DNH tự dùng nội bộ, không phải giả định của MCNA.
+-- ---------------------------------------------------------------------
+-- Trong SP: [DueDate] trên BRV_HTTDuDK/BRVSX_HTTDuDK là SỐ NGÀY công nợ
+-- (không phải 1 ngày cụ thể) — cộng vào DocDate (ngày hoá đơn) ra ngày
+-- đến hạn thật (DateDue). Số ngày quá hạn = ngày báo cáo trừ DateDue.
+--
+--   DateDue = DATEADD(day, [DueDate], [DocDate])
+--   OverDue = CASE WHEN CloseBal < 0 THEN -1  -- ứng trước/dư có, chưa đến hạn
+--                  ELSE IIF(DateDue > @ReportDate OR ISNULL([DueDate],0) = 0, 0,
+--                           DATEDIFF(Day, DateDue, @ReportDate))
+--             END
+
+-- ---------------------------------------------------------------------
+-- 2. BUCKET — SP có 2 bộ kỳ hạn song song, tham số hoá qua @_Period1/
+--    @_Period2 (mặc định 7 và 15 ngày/kỳ). MCNA hiện dùng bộ 15 ngày/kỳ
+--    (CloseBal5-8) làm chuẩn cho chatbot + alert Teams (chốt 16/07/2026,
+--    xác nhận lại 22/07/2026 để KHÔNG làm lệch số liệu đang hiển thị
+--    cho DNH). Bộ 7 ngày/kỳ (CloseBal0-4) vẫn tồn tại trong SP gốc,
+--    dùng nếu sau này cần báo cáo chi tiết/cảnh báo sớm hơn.
+-- ---------------------------------------------------------------------
+
+-- Bộ ĐANG DÙNG (15 ngày/kỳ, @_Period2 mặc định = 15):
+--   CloseBal0 (Trong hạn)     OverDue = 0
+--   CloseBal5 (1-15 ngày)     OverDue BETWEEN 1            AND 1*15
+--   CloseBal6 (16-30 ngày)    OverDue BETWEEN 1+15         AND 2*15
+--   CloseBal7 (31-45 ngày)    OverDue BETWEEN 1+2*15       AND 3*15
+--   CloseBal8 (>45 ngày)      OverDue > 3*15
+--   SoonDue   (chưa đến hạn)  OverDue < 0 (CloseBal âm — khách ứng trước/dư có)
+
+-- Bộ THAM KHẢO (7 ngày/kỳ, @_Period1 mặc định = 7, chưa dùng — giữ lại
+-- để đối chiếu nếu sau này cần đổi độ chi tiết):
+--   CloseBal0 (Trong hạn)     OverDue = 0
+--   CloseBal1 (1-7 ngày)      OverDue BETWEEN 1           AND 1*7
+--   CloseBal2 (8-14 ngày)     OverDue BETWEEN 1+7         AND 2*7
+--   CloseBal3 (15-21 ngày)    OverDue BETWEEN 1+2*7       AND 3*7
+--   CloseBal4 (>21 ngày)      OverDue > 3*7
+
+-- ---------------------------------------------------------------------
+-- 3. NGƯỠNG MÀU ĐỀ XUẤT (xanh/vàng/đỏ) — dựa trên bộ 15 ngày/kỳ đang
+--    dùng, khớp với ngưỡng alert A1 sẵn có (check_debt_aging_migration_
+--    alert, src/alerts.py — cảnh báo khách MỚI rơi vào nhóm >45 ngày):
+-- ---------------------------------------------------------------------
+--   Trong hạn / chưa đến hạn (OverDue <= 0)  -> Xanh dương
+--   1-15 ngày quá hạn                         -> Xanh lá   (chấp nhận được)
+--   16-30 ngày quá hạn                        -> Vàng      (cần nhắc khách/TDV)
+--   31-45 ngày quá hạn                        -> Cam       (cần leo thang QLV)
+--   >45 ngày quá hạn                          -> Đỏ        (nợ xấu tiềm ẩn, khớp trigger A1)
+
+-- ---------------------------------------------------------------------
+-- 4. CÁC QUY TẮC NGHIỆP VỤ KHÁC RÚT RA TỪ SP (không được bỏ qua khi
+--    viết lại logic tương đương ở nơi khác, vd query trên mart/Postgres):
+-- ---------------------------------------------------------------------
+-- - Chỉ tính công nợ tài khoản LIKE '131%' (khoản phải thu khách hàng).
+-- - CloseBal < 0 (khách ứng trước/dư có) KHÔNG được tính là quá hạn —
+--   OverDue gán cứng = -1 (SoonDue), không đi qua công thức DATEDIFF.
+-- - Có bước loại trừ cứng 2 CustomerId đặc thù (618322/ClassCode='TM',
+--   5254041/ClassCode='SX') — dữ liệu nghiệp vụ đặc biệt của DNH, không
+--   phải bug — GIỮ NGUYÊN loại trừ này nếu tái tạo logic tương đương.
+-- - Prepayment (ứng trước, @_IsPrepaymentInclude=1 mặc định) được gộp
+--   vào cùng bucket tuổi nợ, giá trị luôn âm (CloseBal = -Amount) — vì
+--   vậy ảnh hưởng đúng vào SoonDue chứ không lẫn vào các bucket dương.
+-- - Có 2 ClassCode song song: 'TM' (OTC, dùng BRV_HTTDuDK/BRV_KhachHang)
+--   và 'SX' (ETC, dùng BRVSX_HTTDuDK/BRVSX_KhachHang) — luôn xử lý cả 2
+--   nhánh, không giả định chỉ có 1 kênh.
