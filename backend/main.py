@@ -206,7 +206,7 @@ def chat(req: ChatRequest, user: dict = Depends(require_user)):
         scope_channel = user.get("scope_channel")
         result = ask(req.question, session_id=req.session_id, username=user["username"],
                      scope_area_code=scope_area_code, scope_employee_code=scope_employee_code,
-                     scope_channel=scope_channel)
+                     scope_channel=scope_channel, scope_role=user["role"])
         register_session(req.session_id, user["username"], req.question)
     except HTTPException:
         raise
