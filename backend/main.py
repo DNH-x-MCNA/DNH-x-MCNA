@@ -1,95 +1,67 @@
-# -*- coding: utf-8 -*-
-"""FastAPI backend cho AI Chatbot DNH - Phase 2."""
 import os
-import threading
-import time
-from fastapi import Depends, FastAPI, HTTPException, Header
-from fastapi.middleware.cors import CORSMiddleware
+import sys
+import json
+import datetime as dt
+from collections import defaultdict
+from fastapi import FastAPI, HTTPException, Header, Depends, Query
 from pydantic import BaseModel
+from typing import Optional, List, Dict, Any
 
-
-def load_env():
-    env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
-    if os.path.exists(env_path):
-        for line in open(env_path, encoding="utf-8"):
-            line = line.strip()
-            if line and not line.startswith("#") and "=" in line:
-                k, v = line.split("=", 1)
-                os.environ.setdefault(k.strip(), v.strip())
-load_env()
-
-from nl2sql import ask  # noqa: E402  (phai load_env truoc khi import - nl2sql doc ANTHROPIC_API_KEY luc goi ham)
-from conversation_memory import (  # noqa: E402
-    load_history, clear_session, register_session, list_sessions, get_session_owner,
+from auth import (
+    init_schema as init_auth_schema,
+    verify_login,
+    create_session,
+    get_user_by_session,
+    delete_session,
+    get_name_by_username,
 )
-import auth  # noqa: E402
-
-auth.init_schema()
-
-app = FastAPI(title="DNH AI Chatbot API")
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        "https://dnh-bot.vercel.app",
-    ],
-    allow_methods=["*"],
-    allow_headers=["*"],
+from conversation_memory import (
+    register_session,
+    list_sessions,
+    delete_session as delete_conversation_session,
+    get_session_history,
 )
+from nl2sql import ask
 
-BACKEND_API_KEY = os.environ.get("BACKEND_API_KEY")
+init_auth_schema()
 
-# === Gioi han so cau hoi / phut / nguoi (diem #6 gop y, 22/07/2026) ===
-# Moi cau hoi co the chay toi MAX_TOOL_ROUNDS=8 vong goi LLM -> 1 nguoi spam lien tuc co the doi
-# chi phi token len rat nhanh (dung moi lo anh Long neu o hop 16/07: chi phi API khi 10-20 nguoi
-# dung dong thoi). Cua so truot don gian, luu trong bo nho tien trinh: backend chay 1 tien trinh
-# uvicorn duy nhat (xem run_supervisor.ps1, khong dung --workers) nen khong can Redis.
-CHAT_RATE_LIMIT_PER_MIN = int(os.environ.get("CHAT_RATE_LIMIT_PER_MIN", "10"))
-_rate_lock = threading.Lock()
-_rate_hits: dict[str, list[float]] = {}
+app = FastAPI(title="DNH AI Chatbot API", version="1.0.0")
 
-
-def _check_rate_limit(username: str):
-    """Chan neu user vuot qua CHAT_RATE_LIMIT_PER_MIN cau trong 60 giay gan nhat. Dat = 0 de tat han.
-    Endpoint /chat chay trong threadpool cua FastAPI (ham sync) nen phai khoa khi sua dict dung chung."""
-    if CHAT_RATE_LIMIT_PER_MIN <= 0:
-        return
-    now = time.time()
-    with _rate_lock:
-        hits = [t for t in _rate_hits.get(username, []) if now - t < 60]
-        if len(hits) >= CHAT_RATE_LIMIT_PER_MIN:
-            wait = int(60 - (now - hits[0])) + 1
-            raise HTTPException(
-                429,
-                f"Ban dang hoi qua nhanh (toi da {CHAT_RATE_LIMIT_PER_MIN} cau/phut). "
-                f"Vui long thu lai sau {wait} giay.")
-        hits.append(now)
-        _rate_hits[username] = hits
-        # Don dep dinh ky de dict khong phinh mai theo so tai khoan da tung dung.
-        if len(_rate_hits) > 500:
-            for u in [u for u, ts in _rate_hits.items() if not any(now - t < 60 for t in ts)]:
-                _rate_hits.pop(u, None)
+API_KEY = os.getenv("BACKEND_API_KEY", "").strip()
 
 
 def require_api_key(x_api_key: str = Header(default=None)):
-    """Chan cac request khong kem dung API key (danh cho frontend Vercel qua tunnel cong khai) -
-    hang rao co ban chong bot/scan tu dong, KHONG thay the cho kiem soat truy cap that (vd Cloudflare
-    Access theo email DNH) neu can gioi han chi nhan vien cong ty duoc dung."""
-    if BACKEND_API_KEY and x_api_key != BACKEND_API_KEY:
-        raise HTTPException(401, "Thieu hoac sai API key")
+    if API_KEY and x_api_key != API_KEY:
+        raise HTTPException(401, "API Key khong hop le")
 
 
 def require_user(authorization: str = Header(default=None)) -> dict:
-    """Xac thuc nguoi dung qua session token (Authorization: Bearer <token>) - day la lop bao mat
-    THAT (khac API key chi la hang rao chong bot). Tra ve dict {id,username,name,role,scope_value}."""
     if not authorization or not authorization.startswith("Bearer "):
-        raise HTTPException(401, "Chua dang nhap")
-    token = authorization[len("Bearer "):]
-    user = auth.get_user_by_session(token)
+        raise HTTPException(401, "Yeu cau dang nhap (thieu Bearer token)")
+    token = authorization.split(" ", 1)[1]
+    user = get_user_by_session(token)
     if not user:
-        raise HTTPException(401, "Phien dang nhap khong hop le hoac da het han")
+        raise HTTPException(401, "Phien dang nhap het han hoac khong hop le")
     return user
+
+
+_USER_LAST_REQUEST = {}
+RATE_LIMIT_INTERVAL_SEC = 2.0
+
+
+def _check_rate_limit(username: str):
+    now = dt.datetime.now()
+    last = _USER_LAST_REQUEST.get(username)
+    if last and (now - last).total_seconds() < RATE_LIMIT_INTERVAL_SEC:
+        raise HTTPException(429, "Thao tac qua nhanh, vui long cho 2 giay")
+    _USER_LAST_REQUEST[username] = now
+
+
+def _require_session_access(session_id: str, user: dict):
+    from conversation_memory import get_session_owner
+    owner = get_session_owner(session_id)
+    if owner is not None and owner != user["username"] and user["role"] != "c_level":
+        raise HTTPException(403, "Khong co quyen truy cap cuoc tro chuyen nay")
 
 
 class LoginRequest(BaseModel):
@@ -99,29 +71,41 @@ class LoginRequest(BaseModel):
 
 class LoginResponse(BaseModel):
     token: str
-    name: str | None
+    username: str
+    name: Optional[str]
     role: str
-    scope_value: str | None
+    scope_value: Optional[str]
+    scope_channel: Optional[str]
 
 
 class UserInfo(BaseModel):
     username: str
-    name: str | None
+    name: Optional[str]
     role: str
-    scope_value: str | None
+    scope_value: Optional[str]
+    scope_channel: Optional[str]
 
 
 class ChatRequest(BaseModel):
     question: str
-    session_id: str = "default"  # 1 session = 1 phien chat webapp, dung de nho ngu canh
+    session_id: str
 
 
 class ChatResponse(BaseModel):
     answer: str
     sql_used: list[str]
-    columns: list[str] | None = None
-    rows: list | None = None
-    row_count: int | None = None
+    columns: Optional[list[str]] = None
+    rows: Optional[list[list[Any]]] = None
+    row_count: Optional[int] = None
+
+
+class SessionSummary(BaseModel):
+    session_id: str
+    title: Optional[str]
+    owner_username: str
+    owner_name: Optional[str]
+    created_at: str
+    updated_at: str
 
 
 class HistoryMessage(BaseModel):
@@ -131,87 +115,83 @@ class HistoryMessage(BaseModel):
 
 @app.get("/health")
 def health():
-    return {"status": "ok"}
+    return {"status": "ok", "timestamp": dt.datetime.now().isoformat()}
 
 
 @app.post("/auth/login", response_model=LoginResponse, dependencies=[Depends(require_api_key)])
 def login(req: LoginRequest):
-    user = auth.verify_login(req.username, req.password)
+    user = verify_login(req.username, req.password)
     if not user:
         raise HTTPException(401, "Tai khoan hoac mat khau khong dung")
-    token = auth.create_session(user["id"])
-    return LoginResponse(token=token, name=user["name"], role=user["role"], scope_value=user["scope_value"])
+    token = create_session(user["id"])
+    return LoginResponse(
+        token=token,
+        username=user["username"],
+        name=user["name"],
+        role=user["role"],
+        scope_value=user["scope_value"],
+        scope_channel=user["scope_channel"],
+    )
 
 
 @app.post("/auth/logout", dependencies=[Depends(require_api_key)])
 def logout(authorization: str = Header(default=None)):
     if authorization and authorization.startswith("Bearer "):
-        auth.delete_session(authorization[len("Bearer "):])
-    return {"status": "logged_out"}
+        token = authorization.split(" ", 1)[1]
+        delete_session(token)
+    return {"ok": True}
 
 
 @app.get("/auth/me", response_model=UserInfo, dependencies=[Depends(require_api_key)])
 def me(user: dict = Depends(require_user)):
-    return UserInfo(username=user["username"], name=user["name"], role=user["role"], scope_value=user["scope_value"])
-
-
-def _require_session_access(session_id: str, user: dict):
-    """Chan truy cap session cua nguoi khac - c_level xem duoc tat ca, con lai CHI xem duoc session
-    cua CHINH MINH. owner=None (session cu tao truoc khi co bang sessions) tam thoi cho qua de khong
-    vo du lieu cu."""
-    owner = get_session_owner(session_id)
-    if owner is not None and owner != user["username"] and user["role"] != "c_level":
-        raise HTTPException(403, "Ban khong co quyen xem cuoc tro chuyen nay")
+    return UserInfo(
+        username=user["username"],
+        name=user["name"],
+        role=user["role"],
+        scope_value=user["scope_value"],
+        scope_channel=user["scope_channel"],
+    )
 
 
 @app.get("/history/{session_id}", response_model=list[HistoryMessage], dependencies=[Depends(require_api_key)])
 def get_history(session_id: str, user: dict = Depends(require_user)):
-    """Lay lai lich su hoi thoai cua 1 session - de frontend hien thi lai khi mo lai trang."""
     _require_session_access(session_id, user)
-    return [HistoryMessage(**m) for m in load_history(session_id, max_turns=20)]
-
-
-class SessionSummary(BaseModel):
-    session_id: str
-    title: str | None
-    owner_username: str
-    owner_name: str | None
-    created_at: str
-    updated_at: str
+    return get_session_history(session_id)
 
 
 @app.get("/sessions", response_model=list[SessionSummary], dependencies=[Depends(require_api_key)])
 def get_sessions(user: dict = Depends(require_user)):
-    """Danh sach cuoc tro chuyen (kieu ChatGPT) - c_level thay TAT CA (kem ten chu so huu), nguoi
-    khac CHI thay cua chinh minh."""
     rows = list_sessions(None if user["role"] == "c_level" else user["username"])
     out = []
     for r in rows:
-        owner_name = user["name"] if r["owner_username"] == user["username"] else auth.get_name_by_username(r["owner_username"])
-        out.append(SessionSummary(owner_name=owner_name, **r))
+        owner_name = get_name_by_username(r["owner_username"]) if user["role"] == "c_level" else user.get("name")
+        out.append(SessionSummary(
+            session_id=r["session_id"],
+            title=r["title"],
+            owner_username=r["owner_username"],
+            owner_name=owner_name,
+            created_at=r["created_at"],
+            updated_at=r["updated_at"],
+        ))
     return out
 
 
 @app.delete("/sessions/{session_id}", dependencies=[Depends(require_api_key)])
 def delete_session_endpoint(session_id: str, user: dict = Depends(require_user)):
-    """Xoa han 1 cuoc tro chuyen - CHI chu so huu moi xoa duoc (c_level xem duoc cua nguoi khac
-    nhung KHONG tu y xoa, an toan hon)."""
+    from conversation_memory import get_session_owner
     owner = get_session_owner(session_id)
     if owner is not None and owner != user["username"]:
-        raise HTTPException(403, "Ban khong co quyen xoa cuoc tro chuyen nay")
-    clear_session(session_id)
-    return {"status": "deleted"}
+        raise HTTPException(403, "Chi chu so huu moi co quyen xoa cuoc tro chuyen nay")
+    delete_conversation_session(session_id)
+    return {"ok": True}
 
 
 @app.post("/clear/{session_id}", dependencies=[Depends(require_api_key)])
 def clear(session_id: str, user: dict = Depends(require_user)):
-    """Xoa lich su hoi thoai cua 1 session (giu lai de tuong thich nguoc - frontend moi dung
-    DELETE /sessions/{id} thay the)."""
-    owner = get_session_owner(session_id)
-    if owner is not None and owner != user["username"]:
-        raise HTTPException(403, "Ban khong co quyen xoa cuoc tro chuyen nay")
-    clear_session(session_id)
-    return {"status": "cleared"}
+    _require_session_access(session_id, user)
+    from conversation_memory import clear_session_history
+    clear_session_history(session_id)
+    return {"ok": True}
 
 
 @app.post("/chat", response_model=ChatResponse, dependencies=[Depends(require_api_key)])
@@ -221,17 +201,8 @@ def chat(req: ChatRequest, user: dict = Depends(require_user)):
     _check_rate_limit(user["username"])
     _require_session_access(req.session_id, user)
     try:
-        # regional_director/qlv bi gioi han xem theo vung (scope_value = MB/MT/MN) - c_level khong
-        # gioi han gi (scope_area_code=None). Enforce THAT xay ra o report_templates.py (tang code,
-        # khong phu thuoc AI), day chi la buoc suy ra scope tu tai khoan da dang nhap.
         scope_area_code = user["scope_value"] if user["role"] in ("regional_director", "qlv") else None
-        # scope_employee_code: CHI danh cho qlv (khong danh cho regional_director - ho la cap tren
-        # nhieu QLV nen duoc xem het ca vung nhu thiet ke ban dau) - gioi han bao cao lo hieu suat CA
-        # NHAN dong nghiep (get_revenue_tree/get_kpi_ranking) chi con doi cua rieng ho, khong thay
-        # KPI ca nhan cua cac QLV khac trong cung vung.
         scope_employee_code = user["employee_code"] if user["role"] == "qlv" else None
-        # scope_channel: doc lap voi role/scope_area_code - CHI gioi han theo kenh (vd 'OTC') khi tai
-        # khoan duoc gan rieng, ap dung duoc cho BAT KY role nao (vd c_level nhung chi duoc xem OTC).
         scope_channel = user.get("scope_channel")
         result = ask(req.question, session_id=req.session_id, username=user["username"],
                      scope_area_code=scope_area_code, scope_employee_code=scope_employee_code,
@@ -243,8 +214,6 @@ def chat(req: ChatRequest, user: dict = Depends(require_user)):
         raise HTTPException(500, f"Loi he thong: {str(e)[:300]}")
 
     lr = result.get("last_result") or {}
-    # last_result co 2 dang: ket qua tool bao cao chuan ({"ok","result"}) hoac raw SQL ({"ok","columns","rows","row_count"}).
-    # Chi tra ve columns/rows/row_count khi la dang raw SQL (co du 3 truong nay).
     is_raw_sql = lr.get("ok") and "columns" in lr
     return ChatResponse(
         answer=result["answer"],
@@ -253,6 +222,150 @@ def chat(req: ChatRequest, user: dict = Depends(require_user)):
         rows=lr.get("rows") if is_raw_sql else None,
         row_count=lr.get("row_count") if is_raw_sql else None,
     )
+
+
+@app.get("/audit-logs", dependencies=[Depends(require_api_key)])
+def get_audit_logs_dashboard(
+    days: int = Query(default=30, ge=1, le=365),
+    limit: int = Query(default=200, ge=1, le=1000),
+    user_filter: Optional[str] = None,
+    user: dict = Depends(require_user)
+):
+    """
+    Dashboard Audit Log & Chi phi AI truc quan khong can hoi AI - danh rieng cho Ban Dieu Hanh (C-Level / Super Admin).
+    """
+    if user["role"] != "c_level":
+        raise HTTPException(403, "Chi tai khoan C-Level / Ban Dieu Hanh moi co quyen xem Dashboard Audit Log")
+
+    _LOGS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs")
+    AUDIT_LOG_PATH = os.path.join(_LOGS_DIR, "audit_log.jsonl")
+    COST_LOG_PATH = os.path.join(_LOGS_DIR, "cost_log.jsonl")
+
+    cutoff = dt.datetime.now() - dt.timedelta(days=days) if days else None
+
+    # 1. Read audit logs
+    audit_entries = []
+    if os.path.exists(AUDIT_LOG_PATH):
+        with open(AUDIT_LOG_PATH, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    audit_entries.append(json.loads(line))
+                except Exception:
+                    continue
+
+    # 2. Read cost logs mapped by session_id
+    cost_by_session = defaultdict(lambda: {"cost_usd": 0.0, "input_tokens": 0, "output_tokens": 0, "total_tokens": 0, "calls": 0})
+    if os.path.exists(COST_LOG_PATH):
+        with open(COST_LOG_PATH, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    c = json.loads(line)
+                    sid = c.get("session_id")
+                    if sid:
+                        cost = c.get("cost_usd", 0.0) or 0.0
+                        it = c.get("input_tokens", 0) or 0
+                        ot = c.get("output_tokens", 0) or 0
+                        tt = c.get("total_tokens", 0) or (it + ot)
+                        cost_by_session[sid]["cost_usd"] += cost
+                        cost_by_session[sid]["input_tokens"] += it
+                        cost_by_session[sid]["output_tokens"] += ot
+                        cost_by_session[sid]["total_tokens"] += tt
+                        cost_by_session[sid]["calls"] += 1
+                except Exception:
+                    continue
+
+    # 3. Filter entries & aggregate stats per user
+    filtered_logs = []
+    user_stats = defaultdict(lambda: {"query_count": 0, "input_tokens": 0, "output_tokens": 0, "total_tokens": 0, "cost_usd": 0.0})
+    total_cost_usd = 0.0
+    total_input_tokens = 0
+    total_output_tokens = 0
+
+    target_user_str = (user_filter or "").strip().lower()
+
+    for e in audit_entries:
+        uname = e.get("username") or "unknown"
+        if target_user_str and target_user_str not in ("all", ""):
+            if target_user_str not in uname.lower():
+                continue
+        if cutoff:
+            try:
+                if dt.datetime.fromisoformat(e["ts"]) < cutoff:
+                    continue
+            except Exception:
+                pass
+
+        sid = e.get("session_id")
+        session_cost_data = cost_by_session.get(sid, {})
+        c_usd = session_cost_data.get("cost_usd", 0.0)
+        c_it = session_cost_data.get("input_tokens", 0)
+        c_ot = session_cost_data.get("output_tokens", 0)
+        c_tt = session_cost_data.get("total_tokens", c_it + c_ot)
+
+        display_name = get_name_by_username(uname) or uname
+
+        user_stats[uname]["query_count"] += 1
+        user_stats[uname]["input_tokens"] += c_it
+        user_stats[uname]["output_tokens"] += c_ot
+        user_stats[uname]["total_tokens"] += c_tt
+        user_stats[uname]["cost_usd"] += c_usd
+        user_stats[uname]["display_name"] = display_name
+
+        total_cost_usd += c_usd
+        total_input_tokens += c_it
+        total_output_tokens += c_ot
+
+        filtered_logs.append({
+            "ts": e.get("ts"),
+            "username": uname,
+            "user_name": display_name,
+            "question": e.get("question"),
+            "sql": e.get("sql"),
+            "status": e.get("status", "success"),
+            "duration_ms": e.get("duration_ms"),
+            "input_tokens": c_it,
+            "output_tokens": c_ot,
+            "total_tokens": c_tt,
+            "cost_usd": round(c_usd, 6),
+            "cost_vnd": round(c_usd * 25400.0, 2)
+        })
+
+    filtered_logs.sort(key=lambda x: x.get("ts", ""), reverse=True)
+    recent_logs = filtered_logs[:limit]
+
+    user_breakdown = []
+    for uname, s in sorted(user_stats.items(), key=lambda x: -x[1]["cost_usd"]):
+        user_breakdown.append({
+            "username": uname,
+            "user_name": s.get("display_name", uname),
+            "query_count": s["query_count"],
+            "input_tokens": s["input_tokens"],
+            "output_tokens": s["output_tokens"],
+            "total_tokens": s["total_tokens"],
+            "cost_usd": round(s["cost_usd"], 6),
+            "cost_vnd": round(s["cost_usd"] * 25400.0, 2)
+        })
+
+    return {
+        "summary": {
+            "total_cost_usd": round(total_cost_usd, 6),
+            "total_cost_vnd": round(total_cost_usd * 25400.0, 2),
+            "total_input_tokens": total_input_tokens,
+            "total_output_tokens": total_output_tokens,
+            "grand_total_tokens": total_input_tokens + total_output_tokens,
+            "total_queries": len(filtered_logs),
+            "unique_users_count": len(user_stats),
+            "days": days
+        },
+        "user_breakdown": user_breakdown,
+        "logs": recent_logs
+    }
 
 
 if __name__ == "__main__":
