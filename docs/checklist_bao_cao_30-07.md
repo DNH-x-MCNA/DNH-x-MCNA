@@ -1,6 +1,6 @@
 # Checklist chuẩn bị buổi báo cáo tiến độ 30/07/2026
 
-Báo cáo chính: [`bao_cao_tuan_27-31-07.md`](bao_cao_tuan_27-31-07.md) — số liệu trong đó chốt đến
+Báo cáo chính: [`bao_cao_tien_do_16-30-07.md`](bao_cao_tien_do_16-30-07.md) · kỳ **16/07 → 30/07** (2 tuần, kể từ họp 16/07) — số liệu chốt đến
 **28/07**, cần chạy lại để lấy số của ngày báo cáo.
 
 ---
@@ -89,5 +89,7 @@ hiện ở nghiệm thu tháng 9.
   con số gần như bằng 0 — đúng về số học nhưng dễ gây hiểu sai.
 - **Chi phí AI sẽ tăng ~50% sau 31/08.** Nêu chủ động, kèm việc MCNA đang tối ưu phần dữ liệu nạp vào
   để bù lại. Đừng để khách thấy con số thấp hôm nay rồi bất ngờ về sau.
-- **Hai lỗ hổng phân quyền tuần này do MCNA tự tìm ra và tự sửa**, không phải khách phát hiện — nên
-  trình bày như bằng chứng của quy trình tự rà soát, không phải sự cố.
+- **Cả 3 lỗ hổng phân quyền do MCNA tự tìm ra và tự sửa**, không phải khách phát hiện — nên trình bày
+  như bằng chứng của quy trình tự rà soát, không phải sự cố.
+- **Kỳ báo cáo là 2 tuần (16/07 → 30/07)**, không phải 1 tuần. Nếu khách nhớ mốc họp trước là 16/07 thì
+  con số "9 lỗi · 3 lỗ hổng" là tổng của cả kỳ, đúng như trình bày trong báo cáo.

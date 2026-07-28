@@ -400,12 +400,13 @@ công ty).
 - `10:48 tung.trinh` chỉ thấy *lịch sử/chi phí cá nhân*, `dnh` thấy toàn công ty → **R-I** phân quyền đúng
 - Tổng chi phí hiện **$13,80** thay vì `$0` → bản vá `session_id` đã nối được `audit_log` ↔ `cost_log`
 
-> ⚠️ **Còn một bản sao của lỗi này ở tầng giao diện**: `src/app/page.tsx` xác định `isCLevel` bằng
-> `username === "dnh"` bên cạnh `role`. Ở frontend thì nhẹ hơn nhiều (chỉ ẩn/hiện nút, quyền thật đã
-> chặn ở backend), nhưng vẫn nên đổi sang chỉ dựa vào `role`.
+**Bản sao ở tầng giao diện — đã sửa cùng ngày.** `src/app/page.tsx` xác định `isCLevel` bằng
+`username === "dnh"` bên cạnh `role`, tức thêm tài khoản tên `dnh.marketing` là tự nhiên thấy nút xem
+chi phí toàn công ty. Hậu quả nhẹ hơn backend nhiều (chỉ ẩn/hiện nút, quyền thật đã chặn ở tầng
+`scope_role`) nhưng vẫn đã đổi sang **chỉ dựa vào `role`**, đồng bộ cả bản trong `bao-cao-canh-bao/`.
 
-> ❓ **Cần DNH xác nhận**: dashboard này cho C-Level xem **câu hỏi của mọi nhân viên**. Kỹ thuật đã an
-> toàn, nhưng mức độ giám sát đó có được DNH đồng ý không?
+> ✅ **DNH đã đồng ý (28/07/2026)**: C-Level được xem lịch sử câu hỏi của **mọi nhân viên** qua
+> dashboard này. Không cần giới hạn thêm.
 
 ---
 
