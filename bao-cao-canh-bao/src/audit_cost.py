@@ -28,13 +28,21 @@ USD_TO_VND_RATE = 25400.0
 
 # Pricing table per 1M tokens (USD)
 MODEL_PRICING = {
+    # Mức giá ưu đãi áp dụng đến hết ngày 31/08/2026: $2.00 / 1M input, $10.00 / 1M output
+    "claude-sonnet-5": {"input": 2.00, "output": 10.00},
+    "claude-3-5-sonnet": {"input": 2.00, "output": 10.00},
     "gemini-1.5-flash": {"input": 0.075, "output": 0.30},
     "gemini-1.5-pro": {"input": 1.25, "output": 5.00},
     "gemini-2.0-flash": {"input": 0.10, "output": 0.40},
-    "claude-3-5-sonnet": {"input": 3.00, "output": 15.00},
     "gpt-4o": {"input": 2.50, "output": 10.00},
     "gpt-4o-mini": {"input": 0.15, "output": 0.60},
     "default": {"input": 0.10, "output": 0.40}
+}
+
+# Mức giá tiêu chuẩn áp dụng sau 31/08/2026: $3.00 / 1M input, $15.00 / 1M output
+POST_PROMO_PRICING = {
+    "claude-sonnet-5": {"input": 3.00, "output": 15.00},
+    "claude-3-5-sonnet": {"input": 3.00, "output": 15.00},
 }
 
 ALLOWED_ROLES_FOR_AUDIT = {"SUPER_ADMIN", "C_LEVEL", "CEO", "CFO", "COO"}
