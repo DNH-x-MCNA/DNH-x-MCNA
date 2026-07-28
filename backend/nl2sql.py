@@ -356,16 +356,13 @@ TEMPLATE_TOOLS = [
     },
     {
         "name": "get_audit_log",
-        "description": "Lich su truy van (cau hoi, SQL/bao cao da chay, ket qua) va token/chi phi AI "
-                        "CUA CHINH NGUOI DANG HOI - dung khi nguoi dung hoi 'lich su truy van cua toi', "
-                        "'toi da hoi nhung gi gan day', 'toi da ton bao nhieu token/chi phi'. CHI tra ve "
-                        "du lieu cua tai khoan dang dang nhap (server tu dong gan username, KHONG the "
-                        "xem lich su nguoi khac du truyen tham so gi).",
+        "description": "Lich su truy van va token/chi phi AI quy doi VND/USD. Void tai khoan C-Level hoac Admin: ho tro xem BÁO CÁO CHI PHÍ AI TOÀN CÔNG TY hoac loc theo nguoi dung (target_username). Voi tai khoan QLV/TDV: xem chi phi va lich su ca nhan.",
         "input_schema": {
             "type": "object",
             "properties": {
                 "days": {"type": "integer", "description": "So ngay gan nhat can xem, mac dinh 7"},
                 "limit": {"type": "integer", "description": "So dong lich su gan nhat toi da tra ve, mac dinh 30"},
+                "target_username": {"type": "string", "description": "Ten tai khoan nguoi dung can loc (chi danh cho C-Level/Admin), hoac 'all' de xem toàn cong ty"},
             },
             "required": [],
         },
