@@ -719,7 +719,7 @@ def ask(question: str, session_id: str = "default", username: str = None, scope_
                     db = RAW_SQL_TOOLS[tu.name]
                     sql = tu.input.get("sql", "")
                     sql_used.append(f"[{db}] {sql}")
-                    result = run_query(sql, question=question, db=db, username=username)
+                    result = run_query(sql, question=question, db=db, username=username, session_id=session_id)
                     last_result = result
                     last_tool_used = (tu.name, str(tu.input))
                     if db == "local" and result["ok"]:
@@ -728,7 +728,7 @@ def ask(question: str, session_id: str = "default", username: str = None, scope_
                                 "row_count": result["row_count"]} if result["ok"] else {"error": result["error"]})
             else:
                 sql_used.append(f"[bao cao chuan] {tu.name}({tu.input})")
-                tresult = call_template(tu.name, tu.input, question=question, username=username,
+                tresult = call_template(tu.name, tu.input, question=question, username=username, session_id=session_id,
                                          scope_area_code=scope_area_code, scope_employee_code=scope_employee_code,
                                          scope_channel=scope_channel)
                 last_result = tresult
