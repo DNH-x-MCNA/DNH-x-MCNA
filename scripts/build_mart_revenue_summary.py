@@ -47,9 +47,16 @@ CREATE TABLE IF NOT EXISTS mart_layer.mart_revenue_summary (
 CREATE INDEX IF NOT EXISTS idx_mart_revenue_date ON mart_layer.mart_revenue_summary (report_date);
 """
 
-# OTC/ETC dùng chung 1 mẫu, chỉ khác bảng nguồn + điều kiện IsHC (chỉ OTC có cột này) và điều
-# kiện loại mã chuyển kho nội bộ (chỉ ETC cần lọc thủ công vì chưa có FK sạch sang dim khách hàng
-# — xem docs/dev_supabase_schema.sql phần ghi chú FK).
+DELETE_RANGE_OTC = """
+DELETE FROM mart_layer.mart_revenue_summary
+WHERE report_date >= :start_dt::date AND report_date < :end_dt::date AND channel = 'OTC';
+"""
+
+DELETE_RANGE_ETC = """
+DELETE FROM mart_layer.mart_revenue_summary
+WHERE report_date >= :start_dt::date AND report_date < :end_dt::date AND channel = 'ETC';
+"""
+
 UPSERT_OTC = """
 INSERT INTO mart_layer.mart_revenue_summary (report_date, channel, revenue, invoice_count, updated_at)
 SELECT
@@ -102,8 +109,10 @@ def run(start_dt, end_dt, label):
     print(f"[*] Tong hop mart_revenue_summary cho {label} ({start_dt} -> {end_dt})...")
     with engine.begin() as conn:
         conn.execute(text(DDL))
+        conn.execute(text(DELETE_RANGE_OTC), {"start_dt": start_dt, "end_dt": end_dt})
         r1 = conn.execute(text(UPSERT_OTC), {"start_dt": start_dt, "end_dt": end_dt})
         print(f"    OTC: {r1.rowcount} dong upsert")
+        conn.execute(text(DELETE_RANGE_ETC), {"start_dt": start_dt, "end_dt": end_dt})
         r2 = conn.execute(text(UPSERT_ETC), {"start_dt": start_dt, "end_dt": end_dt})
         print(f"    ETC: {r2.rowcount} dong upsert")
     print("Xong.")
@@ -118,9 +127,6 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     if args.full:
-        # Backfill tu dau nam data that su co (xem earliest_date trong ai_agent/chatbot.py -
-        # hien tai la dau thang 1/2026); dat mot moc som an toan, WHERE >= that se tu gioi han
-        # theo du lieu thuc te co.
         run("2020-01-01", "2100-01-01", "TOAN BO LICH SU (full backfill)")
     else:
         today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)

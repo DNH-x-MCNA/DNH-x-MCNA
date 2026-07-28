@@ -339,6 +339,41 @@ và sai `month_pct_of_target`. Ví dụ thật: `TM250101109` tháng 7 lẽ ra 3
 AND target_asof ORDER BY save_date DESC LIMIT 1`), giống mọi hàm KPI khác. Thêm cảnh báo fail-closed
 khi tháng đó không có snapshot, để `target=0` không bị AI diễn giải thành "bán được 0 đồng".
 
+### ⚠️ R-H. QLV xem được doanh thu TOÀN MIỀN — chặn tạm 28/07, CHƯA xử lý xong
+
+**Phát hiện 28/07/2026** khi kiểm chứng bản vá `get_audit_log` trên chatbot thật: tài khoản `qlv`
+(Trịnh Xuân Tùng, MB) hỏi *"Doanh thu tháng này bao nhiêu?"* → nhận về **29,37 tỷ = doanh thu cả
+miền Bắc** (tổng của 10 đội), thay vì riêng đội mình.
+
+**Cùng loại lỗ hổng với R-F nhưng ở nhóm tool khác.** R-F chỉ vá nhóm KPI cá nhân; hoá ra **12/17
+tool** chỉ bị giới hạn theo `scope_area_code` (vùng MB/MT/MN) — tức tài khoản `qlv` thấy **y hệt**
+`regional_director` ở mọi câu về doanh thu, top khách, top sản phẩm, tồn kho, công nợ.
+
+**Nguyên nhân gốc**: `_PERSON_LEVEL_TEMPLATES` (danh sách tool bị thu hẹp về đội) chỉ liệt kê 5 tool
+KPI, bỏ qua toàn bộ nhóm doanh thu/khách hàng/tồn kho. Cơ chế fail-closed của R-F **hoạt động đúng**
+— chỉ là danh sách khai báo thiếu.
+
+**Đã chốt với user 28/07**: QLV **chỉ được xem đội của riêng mình**, không phải cả miền.
+
+**Xử lý tạm (đã deploy)**: đưa 9 tool vào `_PERSON_LEVEL_TEMPLATES` → tài khoản `qlv` bị **chặn hẳn**
+(fail-closed) thay vì âm thầm trả dữ liệu cả vùng. Chia 3 nhóm:
+
+| Nhóm | Tool | Trạng thái |
+|---|---|---|
+| **(a) Thu hẹp được, CHƯA làm** | `get_revenue_by_channel`, `get_revenue_by_region`, `get_top_customers`, `get_top_products`, `compare_periods` | 🔴 **Chặn tạm** — hoá đơn có `employee_code` nên lọc theo đội được, nhưng phải sửa SQL từng hàm + test lại với Bravo |
+| **(b) Không thể thu hẹp** | `get_inventory_by_region` (kho), `get_receivables_overview` (công nợ theo khách), `get_qlv_change_history`, `get_revenue_reconciliation` | 🔴 Chặn — dữ liệu không gắn với 1 nhân viên, cần **DNH chốt** ai được xem |
+| **(c) Vô hại, không chặn** | `get_employee_directory` (tra tên/mã/vùng — chính là câu Q3), `get_customer_detail` (đã ép scope vùng+kênh), `get_audit_log` (đã ép username) | ✅ Giữ nguyên |
+
+Kiểm chứng: `qlv` bị chặn đúng 10 tool; `c_level` và `regional_director` **không đổi hành vi** (chặn
+chỉ kích hoạt khi có `scope_employee_code`).
+
+> 🔴 **VIỆC CÒN NỢ — ảnh hưởng demo**: 5 tool nhóm (a) hiện `qlv` **không hỏi được**. Nếu demo có
+> đoạn đăng nhập vai QLV hỏi doanh thu thì phải thu hẹp SQL xong trước 09/08, hoặc tránh câu đó.
+> Câu **R2** (top khách hàng vùng) trong kịch bản dùng vai `regional_director` nên **không bị ảnh hưởng**.
+
+> ❓ **Cần DNH xác nhận**: nhóm (b) — QLV có được xem tồn kho / công nợ của vùng không, hay chỉ cấp
+> Trưởng phòng/Giám đốc vùng trở lên? Hiện chặn hết để an toàn.
+
 ---
 
 ## 1. Vai `c_level` — toàn quốc (8 câu)
