@@ -189,8 +189,12 @@ def delete_session_endpoint(session_id: str, user: dict = Depends(require_user))
 @app.post("/clear/{session_id}", dependencies=[Depends(require_api_key)])
 def clear(session_id: str, user: dict = Depends(require_user)):
     _require_session_access(session_id, user)
-    from conversation_memory import clear_session_history
-    clear_session_history(session_id)
+    # 28/07/2026: truoc day import `clear_session_history` - ham nay KHONG TON TAI trong
+    # conversation_memory.py (chi co clear_session, va 2 alias delete_session/get_session_history).
+    # Vi import nam trong THAN ham nen khong lam sap luc khoi dong, chi no khi co nguoi bam xoa lich
+    # su phien -> ImportError -> HTTP 500. Doi sang dung ham that.
+    from conversation_memory import clear_session
+    clear_session(session_id)
     return {"ok": True}
 
 
