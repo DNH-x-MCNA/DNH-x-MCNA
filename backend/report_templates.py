@@ -1713,9 +1713,44 @@ def audit_log_summary(days: int = 7, limit: int = 30, username: str = None, targ
                     agg["output_tokens"] += c_tok
                     agg["calls"] += 1
 
+    def _event_summary(e: dict) -> str:
+        """1 dong mo ta ngan gon kieu 'nhat ky hoat dong' (giong timeline audit log admin: 'Ai - lam
+        gi - luc nao') - de AI trinh bay nhat quan thay vi tu dien giai tu question/sql/status moi lan
+        1 kieu khac nhau (28/07/2026, theo yeu cau dinh dang giong timeline hanh chinh admin). sql co
+        dang '<template:ten_tool>(...)' cho bao cao chuan, hoac SQL tho cho query_database - rut gon
+        lai thanh 1 cau hanh dong ro rang. C-Level xem toan cong ty se thay ten nguoi dung dat truoc
+        (vd "tungtx: Chay bao cao...") de phan biet dong nao cua ai."""
+        sql = e.get("sql") or ""
+        status = e.get("status")
+        if sql.startswith("<template:"):
+            tool_name = sql.split(":", 1)[1].split(">", 1)[0]
+            action = f"Chạy báo cáo '{tool_name}'"
+        elif sql:
+            action = "Chạy truy vấn dữ liệu tự do (query_database)"
+        else:
+            action = "Thực hiện thao tác"
+        if status == "ok":
+            rc = e.get("row_count")
+            detail = f" — {rc} dòng kết quả" if rc is not None else ""
+            dur = e.get("duration_ms")
+            detail += f", {dur} ms" if dur is not None else ""
+            line = f"{action}{detail}"
+        elif status == "rejected":
+            line = f"{action} — BỊ TỪ CHỐI ({str(e.get('error', ''))[:80]})"
+        elif status == "blocked":
+            line = f"{action} — BỊ CHẶN (không đủ quyền)"
+        elif status == "error":
+            line = f"{action} — LỖI ({str(e.get('error', ''))[:80]})"
+        else:
+            line = action
+        if is_clevel_admin and not effective_target and e.get("username"):
+            line = f"{e['username']}: {line}"
+        return line
+
     recent = sorted(my_entries, key=lambda e: e.get("ts", ""), reverse=True)[:limit]
     history = [{
         "ts": e.get("ts"),
+        "event_summary": _event_summary(e),
         "username": e.get("username"),
         "question": e.get("question"),
         "sql": e.get("sql"),
@@ -1738,6 +1773,11 @@ def audit_log_summary(days: int = 7, limit: int = 30, username: str = None, targ
         "total_output_tokens": total_tokens_out,
         "total_tokens": total_tokens_in + total_tokens_out,
         "history": history,
+        "display_hint": ("Trinh bay ket qua o dang TIMELINE - moi dong 1 su kien, theo thu tu MOI NHAT "
+                          "TRUOC: gio:phut (ts) + event_summary (da soan san, dung nguyen van, KHONG tu "
+                          "dien giai lai tu sql/question) + cau hoi goc (question) rut gon neu can. KHONG "
+                          "trinh bay duoi dang bang SQL/cot ky thuat - day la nhat ky hoat dong cho nguoi "
+                          "dung thuong, khong phai bao cao du lieu."),
         "note": ("Bao cao chi phi AI quy doi ty gia 1 USD = 25,400 VND. Tai khoan C-Level / Admin co quyen xem tong quan toan cong ty va loc theo tung nguoi dung."),
     }
 

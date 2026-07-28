@@ -356,7 +356,10 @@ TEMPLATE_TOOLS = [
     },
     {
         "name": "get_audit_log",
-        "description": "Lich su truy van va token/chi phi AI quy doi VND/USD. Void tai khoan C-Level hoac Admin: ho tro xem BÁO CÁO CHI PHÍ AI TOÀN CÔNG TY hoac loc theo nguoi dung (target_username). Voi tai khoan QLV/TDV: xem chi phi va lich su ca nhan.",
+        "description": "Lich su truy van va token/chi phi AI quy doi VND/USD. Voi tai khoan C-Level hoac Admin: ho tro xem BÁO CÁO CHI PHÍ AI TOÀN CÔNG TY hoac loc theo nguoi dung (target_username). Voi tai khoan QLV/TDV: xem chi phi va lich su ca nhan. "
+                        "CACH TRINH BAY: ket qua co truong 'display_hint' - PHAI theo dung huong dan do "
+                        "(dang TIMELINE, moi dong 1 su kien voi gio + event_summary DA SOAN SAN dung "
+                        "nguyen van, moi nhat len dau, KHONG trinh bay thanh bang SQL/cot ky thuat).",
         "input_schema": {
             "type": "object",
             "properties": {
