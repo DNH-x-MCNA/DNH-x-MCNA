@@ -570,6 +570,15 @@ export default function Home() {
   const [auditUserFilter, setAuditUserFilter] = useState<string>("all");
   const [auditActiveTab, setAuditActiveTab] = useState<"users" | "logs">("users");
 
+  const isCLevel = Boolean(
+    userInfo && (
+      userInfo.role?.toLowerCase() === "c_level" ||
+      userInfo.role?.toLowerCase() === "admin" ||
+      userInfo.username?.toLowerCase() === "c_level" ||
+      userInfo.username?.toLowerCase() === "dnh"
+    )
+  );
+
   const fetchAuditData = (daysVal: number, userVal: string) => {
     if (!authToken) return;
     setAuditLoading(true);
@@ -848,7 +857,7 @@ export default function Home() {
           + Cuộc trò chuyện mới
         </button>
 
-        {userInfo?.role === "c_level" && (
+        {isCLevel && (
           <button
             onClick={openAuditDashboard}
             className="mx-3 mt-2 flex items-center gap-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-left text-sm font-semibold text-amber-900 shadow-sm transition hover:bg-amber-100"
@@ -873,7 +882,7 @@ export default function Home() {
                 <div className="truncate">{s.title || "Cuộc trò chuyện mới"}</div>
                 <div className="truncate text-xs text-slate-400">
                   {formatRelativeTime(s.updated_at)}
-                  {userInfo?.role === "c_level" && s.owner_username !== userInfo.username
+                  {isCLevel && s.owner_username !== userInfo.username
                     ? ` · ${s.owner_name || s.owner_username}`
                     : ""}
                 </div>
@@ -913,7 +922,7 @@ export default function Home() {
           <div className="flex items-center gap-3">
             {userInfo && (
               <>
-                {userInfo.role === "c_level" && (
+                {isCLevel && (
                   <button
                     onClick={openAuditDashboard}
                     className="flex items-center gap-1.5 rounded-full border border-amber-500/50 bg-amber-500/20 px-3.5 py-1.5 text-xs font-semibold text-amber-300 shadow-sm transition hover:bg-amber-500/30 hover:text-amber-100 hover:border-amber-400"
@@ -949,7 +958,7 @@ export default function Home() {
             <div className="mt-8">
               <p className="mb-3 text-sm text-slate-500">Thử hỏi một trong các câu sau:</p>
               <div className="flex flex-wrap gap-2">
-                {(userInfo?.role === "c_level" ? SAMPLE_QUESTIONS_CLEVEL : SAMPLE_QUESTIONS_COMMON).map((q) => (
+                {(isCLevel ? SAMPLE_QUESTIONS_CLEVEL : SAMPLE_QUESTIONS_COMMON).map((q) => (
                   <button
                     key={q}
                     onClick={() => sendQuestion(q)}
