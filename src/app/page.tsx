@@ -79,6 +79,50 @@ function authHeaders(token: string | null): HeadersInit {
 
 type UserInfo = { username: string; name: string | null; role: string; scope_value: string | null };
 
+type AuditSummary = {
+  total_cost_usd: number;
+  total_cost_vnd: number;
+  total_input_tokens: number;
+  total_output_tokens: number;
+  grand_total_tokens: number;
+  total_queries: number;
+  unique_users_count: number;
+  days: number;
+};
+
+type UserBreakdownItem = {
+  username: string;
+  user_name: string;
+  query_count: number;
+  input_tokens: number;
+  output_tokens: number;
+  total_tokens: number;
+  cost_usd: number;
+  cost_vnd: number;
+};
+
+type QueryLogItem = {
+  ts: string;
+  username: string;
+  user_name: string;
+  question: string;
+  sql: string | null;
+  status: string;
+  duration_ms: number | null;
+  input_tokens: number;
+  output_tokens: number;
+  total_tokens: number;
+  cost_usd: number;
+  cost_vnd: number;
+};
+
+type AuditDashboardData = {
+  summary: AuditSummary;
+  user_breakdown: UserBreakdownItem[];
+  logs: QueryLogItem[];
+};
+
+
 const ROLE_LABELS: Record<string, string> = {
   c_level: "Ban Điều Hành (toàn công ty)",
   regional_director: "Giám đốc miền",
@@ -205,6 +249,276 @@ const MessageList = memo(function MessageList({
         </div>
       )}
       <div ref={bottomRef} />
+
+      {/* AUDIT LOG & COST DASHBOARD MODAL FOR C-LEVEL */}
+      {auditModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 overflow-y-auto">
+          <div className="flex flex-col w-full max-w-5xl max-h-[90vh] bg-white rounded-2xl shadow-2xl overflow-hidden border border-slate-200">
+            {/* Modal Header */}
+            <div className="flex items-center justify-between bg-slate-900 px-6 py-4 text-white">
+              <div className="flex items-center gap-3">
+                <span className="text-2xl">📊</span>
+                <div>
+                  <h2 className="text-lg font-bold">Dashboard Audit Log & Chi phí AI Toàn Công ty</h2>
+                  <p className="text-xs text-slate-300">Dành riêng cho Ban Điều Hành (C-Level) · Tra cứu trực tiếp dữ liệu realtime</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setAuditModalOpen(false)}
+                className="rounded-full p-2 text-slate-400 hover:bg-slate-800 hover:text-white transition"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Modal Controls Bar */}
+            <div className="flex flex-wrap items-center justify-between gap-3 bg-slate-100 border-b border-slate-200 px-6 py-3">
+              <div className="flex items-center gap-3">
+                {/* Time Range Selector */}
+                <div className="flex items-center gap-1.5 text-xs font-medium text-slate-600">
+                  <span>Khoảng thời gian:</span>
+                  <select
+                    value={auditDays}
+                    onChange={(e) => {
+                      const val = Number(e.target.value);
+                      setAuditDays(val);
+                      fetchAuditData(val, auditUserFilter);
+                    }}
+                    className="rounded-lg border border-slate-300 bg-white px-2.5 py-1 text-xs text-slate-800 outline-none focus:border-blue-500"
+                  >
+                    <option value={7}>7 ngày gần nhất</option>
+                    <option value={30}>30 ngày gần nhất</option>
+                    <option value={90}>90 ngày gần nhất</option>
+                  </select>
+                </div>
+
+                {/* User Filter Dropdown */}
+                <div className="flex items-center gap-1.5 text-xs font-medium text-slate-600">
+                  <span>Người dùng:</span>
+                  <select
+                    value={auditUserFilter}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setAuditUserFilter(val);
+                      fetchAuditData(auditDays, val);
+                    }}
+                    className="rounded-lg border border-slate-300 bg-white px-2.5 py-1 text-xs text-slate-800 outline-none focus:border-blue-500 max-w-[160px] truncate"
+                  >
+                    <option value="all">Tất cả người dùng</option>
+                    {auditData?.user_breakdown.map((u) => (
+                      <option key={u.username} value={u.username}>
+                        {u.user_name} ({u.username})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              {/* Refresh & Tabs */}
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => fetchAuditData(auditDays, auditUserFilter)}
+                  className="rounded-lg border border-slate-300 bg-white px-3 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50 transition"
+                  disabled={auditLoading}
+                >
+                  {auditLoading ? "Đang tải..." : "🔄 Làm mới"}
+                </button>
+                <div className="flex rounded-lg border border-slate-300 bg-white p-0.5 text-xs">
+                  <button
+                    onClick={() => setAuditActiveTab("users")}
+                    className={`px-3 py-1 rounded-md font-medium transition ${
+                      auditActiveTab === "users" ? "bg-blue-600 text-white shadow-sm" : "text-slate-600 hover:text-slate-900"
+                    }`}
+                  >
+                    👥 Theo Người Dùng
+                  </button>
+                  <button
+                    onClick={() => setAuditActiveTab("logs")}
+                    className={`px-3 py-1 rounded-md font-medium transition ${
+                      auditActiveTab === "logs" ? "bg-blue-600 text-white shadow-sm" : "text-slate-600 hover:text-slate-900"
+                    }`}
+                  >
+                    📝 Nhật Ký Truy Vấn
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {/* Modal Content Body */}
+            <div className="flex-1 overflow-y-auto p-6">
+              {auditLoading && !auditData ? (
+                <div className="flex h-64 items-center justify-center text-sm text-slate-400">
+                  Đang tải dữ liệu Audit Log & Chi phí AI...
+                </div>
+              ) : auditData ? (
+                <div className="flex flex-col gap-6">
+                  {/* Summary Metric Cards */}
+                  <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+                    <div className="rounded-xl border border-amber-200 bg-amber-50/50 p-4 shadow-sm">
+                      <div className="text-xs font-medium text-amber-700">Tổng Chi Phí AI</div>
+                      <div className="mt-1 text-lg font-bold text-amber-900">
+                        {auditData.summary.total_cost_vnd.toLocaleString("vi-VN")} đ
+                      </div>
+                      <div className="text-[11px] text-amber-600">
+                        ~ ${auditData.summary.total_cost_usd.toFixed(4)} USD
+                      </div>
+                    </div>
+
+                    <div className="rounded-xl border border-blue-200 bg-blue-50/50 p-4 shadow-sm">
+                      <div className="text-xs font-medium text-blue-700">Tổng Token Tiêu Tốn</div>
+                      <div className="mt-1 text-lg font-bold text-blue-900">
+                        {auditData.summary.grand_total_tokens.toLocaleString()}
+                      </div>
+                      <div className="text-[11px] text-blue-600">
+                        In: {auditData.summary.total_input_tokens.toLocaleString()} · Out: {auditData.summary.total_output_tokens.toLocaleString()}
+                      </div>
+                    </div>
+
+                    <div className="rounded-xl border border-emerald-200 bg-emerald-50/50 p-4 shadow-sm">
+                      <div className="text-xs font-medium text-emerald-700">Tổng Lượt Truy Vấn</div>
+                      <div className="mt-1 text-lg font-bold text-emerald-900">
+                        {auditData.summary.total_queries.toLocaleString()} lượt
+                      </div>
+                      <div className="text-[11px] text-emerald-600">
+                        Trong {auditData.summary.days} ngày qua
+                      </div>
+                    </div>
+
+                    <div className="rounded-xl border border-purple-200 bg-purple-50/50 p-4 shadow-sm">
+                      <div className="text-xs font-medium text-purple-700">Người Dùng Hoạt Động</div>
+                      <div className="mt-1 text-lg font-bold text-purple-900">
+                        {auditData.summary.unique_users_count} người
+                      </div>
+                      <div className="text-[11px] text-purple-600">
+                        Đang hoạt động trên hệ thống
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* TAB 1: USER BREAKDOWN TABLE */}
+                  {auditActiveTab === "users" && (
+                    <div className="flex flex-col gap-3">
+                      <h3 className="text-sm font-bold text-slate-800">
+                        📊 Bảng Thống Kê Token & Chi Phí Theo Người Dùng
+                      </h3>
+                      <div className="overflow-x-auto rounded-xl border border-slate-200 shadow-sm">
+                        <table className="min-w-full text-xs">
+                          <thead className="bg-slate-100 text-slate-700 font-semibold border-b border-slate-200">
+                            <tr>
+                              <th className="px-4 py-3 text-left">Người Dùng</th>
+                              <th className="px-4 py-3 text-center">Tài Khoản</th>
+                              <th className="px-4 py-3 text-right">Số Câu Hỏi</th>
+                              <th className="px-4 py-3 text-right">Input Tokens</th>
+                              <th className="px-4 py-3 text-right">Output Tokens</th>
+                              <th className="px-4 py-3 text-right">Tổng Tokens</th>
+                              <th className="px-4 py-3 text-right">Chi Phí (USD)</th>
+                              <th className="px-4 py-3 text-right font-bold text-amber-700">Chi Phí (VNĐ)</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-100 bg-white">
+                            {auditData.user_breakdown.map((u) => (
+                              <tr key={u.username} className="hover:bg-slate-50 transition">
+                                <td className="px-4 py-3 font-medium text-slate-900">{u.user_name}</td>
+                                <td className="px-4 py-3 text-center text-slate-500 font-mono">{u.username}</td>
+                                <td className="px-4 py-3 text-right text-slate-700 font-semibold">{u.query_count}</td>
+                                <td className="px-4 py-3 text-right text-slate-600">{u.input_tokens.toLocaleString()}</td>
+                                <td className="px-4 py-3 text-right text-slate-600">{u.output_tokens.toLocaleString()}</td>
+                                <td className="px-4 py-3 text-right font-medium text-slate-800">{u.total_tokens.toLocaleString()}</td>
+                                <td className="px-4 py-3 text-right text-slate-600">${u.cost_usd.toFixed(4)}</td>
+                                <td className="px-4 py-3 text-right font-bold text-amber-700">
+                                  {u.cost_vnd.toLocaleString("vi-VN")} đ
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* TAB 2: DETAILED QUERY AUDIT LOGS TABLE */}
+                  {auditActiveTab === "logs" && (
+                    <div className="flex flex-col gap-3">
+                      <h3 className="text-sm font-bold text-slate-800">
+                        📝 Nhật Ký Truy Vấn Chi Tiết ({auditData.logs.length} dòng gần nhất)
+                      </h3>
+                      <div className="overflow-x-auto rounded-xl border border-slate-200 shadow-sm">
+                        <table className="min-w-full text-xs">
+                          <thead className="bg-slate-100 text-slate-700 font-semibold border-b border-slate-200">
+                            <tr>
+                              <th className="px-4 py-3 text-left">Thời Gian</th>
+                              <th className="px-4 py-3 text-left">Người Dùng</th>
+                              <th className="px-4 py-3 text-left">Nội Dung Câu Hỏi</th>
+                              <th className="px-4 py-3 text-right">Input Tokens</th>
+                              <th className="px-4 py-3 text-right">Output Tokens</th>
+                              <th className="px-4 py-3 text-right">Chi Phí (VNĐ)</th>
+                              <th className="px-4 py-3 text-center">Thời Gian Chạy</th>
+                              <th className="px-4 py-3 text-center">Chi Tiết SQL</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-100 bg-white">
+                            {auditData.logs.map((log, idx) => (
+                              <tr key={idx} className="hover:bg-slate-50 transition">
+                                <td className="px-4 py-3 text-slate-500 whitespace-nowrap">
+                                  {log.ts ? log.ts.replace("T", " ").slice(0, 19) : "—"}
+                                </td>
+                                <td className="px-4 py-3 font-medium text-slate-900 whitespace-nowrap">
+                                  {log.user_name}
+                                </td>
+                                <td className="px-4 py-3 text-slate-800 font-normal max-w-xs truncate" title={log.question}>
+                                  {log.question}
+                                </td>
+                                <td className="px-4 py-3 text-right text-slate-600">{log.input_tokens.toLocaleString()}</td>
+                                <td className="px-4 py-3 text-right text-slate-600">{log.output_tokens.toLocaleString()}</td>
+                                <td className="px-4 py-3 text-right font-semibold text-amber-700">
+                                  {log.cost_vnd.toLocaleString("vi-VN")} đ
+                                </td>
+                                <td className="px-4 py-3 text-center text-slate-500 whitespace-nowrap">
+                                  {log.duration_ms ? `${log.duration_ms} ms` : "—"}
+                                </td>
+                                <td className="px-4 py-3 text-center">
+                                  {log.sql ? (
+                                    <details className="inline-block text-left">
+                                      <summary className="cursor-pointer font-medium text-blue-600 hover:underline">
+                                        Xem SQL
+                                      </summary>
+                                      <pre className="mt-2 max-w-md overflow-x-auto rounded bg-slate-900 p-3 text-[11px] text-slate-100">
+                                        {log.sql}
+                                      </pre>
+                                    </details>
+                                  ) : (
+                                    <span className="text-slate-400">—</span>
+                                  )}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className="flex h-64 items-center justify-center text-sm text-slate-400">
+                  Không tìm thấy dữ liệu Audit Log.
+                </div>
+              )}
+            </div>
+
+            {/* Modal Footer */}
+            <div className="flex items-center justify-between border-t border-slate-200 bg-slate-50 px-6 py-3 text-xs text-slate-500">
+              <span>* Chi phí được tính quy đổi tự động 1 USD = 25,400 VNĐ theo bảng giá Anthropic API chính thức.</span>
+              <button
+                onClick={() => setAuditModalOpen(false)}
+                className="rounded-lg bg-slate-800 px-4 py-2 text-xs font-medium text-white hover:bg-slate-900 transition"
+              >
+                Đóng
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
     </div>
   );
 });
@@ -248,6 +562,44 @@ export default function Home() {
   const [loginPassword, setLoginPassword] = useState("");
   const [loginError, setLoginError] = useState("");
   const [loginSubmitting, setLoginSubmitting] = useState(false);
+  // Audit Log & Cost Dashboard Modal State
+  const [auditModalOpen, setAuditModalOpen] = useState(false);
+  const [auditLoading, setAuditLoading] = useState(false);
+  const [auditData, setAuditData] = useState<AuditDashboardData | null>(null);
+  const [auditDays, setAuditDays] = useState<number>(30);
+  const [auditUserFilter, setAuditUserFilter] = useState<string>("all");
+  const [auditActiveTab, setAuditActiveTab] = useState<"users" | "logs">("users");
+
+  const isCLevel = Boolean(
+    userInfo && (
+      userInfo.role?.toLowerCase() === "c_level" ||
+      userInfo.role?.toLowerCase() === "admin" ||
+      userInfo.username?.toLowerCase() === "c_level" ||
+      userInfo.username?.toLowerCase() === "dnh"
+    )
+  );
+
+  const fetchAuditData = (daysVal: number, userVal: string) => {
+    if (!authToken) return;
+    setAuditLoading(true);
+    const params = new URLSearchParams({ days: String(daysVal), limit: "300" });
+    if (userVal && userVal !== "all") {
+      params.append("user_filter", userVal);
+    }
+    fetch(`${API_URL}/audit-logs?${params.toString()}`, { headers: authHeaders(authToken) })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data: AuditDashboardData | null) => {
+        if (data) setAuditData(data);
+      })
+      .catch((e) => console.error("Error fetching audit logs:", e))
+      .finally(() => setAuditLoading(false));
+  };
+
+  const openAuditDashboard = () => {
+    setAuditModalOpen(true);
+    fetchAuditData(auditDays, auditUserFilter);
+  };
+
 
   // Kiem tra token da luu (neu co) ngay khi mo trang - xac nhan qua /auth/me truoc khi cho vao chat
   useEffect(() => {
@@ -504,6 +856,16 @@ export default function Home() {
         >
           + Cuộc trò chuyện mới
         </button>
+
+        {isCLevel && (
+          <button
+            onClick={openAuditDashboard}
+            className="mx-3 mt-2 flex items-center gap-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-left text-sm font-semibold text-amber-900 shadow-sm transition hover:bg-amber-100"
+          >
+            <span>📊</span>
+            <span>Audit Log & Chi phí AI</span>
+          </button>
+        )}
         <div className="flex-1 overflow-y-auto px-2 py-3">
           {sessions.length === 0 && (
             <p className="px-2 text-xs text-slate-400">Chưa có cuộc trò chuyện nào.</p>
@@ -520,7 +882,7 @@ export default function Home() {
                 <div className="truncate">{s.title || "Cuộc trò chuyện mới"}</div>
                 <div className="truncate text-xs text-slate-400">
                   {formatRelativeTime(s.updated_at)}
-                  {userInfo?.role === "c_level" && s.owner_username !== userInfo.username
+                  {isCLevel && s.owner_username !== userInfo.username
                     ? ` · ${s.owner_name || s.owner_username}`
                     : ""}
                 </div>
@@ -560,14 +922,14 @@ export default function Home() {
           <div className="flex items-center gap-3">
             {userInfo && (
               <>
-                {userInfo.role === "c_level" && (
+                {isCLevel && (
                   <button
-                    onClick={() => sendQuestion("Báo cáo chi phí AI toàn công ty")}
-                    className="hidden sm:flex items-center gap-1.5 rounded-full border border-amber-500/50 bg-amber-500/10 px-3 py-1.5 text-xs font-medium text-amber-300 transition hover:bg-amber-500/20 hover:text-amber-200"
-                    title="Xem chi phí AI và Audit Log toàn công ty"
+                    onClick={openAuditDashboard}
+                    className="flex items-center gap-1.5 rounded-full border border-amber-500/50 bg-amber-500/20 px-3.5 py-1.5 text-xs font-semibold text-amber-300 shadow-sm transition hover:bg-amber-500/30 hover:text-amber-100 hover:border-amber-400"
+                    title="Mở Dashboard Audit Log & Chi phí AI toàn công ty"
                   >
-                    <span>💰</span>
-                    <span>Chi phí AI</span>
+                    <span>📊</span>
+                    <span>Audit Log & Chi phí AI</span>
                   </button>
                 )}
                 <div className="hidden text-right text-xs text-slate-300 sm:block">
@@ -596,7 +958,7 @@ export default function Home() {
             <div className="mt-8">
               <p className="mb-3 text-sm text-slate-500">Thử hỏi một trong các câu sau:</p>
               <div className="flex flex-wrap gap-2">
-                {(userInfo?.role === "c_level" ? SAMPLE_QUESTIONS_CLEVEL : SAMPLE_QUESTIONS_COMMON).map((q) => (
+                {(isCLevel ? SAMPLE_QUESTIONS_CLEVEL : SAMPLE_QUESTIONS_COMMON).map((q) => (
                   <button
                     key={q}
                     onClick={() => sendQuestion(q)}
@@ -640,6 +1002,276 @@ export default function Home() {
         </form>
       </main>
       </div>
+
+      {/* AUDIT LOG & COST DASHBOARD MODAL FOR C-LEVEL */}
+      {auditModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 overflow-y-auto">
+          <div className="flex flex-col w-full max-w-5xl max-h-[90vh] bg-white rounded-2xl shadow-2xl overflow-hidden border border-slate-200">
+            {/* Modal Header */}
+            <div className="flex items-center justify-between bg-slate-900 px-6 py-4 text-white">
+              <div className="flex items-center gap-3">
+                <span className="text-2xl">📊</span>
+                <div>
+                  <h2 className="text-lg font-bold">Dashboard Audit Log & Chi phí AI Toàn Công ty</h2>
+                  <p className="text-xs text-slate-300">Dành riêng cho Ban Điều Hành (C-Level) · Tra cứu trực tiếp dữ liệu realtime</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setAuditModalOpen(false)}
+                className="rounded-full p-2 text-slate-400 hover:bg-slate-800 hover:text-white transition"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Modal Controls Bar */}
+            <div className="flex flex-wrap items-center justify-between gap-3 bg-slate-100 border-b border-slate-200 px-6 py-3">
+              <div className="flex items-center gap-3">
+                {/* Time Range Selector */}
+                <div className="flex items-center gap-1.5 text-xs font-medium text-slate-600">
+                  <span>Khoảng thời gian:</span>
+                  <select
+                    value={auditDays}
+                    onChange={(e) => {
+                      const val = Number(e.target.value);
+                      setAuditDays(val);
+                      fetchAuditData(val, auditUserFilter);
+                    }}
+                    className="rounded-lg border border-slate-300 bg-white px-2.5 py-1 text-xs text-slate-800 outline-none focus:border-blue-500"
+                  >
+                    <option value={7}>7 ngày gần nhất</option>
+                    <option value={30}>30 ngày gần nhất</option>
+                    <option value={90}>90 ngày gần nhất</option>
+                  </select>
+                </div>
+
+                {/* User Filter Dropdown */}
+                <div className="flex items-center gap-1.5 text-xs font-medium text-slate-600">
+                  <span>Người dùng:</span>
+                  <select
+                    value={auditUserFilter}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setAuditUserFilter(val);
+                      fetchAuditData(auditDays, val);
+                    }}
+                    className="rounded-lg border border-slate-300 bg-white px-2.5 py-1 text-xs text-slate-800 outline-none focus:border-blue-500 max-w-[160px] truncate"
+                  >
+                    <option value="all">Tất cả người dùng</option>
+                    {auditData?.user_breakdown.map((u) => (
+                      <option key={u.username} value={u.username}>
+                        {u.user_name} ({u.username})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              {/* Refresh & Tabs */}
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => fetchAuditData(auditDays, auditUserFilter)}
+                  className="rounded-lg border border-slate-300 bg-white px-3 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50 transition"
+                  disabled={auditLoading}
+                >
+                  {auditLoading ? "Đang tải..." : "🔄 Làm mới"}
+                </button>
+                <div className="flex rounded-lg border border-slate-300 bg-white p-0.5 text-xs">
+                  <button
+                    onClick={() => setAuditActiveTab("users")}
+                    className={`px-3 py-1 rounded-md font-medium transition ${
+                      auditActiveTab === "users" ? "bg-blue-600 text-white shadow-sm" : "text-slate-600 hover:text-slate-900"
+                    }`}
+                  >
+                    👥 Theo Người Dùng
+                  </button>
+                  <button
+                    onClick={() => setAuditActiveTab("logs")}
+                    className={`px-3 py-1 rounded-md font-medium transition ${
+                      auditActiveTab === "logs" ? "bg-blue-600 text-white shadow-sm" : "text-slate-600 hover:text-slate-900"
+                    }`}
+                  >
+                    📝 Nhật Ký Truy Vấn
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {/* Modal Content Body */}
+            <div className="flex-1 overflow-y-auto p-6">
+              {auditLoading && !auditData ? (
+                <div className="flex h-64 items-center justify-center text-sm text-slate-400">
+                  Đang tải dữ liệu Audit Log & Chi phí AI...
+                </div>
+              ) : auditData ? (
+                <div className="flex flex-col gap-6">
+                  {/* Summary Metric Cards */}
+                  <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+                    <div className="rounded-xl border border-amber-200 bg-amber-50/50 p-4 shadow-sm">
+                      <div className="text-xs font-medium text-amber-700">Tổng Chi Phí AI</div>
+                      <div className="mt-1 text-lg font-bold text-amber-900">
+                        {auditData.summary.total_cost_vnd.toLocaleString("vi-VN")} đ
+                      </div>
+                      <div className="text-[11px] text-amber-600">
+                        ~ ${auditData.summary.total_cost_usd.toFixed(4)} USD
+                      </div>
+                    </div>
+
+                    <div className="rounded-xl border border-blue-200 bg-blue-50/50 p-4 shadow-sm">
+                      <div className="text-xs font-medium text-blue-700">Tổng Token Tiêu Tốn</div>
+                      <div className="mt-1 text-lg font-bold text-blue-900">
+                        {auditData.summary.grand_total_tokens.toLocaleString()}
+                      </div>
+                      <div className="text-[11px] text-blue-600">
+                        In: {auditData.summary.total_input_tokens.toLocaleString()} · Out: {auditData.summary.total_output_tokens.toLocaleString()}
+                      </div>
+                    </div>
+
+                    <div className="rounded-xl border border-emerald-200 bg-emerald-50/50 p-4 shadow-sm">
+                      <div className="text-xs font-medium text-emerald-700">Tổng Lượt Truy Vấn</div>
+                      <div className="mt-1 text-lg font-bold text-emerald-900">
+                        {auditData.summary.total_queries.toLocaleString()} lượt
+                      </div>
+                      <div className="text-[11px] text-emerald-600">
+                        Trong {auditData.summary.days} ngày qua
+                      </div>
+                    </div>
+
+                    <div className="rounded-xl border border-purple-200 bg-purple-50/50 p-4 shadow-sm">
+                      <div className="text-xs font-medium text-purple-700">Người Dùng Hoạt Động</div>
+                      <div className="mt-1 text-lg font-bold text-purple-900">
+                        {auditData.summary.unique_users_count} người
+                      </div>
+                      <div className="text-[11px] text-purple-600">
+                        Đang hoạt động trên hệ thống
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* TAB 1: USER BREAKDOWN TABLE */}
+                  {auditActiveTab === "users" && (
+                    <div className="flex flex-col gap-3">
+                      <h3 className="text-sm font-bold text-slate-800">
+                        📊 Bảng Thống Kê Token & Chi Phí Theo Người Dùng
+                      </h3>
+                      <div className="overflow-x-auto rounded-xl border border-slate-200 shadow-sm">
+                        <table className="min-w-full text-xs">
+                          <thead className="bg-slate-100 text-slate-700 font-semibold border-b border-slate-200">
+                            <tr>
+                              <th className="px-4 py-3 text-left">Người Dùng</th>
+                              <th className="px-4 py-3 text-center">Tài Khoản</th>
+                              <th className="px-4 py-3 text-right">Số Câu Hỏi</th>
+                              <th className="px-4 py-3 text-right">Input Tokens</th>
+                              <th className="px-4 py-3 text-right">Output Tokens</th>
+                              <th className="px-4 py-3 text-right">Tổng Tokens</th>
+                              <th className="px-4 py-3 text-right">Chi Phí (USD)</th>
+                              <th className="px-4 py-3 text-right font-bold text-amber-700">Chi Phí (VNĐ)</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-100 bg-white">
+                            {auditData.user_breakdown.map((u) => (
+                              <tr key={u.username} className="hover:bg-slate-50 transition">
+                                <td className="px-4 py-3 font-medium text-slate-900">{u.user_name}</td>
+                                <td className="px-4 py-3 text-center text-slate-500 font-mono">{u.username}</td>
+                                <td className="px-4 py-3 text-right text-slate-700 font-semibold">{u.query_count}</td>
+                                <td className="px-4 py-3 text-right text-slate-600">{u.input_tokens.toLocaleString()}</td>
+                                <td className="px-4 py-3 text-right text-slate-600">{u.output_tokens.toLocaleString()}</td>
+                                <td className="px-4 py-3 text-right font-medium text-slate-800">{u.total_tokens.toLocaleString()}</td>
+                                <td className="px-4 py-3 text-right text-slate-600">${u.cost_usd.toFixed(4)}</td>
+                                <td className="px-4 py-3 text-right font-bold text-amber-700">
+                                  {u.cost_vnd.toLocaleString("vi-VN")} đ
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* TAB 2: DETAILED QUERY AUDIT LOGS TABLE */}
+                  {auditActiveTab === "logs" && (
+                    <div className="flex flex-col gap-3">
+                      <h3 className="text-sm font-bold text-slate-800">
+                        📝 Nhật Ký Truy Vấn Chi Tiết ({auditData.logs.length} dòng gần nhất)
+                      </h3>
+                      <div className="overflow-x-auto rounded-xl border border-slate-200 shadow-sm">
+                        <table className="min-w-full text-xs">
+                          <thead className="bg-slate-100 text-slate-700 font-semibold border-b border-slate-200">
+                            <tr>
+                              <th className="px-4 py-3 text-left">Thời Gian</th>
+                              <th className="px-4 py-3 text-left">Người Dùng</th>
+                              <th className="px-4 py-3 text-left">Nội Dung Câu Hỏi</th>
+                              <th className="px-4 py-3 text-right">Input Tokens</th>
+                              <th className="px-4 py-3 text-right">Output Tokens</th>
+                              <th className="px-4 py-3 text-right">Chi Phí (VNĐ)</th>
+                              <th className="px-4 py-3 text-center">Thời Gian Chạy</th>
+                              <th className="px-4 py-3 text-center">Chi Tiết SQL</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-100 bg-white">
+                            {auditData.logs.map((log, idx) => (
+                              <tr key={idx} className="hover:bg-slate-50 transition">
+                                <td className="px-4 py-3 text-slate-500 whitespace-nowrap">
+                                  {log.ts ? log.ts.replace("T", " ").slice(0, 19) : "—"}
+                                </td>
+                                <td className="px-4 py-3 font-medium text-slate-900 whitespace-nowrap">
+                                  {log.user_name}
+                                </td>
+                                <td className="px-4 py-3 text-slate-800 font-normal max-w-xs truncate" title={log.question}>
+                                  {log.question}
+                                </td>
+                                <td className="px-4 py-3 text-right text-slate-600">{log.input_tokens.toLocaleString()}</td>
+                                <td className="px-4 py-3 text-right text-slate-600">{log.output_tokens.toLocaleString()}</td>
+                                <td className="px-4 py-3 text-right font-semibold text-amber-700">
+                                  {log.cost_vnd.toLocaleString("vi-VN")} đ
+                                </td>
+                                <td className="px-4 py-3 text-center text-slate-500 whitespace-nowrap">
+                                  {log.duration_ms ? `${log.duration_ms} ms` : "—"}
+                                </td>
+                                <td className="px-4 py-3 text-center">
+                                  {log.sql ? (
+                                    <details className="inline-block text-left">
+                                      <summary className="cursor-pointer font-medium text-blue-600 hover:underline">
+                                        Xem SQL
+                                      </summary>
+                                      <pre className="mt-2 max-w-md overflow-x-auto rounded bg-slate-900 p-3 text-[11px] text-slate-100">
+                                        {log.sql}
+                                      </pre>
+                                    </details>
+                                  ) : (
+                                    <span className="text-slate-400">—</span>
+                                  )}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className="flex h-64 items-center justify-center text-sm text-slate-400">
+                  Không tìm thấy dữ liệu Audit Log.
+                </div>
+              )}
+            </div>
+
+            {/* Modal Footer */}
+            <div className="flex items-center justify-between border-t border-slate-200 bg-slate-50 px-6 py-3 text-xs text-slate-500">
+              <span>* Chi phí được tính quy đổi tự động 1 USD = 25,400 VNĐ theo bảng giá Anthropic API chính thức.</span>
+              <button
+                onClick={() => setAuditModalOpen(false)}
+                className="rounded-lg bg-slate-800 px-4 py-2 text-xs font-medium text-white hover:bg-slate-900 transition"
+              >
+                Đóng
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
     </div>
   );
 }
