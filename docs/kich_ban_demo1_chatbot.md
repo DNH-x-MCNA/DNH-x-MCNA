@@ -374,6 +374,39 @@ chỉ kích hoạt khi có `scope_employee_code`).
 > ❓ **Cần DNH xác nhận**: nhóm (b) — QLV có được xem tồn kho / công nợ của vùng không, hay chỉ cấp
 > Trưởng phòng/Giám đốc vùng trở lên? Hiện chặn hết để an toàn.
 
+### ✅ R-I. Leo quyền qua `get_audit_log` — đã vá 28/07
+
+**Phát hiện chiều 28/07** khi rà bộ commit mới thêm tính năng *"C-Level xem chi phí AI toàn công ty"*.
+Tính năng đúng hướng, nhưng chỗ xác định quyền bị đặt sai: hằng số `_SELF_SCOPED_TEMPLATES` bị làm
+**rỗng**, trong khi chú thích ngay phía trên vẫn ghi *"username PHẢI được ép từ server"*.
+
+Hậu quả — **đã kiểm chứng bằng test chạy thật**, không phải suy đoán:
+
+| # | Vấn đề | Bằng chứng |
+|---|---|---|
+| 1 | **Lộ dữ liệu** | `username` không còn được server ép → chỉ lấy từ tham số AI đưa. Tài khoản `qlv` khiến AI truyền `username='dnh'` là đọc được lịch sử người khác |
+| 2 | **Leo quyền** | Truyền `scope_role='c_level'` → xem được **toàn công ty (68 dòng)** từ tài khoản `qlv` |
+| 3 | **Hỏng tính năng** | Khi AI chỉ truyền tham số được khai báo, `username=None` → bộ lọc so sánh với `None` → trên live **mọi tài khoản kể cả C-Level nhận về rỗng** |
+
+Cả ba cùng một gốc: **danh tính và vai trò phải do SERVER quyết định**, không bao giờ do AI truyền.
+
+**Đã sửa**: khôi phục `_SELF_SCOPED_TEMPLATES = {"get_audit_log"}`; thêm `scope_role` ép từ server qua
+chuỗi `main.py → ask() → call_template`; **bỏ hẳn** suy luận quyền theo *chuỗi* tên tài khoản (code cũ
+dùng `username.startswith('admin')` — nghĩa là người tên `admin.nguyen` tự nhiên xem được chi phí toàn
+công ty).
+
+**Kiểm chứng trên live 28/07** (nhật ký `get_audit_log`, tài khoản `dnh`):
+- `11:08 tung.trinh ⚠️ BỊ CHẶN - không đủ quyền (doanh thu theo kênh)` → **R-H** chạy đúng
+- `10:48 tung.trinh` chỉ thấy *lịch sử/chi phí cá nhân*, `dnh` thấy toàn công ty → **R-I** phân quyền đúng
+- Tổng chi phí hiện **$13,80** thay vì `$0` → bản vá `session_id` đã nối được `audit_log` ↔ `cost_log`
+
+> ⚠️ **Còn một bản sao của lỗi này ở tầng giao diện**: `src/app/page.tsx` xác định `isCLevel` bằng
+> `username === "dnh"` bên cạnh `role`. Ở frontend thì nhẹ hơn nhiều (chỉ ẩn/hiện nút, quyền thật đã
+> chặn ở backend), nhưng vẫn nên đổi sang chỉ dựa vào `role`.
+
+> ❓ **Cần DNH xác nhận**: dashboard này cho C-Level xem **câu hỏi của mọi nhân viên**. Kỹ thuật đã an
+> toàn, nhưng mức độ giám sát đó có được DNH đồng ý không?
+
 ---
 
 ## 1. Vai `c_level` — toàn quốc (8 câu)
