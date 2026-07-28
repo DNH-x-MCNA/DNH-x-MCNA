@@ -982,6 +982,21 @@ export default function Home() {
           <MessageList messages={messages} loading={loading} bottomRef={bottomRef} />
         </div>
 
+        {isCLevel && (
+          <div className="mb-2 flex items-center justify-between rounded-xl border border-amber-300 bg-amber-50/90 px-4 py-2.5 text-xs font-semibold text-amber-900 shadow-sm">
+            <div className="flex items-center gap-2">
+              <span className="text-base">📊</span>
+              <span>Dành cho C-Level: Xem Dashboard Audit Log & Chi phí AI toàn công ty realtime.</span>
+            </div>
+            <button
+              type="button"
+              onClick={openAuditDashboard}
+              className="rounded-lg bg-amber-600 px-3.5 py-1.5 text-xs font-bold text-white shadow hover:bg-amber-700 transition shrink-0"
+            >
+              Mở Dashboard Audit Log
+            </button>
+          </div>
+        )}
         <form onSubmit={handleSubmit} className="border-t border-slate-200 bg-slate-50 py-4">
           <div className="flex gap-2">
             <input
