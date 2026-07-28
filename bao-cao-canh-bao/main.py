@@ -1,349 +1,373 @@
 import os
 import sys
-import time
-import argparse
-from datetime import datetime
-from dotenv import load_dotenv
-from src.database import get_db_engines, load_config
-from src.etl import get_daily_digest_metrics, get_weekly_digest_metrics, get_monthly_digest_metrics
-from src.notifier import build_digest_email, send_email, flush_critical_teams_queue, send_teams_alert
-from src.alerts import (
-    run_alert_checks,               # bản MOCK (ERP/CRM giả lập) — chỉ dùng ở môi trường 'local'
-    run_smart_business_alerts,      # cảnh báo thật: nợ quá hạn / cháy kho / KPI thấp
-    run_sales_kpi_insights_alert,   # báo cáo phân tích doanh số & KPI theo kênh/chức danh
-    check_revenue_drop_alert,       # doanh thu giảm > ngưỡng so với kỳ trước
-    check_credit_limit_exceeded_alert,   # nợ vượt hạn mức tín dụng (no-op nếu thiếu dữ liệu)
-    # --- Trigger mở rộng (nhóm A-G) ---
-    check_company_overdue_ratio_alert,   # A3: tỷ lệ nợ quá hạn toàn công ty
-    check_overdue_customer_new_orders_alert,  # A2: khách quá hạn vẫn được lên đơn mới
-    check_debt_aging_migration_alert,    # A1: nợ mới chuyển nhóm >45 ngày
-    check_dead_stock_alert,              # B2: tồn kho chết / bán chậm
-    check_near_expiry_alert,             # B1: cận date (no-op nếu thiếu dữ liệu hạn dùng)
-    check_customer_churn_alert,          # C1: khách lớn sụt giảm / nguy cơ mất khách
-    check_revenue_concentration_alert,   # C2: rủi ro tập trung doanh thu
-    check_return_rate_alert,             # E: tỷ lệ hàng trả về cao (ETC)
-    check_zero_sales_rep_alert,          # F: nhân sự doanh số = 0
-    check_kpi_sales_force_risk_alert,    # F2: rủi ro KPI khối OTC miền Nam (QĐ 0429-2, no-op nếu thiếu dữ liệu)
-    check_daily_kpi_pace_alert,          # F3: nhịp KPI ngày từng TDV (đỏ/vàng/xanh, OTC only)
-    check_kpi_milestone_drop_alert,      # F4: mốc ngày 10/20 giảm >5% so TB 5 tháng trước (kênh + từng TDV)
-    check_data_sanity_ok,                # G2: guard chặn alert khi dữ liệu rỗng/hỏng
-    check_etl_freshness_alert,           # G1: ETL đứng (dữ liệu không refresh)
-    check_kpi_revenue_reconciliation_alert,  # G3: doanh thu KPI lệch so với hóa đơn thực tế (OTC)
-    format_vietnamese_money,
+import json
+import datetime as dt
+from collections import defaultdict
+from fastapi import FastAPI, HTTPException, Header, Depends, Query
+from pydantic import BaseModel
+from typing import Optional, List, Dict, Any
+
+from auth import (
+    init_schema as init_auth_schema,
+    verify_login,
+    create_session,
+    get_user_by_session,
+    delete_session,
+    get_name_by_username,
 )
+from conversation_memory import (
+    register_session,
+    list_sessions,
+    delete_session as delete_conversation_session,
+    get_session_history,
+)
+from nl2sql import ask
+
+init_auth_schema()
+
+app = FastAPI(title="DNH AI Chatbot API", version="1.0.0")
+
+API_KEY = os.getenv("BACKEND_API_KEY", "").strip()
 
 
-def _is_alert_business_hours(config):
-    """15/07/2026: chỉ cho phép quét/gửi cảnh báo nghiệp vụ thời gian thực trong giờ hành chính
-    (config['scheduler']::alert_business_hours_start/end/days) — xem ghi chú trong config.yaml.
-    Không có khung giờ trong config (môi trường cũ) -> mặc định luôn cho phép (hành vi cũ)."""
-    sched = config.get('scheduler', {}) or {}
-    start_str = sched.get('alert_business_hours_start')
-    end_str = sched.get('alert_business_hours_end')
-    days = sched.get('alert_business_days')
-    if not start_str or not end_str or not days:
-        return True
-    now = datetime.now()
-    if now.isoweekday() not in days:
-        return False
-    start_h, start_m = (int(x) for x in start_str.split(':'))
-    end_h, end_m = (int(x) for x in end_str.split(':'))
-    start_t = now.replace(hour=start_h, minute=start_m, second=0, microsecond=0)
-    end_t = now.replace(hour=end_h, minute=end_m, second=0, microsecond=0)
-    return start_t <= now < end_t
+def require_api_key(x_api_key: str = Header(default=None)):
+    if API_KEY and x_api_key != API_KEY:
+        raise HTTPException(401, "API Key khong hop le")
 
 
-def run_all_alert_checks(config, erp_engine=None, crm_engine=None):
+def require_user(authorization: str = Header(default=None)) -> dict:
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(401, "Yeu cau dang nhap (thieu Bearer token)")
+    token = authorization.split(" ", 1)[1]
+    user = get_user_by_session(token)
+    if not user:
+        raise HTTPException(401, "Phien dang nhap het han hoac khong hop le")
+    return user
+
+
+_USER_LAST_REQUEST = {}
+RATE_LIMIT_INTERVAL_SEC = 2.0
+
+
+def _check_rate_limit(username: str):
+    now = dt.datetime.now()
+    last = _USER_LAST_REQUEST.get(username)
+    if last and (now - last).total_seconds() < RATE_LIMIT_INTERVAL_SEC:
+        raise HTTPException(429, "Thao tac qua nhanh, vui long cho 2 giay")
+    _USER_LAST_REQUEST[username] = now
+
+
+def _require_session_access(session_id: str, user: dict):
+    from conversation_memory import get_session_owner
+    owner = get_session_owner(session_id)
+    if owner is not None and owner != user["username"] and user["role"] != "c_level":
+        raise HTTPException(403, "Khong co quyen truy cap cuoc tro chuyen nay")
+
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+
+class LoginResponse(BaseModel):
+    token: str
+    username: str
+    name: Optional[str]
+    role: str
+    scope_value: Optional[str]
+    scope_channel: Optional[str]
+
+
+class UserInfo(BaseModel):
+    username: str
+    name: Optional[str]
+    role: str
+    scope_value: Optional[str]
+    scope_channel: Optional[str]
+
+
+class ChatRequest(BaseModel):
+    question: str
+    session_id: str
+
+
+class ChatResponse(BaseModel):
+    answer: str
+    sql_used: list[str]
+    columns: Optional[list[str]] = None
+    rows: Optional[list[list[Any]]] = None
+    row_count: Optional[int] = None
+
+
+class SessionSummary(BaseModel):
+    session_id: str
+    title: Optional[str]
+    owner_username: str
+    owner_name: Optional[str]
+    created_at: str
+    updated_at: str
+
+
+class HistoryMessage(BaseModel):
+    role: str
+    content: str
+
+
+@app.get("/health")
+def health():
+    return {"status": "ok", "timestamp": dt.datetime.now().isoformat()}
+
+
+@app.post("/auth/login", response_model=LoginResponse, dependencies=[Depends(require_api_key)])
+def login(req: LoginRequest):
+    user = verify_login(req.username, req.password)
+    if not user:
+        raise HTTPException(401, "Tai khoan hoac mat khau khong dung")
+    token = create_session(user["id"])
+    return LoginResponse(
+        token=token,
+        username=user["username"],
+        name=user["name"],
+        role=user["role"],
+        scope_value=user["scope_value"],
+        scope_channel=user["scope_channel"],
+    )
+
+
+@app.post("/auth/logout", dependencies=[Depends(require_api_key)])
+def logout(authorization: str = Header(default=None)):
+    if authorization and authorization.startswith("Bearer "):
+        token = authorization.split(" ", 1)[1]
+        delete_session(token)
+    return {"ok": True}
+
+
+@app.get("/auth/me", response_model=UserInfo, dependencies=[Depends(require_api_key)])
+def me(user: dict = Depends(require_user)):
+    return UserInfo(
+        username=user["username"],
+        name=user["name"],
+        role=user["role"],
+        scope_value=user["scope_value"],
+        scope_channel=user["scope_channel"],
+    )
+
+
+@app.get("/history/{session_id}", response_model=list[HistoryMessage], dependencies=[Depends(require_api_key)])
+def get_history(session_id: str, user: dict = Depends(require_user)):
+    _require_session_access(session_id, user)
+    return get_session_history(session_id)
+
+
+@app.get("/sessions", response_model=list[SessionSummary], dependencies=[Depends(require_api_key)])
+def get_sessions(user: dict = Depends(require_user)):
+    rows = list_sessions(None if user["role"] == "c_level" else user["username"])
+    out = []
+    for r in rows:
+        owner_name = get_name_by_username(r["owner_username"]) if user["role"] == "c_level" else user.get("name")
+        out.append(SessionSummary(
+            session_id=r["session_id"],
+            title=r["title"],
+            owner_username=r["owner_username"],
+            owner_name=owner_name,
+            created_at=r["created_at"],
+            updated_at=r["updated_at"],
+        ))
+    return out
+
+
+@app.delete("/sessions/{session_id}", dependencies=[Depends(require_api_key)])
+def delete_session_endpoint(session_id: str, user: dict = Depends(require_user)):
+    from conversation_memory import get_session_owner
+    owner = get_session_owner(session_id)
+    if owner is not None and owner != user["username"]:
+        raise HTTPException(403, "Chi chu so huu moi co quyen xoa cuoc tro chuyen nay")
+    delete_conversation_session(session_id)
+    return {"ok": True}
+
+
+@app.post("/clear/{session_id}", dependencies=[Depends(require_api_key)])
+def clear(session_id: str, user: dict = Depends(require_user)):
+    _require_session_access(session_id, user)
+    from conversation_memory import clear_session_history
+    clear_session_history(session_id)
+    return {"ok": True}
+
+
+@app.post("/chat", response_model=ChatResponse, dependencies=[Depends(require_api_key)])
+def chat(req: ChatRequest, user: dict = Depends(require_user)):
+    if not req.question or not req.question.strip():
+        raise HTTPException(400, "Cau hoi khong duoc de trong")
+    _check_rate_limit(user["username"])
+    _require_session_access(req.session_id, user)
+    try:
+        scope_area_code = user["scope_value"] if user["role"] in ("regional_director", "qlv") else None
+        scope_employee_code = user["employee_code"] if user["role"] == "qlv" else None
+        scope_channel = user.get("scope_channel")
+        result = ask(req.question, session_id=req.session_id, username=user["username"],
+                     scope_area_code=scope_area_code, scope_employee_code=scope_employee_code,
+                     scope_channel=scope_channel)
+        register_session(req.session_id, user["username"], req.question)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, f"Loi he thong: {str(e)[:300]}")
+
+    lr = result.get("last_result") or {}
+    is_raw_sql = lr.get("ok") and "columns" in lr
+    return ChatResponse(
+        answer=result["answer"],
+        sql_used=result["sql_used"],
+        columns=lr.get("columns") if is_raw_sql else None,
+        rows=lr.get("rows") if is_raw_sql else None,
+        row_count=lr.get("row_count") if is_raw_sql else None,
+    )
+
+
+@app.get("/audit-logs", dependencies=[Depends(require_api_key)])
+def get_audit_logs_dashboard(
+    days: int = Query(default=30, ge=1, le=365),
+    limit: int = Query(default=200, ge=1, le=1000),
+    user_filter: Optional[str] = None,
+    user: dict = Depends(require_user)
+):
     """
-    Chạy TOÀN BỘ cảnh báo nghiệp vụ THẬT của DNH đọc từ dữ liệu thật:
-      - run_smart_business_alerts(): nợ quá hạn, cháy kho, KPI thấp
-      - run_sales_kpi_insights_alert(): phân tích doanh số & KPI theo kênh/chức danh
-      - check_revenue_drop_alert(): doanh thu giảm > ngưỡng so với kỳ trước
-      - check_credit_limit_exceeded_alert(): nợ vượt hạn mức tín dụng (no-op nếu chưa có dữ liệu)
-
-    Mỗi hàm tự bọc try/except bên trong nên lỗi 1 loại cảnh báo không làm chết cả vòng lặp.
-    Bản MOCK run_alert_checks(ERP/CRM giả lập) CHỈ chạy khi environment == 'local' để dev test;
-    production KHÔNG bao giờ chạy mock.
+    Dashboard Audit Log & Chi phi AI truc quan khong can hoi AI - danh rieng cho Ban Dieu Hanh (C-Level / Super Admin).
     """
-    if not _is_alert_business_hours(config):
-        print(f"[ALERTS] Ngoài giờ hành chính ({datetime.now().strftime('%Y-%m-%d %H:%M:%S')}) — bỏ qua chu kỳ quét cảnh báo này.")
-        return
+    if user["role"] != "c_level":
+        raise HTTPException(403, "Chi tai khoan C-Level / Ban Dieu Hanh moi co quyen xem Dashboard Audit Log")
 
-    flags = config.get('alert_feature_flags', {}) or {}
+    _LOGS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs")
+    AUDIT_LOG_PATH = os.path.join(_LOGS_DIR, "audit_log.jsonl")
+    COST_LOG_PATH = os.path.join(_LOGS_DIR, "cost_log.jsonl")
 
-    # G1: health-check ETL trước (không phụ thuộc dữ liệu nghiệp vụ) — tắt tạm khi trỏ vào
-    # Supabase dev/test (snapshot tĩnh, SyncAt không tăng nên sẽ báo "ETL đứng" liên tục sai).
-    if flags.get('etl_freshness_check', True):
-        check_etl_freshness_alert()
+    cutoff = dt.datetime.now() - dt.timedelta(days=days) if days else None
 
-    # G2: guard — nếu dữ liệu cốt lõi rỗng/hỏng thì DỪNG, không gửi alert nghiệp vụ sai
-    if not check_data_sanity_ok():
-        print("[ALERTS] Dữ liệu bất thường (rỗng) — bỏ qua các cảnh báo nghiệp vụ lần này.")
-        return
+    # 1. Read audit logs
+    audit_entries = []
+    if os.path.exists(AUDIT_LOG_PATH):
+        with open(AUDIT_LOG_PATH, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    audit_entries.append(json.loads(line))
+                except Exception:
+                    continue
 
-    print("[ALERTS] Chạy các cảnh báo nghiệp vụ thật...")
+    # 2. Read cost logs mapped by session_id
+    cost_by_session = defaultdict(lambda: {"cost_usd": 0.0, "input_tokens": 0, "output_tokens": 0, "total_tokens": 0, "calls": 0})
+    if os.path.exists(COST_LOG_PATH):
+        with open(COST_LOG_PATH, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    c = json.loads(line)
+                    sid = c.get("session_id")
+                    if sid:
+                        cost = c.get("cost_usd", 0.0) or 0.0
+                        it = c.get("input_tokens", 0) or 0
+                        ot = c.get("output_tokens", 0) or 0
+                        tt = c.get("total_tokens", 0) or (it + ot)
+                        cost_by_session[sid]["cost_usd"] += cost
+                        cost_by_session[sid]["input_tokens"] += it
+                        cost_by_session[sid]["output_tokens"] += ot
+                        cost_by_session[sid]["total_tokens"] += tt
+                        cost_by_session[sid]["calls"] += 1
+                except Exception:
+                    continue
 
-    # Nhóm cảnh báo gốc
-    run_smart_business_alerts()          # nợ quá hạn / cháy kho / KPI thấp
-    run_sales_kpi_insights_alert()       # phân tích doanh số & KPI
-    # Trigger mở rộng — mỗi hàm tự try/except, lỗi 1 cái không chặn cái khác
-    check_revenue_drop_alert()
-    if flags.get('credit_limit_check', True):
-        check_credit_limit_exceeded_alert()
-    check_company_overdue_ratio_alert()
-    check_overdue_customer_new_orders_alert()
-    check_debt_aging_migration_alert()
-    check_dead_stock_alert()
-    if flags.get('near_expiry_check', True):
-        check_near_expiry_alert()
-    check_customer_churn_alert()
-    check_revenue_concentration_alert()
-    check_return_rate_alert()
-    check_zero_sales_rep_alert()
-    if flags.get('kpi_sales_force_risk_check', True):
-        check_kpi_sales_force_risk_alert()
-    check_daily_kpi_pace_alert()
-    check_kpi_milestone_drop_alert()
-    check_kpi_revenue_reconciliation_alert()
+    # 3. Filter entries & aggregate stats per user
+    filtered_logs = []
+    user_stats = defaultdict(lambda: {"query_count": 0, "input_tokens": 0, "output_tokens": 0, "total_tokens": 0, "cost_usd": 0.0})
+    total_cost_usd = 0.0
+    total_input_tokens = 0
+    total_output_tokens = 0
 
-    if str(config.get('environment', 'local')).lower() == 'local' and erp_engine is not None and crm_engine is not None:
-        print("[ALERTS] (môi trường 'local') Chạy thêm bộ MOCK ERP/CRM để dev test...")
-        run_alert_checks(erp_engine, crm_engine)
+    target_user_str = (user_filter or "").strip().lower()
 
-    # Gửi hết card CRITICAL đã gom trong hàng đợi (xem src/notifier.py::flush_critical_teams_queue)
-    # — BẮT BUỘC gọi ở CUỐI, sau khi TẤT CẢ check_*_alert() ở trên đã chạy xong, để gộp đúng mọi
-    # alert CRITICAL phát hiện được trong CÙNG 1 chu kỳ quét thành 1 card duy nhất/webhook.
-    flush_critical_teams_queue()
+    for e in audit_entries:
+        uname = e.get("username") or "unknown"
+        if target_user_str and target_user_str not in ("all", ""):
+            if target_user_str not in uname.lower():
+                continue
+        if cutoff:
+            try:
+                if dt.datetime.fromisoformat(e["ts"]) < cutoff:
+                    continue
+            except Exception:
+                pass
 
-load_dotenv()
+        sid = e.get("session_id")
+        session_cost_data = cost_by_session.get(sid, {})
+        c_usd = session_cost_data.get("cost_usd", 0.0)
+        c_it = session_cost_data.get("input_tokens", 0)
+        c_ot = session_cost_data.get("output_tokens", 0)
+        c_tt = session_cost_data.get("total_tokens", c_it + c_ot)
 
-def _digest_table(metrics):
-    """Chuyển metrics dict (doanh thu/công nợ/tồn kho THẬT từ Supabase) thành
-    table_headers/table_rows để gửi qua Email (dùng cho bản tóm tắt dạng bảng đơn giản —
-    email HTML đầy đủ hơn thì xem build_digest_email/DIGEST_EMAIL_TEMPLATE)."""
-    headers = ["Chỉ số", "Giá trị"]
-    change_pct = metrics['revenue']['change_pct']
-    prev_label = metrics['revenue'].get('prev_period_label', '')
-    change_str = f"{change_pct:+.1f}% so kỳ {prev_label}" if change_pct is not None else "chưa đủ dữ liệu kỳ trước"
-    # 17/07/2026: audience đã lọc theo 1 kênh (vd "Quản lý Kênh OTC") thì etc_rev/etc_invoice_count
-    # đã bị ép về 0 ở get_digest_metrics (đúng) — nhưng hiện thẳng "Doanh thu ETC: 0đ" trong báo cáo
-    # OTC là rác hiển thị vô nghĩa, dễ gây hiểu lầm là "ETC thật sự bằng 0". Ẩn hẳn dòng kênh không
-    # thuộc scope thay vì hiện số 0 giả.
-    scoped_channel = metrics.get('channel')
-    rows = []
-    if scoped_channel != "ETC":
-        rows.append(["Doanh thu OTC", format_vietnamese_money(metrics['revenue']['otc'])])
-    if scoped_channel != "OTC":
-        rows.append(["Doanh thu ETC", format_vietnamese_money(metrics['revenue']['etc'])])
-    rows.append(["Tổng doanh thu", f"{format_vietnamese_money(metrics['revenue']['total'])} ({change_str})"])
-    if scoped_channel != "ETC":
-        rows.append(["Số hóa đơn OTC", str(metrics['revenue']['otc_invoice_count'])])
-    if scoped_channel != "OTC":
-        rows.append(["Số hóa đơn ETC", str(metrics['revenue']['etc_invoice_count'])])
-    rows.append(["Tổng số hóa đơn", str(metrics['revenue']['invoice_count'])])
-    rows.append(["Mặt hàng tồn chết", str(metrics['inventory']['dead_stock_count'])])
-    rows.append(["Mặt hàng sắp hết hàng", str(metrics['inventory']['near_stockout_count'])])
-    # 14/07/2026: bỏ hẳn khối công nợ chi tiết (5 dòng Nợ quá hạn/Dư nợ OTC/ETC/Tổng) — Daily
-    # Digest chỉ còn doanh thu + tồn kho, ngắn gọn xem nhanh. Cảnh báo nợ quá hạn nghiêm trọng
-    # (vượt ngưỡng) vẫn tự bắn CARD RIÊNG qua Teams khi phát sinh (check_company_overdue_ratio_alert
-    # trong src/alerts.py), độc lập với Daily Digest này.
-    #
-    # 16/07/2026: THÊM LẠI mục cảnh báo — nhưng khác bản cũ đã bỏ: giờ chỉ liệt kê cảnh báo THẬT
-    # SỰ có ý nghĩa nghiệp vụ (metrics['highlights'], đã lọc bỏ data_sanity_zero/etl_stale/
-    # sales_kpi_insights_report ở _get_period_highlights — xem src/etl.py), scope ĐÚNG NGÀY hôm
-    # nay (không phải toàn bộ lịch sử), không phải liệt kê thô mọi alert_key kỹ thuật như trước.
-    for h in metrics.get('highlights', []):
-        rows.append([f"Cảnh báo: {h['label']}", f"{h['value_display']} (lúc {h['sent_at_display']})"])
+        display_name = get_name_by_username(uname) or uname
 
-    return headers, rows
+        user_stats[uname]["query_count"] += 1
+        user_stats[uname]["input_tokens"] += c_it
+        user_stats[uname]["output_tokens"] += c_ot
+        user_stats[uname]["total_tokens"] += c_tt
+        user_stats[uname]["cost_usd"] += c_usd
+        user_stats[uname]["display_name"] = display_name
 
-def send_daily_digest():
-    """
-    Trích xuất dữ liệu tổng hợp trong ngày và gửi qua Teams —
-    quy tắc kênh: ALERT nghiệp vụ (src/alerts.py) và Daily Digest đi Teams (cần ngắn gọn, xem
-    nhanh); Weekly/Monthly Report đi Outlook (báo cáo dài, đọc kỹ không cần đọc ngay). Đổi từ
-    Email sang Teams 10/07/2026 theo yêu cầu — trước đó Daily Digest từng đi Email, nay khớp với
-    ghi chú kênh đã có sẵn trong send_alert_to_all_channels().
+        total_cost_usd += c_usd
+        total_input_tokens += c_it
+        total_output_tokens += c_ot
 
-    13/07/2026: đổi từ gửi 1 bản chung (không lọc region/channel -> chỉ khớp audience "C-Level
-    Toàn quốc", 5 audience còn lại không nhận được Daily Digest) sang lặp qua report_recipients
-    (giống _send_periodic_email_report của Weekly/Monthly) — mỗi audience nhận đúng phạm vi dữ
-    liệu của mình. Gửi TRỰC TIẾP tới đúng teams_webhook của từng audience (send_teams_alert +
-    webhook_url_override) thay vì qua send_alert_to_all_channels/_resolve_teams_webhooks — cơ chế
-    đó tự fan-out theo region/channel KHỚP nên nếu gọi lặp sẽ khiến C-Level nhận trùng cả 6 bản
-    (audience không giới hạn vùng/kênh luôn khớp mọi lần gọi).
-    """
-    print(f"[{datetime.now()}] Đang chuẩn bị báo cáo Daily Digest...")
-    from src.region_map import REGION_NAMES_VI
+        filtered_logs.append({
+            "ts": e.get("ts"),
+            "username": uname,
+            "user_name": display_name,
+            "question": e.get("question"),
+            "sql": e.get("sql"),
+            "status": e.get("status", "success"),
+            "duration_ms": e.get("duration_ms"),
+            "input_tokens": c_it,
+            "output_tokens": c_ot,
+            "total_tokens": c_tt,
+            "cost_usd": round(c_usd, 6),
+            "cost_vnd": round(c_usd * 25400.0, 2)
+        })
 
-    config = load_config()
-    recipients = config.get('report_recipients') or []
-    if not recipients:
-        print(f"[{datetime.now()}] Chưa cấu hình report_recipients — gửi Daily Digest bản không lọc (hành vi cũ).")
-        recipients = [{"audience": None, "region": None, "channel": None, "teams_webhook": None}]
+    filtered_logs.sort(key=lambda x: x.get("ts", ""), reverse=True)
+    recent_logs = filtered_logs[:limit]
 
-    overall_ok = True
-    for r in recipients:
-        audience = r.get('audience')
-        region = r.get('region')
-        channel = r.get('channel')
-        webhook = (r.get('teams_webhook') or '').strip() or None
-        try:
-            metrics = get_daily_digest_metrics(region=region, channel=channel)
-            headers, rows = _digest_table(metrics)
-            region_label = REGION_NAMES_VI.get(region, region) if region else "Toàn quốc"
-            title = f"BÁO CÁO TỔNG HỢP HÀNG NGÀY ({metrics['date']})" + (f" — {audience}" if audience else "")
-            summary = (
-                f"Tổng hợp hoạt động ERP/CRM ngày {metrics['date']}."
-                f" Dữ liệu cập nhật lúc {metrics.get('updated_at', 'N/A')}."
-            )
-            sent = send_teams_alert(
-                title=title,
-                summary=summary,
-                table_headers=headers,
-                table_rows=rows,
-                severity="INFO",
-                period=metrics['date'],
-                channel=channel or "OTC + ETC (gộp)",
-                region=region_label,
-                webhook_url_override=webhook,
-            )
-            if sent:
-                print(f"[{datetime.now()}] Daily Digest cho '{audience or 'mặc định'}' đã gửi thành công.")
-            else:
-                print(f"[{datetime.now()}] Gửi Daily Digest cho '{audience or 'mặc định'}' thất bại.")
-                overall_ok = False
-        except Exception as e:
-            print(f"[{datetime.now()}] Lỗi khi tạo/gửi Daily Digest cho '{audience or 'mặc định'}': {e}")
-            overall_ok = False
-    return overall_ok
+    user_breakdown = []
+    for uname, s in sorted(user_stats.items(), key=lambda x: -x[1]["cost_usd"]):
+        user_breakdown.append({
+            "username": uname,
+            "user_name": s.get("display_name", uname),
+            "query_count": s["query_count"],
+            "input_tokens": s["input_tokens"],
+            "output_tokens": s["output_tokens"],
+            "total_tokens": s["total_tokens"],
+            "cost_usd": round(s["cost_usd"], 6),
+            "cost_vnd": round(s["cost_usd"] * 25400.0, 2)
+        })
 
-def _scope_label(region, channel):
-    """Nhãn phạm vi hiển thị trong email — dùng chung tên miền tiếng Việt đã kiểm chứng."""
-    parts = []
-    if region:
-        from src.region_map import REGION_NAMES_VI
-        parts.append(REGION_NAMES_VI.get(region, region))
-    if channel:
-        parts.append(f"Kênh {channel}")
-    return " — ".join(parts) if parts else "Toàn quốc, tất cả kênh"
+    return {
+        "summary": {
+            "total_cost_usd": round(total_cost_usd, 6),
+            "total_cost_vnd": round(total_cost_usd * 25400.0, 2),
+            "total_input_tokens": total_input_tokens,
+            "total_output_tokens": total_output_tokens,
+            "grand_total_tokens": total_input_tokens + total_output_tokens,
+            "total_queries": len(filtered_logs),
+            "unique_users_count": len(user_stats),
+            "days": days
+        },
+        "user_breakdown": user_breakdown,
+        "logs": recent_logs
+    }
 
-def _send_periodic_email_report(get_metrics_fn, period_label, report_title):
-    """
-    Dùng chung cho Weekly/Monthly report — CHỈ gửi qua Email (báo cáo lớn, đọc kỹ không cần đọc
-    ngay). Lặp qua config['report_recipients'] (Phần 3 — phân quyền theo cấp quản lý), gọi
-    get_metrics_fn(region=.., channel=..) cho từng audience rồi gửi RIÊNG tới email của audience
-    đó — mỗi audience nhận đúng phạm vi dữ liệu của mình, không gộp chung 1 bản như trước.
-    Nếu config chưa có report_recipients (vd môi trường cũ chưa cập nhật) thì fallback gửi 1 bản
-    không lọc như hành vi cũ, để không phá vỡ nơi gọi khác.
-    """
-    config = load_config()
-    recipients = config.get('report_recipients') or []
-    if not recipients:
-        print(f"[{datetime.now()}] Chưa cấu hình report_recipients — gửi {report_title} bản không lọc (hành vi cũ).")
-        recipients = [{"audience": None, "region": None, "channel": None, "emails": None}]
 
-    overall_ok = True
-    for r in recipients:
-        audience = r.get('audience')
-        region = r.get('region')
-        channel = r.get('channel')
-        emails = [e for e in (r.get('emails') or []) if e]
-        print(f"[{datetime.now()}] Đang chuẩn bị {report_title} cho '{audience or 'mặc định'}'...")
-        try:
-            metrics = get_metrics_fn(region=region, channel=channel)
-            scope = _scope_label(region, channel)
-            subject_suffix = f" ({audience})" if audience else ""
-            # 13/07/2026: bỏ emoji 🔴/📊 ở tiêu đề + Outlook Importance:High — báo cáo ĐỊNH KỲ
-            # không cần "hét" mức khẩn cấp giống alert thời gian thực (Teams đã lo việc đó); vẫn
-            # giữ banner text nhắc nhở trong nội dung (xem metrics.has_critical trong template)
-            # để người đọc biết cần xem kỹ mục "Điểm Nổi Bật", chỉ không dùng màu/cờ gắt nữa.
-            subject = f"{report_title}{subject_suffix} — {metrics.get('period_range', metrics['date'])}"
-            html_content = build_digest_email(metrics, period_label=period_label, audience=audience, scope_label=scope)
-            if send_email(subject, html_content, recipient_override=emails or None, importance=None):
-                print(f"[{datetime.now()}] {report_title} cho '{audience or 'mặc định'}' đã gửi thành công.")
-            else:
-                print(f"[{datetime.now()}] Gửi {report_title} cho '{audience or 'mặc định'}' thất bại.")
-                overall_ok = False
-        except Exception as e:
-            print(f"[{datetime.now()}] Lỗi khi tạo/gửi {report_title} cho '{audience or 'mặc định'}': {e}")
-            overall_ok = False
-    return overall_ok
-
-def send_weekly_report():
-    return _send_periodic_email_report(get_weekly_digest_metrics, "Weekly", "Báo cáo tổng hợp TUẦN")
-
-def send_monthly_report():
-    return _send_periodic_email_report(get_monthly_digest_metrics, "Monthly", "Báo cáo tổng hợp THÁNG")
-
-def main():
-    parser = argparse.ArgumentParser(description="Pipeline ETL & Cảnh báo thời gian thực ERP/CRM")
-    parser.add_argument('--once', action='store_true', help='Chạy trích xuất và kiểm tra cảnh báo 1 lần duy nhất rồi thoát')
-    parser.add_argument('--send-daily', action='store_true', help='Gửi báo cáo Daily Digest (Email) ngay lập tức rồi thoát')
-    parser.add_argument('--send-weekly', action='store_true', help='Gửi báo cáo Weekly (Email) ngay lập tức rồi thoát')
-    parser.add_argument('--send-monthly', action='store_true', help='Gửi báo cáo Monthly (Email) ngay lập tức rồi thoát')
-    args = parser.parse_args()
-
-    config = load_config()
-    is_local = str(config.get('environment', 'local')).lower() == 'local'
-
-    # Chỉ tạo mock ERP/CRM engine ở môi trường 'local' (production đọc dữ liệu thật, không cần mock).
-    erp_engine = crm_engine = None
-    if is_local:
-        try:
-            erp_engine, crm_engine = get_db_engines()
-        except Exception as e:
-            print(f"[{datetime.now()}] Cảnh báo: không tạo được mock ERP/CRM engine (bỏ qua bản mock): {e}")
-
-    # 1. Nếu yêu cầu gửi báo cáo ngay lập tức
-    if args.send_daily:
-        send_daily_digest()
-        sys.exit(0)
-    if args.send_weekly:
-        send_weekly_report()
-        sys.exit(0)
-    if args.send_monthly:
-        send_monthly_report()
-        sys.exit(0)
-
-    # 2. Nếu yêu cầu chạy check 1 lần duy nhất
-    if args.once:
-        print(f"[{datetime.now()}] Bắt đầu quét cảnh báo nghiệp vụ DNH một lần...")
-        run_all_alert_checks(config, erp_engine, crm_engine)
-        print(f"[{datetime.now()}] Quét cảnh báo hoàn thành.")
-        sys.exit(0)
-
-    # 3. Chạy dạng Vòng lặp/Dịch vụ nền liên tục — vai trò LƯỚI AN TOÀN DỰ PHÒNG.
-    # Cảnh báo thời gian thực chính được trigger NGAY sau mỗi lần đồng bộ Bravo (xem
-    # scripts/sync_from_bravo_to_supabase.py::run_alert_checks_after_sync) — độ trễ gần như
-    # bằng 0 vì chạy đúng lúc dữ liệu vừa cập nhật, thay vì đoán chu kỳ poll. Vòng lặp này chỉ
-    # chạy lại định kỳ để bắt các trường hợp lỡ (sync thất bại giữa chừng, ETL bị đứng — xem
-    # check_etl_freshness_alert). Báo cáo Daily/Weekly/Monthly đã tách sang scheduled task riêng
-    # (DNH_Daily_Digest_1745/DNH_Weekly_Report/DNH_Monthly_Report — scripts/register_digest_schedule.bat),
-    # không còn phụ thuộc vòng lặp này nên không cần poll theo phút nữa.
-    interval = int(config['scheduler'].get('etl_check_interval_seconds', 3600))
-
-    print("=" * 60)
-    print(" KHỞI CHẠY PIPELINE CẢNH BÁO NGHIỆP VỤ (LƯỚI AN TOÀN DỰ PHÒNG) ")
-    print(f" - Tần suất quét dự phòng: {interval} giây")
-    print(" - Cảnh báo thời gian thực chính: trigger ngay sau mỗi lần đồng bộ Bravo (5 lần/ngày)")
-    print(" - Báo cáo Daily/Weekly/Monthly: chạy qua scheduled task riêng, không qua vòng lặp này")
-    print(" Cửa sổ CMD này cần được mở để hệ thống tiếp tục chạy nền.")
-    print("=" * 60)
-
-    while True:
-        try:
-            now = datetime.now()
-            print(f"[{now.strftime('%Y-%m-%d %H:%M:%S')}] Đang quét cảnh báo nghiệp vụ DNH (lưới an toàn dự phòng)...")
-            run_all_alert_checks(config, erp_engine, crm_engine)
-        except KeyboardInterrupt:
-            print("\nDừng dịch vụ theo yêu cầu người dùng.")
-            break
-        except Exception as e:
-            print(f"[{datetime.now()}] Lỗi hệ thống trong vòng lặp chính: {e}")
-
-        # Chờ đến chu kỳ quét tiếp theo
-        time.sleep(interval)
-
-if __name__ == '__main__':
-    main()
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
