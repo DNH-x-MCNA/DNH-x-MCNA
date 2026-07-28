@@ -1,8 +1,12 @@
 # Nội dung Báo cáo tiến độ — 30/07/2026
 
-*Soạn 22/07/2026. Bám đúng cấu trúc 6 slide của bản báo cáo 16/07 (Google Slides) để tái sử dụng
-template. Số liệu lấy tại 22/07 — **các ô đánh dấu 🔄 cần chạy lại ngay trước buổi họp** (dữ liệu
-thay đổi hằng ngày; xem mục "Lệnh lấy số liệu" ở cuối file).*
+*Soạn 22/07/2026, **cập nhật 28/07** với phần việc tuần 23–30/07. Bám đúng cấu trúc 6 slide của bản
+báo cáo 16/07 (Google Slides) để tái sử dụng template. Số liệu lấy tại 28/07 — **các ô đánh dấu 🔄 cần
+chạy lại ngay trước buổi họp** (dữ liệu thay đổi hằng ngày; xem mục "Lệnh lấy số liệu" ở cuối file).*
+
+> **Kỳ báo cáo: 16/07 → 30/07** (2 tuần, kể từ buổi họp 16/07). Tổng kết cả kỳ: **15/15 hạng mục kiểm
+> định đạt · 9 lỗi số liệu đã sửa · 3 lỗ hổng phân quyền đã bịt** — tất cả do MCNA tự rà soát phát
+> hiện. Xem [`checklist_bao_cao_30-07.md`](checklist_bao_cao_30-07.md) cho việc cần làm sáng 30/07.
 
 ---
 
@@ -56,7 +60,7 @@ Kiểm **từ dưới lên**: cá nhân → quản lý → vùng → toàn công
 
 **→ 15/15 hạng mục đạt, sai lệch 0 đồng ở mọi ranh giới giữa các lớp.**
 
-### 3 lỗi thật phát hiện & sửa nhờ quy trình này
+### 5 lỗi thật phát hiện & sửa nhờ quy trình này
 
 **① Tỷ lệ nợ quá hạn 92,9% / 81,1% mà DNH phản ánh — xác nhận là LỖI THẬT, đã sửa.**
 Công thức cũ đọc cột "đã thanh toán" bị đứng yên (không ghi nhận khoản trả sau, không đối trừ ứng
@@ -74,16 +78,64 @@ DNH sửa dữ liệu gốc**.
 
 **③ Nhóm khách hàng thiếu hồ sơ vùng** khiến **2,1 tỷ** doanh thu không được tính vào đúng miền.
 
+**④ Chỉ tiêu tháng bị lấy nhầm của tháng khác** *(mới, tuần 23–30/07)* — khi xem doanh số theo từng
+ngày của một nhân viên, hệ thống lấy chỉ tiêu **cao nhất trong 3 tháng gần nhất** thay vì chỉ tiêu của
+đúng tháng đang xem. Trên một nhân viên thật: lấy 343,7 triệu (của tháng 4) thay vì 302,2 triệu của
+tháng 7.
+
+| | Trước khi sửa | Sau khi sửa |
+|---|---|---|
+| Mức hoàn thành tháng | 65,2% | **74,1%** |
+| Số ngày bị chấm Đỏ | 11 | **10** |
+
+Nhân viên bị báo thấp hơn thực tế **9 điểm %**, 3 ngày bị chấm màu xấu oan. Lỗi áp dụng cho **mọi nhân
+viên bán hàng**. Đây cũng chính là nguyên nhân **chênh lệch 1,13 tỷ** còn treo từ buổi họp trước.
+
+**⑤ Hai đơn vị kinh doanh miền Nam biến mất khỏi báo cáo KPI** *(mới)* — "Kênh MT" và "Chợ sỉ" không
+hiện trong danh sách quản lý vùng do cách tổ chức dữ liệu khác các đội thường, làm **hụt 6,79 tỷ** chỉ
+tiêu miền Nam.
+
+### Hai chênh lệch còn treo từ buổi họp 16/07 — đã đóng cả hai
+
+| Chênh lệch | Kết luận |
+|---|---|
+| **1,75 tỷ** (chỉ tiêu miền Bắc) | **Không phải lỗi** — là phần chỉ tiêu cá nhân của các quản lý vừa quản đội vừa tự phụ trách địa bàn, hoàn toàn hợp lệ. Kiểm chứng khớp báo cáo gốc **0 đồng** cả 3 miền, bền qua **7 tháng liên tiếp** |
+| **1,13 tỷ** (chỉ tiêu một quản lý) | Chính là lỗi ④ ở trên, đã sửa |
+
+*Đồng thời điều này cũng bác bỏ nghi vấn "chỉ tiêu cấp vùng cộng chồng lên chỉ tiêu cá nhân" ở mức số
+học — tổng gộp khớp tuyệt đối với bảng chỉ tiêu vùng chính thức của DNH.*
+
 ---
 
 ## SLIDE 4 — Nhật ký công việc (2/2): Chatbot & Báo cáo
 
 **Kỳ 15/07 – 30/07/2026**
 
+### ⭐ Công nợ trên chatbot — đã về cùng một nguồn với báo cáo *(mới, tuần 23–30/07)*
+
+Rủi ro lớn nhất còn lại sau họp 16/07: chatbot và báo cáo trả lời công nợ từ **hai nguồn khác nhau**.
+Chatbot đọc bảng nhập tay một lần từ đầu dự án, không tự làm mới — chính nguồn gây ra con số 9,17 tỷ
+ở lỗi ① slide trước. Nay chatbot đọc **trực tiếp báo cáo công nợ gốc của DNH**.
+
+| Kiểm chứng | Kết quả |
+|---|---|
+| Đối chiếu chatbot ↔ báo cáo gốc | ✅ **Lệch 0 đồng** (180,48 tỷ dư nợ · 77,07 tỷ quá hạn) |
+| Số dòng dữ liệu | 9.787 khách hàng × kênh |
+
+Đồng thời **chặn cứng đường quay lại nguồn cũ** ở ba lớp. **→ Câu hỏi công nợ nay đủ tin cậy để đưa
+vào Demo #1** — đây là câu ban lãnh đạo chắc chắn hỏi.
+
 ### AI Chatbot (Giai đoạn 2)
 - **Phân quyền theo vùng đã áp dụng thật ở tầng code** — mỗi tài khoản chỉ truy vấn được đúng
   vùng/kênh của mình, không phụ thuộc vào việc AI có "tự giác" lọc hay không.
   *(Đáp ứng trực tiếp yêu cầu tại họp 16/07: mỗi QLV chỉ tự kiểm tra vùng mình.)*
+- **Bịt thêm 2 lỗ hổng phân quyền** *(mới)*, cả hai do MCNA tự rà soát phát hiện:
+  - *Quản lý vùng xem được doanh thu toàn miền* — hỏi "doanh thu tháng này" nhận về doanh thu **cả
+    miền** (tổng 10 đội) thay vì riêng đội mình. Lớp bảo vệ dựng trước đó chỉ phủ nhóm báo cáo KPI, bỏ
+    sót nhóm doanh thu/khách hàng/tồn kho/công nợ. Đã chặn theo nguyên tắc **thà từ chối còn hơn lộ
+    nhầm** *(hệ quả cần DNH chốt — xem Slide 6)*.
+  - *Có thể tự nâng quyền qua báo cáo chi phí AI* — danh tính và vai trò người dùng do phần AI tự khai
+    thay vì máy chủ quyết định. Đã sửa để **máy chủ luôn là bên quyết định quyền hạn**.
 - **Cảnh báo khi dữ liệu có thể cũ** — phát hiện tiến trình đồng bộ treo, thay vì trả lời tự tin
   bằng số liệu cũ.
 - **Cảnh báo khi số liệu không khớp** — nếu tổng theo vùng lệch tổng chung, chatbot **nói rõ với
@@ -101,20 +153,53 @@ DNH sửa dữ liệu gốc**.
   (vốn là 2 cách cắt lát của cùng một khoản doanh thu).
 - **Nhãn kỳ báo cáo trung thực hơn**: hiển thị đúng khoảng đã có dữ liệu thay vì cả khung lịch.
 
+### Chuẩn hóa lương thưởng theo văn bản chính sách của DNH *(mới)*
+
+Ngưỡng đánh giá trước đây là **số MCNA tự đặt, không có căn cứ**. Nay đối chiếu trực tiếp bảng cấu
+hình mà hệ thống tính lương của DNH đang dùng, kèm các quyết định có chữ ký — và **tách bạch ba khái
+niệm** từng bị gộp làm một khiến báo cáo tự mâu thuẫn:
+
+| Khái niệm | Mốc |
+|---|---|
+| Đạt chỉ tiêu | ≥100% |
+| Đạt KPI | ≥80% |
+| Tới mức thưởng nhóm hàng | **65%** (nhân viên) / **70%** (quản lý) |
+
+Đồng thời **cấm hệ thống kết luận "không được thưởng"** khi một người chỉ dưới mốc thưởng nhóm hàng —
+DNH còn nhiều khoản thưởng khác với mốc riêng, và lương cơ bản từ 60% trở lên vẫn hưởng đủ.
+
+### Chi phí vận hành AI — đã đo được lần đầu *(mới)*
+
+Trước đây hệ thống có ghi nhận chi phí nhưng **không nối được với người dùng**, nên mọi báo cáo đều
+hiện 0 đồng. Đã sửa và bắt đầu có số thật.
+
+- Bổ sung **Bảng điều khiển Chi phí AI & Nhật ký truy vấn** cho Ban điều hành: xem lịch sử câu hỏi của
+  mọi nhân viên và chi phí toàn công ty (quy đổi sẵn ra tiền Việt), **không cần hỏi qua chatbot**.
+- **Tỷ lệ dữ liệu vào/ra ≈ 8,7 lần** — chi phí bị chi phối bởi phần dữ liệu nạp vào, không phải độ dài
+  câu trả lời. Đây là chỗ đang tối ưu để giảm giá.
+- ⚠️ **Giá dịch vụ AI tăng ~50% sau 31/08/2026** — bản ước tính go-live sẽ dùng giá sau khuyến mãi.
+
 ---
 
 ## SLIDE 5 — OVERALL STATUS UPDATE
 
 ### VIỆC ĐANG LÀM / SẮP TỚI
 
-- **Chuẩn bị Demo #1 Chatbot (09/08)**
-- **Chờ DNH xác nhận 14 điểm nghiệp vụ** *(đã gửi danh sách kèm bằng chứng số liệu)* — trong đó
-  **5 điểm cần chốt trước Demo #1** vì ảnh hưởng trực tiếp con số hiển thị:
-  1. Cách tính ngày quá hạn & xác nhận báo cáo công nợ chuẩn
+- **Chuẩn bị Demo #1 Chatbot (09/08)** — kịch bản **17 câu theo 3 vai trò** kèm bộ đáp án đối chiếu
+  sinh trực tiếp từ Bravo đã sẵn sàng; đang kiểm chứng từng câu trên hệ thống thật.
+- 🔴 **MỚI — cần DNH chốt trước 09/08: quyền xem của quản lý vùng.** Sau khi bịt lỗ hổng, MCNA đã tạm
+  chặn 9 báo cáo với tài khoản quản lý vùng để đảm bảo an toàn. Hệ quả: họ **chưa hỏi được** về doanh
+  thu, tồn kho, công nợ. Cần chốt: quản lý vùng xem số liệu ở phạm vi *đội của mình* hay *cả miền*?
+  Tồn kho và công nợ có thuộc quyền xem của họ không?
+- **Chờ DNH xác nhận các điểm nghiệp vụ còn lại** *(đã gửi danh sách kèm bằng chứng số liệu)*:
+  1. ✅ ~~Cách tính ngày quá hạn & xác nhận báo cáo công nợ chuẩn~~ — **đã tự giải quyết**: chatbot và
+     báo cáo nay dùng chung báo cáo gốc của DNH
   2. Mốc phân nhóm tuổi nợ
   3. Nguồn giá để tính giá trị tồn kho *(thiếu nên mục "tồn kho chết" luôn hiển thị 0)*
-  4. Chỉ tiêu cấp vùng vs cá nhân *(nghi có cộng chồng chỉ tiêu)*
+  4. ✅ ~~Chỉ tiêu cấp vùng vs cá nhân~~ — **đã bác bỏ nghi vấn cộng chồng** ở mức số học (Slide 3);
+     vẫn nên xác nhận về mặt tổ chức nhân sự
   5. Kênh ETC có giao chỉ tiêu theo từng nhân viên không
+  6. Phiên bản văn bản chính sách lương áp dụng cho tháng 7 *(có 2 bản cùng tồn tại)*
 - **Đề nghị DNH nghiệm thu theo từng lớp dữ liệu** — MCNA đã tự kiểm xong (bước 1–2); chờ anh Long
   khảo sát (bước 3) và quản lý vùng chéo kiểm (bước 4).
 - **Cần danh sách tài khoản Chatbot thật** để cấp quyền cho quản lý vùng tự kiểm tra.
@@ -129,16 +214,20 @@ DNH sửa dữ liệu gốc**.
 | **M4 — Demo #2 Cảnh báo Outlook** | 06/09 | ⚡ Nội dung đã sẵn sàng sớm |
 | **Đóng dự án** | 30/09 | ⚪ |
 
-### 🔄 Số liệu hệ thống đang vận hành *(cập nhật 22/07 — chạy lại trước buổi họp)*
+### 🔄 Số liệu hệ thống đang vận hành *(cập nhật 28/07 — chạy lại trước buổi họp)*
 
-| Chỉ số | Giá trị (tháng 7, đến 22/07) |
+| Chỉ số | Giá trị (tháng 7, đến 28/07) |
 |---|---|
-| Doanh thu OTC | 16,97 tỷ đ (5.535 hóa đơn) |
-| Doanh thu ETC | 25,71 tỷ đ (629 hóa đơn) |
-| **Tổng doanh thu** | **42,68 tỷ đ** (+5,4% so kỳ trước) |
-| Tổng dư nợ / quá hạn | 180,06 tỷ / 81,48 tỷ (**45,3%**) |
-| KPI toàn đội OTC | 36,0% hoàn thành chỉ tiêu tháng |
-| Doanh thu ETC theo vùng | Bắc 9,40 tỷ · Trung 1,24 tỷ · Nam 15,08 tỷ |
+| Doanh thu OTC | 26,51 tỷ đ (7.580 hóa đơn) |
+| Doanh thu ETC | 33,09 tỷ đ (774 hóa đơn) |
+| **Tổng doanh thu** | **59,59 tỷ đ** |
+| Tổng dư nợ / quá hạn | 180,48 tỷ / 77,07 tỷ (**42,7%**) |
+| Đạt chỉ tiêu (≥100%) · Đạt KPI (≥80%) · Tới mức thưởng (≥65%) | **8/147 · 24/147 · 50/147** |
+| Mức hoàn thành theo miền | Bắc 53,5% · Nam 50,2% · Trung 47,1% — toàn đội **51,8%** |
+
+> ⚠️ **Cách đọc con số "đạt chỉ tiêu"**: so lũy kế đến nay với chỉ tiêu **cả tháng**. Tháng 7 còn 3
+> ngày chưa kết thúc nên tự nhiên thấp — số cuối tháng sẽ cao hơn đáng kể. Tham chiếu các tháng đã
+> trọn: tháng 4 đạt **64/150**, tháng 5 đạt **19/149**, tháng 6 đạt **25/150**.
 
 ---
 
@@ -146,11 +235,13 @@ DNH sửa dữ liệu gốc**.
 
 | # | Rủi ro | Mức | Biện pháp xử lý |
 |---|---|---|---|
-| 1 | **14 điểm nghiệp vụ chưa được DNH chốt** → số liệu còn dùng giả định, rủi ro phải làm lại sau Demo | 🔴 Cao | Đã lập danh sách kèm bằng chứng số liệu; đề nghị chốt **5 điểm ưu tiên trước 09/08** |
-| 2 | **Chưa có nghiệm thu từng lớp từ DNH** → sai lệch phát hiện muộn, tốn công sửa lại cuối dự án | 🔴 Cao | Mời anh Long soát Lớp 1–2 trước; cấp tài khoản để QLV vùng tự kiểm Lớp 3–4 |
-| 3 | **Chi phí token AI** khi 10–20 người dùng đồng thời | 🟠 TB | Đã áp giới hạn 10 câu/phút/người + phân vùng dữ liệu theo quyền; cam kết ước tính chi phí tuần 8–10 |
-| 4 | **Dữ liệu gốc Bravo có cờ/mã sai** (2 quản lý thật bị ẩn khỏi báo cáo, 6 mã nhân viên không xác định ≈484 triệu) | 🟠 TB | Đã vá tạm ở tầng code; đề nghị DNH sửa gốc + lập quy trình rà soát định kỳ |
-| 5 | **Gián đoạn vận hành máy chủ** trước các mốc demo | 🟢 Thấp | Đã cấu hình tự khởi động lại sau khi máy khởi động / tiến trình lỗi *(xử lý xong 22/07)* |
+| 1 | 🆕 **Quyền xem của quản lý vùng chưa được chốt** — đã tạm chặn 9 báo cáo để đảm bảo an toàn, nhưng như vậy quản lý vùng chưa hỏi được về doanh thu, tồn kho, công nợ | 🔴 Cao | **Đề nghị chốt trước 09/08**. Chưa chốt thì tại Demo #1 không trình bày được phần đăng nhập vai quản lý vùng — vốn là phần thể hiện năng lực phân quyền |
+| 2 | **Các điểm nghiệp vụ chưa được DNH chốt** → số liệu còn dùng giả định, rủi ro phải làm lại sau Demo | 🔴 Cao | Đã lập danh sách kèm bằng chứng; **2/5 điểm ưu tiên đã tự giải quyết** trong kỳ này (công nợ, chỉ tiêu vùng); đề nghị chốt phần còn lại trước 09/08 |
+| 3 | **Chưa có nghiệm thu từng lớp từ DNH** → sai lệch phát hiện muộn, tốn công sửa lại cuối dự án | 🔴 Cao | Mời anh Long soát Lớp 1–2 trước; **cấp tài khoản để QLV vùng tự kiểm Lớp 3–4** *(đã nêu từ 16/07, vẫn đang chờ)* |
+| 4 | **Dữ liệu gốc Bravo có cờ/mã sai** — 2 quản lý thật bị ẩn khỏi báo cáo, 6 mã nhân viên không xác định ≈484 triệu | 🟠 TB | Đã vá tạm ở tầng code. ⚠️ **Phát hiện thêm**: cờ sai này còn tác động vào **chính thủ tục tính lương** của DNH, nên 2 người có thể đang bị tính thiếu thưởng thật — đề nghị bộ phận lương/kế toán đối chiếu và sửa dữ liệu gốc |
+| 5 | **Chi phí token AI** khi 10–20 người dùng đồng thời | 🟠 TB | Đã áp giới hạn 10 câu/phút/người + theo dõi ngân sách theo tháng; **đã đo được số thật lần đầu**; cam kết ước tính chi phí tuần 8–10 |
+| 6 | 🆕 **Chi phí AI tăng ~50% sau 31/08/2026** do hết giai đoạn khuyến mãi của nhà cung cấp | 🟠 TB | Bản ước tính go-live dùng **giá sau khuyến mãi**; đang tối ưu phần dữ liệu nạp vào để bù lại |
+| 7 | 🆕 **Hạ tầng vận hành còn mong manh** — đường kết nối giữa giao diện web và máy chủ đổi địa chỉ mỗi lần khởi động lại, phải sửa tay | 🟠 TB | Đã ghi nhận đầy đủ; **xử lý dứt điểm trước 09/08** để tránh chatbot gián đoạn giữa buổi demo |
 
 ---
 
@@ -165,24 +256,36 @@ DNH sửa dữ liệu gốc**.
 
 - **Giữ nguyên template & bố cục** bản 16/07 để nhất quán, chỉ thay nội dung.
 - **Slide 2**: nhớ dời dải "HÔM NAY" sang **T5 (27/07–02/08)** và đổi màu trạng thái 5 giai đoạn.
-- **Không đưa tên nhân viên cụ thể** lên slide chiếu chung ở phần lỗi dữ liệu (mục ②) — chỉ nói
-  "2 quản lý"; danh tính đã có trong tài liệu gửi riêng.
+- **Không đưa tên nhân viên cụ thể** lên slide chiếu chung ở phần lỗi dữ liệu (mục ②, ④) — chỉ nói
+  "2 quản lý" / "một nhân viên"; danh tính đã có trong tài liệu gửi riêng.
+- **Slide 3 nay có 5 lỗi thay vì 3** — nếu chật chỗ, gộp ④⑤ thành một khối "phát hiện thêm tuần
+  23–30/07" và để bảng so sánh 65,2% → 74,1% làm điểm nhấn (đây là ví dụ dễ hiểu nhất cho khách về
+  việc lỗi âm thầm ảnh hưởng tới đánh giá nhân viên).
+- **Slide 6 nay có 7 rủi ro** — 3 mục đánh 🆕 là mới phát sinh trong kỳ. Mục 1 nên nói trước vì đang
+  chặn Demo #1 và cần DNH quyết ngay tại buổi họp.
 - Phần nhật ký (slide 3–4) nên để dạng **bảng/gạch đầu dòng ngắn**, số liệu in đậm — bản 16/07
   dùng bảng, giữ vậy cho quen mắt.
 
 ## Lệnh lấy lại số liệu trước buổi họp
 
-Chạy trong `D:\DNH`:
+Chạy trong `D:\DNH` — công cụ này sinh **toàn bộ** số cần cho slide, cùng nguồn với đáp án Demo #1:
 
 ```bash
-python -c "
-from src.etl import get_monthly_digest_metrics
-m = get_monthly_digest_metrics(region=None, channel=None)
-r = m['revenue']; rec = m.get('receivables') or {}; k = m.get('kpi_summary') or {}
-print(f\"Ky: {m['period_range']}\")
-print(f\"OTC {r['otc']:,.0f} ({r['otc_invoice_count']} HD) | ETC {r['etc']:,.0f} ({r['etc_invoice_count']} HD)\")
-print(f\"TONG {r['total']:,.0f} | so ky truoc {r['change_pct']}%\")
-print(f\"Cong no: qua han {rec.get('total_overdue',0):,.0f} / du no {rec.get('balance_end',0):,.0f}\")
-print(f\"KPI doi: {k.get('achieved_count')}/{k.get('total_count')} | toan doi {k.get('team_pct')}%\")
-"
+set PYTHONIOENCODING=utf-8 && python scripts/demo1_ground_truth.py
 ```
+
+Đối chiếu output với bảng số liệu Slide 5:
+
+| Lấy từ mục | Điền vào |
+|---|---|
+| `[C1]` | Doanh thu OTC / ETC / Tổng + số hóa đơn |
+| `CÔNG NỢ` dòng `TOÀN CÔNG TY` | Tổng dư nợ · quá hạn · % |
+| `[C7]` | 3 mốc: ≥100% · ≥80% · ≥65% |
+| `[C6]` | Mức hoàn thành 3 miền + toàn đội |
+
+> ⚠️ **Không dùng cờ `--as-of`** cho báo cáo tiến độ — cờ đó chỉ dành cho việc tập dượt Demo #1 với
+> tháng 7 đã trọn. Báo cáo 30/07 cần số thực tế đến đúng ngày họp.
+
+**Số chi phí AI**: hỏi chatbot bằng tài khoản `dnh`, phiên chat mới — *"Báo cáo chi phí AI toàn công
+ty"*. Lưu ý khi trình bày: chi phí chỉ tính được cho các phiên **từ 28/07 trở đi** (trước đó hệ thống
+không nối được chi phí với người dùng), đừng để khách hiểu nhầm là chi phí cả dự án thấp như vậy.
