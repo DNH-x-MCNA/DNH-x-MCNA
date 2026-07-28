@@ -94,10 +94,16 @@ def validate_sql(sql: str, db: str = "local") -> str:
     return s
 
 
-def run_query(sql: str, question: str = "", db: str = "local", username: str = None) -> dict:
-    """Validate, thuc thi SQL (chi doc), ghi audit log, tra ve {columns, rows, row_count, duration_ms} hoac loi."""
+def run_query(sql: str, question: str = "", db: str = "local", username: str = None,
+              session_id: str = None) -> dict:
+    """Validate, thuc thi SQL (chi doc), ghi audit log, tra ve {columns, rows, row_count, duration_ms} hoac loi.
+    session_id: 28/07/2026 - THEM de audit_log.jsonl noi duoc voi cost_log.jsonl trong get_audit_log
+    (report_templates.py::audit_log_summary). TRUOC DAY khong truyen -> moi dong log KHONG co
+    session_id -> phep noi qua session_id luon ra tap RONG -> chi phi bao 0d cho MOI tai khoan, phat
+    hien khi kiem thu get_audit_log lan dau (28/07)."""
     t0 = time.time()
-    entry = {"ts": dt.datetime.now().isoformat(), "username": username, "question": question, "sql": sql, "db": db}
+    entry = {"ts": dt.datetime.now().isoformat(), "username": username, "question": question, "sql": sql,
+             "db": db, "session_id": session_id}
     try:
         safe_sql = validate_sql(sql, db)
         eng = _get_engine(db)

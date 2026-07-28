@@ -1796,7 +1796,7 @@ _CHANNEL_SCOPED_TEMPLATES = {"get_revenue_by_channel", "get_top_products", "get_
 
 def call_template(name: str, args: dict, question: str = "", username: str = None,
                    scope_area_code: str = None, scope_employee_code: str = None,
-                   scope_channel: str = None) -> dict:
+                   scope_channel: str = None, session_id: str = None) -> dict:
     """Goi 1 template theo ten, ghi audit log (giong format run_query de nhat quan truy vet).
     scope_area_code: EP TRUYEN tu server (khong phai tu tham so AI dua ra) khi tai khoan bi gioi han
     vung - ghi de bat ky gia tri nao AI cung cap trong args, dam bao AI KHONG the tu "mo khoa" vung
@@ -1805,9 +1805,12 @@ def call_template(name: str, args: dict, question: str = "", username: str = Non
     get_kpi_ranking (xem _EMPLOYEE_SCOPED_TEMPLATES) - cac ham khac khong nhan tham so nay nen KHONG
     duoc truyen bua, se loi TypeError. scope_channel: CHI ap dung cho cac template lien quan doanh
     thu/khach hang (xem _CHANNEL_SCOPED_TEMPLATES) - EP GIOI HAN kenh (vd 'OTC'), doc lap voi 2 co
-    che scope kia, ap dung duoc cho MOI role."""
+    che scope kia, ap dung duoc cho MOI role. session_id: 28/07/2026 - THEM de audit_log.jsonl noi
+    duoc voi cost_log.jsonl trong get_audit_log (xem audit_log_summary) - thieu truong nay thi phep
+    noi qua session_id luon rong, chi phi bao 0d cho MOI tai khoan (phat hien khi kiem thu lan dau)."""
     t0 = dt.datetime.now()
-    entry = {"ts": t0.isoformat(), "username": username, "question": question, "sql": f"<template:{name}>({args})"}
+    entry = {"ts": t0.isoformat(), "username": username, "question": question,
+             "sql": f"<template:{name}>({args})", "session_id": session_id}
     # 22/07/2026 (diem #5): mo "hop" canh bao rieng cho lan goi nay - tool goi _warn() trong luc chay
     # se duoc gom lai va dinh kem vao ket qua tra ve cho AI.
     token = _tool_warnings.set([])
