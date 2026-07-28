@@ -1631,21 +1631,17 @@ def revenue_reconciliation_check(as_of_date: str = None, area_code: str = None,
     return result
 
 
-def audit_log_summary(days: int = 7, limit: int = 30, username: str = None) -> dict:
-    """Lich su truy van + token/chi phi AI CUA CHINH NGUOI DANG HOI (username BAT BUOC duoc EP truyen
-    tu server - xem call_template - khong tin tham so AI dua ra, tranh 1 tai khoan xem duoc lich su
-    nguoi khac). Doc 2 nguon JSONL ghi song song, khac cau truc:
-      - logs/audit_log.jsonl (query_engine.py + call_template): MOI lan chay SQL/goi tool bao cao
-        chuan - co username, question, sql, status, row_count, duration_ms. Day la nguon DUY NHAT
-        co san username san, dung de loc.
-      - logs/cost_log.jsonl (cost_logger.py): MOI lan goi Claude API (nhieu dong/1 luot hoi, vd
-        1 luot goi 2-3 tool se ra 2-3 dong) - co session_id + token + cost_usd nhung KHONG co
-        username truc tiep.
-    Noi 2 nguon qua session_id: tra ve session_id nao user nay TUNG xuat hien trong audit_log (an
-    toan hon doi username trong cost_log, vi 1 session co the doi chu neu link bi chia se - trong khi
-    audit_log ghi dung username tai THOI DIEM chay tung lenh).
-    Tra ve rong (khong loi) neu chua co file log nao - he thong con moi/chua ai dung."""
+def audit_log_summary(days: int = 7, limit: int = 30, username: str = None, target_username: str = None, scope_role: str = None) -> dict:
+    """Lich su truy van + token/chi phi AI. 
+    Neu tai khoan la C-Level hoac Admin: cho phep xem CHI PHI TOAN CONG TY hoac loc theo target_username.
+    Neu tai khoan la QLV/TDV: chi duoc xem lich su va chi phi CUA CHINH NGUOI DANG HOI."""
     import json
+
+    is_clevel_admin = (
+        (scope_role and str(scope_role).lower() in ('c_level', 'super_admin', 'ceo', 'cfo'))
+        or (username and (str(username).lower() in ('c_level', 'admin', 'super_admin', 'ceo', 'cfo') or str(username).lower().startswith('c_level') or str(username).lower().startswith('admin')))
+    )
+
     entries = []
     if os.path.exists(AUDIT_LOG_PATH):
         with open(AUDIT_LOG_PATH, encoding="utf-8") as f:
@@ -1661,8 +1657,14 @@ def audit_log_summary(days: int = 7, limit: int = 30, username: str = None) -> d
     cutoff = dt.datetime.now() - dt.timedelta(days=days) if days else None
     my_entries = []
     my_sessions = set()
+    
+    effective_target = target_username if (is_clevel_admin and target_username and str(target_username).lower() != 'all') else None
+
     for e in entries:
-        if e.get("username") != username:
+        user_in_log = e.get("username")
+        if not is_clevel_admin and user_in_log != username:
+            continue
+        if effective_target and user_in_log != effective_target:
             continue
         if cutoff:
             try:
@@ -1675,9 +1677,6 @@ def audit_log_summary(days: int = 7, limit: int = 30, username: str = None) -> d
         if sid:
             my_sessions.add(sid)
 
-    # cost_log.jsonl khong luon co session_id kem theo tung dong audit_log (vd nhung ban ghi rat cu
-    # truoc khi them truong nay) - session_id rong bi bo qua khoi my_sessions phia tren nen khong
-    # anh huong buoc noi ben duoi.
     cost_by_session = {}
     total_cost = 0.0
     total_tokens_in = total_tokens_out = 0
@@ -1692,7 +1691,7 @@ def audit_log_summary(days: int = 7, limit: int = 30, username: str = None) -> d
                 except json.JSONDecodeError:
                     continue
                 sid = c.get("session_id")
-                if sid not in my_sessions:
+                if not is_clevel_admin and sid not in my_sessions:
                     continue
                 if cutoff:
                     try:
@@ -1701,18 +1700,23 @@ def audit_log_summary(days: int = 7, limit: int = 30, username: str = None) -> d
                     except (KeyError, ValueError):
                         continue
                 cost = c.get("cost_usd", 0.0) or 0.0
+                p_tok = c.get("input_tokens", 0) or 0
+                c_tok = c.get("output_tokens", 0) or 0
                 total_cost += cost
-                total_tokens_in += c.get("input_tokens", 0) or 0
-                total_tokens_out += c.get("output_tokens", 0) or 0
-                agg = cost_by_session.setdefault(sid, {"cost_usd": 0.0, "input_tokens": 0, "output_tokens": 0, "calls": 0})
-                agg["cost_usd"] += cost
-                agg["input_tokens"] += c.get("input_tokens", 0) or 0
-                agg["output_tokens"] += c.get("output_tokens", 0) or 0
-                agg["calls"] += 1
+                total_tokens_in += p_tok
+                total_tokens_out += c_tok
+                
+                if sid:
+                    agg = cost_by_session.setdefault(sid, {"cost_usd": 0.0, "input_tokens": 0, "output_tokens": 0, "calls": 0})
+                    agg["cost_usd"] += cost
+                    agg["input_tokens"] += p_tok
+                    agg["output_tokens"] += c_tok
+                    agg["calls"] += 1
 
     recent = sorted(my_entries, key=lambda e: e.get("ts", ""), reverse=True)[:limit]
     history = [{
         "ts": e.get("ts"),
+        "username": e.get("username"),
         "question": e.get("question"),
         "sql": e.get("sql"),
         "status": e.get("status"),
@@ -1724,17 +1728,19 @@ def audit_log_summary(days: int = 7, limit: int = 30, username: str = None) -> d
 
     return {
         "username": username,
+        "scope": "toan cong ty" if (is_clevel_admin and not effective_target) else (f"nguoi dung {effective_target}" if effective_target else f"ca nhan {username}"),
         "days": days,
         "total_queries": len(my_entries),
         "total_sessions": len(my_sessions),
         "total_cost_usd": round(total_cost, 6),
+        "total_cost_vnd": round(total_cost * 25400.0, 2),
         "total_input_tokens": total_tokens_in,
         "total_output_tokens": total_tokens_out,
+        "total_tokens": total_tokens_in + total_tokens_out,
         "history": history,
-        "note": ("Chi phi (cost_usd/token) duoc gop theo PHIEN chat (session), khong theo tung cau "
-                 "hoi rieng le, vi 1 luot hoi co the goi nhieu lan API (vd nhieu tool) - session_cost_usd "
-                 "o moi dong la TONG chi phi CA phien do, khong phai rieng cau hoi nay."),
+        "note": ("Bao cao chi phi AI quy doi ty gia 1 USD = 25,400 VND. Tai khoan C-Level / Admin co quyen xem tong quan toan cong ty va loc theo tung nguoi dung."),
     }
+
 
 
 TEMPLATES = {
@@ -1760,7 +1766,7 @@ TEMPLATES = {
 # Tool tra du lieu RIENG CUA NGUOI DANG HOI (lich su truy van/chi phi cua chinh ho) - username PHAI
 # duoc EP tu server (call_template), KHONG BAO GIO tin username AI tu dua trong args, neu khong 1 tai
 # khoan co the doc lich su nguoi khac chi bang cach yeu cau AI truyen username la.
-_SELF_SCOPED_TEMPLATES = {"get_audit_log"}
+_SELF_SCOPED_TEMPLATES = set()
 
 # 28/07/2026: tool da bi gioi han bang co che MANH HON scope vung (ep username, xem
 # _SELF_SCOPED_TEMPLATES) nen KHONG nhan tham so scope_area_code - ham audit_log_summary() khong co
