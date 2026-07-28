@@ -8,7 +8,7 @@ Hệ thống báo cáo / cảnh báo / chatbot **đã chạy trên dữ liệu t
 
 | Mức | Mục | Vì sao gấp |
 |---|---|---|
-| 🔴 **Chốt trước Demo #1 (09/08)** | A1, A2, A3, A4, A5, **A6** | Ảnh hưởng trực tiếp con số hiển thị; sửa sau Demo sẽ phải làm lại số liệu đã trình bày |
+| 🔴 **Chốt trước Demo #1 (09/08)** | A1, A2, A3, A4, A5, A6(b) | Ảnh hưởng trực tiếp con số hiển thị; sửa sau Demo sẽ phải làm lại số liệu đã trình bày |
 | 🟠 **Nên chốt trong tháng 8** | B1, B2, B3, D1 | Quyết định ngưỡng cảnh báo — sai ngưỡng gây nhiễu hoặc bỏ sót, nhưng không sai số liệu gốc |
 | 🟡 **Cần DNH sửa dữ liệu gốc** | C1, C2 | MCNA đã vá tạm ở tầng code; cần sửa gốc để không tái diễn |
 | 🟢 **Phối hợp vận hành** | D2, D3, E1, E2, E3 | Không chặn kỹ thuật, nhưng cần để nghiệm thu & vận hành lâu dài |
@@ -83,22 +83,29 @@ MCNA đã bổ sung tạm bảng **"Doanh số ETC theo nhân viên"** (chỉ c�
 
 **Phát hiện 23/07/2026**, gồm **2 câu hỏi tách bạch** nhưng cùng ảnh hưởng đến một con số mà lãnh đạo hỏi nhiều nhất: *"có bao nhiêu nhân viên đạt chỉ tiêu?"*
 
-### (a) Ngưỡng đạt — ✅ ĐÃ TỰ TÌM ĐƯỢC ĐÁP ÁN, KHÔNG CẦN DNH TRẢ LỜI
+### (a) Đã tách bạch hai khái niệm, ngưỡng theo vai trò đã chốt
 
-Ban đầu MCNA phát hiện báo cáo email và chatbot dùng **hai ngưỡng khác nhau** (≥100% và ≥80%) — cả hai đều là con số MCNA tự đặt, không có căn cứ nghiệp vụ.
+**Phần đã tự giải quyết:** ban đầu báo cáo email và chatbot dùng **hai con số khác nhau** (≥100% và ≥80%) — cả hai đều do MCNA tự đặt, không có căn cứ. Sau khi đọc `DIM_BacThuong` (bảng cấu hình bậc thưởng mà thủ tục tính lương `usp_SaleSalary_Calculation_Ver2` đọc thật) và đối chiếu với các quyết định HĐQT có chữ ký, MCNA đã **tách rõ hai khái niệm bị gộp nhầm từ đầu** — cả email lẫn chatbot giờ hiển thị cả hai:
 
-**Đã tìm được ngưỡng chính thức của DNH** trong bảng cấu hình bậc thưởng `DIM_BacThuong` trên Bravo — chính bảng mà thủ tục tính lương `usp_SaleSalary_Calculation_Ver2` đọc để quyết định tỷ lệ thưởng:
-
-| Vai trò | Ngưỡng bắt đầu được thưởng | Các bậc |
+| Khái niệm | Mốc | Ý nghĩa |
 |---|---|---|
-| **Trình dược viên (TDV)** | **65%** | 65 · 75 · 85 · 95% |
-| **QLV, CS, TP, PP, TBP, TK** | **70%** | 70 · 80 · 90 · 100 · 120% |
+| **Đạt chỉ tiêu** | ≥100% chỉ tiêu tháng | Hoàn thành kế hoạch doanh số |
+| **Tới mức thưởng nhóm hàng** | TDV 65% · QLV và cấp quản lý 70% | Mốc *bắt đầu* được tính thưởng nhóm hàng (DM1/DM2/DM3) |
 
-Giống nhau ở **cả 3 miền** Bắc/Trung/Nam. Hệ thống đã đổi theo đúng cấu hình này (báo cáo tháng 7 tại 23/07: 27/147 TDV đạt, thay vì 10/147 khi dùng ngưỡng 80% cũ).
+**Quan trọng — 65%/70% KHÔNG phải "ngưỡng được thưởng" nói chung:** đó chỉ là cổng của **thưởng nhóm hàng**. Chính sách DNH còn nhiều khoản thưởng khác với mốc riêng, tra theo chỉ số khác: thưởng tiến độ V15/V22/V25, thưởng khách hàng hoạt động ASO (tính theo **số lượng khách**, không phải %), thưởng quý, thưởng năm; chưa kể **lương cơ bản từ 60% trở lên vẫn hưởng 100%**. Vì vậy một người dưới 65% **vẫn có thể** được các khoản kia và vẫn đủ lương cơ bản — hệ thống đã được sửa để **không bao giờ** nói ai đó "không được thưởng" chỉ vì dưới mốc nhóm hàng.
 
-**Lưu ý về bản chất**: DNH dùng **bậc thang** (càng vượt càng hưởng tỷ lệ cao), không phải ngưỡng đạt/không-đạt nhị phân. Con số "Đạt Chỉ Tiêu N/M" trên báo cáo chỉ là mốc sàn để tóm tắt nhanh.
+**Có hai thế hệ chính sách cùng tồn tại**, và ban đầu MCNA phát hiện chúng cho ra ngưỡng TDV khác nhau:
 
-**❓ Chỉ cần DNH xác nhận lại**: dùng "mốc bắt đầu được thưởng" làm định nghĩa "đạt chỉ tiêu" trong báo cáo quản trị có phù hợp không, hay DNH muốn một mốc khác cho mục đích theo dõi (vd vẫn lấy 100% là "hoàn thành kế hoạch")?
+| Nguồn | Ngưỡng thưởng nhóm hàng cho TDV | Ghi chú |
+|---|---|---|
+| **QĐ 0429/QĐ-HĐQT.25** (ký 29/04/2025) | 70% | Thế hệ cũ, mốc chốt tiến độ ngày 25 (V25) |
+| **QĐ 0107/2026** (ký 01/07/2026, hiệu lực 01/07/2026) | **65%** | Thế hệ mới, mốc chốt ngày 15+22 (V15/V22) |
+
+**Quy tắc áp dụng đã chốt (23/07/2026)**: dùng văn bản **mới nhất theo từng loại vị trí**. TDV có văn bản mới hiệu lực từ 01/07/2026 (QĐ 0107) nên áp dụng luôn — **TDV = 65%**. Các vị trí khác (QLV, TP, PP, TBP, TDV chợ sĩ) chưa có văn bản nào mới hơn thay thế QĐ 0429/.25, nên vẫn giữ **70%** theo văn bản đó. Đây cũng là kết quả mà `DIM_BacThuong` (lọc theo ngày hiệu lực) đưa ra — cấu hình hệ thống và quy tắc áp dụng khớp nhau. Hệ thống đã dùng đúng theo bảng trên.
+
+*(Có một ghi chú nội bộ khác trong mã nguồn chatbot nói bộ KPI kiểu mới "chưa áp dụng thực tế cho tháng 7" theo xác nhận với BA phía DNH — nhiều khả năng ghi chú đó nói về việc **các thành phần KPI chi tiết** (SKU, ASO, tái đơn theo công thức mới) chưa được theo dõi đủ trong kho dữ liệu, không phải về ngưỡng % dùng để tính thưởng. Nêu ở đây để DNH tiện đối chiếu nếu có sai khác.)*
+
+**❓ Cần DNH xác nhận thêm**: Dùng "mốc bắt đầu được thưởng nhóm hàng" (theo quy tắc văn bản mới nhất/vị trí ở trên) làm chỉ số tóm tắt trong báo cáo quản trị có phù hợp không, hay DNH muốn mốc khác (vd vẫn lấy 100% là "hoàn thành kế hoạch")?
 
 ### (b) Đánh giá "đạt chỉ tiêu" **giữa tháng** thì so với cái gì?
 
@@ -111,7 +118,7 @@ Chỉ tiêu (`MonthSaleTarget`) là chỉ tiêu **cả tháng**, còn doanh số
 | Tháng 6/2026 *(trọn tháng)* | 25/150 | 52/150 | 65,5% |
 | **Tháng 7/2026 *(mới 23/31 ngày)*** | **0/147** | **10/147** | **41,6%** |
 
-*(Cột ≥80% là ngưỡng hệ thống đang dùng sau khi thống nhất ở mục (a); cột ≥100% để đối chiếu.)*
+*(Bảng trên lập khi hệ thống còn dùng ngưỡng 80% cũ. Sau khi tách 2 khái niệm ở mục (a): cột ≥100% là "đạt chỉ tiêu", còn "tới mức thưởng nhóm hàng" nay tính ở 65% cho TDV — tháng 7/2026 cho **27/147** thay vì 10/147 ở cột ≥80%.)*
 
 Nghĩa là: nếu ai đó mở báo cáo vào ngày 5 hàng tháng, hệ thống sẽ báo *"0 nhân viên đạt chỉ tiêu"* — **đúng về mặt số học nhưng vô nghĩa về mặt quản trị.**
 
@@ -177,6 +184,23 @@ Con số này **rất nhạy với cách chọn mẫu số** (thử một cách 
 *(Lưu ý: 2 mã khác cũng bị gắn cờ này — `MN1` "Kênh MT", `MN4` "Chợ sỉ" — là mã kênh phân phối, **gắn cờ đúng**, MCNA không đụng tới.)*
 
 **❓ Cần xác nhận**: (1) Xác nhận 2 người trên là nhân viên hợp lệ để **sửa thẳng dữ liệu gốc** (khi đó MCNA gỡ bản vá tạm trong code). (2) DNH có quy trình rà soát định kỳ để phát hiện trường hợp tương tự không?
+
+### ⚠️ Nghi vấn nghiêm trọng hơn: đây có thể không chỉ là lỗi báo cáo — mà là lỗi TÍNH LƯƠNG THẬT
+
+Cờ `IsDuplicate` không chỉ ảnh hưởng báo cáo KPI. Đọc trực tiếp thủ tục tính lương gốc `usp_SaleSalary_Calculation_Ver2` (DNH dùng để trả lương kinh doanh thật), cờ này tác động vào **chính quy trình tính thưởng**:
+
+1. `IsDuplicate=1` khiến 2 điểm thành phần (`NCPoint` — khách mở mới, `TPRPoint` — sản phẩm trọng tâm) bị nhân với 0.
+2. Cùng lúc, người bị gắn cờ **bị loại khỏi** danh sách xét bậc thưởng nhóm hàng (`DMBonus`).
+3. Vì `DMBonus` được tính bằng cách **nhân** với tổng điểm KPI, mất điểm và mất bậc cộng dồn thành **mất toàn bộ khoản thưởng nhóm hàng của tháng đó** — bất kể doanh số thực đạt cao đến đâu.
+
+**Đối chứng sơ bộ đã chạy** (dữ liệu 4 tháng gần nhất tính đến 20/07/2026, cần DNH/MCNA chạy lại để xác nhận số chính xác trước khi dùng chính thức):
+- Cả 4/4 tháng có dữ liệu của 2 người bị gắn cờ sai đều cho `TotalPoint = 0,000` — trong khi 17/17 QLV không bị gắn cờ trong cùng kỳ đều có `TotalPoint > 0`.
+- Ví dụ cụ thể: tháng 3/2026, bà Thủy (`MBKV12`) đạt **101,2%** chỉ tiêu với doanh số **7,28 tỷ** (gấp ~2,5 lần các QLV khác cùng kỳ) nhưng nhận **0đ** thưởng nhóm hàng; các QLV khác đạt 92–104% với doanh số 2,6–2,9 tỷ nhận **10–11 triệu đồng**.
+- Ước tính sơ bộ theo mức thưởng trung bình của QLV tương đương (~9,3 triệu/tháng, tính trên 28 lượt quan sát): **thiệt hại có thể ≥37 triệu đồng qua 4 tháng** cho riêng 2 người này — **con số cần DNH đối chiếu lại với hệ thống lương/kế toán nội bộ, MCNA không có quyền và không tự xác nhận số tiền cuối cùng.**
+
+*(Không phải mọi trường hợp gắn cờ đều sai — `MN1`/`MN4` là mã kênh phân phối, gắn cờ đúng; `TM24100101x` là vị trí đang khuyết người. Nghi vấn thiệt hại lương chỉ áp dụng cho 2 mã nêu trên.)*
+
+**❓ Cần xác nhận thêm**: (3) DNH có thể đối chiếu 2 mã nhân viên trên với hệ thống chấm công/kế toán lương thực tế của các tháng gần đây không — để xác nhận có bị thiếu thưởng hay không, và nếu có thì xử lý truy trả theo đúng quy trình nội bộ DNH?
 
 ## C2. Bản ghi không phải khách hàng nhưng bị đánh dấu là khách hàng
 
