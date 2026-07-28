@@ -48,12 +48,19 @@ type Message = {
   error?: boolean;
 };
 
-const SAMPLE_QUESTIONS = [
+const SAMPLE_QUESTIONS_COMMON = [
   "Doanh thu hôm nay bao nhiêu?",
   "Top 10 sản phẩm bán chạy nhất?",
   "So sánh doanh thu tháng này với tháng trước?",
   "Nhân viên nào chưa đạt KPI?",
   "Công nợ quá hạn nhiều nhất là khách hàng nào?",
+  "Lịch sử truy vấn và chi phí của tôi",
+];
+
+const SAMPLE_QUESTIONS_CLEVEL = [
+  ...SAMPLE_QUESTIONS_COMMON,
+  "Báo cáo chi phí AI toàn công ty",
+  "Báo cáo chi phí AI chi tiết theo người dùng",
 ];
 
 // Goi vao route noi bo (/api/...) cua chinh Next.js thay vi goi thang backend - route nay chay
@@ -552,13 +559,25 @@ export default function Home() {
           </div>
           <div className="flex items-center gap-3">
             {userInfo && (
-              <div className="hidden text-right text-xs text-slate-300 sm:block">
-                <div className="font-medium text-white">{userInfo.name || userInfo.username}</div>
-                <div>
-                  {ROLE_LABELS[userInfo.role] || userInfo.role}
-                  {userInfo.scope_value ? ` · ${userInfo.scope_value}` : ""}
+              <>
+                {userInfo.role === "c_level" && (
+                  <button
+                    onClick={() => sendQuestion("Báo cáo chi phí AI toàn công ty")}
+                    className="hidden sm:flex items-center gap-1.5 rounded-full border border-amber-500/50 bg-amber-500/10 px-3 py-1.5 text-xs font-medium text-amber-300 transition hover:bg-amber-500/20 hover:text-amber-200"
+                    title="Xem chi phí AI và Audit Log toàn công ty"
+                  >
+                    <span>💰</span>
+                    <span>Chi phí AI</span>
+                  </button>
+                )}
+                <div className="hidden text-right text-xs text-slate-300 sm:block">
+                  <div className="font-medium text-white">{userInfo.name || userInfo.username}</div>
+                  <div>
+                    {ROLE_LABELS[userInfo.role] || userInfo.role}
+                    {userInfo.scope_value ? ` · ${userInfo.scope_value}` : ""}
+                  </div>
                 </div>
-              </div>
+              </>
             )}
             <button
               onClick={handleLogout}
@@ -577,11 +596,15 @@ export default function Home() {
             <div className="mt-8">
               <p className="mb-3 text-sm text-slate-500">Thử hỏi một trong các câu sau:</p>
               <div className="flex flex-wrap gap-2">
-                {SAMPLE_QUESTIONS.map((q) => (
+                {(userInfo?.role === "c_level" ? SAMPLE_QUESTIONS_CLEVEL : SAMPLE_QUESTIONS_COMMON).map((q) => (
                   <button
                     key={q}
                     onClick={() => sendQuestion(q)}
-                    className="rounded-full border border-slate-300 bg-white px-4 py-2 text-sm text-slate-700 transition hover:border-blue-400 hover:text-blue-600"
+                    className={`rounded-full border px-4 py-2 text-sm transition shadow-sm ${
+                      q.includes("chi phí AI")
+                        ? "border-amber-300 bg-amber-50 text-amber-900 hover:bg-amber-100 hover:border-amber-400 font-medium"
+                        : "border-slate-300 bg-white text-slate-700 hover:border-blue-400 hover:text-blue-600"
+                    }`}
                   >
                     {q}
                   </button>
