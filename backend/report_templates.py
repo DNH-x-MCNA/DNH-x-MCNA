@@ -1637,9 +1637,16 @@ def audit_log_summary(days: int = 7, limit: int = 30, username: str = None, targ
     Neu tai khoan la QLV/TDV: chi duoc xem lich su va chi phi CUA CHINH NGUOI DANG HOI."""
     import json
 
-    is_clevel_admin = (
-        (scope_role and str(scope_role).lower() in ('c_level', 'super_admin', 'ceo', 'cfo'))
-        or (username and (str(username).lower() in ('c_level', 'admin', 'super_admin', 'ceo', 'cfo') or str(username).lower().startswith('c_level') or str(username).lower().startswith('admin')))
+    # 28/07/2026: CHI dua vao scope_role - gia tri nay duoc call_template EP tu server (tu user["role"]
+    # da xac thuc), AI khong the dua vao.
+    # DA BO ve suy luan quyen theo CHUOI username (truoc day: username in ('admin','ceo'...) hoac
+    # startswith('c_level'/'admin')). Hai ly do:
+    #   - username cung chi la 1 chuoi, khi _SELF_SCOPED_TEMPLATES rong thi do AI dua -> tu nang quyen.
+    #   - ngay ca khi ep dung tu server, suy quyen tu TEN tai khoan la sai nguyen tac: mot nguoi ten
+    #     'admin.nguyen' hay 'ceo.tro.ly' se duoc quyen xem chi phi toan cong ty ma khong ai co y do.
+    # Quyen phai doc tu vai tro trong CSDL tai khoan, khong doc tu cach dat ten.
+    is_clevel_admin = bool(
+        scope_role and str(scope_role).lower() in ('c_level', 'super_admin', 'ceo', 'cfo')
     )
 
     entries = []
@@ -1806,7 +1813,17 @@ TEMPLATES = {
 # Tool tra du lieu RIENG CUA NGUOI DANG HOI (lich su truy van/chi phi cua chinh ho) - username PHAI
 # duoc EP tu server (call_template), KHONG BAO GIO tin username AI tu dua trong args, neu khong 1 tai
 # khoan co the doc lich su nguoi khac chi bang cach yeu cau AI truyen username la.
-_SELF_SCOPED_TEMPLATES = set()
+#
+# 28/07/2026: KHOI PHUC lai {"get_audit_log"} sau khi phat hien set nay bi lam RONG (trong commit them
+# tinh nang C-Level xem chi phi toan cong ty). Hau qua khi de rong - da kiem chung bang test thuc te:
+#   1) LO DU LIEU: username khong con duoc ep tu server -> chi con lay tu args do AI dua ra. Tai khoan
+#      qlv chi can khien AI truyen username='dnh' la doc duoc lich su nguoi khac (test tra ve dung
+#      username=dnh). Nang hon: truyen scope_role='c_level' la xem duoc TOAN CONG TY (test: 68 dong).
+#   2) HONG TINH NANG: khi AI chi truyen tham so DUOC KHAI BAO (days/limit/target_username) thi
+#      username=None -> is_clevel_admin=False -> bo loc di so sanh voi None, moi tai khoan (ke ca
+#      C-Level) nhan ve cung mot tap sai. Tren live noi log co username that -> tat ca nhan ve RONG.
+# Ca 2 cung mot goc: DANH TINH va VAI TRO phai do SERVER quyet dinh, khong bao gio do AI truyen.
+_SELF_SCOPED_TEMPLATES = {"get_audit_log"}
 
 # 28/07/2026: tool da bi gioi han bang co che MANH HON scope vung (ep username, xem
 # _SELF_SCOPED_TEMPLATES) nen KHONG nhan tham so scope_area_code - ham audit_log_summary() khong co
@@ -1866,7 +1883,8 @@ _CHANNEL_SCOPED_TEMPLATES = {"get_revenue_by_channel", "get_top_products", "get_
 
 def call_template(name: str, args: dict, question: str = "", username: str = None,
                    scope_area_code: str = None, scope_employee_code: str = None,
-                   scope_channel: str = None, session_id: str = None) -> dict:
+                   scope_channel: str = None, session_id: str = None,
+                   scope_role: str = None) -> dict:
     """Goi 1 template theo ten, ghi audit log (giong format run_query de nhat quan truy vet).
     scope_area_code: EP TRUYEN tu server (khong phai tu tham so AI dua ra) khi tai khoan bi gioi han
     vung - ghi de bat ky gia tri nao AI cung cap trong args, dam bao AI KHONG the tu "mo khoa" vung
@@ -1888,7 +1906,11 @@ def call_template(name: str, args: dict, question: str = "", username: str = Non
         fn = TEMPLATES[name]
         call_args = dict(args)
         if name in _SELF_SCOPED_TEMPLATES:
+            # EP CA HAI tu server, ghi de bat ky gia tri nao AI dua vao args: username (danh tinh)
+            # va scope_role (vai tro, quyet dinh co duoc xem toan cong ty hay khong). Thieu 1 trong 2
+            # la AI co the tu nang quyen - xem ghi chu o _SELF_SCOPED_TEMPLATES.
             call_args["username"] = username
+            call_args["scope_role"] = scope_role
         if scope_area_code and name not in _AREA_EXEMPT_TEMPLATES:
             call_args["scope_area_code"] = scope_area_code
         if scope_employee_code and name in _PERSON_LEVEL_TEMPLATES:

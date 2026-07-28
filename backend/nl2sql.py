@@ -616,7 +616,7 @@ def _dynamic_context_note(question: str = "", session_id: str = "", scope_area_c
 
 
 def ask(question: str, session_id: str = "default", username: str = None, scope_area_code: str = None,
-        scope_employee_code: str = None, scope_channel: str = None) -> dict:
+        scope_employee_code: str = None, scope_channel: str = None, scope_role: str = None) -> dict:
     """
     Nhan cau hoi tieng Viet + session_id (1 phien chat webapp) - tu dong nho lai vai cau hoi/tra loi
     gan nhat trong CUNG session de hieu ngu canh cau hoi tiep theo.
@@ -730,7 +730,7 @@ def ask(question: str, session_id: str = "default", username: str = None, scope_
                 sql_used.append(f"[bao cao chuan] {tu.name}({tu.input})")
                 tresult = call_template(tu.name, tu.input, question=question, username=username, session_id=session_id,
                                          scope_area_code=scope_area_code, scope_employee_code=scope_employee_code,
-                                         scope_channel=scope_channel)
+                                         scope_channel=scope_channel, scope_role=scope_role)
                 last_result = tresult
                 last_tool_used = (tu.name, str(tu.input))
                 payload = tresult["result"] if tresult["ok"] else {"error": tresult["error"]}
