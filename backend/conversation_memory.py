@@ -166,3 +166,8 @@ def clear_session(session_id: str):
 
 
 init()
+
+
+# Aliases for compatibility with main.py imports
+delete_session = clear_session
+get_session_history = load_history
