@@ -661,10 +661,25 @@ def employee_daily_kpi(employee_code: str, year_month: str, scope_area_code: str
     range_end = min(month_end, today)
     target_asof = min(month_end, today)
 
-    r = _q("SELECT MAX(month_sale_target) t, MAX(save_date) d FROM fact_tonghopkhachhang "
-           "WHERE employee_code=? AND save_date<=?", (resolved_code, str(target_asof)))
+    # 28/07/2026: TRUOC DAY MAX(month_sale_target)+MAX(save_date) doc lap tren MOI snapshot
+    # save_date<=target_asof - vi kho giu nhieu thang lich su (khong chi 90 ngay gan nhat, Bravo
+    # con snapshot tu 2025), MAX() lay nham CHI TIEU CAO NHAT tung co, khong phai chi tieu THANG
+    # DANG HOI. Day chinh la nguyen nhan chenh lech 1,13 ty da ghi trong kich_ban_demo1_chatbot.md
+    # (tungtx: chatbot tung bao 4.149.931.306d = snapshot thang 4/2026, trong khi thang 7/2026 that
+    # la 3.016.493.346d) - da xac nhan bang truy van truc tiep Bravo 28/07/2026. Sua: ghim vao dung
+    # 1 snapshot MOI NHAT nam TRONG khoang [month_start, target_asof], giong moi ham KPI khac trong
+    # file nay (_kpi_snapshot/employee_kpi/kpi_ranking deu WHERE save_date=?).
+    r = _q("SELECT month_sale_target t, save_date d FROM fact_tonghopkhachhang "
+           "WHERE employee_code=? AND save_date BETWEEN ? AND ? "
+           "ORDER BY save_date DESC LIMIT 1", (resolved_code, str(month_start), str(target_asof)))
     target = _f(r[0]["t"]) if r else 0.0
     target_as_of = r[0]["d"] if r else None
+    if not r:
+        # Fail-closed: KHONG de target=0 lam moi ngay tu dong thanh do (pct=0) roi AI dien giai
+        # thanh "khong ban duoc gi" - phai noi ro la THIEU DU LIEU chi tieu cho thang nay.
+        _warn(f"Khong co snapshot chi tieu cho '{employee_code}' trong thang {year_month} trong kho "
+              "local - so % theo ngay duoi day KHONG dang tin cay (target=0), can dong bo lai hoac "
+              "hoi thang khac.")
 
     days = []
     total_sales_month = 0.0
@@ -1695,6 +1710,14 @@ TEMPLATES = {
 # khoan co the doc lich su nguoi khac chi bang cach yeu cau AI truyen username la.
 _SELF_SCOPED_TEMPLATES = {"get_audit_log"}
 
+# 28/07/2026: tool da bi gioi han bang co che MANH HON scope vung (ep username, xem
+# _SELF_SCOPED_TEMPLATES) nen KHONG nhan tham so scope_area_code - ham audit_log_summary() khong co
+# tham so nay trong chu ky. Neu call_template van truyen vo dieu kien (nhu MOI template khac) se
+# TypeError -> tai khoan regional_director/qlv goi get_audit_log LUON LOI (phat hien 28/07/2026, tu
+# khi tool nay them vao 27/07). Day la MIEN TRU CO CHU DICH, khong phai noi long fail-closed: moi
+# tool KHAC quen khai bao tham so nay van se no TypeError nhu cu, dung xoa dong nay de "sua" loi khac.
+_AREA_EXEMPT_TEMPLATES = {"get_audit_log"}
+
 
 # 23/07/2026 - DOI SANG CO CHE "DANH SACH CHO PHEP, FAIL-CLOSED" sau khi phat hien lo hong R-F
 # (xem docstring employee_kpi). TRUOC DAY chi co _EMPLOYEE_SCOPED_TEMPLATES: tool NAO co ten trong do
@@ -1724,7 +1747,8 @@ def call_template(name: str, args: dict, question: str = "", username: str = Non
     """Goi 1 template theo ten, ghi audit log (giong format run_query de nhat quan truy vet).
     scope_area_code: EP TRUYEN tu server (khong phai tu tham so AI dua ra) khi tai khoan bi gioi han
     vung - ghi de bat ky gia tri nao AI cung cap trong args, dam bao AI KHONG the tu "mo khoa" vung
-    khac bang cach truyen tham so la. scope_employee_code: CHI ap dung cho get_revenue_tree/
+    khac bang cach truyen tham so la. KHONG truyen cho tool trong _AREA_EXEMPT_TEMPLATES (da gioi han
+    bang co che khac, xem docstring set do). scope_employee_code: CHI ap dung cho get_revenue_tree/
     get_kpi_ranking (xem _EMPLOYEE_SCOPED_TEMPLATES) - cac ham khac khong nhan tham so nay nen KHONG
     duoc truyen bua, se loi TypeError. scope_channel: CHI ap dung cho cac template lien quan doanh
     thu/khach hang (xem _CHANNEL_SCOPED_TEMPLATES) - EP GIOI HAN kenh (vd 'OTC'), doc lap voi 2 co
@@ -1739,7 +1763,7 @@ def call_template(name: str, args: dict, question: str = "", username: str = Non
         call_args = dict(args)
         if name in _SELF_SCOPED_TEMPLATES:
             call_args["username"] = username
-        if scope_area_code:
+        if scope_area_code and name not in _AREA_EXEMPT_TEMPLATES:
             call_args["scope_area_code"] = scope_area_code
         if scope_employee_code and name in _PERSON_LEVEL_TEMPLATES:
             if name in _EMPLOYEE_SCOPED_TEMPLATES:
