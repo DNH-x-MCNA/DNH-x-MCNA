@@ -1781,8 +1781,32 @@ _AREA_EXEMPT_TEMPLATES = {"get_audit_log"}
 #   _EMPLOYEE_SCOPED_TEMPLATES = tool DA nhan duoc tham so scope_employee_code
 # Tool nam trong nhom 1 nhung KHONG nam trong nhom 2 -> CHAN HAN lan goi (khong tra du lieu), thay vi
 # am tham tra du lieu toan vung. Them tool moi ma quen khai bao -> bi chan, khong bi ho.
+#
+# 28/07/2026 (R-H) - MO RONG sau khi phat hien lo hong CUNG LOAI voi R-F nhung o nhom tool KHAC:
+# tai khoan qlv hoi "doanh thu thang nay" van nhan ve doanh thu TOAN MIEN MB (29,37 ty = ca 10 doi),
+# thay vi rieng doi minh. Nguyen nhan: 12/17 tool chi bi gioi han theo scope_area_code (VUNG) - y HET
+# regional_director - vi _PERSON_LEVEL_TEMPLATES truoc day chi liet ke tool KPI ca nhan, bo qua ca
+# nhom doanh thu/khach hang/ton kho/cong no. User xac nhan 28/07: QLV CHI duoc xem doi cua rieng minh.
+#
+# Cach xu ly theo dung tien le R-F: khai bao vao _PERSON_LEVEL_TEMPLATES de bi CHAN HAN voi qlv, thay
+# vi am tham tra du lieu ca vung. Chia 3 nhom theo kha nang thu hep:
+#   (a) THU HEP DUOC ve doi (hoa don co employee_code) nhung CHUA lam - can sua SQL tung ham + test
+#       lai voi Bravo: get_revenue_by_channel, get_revenue_by_region, get_top_customers,
+#       get_top_products, compare_periods. CHAN TAM cho toi khi thu hep xong.
+#   (b) KHONG THE thu hep ve doi (du lieu khong gan voi 1 nhan vien): get_inventory_by_region (kho),
+#       get_receivables_overview (cong no theo khach), get_qlv_change_history (lich su doi QLV),
+#       get_revenue_reconciliation (cong cu doi chieu he thong). Chan han cho toi khi DNH chot ai duoc xem.
+#   (c) VO HAI, KHONG chan: get_employee_directory (chi tra ten/ma/vung, khong phai so lieu kinh
+#       doanh - chinh la cau Q3 trong kich ban demo), get_customer_detail (tra cuu 1 khach cu the ma
+#       nguoi dung da biet ma - da bi ep scope vung + kenh), get_audit_log (da ep username).
 _PERSON_LEVEL_TEMPLATES = {"get_revenue_tree", "get_kpi_ranking", "get_employee_kpi",
-                            "get_employee_daily_kpi", "check_order_timing"}
+                            "get_employee_daily_kpi", "check_order_timing",
+                            # (a) cho thu hep ve doi - xem ghi chu tren
+                            "get_revenue_by_channel", "get_revenue_by_region", "get_top_customers",
+                            "get_top_products", "compare_periods",
+                            # (b) khong the thu hep ve doi
+                            "get_inventory_by_region", "get_receivables_overview",
+                            "get_qlv_change_history", "get_revenue_reconciliation"}
 _EMPLOYEE_SCOPED_TEMPLATES = {"get_revenue_tree", "get_kpi_ranking", "get_employee_kpi",
                                "get_employee_daily_kpi"}
 # check_order_timing CO Y de ngoai _EMPLOYEE_SCOPED_TEMPLATES: day la bao cao CHONG GIAN LAN neu dich
