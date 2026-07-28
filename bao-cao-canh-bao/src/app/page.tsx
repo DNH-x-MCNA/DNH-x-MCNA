@@ -570,12 +570,15 @@ export default function Home() {
   const [auditUserFilter, setAuditUserFilter] = useState<string>("all");
   const [auditActiveTab, setAuditActiveTab] = useState<"users" | "logs">("users");
 
+  // 28/07/2026: CHI dua vao role, KHONG suy quyen tu chuoi username nua (truoc day con nhan
+  // username === "c_level" || username === "dnh"). Day la ban sao o tang giao dien cua lo hong R-I
+  // vua va o backend: suy quyen tu TEN tai khoan nghia la them tai khoan ten "dnh.marketing" hay
+  // "c_level.tro.ly" la tu nhien thay nut xem chi phi toan cong ty. O frontend hau qua nhe hon
+  // (chi an/hien nut, quyen that da chan o backend qua scope_role) nhung van phai sua cho nhat quan.
   const isCLevel = Boolean(
     userInfo && (
       userInfo.role?.toLowerCase() === "c_level" ||
-      userInfo.role?.toLowerCase() === "admin" ||
-      userInfo.username?.toLowerCase() === "c_level" ||
-      userInfo.username?.toLowerCase() === "dnh"
+      userInfo.role?.toLowerCase() === "admin"
     )
   );
 
