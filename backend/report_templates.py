@@ -288,31 +288,49 @@ def _channel_sub_buckets():
               "WHERE position_code='QLV' AND is_duplicate=1 AND name LIKE 'Kênh%' AND dmsid IS NOT NULL")
 
 
-def revenue_by_region(date_from: str, date_to: str, scope_area_code: str = None) -> list:
-    """Doanh thu theo vung mien (MB/MT/MN), gop ca OTC + ETC. CA HAI deu LEFT JOIN qua bang khach hang
-    de lay city_id (da doi chieu voi DA ben Bravo va xac nhan day la cach dung - KHONG dung city_id ghi
-    truc tiep tren vhoadon_otc vi truong nay khong dang tin, tung gay lech doanh thu theo vung).
+def revenue_by_region(date_from: str, date_to: str, scope_area_code: str = None, channel: str = "ALL",
+                       scope_channel: str = None) -> list:
+    """Doanh thu theo vung mien (MB/MT/MN). channel: 'ALL' (mac dinh, gop OTC+ETC), 'OTC', hoac 'ETC' -
+    scope_channel: EP GHI DE tham so channel (bo qua gia tri AI truyen vao) khi tai khoan bi gioi han
+    kenh (xem top_products/top_customers) - dam bao tai khoan chi duoc xem OTC khong the tu hoi ETC
+    de "mo khoa" so lieu vung minh khong duoc thay.
+    28/07/2026 THEM tham so nay sau khi phat hien BAT THUONG: cau hoi "doanh thu OTC theo vung" ma goi
+    tool nay KHONG loc kenh se ra so BI THOI PHONG gap ~4 lan (vd Mien Nam OTC that ~6,6 ty nhung ETC
+    rieng vung nay len toi ~18,8 ty do 1-2 benh vien/thau lon, cong chung ra 25,4 ty neu khong tach) -
+    day la nguyen nhan khien AI phai duoc hoi lai nhieu lan moi ra dung so OTC rieng, gio da co san
+    tham so de goi dung ngay tu dau. CA HAI kenh deu LEFT JOIN qua bang khach hang de lay city_id (da
+    doi chieu voi DA ben Bravo va xac nhan day la cach dung - KHONG dung city_id ghi truc tiep tren
+    vhoadon_otc vi truong nay khong dang tin, tung gay lech doanh thu theo vung).
     BAT BUOC LEFT JOIN (khong duoc INNER JOIN) - khach "mo coi" khong co trong bang khach hang (vd
     HCM13508 - co that, ~2.3 ty doanh thu 2022-2025, KHONG co trong dms_khachhang) se bi INNER JOIN
     am tham loai bo ca khoi tong lan breakdown. Voi LEFT JOIN, khach mo coi duoc suy luan vung qua
     TIEN TO ma khach hang (region_map.py, bang 63 tien to da kiem chung >=95% thuan, vd HCM -> MN) -
     CHI con roi vao "Khac/chua xac dinh" neu tien to khong nam trong bang do (an toan hon doan bua).
     Moi dong CO THE co them "channel_breakdown" (danh sach {name, revenue}) neu vung do co kenh dac
-    biet duoc theo doi rieng (vd Modern Trade/Long Chau, Pharmacity... trong Mien Nam) - day la SO DA
-    NAM SAN TRONG "revenue" cua vung (KHONG duoc cong them vao tong), chi de bao cao minh bach tach
-    rieng theo yeu cau nghiep vu (xac nhan voi DA DNH 20/07/2026): kenh nay VAN tinh vao tong vung
-    nhung can hien thi tach biet vi ban chat kinh doanh khac (chuoi lon vs kenh thuong)."""
-    rows = _q("""
+    biet duoc theo doi rieng (vd Modern Trade/Long Chau, Pharmacity... trong Mien Nam, CHI thuoc OTC) -
+    day la SO DA NAM SAN TRONG "revenue" cua vung (KHONG duoc cong them vao tong), chi de bao cao minh
+    bach tach rieng theo yeu cau nghiep vu (xac nhan voi DA DNH 20/07/2026): kenh nay VAN tinh vao tong
+    vung nhung can hien thi tach biet vi ban chat kinh doanh khac (chuoi lon vs kenh thuong)."""
+    if scope_channel:
+        channel = scope_channel
+    parts = []
+    part_params = []
+    if channel != "ETC":
+        parts.append("""
         SELECT o.customer_code cc, tp.area_code area, SUM(o.amount9) rev
         FROM vhoadon_otc o LEFT JOIN dms_khachhang kh ON kh.code=o.customer_code
         LEFT JOIN dim_tinhthanhpho tp ON tp.city_id=kh.city_id
-        WHERE o.doc_date BETWEEN ? AND ? GROUP BY o.customer_code, tp.area_code
-        UNION ALL
+        WHERE o.doc_date BETWEEN ? AND ? GROUP BY o.customer_code, tp.area_code""")
+        part_params.append((date_from, date_to))
+    if channel != "OTC":
+        parts.append("""
         SELECT e.customer_code cc, tp.area_code area, SUM(e.amount9) rev
         FROM vhoadon_etc e LEFT JOIN dmssx_khachhang kh ON kh.code=e.customer_code
         LEFT JOIN dim_tinhthanhpho tp ON tp.city_id=kh.city_id
-        WHERE e.doc_date BETWEEN ? AND ? GROUP BY e.customer_code, tp.area_code
-        """, (date_from, date_to, date_from, date_to))
+        WHERE e.doc_date BETWEEN ? AND ? GROUP BY e.customer_code, tp.area_code""")
+        part_params.append((date_from, date_to))
+    params = tuple(p for pp in part_params for p in pp)
+    rows = _q(" UNION ALL ".join(parts), params)
 
     # date_from truoc cua so 12 thang chi tiet -> cong them phan da NEN (monthly_customer_summary co
     # customer_code nen van suy luan vung qua dms_khachhang/dmssx_khachhang giong nhu tren).
@@ -320,17 +338,24 @@ def revenue_by_region(date_from: str, date_to: str, scope_area_code: str = None)
     if date_from < cutoff:
         summary_to = min(date_to, cutoff)
         ym_from, ym_to = date_from[:7], summary_to[:7]
-        rows = list(rows) + _q("""
+        summary_parts = []
+        summary_params = []
+        if channel != "ETC":
+            summary_parts.append("""
             SELECT m.customer_code cc, tp.area_code area, SUM(m.revenue) rev
             FROM monthly_customer_summary m LEFT JOIN dms_khachhang kh ON kh.code=m.customer_code
             LEFT JOIN dim_tinhthanhpho tp ON tp.city_id=kh.city_id
-            WHERE m.channel='OTC' AND m.year_month BETWEEN ? AND ? GROUP BY m.customer_code, tp.area_code
-            UNION ALL
+            WHERE m.channel='OTC' AND m.year_month BETWEEN ? AND ? GROUP BY m.customer_code, tp.area_code""")
+            summary_params.append((ym_from, ym_to))
+        if channel != "OTC":
+            summary_parts.append("""
             SELECT m.customer_code cc, tp.area_code area, SUM(m.revenue) rev
             FROM monthly_customer_summary m LEFT JOIN dmssx_khachhang kh ON kh.code=m.customer_code
             LEFT JOIN dim_tinhthanhpho tp ON tp.city_id=kh.city_id
-            WHERE m.channel='ETC' AND m.year_month BETWEEN ? AND ? GROUP BY m.customer_code, tp.area_code
-            """, (ym_from, ym_to, ym_from, ym_to))
+            WHERE m.channel='ETC' AND m.year_month BETWEEN ? AND ? GROUP BY m.customer_code, tp.area_code""")
+            summary_params.append((ym_from, ym_to))
+        rows = list(rows) + _q(" UNION ALL ".join(summary_parts),
+                                tuple(p for pp in summary_params for p in pp))
 
     agg = {}
     for r in rows:
@@ -348,7 +373,11 @@ def revenue_by_region(date_from: str, date_to: str, scope_area_code: str = None)
         # lech tuc la co JOIN nao do dang am tham lam roi du lieu (vd bi doi lai thanh INNER JOIN).
         # Dung LAI revenue_by_channel() (da co san UNION nen du lieu >12 thang) thay vi tu SUM rieng,
         # tranh 2 noi tinh "tong khong loc vung" khac cong thuc nhau (nhat la sau khi them nen du lieu).
-        raw_total = revenue_by_channel(date_from, date_to)["total"]["revenue"]
+        # Voi channel='OTC'/'ETC', so sanh dung voi phan kenh tuong ung (khong phai total gop ca 2).
+        rbc = revenue_by_channel(date_from, date_to)
+        raw_total = (rbc["otc"]["revenue"] if channel == "OTC"
+                     else rbc["etc"]["revenue"] if channel == "ETC"
+                     else rbc["total"]["revenue"])
         if abs(total - raw_total) > 1:
             _write_log({"ts": dt.datetime.now().isoformat(), "status": "warn",
                         "sql": "<revenue_by_region reconciliation check>",
@@ -367,7 +396,8 @@ def revenue_by_region(date_from: str, date_to: str, scope_area_code: str = None)
     # bao cao minh bach, KHONG cong them vao tong (xem _channel_sub_buckets()). CHI tinh duoc tu du
     # lieu CHI TIET (channel_code khong duoc luu trong monthly_customer_summary da nen) - neu date_from
     # vuot cua so 12 thang, breakdown nay se THIEU phan da nen, ghi ro trong "note" de khong hieu nham.
-    buckets = _channel_sub_buckets()
+    # Kenh dac biet (Modern Trade...) CHI ton tai trong OTC - bo qua hoan toan khi channel='ETC'.
+    buckets = _channel_sub_buckets() if channel != "ETC" else []
     if buckets:
         for row in result:
             row_buckets = [b for b in buckets if b["area_code"] == row["area"]]
@@ -1254,7 +1284,15 @@ def revenue_tree(as_of_date: str = None, area_code: str = None, scope_area_code:
     cho TP trong fact_tonghopkhachhang) - khi tra loi PHAI noi ro so 0 nay la "chua co du lieu target
     rieng cho TP", TUYET DOI KHONG bao la TP "khong dat KPI"/0% - do la thong tin sai lech nghiem trong.
     Muon biet tong doanh thu THAT cua ca vung TP phu trach, cong don sales cua tat ca QLV ben duoi
-    (hoac dung get_revenue_by_region cho doanh thu hoa don thuc te, khac voi so KPI o day)."""
+    (hoac dung get_revenue_by_region cho doanh thu hoa don thuc te, khac voi so KPI o day).
+
+    27/07/2026 - DONG BO voi kpi_ranking()/_rollup_tier_codes(): truoc day danh sach "QLV" duoi moi TP
+    loc truc tiep position_code='QLV' AND is_duplicate<>1, BO SOT cac NHOM/KENH nhu 'Kênh MT'/'Chợ sỉ'
+    (Mien Nam - IsDuplicate=1 vi Bravo gan trung ma, khong phai QLV that bi trung). Hau qua THUC TE: cay
+    QLV/TDV cua Mien Nam ra 3,50 ty trong khi tong vung (get_revenue_by_region) la 6,25 ty - nguoi dung
+    phai HOI LAI "con thieu gi" moi duoc bao thieu Kenh MT (2,73 ty) + Cho si (0,15 ty). Gio dung CHUNG
+    _rollup_tier_codes(fdate) (theo manager_code THAT) lam nguon danh sach QLV, giong het kpi_ranking -
+    2 tool nay LUON phai ra cung tong 1 vung, khong con truong hop tong khop nhung bóc tach le."""
     if scope_area_code:
         area_code = scope_area_code
     if as_of_date is None:
@@ -1272,28 +1310,42 @@ def revenue_tree(as_of_date: str = None, area_code: str = None, scope_area_code:
         tp_params = (area_code,)
     tp_rows = _q(tp_sql, tp_params)
 
+    # Danh sach "QLV" (bao gom ca nhom/kenh nhu Kenh MT/Cho si) - CUNG nguon voi kpi_ranking() de 2
+    # tool khong bao gio lech nhau. Cac ban ghi nhom/kenh KHONG co manager_code tro len TP (chung la
+    # tang rollup doc lap, khong bao cao ai) nen gan theo area_code cua chinh ban ghi do thay vi cho
+    # doi chieu qua manager_code nhu QLV that.
+    managers = _rollup_tier_codes(fdate)
+    qlv_all = []
+    if managers:
+        ph = ",".join(["?"] * len(managers))
+        qlv_all = _q(f"SELECT employee_code, name, area_code, COALESCE(is_duplicate,0) dup "
+                     f"FROM dim_nhanvien WHERE employee_code IN ({ph})", tuple(managers))
+
     tree = []
     for tp in tp_rows:
         tp_kpi = _kpi_snapshot(tp["employee_code"], fdate, "TP")
-        qlv_sql = ("SELECT employee_code, name FROM dim_nhanvien WHERE position_code='QLV' AND area_code=? "
-                   f"AND end_date IS NULL AND COALESCE(is_resigned,0)<>1 AND {_not_duplicate_sql('')}")
-        qlv_params = [tp["area_code"]]
+        qlv_rows = [q for q in qlv_all if q["area_code"] == tp["area_code"]]
         if scope_employee_code:
-            qlv_sql += " AND employee_code=?"
-            qlv_params.append(scope_employee_code)
-        qlv_sql += " ORDER BY name"
-        qlv_rows = _q(qlv_sql, tuple(qlv_params))
+            qlv_rows = [q for q in qlv_rows if q["employee_code"] == scope_employee_code]
+        qlv_rows = sorted(qlv_rows, key=lambda q: q["name"] or "")
         qlv_list = []
         for qlv in qlv_rows:
             q_kpi = _kpi_snapshot(qlv["employee_code"], fdate, "QLV")
-            team = _team_of_qlv(qlv["employee_code"], fdate)
+            is_unit = (int(qlv["dup"] or 0) == 1
+                       and qlv["employee_code"] not in _KNOWN_MISFLAGGED_DUPLICATE_CODES)
+            team = [] if is_unit else _team_of_qlv(qlv["employee_code"], fdate)
             tdv_list = []
             for t in team:
                 # _team_of_qlv da loc san position_code='TDV' nen o day chac chan la TDV (nguong 65%).
                 t_kpi = _kpi_snapshot(t["employee_code"], fdate, "TDV")
                 tdv_list.append({"employee_code": t["employee_code"], "name": t["name"], **t_kpi})
-            qlv_list.append({"employee_code": qlv["employee_code"], "name": qlv["name"], **q_kpi,
-                              "tdv_count": len(tdv_list), "tdv": tdv_list})
+            qlv_entry = {"employee_code": qlv["employee_code"], "name": qlv["name"], **q_kpi,
+                         "tdv_count": len(tdv_list), "tdv": tdv_list, "la_nhom_kenh": is_unit}
+            if is_unit:
+                qlv_entry["ghi_chu"] = (f"'{qlv['name']}' la NHOM/KENH ban hang (khong phai mot ca "
+                                        "nhan/khong co doi TDV rieng) - khi tra loi phai goi dung la "
+                                        "kenh/nhom, KHONG duoc noi nhu mot QLV thong thuong.")
+            qlv_list.append(qlv_entry)
         tree.append({"employee_code": tp["employee_code"], "name": tp["name"], "area_code": tp["area_code"],
                       **tp_kpi, "qlv_count": len(qlv_list), "qlv": qlv_list})
     return {"as_of": fdate, "tree": tree}
@@ -1715,7 +1767,8 @@ _EMPLOYEE_SCOPED_TEMPLATES = {"get_revenue_tree", "get_kpi_ranking", "get_employ
 # qlv thi CHAN han (fail-closed) cho toi khi DNH chot. Xem D1 trong docs/Cau_hoi_can_DNH_xac_nhan.md.
 
 _CHANNEL_SCOPED_TEMPLATES = {"get_revenue_by_channel", "get_top_products", "get_top_customers",
-                              "compare_periods", "get_customer_detail", "check_order_timing"}
+                              "compare_periods", "get_customer_detail", "check_order_timing",
+                              "get_revenue_by_region"}
 
 
 def call_template(name: str, args: dict, question: str = "", username: str = None,

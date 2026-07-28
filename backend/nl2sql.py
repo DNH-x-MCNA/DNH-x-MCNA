@@ -78,27 +78,36 @@ TEMPLATE_TOOLS = [
     },
     {
         "name": "get_revenue_by_region",
-        "description": "Doanh thu theo vung mien (Mien Bac/Trung/Nam), gop ca OTC+ETC, trong 1 khoang ngay. "
+        "description": "Doanh thu theo vung mien (Mien Bac/Trung/Nam) trong 1 khoang ngay. "
                         "BAT BUOC dung tool nay cho MOI cau hoi ve doanh thu theo vung/mien/khu vuc - KE CA "
                         "KHI nguoi dung chi hoi 1 vung cu the (vd 'doanh thu mien Nam'): van goi tool nay "
                         "(no luon tra ve ca 3 vung) roi CHI trich/hien thi vung duoc hoi trong cau tra loi, "
                         "TUYET DOI KHONG tu viet SQL rieng voi dieu kien area_code=... vi se BO SOT khach "
                         "hang 'mo coi' (khong co ho so trong bang khach hang) ma CHI ham nay moi suy luan "
                         "dung vung qua tien to ma khach hang. "
+                        "THAM SO 'channel' QUAN TRONG (28/07/2026, sua sau khi phat hien bao cao 'OTC 3 mien' "
+                        "bi thoi phong ~4 lan neu quen loc): nguoi dung hoi RO RANG 'doanh thu OTC theo vung' "
+                        "-> BAT BUOC truyen channel='OTC'; hoi 'ETC theo vung' -> channel='ETC'; hoi 'doanh "
+                        "thu theo vung' CHUNG CHUNG (khong noi OTC/ETC) -> de channel mac dinh 'ALL' (gop ca "
+                        "2 kenh). KHONG duoc de mac dinh 'ALL' roi tu tru/suy doan phan OTC - 1-2 khach ETC "
+                        "(benh vien/thau) co the lon hon CA VUNG do cong lai, lam so bi sai nghiem trong. "
                         "CANH BAO NHAM LAN QUAN TRONG: 'Kenh MT' (Modern Trade - chuoi nha thuoc lon nhu "
-                        "Long Chau, Pharmacity) LA 1 KENH BAN HANG, HOAN TOAN KHAC voi ma vung 'MT'=Mien "
-                        "Trung (trung chu viet tat ngau nhien). Neu nguoi dung hoi 've doanh thu Kenh MT/"
-                        "Modern Trade/MN1' thi VAN goi tool NAY (KHONG phai get_revenue_by_channel, tool "
-                        "do chi biet OTC/ETC) - dong ket qua cua Mien Nam se co them truong 'channel_"
-                        "breakdown' (danh sach {name, revenue}) chua san doanh thu Kenh MT da tach rieng "
-                        "(SO NAY DA NAM SAN trong 'revenue' cua Mien Nam, KHONG duoc cong them) - lay so "
-                        "tu day de tra loi. TUYET DOI KHONG tra loi 'he thong khong co kenh MT' hay tu "
-                        "dong hieu nham sang doanh thu vung Mien Trung khi nguoi dung noi ro la 'kenh'.",
+                        "Long Chau, Pharmacity) LA 1 KENH BAN HANG (CHI thuoc OTC), HOAN TOAN KHAC voi ma vung "
+                        "'MT'=Mien Trung (trung chu viet tat ngau nhien). Neu nguoi dung hoi 've doanh thu "
+                        "Kenh MT/Modern Trade/MN1' thi VAN goi tool NAY (KHONG phai get_revenue_by_channel, "
+                        "tool do chi biet OTC/ETC toan quoc khong tach vung) - dong ket qua cua Mien Nam se "
+                        "co them truong 'channel_breakdown' (danh sach {name, revenue}) chua san doanh thu "
+                        "Kenh MT da tach rieng (SO NAY DA NAM SAN trong 'revenue' cua Mien Nam, KHONG duoc "
+                        "cong them) - lay so tu day de tra loi. TUYET DOI KHONG tra loi 'he thong khong co "
+                        "kenh MT' hay tu dong hieu nham sang doanh thu vung Mien Trung khi nguoi dung noi ro "
+                        "la 'kenh'.",
         "input_schema": {
             "type": "object",
             "properties": {
                 "date_from": {"type": "string", "description": "YYYY-MM-DD"},
                 "date_to": {"type": "string", "description": "YYYY-MM-DD"},
+                "channel": {"type": "string", "description": "'ALL' (mac dinh, gop OTC+ETC), 'OTC', hoac 'ETC' - "
+                                                               "PHAI truyen dung khi nguoi dung noi ro kenh, xem canh bao o description."},
             },
             "required": ["date_from", "date_to"],
         },
