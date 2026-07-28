@@ -7,6 +7,21 @@ from fastapi import FastAPI, HTTPException, Header, Depends, Query
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
 
+
+# 28/07/2026: PHUC HOI ham nay - ban main.py truoc do (viet lai cho dashboard C-Level) da lam mat
+# buoc load .env, khien os.environ["ANTHROPIC_API_KEY"] (doc trong nl2sql.py::ask()) nem KeyError
+# ngay khi nguoi dung hoi cau dau tien ("Loi he thong: 'ANTHROPIC_API_KEY'"). PHAI goi TRUOC khi
+# import auth/conversation_memory/nl2sql vi cac module do co the doc bien moi truong ngay luc import.
+def load_env():
+    env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+    if os.path.exists(env_path):
+        for line in open(env_path, encoding="utf-8"):
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                k, v = line.split("=", 1)
+                os.environ.setdefault(k.strip(), v.strip())
+load_env()
+
 from auth import (
     init_schema as init_auth_schema,
     verify_login,
