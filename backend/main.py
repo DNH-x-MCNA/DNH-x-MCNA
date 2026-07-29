@@ -275,8 +275,25 @@ def get_audit_logs_dashboard(
                 except Exception:
                     continue
 
-    # 2. Read cost logs mapped by session_id
+    # 2. Doc cost_log.jsonl - NGUON DUY NHAT CHO TONG CHI PHI THAT.
+    #
+    # 29/07/2026: truoc day tong chi phi duoc cong tu cac PHIEN co mat trong audit_log. Nhung
+    # cost_log ghi MOI lan goi Claude API, con audit_log chi ghi khi chay SQL/goi tool bao cao - va
+    # chi bat dau ghi session_id tu 28/07. Moi dong cost_log khong khop duoc voi audit_log deu bi bo
+    # qua HOAN TOAN => tong bao ra thap hon thuc te rat nhieu (nguoi dung phan anh 29/07).
+    #
+    # Nay tach lam 2 khai niem:
+    #   - TONG chi phi   = cong THANG tu cost_log (dung bang so tien Anthropic thuc thu)
+    #   - Quy cho ai     = qua session_id, phan khong khop duoc gom vao dong "(chua quy duoc)"
+    # Nho vay tong luon dung, va phan chua quy duoc thi HIEN RO thay vi bien mat.
+    #
+    # Token cung cong ca cache_read/cache_write: chi phi von da tinh chung (xem pricing.py), truoc
+    # day chi hien input+output nen nguoi doc nham tay se thay khong khop voi so tien.
     cost_by_session = defaultdict(lambda: {"cost_usd": 0.0, "input_tokens": 0, "output_tokens": 0, "total_tokens": 0, "calls": 0})
+    grand_cost_usd = 0.0
+    grand_input_tokens = 0
+    grand_output_tokens = 0
+    grand_cache_tokens = 0
     if os.path.exists(COST_LOG_PATH):
         with open(COST_LOG_PATH, encoding="utf-8") as f:
             for line in f:
@@ -285,19 +302,32 @@ def get_audit_logs_dashboard(
                     continue
                 try:
                     c = json.loads(line)
-                    sid = c.get("session_id")
-                    if sid:
-                        cost = c.get("cost_usd", 0.0) or 0.0
-                        it = c.get("input_tokens", 0) or 0
-                        ot = c.get("output_tokens", 0) or 0
-                        tt = c.get("total_tokens", 0) or (it + ot)
-                        cost_by_session[sid]["cost_usd"] += cost
-                        cost_by_session[sid]["input_tokens"] += it
-                        cost_by_session[sid]["output_tokens"] += ot
-                        cost_by_session[sid]["total_tokens"] += tt
-                        cost_by_session[sid]["calls"] += 1
                 except Exception:
                     continue
+                # Ap CUNG bo loc thoi gian nhu audit_log - truoc day cost_log khong bi loc ngay nao,
+                # nen chon "7 ngay" hay "30 ngay" deu ra cung mot so tien.
+                if cutoff:
+                    try:
+                        if dt.datetime.fromisoformat(c["ts"]) < cutoff:
+                            continue
+                    except Exception:
+                        pass
+                cost = c.get("cost_usd", 0.0) or 0.0
+                it = c.get("input_tokens", 0) or 0
+                ot = c.get("output_tokens", 0) or 0
+                cr = c.get("cache_read_tokens", 0) or 0
+                cw = c.get("cache_write_tokens", 0) or 0
+                grand_cost_usd += cost
+                grand_input_tokens += it
+                grand_output_tokens += ot
+                grand_cache_tokens += cr + cw
+                sid = c.get("session_id")
+                if sid:
+                    cost_by_session[sid]["cost_usd"] += cost
+                    cost_by_session[sid]["input_tokens"] += it
+                    cost_by_session[sid]["output_tokens"] += ot
+                    cost_by_session[sid]["total_tokens"] += it + ot + cr + cw
+                    cost_by_session[sid]["calls"] += 1
 
     # 3. Filter entries & aggregate stats per user
     filtered_logs = []
@@ -390,13 +420,34 @@ def get_audit_logs_dashboard(
             "cost_vnd": round(s["cost_usd"] * 25400.0, 2)
         })
 
+    # Phan chi phi CO THAT nhung chua noi duoc ve nguoi dung nao (phien khong xuat hien trong
+    # audit_log, hoac ban ghi truoc 28/07 khi audit_log chua ghi session_id). HIEN RO thanh 1 dong
+    # thay vi de bien mat - chinh cho nay tung lam tong bao ra thap hon thuc te.
+    unattributed = grand_cost_usd - total_cost_usd
+    if unattributed > 1e-9:
+        user_breakdown.append({
+            "username": "(chưa quy được)",
+            "user_name": "Chưa quy được cho người dùng",
+            "query_count": 0,
+            "input_tokens": max(0, grand_input_tokens - total_input_tokens),
+            "output_tokens": max(0, grand_output_tokens - total_output_tokens),
+            "total_tokens": 0,
+            "cost_usd": round(unattributed, 6),
+            "cost_vnd": round(unattributed * 25400.0, 2),
+        })
+
     return {
         "summary": {
-            "total_cost_usd": round(total_cost_usd, 6),
-            "total_cost_vnd": round(total_cost_usd * 25400.0, 2),
-            "total_input_tokens": total_input_tokens,
-            "total_output_tokens": total_output_tokens,
-            "grand_total_tokens": total_input_tokens + total_output_tokens,
+            # TONG = cong thang tu cost_log, dung bang so tien thuc thu - KHONG phai tong phan da
+            # quy duoc cho nguoi dung (xem ghi chu muc 2).
+            "total_cost_usd": round(grand_cost_usd, 6),
+            "total_cost_vnd": round(grand_cost_usd * 25400.0, 2),
+            "attributed_cost_usd": round(total_cost_usd, 6),
+            "unattributed_cost_usd": round(max(0.0, unattributed), 6),
+            "total_input_tokens": grand_input_tokens,
+            "total_output_tokens": grand_output_tokens,
+            "total_cache_tokens": grand_cache_tokens,
+            "grand_total_tokens": grand_input_tokens + grand_output_tokens + grand_cache_tokens,
             "total_queries": len(filtered_logs),
             "unique_users_count": len(user_stats),
             "days": days

@@ -82,8 +82,11 @@ type UserInfo = { username: string; name: string | null; role: string; scope_val
 type AuditSummary = {
   total_cost_usd: number;
   total_cost_vnd: number;
+  attributed_cost_usd: number;
+  unattributed_cost_usd: number;
   total_input_tokens: number;
   total_output_tokens: number;
+  total_cache_tokens: number;
   grand_total_tokens: number;
   total_queries: number;
   unique_users_count: number;
@@ -870,6 +873,12 @@ export default function Home() {
                       <div className="text-[11px] text-amber-600">
                         ~ ${auditData.summary.total_cost_usd.toFixed(4)} USD
                       </div>
+                      {auditData.summary.unattributed_cost_usd > 0 && (
+                        <div className="mt-1 text-[10px] leading-tight text-amber-700/80">
+                          Trong đó {(auditData.summary.unattributed_cost_usd * 25400).toLocaleString("vi-VN", { maximumFractionDigits: 0 })} đ
+                          chưa quy được cho người dùng cụ thể
+                        </div>
+                      )}
                     </div>
 
                     <div className="rounded-xl border border-blue-200 bg-blue-50/50 p-4 shadow-sm">
@@ -879,6 +888,9 @@ export default function Home() {
                       </div>
                       <div className="text-[11px] text-blue-600">
                         In: {auditData.summary.total_input_tokens.toLocaleString()} · Out: {auditData.summary.total_output_tokens.toLocaleString()}
+                        {auditData.summary.total_cache_tokens > 0 && (
+                          <> · Cache: {auditData.summary.total_cache_tokens.toLocaleString()}</>
+                        )}
                       </div>
                     </div>
 
