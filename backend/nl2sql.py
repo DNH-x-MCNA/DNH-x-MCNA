@@ -667,7 +667,7 @@ def ask(question: str, session_id: str = "default", username: str = None, scope_
             messages=messages,
             extra_headers=_CACHE_BETA_HEADERS,
         )
-        compute_and_log_cost(resp.usage, MODEL, question, session_id)
+        compute_and_log_cost(resp.usage, MODEL, question, session_id, username)
         messages.append({"role": "assistant", "content": resp.content})
 
         tool_uses = [b for b in resp.content if b.type == "tool_use"]
@@ -680,7 +680,7 @@ def ask(question: str, session_id: str = "default", username: str = None, scope_
                 resp2 = client.messages.create(model=MODEL, max_tokens=MAX_TOKENS, system=system_blocks,
                                                 tools=tools_for_request, messages=messages,
                                                 extra_headers=_CACHE_BETA_HEADERS)
-                compute_and_log_cost(resp2.usage, MODEL, question, session_id)
+                compute_and_log_cost(resp2.usage, MODEL, question, session_id, username)
                 answer_text = "".join(b.text for b in resp2.content if b.type == "text").strip()
                 if not answer_text:
                     answer_text = ("Xin lỗi, dữ liệu trả về quá lớn để tổng hợp gọn trong 1 câu trả lời. "

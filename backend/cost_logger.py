@@ -19,9 +19,18 @@ MONTHLY_ALERT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "l
 _alerted_months: set = set()
 
 
-def compute_and_log_cost(usage, model: str, question: str = "", session_id: str = "") -> float:
+def compute_and_log_cost(usage, model: str, question: str = "", session_id: str = "",
+                          username: str = "") -> float:
     """usage: object tra ve tu response.usage cua Anthropic SDK (co input_tokens, output_tokens,
-    cache_creation_input_tokens, cache_read_input_tokens). Tra ve cost USD cua lan goi nay."""
+    cache_creation_input_tokens, cache_read_input_tokens). Tra ve cost USD cua lan goi nay.
+
+    username (29/07/2026): GHI THANG vao log de quy chi phi cho tung nguoi. Truoc day dashboard phai
+    NOI NGUOC qua session_id sang audit_log.jsonl, cach do bo sot rat nhieu:
+      - audit_log chi ghi khi chay SQL / goi tool bao cao. Luot nao AI tra loi thang (khong goi tool)
+        van TON TIEN nhung khong co dong audit nao de noi vao.
+      - audit_log moi bat dau ghi session_id tu 28/07; moi ban ghi truoc do khong the khop.
+    Ket qua: 89% chi phi do duoc ngay 29/07 khong quy duoc cho ai. Ghi thang username o day xoa han
+    su phu thuoc vao phep noi - moi lan goi API deu biet ro la cua ai."""
     input_tokens = getattr(usage, "input_tokens", 0) or 0
     output_tokens = getattr(usage, "output_tokens", 0) or 0
     cache_read = getattr(usage, "cache_read_input_tokens", 0) or 0
@@ -32,6 +41,7 @@ def compute_and_log_cost(usage, model: str, question: str = "", session_id: str 
     entry = {
         "ts": dt.datetime.now().isoformat(),
         "session_id": session_id,
+        "username": username or "",
         "question_preview": (question or "")[:120],
         "model": model,
         "input_tokens": input_tokens,
