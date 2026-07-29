@@ -290,8 +290,8 @@ def get_audit_logs_dashboard(
     #
     # Token cung cong ca cache_read/cache_write: chi phi von da tinh chung (xem pricing.py), truoc
     # day chi hien input+output nen nguoi doc nham tay se thay khong khop voi so tien.
-    cost_by_session = defaultdict(lambda: {"cost_usd": 0.0, "input_tokens": 0, "output_tokens": 0, "total_tokens": 0, "calls": 0})
-    cost_direct_by_user = defaultdict(lambda: {"cost_usd": 0.0, "input_tokens": 0, "output_tokens": 0, "total_tokens": 0})
+    cost_by_session = defaultdict(lambda: {"cost_usd": 0.0, "input_tokens": 0, "output_tokens": 0, "cache_tokens": 0, "total_tokens": 0, "calls": 0})
+    cost_direct_by_user = defaultdict(lambda: {"cost_usd": 0.0, "input_tokens": 0, "output_tokens": 0, "cache_tokens": 0, "total_tokens": 0})
     grand_cost_usd = 0.0
     grand_input_tokens = 0
     grand_output_tokens = 0
@@ -333,6 +333,7 @@ def get_audit_logs_dashboard(
                     d["cost_usd"] += cost
                     d["input_tokens"] += it
                     d["output_tokens"] += ot
+                    d["cache_tokens"] += cr + cw
                     d["total_tokens"] += it + ot + cr + cw
                     continue  # da quy duoc, khong can den phep noi session
 
@@ -342,15 +343,17 @@ def get_audit_logs_dashboard(
                     cost_by_session[sid]["cost_usd"] += cost
                     cost_by_session[sid]["input_tokens"] += it
                     cost_by_session[sid]["output_tokens"] += ot
+                    cost_by_session[sid]["cache_tokens"] += cr + cw
                     cost_by_session[sid]["total_tokens"] += it + ot + cr + cw
                     cost_by_session[sid]["calls"] += 1
 
     # 3. Filter entries & aggregate stats per user
     filtered_logs = []
-    user_stats = defaultdict(lambda: {"query_count": 0, "input_tokens": 0, "output_tokens": 0, "total_tokens": 0, "cost_usd": 0.0})
+    user_stats = defaultdict(lambda: {"query_count": 0, "input_tokens": 0, "output_tokens": 0, "cache_tokens": 0, "total_tokens": 0, "cost_usd": 0.0})
     total_cost_usd = 0.0
     total_input_tokens = 0
     total_output_tokens = 0
+    total_cache_tokens_attributed = 0
 
     target_user_str = (user_filter or "").strip().lower()
 
@@ -380,6 +383,7 @@ def get_audit_logs_dashboard(
         c_usd = session_cost_data.get("cost_usd", 0.0)
         c_it = session_cost_data.get("input_tokens", 0)
         c_ot = session_cost_data.get("output_tokens", 0)
+        c_ct = session_cost_data.get("cache_tokens", 0)
         c_tt = session_cost_data.get("total_tokens", c_it + c_ot)
 
         display_name = get_name_by_username(uname) or uname
@@ -394,11 +398,13 @@ def get_audit_logs_dashboard(
             counted_sessions.add(sid)
             user_stats[uname]["input_tokens"] += c_it
             user_stats[uname]["output_tokens"] += c_ot
+            user_stats[uname]["cache_tokens"] += c_ct
             user_stats[uname]["total_tokens"] += c_tt
             user_stats[uname]["cost_usd"] += c_usd
             total_cost_usd += c_usd
             total_input_tokens += c_it
             total_output_tokens += c_ot
+            total_cache_tokens_attributed += c_ct
 
         filtered_logs.append({
             "ts": e.get("ts"),
@@ -431,6 +437,7 @@ def get_audit_logs_dashboard(
         st["cost_usd"] += d["cost_usd"]
         st["input_tokens"] += d["input_tokens"]
         st["output_tokens"] += d["output_tokens"]
+        st["cache_tokens"] += d["cache_tokens"]
         st["total_tokens"] += d["total_tokens"]
         st.setdefault("query_count", 0)
         if "display_name" not in st:
@@ -438,6 +445,7 @@ def get_audit_logs_dashboard(
         total_cost_usd += d["cost_usd"]
         total_input_tokens += d["input_tokens"]
         total_output_tokens += d["output_tokens"]
+        total_cache_tokens_attributed += d["cache_tokens"]
 
     user_breakdown = []
     for uname, s in sorted(user_stats.items(), key=lambda x: -x[1]["cost_usd"]):
@@ -447,9 +455,11 @@ def get_audit_logs_dashboard(
             "query_count": s["query_count"],
             "input_tokens": s["input_tokens"],
             "output_tokens": s["output_tokens"],
+            "cache_tokens": s["cache_tokens"],
             "total_tokens": s["total_tokens"],
             "cost_usd": round(s["cost_usd"], 6),
-            "cost_vnd": round(s["cost_usd"] * USD_TO_VND_RATE, 2)
+            "cost_vnd": round(s["cost_usd"] * USD_TO_VND_RATE, 2),
+            "is_unattributed": False,
         })
 
     # Phan chi phi CO THAT nhung chua noi duoc ve nguoi dung nao (phien khong xuat hien trong
@@ -457,15 +467,25 @@ def get_audit_logs_dashboard(
     # thay vi de bien mat - chinh cho nay tung lam tong bao ra thap hon thuc te.
     unattributed = grand_cost_usd - total_cost_usd
     if unattributed > 1e-9:
+        # 29/07/2026 - SUA LOI: truoc day total_tokens o dong nay bi ghi CUNG bang 0 trong khi
+        # input/output van co so, nen tren dashboard hien "In 2.738.469 · Out 313.394" ma cot "Tong
+        # Tokens" lai bang 0 - nhin nhu du lieu hong. Nay tinh dung bang phan con lai cua tong.
+        un_it = max(0, grand_input_tokens - total_input_tokens)
+        un_ot = max(0, grand_output_tokens - total_output_tokens)
+        un_ct = max(0, grand_cache_tokens - total_cache_tokens_attributed)
         user_breakdown.append({
             "username": "(chưa quy được)",
             "user_name": "Chưa quy được cho người dùng",
             "query_count": 0,
-            "input_tokens": max(0, grand_input_tokens - total_input_tokens),
-            "output_tokens": max(0, grand_output_tokens - total_output_tokens),
-            "total_tokens": 0,
+            "input_tokens": un_it,
+            "output_tokens": un_ot,
+            "cache_tokens": un_ct,
+            "total_tokens": un_it + un_ot + un_ct,
             "cost_usd": round(unattributed, 6),
             "cost_vnd": round(unattributed * USD_TO_VND_RATE, 2),
+            # Co day de frontend KHONG danh dau "tieu thu cao nhat" vao dong nay - day khong phai
+            # mot nguoi dung that, no la phan chi phi chua noi duoc ve ai.
+            "is_unattributed": True,
         })
 
     return {
@@ -481,7 +501,9 @@ def get_audit_logs_dashboard(
             "total_cache_tokens": grand_cache_tokens,
             "grand_total_tokens": grand_input_tokens + grand_output_tokens + grand_cache_tokens,
             "total_queries": len(filtered_logs),
-            "unique_users_count": len(user_stats),
+            # Loai "unknown" (luot khong xac dinh duoc tai khoan) khoi so nguoi dung - truoc day dem
+            # ca no nen so "nguoi dung hoat dong" luon nhieu hon so nguoi that.
+            "unique_users_count": len([u for u in user_stats if u and u.lower() != "unknown"]),
             "days": days
         },
         "user_breakdown": user_breakdown,
