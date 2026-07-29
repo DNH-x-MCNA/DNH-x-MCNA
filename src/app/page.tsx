@@ -101,6 +101,10 @@ type UserBreakdownItem = {
   cost_vnd: number;
 };
 
+// Cac truong session_* la so cua CA PHIEN chat, khong phai cua rieng luot hoi tren dong do:
+// cost_log ghi theo tung lan goi API, mot luot hoi sinh nhieu lan goi nen khong tach duoc xuong
+// tung cau hoi. Nhieu dong cung mot phien se hien CUNG mot so - dung cong tay cac dong nay lai,
+// tong dung nam o phan summary (da chong trung).
 type QueryLogItem = {
   ts: string;
   username: string;
@@ -109,11 +113,12 @@ type QueryLogItem = {
   sql: string | null;
   status: string;
   duration_ms: number | null;
-  input_tokens: number;
-  output_tokens: number;
-  total_tokens: number;
-  cost_usd: number;
-  cost_vnd: number;
+  session_id: string | null;
+  session_input_tokens: number;
+  session_output_tokens: number;
+  session_total_tokens: number;
+  session_cost_usd: number;
+  session_cost_vnd: number;
 };
 
 type AuditDashboardData = {
@@ -952,9 +957,9 @@ export default function Home() {
                               <th className="px-4 py-3 text-left">Thời Gian</th>
                               <th className="px-4 py-3 text-left">Người Dùng</th>
                               <th className="px-4 py-3 text-left">Nội Dung Câu Hỏi</th>
-                              <th className="px-4 py-3 text-right">Input Tokens</th>
-                              <th className="px-4 py-3 text-right">Output Tokens</th>
-                              <th className="px-4 py-3 text-right">Chi Phí (VNĐ)</th>
+                              <th className="px-4 py-3 text-right">Input Tokens<div className="font-normal text-[10px] text-slate-400">(cả phiên)</div></th>
+                              <th className="px-4 py-3 text-right">Output Tokens<div className="font-normal text-[10px] text-slate-400">(cả phiên)</div></th>
+                              <th className="px-4 py-3 text-right">Chi Phí (VNĐ)<div className="font-normal text-[10px] text-slate-400">(cả phiên)</div></th>
                               <th className="px-4 py-3 text-center">Thời Gian Chạy</th>
                               <th className="px-4 py-3 text-center">Chi Tiết SQL</th>
                             </tr>
@@ -971,10 +976,10 @@ export default function Home() {
                                 <td className="px-4 py-3 text-slate-800 font-normal max-w-xs truncate" title={log.question}>
                                   {log.question}
                                 </td>
-                                <td className="px-4 py-3 text-right text-slate-600">{log.input_tokens.toLocaleString()}</td>
-                                <td className="px-4 py-3 text-right text-slate-600">{log.output_tokens.toLocaleString()}</td>
+                                <td className="px-4 py-3 text-right text-slate-600">{log.session_input_tokens.toLocaleString()}</td>
+                                <td className="px-4 py-3 text-right text-slate-600">{log.session_output_tokens.toLocaleString()}</td>
                                 <td className="px-4 py-3 text-right font-semibold text-amber-700">
-                                  {log.cost_vnd.toLocaleString("vi-VN")} đ
+                                  {log.session_cost_vnd.toLocaleString("vi-VN")} đ
                                 </td>
                                 <td className="px-4 py-3 text-center text-slate-500 whitespace-nowrap">
                                   {log.duration_ms ? `${log.duration_ms} ms` : "—"}
