@@ -37,6 +37,7 @@ from conversation_memory import (
     get_session_history,
 )
 from nl2sql import ask
+from pricing import USD_TO_VND_RATE
 
 init_auth_schema()
 
@@ -416,7 +417,7 @@ def get_audit_logs_dashboard(
             "session_output_tokens": c_ot,
             "session_total_tokens": c_tt,
             "session_cost_usd": round(c_usd, 6),
-            "session_cost_vnd": round(c_usd * 25400.0, 2),
+            "session_cost_vnd": round(c_usd * USD_TO_VND_RATE, 2),
         })
 
     filtered_logs.sort(key=lambda x: x.get("ts", ""), reverse=True)
@@ -448,7 +449,7 @@ def get_audit_logs_dashboard(
             "output_tokens": s["output_tokens"],
             "total_tokens": s["total_tokens"],
             "cost_usd": round(s["cost_usd"], 6),
-            "cost_vnd": round(s["cost_usd"] * 25400.0, 2)
+            "cost_vnd": round(s["cost_usd"] * USD_TO_VND_RATE, 2)
         })
 
     # Phan chi phi CO THAT nhung chua noi duoc ve nguoi dung nao (phien khong xuat hien trong
@@ -464,7 +465,7 @@ def get_audit_logs_dashboard(
             "output_tokens": max(0, grand_output_tokens - total_output_tokens),
             "total_tokens": 0,
             "cost_usd": round(unattributed, 6),
-            "cost_vnd": round(unattributed * 25400.0, 2),
+            "cost_vnd": round(unattributed * USD_TO_VND_RATE, 2),
         })
 
     return {
@@ -472,7 +473,7 @@ def get_audit_logs_dashboard(
             # TONG = cong thang tu cost_log, dung bang so tien thuc thu - KHONG phai tong phan da
             # quy duoc cho nguoi dung (xem ghi chu muc 2).
             "total_cost_usd": round(grand_cost_usd, 6),
-            "total_cost_vnd": round(grand_cost_usd * 25400.0, 2),
+            "total_cost_vnd": round(grand_cost_usd * USD_TO_VND_RATE, 2),
             "attributed_cost_usd": round(total_cost_usd, 6),
             "unattributed_cost_usd": round(max(0.0, unattributed), 6),
             "total_input_tokens": grand_input_tokens,

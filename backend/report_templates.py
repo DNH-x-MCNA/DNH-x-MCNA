@@ -16,6 +16,7 @@ from local_warehouse import get_conn, get_sync_meta
 from query_engine import _write_log, _get_engine
 from region_map import region_from_customer_code, REGION_SQL_MARKERS, REGION_NAMES_VI
 import org_hierarchy as oh
+from pricing import USD_TO_VND_RATE
 
 _LOGS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs")
 AUDIT_LOG_PATH = os.path.join(_LOGS_DIR, "audit_log.jsonl")
@@ -1821,7 +1822,7 @@ def audit_log_summary(days: int = 7, limit: int = 30, username: str = None, targ
         "total_queries": len(my_entries),
         "total_sessions": len(my_sessions),
         "total_cost_usd": round(total_cost, 6),
-        "total_cost_vnd": round(total_cost * 25400.0, 2),
+        "total_cost_vnd": round(total_cost * USD_TO_VND_RATE, 2),
         "total_input_tokens": total_tokens_in,
         "total_output_tokens": total_tokens_out,
         "total_tokens": total_tokens_in + total_tokens_out,
