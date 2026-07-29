@@ -308,6 +308,15 @@ def get_audit_logs_dashboard(
 
     target_user_str = (user_filter or "").strip().lower()
 
+    # 29/07/2026 - CHONG CONG TRUNG CHI PHI.
+    # cost_by_session[sid] la chi phi CA PHIEN, nhung vong lap duoi chay theo TUNG LUOT truy van.
+    # Truoc day moi luot deu cong nguyen chi phi phien vao tong => phien co 6 luot bi tinh 6 lan.
+    # Bang chung do duoc 29/07 (tai khoan tung.trinh): dashboard bao $1,0858 trong khi duong tinh
+    # dung (report_templates.py::audit_log_summary - duyet tung dong cost_log DUNG MOT LAN) bao
+    # $0,18 - lech 6,03 lan, khop chinh xac so luot trung binh moi phien (23 luot / 4 phien).
+    # Nay moi phien CHI duoc cong mot lan, vao nguoi dung xuat hien dau tien trong phien do.
+    counted_sessions = set()
+
     for e in audit_entries:
         uname = e.get("username") or "unknown"
         if target_user_str and target_user_str not in ("all", ""):
@@ -330,15 +339,20 @@ def get_audit_logs_dashboard(
         display_name = get_name_by_username(uname) or uname
 
         user_stats[uname]["query_count"] += 1
-        user_stats[uname]["input_tokens"] += c_it
-        user_stats[uname]["output_tokens"] += c_ot
-        user_stats[uname]["total_tokens"] += c_tt
-        user_stats[uname]["cost_usd"] += c_usd
         user_stats[uname]["display_name"] = display_name
 
-        total_cost_usd += c_usd
-        total_input_tokens += c_it
-        total_output_tokens += c_ot
+        # Chi cong chi phi/token khi gap phien nay LAN DAU - xem ghi chu "CHONG CONG TRUNG" o tren.
+        # Luot khong co session_id (ban ghi truoc 28/07, khi audit_log chua ghi truong nay) van duoc
+        # dem vao query_count nhung khong co chi phi - dung, vi khong the noi nguoc ve cost_log.
+        if sid and sid not in counted_sessions:
+            counted_sessions.add(sid)
+            user_stats[uname]["input_tokens"] += c_it
+            user_stats[uname]["output_tokens"] += c_ot
+            user_stats[uname]["total_tokens"] += c_tt
+            user_stats[uname]["cost_usd"] += c_usd
+            total_cost_usd += c_usd
+            total_input_tokens += c_it
+            total_output_tokens += c_ot
 
         filtered_logs.append({
             "ts": e.get("ts"),
@@ -348,11 +362,16 @@ def get_audit_logs_dashboard(
             "sql": e.get("sql"),
             "status": e.get("status", "success"),
             "duration_ms": e.get("duration_ms"),
-            "input_tokens": c_it,
-            "output_tokens": c_ot,
-            "total_tokens": c_tt,
-            "cost_usd": round(c_usd, 6),
-            "cost_vnd": round(c_usd * 25400.0, 2)
+            # CHI PHI CUA CA PHIEN, khong phai cua rieng luot nay - cost_log ghi theo lan goi API,
+            # mot luot hoi sinh nhieu lan goi nen KHONG tach duoc xuong tung cau hoi. Nhieu dong
+            # cung mot phien se hien CUNG mot so; cong tay cac dong nay lai se ra so sai (dung
+            # tong o phan summary, da chong trung). Ten truong co hau to _session cho ro nghia.
+            "session_id": sid,
+            "session_input_tokens": c_it,
+            "session_output_tokens": c_ot,
+            "session_total_tokens": c_tt,
+            "session_cost_usd": round(c_usd, 6),
+            "session_cost_vnd": round(c_usd * 25400.0, 2),
         })
 
     filtered_logs.sort(key=lambda x: x.get("ts", ""), reverse=True)
