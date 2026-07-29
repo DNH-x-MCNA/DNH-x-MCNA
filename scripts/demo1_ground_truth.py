@@ -74,16 +74,27 @@ def _kpi_snapshot_asof(as_of_date, position_codes=('TDV', 'QLV'), include_duplic
         WITH snap AS (
             SELECT MAX([SaveDate]) AS d FROM [FACT_TongHopKhachHang] WHERE [SaveDate] <= :as_of
         ),
+        -- 29/07/2026: gộp theo THÁNG của snapshot đó, mỗi nhân viên lấy SaveDate mới nhất của CHÍNH
+        -- họ — vì DNH ghi snapshot tách theo vùng qua nhiều ngày (tháng 7: 27/07 có MB+MN, 28/07 chỉ
+        -- có MT). Ghim 1 ngày như trước làm mất hẳn 2 miền. Xem src/alerts.py::
+        -- _MONTH_START_OF_LATEST_SNAPSHOT_SQL cho bối cảnh đầy đủ.
+        latest AS (
+            SELECT f.[EmployeeCode], MAX(f.[SaveDate]) AS d
+            FROM [FACT_TongHopKhachHang] f
+            WHERE f.[SaveDate] <= :as_of
+              AND f.[SaveDate] >= (SELECT DATEFROMPARTS(YEAR(d), MONTH(d), 1) FROM snap)
+            GROUP BY f.[EmployeeCode]
+        ),
         tdv_actual AS (
-            SELECT [EmployeeCode], SUM([Amount_Cus]) AS TotalActual
-            FROM [FACT_TongHopKhachHang]
-            WHERE [SaveDate] = (SELECT d FROM snap)
-            GROUP BY [EmployeeCode]
+            SELECT f.[EmployeeCode], SUM(f.[Amount_Cus]) AS TotalActual
+            FROM [FACT_TongHopKhachHang] f
+            JOIN latest l ON l.[EmployeeCode] = f.[EmployeeCode] AND l.d = f.[SaveDate]
+            GROUP BY f.[EmployeeCode]
         ),
         tdv_target AS (
-            SELECT DISTINCT [EmployeeCode], [AreaCode], [MonthSaleTarget], [ManagerCode]
-            FROM [FACT_TongHopKhachHang]
-            WHERE [SaveDate] = (SELECT d FROM snap)
+            SELECT DISTINCT f.[EmployeeCode], f.[AreaCode], f.[MonthSaleTarget], f.[ManagerCode]
+            FROM [FACT_TongHopKhachHang] f
+            JOIN latest l ON l.[EmployeeCode] = f.[EmployeeCode] AND l.d = f.[SaveDate]
         )
         SELECT n.[EmployeeCode] AS employee_code, n.[Name] AS employee_name, t.[AreaCode] AS area_code,
                n.[PositionCode] AS position_code, t.[ManagerCode] AS manager_code,
@@ -124,8 +135,12 @@ def _manager_codes_asof(as_of_date):
         raise RuntimeError("Không có Bravo engine (thiếu BRAVO_SQL_* trong .env)")
     with engine.connect() as conn:
         rows = conn.execute(text('''
+            WITH snap AS (
+                SELECT MAX([SaveDate]) AS d FROM [FACT_TongHopKhachHang] WHERE [SaveDate] <= :as_of
+            )
             SELECT DISTINCT [ManagerCode] FROM [FACT_TongHopKhachHang]
-            WHERE [SaveDate] = (SELECT MAX([SaveDate]) FROM [FACT_TongHopKhachHang] WHERE [SaveDate] <= :as_of)
+            WHERE [SaveDate] <= :as_of
+              AND [SaveDate] >= (SELECT DATEFROMPARTS(YEAR(d), MONTH(d), 1) FROM snap)
               AND [ManagerCode] IS NOT NULL AND [ManagerCode] <> ''
         '''), {"as_of": str(as_of_date)}).fetchall()
     return {r[0] for r in rows}
@@ -372,6 +387,23 @@ def section_kpi(p, as_of_date):
     tot_a = sum(v["amount"] for v in by_area.values())
     lines.append(f"{'TOÀN ĐỘI':<12} {(tot_a/tot_t*100 if tot_t else 0):>7.1f}%   "
                  f"đạt {money(tot_a)} / chỉ tiêu {money(tot_t)}")
+
+    # 29/07/2026 — CHỐT AN TOÀN: snapshot có thể THIẾU HẲN một vùng, khi đó dòng "TOÀN ĐỘI" ở trên
+    # chỉ là tổng các vùng còn lại nhưng trông y như số toàn quốc. Đã xảy ra thật: DNH ghi snapshot
+    # tháng 7 TÁCH LÀM 2 NGÀY theo vùng (SaveDate 27/07 có MB+MN, 28/07 CHỈ có MT) — chạy ngày 29/07
+    # ra "TOÀN ĐỘI 48,7%" trong khi đó chỉ là Miền Trung, hụt MB 30,78 tỷ và MN 13,19 tỷ.
+    # Kiểm cả 2 chiều: thiếu vùng, và số vùng ít hơn 3.
+    expected_areas = {"MB", "MT", "MN"}
+    missing_areas = expected_areas - set(by_area.keys())
+    if missing_areas:
+        lines += [
+            "",
+            f"🔴 CẢNH BÁO — SNAPSHOT THIẾU VÙNG: {', '.join(sorted(missing_areas))} không có dòng nào.",
+            f"    Dòng TOÀN ĐỘI ở trên CHỈ gồm {', '.join(sorted(by_area.keys()))}, KHÔNG phải toàn công ty.",
+            "    TUYỆT ĐỐI không dùng số này cho báo cáo hay đối chiếu demo.",
+            "    Nguyên nhân thường gặp: snapshot tháng đang được ghi dở, mỗi vùng ghi một ngày khác nhau.",
+            "    Xử lý: chạy lại với --as-of của tháng đã trọn (vd --as-of 2026-06-30), hoặc đợi snapshot cuối tháng.",
+        ]
     answer("C6", "Xếp hạng các vùng theo mức đạt KPI?", lines)
 
     # --- C8 / Q1: cây Vùng -> QLV -> TDV, lấy miền Bắc làm mẫu ---
