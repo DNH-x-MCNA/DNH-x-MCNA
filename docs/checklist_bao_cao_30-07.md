@@ -52,7 +52,7 @@ bên kho chatbot.
 | Việc | Ảnh hưởng nếu để nguyên |
 |---|---|
 | **Giao diện Bảng điều khiển Chi phí AI** chưa lên web (chờ cập nhật lại phía nhà cung cấp hosting) | Không demo được màn hình này tại buổi báo cáo — chỉ trình bày qua chatbot dạng chữ |
-| **Kiểm chứng trọn bộ 17 câu Demo #1** mới chạy được một phần | Chưa khẳng định được "đã kiểm chứng đầy đủ" ở Slide 5 |
+| ~~Kiểm chứng trọn bộ 17 câu Demo #1~~ | ✅ **XONG 29/07 — 17/17 đạt**, cả 3 vai trò |
 
 ---
 
