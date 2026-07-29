@@ -12,6 +12,11 @@ type ChatResponse = {
   row_count: number | null;
 };
 
+// Tỷ giá USD -> VND cho các số chi phí AI hiển thị ở frontend. Phải khớp với
+// backend/pricing.py::USD_TO_VND_RATE — backend trả sẵn *_vnd cho phần lớn số liệu, riêng phần
+// "chưa quy được cho ai" đang quy đổi tại đây nên vẫn cần hằng số này.
+const USD_TO_VND_RATE = 26334.5;
+
 type HistoryMessage = { role: "user" | "assistant"; content: string };
 
 type SessionSummary = {
@@ -924,7 +929,7 @@ export default function Home() {
                       </div>
                       {auditData.summary.unattributed_cost_usd > 0 && (
                         <div className="mt-1 text-[10px] leading-tight text-amber-700/80">
-                          Trong đó {(auditData.summary.unattributed_cost_usd * 25400).toLocaleString("vi-VN", { maximumFractionDigits: 0 })} đ
+                          Trong đó {(auditData.summary.unattributed_cost_usd * USD_TO_VND_RATE).toLocaleString("vi-VN", { maximumFractionDigits: 0 })} đ
                           chưa quy được cho người dùng cụ thể
                         </div>
                       )}

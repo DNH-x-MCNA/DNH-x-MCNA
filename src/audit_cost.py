@@ -23,8 +23,10 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
-# Exchange rate USD -> VND
-USD_TO_VND_RATE = 25400.0
+# Exchange rate USD -> VND. Cap nhat 29/07/2026: 26.334,50.
+# LUU Y: file nay hien KHONG duoc module nao import (grep toan repo khong ra cho dung). Nguon that
+# dang chay la backend/pricing.py::USD_TO_VND_RATE - sua o day khong lam doi so tren dashboard.
+USD_TO_VND_RATE = 26334.50
 
 # Pricing table per 1M tokens (USD)
 MODEL_PRICING = {

@@ -29,6 +29,11 @@ MODEL_PRICING = {
     },
 }
 
+# Ty gia quy doi USD -> VND hien thi tren dashboard va bao cao. NGUON DUY NHAT - truoc day so 25400
+# bi chep cung o 8 cho trong 4 file (main.py x4, report_templates.py, audit_cost.py, page.tsx), sua
+# mot cho la sot cac cho con lai. Cap nhat 29/07/2026 theo ty gia thuc te 26.334,50.
+USD_TO_VND_RATE = 26334.50
+
 SOFT_COST_LIMIT_USD = 0.03   # tran "mem" - phan lon request nen duoi muc nay
 HARD_COST_LIMIT_USD = 0.045  # tran "cung" - vuot muc nay thi ghi canh bao (KHONG tu dong can thiep)
 
