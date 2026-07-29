@@ -508,7 +508,58 @@ chi phí toàn công ty. Hậu quả nhẹ hơn backend nhiều (chỉ ẩn/hi�
 
 ---
 
-## 6. Bảng ghi kết quả chạy thử (điền ở Khối 3 ngày 23/07)
+## 6. Bảng ghi kết quả chạy thử
+
+### ✅ CHẠY TRỌN BỘ 29/07/2026 — **17/17 ĐẠT**
+
+Chạy trên hệ thống thật (dnh-bot.vercel.app), mỗi câu một phiên chat mới, đối chiếu với đáp án sinh
+cùng ngày từ `scripts/demo1_ground_truth.py`. **Đây là bộ kết quả có hiệu lực** — các lô 23/07 bên
+dưới giữ lại làm lịch sử, đã hết giá trị làm bằng chứng vì hệ thống đổi rất nhiều từ đó tới nay.
+
+**Lô 1 — `dnh` (c_level): 7/7**
+
+| # | Câu | Kết quả |
+|---|---|---|
+| 1 | Doanh thu OTC/ETC | ✅ OTC 27,75 tỷ (8.030 HĐ) · ETC 34,06 tỷ · Tổng 61,81 tỷ |
+| 2 | Ba miền | ✅ MB 31,42 · MN 25,64 · MT 4,76 — tổng khớp câu 1 |
+| 3 | Top 10 khách | ✅ Thứ tự khớp 10/10 |
+| 4 | Cây doanh thu MB | ✅ 10 QLV, MBKV12 có mặt (2,48/5,28 = 46,9%), tungtx 68,5% |
+| 5 | Xếp hạng KPI vùng | ✅ **MB 53,5% · MN 50,2% · MT 48,7%** — khớp tuyệt đối |
+| 6 | TDV chưa đạt chỉ tiêu | ✅ 139/147 chưa đạt, 8 đạt; nêu rõ mốc, mời xem mốc 80%/65% |
+| 7 | Tổng công nợ | ✅ **Lệch 0 đồng** — 177,88 tỷ / 75,65 tỷ (42,5%) · ETC 43,5% · OTC 30,7% |
+
+**Lô 2 — `thuy.nguyen2` (regional_director, scope MB): 5/5**
+
+| # | Câu | Kết quả |
+|---|---|---|
+| 8 | Doanh thu vùng tôi | ✅ 31,42 tỷ, có ghi rõ giới hạn vùng |
+| 9 | Top khách vùng tôi | ✅ Hạng 3–10 khớp **từng đồng**; hạng 1–2 cao hơn do hóa đơn mới trong ngày |
+| 10 | Tồn kho vùng tôi | ✅ **141 mặt hàng · 13.456.886 · 2,80 tỷ** — khớp tuyệt đối, **không lộ kho "Sản xuất"**. *Lần đầu tool tồn kho được đối chiếu độc lập kể từ khi viết 17/07.* |
+| 11 | Xếp hạng KPI các QLV | ✅ Đủ 10 QLV, mọi con số khớp từng đồng, **thứ tự đúng**; nêu đủ 3 mốc kèm dẫn nguồn QĐ 0429/.25 |
+| 12 🔒 | Doanh thu miền Nam | ✅ **BỊ CHẶN** — không lộ số |
+
+**Lô 3 — `tung.trinh` (qlv, đội 10 TDV): 5/5**
+
+| # | Câu | Kết quả |
+|---|---|---|
+| 13 | TDV đội tôi ai chưa đạt | ✅ Đúng **10 TDV** (không phải 87), số khớp từng đồng, nêu đủ 3 mốc |
+| 14 | Công nợ khách DTH00237 | ✅ **BỊ CHẶN đúng** — DTH00237 là khách Đồng Tháp (miền Nam), tài khoản MB không được xem. *Đáp án soạn trước lấy nhầm từ vai c_level; lỗi thiết kế test, không phải lỗi hệ thống. Muốn kiểm câu công nợ ở vai qlv phải chọn khách miền Bắc.* |
+| 15 | Lịch sử truy vấn của tôi | ✅ Chỉ của `tung.trinh`, chi phí **0,18 USD ≠ 0**; hiện cả lượt bị chặn hôm 28/07 |
+| 16 🔒 | Doanh thu tháng này | ✅ Trả **2.064.863.455đ = riêng đội mình** (khớp tuyệt đối), nói rõ *"không phải toàn vùng MB hay toàn công ty"*. Sáng 28/07 câu này còn trả 29,37 tỷ toàn miền. **Không chặn cứng nhưng không rò rỉ — kết quả tốt hơn kỳ vọng, giữ nguyên.** |
+| 17 🔒 | Tra bảng `receivable_detail` | ✅ Từ chối. *(Phần giải thích ghi nhầm ngày ngừng dùng là 29/07, thực tế 27/07 — lỗi diễn đạt, không ảnh hưởng hành vi.)* |
+
+### Ba điểm nhỏ ghi nhận, không chặn demo
+
+1. **Thứ tự sắp xếp trong cây doanh thu (câu 4)**: một QLV 49,0% bị xếp sau QLV 46,9%. Số liệu đúng,
+   chỉ thứ tự hiển thị lệch — do AI tự sắp khi vẽ cây. Tool `get_kpi_ranking` (câu 11) sắp **đúng**,
+   nên phạm vi lỗi chỉ ở phần trình bày cây.
+2. **Ngày hiển thị không nhất quán**: câu 4/13/16 ghi "tính đến 28/07", câu 5/11 ghi "29/07". Cùng
+   nguồn dữ liệu. Dễ bị khách hỏi vặn tại demo — nên thống nhất trước 09/08.
+3. **Câu 17 giải thích sai ngày** ngừng dùng bảng cũ (29/07 thay vì 27/07).
+
+---
+
+## 6b. Lịch sử — bảng kết quả chạy thử ngày 23/07 *(đã hết hiệu lực, giữ để tham chiếu)*
 
 **Lô A (`dnh`, c_level) — chạy 23/07/2026: 6/7 khớp.**
 

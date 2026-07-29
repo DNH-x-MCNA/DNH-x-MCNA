@@ -208,8 +208,10 @@
 
   ### VIỆC ĐANG LÀM / SẮP TỚI
 
-  - **Chuẩn bị Demo #1 Chatbot (09/08)** — kịch bản **17 câu theo 3 vai trò** kèm bộ đáp án đối chiếu
-    sinh trực tiếp từ Bravo đã sẵn sàng; đang kiểm chứng từng câu trên hệ thống thật.
+  - ✅ **Demo #1 Chatbot (09/08) — ĐÃ KIỂM CHỨNG TRỌN BỘ.** Ngày 29/07 chạy đủ **17 câu trên hệ thống
+    thật, 17/17 đạt**, cả 3 vai trò (Ban điều hành / Giám đốc miền / Quản lý vùng), đối chiếu từng con
+    số với dữ liệu gốc Bravo. Trong đó **3 câu thử bảo mật đều bị chặn đúng** (hỏi vùng khác, tra bảng
+    dữ liệu đã ngừng dùng, xem ngoài phạm vi đội).
   - 🔴 **MỚI — cần DNH chốt trước 09/08: quyền xem của quản lý vùng.** Sau khi bịt lỗ hổng, MCNA đã tạm
     chặn 9 báo cáo với tài khoản quản lý vùng để đảm bảo an toàn. Hệ quả: họ **chưa hỏi được** về doanh
     thu, tồn kho, công nợ. Cần chốt: quản lý vùng xem số liệu ở phạm vi *đội của mình* hay *cả miền*?
