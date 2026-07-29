@@ -558,10 +558,11 @@ def employee_kpi(as_of_date: str, limit: int = 10, order_by: str = "sales", filt
                     SUM(e.amount_ct) sales, MAX(e.month_sale_target) target,
                     SUM(e.is_nc) new_customers
              FROM fact_tonghopkhachhang e
+             JOIN {_MONTH_LATEST_SUBQ} l ON l.employee_code=e.employee_code AND l.d=e.save_date
              LEFT JOIN dim_nhanvien nv ON nv.employee_code=e.employee_code
              LEFT JOIN dim_chucvu cv ON cv.position_code=nv.position_code
-             WHERE e.save_date=? AND {_not_duplicate_sql('nv')}"""
-    params = [fdate]
+             WHERE {_not_duplicate_sql('nv')}"""
+    params = [fdate, fdate]
     if position_code:
         sql += " AND nv.position_code=?"
         params.append(position_code)
@@ -697,8 +698,9 @@ def employee_daily_kpi(employee_code: str, year_month: str, scope_area_code: str
     # DANG HOI. Day chinh la nguyen nhan chenh lech 1,13 ty da ghi trong kich_ban_demo1_chatbot.md
     # (tungtx: chatbot tung bao 4.149.931.306d = snapshot thang 4/2026, trong khi thang 7/2026 that
     # la 3.016.493.346d) - da xac nhan bang truy van truc tiep Bravo 28/07/2026. Sua: ghim vao dung
-    # 1 snapshot MOI NHAT nam TRONG khoang [month_start, target_asof], giong moi ham KPI khac trong
-    # file nay (_kpi_snapshot/employee_kpi/kpi_ranking deu WHERE save_date=?).
+    # 1 snapshot MOI NHAT nam TRONG khoang [month_start, target_asof]. Cung nguyen tac "gop theo
+    # THANG, lay ban ghi moi nhat cua CHINH nhan vien do" ma _MONTH_LATEST_SUBQ ap dung cho cac ham
+    # KPI khac (29/07/2026) - o day da dung san tu 28/07 nen khong phai sua lai.
     r = _q("SELECT month_sale_target t, save_date d FROM fact_tonghopkhachhang "
            "WHERE employee_code=? AND save_date BETWEEN ? AND ? "
            "ORDER BY save_date DESC LIMIT 1", (resolved_code, str(month_start), str(target_asof)))
@@ -1206,13 +1208,35 @@ def receivables_overview(top_n: int = 10, scope_area_code: str = None) -> dict:
     return result
 
 
+# 29/07/2026 — GOP THEO THANG, khong ghim MOT save_date.
+#
+# Vi sao: DNH KHONG ghi snapshot thang thanh mot lan. Xac nhan tren Bravo 29/07/2026 - thang 7 co 2
+# snapshot, moi cai chua mot phan vung:
+#     save_date 2026-07-27 -> MB (102 NV) + MN (48 NV), KHONG co MT
+#     save_date 2026-07-28 -> CHI co MT (34 NV)
+# Ghim vao MAX(save_date) nhu truoc => ngay 29/07 chi thay MT, bao "toan doi 48,7%" trong khi thuc
+# chat la rieng Mien Trung - hut MB 30,78 ty va MN 13,19 ty. So tron tru, tu tin, va sai ca mot bac
+# do lon. Cac thang da dong (31/05, 30/06...) chi co 1 snapshot tron ven nen loi chi lo GIUA THANG.
+#
+# Cach gop: trong THANG cua fdate, moi nhan vien lay save_date moi nhat cua CHINH ho. Kiem chung
+# 29/07/2026 tren Bravo: tong chi tieu ra dung 50.967.586.921d (MB 30.781.764.408 · MN 13.185.822.513
+# · MT 7.000.000.000) - khop tung dong voi gia tri da verify, va khoi phuc du ca 3 mien.
+# LUON truyen tham so theo thu tu (fdate, fdate).
+_MONTH_LATEST_SUBQ = """(SELECT employee_code, MAX(save_date) d FROM fact_tonghopkhachhang
+                          WHERE save_date<=? AND substr(save_date,1,7)=substr(?,1,7)
+                          GROUP BY employee_code)"""
+
+
 def _kpi_snapshot(employee_code: str, fdate: str, position_code: str = None):
-    """Sales/target/pct cua 1 nhan vien (QLV/TDV deu dung duoc) tai 1 snapshot da biet - fact_tonghopkhachhang
-    da tinh san rollup cho ca cap QLV (Bravo tu tong hop), khong can tu cong tay tu doanh thu TDV.
+    """Sales/target/pct cua 1 nhan vien (QLV/TDV deu dung duoc) trong THANG cua fdate -
+    fact_tonghopkhachhang da tinh san rollup cho ca cap QLV (Bravo tu tong hop), khong can tu cong
+    tay tu doanh thu TDV.
     position_code: BAT BUOC truyen khi da biet vai tro - nguong THUONG khac nhau (TDV 65% / quan ly
     70%), de trong se cham nham cap quan ly o nguong TDV. (Moc DAT KPI 80% thi chung moi vai tro.)"""
-    r = _q("SELECT SUM(amount_ct) sales, MAX(month_sale_target) target FROM fact_tonghopkhachhang "
-           "WHERE employee_code=? AND save_date=?", (employee_code, fdate))
+    r = _q(f"SELECT SUM(f.amount_ct) sales, MAX(f.month_sale_target) target "
+           f"FROM fact_tonghopkhachhang f "
+           f"JOIN {_MONTH_LATEST_SUBQ} l ON l.employee_code=f.employee_code AND l.d=f.save_date "
+           f"WHERE f.employee_code=?", (fdate, fdate, employee_code))
     sales = _f(r[0]["sales"]) if r else 0.0
     target = _f(r[0]["target"]) if r else 0.0
     pct = (sales / target * 100) if target else 0.0
@@ -1246,9 +1270,10 @@ def _team_of_qlv(qlv_employee_code: str, fdate: str = None) -> list:
     if not fdate:
         return []
     return _q(
-        "SELECT DISTINCT e.employee_code, nv.name FROM fact_tonghopkhachhang e "
-        "LEFT JOIN dim_nhanvien nv ON nv.employee_code=e.employee_code "
-        "WHERE e.manager_code=? AND e.save_date=? AND nv.position_code='TDV'", (qlv_employee_code, fdate))
+        f"SELECT DISTINCT e.employee_code, nv.name FROM fact_tonghopkhachhang e "
+        f"JOIN {_MONTH_LATEST_SUBQ} l ON l.employee_code=e.employee_code AND l.d=e.save_date "
+        f"LEFT JOIN dim_nhanvien nv ON nv.employee_code=e.employee_code "
+        f"WHERE e.manager_code=? AND nv.position_code='TDV'", (fdate, fdate, qlv_employee_code))
 
 
 def qlv_change_history(area_code: str = None, qlv_search: str = None, scope_area_code: str = None) -> list:
@@ -1378,7 +1403,8 @@ def _rollup_tier_codes(fdate: str) -> list:
     """
     return [m["manager_code"] for m in _q(
         "SELECT DISTINCT manager_code FROM fact_tonghopkhachhang "
-        "WHERE save_date=? AND manager_code IS NOT NULL AND manager_code<>''", (fdate,))]
+        "WHERE save_date<=? AND substr(save_date,1,7)=substr(?,1,7) "
+        "AND manager_code IS NOT NULL AND manager_code<>''", (fdate, fdate))]
 
 
 def _warn_region_target_mismatch(rows: list, fdate: str, tolerance_pct: float = 0.5) -> None:
@@ -1412,6 +1438,22 @@ def _warn_region_target_mismatch(rows: list, fdate: str, tolerance_pct: float = 
                   f"{r['target']:,.0f}d vs chi tieu vung chinh thuc (dim_targetvungmien) {ref:,.0f}d "
                   f"- lech {diff_pct:.1f}%. Cau truc du lieu co the da doi; PHAI noi ro con so dang "
                   f"can doi chieu lai, KHONG khang dinh chac chan voi nguoi dung.")
+
+    # 29/07/2026 - VA DIEM MU: vong lap tren chi duyet cac vung CO MAT trong rows, nen vung BIEN MAT
+    # HOAN TOAN khoi snapshot thi khong co dong nao de kiem -> khong canh bao gi ca.
+    # Da xay ra that: DNH ghi snapshot thang 7 TACH LAM 2 NGAY theo vung (SaveDate 27/07 co MB+MN,
+    # SaveDate 28/07 CHI co MT). Vi ca bao cao lan chatbot deu ghim vao MOT save_date, cau hoi KPI
+    # ngay 29/07 chi thay MT va bao "TOAN DOI 48,7%" - thuc chat la rieng Mien Trung, hut MB 30,78 ty
+    # va MN 13,19 ty. Khong he co canh bao vi MT doi chieu voi dim_targetvungmien van khop.
+    # Day la loai sai NGUY HIEM NHAT: so tron tru, tu tin, va sai ca mot bac do lon.
+    missing = [a for a in official if a not in {r["area_code"] for r in rows}]
+    if missing:
+        hut = sum(official[a] for a in missing)
+        _warn(f"THIEU VUNG trong snapshot {fdate}: {', '.join(sorted(missing))} khong co dong nao "
+              f"(chi tieu vung chinh thuc: {hut:,.0f}d). Con so 'toan doi' duoi day CHI gom cac vung "
+              f"con lai, KHONG phai toan cong ty - TUYET DOI khong trinh bay nhu so toan quoc. "
+              f"Nguyen nhan thuong gap: snapshot thang dang duoc ghi do dang, moi vung ghi mot ngay "
+              f"khac nhau. Hoi lai vao thang da tron (vd cuoi thang) de co so day du.")
 
 
 def kpi_ranking(group_by: str = "qlv", as_of_date: str = None, limit: int = 20,
@@ -1473,9 +1515,10 @@ def kpi_ranking(group_by: str = "qlv", as_of_date: str = None, limit: int = 20,
         # CHOT AN TOAN 1 - chong LONG TANG: gop tang rollup chi dung khi cac rollup KHONG chua nhau.
         # Neu sau nay Bravo them cap tren (vd TP quan ly QLV), cong ca 2 cap se GAP DOI am tham.
         # Thay vi tra ve so sai, bao ro rang. Hien tai (27/07/2026): 21/21 deu la QLV, khong ai bi long.
-        nested = _q(f"SELECT DISTINCT employee_code FROM fact_tonghopkhachhang WHERE save_date=? "
+        nested = _q(f"SELECT DISTINCT employee_code FROM fact_tonghopkhachhang "
+                    f"WHERE save_date<=? AND substr(save_date,1,7)=substr(?,1,7) "
                     f"AND employee_code IN ({ph}) AND manager_code IS NOT NULL AND manager_code<>''",
-                    (fdate, *managers))
+                    (fdate, fdate, *managers))
         if nested:
             _warn(f"CANH BAO CAU TRUC: {len(nested)} nguoi o tang quan ly lai co cap tren "
                   f"({', '.join(n['employee_code'] for n in nested[:5])}...) - cay to chuc da co them "
@@ -1483,11 +1526,14 @@ def kpi_ranking(group_by: str = "qlv", as_of_date: str = None, limit: int = 20,
                   "dang can kiem tra lai, khong khang dinh chac chan.")
 
         sql = f"""SELECT nv.area_code area_code, SUM(e.sales) sales, SUM(e.target) target
-                  FROM (SELECT employee_code, SUM(amount_ct) sales, MAX(month_sale_target) target
-                        FROM fact_tonghopkhachhang WHERE save_date=? GROUP BY employee_code) e
+                  FROM (SELECT f.employee_code, SUM(f.amount_ct) sales, MAX(f.month_sale_target) target
+                        FROM fact_tonghopkhachhang f
+                        JOIN {_MONTH_LATEST_SUBQ} l
+                          ON l.employee_code=f.employee_code AND l.d=f.save_date
+                        GROUP BY f.employee_code) e
                   JOIN dim_nhanvien nv ON nv.employee_code=e.employee_code
                   WHERE e.employee_code IN ({ph})"""
-        params = [fdate] + managers
+        params = [fdate, fdate] + managers
         if scope_area_code:
             sql += " AND nv.area_code=?"
             params.append(scope_area_code)
