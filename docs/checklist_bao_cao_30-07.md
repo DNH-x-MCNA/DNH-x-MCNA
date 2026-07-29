@@ -30,8 +30,8 @@ Lấy từ output và thay vào bảng **"Số liệu hệ thống"** ở Slide 
 **Nguồn số: bảng cước của nhà cung cấp AI (Anthropic Console → Usage/Cost), KHÔNG phải bảng điều khiển
 nội bộ.** Mở Console, đọc *Total cost* của tháng, điền vào Slide 4.
 
-Số chốt ngày 29/07: **26,01 USD ≈ 660 nghìn đồng** (kỳ 08/07 → 29/07). Chạy lại sáng 30/07 để lấy số của
-đúng ngày họp.
+Số chốt ngày 29/07: **26,01 USD ≈ 685 nghìn đồng** (kỳ 08/07 → 29/07, tỷ giá **26.334,50 đ/USD**). Chạy
+lại sáng 30/07 để lấy số của đúng ngày họp.
 
 > ⚠️ **Đừng lấy tổng chi phí từ dashboard nội bộ** — nó báo 14,51 USD trong khi hóa đơn thật là 26,01 USD.
 >
@@ -45,7 +45,8 @@ Số chốt ngày 29/07: **26,01 USD ≈ 660 nghìn đồng** (kỳ 08/07 → 29
 
 **Khi trình bày, nói rõ 2 điều** (đã ghi sẵn trong Slide 4):
 - Đây là chi phí **giai đoạn phát triển/kiểm thử** của đội MCNA, chưa phải mức vận hành thật 147 TDV.
-- Nhịp hiện tại ≈ **37 USD/tháng**, sau 31/08 hết khuyến mãi thành **~55 USD ≈ 1,4 triệu đ/tháng**.
+- Nhịp hiện tại ≈ **37 USD ≈ 965 nghìn đ/tháng**, sau 31/08 hết khuyến mãi thành **~55 USD ≈ 1,45 triệu
+  đ/tháng** — đã vượt ngân sách 50 USD đang đặt trong hệ thống.
 
 ## 3. Kiểm tra hệ thống còn chạy tốt
 
