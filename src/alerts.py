@@ -647,9 +647,31 @@ def _is_duplicate_filter_sql(alias="n"):
             f"OR {prefix}[EmployeeCode] IN ({codes}))")
 
 
+# 29/07/2026 — GỘP THEO THÁNG thay vì ghim vào MỘT SaveDate.
+#
+# Vì sao: DNH KHÔNG ghi snapshot tháng thành một lần. Xác nhận thực tế 29/07/2026 — tháng 7 có 2
+# snapshot, mỗi cái chứa một phần vùng:
+#     SaveDate 2026-07-27 → MB (102 NV) + MN (48 NV), KHÔNG có MT
+#     SaveDate 2026-07-28 → CHỈ có MT (34 NV)
+# Ghim vào MAX(SaveDate) như trước ⇒ ngày 29/07 chỉ thấy MT, báo "toàn đội 48,7%" trong khi thực chất
+# là riêng Miền Trung — hụt MB 30,78 tỷ và MN 13,19 tỷ. Số trông tròn trịa, tự tin, và sai cả một bậc
+# độ lớn. Các tháng đã đóng (31/05, 30/06...) chỉ có 1 snapshot trọn vẹn nên lỗi này chỉ lộ giữa tháng.
+#
+# Cách gộp: lấy mọi dòng TỪ ĐẦU THÁNG của snapshot mới nhất trở đi, rồi mỗi nhân viên lấy SaveDate
+# mới nhất của CHÍNH họ (xem CTE `latest` trong get_bravo_kpi_tdv_snapshot). Kiểm chứng 29/07/2026:
+# tổng chỉ tiêu ra đúng 50.967.586.921đ (MB 30.781.764.408 · MN 13.185.822.513 · MT 7.000.000.000) —
+# khớp từng đồng với giá trị đã verify trước đó, và khôi phục đủ cả 3 miền.
+_MONTH_START_OF_LATEST_SNAPSHOT_SQL = (
+    "(SELECT DATEFROMPARTS(YEAR(MAX([SaveDate])), MONTH(MAX([SaveDate])), 1) "
+    "FROM [FACT_TongHopKhachHang])"
+)
+
+
 def get_bravo_manager_codes():
-    """Tập mã nhân viên ĐANG quản lý người khác, lấy từ cột ManagerCode của FACT_TongHopKhachHang tại
-    snapshot mới nhất — KHÔNG lọc PositionCode, KHÔNG lọc IsDuplicate. Đây là điểm mấu chốt: nếu lọc
+    """Tập mã nhân viên ĐANG quản lý người khác, lấy từ cột ManagerCode của FACT_TongHopKhachHang
+    trong THÁNG của snapshot mới nhất (xem _MONTH_START_OF_LATEST_SNAPSHOT_SQL — KHÔNG ghim 1 ngày,
+    vì DNH ghi snapshot tách theo vùng qua nhiều ngày) — KHÔNG lọc PositionCode, KHÔNG lọc
+    IsDuplicate. Đây là điểm mấu chốt: nếu lọc
     theo chức danh thì QLV nào có cấp dưới mang chức danh lạ sẽ KHÔNG được nhận ra là quản lý
     (xác nhận 27/07/2026: MN1 'Kênh MT' quản lý TM23100133 chức danh 'TK', MN4 'Chợ sỉ' quản lý
     TM23100153 chức danh 'CS' — lọc IN ('TDV','QLV') làm mất cả 2 QLV này khỏi tầng rollup, hụt
@@ -665,9 +687,9 @@ def get_bravo_manager_codes():
     if engine is None:
         raise RuntimeError("Không có Bravo engine (thiếu BRAVO_SQL_* trong .env)")
     with engine.connect() as conn:
-        rows = conn.execute(text('''
+        rows = conn.execute(text(f'''
             SELECT DISTINCT [ManagerCode] FROM [FACT_TongHopKhachHang]
-            WHERE [SaveDate] = (SELECT MAX([SaveDate]) FROM [FACT_TongHopKhachHang])
+            WHERE [SaveDate] >= {_MONTH_START_OF_LATEST_SNAPSHOT_SQL}
               AND [ManagerCode] IS NOT NULL AND [ManagerCode] <> ''
         ''')).fetchall()
     return {r[0] for r in rows}
@@ -705,16 +727,22 @@ def get_bravo_kpi_tdv_snapshot(position_codes=('TDV',), include_duplicates=False
         raise RuntimeError("Không có Bravo engine (thiếu BRAVO_SQL_* trong .env)")
     placeholders = ",".join(f"'{p}'" for p in position_codes)
     sql = text(f'''
-        WITH tdv_actual AS (
-            SELECT [EmployeeCode], SUM([Amount_Cus]) AS TotalActual
+        WITH latest AS (
+            SELECT [EmployeeCode], MAX([SaveDate]) AS d
             FROM [FACT_TongHopKhachHang]
-            WHERE [SaveDate] = (SELECT MAX([SaveDate]) FROM [FACT_TongHopKhachHang])
+            WHERE [SaveDate] >= {_MONTH_START_OF_LATEST_SNAPSHOT_SQL}
             GROUP BY [EmployeeCode]
         ),
+        tdv_actual AS (
+            SELECT f.[EmployeeCode], SUM(f.[Amount_Cus]) AS TotalActual
+            FROM [FACT_TongHopKhachHang] f
+            JOIN latest l ON l.[EmployeeCode] = f.[EmployeeCode] AND l.d = f.[SaveDate]
+            GROUP BY f.[EmployeeCode]
+        ),
         tdv_target AS (
-            SELECT DISTINCT [EmployeeCode], [AreaCode], [MonthSaleTarget], [ManagerCode]
-            FROM [FACT_TongHopKhachHang]
-            WHERE [SaveDate] = (SELECT MAX([SaveDate]) FROM [FACT_TongHopKhachHang])
+            SELECT DISTINCT f.[EmployeeCode], f.[AreaCode], f.[MonthSaleTarget], f.[ManagerCode]
+            FROM [FACT_TongHopKhachHang] f
+            JOIN latest l ON l.[EmployeeCode] = f.[EmployeeCode] AND l.d = f.[SaveDate]
         )
         SELECT n.[EmployeeCode] AS employee_code, n.[Name] AS employee_name, t.[AreaCode] AS area_code,
                n.[PositionCode] AS position_code, t.[ManagerCode] AS manager_code,

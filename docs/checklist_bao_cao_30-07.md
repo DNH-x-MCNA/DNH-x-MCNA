@@ -92,4 +92,4 @@ hiện ở nghiệm thu tháng 9.
 - **Cả 3 lỗ hổng phân quyền do MCNA tự tìm ra và tự sửa**, không phải khách phát hiện — nên trình bày
   như bằng chứng của quy trình tự rà soát, không phải sự cố.
 - **Kỳ báo cáo là 2 tuần (16/07 → 30/07)**, không phải 1 tuần. Nếu khách nhớ mốc họp trước là 16/07 thì
-  con số "9 lỗi · 3 lỗ hổng" là tổng của cả kỳ, đúng như trình bày trong báo cáo.
+  con số "10 lỗi · 3 lỗ hổng" là tổng của cả kỳ, đúng như trình bày trong báo cáo.
