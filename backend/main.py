@@ -290,6 +290,7 @@ def get_audit_logs_dashboard(
     # Token cung cong ca cache_read/cache_write: chi phi von da tinh chung (xem pricing.py), truoc
     # day chi hien input+output nen nguoi doc nham tay se thay khong khop voi so tien.
     cost_by_session = defaultdict(lambda: {"cost_usd": 0.0, "input_tokens": 0, "output_tokens": 0, "total_tokens": 0, "calls": 0})
+    cost_direct_by_user = defaultdict(lambda: {"cost_usd": 0.0, "input_tokens": 0, "output_tokens": 0, "total_tokens": 0})
     grand_cost_usd = 0.0
     grand_input_tokens = 0
     grand_output_tokens = 0
@@ -321,6 +322,20 @@ def get_audit_logs_dashboard(
                 grand_input_tokens += it
                 grand_output_tokens += ot
                 grand_cache_tokens += cr + cw
+
+                # Duong QUY CHI PHI thu nhat (29/07/2026, chinh xac nhat): cost_log nay ghi thang
+                # username. Khong phu thuoc audit_log nen bat duoc CA nhung luot AI tra loi truc tiep
+                # khong goi tool - von la phan lon chi phi bi that lac truoc day.
+                uname_direct = (c.get("username") or "").strip()
+                if uname_direct:
+                    d = cost_direct_by_user[uname_direct]
+                    d["cost_usd"] += cost
+                    d["input_tokens"] += it
+                    d["output_tokens"] += ot
+                    d["total_tokens"] += it + ot + cr + cw
+                    continue  # da quy duoc, khong can den phep noi session
+
+                # Duong DU PHONG: ban ghi cu (truoc 29/07) chua co username -> noi qua session_id.
                 sid = c.get("session_id")
                 if sid:
                     cost_by_session[sid]["cost_usd"] += cost
@@ -406,6 +421,22 @@ def get_audit_logs_dashboard(
 
     filtered_logs.sort(key=lambda x: x.get("ts", ""), reverse=True)
     recent_logs = filtered_logs[:limit]
+
+    # Cong phan quy TRUC TIEP tu cost_log (co username) vao thong ke tung nguoi. Nguoi chi xuat hien
+    # trong cost_log ma chua tung co dong audit_log nao van duoc tao muc rieng (query_count=0) - ho
+    # co ton tien that, khong duoc bo sot.
+    for uname, d in cost_direct_by_user.items():
+        st = user_stats[uname]
+        st["cost_usd"] += d["cost_usd"]
+        st["input_tokens"] += d["input_tokens"]
+        st["output_tokens"] += d["output_tokens"]
+        st["total_tokens"] += d["total_tokens"]
+        st.setdefault("query_count", 0)
+        if "display_name" not in st:
+            st["display_name"] = get_name_by_username(uname) or uname
+        total_cost_usd += d["cost_usd"]
+        total_input_tokens += d["input_tokens"]
+        total_output_tokens += d["output_tokens"]
 
     user_breakdown = []
     for uname, s in sorted(user_stats.items(), key=lambda x: -x[1]["cost_usd"]):
