@@ -137,6 +137,52 @@ function numericColumnFlags(rows: unknown[][], colCount: number): boolean[] {
   return flags;
 }
 
+// Kieu toi gian cho node cua cay markdown (mdast) - chi khai bao truong can dung, tranh phai them
+// dependency @types/mdast rieng chi de dung 1 remark plugin nho.
+type MdastLikeNode = {
+  type: string;
+  children?: MdastLikeNode[];
+  value?: string;
+  align?: (string | null)[];
+};
+
+function mdastPlainText(node: MdastLikeNode): string {
+  if (node.type === "text" || node.type === "inlineCode") return node.value || "";
+  if (!node.children) return "";
+  return node.children.map(mdastPlainText).join("");
+}
+
+// Remark plugin: xet CA COT (gom header) cua bang markdown do AI sinh ra, thay vi can-phai tung o
+// <td> rieng le. Ly do sua: can-phai tung o khien tieu de cot ("Doanh thu") nam ben trai trong khi
+// so lieu ben duoi nam ben phai - nhin giong bi lech hang du moi o rieng le van dung. Ap dung style
+// text-align qua thuoc tinh "align" chuan cua mdast (giong cach remark-gfm xu ly cu phap `---:` trong
+// markdown) nen header va du lieu LUON can theo dung 1 kieu.
+function remarkAlignNumericColumns() {
+  return (tree: MdastLikeNode) => {
+    const visit = (node: MdastLikeNode) => {
+      if (node.type === "table" && Array.isArray(node.children) && node.children.length >= 2) {
+        const rows = node.children; // hang dau la header
+        const colCount = rows[0].children?.length ?? 0;
+        const align: (string | null)[] =
+          node.align && node.align.length === colCount ? [...node.align] : new Array(colCount).fill(null);
+        for (let c = 0; c < colCount; c++) {
+          const texts = rows
+            .slice(1)
+            .map((r) => r.children?.[c])
+            .filter((cell): cell is MdastLikeNode => Boolean(cell))
+            .map((cell) => mdastPlainText(cell).trim())
+            .filter((t) => t !== "" && t !== "—" && t !== "-");
+          if (texts.length === 0) continue;
+          if (texts.filter(isNumericLikeCell).length / texts.length >= 0.8) align[c] = "right";
+        }
+        node.align = align;
+      }
+      (node.children || []).forEach(visit);
+    };
+    visit(tree);
+  };
+}
+
 function formatRelativeTime(iso: string): string {
   // Backend luu "YYYY-MM-DD HH:MM:SS" theo gio local server (khong co timezone suffix) - parse thu
   // cong the la ISO-ish, cach nay du chinh xac cho hien thi "may phut/gio truoc".
@@ -313,13 +359,19 @@ const markdownComponents = {
   thead: ({ children }: { children?: ReactNode }) => <thead className="bg-[#F1F5F9]">{children}</thead>,
   tbody: ({ children }: { children?: ReactNode }) => <tbody className="divide-y divide-slate-100 bg-white">{children}</tbody>,
   tr: ({ children }: { children?: ReactNode }) => <tr className="transition hover:bg-slate-50">{children}</tr>,
-  th: ({ children }: { children?: ReactNode }) => (
-    <th className="px-3 py-2 text-left font-semibold text-slate-600">{children}</th>
+  // mdast-util-to-hast tao thuoc tinh HAST "align" (cu) tu truong "align" cua mdast ma
+  // remarkAlignNumericColumns gan (xet CA COT). react-markdown roi chuyen thuoc tinh HAST "align" do
+  // THANH prop `style={{textAlign}}` khi tao React element - da xac minh bang render thu (khong phai
+  // prop `align` nhu doc source mdast-util-to-hast tuong tuong) - phai nhan `style`, khong duoc chi
+  // destructure {children} roi bo qua, neu khong tieu de cot se khong can theo du lieu ben duoi.
+  th: ({ children, style }: { children?: ReactNode; style?: React.CSSProperties }) => (
+    <th className={`px-3 py-2 font-semibold text-slate-600 ${style?.textAlign === "right" ? "text-right" : "text-left"}`}>
+      {children}
+    </th>
   ),
-  // Tag mau cho o chi chua dung 1 khoa kenh/vung, can-phai cho o chi chua so/phan tram/tien te - ca
-  // hai deu chi ap dung khi getPlainCellText tra ve chuoi thuan (khong co the long ben trong), neu
-  // khong khop dieu kien nao thi giu nguyen cach render mac dinh nhu truoc.
-  td: ({ children }: { children?: ReactNode }) => {
+  // Tag mau cho o chi chua dung 1 khoa kenh/vung - chi ap dung khi getPlainCellText tra ve chuoi
+  // thuan (khong co the long ben trong), neu khong khop thi giu nguyen cach render mac dinh.
+  td: ({ children, style }: { children?: ReactNode; style?: React.CSSProperties }) => {
     const text = getPlainCellText(children);
     const trimmed = text?.trim();
     const tagClass = trimmed ? CHANNEL_REGION_TAG_STYLES[trimmed] : undefined;
@@ -332,9 +384,10 @@ const markdownComponents = {
         </td>
       );
     }
-    const numeric = trimmed ? isNumericLikeCell(trimmed) : false;
     return (
-      <td className={`px-3 py-2 text-slate-700 ${numeric ? "text-right" : "text-left"}`}>{children}</td>
+      <td className={`px-3 py-2 text-slate-700 ${style?.textAlign === "right" ? "text-right" : "text-left"}`}>
+        {children}
+      </td>
     );
   },
 };
@@ -367,7 +420,7 @@ const MessageList = memo(function MessageList({
           >
             {m.role === "bot" ? (
               <div className="markdown-body">
-                <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
+                <ReactMarkdown remarkPlugins={[remarkGfm, remarkAlignNumericColumns]} components={markdownComponents}>
                   {m.text}
                 </ReactMarkdown>
               </div>
