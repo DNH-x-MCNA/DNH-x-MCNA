@@ -198,9 +198,15 @@
 
   - Bổ sung **Bảng điều khiển Chi phí AI & Nhật ký truy vấn** cho Ban điều hành: xem lịch sử câu hỏi của
     mọi nhân viên và chi phí toàn công ty (quy đổi sẵn ra tiền Việt), **không cần hỏi qua chatbot**.
+  - **Chi phí thực tế 08/07 → 29/07: 26,01 USD ≈ 660 nghìn đồng** *(lấy từ bảng cước của nhà cung cấp AI —
+    nguồn tính tiền chính thức)*. Tương đương **~1,18 USD/ngày**, tức **~37 USD ≈ 930 nghìn đồng/tháng**
+    nếu giữ nhịp hiện tại.
+  - ⚠️ Đây là **mức của giai đoạn phát triển và kiểm thử** *(đội MCNA chạy hàng trăm lượt đối chiếu số
+    liệu)*, **chưa phải mức vận hành thật** với 147 TDV. Con số cho go-live vẫn theo cam kết **tuần 8–10**.
   - **Tỷ lệ dữ liệu vào/ra ≈ 8,7 lần** — chi phí bị chi phối bởi phần dữ liệu nạp vào, không phải độ dài
     câu trả lời. Đây là chỗ đang tối ưu để giảm giá.
-  - ⚠️ **Giá dịch vụ AI tăng ~50% sau 31/08/2026** — bản ước tính go-live sẽ dùng giá sau khuyến mãi.
+  - ⚠️ **Giá dịch vụ AI tăng ~50% sau 31/08/2026** — với nhịp hiện tại sẽ thành **~55 USD ≈ 1,4 triệu
+    đồng/tháng**. Bản ước tính go-live sẽ dùng giá sau khuyến mãi.
 
   ---
 
@@ -311,6 +317,15 @@
   > ⚠️ **Không dùng cờ `--as-of`** cho báo cáo tiến độ — cờ đó chỉ dành cho việc tập dượt Demo #1 với
   > tháng 7 đã trọn. Báo cáo 30/07 cần số thực tế đến đúng ngày họp.
 
-  **Số chi phí AI**: hỏi chatbot bằng tài khoản `dnh`, phiên chat mới — *"Báo cáo chi phí AI toàn công
-  ty"*. Lưu ý khi trình bày: chi phí chỉ tính được cho các phiên **từ 28/07 trở đi** (trước đó hệ thống
-  không nối được chi phí với người dùng), đừng để khách hiểu nhầm là chi phí cả dự án thấp như vậy.
+  **Số chi phí AI** — lấy từ **bảng cước của nhà cung cấp AI**, KHÔNG lấy từ bảng điều khiển nội bộ.
+
+  Hai nguồn lệch nhau: 26,01 USD (Console) so với 14,51 USD (nội bộ). **Đã truy xong nguyên nhân ngày
+  29/07** — không phải lỗi:
+
+  - Đơn giá trong hệ thống **khớp tuyệt đối** với hóa đơn: cộng lại 4 loại token trong sổ ra đúng
+    14,5134 USD, lệch 0.
+  - Chênh 11,50 USD nằm trọn ở **08/07 → 14/07**, là giai đoạn trước khi tính năng đo chi phí được viết
+    (bật ngày 15/07). Sổ nội bộ không thiếu lượt nào **kể từ khi bắt đầu đo**.
+
+  → Khi trình bày, dùng **26,01 USD** cho tổng cả kỳ (bao gồm 7 ngày đầu chưa đo). Sổ nội bộ dùng cho
+  phân tích chi tiết theo người và theo ngày từ 15/07 trở đi.

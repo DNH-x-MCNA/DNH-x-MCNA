@@ -27,15 +27,25 @@ Lấy từ output và thay vào bảng **"Số liệu hệ thống"** ở Slide 
 
 ## 2. Cập nhật chi phí AI
 
-Hỏi chatbot bằng tài khoản `dnh`, **phiên chat mới**:
+**Nguồn số: bảng cước của nhà cung cấp AI (Anthropic Console → Usage/Cost), KHÔNG phải bảng điều khiển
+nội bộ.** Mở Console, đọc *Total cost* của tháng, điền vào Slide 4.
 
-> Báo cáo chi phí AI toàn công ty
+Số chốt ngày 29/07: **26,01 USD ≈ 660 nghìn đồng** (kỳ 08/07 → 29/07). Chạy lại sáng 30/07 để lấy số của
+đúng ngày họp.
 
-Điền vào Slide 4 mục chi phí AI: tổng chi phí (USD + VNĐ), tổng số truy vấn, số phiên.
+> ⚠️ **Đừng lấy tổng chi phí từ dashboard nội bộ** — nó báo 14,51 USD trong khi hóa đơn thật là 26,01 USD.
+>
+> **Đã truy xong nguyên nhân 29/07, không phải lỗi:** đơn giá trong code khớp tuyệt đối với hóa đơn
+> (cộng 4 loại token ra đúng 14,5134, lệch 0). Chênh 11,50 USD nằm trọn ở **08/07 → 14/07** — API đã dùng
+> từ 08/07 nhưng tính năng đo chi phí đến **15/07** mới được viết (commit `d106a25`). Sổ nội bộ **không
+> thiếu lượt nào kể từ khi bắt đầu đo**.
+>
+> → Tổng cả kỳ: lấy Console. Chi tiết theo người/theo ngày từ 15/07: lấy dashboard nội bộ. Cả hai đều
+> đúng, chỉ khác phạm vi.
 
-> Lưu ý khi trình bày: chi phí chỉ tính được cho các phiên **từ 28/07 trở đi** (trước đó hệ thống
-> không nối được chi phí với người dùng). Nếu khách hỏi tổng chi phí từ đầu dự án thì phải nói rõ điều
-> này, đừng để hiểu nhầm là chi phí thấp.
+**Khi trình bày, nói rõ 2 điều** (đã ghi sẵn trong Slide 4):
+- Đây là chi phí **giai đoạn phát triển/kiểm thử** của đội MCNA, chưa phải mức vận hành thật 147 TDV.
+- Nhịp hiện tại ≈ **37 USD/tháng**, sau 31/08 hết khuyến mãi thành **~55 USD ≈ 1,4 triệu đ/tháng**.
 
 ## 3. Kiểm tra hệ thống còn chạy tốt
 
