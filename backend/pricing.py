@@ -11,9 +11,9 @@ MODEL_PRICING = {
     "claude-sonnet-5": {
         "input": 2.00,        # gia gioi thieu den 31/08/2026, sau do $3.00
         "output": 10.00,      # gia gioi thieu den 31/08/2026, sau do $15.00
-        "cache_read": 0.20,   # ~10% gia input goc
-        "cache_write": 2.50,  # cache creation (ghi cache lan dau) - uoc tinh ~1.25x input, dieu chinh
-                               # lai neu Anthropic cong bo gia chinh xac rieng cho model nay
+        "cache_read": 0.20,   # 0.1x input - he so chuan Anthropic
+        "cache_write": 2.50,  # 1.25x input (cache TTL 5 phut) - he so chuan Anthropic, DA XAC MINH
+                               # 29/07/2026 voi bang gia chinh thuc. KHONG con la uoc tinh.
     },
     "claude-haiku-4-5": {
         "input": 1.00,

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useEffect, memo, FormEvent, ReactNode, RefObject } from "react";
+import { useState, useRef, useEffect, useMemo, memo, FormEvent, ReactNode, RefObject } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
@@ -293,6 +293,9 @@ export default function Home() {
   // chinh minh (loc o backend, xem GET /sessions trong main.py).
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  // Loc lich su tro chuyen theo nguoi dung. Chi C-Level moi thay nhieu chu so huu trong `sessions`,
+  // nen bo loc cung chi hien voi ho - tai khoan thuong luon chi co dung 1 chu so huu la chinh minh.
+  const [ownerFilter, setOwnerFilter] = useState<string>("all");
 
   // Trang thai dang nhap - kiem tra token da luu truoc khi cho vao giao dien chat
   const [authToken, setAuthToken] = useState<string | null>(null);
@@ -320,6 +323,44 @@ export default function Home() {
       userInfo.role?.toLowerCase() === "c_level" ||
       userInfo.role?.toLowerCase() === "admin"
     )
+  );
+
+  // Danh sach chu so huu co trong lich su, kem so cuoc tro chuyen - dung dung nguon `sessions` dang
+  // hien thi nen con so trong bo loc luon khop voi so dong ben duoi. Minh luon dung dau danh sach.
+  const sessionOwners = useMemo(() => {
+    const byUser = new Map<string, { username: string; label: string; count: number }>();
+    for (const s of sessions) {
+      const existing = byUser.get(s.owner_username);
+      if (existing) {
+        existing.count += 1;
+      } else {
+        byUser.set(s.owner_username, {
+          username: s.owner_username,
+          label: s.owner_name || s.owner_username,
+          count: 1,
+        });
+      }
+    }
+    return Array.from(byUser.values()).sort((a, b) => {
+      if (a.username === userInfo?.username) return -1;
+      if (b.username === userInfo?.username) return 1;
+      return a.label.localeCompare(b.label, "vi");
+    });
+  }, [sessions, userInfo?.username]);
+
+  // Neu nguoi dang duoc loc khong con cuoc tro chuyen nao (vd vua xoa het), tu dong coi nhu "tat ca"
+  // thay vi de o select rong tro tren man hinh.
+  const effectiveOwnerFilter =
+    ownerFilter !== "all" && !sessionOwners.some((o) => o.username === ownerFilter)
+      ? "all"
+      : ownerFilter;
+
+  const visibleSessions = useMemo(
+    () =>
+      effectiveOwnerFilter === "all"
+        ? sessions
+        : sessions.filter((s) => s.owner_username === effectiveOwnerFilter),
+    [sessions, effectiveOwnerFilter]
   );
 
   const fetchAuditData = (daysVal: number, userVal: string) => {
@@ -609,11 +650,31 @@ export default function Home() {
             <span>Audit Log & Chi phí AI</span>
           </button>
         )}
+        {isCLevel && sessionOwners.length > 1 && (
+          <div className="mx-3 mt-3">
+            <select
+              value={effectiveOwnerFilter}
+              onChange={(e) => setOwnerFilter(e.target.value)}
+              title="Lọc lịch sử trò chuyện theo người dùng"
+              className="w-full rounded-lg border border-slate-300 bg-white px-2.5 py-2 text-xs text-slate-700 outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
+            >
+              <option value="all">👥 Tất cả người dùng ({sessions.length})</option>
+              {sessionOwners.map((o) => (
+                <option key={o.username} value={o.username}>
+                  {o.label} ({o.count})
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
         <div className="flex-1 overflow-y-auto px-2 py-3">
           {sessions.length === 0 && (
             <p className="px-2 text-xs text-slate-400">Chưa có cuộc trò chuyện nào.</p>
           )}
-          {sessions.map((s) => (
+          {sessions.length > 0 && visibleSessions.length === 0 && (
+            <p className="px-2 text-xs text-slate-400">Người này chưa có cuộc trò chuyện nào.</p>
+          )}
+          {visibleSessions.map((s) => (
             <div
               key={s.session_id}
               onClick={() => switchToSession(s.session_id)}
@@ -725,21 +786,9 @@ export default function Home() {
           <MessageList messages={messages} loading={loading} bottomRef={bottomRef} />
         </div>
 
-        {isCLevel && (
-          <div className="mb-2 flex items-center justify-between rounded-xl border border-amber-300 bg-amber-50/90 px-4 py-2.5 text-xs font-semibold text-amber-900 shadow-sm">
-            <div className="flex items-center gap-2">
-              <span className="text-base">📊</span>
-              <span>Dành cho C-Level: Xem Dashboard Audit Log & Chi phí AI toàn công ty realtime.</span>
-            </div>
-            <button
-              type="button"
-              onClick={openAuditDashboard}
-              className="rounded-lg bg-amber-600 px-3.5 py-1.5 text-xs font-bold text-white shadow hover:bg-amber-700 transition shrink-0"
-            >
-              Mở Dashboard Audit Log
-            </button>
-          </div>
-        )}
+        {/* Banner "Danh cho C-Level" da bo (29/07/2026): loi vao Dashboard Audit Log da co san o 2 cho
+            (nut tren header + muc trong sidebar), banner thu 3 nam ngay tren o nhap chi lam chat khung
+            chat va lap lai cung mot hanh dong. */}
         <form onSubmit={handleSubmit} className="border-t border-slate-200 bg-slate-50 py-4">
           <div className="flex gap-2">
             <input
