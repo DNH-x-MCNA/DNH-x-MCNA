@@ -299,9 +299,13 @@ type UserBreakdownItem = {
   query_count: number;
   input_tokens: number;
   output_tokens: number;
+  // cache_tokens/is_unattributed do backend bo sung 29/07/2026 - de optional de dashboard khong vo
+  // khi frontend da deploy nhung backend tren may 24 con chay ban cu.
+  cache_tokens?: number;
   total_tokens: number;
   cost_usd: number;
   cost_vnd: number;
+  is_unattributed?: boolean;
 };
 
 // Cac truong session_* la so cua CA PHIEN chat, khong phai cua rieng luot hoi tren dong do:
@@ -1201,12 +1205,33 @@ export default function Home() {
                       <div className="text-[11px] tabular-nums text-amber-50/90">
                         ~ ${auditData.summary.total_cost_usd.toFixed(4)} USD
                       </div>
-                      <div className="mt-1.5 inline-flex items-center rounded-full bg-white/15 px-2 py-0.5 text-[10px] font-medium text-amber-50">
-                        Quy đổi 1 USD = {USD_TO_VND_RATE.toLocaleString("vi-VN")} đ
-                      </div>
+                      {/* Ty gia HIEN THI phai la ty gia BACKEND DA THUC SU DUNG de quy doi, suy nguoc
+                          tu chinh du lieu tra ve - khong duoc lay hang so cua frontend. Hai ben co the
+                          lech nhau khi frontend da deploy con backend tren may 24 thi chua, va khi do
+                          ghi hang so frontend len the la noi sai ve so tien dang hien ngay ben tren. */}
+                      {(() => {
+                        const usd = auditData.summary.total_cost_usd;
+                        const effectiveRate = usd > 0 ? auditData.summary.total_cost_vnd / usd : USD_TO_VND_RATE;
+                        const isStale = Math.abs(effectiveRate - USD_TO_VND_RATE) > 1;
+                        return (
+                          <div
+                            className="mt-1.5 inline-flex items-center rounded-full bg-white/15 px-2 py-0.5 text-[10px] font-medium text-amber-50"
+                            title={isStale ? `Máy chủ đang dùng tỷ giá cũ. Bản mới nhất: ${USD_TO_VND_RATE.toLocaleString("vi-VN")} đ` : undefined}
+                          >
+                            Quy đổi 1 USD = {Math.round(effectiveRate).toLocaleString("vi-VN")} đ
+                            {isStale && " ⚠️"}
+                          </div>
+                        );
+                      })()}
                       {auditData.summary.unattributed_cost_usd > 0 && (
                         <div className="mt-1 text-[10px] leading-tight text-amber-50/80">
-                          Trong đó {(auditData.summary.unattributed_cost_usd * USD_TO_VND_RATE).toLocaleString("vi-VN", { maximumFractionDigits: 0 })} đ
+                          Trong đó{" "}
+                          {(
+                            auditData.summary.unattributed_cost_usd *
+                            (auditData.summary.total_cost_usd > 0
+                              ? auditData.summary.total_cost_vnd / auditData.summary.total_cost_usd
+                              : USD_TO_VND_RATE)
+                          ).toLocaleString("vi-VN", { maximumFractionDigits: 0 })} đ
                           chưa quy được cho người dùng cụ thể
                         </div>
                       )}
@@ -1274,12 +1299,26 @@ export default function Home() {
 
                   {/* TAB 1: USER BREAKDOWN TABLE */}
                   {auditActiveTab === "users" && (() => {
-                    const maxCost = Math.max(0, ...auditData.user_breakdown.map((u) => u.cost_usd));
+                    // "Tieu thu cao nhat" chi xet NGUOI DUNG THAT - dong "(chua quy duoc)" khong phai
+                    // mot nguoi, truoc day no thuong lon nhat bang nen bi danh dau nham.
+                    const realUsers = auditData.user_breakdown.filter((u) => !u.is_unattributed);
+                    const maxCost = Math.max(0, ...realUsers.map((u) => u.cost_usd));
+                    const hasUnattributed = auditData.user_breakdown.some((u) => u.is_unattributed);
+                    const hasZeroCostUser = realUsers.some((u) => u.query_count > 0 && u.cost_usd === 0);
                     return (
                       <div className="flex flex-col gap-3">
                         <h3 className="text-sm font-bold text-slate-800">
                           📊 Bảng Thống Kê Token & Chi Phí Theo Người Dùng
                         </h3>
+                        {(hasUnattributed || hasZeroCostUser) && (
+                          <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] leading-relaxed text-amber-900">
+                            <span className="font-semibold">Vì sao có dòng 0 đồng và dòng &ldquo;chưa quy được&rdquo;:</span>{" "}
+                            sổ chi phí chỉ bắt đầu ghi kèm tên tài khoản từ 29/07/2026. Những lượt hỏi
+                            trước mốc đó vẫn được đếm ở cột &ldquo;Số câu hỏi&rdquo; nhưng không nối
+                            ngược được sang tiền, nên phần tiền của chúng dồn vào dòng cuối bảng.
+                            Tổng tiền toàn công ty vẫn đúng.
+                          </div>
+                        )}
                         <div className="max-h-[420px] overflow-auto rounded-xl border border-slate-200 shadow-sm">
                           <table className="min-w-full text-xs tabular-nums">
                             <thead className="sticky top-0 z-10 bg-[#F1F5F9] text-slate-700 font-semibold shadow-[0_1px_0_0_theme(colors.slate.200)]">
@@ -1287,8 +1326,9 @@ export default function Home() {
                                 <th className="px-4 py-3 text-left">Người Dùng</th>
                                 <th className="px-4 py-3 text-center">Tài Khoản</th>
                                 <th className="px-4 py-3 text-right">Số Câu Hỏi</th>
-                                <th className="px-4 py-3 text-right">Input Tokens</th>
-                                <th className="px-4 py-3 text-right">Output Tokens</th>
+                                <th className="px-4 py-3 text-right">Input</th>
+                                <th className="px-4 py-3 text-right">Output</th>
+                                <th className="px-4 py-3 text-right">Cache</th>
                                 <th className="px-4 py-3 text-right">Tổng Tokens</th>
                                 <th className="px-4 py-3 text-right">Chi Phí (USD)</th>
                                 <th className="px-4 py-3 text-right font-bold text-amber-700">Chi Phí (VNĐ)</th>
@@ -1296,9 +1336,22 @@ export default function Home() {
                             </thead>
                             <tbody className="divide-y divide-slate-100 bg-white">
                               {auditData.user_breakdown.map((u) => {
-                                const isTop = maxCost > 0 && u.cost_usd === maxCost;
+                                const isTop = !u.is_unattributed && maxCost > 0 && u.cost_usd === maxCost;
+                                // Ban backend cu chua tra cache_tokens - suy nguoc tu tong de cot Cache
+                                // van dung thay vi hien 0.
+                                const cacheTokens =
+                                  u.cache_tokens ?? Math.max(0, u.total_tokens - u.input_tokens - u.output_tokens);
                                 return (
-                                  <tr key={u.username} className={`transition ${isTop ? "bg-amber-50/60 hover:bg-amber-50" : "hover:bg-slate-50"}`}>
+                                  <tr
+                                    key={u.username}
+                                    className={`transition ${
+                                      u.is_unattributed
+                                        ? "bg-slate-50 italic text-slate-500 hover:bg-slate-100"
+                                        : isTop
+                                        ? "bg-amber-50/60 hover:bg-amber-50"
+                                        : "hover:bg-slate-50"
+                                    }`}
+                                  >
                                     <td className="px-4 py-3 font-medium text-slate-900">
                                       <span className="inline-flex items-center gap-1.5">
                                         {isTop && <span title="Mức tiêu thụ cao nhất trong kỳ">🔥</span>}
@@ -1309,6 +1362,7 @@ export default function Home() {
                                     <td className="px-4 py-3 text-right text-slate-700 font-semibold">{u.query_count}</td>
                                     <td className="px-4 py-3 text-right text-slate-600">{u.input_tokens.toLocaleString()}</td>
                                     <td className="px-4 py-3 text-right text-slate-600">{u.output_tokens.toLocaleString()}</td>
+                                    <td className="px-4 py-3 text-right text-slate-600">{cacheTokens.toLocaleString()}</td>
                                     <td className="px-4 py-3 text-right font-medium text-slate-800">{u.total_tokens.toLocaleString()}</td>
                                     <td className="px-4 py-3 text-right text-slate-600">${u.cost_usd.toFixed(4)}</td>
                                     <td className="px-4 py-3 text-right font-bold text-amber-700">
@@ -1395,7 +1449,14 @@ export default function Home() {
 
             {/* Modal Footer */}
             <div className="flex items-center justify-between border-t border-slate-200 bg-slate-50 px-6 py-3 text-xs text-slate-500">
-              <span>* Chi phí quy đổi tự động theo tỷ giá 1 USD = {USD_TO_VND_RATE.toLocaleString("vi-VN")} VNĐ và bảng giá Anthropic API chính thức.</span>
+              <span>
+                * Chi phí quy đổi tự động theo tỷ giá{" "}
+                {auditData && auditData.summary.total_cost_usd > 0
+                  ? Math.round(auditData.summary.total_cost_vnd / auditData.summary.total_cost_usd).toLocaleString("vi-VN")
+                  : USD_TO_VND_RATE.toLocaleString("vi-VN")}{" "}
+                đ/USD và bảng giá Anthropic API chính thức. Tổng lấy thẳng từ sổ chi phí nên luôn đúng
+                kể cả khi chưa quy được từng lượt về người dùng cụ thể.
+              </span>
               <button
                 onClick={() => setAuditModalOpen(false)}
                 className="rounded-lg bg-[var(--brand-navy)] px-4 py-2 text-xs font-medium text-white transition hover:bg-slate-800"
