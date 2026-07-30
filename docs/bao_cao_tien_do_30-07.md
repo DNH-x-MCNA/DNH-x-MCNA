@@ -206,7 +206,35 @@
   - **Tỷ lệ dữ liệu vào/ra ≈ 8,7 lần** — chi phí bị chi phối bởi phần dữ liệu nạp vào, không phải độ dài
     câu trả lời. Đây là chỗ đang tối ưu để giảm giá.
   - ⚠️ **Giá dịch vụ AI tăng ~50% sau 31/08/2026** — với nhịp hiện tại sẽ thành **~55 USD ≈ 1,45 triệu
-    đồng/tháng**. Bản ước tính go-live sẽ dùng giá sau khuyến mãi.
+    đồng/tháng**, **vượt ngân sách 50 USD/tháng** đang đặt trong hệ thống. Bản ước tính go-live sẽ dùng
+    giá sau khuyến mãi.
+
+  #### Bốn lớp lỗi tính tiền đã bóc tách *(29/07)*
+
+  Con số chi phí ban đầu không dùng được. Bốn lỗi chồng lên nhau, sửa lần lượt đến khi mọi cột trong
+  bảng cộng tay đều ra khớp:
+
+  | # | Lỗi | Biểu hiện |
+  |---|---|---|
+  | 1 | Cộng trùng | Một phiên 6 lượt hỏi bị tính tiền **6 lần** |
+  | 2 | Giấu mất phần lớn tiền | Tổng chỉ cộng phần quy được cho người dùng, phần còn lại biến mất |
+  | 3 | Không quy được cho ai | 89% chi phí không biết của ai — sổ chi phí chưa ghi tên tài khoản |
+  | 4 | Bảng số không tự khớp | Cột tổng token và tổng tiền cộng tay không ra số hiển thị |
+
+  > Lưu ý khi trình bày: phần **"chưa quy được cho người dùng"** vẫn chiếm phần lớn chi phí lịch sử, do
+  > hệ thống mới bắt đầu ghi tên tài khoản từ 29/07 — **không hồi tố được**. Tổng tiền vẫn chính xác;
+  > từ nay các lượt hỏi mới đều quy được đúng người.
+
+  ### Giao diện chatbot — làm lại toàn bộ *(mới, 29/07)*
+
+  Chuyển từ giao diện mặc định sang bộ nhận diện riêng cho Dược Nam Hà, hướng sáng — trang nhã — hiện đại:
+
+  - **Bảng màu và bộ chữ riêng**, hỗ trợ đầy đủ dấu tiếng Việt.
+  - **Số liệu tài chính gióng cột thẳng hàng** — doanh thu, công nợ, token đều căn phải và dùng chữ số
+    đều bề rộng, đọc nhanh và ít nhầm hơn hẳn.
+  - **Bảng dữ liệu** bo góc, tiêu đề nền xám, tự gắn nhãn màu cho kênh (ETC/OTC) và ba miền.
+  - **Lịch sử trò chuyện** nhóm theo *Hôm nay / 7 ngày qua / Cũ hơn*, kèm bộ lọc theo người dùng cho
+    Ban điều hành.
 
   ---
 

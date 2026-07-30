@@ -50,3 +50,27 @@ backend/__pycache__/
 backend/*.db
 backend/logs/
 backend/*.txt
+
+# Python cache o MOI thu muc (truoc day chi chan backend/, nen __pycache__ o root,
+# ai_agent/, scripts/, src/, tests/ van hien trong git status)
+__pycache__/
+*.py[cod]
+
+# Du lieu chay va file tam.
+# LUU Y: .gitignore KHONG ho tro comment cung dong - dau # chi co tac dung o DAU dong.
+# Viet "data/   # ghi chu" se thanh mau literal ke ca phan ghi chu, khong khop gi ca.
+# data/     : alerts_state.db - trang thai canh bao, sinh ra khi chay (~6.7MB)
+# scratch/  : bieu do va script nhap (~8.3MB)
+data/
+scratch/
+nssm_log.txt
+
+# Script sinh DU LIEU GIA - chi dung tren may dev, TUYET DOI khong dua len git.
+# seed_mock_logs.py ghi thang vao audit_log.jsonl/cost_log.jsonl (co ca duong dan cung
+# D:\DNH\backend\logs), seed_warehouse_data.py ghi doanh so gia vao warehouse.db.
+# Neu len git roi ai chay tren may 24 se lam ban dung so lieu that.
+backend/seed_mock_logs.py
+backend/seed_warehouse_data.py
+
+# Script khoi tao/dat lai mat khau tai khoan C-Level - chay TAY tren tung may.
+backend/create_admin.py

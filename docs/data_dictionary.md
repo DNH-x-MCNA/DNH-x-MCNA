@@ -137,7 +137,7 @@ Bravo (SQL Server, schema `dbo`), qua các hàm `get_bravo_*_snapshot()` trong `
 
 | Tên Cột | Ý Nghĩa Nghiệp Vụ |
 | :--- | :--- |
-| `SaveDate` | Ngày snapshot — luôn dùng `MAX(SaveDate)` làm kỳ mới nhất, KHÔNG hardcode tháng |
+| `SaveDate` | Ngày snapshot. ⚠️ **KHÔNG được ghim vào một `MAX(SaveDate)` duy nhất** — xem cảnh báo ngay dưới bảng |
 | `EmployeeCode` | Mã nhân viên — **mã CHUẨN**, khớp `DIM_NhanVien.EmployeeCode` (không phải bí danh DMSCode, xem 8.3) |
 | `CustomerCode` | Mã khách hàng gắn với dòng doanh số này |
 | `AreaCode` | Vùng miền hoạt động của nhân viên |
@@ -145,8 +145,27 @@ Bravo (SQL Server, schema `dbo`), qua các hàm `get_bravo_*_snapshot()` trong `
 | `Amount_Cus` | Doanh số thực đạt của nhân viên với khách hàng này, trong tháng của `SaveDate` |
 | `YearSaleTarget` | Chỉ tiêu năm — **ĐÃ cộng dồn theo năm** (khác `MonthSaleTarget`), không cộng dồn thêm lần nữa |
 
-**Công thức KPI cá nhân** (`get_bravo_kpi_tdv_snapshot`, `src/alerts.py:564`):
-`month_sale_amount = SUM(Amount_Cus)` theo `EmployeeCode` tại `SaveDate` mới nhất;
+> ### ⚠️ Cảnh báo `SaveDate` — sửa 29/07/2026, ĐỌC KỸ TRƯỚC KHI VIẾT TRUY VẤN MỚI
+>
+> Tài liệu này trước đây ghi *"luôn dùng `MAX(SaveDate)` làm kỳ mới nhất"*. **Điều đó SAI và đã gây ra
+> lỗi nghiêm trọng nhất của kỳ.**
+>
+> DNH **không ghi số liệu một tháng thành một lần**, mà tách ra nhiều ngày theo từng miền. Tháng 7/2026
+> có 2 đợt ghi: `2026-07-27` ghi miền Bắc + miền Nam, `2026-07-28` **chỉ** ghi miền Trung.
+>
+> Ghim vào `MAX(SaveDate)` nghĩa là ngày 29/07 chỉ lấy được miền Trung — báo *"toàn đội đạt 48,7%"*
+> trong khi đó chỉ là 29/147 người, **mất 43,97 tỷ chỉ tiêu** của hai miền còn lại. Nguy hiểm nhất là
+> **không có cảnh báo nào**: lưới kiểm tra chéo chỉ đối chiếu các miền *có mặt* trong kết quả, nên miền
+> biến mất hoàn toàn thì không còn gì để đối chiếu.
+>
+> **Cách đúng:** gộp theo **THÁNG** (`substr(save_date,1,7)`), mỗi `EmployeeCode` lấy bản ghi có
+> `SaveDate` mới nhất **của chính người đó** trong tháng — không phải bản ghi mới nhất toàn bảng.
+> Đã áp dụng ở cả 3 hệ thống: chatbot (`report_templates.py`), báo cáo email (`src/alerts.py`), công cụ
+> đối chiếu (`scripts/demo1_ground_truth.py`). Kèm cảnh báo bắt buộc khi phát hiện thiếu miền.
+
+**Công thức KPI cá nhân** (`get_bravo_kpi_tdv_snapshot`, `src/alerts.py`):
+`month_sale_amount = SUM(Amount_Cus)` theo `EmployeeCode`, lấy bản ghi mới nhất của từng người
+**trong tháng đang xét** (KHÔNG ghim một `SaveDate` chung — xem cảnh báo trên);
 `month_sale_percent = month_sale_amount / month_sale_target` (`None` nếu target ≤ 0, không chia
 cho 0). JOIN với `DIM_NhanVien` để lấy tên/chức danh, loại `IsDuplicate=1`.
 
