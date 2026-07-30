@@ -1837,6 +1837,97 @@ def audit_log_summary(days: int = 7, limit: int = 30, username: str = None, targ
 
 
 
+def salary_detail(employee_code: str = None, save_date: str = None,
+                   scope_employee_code: str = None, scope_role: str = None) -> dict:
+    """Chi tiet THUONG KINH DOANH + PHU CAP theo chinh sach thu nhap moi (QD 0429/.25 Mien Nam/Trung,
+    QD 0107/2026 TDV) - doc TRUC TIEP tu fact_thongketinhluong, nguon Bravo FACT_ThongKeTinhLuong DA
+    TU TINH SAN dung cong thuc (verify 28/07/2026: DMBonus/Sigma(DM*k)=TotalPoint khop tuyet doi voi
+    Bang 01 trong 3 Phu luc chinh sach - xem local_warehouse.py::SCHEMA).
+
+    !!! GIOI HAN QUAN TRONG - PHAI NOI RO KHI TRA LOI: ham nay CHUA co LUONG CO BAN (LCB) - Bravo
+    KHONG luu san muc LCB theo Level (chi co Target/Thuc dat/% theo thang trong DIM_BangLuong2025,
+    KHONG PHAI bang tra Level->LCB). Ket qua tra ve la THUONG KINH DOANH (thuong danh muc DM1/2/3,
+    thuong tien do V15/V22/V25, thuong ASO) + PHU CAP (an ca/xang xe/dien thoai) - CHUA PHAI Tong thu
+    nhap day du (con thieu LCB). TUYET DOI KHONG duoc noi day la "tong luong" hay "thu nhap day du".
+
+    PHAN QUYEN: employee_code mac dinh la CHINH NGUOI DANG HOI (server ep qua scope_employee_code,
+    xem _SELF_SCOPED_TEMPLATES) - AI KHONG duoc tu chon xem nguoi khac tru khi la C-Level/QLV xem
+    doi minh (xem call_template). scope_role='c_level' moi duoc bo qua gioi han nay.
+
+    save_date: ngay snapshot can xem (mac dinh: gan nhat hien co, thuong la cuoi thang/dot chot gan
+    nhat - fact_thongketinhluong CHI co 1 snapshot/thang, khac fact_tonghopkhachhang nhieu dong/thang)."""
+    is_clevel = bool(scope_role and str(scope_role).lower() in ("c_level", "super_admin", "ceo", "cfo"))
+    target_code = employee_code
+    if not is_clevel:
+        # QLV/TDV thuong: CHI duoc xem CHINH MINH - scope_employee_code (ep tu server) la nguon DUY
+        # NHAT dang tin, bo qua employee_code AI/nguoi dung tu truyen de tranh do doi nguoi khac.
+        if not scope_employee_code:
+            return {"error": "Khong xac dinh duoc ma nhan vien cua tai khoan nay de tra cuu thuong/luong."}
+        target_code = scope_employee_code
+
+    if not target_code:
+        return {"error": "Can cho biet ma nhan vien (hoac ten) can tra cuu thuong/luong."}
+
+    ident = _resolve_employee_identity(target_code)
+    lookup_code = ident["dmsid"] or target_code
+
+    if save_date:
+        fdate_r = _q("SELECT MAX(save_date) d FROM fact_thongketinhluong WHERE save_date<=? "
+                     "AND (employee_code=? OR employee_code=?)", (save_date, target_code, lookup_code))
+    else:
+        fdate_r = _q("SELECT MAX(save_date) d FROM fact_thongketinhluong "
+                     "WHERE employee_code=? OR employee_code=?", (target_code, lookup_code))
+    fdate = fdate_r[0]["d"] if fdate_r else None
+    if not fdate:
+        return {"error": f"Chua co du lieu thuong/luong cho nhan vien '{target_code}' (co the ma sai, "
+                          "hoac du lieu chua duoc dong bo/chua phat sinh trong ky nay)."}
+
+    row = _q("SELECT * FROM fact_thongketinhluong WHERE (employee_code=? OR employee_code=?) "
+             "AND save_date=? LIMIT 1", (target_code, lookup_code, fdate))
+    if not row:
+        return {"error": f"Chua co du lieu thuong/luong cho nhan vien '{target_code}' tai ky {fdate}."}
+    r = row[0]
+
+    dm_bonus = _f(r["dm_bonus"])
+    aso_bonus = _f(r["aso_bonus"])
+    v15_bonus = _f(r["v15_bonus"])
+    v22_bonus = _f(r["v22_bonus"])
+    v25_bonus = _f(r["v25_bonus"])
+    allowance = _f(r["lunch_amount"]) + _f(r["transport_amount"]) + _f(r["phone_amount"])
+    total_bonus = dm_bonus + aso_bonus + v15_bonus + v22_bonus + v25_bonus
+
+    threshold = _bonus_threshold(r["position_code"])
+    pct = _f(r["month_sale_percent"]) * 100
+    return {
+        "employee_code": r["employee_code"], "employee_name": r["employee_name"],
+        "position_code": r["position_code"], "area_code": r["area_code"], "save_date": fdate,
+        "month_sale_amount": _f(r["month_sale_amount"]), "month_sale_target": _f(r["month_sale_target"]),
+        "month_sale_percent": pct, "bonus_threshold_pct": threshold,
+        "meets_bonus_threshold": pct >= threshold,
+        "dm_breakdown": {
+            "dm1": {"amount": _f(r["dm1_amount"]), "percent": _f(r["dm1_percent"])},
+            "dm2": {"amount": _f(r["dm2_amount"]), "percent": _f(r["dm2_percent"])},
+            "dm3": {"amount": _f(r["dm3_amount"]), "percent": _f(r["dm3_percent"])},
+            "kpis_total_point": _f(r["total_point"]),
+        },
+        "dm_bonus": dm_bonus,
+        "progress_bonus": {"v15": v15_bonus, "v22": v22_bonus, "v25": v25_bonus},
+        "aso_bonus": aso_bonus,
+        "total_bonus": total_bonus,
+        "allowance": {"lunch": _f(r["lunch_amount"]), "transport": _f(r["transport_amount"]),
+                      "phone": _f(r["phone_amount"]), "total": allowance},
+        "kpi_indicators": {
+            "sku": {"quantity": _f(r["sku_quantity"]), "target": _f(r["sku_target"]), "percent": _f(r["sku_percent"])},
+            "reorder_customer": {"quantity": _f(r["reorder_cus_quantity"]), "target": _f(r["reorder_cus_target"]), "percent": _f(r["reorder_percent"])},
+            "new_customer": {"quantity": _f(r["new_cus_quantity"]), "target": _f(r["new_cus_target"]), "percent": _f(r["new_cus_percent"])},
+            "call": {"quantity": _f(r["call_quantity"]), "target": _f(r["call_target"]), "percent": _f(r["call_percent"])},
+        },
+        "warning": ("CHUA GOM LUONG CO BAN (LCB): so lieu nay CHI la Thuong kinh doanh + Phu cap, KHONG "
+                    "PHAI tong thu nhap day du. LCB tinh theo Level (dua tren Target thang) hien CHUA co "
+                    "trong du lieu dong bo - can bao nguoi dung lien he ke toan/HR de biet LCB chinh xac."),
+    }
+
+
 TEMPLATES = {
     "get_revenue_by_channel": revenue_by_channel,
     "get_top_products": top_products,
@@ -1855,6 +1946,7 @@ TEMPLATES = {
     "get_revenue_reconciliation": revenue_reconciliation_check,
     "get_receivables_overview": receivables_overview,
     "get_audit_log": audit_log_summary,
+    "get_salary_detail": salary_detail,
 }
 
 # Tool tra du lieu RIENG CUA NGUOI DANG HOI (lich su truy van/chi phi cua chinh ho) - username PHAI
@@ -1872,13 +1964,20 @@ TEMPLATES = {
 # Ca 2 cung mot goc: DANH TINH va VAI TRO phai do SERVER quyet dinh, khong bao gio do AI truyen.
 _SELF_SCOPED_TEMPLATES = {"get_audit_log"}
 
+# 28/07/2026 (KPI+luong moi): salary_detail() cung can scope_role tu server (C-Level moi duoc xem
+# nguoi khac) NHUNG khong nhan tham so 'username' (dung employee_code, khac get_audit_log) - tach
+# rieng khoi _SELF_SCOPED_TEMPLATES de khong ep nham 'username' vao ham khong co tham so do (TypeError).
+_ROLE_SCOPED_TEMPLATES = {"get_salary_detail"}
+
 # 28/07/2026: tool da bi gioi han bang co che MANH HON scope vung (ep username, xem
 # _SELF_SCOPED_TEMPLATES) nen KHONG nhan tham so scope_area_code - ham audit_log_summary() khong co
 # tham so nay trong chu ky. Neu call_template van truyen vo dieu kien (nhu MOI template khac) se
 # TypeError -> tai khoan regional_director/qlv goi get_audit_log LUON LOI (phat hien 28/07/2026, tu
 # khi tool nay them vao 27/07). Day la MIEN TRU CO CHU DICH, khong phai noi long fail-closed: moi
 # tool KHAC quen khai bao tham so nay van se no TypeError nhu cu, dung xoa dong nay de "sua" loi khac.
-_AREA_EXEMPT_TEMPLATES = {"get_audit_log"}
+# get_salary_detail: cung khong nhan scope_area_code (dung scope_employee_code + scope_role) - them
+# vao day vi ly do tuong tu.
+_AREA_EXEMPT_TEMPLATES = {"get_audit_log", "get_salary_detail"}
 
 
 # 23/07/2026 - DOI SANG CO CHE "DANH SACH CHO PHEP, FAIL-CLOSED" sau khi phat hien lo hong R-F
@@ -1916,9 +2015,13 @@ _PERSON_LEVEL_TEMPLATES = {"get_revenue_tree", "get_kpi_ranking", "get_employee_
                             "get_top_products", "compare_periods",
                             # (b) khong the thu hep ve doi
                             "get_inventory_by_region", "get_receivables_overview",
-                            "get_qlv_change_history", "get_revenue_reconciliation"}
+                            "get_qlv_change_history", "get_revenue_reconciliation",
+                            # 28/07/2026: get_salary_detail - du lieu THUONG/LUONG CA NHAN, nhay cam
+                            # nhat trong moi tool (tien that cua tung nguoi) - BAT BUOC ep scope, xem
+                            # ham salary_detail() va _EMPLOYEE_SCOPED_TEMPLATES.
+                            "get_salary_detail"}
 _EMPLOYEE_SCOPED_TEMPLATES = {"get_revenue_tree", "get_kpi_ranking", "get_employee_kpi",
-                               "get_employee_daily_kpi"}
+                               "get_employee_daily_kpi", "get_salary_detail"}
 # check_order_timing CO Y de ngoai _EMPLOYEE_SCOPED_TEMPLATES: day la bao cao CHONG GIAN LAN neu dich
 # danh nhan su nghi "chay don don KPI" - chua co xac nhan nghiep vu ai duoc phep xem, nen voi tai khoan
 # qlv thi CHAN han (fail-closed) cho toi khi DNH chot. Xem D1 trong docs/Cau_hoi_can_DNH_xac_nhan.md.
@@ -1957,6 +2060,10 @@ def call_template(name: str, args: dict, question: str = "", username: str = Non
             # va scope_role (vai tro, quyet dinh co duoc xem toan cong ty hay khong). Thieu 1 trong 2
             # la AI co the tu nang quyen - xem ghi chu o _SELF_SCOPED_TEMPLATES.
             call_args["username"] = username
+            call_args["scope_role"] = scope_role
+        if name in _ROLE_SCOPED_TEMPLATES:
+            # Giong _SELF_SCOPED_TEMPLATES nhung KHONG ep 'username' (tool dung employee_code, xem
+            # ghi chu o _ROLE_SCOPED_TEMPLATES) - chi ep scope_role de xac dinh co phai C-Level khong.
             call_args["scope_role"] = scope_role
         if scope_area_code and name not in _AREA_EXEMPT_TEMPLATES:
             call_args["scope_area_code"] = scope_area_code

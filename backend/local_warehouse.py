@@ -107,6 +107,38 @@ CREATE INDEX IF NOT EXISTS idx_ftk_savedate ON fact_tonghopkhachhang(save_date);
 CREATE INDEX IF NOT EXISTS idx_ftk_employee ON fact_tonghopkhachhang(employee_code);
 CREATE INDEX IF NOT EXISTS idx_ftk_manager ON fact_tonghopkhachhang(manager_code);
 
+-- 28/07/2026 (KPI+luong moi QD 0429/.25 + QD 0107/2026): Bravo FACT_ThongKeTinhLuong DA TU TINH SAN
+-- ket qua thuong theo dung cong thuc trong 3 Phu luc chinh sach thu nhap (MN-TDV, MT-QLV, MT-TDV) -
+-- VERIFY THUC TE 28/07/2026 tren TM23100123 (Tran Thien Khiem, QLV MN, SaveDate 2026-07-30):
+--   DMBonus / (DM1Amount*DM1Percent_R + DM2Amount*DM2Percent_R + DM3Amount*DM3Percent_R) = 0.8897
+--   = TotalPoint (0.88970) TUYET DOI KHOP -> xac nhan DM*Percent_R chinh la he so k_tn (Bang 01 PDF)
+--   va TotalPoint chinh la "KPIs" trong cong thuc "Muc huong = Sigma(DM_n x k_tn) x KPIs".
+-- CHI dong bo 1 SNAPSHOT/NGAY (SaveDate) - KHONG co nhieu ban ghi/ngay nhu fact_tonghopkhachhang.
+-- position_code: 'QLV' hoac 'TDV' - CAN de chon dung Phu luc/nguong (65% TDV vs 70% QLV, xem
+-- _bonus_threshold() trong report_templates.py) khi giai thich ket qua.
+CREATE TABLE IF NOT EXISTS fact_thongketinhluong (
+    employee_code TEXT, employee_name TEXT, position_code TEXT, area_code TEXT, area_code2 TEXT,
+    manager_code TEXT, save_date TEXT,
+    month_sale_amount REAL, month_sale_target REAL, month_sale_percent REAL,
+    dm1_amount REAL, dm1_percent REAL, dm2_amount REAL, dm2_percent REAL, dm3_amount REAL, dm3_percent REAL,
+    dm_bonus REAL, total_point REAL,
+    sku_quantity REAL, sku_target REAL, sku_percent REAL,
+    reorder_cus_quantity REAL, reorder_cus_target REAL, reorder_percent REAL,
+    new_cus_quantity REAL, new_cus_target REAL, new_cus_percent REAL,
+    active_cus_quantity REAL, active_cus_target REAL, active_cus_percent REAL,
+    aso_quantity REAL, aso_percent REAL, aso_bonus REAL,
+    call_quantity REAL, call_target REAL, call_percent REAL,
+    v15_amount REAL, v15_percent REAL, v15_bonus REAL,
+    v22_amount REAL, v22_percent REAL, v22_bonus REAL,
+    v25_amount REAL, v25_percent REAL, v25_bonus REAL,
+    target_product_amount REAL, target_product_percent REAL, tpr_point REAL,
+    lunch_amount REAL, transport_amount REAL, phone_amount REAL,
+    salary_coeff REAL
+);
+CREATE INDEX IF NOT EXISTS idx_ftl_savedate ON fact_thongketinhluong(save_date);
+CREATE INDEX IF NOT EXISTS idx_ftl_employee ON fact_thongketinhluong(employee_code, save_date);
+CREATE INDEX IF NOT EXISTS idx_ftl_manager ON fact_thongketinhluong(manager_code);
+
 -- Du lieu hoa don CU HON 12 THANG duoc NEN ve day (KH x thang, KHONG giu item_code/quantity/unit_price/
 -- created_at/stt tung dong) de giam dung luong luu tru va giam rui ro lo du lieu chi tiet hoa don qua
 -- khu (xem sync_warehouse.py::_compress_old_months()). 12 thang gan nhat van giu nguyen chi tiet trong
