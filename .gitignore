@@ -50,3 +50,13 @@ backend/__pycache__/
 backend/*.db
 backend/logs/
 backend/*.txt
+
+# Python cache o MOI thu muc (truoc day chi chan backend/, nen __pycache__ o root,
+# ai_agent/, scripts/, src/, tests/ van hien trong git status)
+__pycache__/
+*.py[cod]
+
+# Script khoi tao tai khoan admin - chay TAY tren tung may, khong commit.
+# Ly do: script nay tao/dat lai mat khau tai khoan C-Level. Giu ngoai git de khong ai
+# vo tinh chay trong quy trinh deploy va doi mat khau tai khoan dang dung de demo.
+backend/create_admin.py
