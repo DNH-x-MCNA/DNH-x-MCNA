@@ -370,6 +370,29 @@ TEMPLATE_TOOLS = [
             "required": [],
         },
     },
+    {
+        "name": "get_salary_detail",
+        "description": "Chi tiet THUONG KINH DOANH + PHU CAP thang cua 1 nhan vien, theo chinh sach "
+                        "thu nhap moi (QD 0429/.25 Mien Nam/Trung, QD 0107/2026 TDV toan quoc, hieu luc "
+                        "tu 28/07/2026) - dung khi nguoi dung hoi 'thuong thang nay cua toi/cua [ten] "
+                        "bao nhieu', 'thuong danh muc/ASO/tien do cua toi', 'ket qua KPI luong cua toi'. "
+                        "!!! CANH BAO QUAN TRONG: ket qua CHUA GOM Luong co ban (LCB) - he thong hien "
+                        "CHUA co du lieu LCB (Bravo khong luu san muc LCB theo Level). PHAI noi ro voi "
+                        "nguoi dung day la THUONG KINH DOANH + PHU CAP, KHONG PHAI 'tong luong'/'tong "
+                        "thu nhap' day du - neu ho hoi tong thu nhap/luong thang, tra loi phan thuong "
+                        "nay VA noi ro con thieu LCB, de nghi lien he ke toan/HR de biet LCB chinh xac. "
+                        "PHAN QUYEN: mac dinh CHI tra ve DUNG cua nguoi dang hoi (server tu dong xac "
+                        "dinh, KHONG the xem cua nguoi khac du truyen employee_code gi) - CHI C-Level "
+                        "moi xem duoc nguoi khac qua tham so employee_code.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "employee_code": {"type": "string", "description": "Ma/ten nhan vien can tra cuu - CHI co hieu luc voi tai khoan C-Level, bi bo qua voi tai khoan thuong (tu dong dung chinh nguoi hoi)"},
+                "save_date": {"type": "string", "description": "YYYY-MM-DD, mac dinh la snapshot moi nhat hien co (thuong cuoi thang/dot chot gan nhat)"},
+            },
+            "required": [],
+        },
+    },
 ]
 
 QUERY_TOOL = {
@@ -458,16 +481,16 @@ QUAN TRONG VE CHON TOOL:
   "count_full_target = 0", "[tien ich] resolve_relative_date(...)". VD DUNG: "toi co the tra cuu chi
   tiet tung khach hang de xem ai phu trach". Mo ta viec lam bang ngon ngu nghiep vu, giau het ten ky
   thuat ben trong.
-- Neu cau hoi thuoc 1 trong 16 nhom: doanh thu theo kenh, top san pham, top khach hang, doanh thu
+- Neu cau hoi thuoc 1 trong 17 nhom: doanh thu theo kenh, top san pham, top khach hang, doanh thu
   theo vung mien, KPI/doanh so nhan vien (tong quan/thang), KPI THEO NGAY 1 nhan vien ca nhan, SO SANH
   2 khoang thoi gian, CHI TIET 1 khach hang cu the, TRA CUU ma/ten/vai tro nhan vien, KIEM TRA don hang
   bat thuong/chay don KPI, TON KHO THEO VUNG, LICH SU DOI QLV, CAY DOANH THU/KPI TP-QLV-TDV, XEP HANG
   KPI, DOI CHIEU doanh thu tu tren xuong vs cong don tu duoi len, LICH SU TRUY VAN/CHI PHI AI cua chinh
-  nguoi dang hoi -> BAT BUOC dung tool tuong ung
+  nguoi dang hoi, THUONG KINH DOANH/PHU CAP thang cua 1 nhan vien -> BAT BUOC dung tool tuong ung
   (get_revenue_by_channel, get_top_products, get_top_customers, get_revenue_by_region, get_employee_kpi,
   get_employee_daily_kpi, compare_periods, get_customer_detail, get_employee_directory, check_order_timing,
   get_inventory_by_region, get_qlv_change_history, get_revenue_tree, get_kpi_ranking,
-  get_revenue_reconciliation, get_receivables_overview, get_audit_log).
+  get_revenue_reconciliation, get_receivables_overview, get_audit_log, get_salary_detail).
   Day la cac truy van DA DUOC KIEM CHUNG khop voi du lieu goc, KHONG tu sinh SQL thay the.
 - Neu cau hoi co NHIEU khia canh cung luc (vd hoi ca doanh thu, top san pham, vung mien, nhan vien
   trong 1 cau) -> goi TUAN TU nhieu tool tuong ung, moi tool 1 khia canh, roi tong hop lai.

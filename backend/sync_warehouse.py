@@ -298,6 +298,52 @@ def sync_fact_tonghopkhachhang(days=90):
     print(f"[fact_tonghopkhachhang] Reload {days} ngay gan nhat: {len(rows)} dong")
 
 
+def sync_fact_thongketinhluong(days=90):
+    """Dong bo ket qua tinh thuong/luong kinh doanh (KPI+luong moi QD 0429/.25 + QD 0107/2026) tu
+    Bravo FACT_ThongKeTinhLuong - da xac nhan (xem local_warehouse.py::SCHEMA) day la ket qua Bravo
+    DA TU TINH SAN dung cong thuc, khong phai du lieu tho can tinh lai. CHI 1 SNAPSHOT/NGAY (SaveDate),
+    khac fact_tonghopkhachhang (nhieu dong/thang theo khach hang) - reload N ngay gan nhat la du vi
+    day la du lieu KET QUA cuoi ky, khong can lich su xa de doi chieu tung khach hang."""
+    start = dt.date.today() - dt.timedelta(days=days)
+    _, rows = bravo_query(
+        "SELECT EmployeeCode, EmployeeName, PositionCode, AreaCode, AreaCode2, ManagerCode, SaveDate, "
+        "MonthSaleAmount, MonthSaleTarget, MonthSalePercent_R, "
+        "DM1Amount, DM1Percent_R, DM2Amount, DM2Percent_R, DM3Amount, DM3Percent_R, "
+        "DMBonus, TotalPoint, "
+        "SKUQuantity, SKUTarget, SKUPercent_R, "
+        "ROCustomerQuantity, ReOrderCusTarget, ROPercent_R, "
+        "NewCustomerQuantity, NewCusTarget, NCPercent_R, "
+        "ActiveCusQuantity, ActiveCusTarget, ACPercent_R, "
+        "ASOQuantity, ASOPercent_R, ASOBonus, "
+        "CallQuantity, CallTarget, CallPercent_R, "
+        "V15Amount, V15Percent_R, V15Bonus, "
+        "V22Amount, V22Percent_R, V22Bonus, "
+        "V25Amount, V25Percent_R, V25Bonus, "
+        "TargetProductAmount, TargetProductPercent_R, TPRPoint, "
+        "LunchAmount_R, TransportAmount_R, PhoneAmount_R, SalaryCoeff "
+        "FROM dbo.FACT_ThongKeTinhLuong WHERE SaveDate >= :a", a=str(start),
+    )
+    conn = get_conn()
+    conn.execute("DELETE FROM fact_thongketinhluong")
+    if rows:
+        conn.executemany(
+            "INSERT INTO fact_thongketinhluong (employee_code,employee_name,position_code,area_code,"
+            "area_code2,manager_code,save_date,month_sale_amount,month_sale_target,month_sale_percent,"
+            "dm1_amount,dm1_percent,dm2_amount,dm2_percent,dm3_amount,dm3_percent,dm_bonus,total_point,"
+            "sku_quantity,sku_target,sku_percent,reorder_cus_quantity,reorder_cus_target,reorder_percent,"
+            "new_cus_quantity,new_cus_target,new_cus_percent,active_cus_quantity,active_cus_target,"
+            "active_cus_percent,aso_quantity,aso_percent,aso_bonus,call_quantity,call_target,call_percent,"
+            "v15_amount,v15_percent,v15_bonus,v22_amount,v22_percent,v22_bonus,v25_amount,v25_percent,"
+            "v25_bonus,target_product_amount,target_product_percent,tpr_point,lunch_amount,"
+            "transport_amount,phone_amount,salary_coeff) "
+            "VALUES (" + ",".join(["?"] * 52) + ")",
+            rows,
+        )
+    conn.commit()
+    conn.close()
+    print(f"[fact_thongketinhluong] Reload {days} ngay gan nhat: {len(rows)} dong")
+
+
 def sync_fact_congno():
     """Snapshot cong no THEO KHACH HANG x KENH tu SP goc DNH usp_DeptAccDueDate_GetData vao
     fact_congno_khachhang. PORT NGUYEN VAN tu D:\\DNH\\src\\alerts.py::get_bravo_receivables_snapshot
@@ -440,6 +486,14 @@ def main():
         sync_small_table(bravo_tbl, local_tbl, bravo_cols, local_cols)
 
     sync_fact_tonghopkhachhang()
+
+    # KPI+luong moi (fact_thongketinhluong): boc try/except rieng nhu cong no - bang moi (28/07/2026),
+    # neu Bravo doi cau truc/loi quyen thi KHONG duoc lam hong phan sync con lai (doanh thu/KPI cu van
+    # phai chay binh thuong).
+    try:
+        sync_fact_thongketinhluong()
+    except Exception as e:
+        print(f"[CANH BAO] sync_fact_thongketinhluong loi, BO QUA lan nay (giu du lieu cu): {e}")
 
     # Cong no: boc try/except rieng - SP loi (quyen/VPN/timeout) KHONG duoc lam hong phan sync con lai.
     # Neu spike (muc 1.3) do SP > 60s: chuyen sang chay lich rieng bang --congno-only (timeout 300s) va
