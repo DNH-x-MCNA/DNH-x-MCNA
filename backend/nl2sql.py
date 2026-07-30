@@ -633,7 +633,15 @@ def ask(question: str, session_id: str = "default", username: str = None, scope_
     o SQL tu do).
     Tra ve dict: {answer: str, sql_used: [list mo ta cac tool/SQL da chay], last_result: {...} hoac None}
     """
-    client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+    if not api_key or api_key == "mock-key-for-local-testing":
+        return {
+            "answer": "⚠️ **Chưa cấu hình API Key Claude/Anthropic**: Vui lòng bổ sung biến `ANTHROPIC_API_KEY=sk-ant-api03...` vào file `backend/.env` để khởi chạy tính năng Phân tích Dữ liệu AI.",
+            "sql_used": [],
+            "last_result": None
+        }
+
+    client = anthropic.Anthropic(api_key=api_key)
     history = load_history(session_id, max_turns=MAX_HISTORY_TURNS)
     messages = list(history) + [{"role": "user", "content": question}]
 

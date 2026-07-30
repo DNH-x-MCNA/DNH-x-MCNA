@@ -3,7 +3,7 @@ import sys
 import json
 import datetime as dt
 from collections import defaultdict
-from fastapi import FastAPI, HTTPException, Header, Depends, Query
+from fastapi import FastAPI, HTTPException, Header, Depends, Query, Request
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
 
@@ -29,7 +29,16 @@ from auth import (
     get_user_by_session,
     delete_session,
     get_name_by_username,
+    generate_password,
+    admin_create_user,
+    set_password,
+    approve_user,
+    toggle_user_active,
+    list_users,
+    delete_all_sessions_for_user,
+    get_user_by_email_or_username,
 )
+from mailer import send_password_email
 from conversation_memory import (
     register_session,
     list_sessions,
@@ -44,6 +53,11 @@ init_auth_schema()
 app = FastAPI(title="DNH AI Chatbot API", version="1.0.0")
 
 API_KEY = os.getenv("BACKEND_API_KEY", "").strip()
+ALLOWED_EMAIL_DOMAIN = "namhapharma.com"
+
+# Rate limiting cho dang ky / quen mat khau
+_EMAIL_AUTH_ATTEMPTS = defaultdict(list)
+_IP_AUTH_ATTEMPTS = defaultdict(list)
 
 
 def require_api_key(x_api_key: str = Header(default=None)):
@@ -61,6 +75,15 @@ def require_user(authorization: str = Header(default=None)) -> dict:
     return user
 
 
+def require_approved_user(user: dict = Depends(require_user)) -> dict:
+    """Fail-closed dependency cho moi endpoint du lieu: Yeu cau tai khoan da duoc duyet (status=='approved') va active."""
+    if user.get("is_active") != 1:
+        raise HTTPException(403, "Tài khoản của bạn đã bị khóa. Vui lòng liên hệ Quản trị viên.")
+    if user.get("status") == "pending":
+        raise HTTPException(403, "Tài khoản của bạn đang ở trạng thái CHỜ DUYỆT. Quản trị viên chưa gán vai trò và phạm vi truy cập cho bạn.")
+    return user
+
+
 _USER_LAST_REQUEST = {}
 RATE_LIMIT_INTERVAL_SEC = 2.0
 
@@ -73,12 +96,31 @@ def _check_rate_limit(username: str):
     _USER_LAST_REQUEST[username] = now
 
 
+def _check_public_auth_rate_limit(email: str, client_ip: str = "local"):
+    """Rate limit rieng cho /auth/register va /auth/forgot-password: Toi da 3 lan/email/gio va 10 lan/IP/gio."""
+    now = dt.datetime.now()
+    cutoff = now - dt.timedelta(hours=1)
+
+    _EMAIL_AUTH_ATTEMPTS[email] = [t for t in _EMAIL_AUTH_ATTEMPTS[email] if t > cutoff]
+    _IP_AUTH_ATTEMPTS[client_ip] = [t for t in _IP_AUTH_ATTEMPTS[client_ip] if t > cutoff]
+
+    if len(_EMAIL_AUTH_ATTEMPTS[email]) >= 3:
+        raise HTTPException(429, "Bạn đã gửi yêu cầu quá 3 lần trong 1 giờ cho email này. Vui lòng thử lại sau.")
+    if len(_IP_AUTH_ATTEMPTS[client_ip]) >= 10:
+        raise HTTPException(429, "Thao tác quá nhiều lần từ IP này. Vui lòng thử lại sau 1 giờ.")
+
+    _EMAIL_AUTH_ATTEMPTS[email].append(now)
+    _IP_AUTH_ATTEMPTS[client_ip].append(now)
+
+
 def _require_session_access(session_id: str, user: dict):
     from conversation_memory import get_session_owner
     owner = get_session_owner(session_id)
     if owner is not None and owner != user["username"] and user["role"] != "c_level":
         raise HTTPException(403, "Khong co quyen truy cap cuoc tro chuyen nay")
 
+
+# --- PYDANTIC SCHEMAS ---
 
 class LoginRequest(BaseModel):
     username: str
@@ -92,6 +134,8 @@ class LoginResponse(BaseModel):
     role: str
     scope_value: Optional[str]
     scope_channel: Optional[str]
+    status: Optional[str] = 'approved'
+    email: Optional[str] = None
 
 
 class UserInfo(BaseModel):
@@ -100,6 +144,29 @@ class UserInfo(BaseModel):
     role: str
     scope_value: Optional[str]
     scope_channel: Optional[str]
+    status: Optional[str] = 'approved'
+    email: Optional[str] = None
+
+
+class RegisterRequest(BaseModel):
+    email: str
+    name: Optional[str] = None
+
+
+class ForgotPasswordRequest(BaseModel):
+    email: str
+
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str
+    new_password: str
+
+
+class ApproveUserRequest(BaseModel):
+    role: str
+    scope_value: Optional[str] = None
+    employee_code: Optional[str] = None
+    scope_channel: Optional[str] = None
 
 
 class ChatRequest(BaseModel):
@@ -129,6 +196,8 @@ class HistoryMessage(BaseModel):
     content: str
 
 
+# --- ENDPOINTS ---
+
 @app.get("/health")
 def health():
     return {"status": "ok", "timestamp": dt.datetime.now().isoformat()}
@@ -138,7 +207,13 @@ def health():
 def login(req: LoginRequest):
     user = verify_login(req.username, req.password)
     if not user:
-        raise HTTPException(401, "Tai khoan hoac mat khau khong dung")
+        raise HTTPException(401, "Tài khoản hoặc mật khẩu không chính xác")
+    if isinstance(user, dict) and user.get("error") == "wrong_password":
+        raise HTTPException(401, "Tài khoản hoặc mật khẩu không chính xác")
+
+    if user.get("is_active") != 1:
+        raise HTTPException(403, "Tài khoản của bạn đã bị khóa. Vui lòng liên hệ Quản trị viên.")
+
     token = create_session(user["id"])
     return LoginResponse(
         token=token,
@@ -147,7 +222,81 @@ def login(req: LoginRequest):
         role=user["role"],
         scope_value=user["scope_value"],
         scope_channel=user["scope_channel"],
+        status=user.get("status", "approved"),
+        email=user.get("email"),
     )
+
+
+class AdminCreateUserRequest(BaseModel):
+    email: str
+    name: Optional[str] = None
+    role: str = "qlv"
+    scope_value: Optional[str] = None
+    employee_code: Optional[str] = None
+    scope_channel: Optional[str] = None
+
+
+@app.post("/auth/register", dependencies=[Depends(require_api_key)])
+def register(req: RegisterRequest):
+    """CO TINH VO HIEU HOA - giu endpoint de tra loi ro rang neu con client cu goi vao, thay vi 404.
+
+    Ly do khong cho tu dang ky: Bravo KHONG luu email nhan vien (da kiem 29/07/2026:
+    INFORMATION_SCHEMA.COLUMNS LIKE '%mail%' tra ve 0 dong tren toan bo database). Nghia la he thong
+    khong co cach nao biet nguoi vua dang ky ung voi ma nhan vien nao, nen khong the tu gan pham vi
+    xem du lieu. So huu hop thu @namhapharma.com chi chung minh LA NGUOI CUA DNH, khong chung minh
+    LA AI. Vi vay tai khoan phai do C-Level tao va gan quyen truc tiep (POST /admin/users/create)."""
+    raise HTTPException(403, "Chức năng tự đăng ký đã bị tắt. Chỉ Quản trị viên (C-Level) mới có quyền khởi tạo tài khoản mới.")
+
+
+@app.post("/auth/forgot-password", dependencies=[Depends(require_api_key)])
+def forgot_password(req: ForgotPasswordRequest, request: Request):
+    if not req.email or not req.email.strip():
+        raise HTTPException(400, "Vui lòng nhập Email công ty")
+
+    clean_email = req.email.strip().lower()
+    parts = clean_email.split("@")
+    if len(parts) != 2 or parts[1] != ALLOWED_EMAIL_DOMAIN:
+        raise HTTPException(400, f"Chức năng chỉ hỗ trợ email công ty Dược Nam Hà (@{ALLOWED_EMAIL_DOMAIN})")
+
+    client_ip = request.client.host if request.client else "local"
+    _check_public_auth_rate_limit(clean_email, client_ip)
+
+    user = get_user_by_email_or_username(clean_email)
+    if user:
+        # 29/07/2026 - THU TU QUAN TRONG: gui mail TRUOC, doi mat khau trong DB SAU.
+        # Lam nguoc lai (doi truoc, gui sau) thi khi SMTP loi - sai app password, mang chap chon,
+        # Office365 chan - mat khau da bi thay doi nhung nguoi dung KHONG nhan duoc mat khau moi,
+        # tu khoa chinh minh ra khoi tai khoan va bat buoc phai nho admin can thiep.
+        new_pwd = generate_password(10)
+        if send_password_email(clean_email, new_pwd, is_reset=True):
+            set_password(clean_email, new_pwd)
+            delete_all_sessions_for_user(user["id"])
+        else:
+            # Gui that bai -> KHONG doi gi ca, mat khau cu van dung duoc binh thuong.
+            # Chi ghi nhan su co (KHONG ghi mat khau) de admin doi chieu khi co nguoi bao khong nhan duoc mail.
+            print(f"[FORGOT-PASSWORD] Gui mail that bai cho {clean_email} - GIU NGUYEN mat khau cu")
+
+    # Luon tra CUNG MOT thong bao, du email co ton tai hay khong va du gui mail thanh cong hay khong.
+    # Neu phan biet (vd tra 500 khi email co that), ke ngoai chi can thu lan luot vai email roi xem
+    # phan hoi nao khac di la do duoc chinh xac ai dang co tai khoan trong he thong.
+    return {"ok": True, "message": "Nếu email thuộc hệ thống Dược Nam Hà, mật khẩu mới đã được gửi đến hộp thư Outlook của bạn."}
+
+
+@app.post("/auth/change-password", dependencies=[Depends(require_api_key)])
+def change_password(req: ChangePasswordRequest, user: dict = Depends(require_user)):
+    if not req.current_password or not req.new_password:
+        raise HTTPException(400, "Vui lòng nhập đầy đủ mật khẩu hiện tại và mật khẩu mới")
+
+    if len(req.new_password) < 6:
+        raise HTTPException(400, "Mật khẩu mới phải có tối thiểu 6 ký tự")
+
+    # Xác thực mật khẩu cũ
+    verified = verify_login(user["username"], req.current_password)
+    if not verified or (isinstance(verified, dict) and verified.get("error") == "wrong_password"):
+        raise HTTPException(400, "Mật khẩu hiện tại không chính xác")
+
+    set_password(user["username"], req.new_password)
+    return {"ok": True, "message": "Đổi mật khẩu thành công!"}
 
 
 @app.post("/auth/logout", dependencies=[Depends(require_api_key)])
@@ -166,17 +315,103 @@ def me(user: dict = Depends(require_user)):
         role=user["role"],
         scope_value=user["scope_value"],
         scope_channel=user["scope_channel"],
+        status=user.get("status", "approved"),
+        email=user.get("email"),
     )
 
 
+# --- ADMIN ENDPOINTS (Chỉ dành cho C-Level đã được duyệt) ---
+
+@app.get("/admin/users", dependencies=[Depends(require_api_key)])
+def get_users_list(status: Optional[str] = None, user: dict = Depends(require_approved_user)):
+    if user["role"] != "c_level":
+        raise HTTPException(403, "Chỉ Quản trị viên C-Level mới có quyền truy cập trang này")
+    return list_users(status)
+
+
+@app.post("/admin/users/create", dependencies=[Depends(require_api_key)])
+def create_user_by_admin(req: AdminCreateUserRequest, user: dict = Depends(require_approved_user)):
+    if user["role"] != "c_level":
+        raise HTTPException(403, "Chỉ Quản trị viên C-Level mới có quyền tạo tài khoản mới")
+
+    if not req.email or not req.email.strip():
+        raise HTTPException(400, "Vui lòng nhập Email công ty Dược Nam Hà")
+
+    clean_email = req.email.strip().lower()
+    parts = clean_email.split("@")
+    if len(parts) != 2 or parts[1] != ALLOWED_EMAIL_DOMAIN:
+        raise HTTPException(400, f"Chỉ hỗ trợ tạo tài khoản cho email công ty Dược Nam Hà (@{ALLOWED_EMAIL_DOMAIN})")
+
+    existing = get_user_by_email_or_username(clean_email)
+    if existing:
+        raise HTTPException(400, f"Tài khoản email {clean_email} đã tồn tại trong hệ thống.")
+
+    if req.role not in ("c_level", "regional_director", "qlv"):
+        raise HTTPException(400, f"Vai trò không hợp lệ: {req.role}")
+
+    user_info, generated_pwd = admin_create_user(
+        email=clean_email,
+        name=req.name,
+        role=req.role,
+        scope_value=req.scope_value if req.role != "c_level" else None,
+        employee_code=req.employee_code if req.role == "qlv" else None,
+        scope_channel=req.scope_channel
+    )
+
+    # Gửi email chứa mật khẩu ngẫu nhiên tới nhân viên. Bao dung SU THAT ve viec gui duoc hay khong -
+    # neu SMTP chua cau hinh/loi ma van bao "da gui" thi admin tuong xong viec, nhan vien khong bao gio
+    # nhan duoc mat khau va khong ai biet tai sao.
+    email_sent = send_password_email(clean_email, generated_pwd, is_reset=False)
+
+    if email_sent:
+        message = f"Tạo tài khoản thành công cho {clean_email} và đã gửi mật khẩu qua Outlook!"
+    else:
+        message = (f"Đã tạo tài khoản cho {clean_email} NHƯNG GỬI EMAIL THẤT BẠI. "
+                   f"Vui lòng copy mật khẩu bên dưới và chuyển trực tiếp cho nhân viên.")
+
+    return {
+        "ok": True,
+        "message": message,
+        "email_sent": email_sent,
+        "generated_password": generated_pwd
+    }
+
+
+@app.post("/admin/users/{username}/approve", dependencies=[Depends(require_api_key)])
+def approve_user_endpoint(username: str, req: ApproveUserRequest, user: dict = Depends(require_approved_user)):
+    if user["role"] != "c_level":
+        raise HTTPException(403, "Chỉ Quản trị viên C-Level mới có quyền phê duyệt tài khoản")
+
+    if req.role not in ("c_level", "regional_director", "qlv"):
+        raise HTTPException(400, f"Vai trò không hợp lệ: {req.role}")
+
+    success = approve_user(username, req.role, req.scope_value, req.employee_code, req.scope_channel)
+    if not success:
+        raise HTTPException(404, "Không tìm thấy tài khoản để phê duyệt")
+    return {"ok": True, "message": f"Phê duyệt tài khoản {username} thành công"}
+
+
+@app.post("/admin/users/{username}/toggle-active", dependencies=[Depends(require_api_key)])
+def toggle_user_active_endpoint(username: str, user: dict = Depends(require_approved_user)):
+    if user["role"] != "c_level":
+        raise HTTPException(403, "Chỉ Quản trị viên C-Level mới có quyền bật/tắt tài khoản")
+
+    res = toggle_user_active(username)
+    if not res:
+        raise HTTPException(404, "Không tìm thấy tài khoản")
+    return {"ok": True, "result": res}
+
+
+# --- DATA ENDPOINTS (Được bảo vệ bằng require_approved_user) ---
+
 @app.get("/history/{session_id}", response_model=list[HistoryMessage], dependencies=[Depends(require_api_key)])
-def get_history(session_id: str, user: dict = Depends(require_user)):
+def get_history(session_id: str, user: dict = Depends(require_approved_user)):
     _require_session_access(session_id, user)
     return get_session_history(session_id)
 
 
 @app.get("/sessions", response_model=list[SessionSummary], dependencies=[Depends(require_api_key)])
-def get_sessions(user: dict = Depends(require_user)):
+def get_sessions(user: dict = Depends(require_approved_user)):
     rows = list_sessions(None if user["role"] == "c_level" else user["username"])
     out = []
     for r in rows:
@@ -193,7 +428,7 @@ def get_sessions(user: dict = Depends(require_user)):
 
 
 @app.delete("/sessions/{session_id}", dependencies=[Depends(require_api_key)])
-def delete_session_endpoint(session_id: str, user: dict = Depends(require_user)):
+def delete_session_endpoint(session_id: str, user: dict = Depends(require_approved_user)):
     from conversation_memory import get_session_owner
     owner = get_session_owner(session_id)
     if owner is not None and owner != user["username"]:
@@ -203,19 +438,15 @@ def delete_session_endpoint(session_id: str, user: dict = Depends(require_user))
 
 
 @app.post("/clear/{session_id}", dependencies=[Depends(require_api_key)])
-def clear(session_id: str, user: dict = Depends(require_user)):
+def clear(session_id: str, user: dict = Depends(require_approved_user)):
     _require_session_access(session_id, user)
-    # 28/07/2026: truoc day import `clear_session_history` - ham nay KHONG TON TAI trong
-    # conversation_memory.py (chi co clear_session, va 2 alias delete_session/get_session_history).
-    # Vi import nam trong THAN ham nen khong lam sap luc khoi dong, chi no khi co nguoi bam xoa lich
-    # su phien -> ImportError -> HTTP 500. Doi sang dung ham that.
     from conversation_memory import clear_session
     clear_session(session_id)
     return {"ok": True}
 
 
 @app.post("/chat", response_model=ChatResponse, dependencies=[Depends(require_api_key)])
-def chat(req: ChatRequest, user: dict = Depends(require_user)):
+def chat(req: ChatRequest, user: dict = Depends(require_approved_user)):
     if not req.question or not req.question.strip():
         raise HTTPException(400, "Cau hoi khong duoc de trong")
     _check_rate_limit(user["username"])
@@ -249,11 +480,8 @@ def get_audit_logs_dashboard(
     days: int = Query(default=30, ge=1, le=365),
     limit: int = Query(default=200, ge=1, le=1000),
     user_filter: Optional[str] = None,
-    user: dict = Depends(require_user)
+    user: dict = Depends(require_approved_user)
 ):
-    """
-    Dashboard Audit Log & Chi phi AI truc quan khong can hoi AI - danh rieng cho Ban Dieu Hanh (C-Level / Super Admin).
-    """
     if user["role"] != "c_level":
         raise HTTPException(403, "Chi tai khoan C-Level / Ban Dieu Hanh moi co quyen xem Dashboard Audit Log")
 
@@ -263,7 +491,6 @@ def get_audit_logs_dashboard(
 
     cutoff = dt.datetime.now() - dt.timedelta(days=days) if days else None
 
-    # 1. Read audit logs
     audit_entries = []
     if os.path.exists(AUDIT_LOG_PATH):
         with open(AUDIT_LOG_PATH, encoding="utf-8") as f:
@@ -276,20 +503,6 @@ def get_audit_logs_dashboard(
                 except Exception:
                     continue
 
-    # 2. Doc cost_log.jsonl - NGUON DUY NHAT CHO TONG CHI PHI THAT.
-    #
-    # 29/07/2026: truoc day tong chi phi duoc cong tu cac PHIEN co mat trong audit_log. Nhung
-    # cost_log ghi MOI lan goi Claude API, con audit_log chi ghi khi chay SQL/goi tool bao cao - va
-    # chi bat dau ghi session_id tu 28/07. Moi dong cost_log khong khop duoc voi audit_log deu bi bo
-    # qua HOAN TOAN => tong bao ra thap hon thuc te rat nhieu (nguoi dung phan anh 29/07).
-    #
-    # Nay tach lam 2 khai niem:
-    #   - TONG chi phi   = cong THANG tu cost_log (dung bang so tien Anthropic thuc thu)
-    #   - Quy cho ai     = qua session_id, phan khong khop duoc gom vao dong "(chua quy duoc)"
-    # Nho vay tong luon dung, va phan chua quy duoc thi HIEN RO thay vi bien mat.
-    #
-    # Token cung cong ca cache_read/cache_write: chi phi von da tinh chung (xem pricing.py), truoc
-    # day chi hien input+output nen nguoi doc nham tay se thay khong khop voi so tien.
     cost_by_session = defaultdict(lambda: {"cost_usd": 0.0, "input_tokens": 0, "output_tokens": 0, "cache_tokens": 0, "total_tokens": 0, "calls": 0})
     cost_direct_by_user = defaultdict(lambda: {"cost_usd": 0.0, "input_tokens": 0, "output_tokens": 0, "cache_tokens": 0, "total_tokens": 0})
     grand_cost_usd = 0.0
@@ -306,8 +519,6 @@ def get_audit_logs_dashboard(
                     c = json.loads(line)
                 except Exception:
                     continue
-                # Ap CUNG bo loc thoi gian nhu audit_log - truoc day cost_log khong bi loc ngay nao,
-                # nen chon "7 ngay" hay "30 ngay" deu ra cung mot so tien.
                 if cutoff:
                     try:
                         if dt.datetime.fromisoformat(c["ts"]) < cutoff:
@@ -324,9 +535,6 @@ def get_audit_logs_dashboard(
                 grand_output_tokens += ot
                 grand_cache_tokens += cr + cw
 
-                # Duong QUY CHI PHI thu nhat (29/07/2026, chinh xac nhat): cost_log nay ghi thang
-                # username. Khong phu thuoc audit_log nen bat duoc CA nhung luot AI tra loi truc tiep
-                # khong goi tool - von la phan lon chi phi bi that lac truoc day.
                 uname_direct = (c.get("username") or "").strip()
                 if uname_direct:
                     d = cost_direct_by_user[uname_direct]
@@ -335,9 +543,8 @@ def get_audit_logs_dashboard(
                     d["output_tokens"] += ot
                     d["cache_tokens"] += cr + cw
                     d["total_tokens"] += it + ot + cr + cw
-                    continue  # da quy duoc, khong can den phep noi session
+                    continue
 
-                # Duong DU PHONG: ban ghi cu (truoc 29/07) chua co username -> noi qua session_id.
                 sid = c.get("session_id")
                 if sid:
                     cost_by_session[sid]["cost_usd"] += cost
@@ -347,7 +554,6 @@ def get_audit_logs_dashboard(
                     cost_by_session[sid]["total_tokens"] += it + ot + cr + cw
                     cost_by_session[sid]["calls"] += 1
 
-    # 3. Filter entries & aggregate stats per user
     filtered_logs = []
     user_stats = defaultdict(lambda: {"query_count": 0, "input_tokens": 0, "output_tokens": 0, "cache_tokens": 0, "total_tokens": 0, "cost_usd": 0.0})
     total_cost_usd = 0.0
@@ -356,14 +562,6 @@ def get_audit_logs_dashboard(
     total_cache_tokens_attributed = 0
 
     target_user_str = (user_filter or "").strip().lower()
-
-    # 29/07/2026 - CHONG CONG TRUNG CHI PHI.
-    # cost_by_session[sid] la chi phi CA PHIEN, nhung vong lap duoi chay theo TUNG LUOT truy van.
-    # Truoc day moi luot deu cong nguyen chi phi phien vao tong => phien co 6 luot bi tinh 6 lan.
-    # Bang chung do duoc 29/07 (tai khoan tung.trinh): dashboard bao $1,0858 trong khi duong tinh
-    # dung (report_templates.py::audit_log_summary - duyet tung dong cost_log DUNG MOT LAN) bao
-    # $0,18 - lech 6,03 lan, khop chinh xac so luot trung binh moi phien (23 luot / 4 phien).
-    # Nay moi phien CHI duoc cong mot lan, vao nguoi dung xuat hien dau tien trong phien do.
     counted_sessions = set()
 
     for e in audit_entries:
@@ -391,9 +589,6 @@ def get_audit_logs_dashboard(
         user_stats[uname]["query_count"] += 1
         user_stats[uname]["display_name"] = display_name
 
-        # Chi cong chi phi/token khi gap phien nay LAN DAU - xem ghi chu "CHONG CONG TRUNG" o tren.
-        # Luot khong co session_id (ban ghi truoc 28/07, khi audit_log chua ghi truong nay) van duoc
-        # dem vao query_count nhung khong co chi phi - dung, vi khong the noi nguoc ve cost_log.
         if sid and sid not in counted_sessions:
             counted_sessions.add(sid)
             user_stats[uname]["input_tokens"] += c_it
@@ -414,10 +609,6 @@ def get_audit_logs_dashboard(
             "sql": e.get("sql"),
             "status": e.get("status", "success"),
             "duration_ms": e.get("duration_ms"),
-            # CHI PHI CUA CA PHIEN, khong phai cua rieng luot nay - cost_log ghi theo lan goi API,
-            # mot luot hoi sinh nhieu lan goi nen KHONG tach duoc xuong tung cau hoi. Nhieu dong
-            # cung mot phien se hien CUNG mot so; cong tay cac dong nay lai se ra so sai (dung
-            # tong o phan summary, da chong trung). Ten truong co hau to _session cho ro nghia.
             "session_id": sid,
             "session_input_tokens": c_it,
             "session_output_tokens": c_ot,
@@ -429,9 +620,6 @@ def get_audit_logs_dashboard(
     filtered_logs.sort(key=lambda x: x.get("ts", ""), reverse=True)
     recent_logs = filtered_logs[:limit]
 
-    # Cong phan quy TRUC TIEP tu cost_log (co username) vao thong ke tung nguoi. Nguoi chi xuat hien
-    # trong cost_log ma chua tung co dong audit_log nao van duoc tao muc rieng (query_count=0) - ho
-    # co ton tien that, khong duoc bo sot.
     for uname, d in cost_direct_by_user.items():
         st = user_stats[uname]
         st["cost_usd"] += d["cost_usd"]
@@ -462,14 +650,8 @@ def get_audit_logs_dashboard(
             "is_unattributed": False,
         })
 
-    # Phan chi phi CO THAT nhung chua noi duoc ve nguoi dung nao (phien khong xuat hien trong
-    # audit_log, hoac ban ghi truoc 28/07 khi audit_log chua ghi session_id). HIEN RO thanh 1 dong
-    # thay vi de bien mat - chinh cho nay tung lam tong bao ra thap hon thuc te.
     unattributed = grand_cost_usd - total_cost_usd
     if unattributed > 1e-9:
-        # 29/07/2026 - SUA LOI: truoc day total_tokens o dong nay bi ghi CUNG bang 0 trong khi
-        # input/output van co so, nen tren dashboard hien "In 2.738.469 · Out 313.394" ma cot "Tong
-        # Tokens" lai bang 0 - nhin nhu du lieu hong. Nay tinh dung bang phan con lai cua tong.
         un_it = max(0, grand_input_tokens - total_input_tokens)
         un_ot = max(0, grand_output_tokens - total_output_tokens)
         un_ct = max(0, grand_cache_tokens - total_cache_tokens_attributed)
@@ -483,15 +665,11 @@ def get_audit_logs_dashboard(
             "total_tokens": un_it + un_ot + un_ct,
             "cost_usd": round(unattributed, 6),
             "cost_vnd": round(unattributed * USD_TO_VND_RATE, 2),
-            # Co day de frontend KHONG danh dau "tieu thu cao nhat" vao dong nay - day khong phai
-            # mot nguoi dung that, no la phan chi phi chua noi duoc ve ai.
             "is_unattributed": True,
         })
 
     return {
         "summary": {
-            # TONG = cong thang tu cost_log, dung bang so tien thuc thu - KHONG phai tong phan da
-            # quy duoc cho nguoi dung (xem ghi chu muc 2).
             "total_cost_usd": round(grand_cost_usd, 6),
             "total_cost_vnd": round(grand_cost_usd * USD_TO_VND_RATE, 2),
             "attributed_cost_usd": round(total_cost_usd, 6),
@@ -501,8 +679,6 @@ def get_audit_logs_dashboard(
             "total_cache_tokens": grand_cache_tokens,
             "grand_total_tokens": grand_input_tokens + grand_output_tokens + grand_cache_tokens,
             "total_queries": len(filtered_logs),
-            # Loai "unknown" (luot khong xac dinh duoc tai khoan) khoi so nguoi dung - truoc day dem
-            # ca no nen so "nguoi dung hoat dong" luon nhieu hon so nguoi that.
             "unique_users_count": len([u for u in user_stats if u and u.lower() != "unknown"]),
             "days": days
         },

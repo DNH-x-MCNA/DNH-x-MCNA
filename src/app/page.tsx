@@ -3,6 +3,8 @@
 import { useState, useRef, useEffect, useMemo, memo, FormEvent, ReactNode, RefObject } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import AuthScreens from "./AuthScreens";
+import AdminUsersPanel from "./AdminUsersPanel";
 
 type ChatResponse = {
   answer: string;
@@ -277,7 +279,15 @@ function authHeaders(token: string | null): HeadersInit {
   };
 }
 
-type UserInfo = { username: string; name: string | null; role: string; scope_value: string | null };
+type UserInfo = {
+  username: string;
+  name: string | null;
+  role: string;
+  scope_value: string | null;
+  scope_channel?: string | null;
+  status?: string;
+  email?: string | null;
+};
 
 type AuditSummary = {
   total_cost_usd: number;
@@ -414,12 +424,12 @@ const MessageList = memo(function MessageList({
       {messages.map((m, i) => (
         <div key={i} className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}>
           <div
-            className={`max-w-[85%] rounded-2xl px-4 py-3 text-sm ${
+            className={`max-w-[85%] text-sm leading-relaxed ${
               m.role === "user"
-                ? "bg-indigo-600 text-white"
+                ? "bg-gradient-to-r from-blue-700 to-indigo-800 text-white shadow-md rounded-2xl rounded-tr-none px-4 py-3 font-medium"
                 : m.error
-                ? "bg-red-50 text-red-700 border border-red-200"
-                : "bg-white text-slate-800 border border-slate-200 shadow-sm"
+                ? "bg-amber-50 text-amber-900 border-l-4 border-amber-500 shadow-sm rounded-2xl rounded-tl-none p-4"
+                : "bg-white text-slate-800 border border-slate-200/80 shadow-sm rounded-2xl rounded-tl-none p-4"
             }`}
           >
             {m.role === "bot" ? (
@@ -562,6 +572,14 @@ export default function Home() {
   const [auditDays, setAuditDays] = useState<number>(30);
   const [auditUserFilter, setAuditUserFilter] = useState<string>("all");
   const [auditActiveTab, setAuditActiveTab] = useState<"users" | "logs">("users");
+
+  // Admin & Change Password Modal States
+  const [adminUsersOpen, setAdminUsersOpen] = useState(false);
+  const [changePwdOpen, setChangePwdOpen] = useState(false);
+  const [currentPwdInput, setCurrentPwdInput] = useState("");
+  const [newPwdInput, setNewPwdInput] = useState("");
+  const [pwdChangeMsg, setPwdChangeMsg] = useState<{ text: string; type: "success" | "error" } | null>(null);
+  const [pwdChangeSubmitting, setPwdChangeSubmitting] = useState(false);
 
   // 28/07/2026: CHI dua vao role, KHONG suy quyen tu chuoi username nua (truoc day con nhan
   // username === "c_level" || username === "dnh"). Day la ban sao o tang giao dien cua lo hong R-I
@@ -822,49 +840,25 @@ export default function Home() {
     );
   }
 
-  if (!authToken) {
+  if (!authToken || !userInfo) {
     return (
-      <div className="flex h-screen items-center justify-center bg-slate-50 px-4">
-        <form
-          onSubmit={handleLogin}
-          className="w-full max-w-sm rounded-2xl border border-slate-200 bg-white p-8 shadow-sm"
-        >
-          <div className="mb-6 flex flex-col items-center gap-2">
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src="/namha-logo.png" alt="NAMHA PHARMA" className="h-10 w-auto" />
-            <h1 className="text-center text-lg font-bold text-slate-900">Đăng nhập AI Analyst</h1>
-            <p className="text-center text-xs text-slate-500">Dược Nam Hà · Trợ lý phân tích dữ liệu kinh doanh</p>
-          </div>
-          <div className="flex flex-col gap-3">
-            <input
-              type="text"
-              placeholder="Tên đăng nhập"
-              value={loginUsername}
-              onChange={(e) => setLoginUsername(e.target.value)}
-              className="rounded-lg border border-slate-300 px-4 py-2.5 text-sm outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
-              disabled={loginSubmitting}
-              autoFocus
-            />
-            <input
-              type="password"
-              placeholder="Mật khẩu"
-              value={loginPassword}
-              onChange={(e) => setLoginPassword(e.target.value)}
-              className="rounded-lg border border-slate-300 px-4 py-2.5 text-sm outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
-              disabled={loginSubmitting}
-            />
-            {loginError && <p className="text-xs text-red-600">{loginError}</p>}
-            <button
-              type="submit"
-              disabled={loginSubmitting || !loginUsername.trim() || !loginPassword}
-              className="mt-1 rounded-lg py-2.5 text-sm font-medium text-white shadow-sm transition hover:shadow-md disabled:cursor-not-allowed disabled:opacity-40"
-              style={{ background: "linear-gradient(135deg, #4F46E5, #2563EB)" }}
-            >
-              {loginSubmitting ? "Đang đăng nhập..." : "Đăng nhập"}
-            </button>
-          </div>
-        </form>
-      </div>
+      <AuthScreens
+        onLoginSuccess={(token, user) => {
+          if (typeof window !== "undefined") {
+            window.localStorage.setItem(AUTH_TOKEN_KEY, token);
+          }
+          setAuthToken(token);
+          setUserInfo({
+            username: user.username,
+            name: user.name,
+            role: user.role,
+            scope_value: user.scope_value,
+            scope_channel: user.scope_channel,
+            status: user.status,
+            email: user.email,
+          });
+        }}
+      />
     );
   }
 
@@ -969,61 +963,109 @@ export default function Home() {
       </aside>
 
       <div className="flex min-w-0 flex-1 flex-col">
-      <header className="relative z-10 border-b border-slate-800/60 bg-[var(--brand-navy)] px-6 py-4 text-white">
-        <div className="mx-auto flex max-w-3xl items-center justify-between">
-          <div className="flex items-center gap-3">
+      <header className="relative z-10 border-b border-slate-800/80 bg-slate-900/95 backdrop-blur-md px-4 sm:px-8 py-3 text-white shadow-lg">
+        <div className="mx-auto flex w-full max-w-7xl items-center justify-between gap-4">
+          {/* Left Title & Logo */}
+          <div className="flex items-center gap-3.5">
             <button
               onClick={() => setSidebarOpen(true)}
               title="Lịch sử trò chuyện"
-              className="rounded-lg p-1.5 text-slate-300 hover:bg-white/10 md:hidden"
+              className="rounded-lg p-2 text-slate-300 hover:bg-slate-800 md:hidden"
             >
               <IconMenu className="h-5 w-5" />
             </button>
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src="/namha-logo.png" alt="NAMHA PHARMA" className="h-9 w-auto" />
+            <div className="bg-white/95 p-1.5 rounded-xl shadow-md border border-white/20">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src="/namha-logo.png" alt="NAMHA PHARMA" className="h-8 w-auto object-contain" />
+            </div>
             <div>
               <div className="flex items-center gap-2">
-                <span className="text-xs font-semibold tracking-wide text-slate-300">DƯỢC NAM HÀ</span>
-                <span className="glow-indigo inline-flex items-center rounded-full bg-indigo-500/20 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-indigo-200">
+                <span className="text-[11px] font-extrabold tracking-wider uppercase text-emerald-400">DƯỢC NAM HÀ</span>
+                <span className="inline-flex items-center rounded-full bg-gradient-to-r from-blue-600 to-indigo-600 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-white shadow-sm">
                   AI Analyst
                 </span>
               </div>
-              <h1 className="text-lg font-bold leading-tight sm:text-xl">Trợ lý phân tích dữ liệu kinh doanh</h1>
+              <h1 className="text-sm sm:text-base font-bold text-slate-100 leading-tight">Trợ lý Phân tích Dữ liệu Kinh doanh</h1>
             </div>
           </div>
-          <div className="flex items-center gap-2.5">
+
+          {/* Right User Actions & Badge */}
+          <div className="flex items-center gap-2 sm:gap-3">
             {userInfo && (
               <>
                 {isCLevel && (
                   <button
-                    onClick={openAuditDashboard}
-                    className="btn-glass flex items-center gap-1.5 rounded-full px-3.5 py-1.5 text-xs font-semibold text-amber-200 transition hover:text-amber-100"
-                    title="Mở Dashboard Audit Log & Chi phí AI toàn công ty"
+                    onClick={() => setAdminUsersOpen(true)}
+                    className="flex items-center gap-1.5 rounded-xl px-3 py-2 text-xs font-semibold text-emerald-300 bg-emerald-950/60 border border-emerald-500/40 hover:bg-emerald-900/80 transition shadow-sm"
+                    title="Mở Quản lý & Phê duyệt Tài khoản Nhân viên"
                   >
-                    <IconChart className="h-3.5 w-3.5" />
-                    <span className="hidden sm:inline">Audit Log & Chi phí AI</span>
+                    <IconUsers className="h-4 w-4" />
+                    <span className="hidden md:inline">Quản lý Tài khoản</span>
                   </button>
                 )}
-                <div className="hidden flex-col items-end gap-1 sm:flex">
-                  <span className="text-xs font-medium text-white">{userInfo.name || userInfo.username}</span>
-                  <span className="badge-metallic inline-flex items-center rounded-full px-2.5 py-0.5 text-[10px] font-semibold text-indigo-100 shadow-sm">
-                    {ROLE_LABELS[userInfo.role] || userInfo.role}
-                    {userInfo.scope_value ? ` · ${userInfo.scope_value}` : ""}
-                  </span>
+                {isCLevel && (
+                  <button
+                    onClick={openAuditDashboard}
+                    className="flex items-center gap-1.5 rounded-xl px-3 py-2 text-xs font-semibold text-amber-300 bg-amber-950/60 border border-amber-500/40 hover:bg-amber-900/80 transition shadow-sm"
+                    title="Mở Dashboard Audit Log & Chi phí AI toàn công ty"
+                  >
+                    <IconChart className="h-4 w-4" />
+                    <span className="hidden md:inline">Audit Log & Chi phí AI</span>
+                  </button>
+                )}
+                <button
+                  onClick={() => { setPwdChangeMsg(null); setChangePwdOpen(true); }}
+                  className="flex items-center gap-1.5 rounded-xl px-3 py-2 text-xs font-semibold text-slate-200 bg-slate-800 border border-slate-700 hover:bg-slate-700 transition shadow-sm"
+                  title="Đổi mật khẩu tài khoản"
+                >
+                  🔑 <span className="hidden sm:inline">Đổi MK</span>
+                </button>
+
+                {/* User Info Badge */}
+                <div className="hidden sm:flex items-center gap-2.5 bg-slate-800/80 border border-slate-700/80 rounded-xl px-3 py-1.5">
+                  <div className="w-7 h-7 rounded-lg bg-gradient-to-tr from-blue-600 to-indigo-600 text-white font-bold text-xs flex items-center justify-center shadow">
+                    {(userInfo.name || userInfo.username).charAt(0).toUpperCase()}
+                  </div>
+                  <div className="flex flex-col text-left">
+                    <span className="text-xs font-bold text-slate-100 max-w-[120px] truncate">{userInfo.name || userInfo.username}</span>
+                    <span className="text-[10px] font-semibold text-emerald-400">
+                      {ROLE_LABELS[userInfo.role] || userInfo.role}
+                      {userInfo.scope_value ? ` · ${userInfo.scope_value}` : ""}
+                    </span>
+                  </div>
                 </div>
               </>
             )}
+
             <button
               onClick={handleLogout}
               title="Đăng xuất"
-              className="btn-glass flex items-center gap-1.5 rounded-full px-3.5 py-2 text-xs text-slate-200 transition hover:text-red-300"
+              className="flex items-center gap-1.5 rounded-xl px-3 py-2 text-xs font-semibold text-rose-300 bg-rose-950/50 border border-rose-500/30 hover:bg-rose-900/70 transition"
             >
-              <IconLogout className="h-3.5 w-3.5" />
-              <span className="hidden sm:inline">Đăng xuất</span>
+              <IconLogout className="h-4 w-4" />
+              <span className="hidden lg:inline">Đăng xuất</span>
             </button>
           </div>
         </div>
       </header>
+
+      {/* Banner Cảnh Báo Tài Khoản Pending */}
+      {userInfo?.status === "pending" && (
+        <div className="bg-amber-500/10 border-b border-amber-500/30 px-6 py-2.5 text-xs text-amber-800 flex items-center justify-between backdrop-blur-sm">
+          <div className="flex items-center gap-2">
+            <span className="text-base">⏳</span>
+            <div>
+              <strong className="font-bold">Tài khoản đang ở trạng thái CHỜ DUYỆT:</strong> Quản trị viên C-Level chưa phê duyệt và gán phân quyền. Mọi yêu cầu truy vấn dữ liệu báo cáo sẽ bị tạm từ chối.
+            </div>
+          </div>
+          <button
+            onClick={() => { setPwdChangeMsg(null); setChangePwdOpen(true); }}
+            className="px-3 py-1 bg-amber-600 hover:bg-amber-700 text-white rounded font-semibold text-xs shadow-sm transition"
+          >
+            🔑 Đổi mật khẩu
+          </button>
+        </div>
+      )}
 
       <main className="mx-auto flex w-full max-w-3xl flex-1 flex-col overflow-hidden px-4">
         <div className="flex-1 overflow-y-auto py-6">
@@ -1464,6 +1506,102 @@ export default function Home() {
                 Đóng
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Admin Users Panel */}
+      {adminUsersOpen && authToken && (
+        <AdminUsersPanel authToken={authToken} onClose={() => setAdminUsersOpen(false)} />
+      )}
+
+      {/* Modal Đổi Mật Khẩu */}
+      {changePwdOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 backdrop-blur-sm p-4">
+          <div className="w-full max-w-md bg-white rounded-2xl shadow-2xl overflow-hidden border border-slate-200">
+            <div className="bg-slate-900 text-white p-4 flex justify-between items-center">
+              <h3 className="font-bold text-sm">🔑 Đổi Mật Khẩu Tài Khoản</h3>
+              <button onClick={() => setChangePwdOpen(false)} className="text-slate-400 hover:text-white">✕</button>
+            </div>
+            <form
+              onSubmit={async (e) => {
+                e.preventDefault();
+                setPwdChangeSubmitting(true);
+                setPwdChangeMsg(null);
+                try {
+                  const res = await fetch("/api/auth/change-password", {
+                    method: "POST",
+                    headers: authHeaders(authToken),
+                    body: JSON.stringify({
+                      current_password: currentPwdInput,
+                      new_password: newPwdInput,
+                    }),
+                  });
+                  const data = await res.json();
+                  if (!res.ok) throw new Error(data.detail || "Đổi mật khẩu thất bại");
+                  setPwdChangeMsg({ text: data.message || "Đổi mật khẩu thành công!", type: "success" });
+                  setCurrentPwdInput("");
+                  setNewPwdInput("");
+                } catch (err: any) {
+                  setPwdChangeMsg({ text: err.message, type: "error" });
+                } finally {
+                  setPwdChangeSubmitting(false);
+                }
+              }}
+              className="p-6 space-y-4"
+            >
+              {pwdChangeMsg && (
+                <div
+                  className={`p-3 rounded-lg text-xs font-medium ${
+                    pwdChangeMsg.type === "success"
+                      ? "bg-emerald-50 text-emerald-800 border border-emerald-200"
+                      : "bg-rose-50 text-rose-800 border border-rose-200"
+                  }`}
+                >
+                  {pwdChangeMsg.text}
+                </div>
+              )}
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">Mật khẩu hiện tại</label>
+                <input
+                  type="password"
+                  required
+                  value={currentPwdInput}
+                  onChange={(e) => setCurrentPwdInput(e.target.value)}
+                  className="w-full px-3.5 py-2 border border-slate-300 rounded-lg text-sm focus:outline-none focus:border-blue-600"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">Mật khẩu mới (Tối thiểu 6 ký tự)</label>
+                <input
+                  type="password"
+                  required
+                  minLength={6}
+                  value={newPwdInput}
+                  onChange={(e) => setNewPwdInput(e.target.value)}
+                  className="w-full px-3.5 py-2 border border-slate-300 rounded-lg text-sm focus:outline-none focus:border-blue-600"
+                />
+              </div>
+
+              <div className="flex justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setChangePwdOpen(false)}
+                  className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-semibold"
+                >
+                  Hủy
+                </button>
+                <button
+                  type="submit"
+                  disabled={pwdChangeSubmitting}
+                  className="px-4 py-2 bg-blue-700 hover:bg-blue-800 text-white rounded-lg text-xs font-semibold shadow disabled:opacity-50"
+                >
+                  {pwdChangeSubmitting ? "Đang lưu..." : "Cập nhật Mật Khẩu 💾"}
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}
