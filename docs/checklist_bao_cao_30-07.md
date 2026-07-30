@@ -60,14 +60,15 @@ bên kho chatbot.
 
 ## 4. Việc chưa xong, cân nhắc hoàn tất trước 30/07
 
-| Việc | Ảnh hưởng nếu để nguyên |
+| Việc | Trạng thái |
 |---|---|
-| **Giao diện Bảng điều khiển Chi phí AI** chưa lên web (chờ cập nhật lại phía nhà cung cấp hosting) | Không demo được màn hình này tại buổi báo cáo — chỉ trình bày qua chatbot dạng chữ |
+| ~~Giao diện Bảng điều khiển Chi phí AI chưa lên web~~ | ✅ **XONG đêm 29/07** — đã lên web thật, demo được trực tiếp trên trình duyệt |
 | ~~Kiểm chứng trọn bộ 17 câu Demo #1~~ | ✅ **XONG 29/07 — 17/17 đạt**, cả 3 vai trò |
+| Đăng nhập bằng email + trang Quản lý Tài khoản *(mới, ngoài kế hoạch ban đầu)* | ✅ Deploy xong đêm 29/07, đã kiểm chứng trên máy chủ thật. **Không demo tab "Quên mật khẩu"** — máy chủ chưa có SMTP nên tính năng này cố ý không làm gì (không tự khoá tài khoản người dùng) |
 
 ---
 
-## 5. Bốn đề nghị cần chốt với DNH tại buổi họp
+## 5. Năm đề nghị cần chốt với DNH tại buổi họp
 
 Xếp theo thứ tự ưu tiên — mục 1 là mới và gấp nhất:
 
@@ -90,6 +91,20 @@ hiện ở nghiệm thu tháng 9.
 **4. 🟠 Xác nhận văn bản chính sách lương áp dụng cho tháng 7**
 > Có 2 phiên bản cùng tồn tại. Cấu hình hệ thống tính lương thật của DNH nghiêng về bản mới (hiệu lực
 > 01/07) — đề nghị xác nhận chính thức.
+
+**5. 🆕 🟠 Một nhân viên bán hàng nhưng không được đặt chỉ tiêu** *(phát hiện 29/07)*
+> Mã `TM26060104` — **Nguyễn Văn Dũng (NTH01)** có doanh số thật **4.952.381đ** nhưng chỉ tiêu tháng
+> bằng **0**, nên không xuất hiện trong bất kỳ thống kê KPI nào.
+
+Đây là lý do tổng nhân viên là **148** nhưng số tính KPI chỉ **147**. Nếu là nhân viên mới chưa kịp giao
+chỉ tiêu thì cần bổ sung; nếu thuộc diện không giao chỉ tiêu thì cần xác nhận để hệ thống ghi nhận đúng.
+
+**6. 🔵 Xin hộp thư gửi email cho hệ thống** *(mới, không gấp)*
+> Đề nghị IT của DNH cấp 1 hộp thư `@namhapharma.com` kèm **app password** để hệ thống gửi được mật
+> khẩu tự động.
+
+Không có nó thì tính năng "Quên mật khẩu" không hoạt động, và việc tạo tài khoản mới phải chuyển mật
+khẩu tay. Có thể chốt sau, không chặn Demo #1.
 
 ---
 
