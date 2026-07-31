@@ -16,6 +16,19 @@ NGUON DU LIEU (tu 2026-07-08):
 "vua moi/ngay bay gio", noi ro day la so lieu tai lan dong bo gan nhat, khong phai tuc thoi 100%.
 """
 
+# ==============================================================================================
+# DOC TRUOC KHI THEM BANG MOI VAO SCHEMA_CONTEXT BEN DUOI
+# ==============================================================================================
+# Bang fact_thongketinhluong CO trong kho (xem local_warehouse.py) nhung CO Y KHONG duoc mo ta o
+# day. Ly do: no co BA TANG chong len nhau (TP -> QLV -> tang la), moi tang deu bang dung doanh thu
+# that, nen cong ca bang ra SAI GAP HON 3 LAN (do ky 31/07/2026: 105.122.031.617 so voi 33.307.889.644
+# that). Hien AI chi cham vao no qua tool salary_detail() - ham do tra dung 1 dong cho 1 nguoi nen
+# an toan. Khai bang nay vao day = mo duong cho AI tu viet SQL cong ca bang.
+# NEU VAN CAN KHAI: phai viet canh bao 3 tang NGAY TRONG CUNG lan sua, khong khai truoc canh bao sau.
+# Bay 2 tang cua fact_tonghopkhachhang (nhe hon) da gay 4 cau tra loi sai ngay 31/07/2026, trong do
+# 2 cau bao nguoc lai voi khach rang du lieu cua ho hong - xem canh bao trong phan bang do ben duoi.
+# ==============================================================================================
+
 SCHEMA_CONTEXT = """
 === KHO "local" (SQLite) - dung voi tool query_database. Ten bang/cot deu chu thuong, KHONG can
 dat trong dau ngoac kep (SQLite khong phan biet hoa/thuong nhu Postgres). Dung LIMIT N (khong dung

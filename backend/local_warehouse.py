@@ -114,8 +114,29 @@ CREATE INDEX IF NOT EXISTS idx_ftk_manager ON fact_tonghopkhachhang(manager_code
 --   = TotalPoint (0.88970) TUYET DOI KHOP -> xac nhan DM*Percent_R chinh la he so k_tn (Bang 01 PDF)
 --   va TotalPoint chinh la "KPIs" trong cong thuc "Muc huong = Sigma(DM_n x k_tn) x KPIs".
 -- CHI dong bo 1 SNAPSHOT/NGAY (SaveDate) - KHONG co nhieu ban ghi/ngay nhu fact_tonghopkhachhang.
--- position_code: 'QLV' hoac 'TDV' - CAN de chon dung Phu luc/nguong (65% TDV vs 70% QLV, xem
--- _bonus_threshold() trong report_templates.py) khi giai thich ket qua.
+-- position_code: THUC TE co 7 gia tri chu khong chi 'QLV'/'TDV' - do tren Bravo ky 31/07/2026 thay
+-- du ca TP, PP, CS, TK, CTV. _bonus_threshold() van xu ly dung (TDV -> 65, MOI vai tro khac -> 70),
+-- nhung dung tuong bang chi co 2 loai. RIENG CTV (3 nguoi MN) dang bi cham nguong 70% nhu quan ly -
+-- can hoi DNH xem co dung y khong.
+--
+-- !!! 31/07/2026 - BANG NAY CO BA TANG CHONG LEN NHAU, NANG HON fact_tonghopkhachhang (chi 2 tang).
+-- Do tren Bravo ky 31/07/2026 (206 ma), cong MonthSaleAmount theo tung cap:
+--     TP (truong phong/GD mien, 3 nguoi)      33.307.889.644
+--     QLV (21 nguoi)                          33.307.889.644
+--     TDV + CS + TK + CTV (tang la, ~180)     33.307.889.644
+--     PP (lop phu them, chi MN, 2 nguoi)       5.198.362.685
+--     -> cong ca bang                        105.122.031.617
+-- Ca BA tang deu DUNG BANG doanh thu OTC that thang 7 tu vHoaDonTotal (33.307.889.644). Cong ca bang
+-- ra dung 3 x 33.307.889.644 + 5.198.362.685 = 105.122.031.617, tuc SAI GAP HON 3 LAN.
+-- => Muon ra tong thi PHAI CHON MOT TANG. Va luu y: meo "ma nao khong xuat hien lam manager_code"
+--    (dung tot cho fact_tonghopkhachhang 2 tang) LA SAI o day, vi QLV vua quan ly nguoi khac vua bi
+--    TP quan ly - ap meo do ra 71.814.141.973, sai 2,16 lan.
+--
+-- HIEN TAI CHUA NGUY HIEM: salary_detail() chi tra DUNG 1 DONG cho 1 nguoi (LIMIT 1), khong cong gop;
+-- va bang nay CO Y KHONG duoc khai trong schema_context.py nen AI khong the tu viet SQL cham vao.
+-- !!! NEU SAU NAY KHAI BANG NAY VAO schema_context.py, PHAI VIET KEM CANH BAO 3 TANG NGAY TRONG CUNG
+-- LAN SUA DO. Bay 2 tang cua fact_tonghopkhachhang da gay 4 cau tra loi sai ngay 31/07 (trong do 2
+-- cau con bao nguoc lai voi khach rang du lieu cua ho hong) - bay 3 tang se nang hon.
 CREATE TABLE IF NOT EXISTS fact_thongketinhluong (
     employee_code TEXT, employee_name TEXT, position_code TEXT, area_code TEXT, area_code2 TEXT,
     manager_code TEXT, save_date TEXT,
