@@ -143,6 +143,28 @@ fact_tonghopkhachhang: 1 dong = 1 (nhan vien, khach hang, ngay snapshot). Cot: e
   thang, MAX vi lap lai moi dong), save_date (ngay snapshot - dung MAX(save_date) <= ngay can xem de
   lay snapshot gan nhat), is_nc (=1 neu la KH moi trong thang). CHI CO ~90 NGAY GAN NHAT trong kho
   local (lich su xa hon khong dong bo vi it gia tri cho KPI hien tai).
+  Cot moi tu 31/07/2026:
+    year_sale_target (chi tieu NAM, DA cong don san - dung MAX giong month_sale_target, TUYET DOI
+      KHONG SUM va cung KHONG nhan len 12 lan tu chi tieu thang),
+    is_ro (=1 la khach MUA LAI trong thang) - DUNG COT NAY cho cau "bao nhieu khach mua lai", KHONG
+      duoc suy dien "khong phai khach moi thi la mua lai": cach suy dien cu tra 6.002 trong khi so
+      that la 5.373,
+    is_ac (=1 la khach HOAT DONG),
+    max_customer_ord_amount (don hang lon nhat cua khach do trong ky),
+    emp_dms_code (ma nhan vien theo dinh dang HOA DON - noi thang sang vhoadon_otc.employee_code ma
+      khong phai vong qua dim_nhanvien),
+    amount_cus - !!! CHUA RO khac amount_ct the nao ve nghiep vu. Ky 30-31/07/2026 hai cot trung
+      khit, nhung cac ky 2025 lech toi 46 dong. DOANH SO VAN PHAI DUNG amount_ct; cot nay CHI de doi
+      chieu khi nguoi dung hoi ro. Neu hai cot lech nhau thi NEU RO ca hai so va noi la chua xac
+      nhan voi DNH cot nao chuan, KHONG duoc tu chon mot cot roi tra loi nhu the la chac chan.
+  !!! BA CO KHACH HANG HANH XU KHAC NHAU GIUA 2 TANG - do that tren Bravo ky 31/07/2026:
+        tang QUAN LY  : is_nc=577 | is_ro=0     | is_ac=0
+        tang NHAN VIEN: is_nc=601 | is_ro=5.594 | is_ac=45
+    - is_nc CO tren CA HAI tang -> dem ca bang se CONG CHONG, phai loc 1 tang.
+    - is_ro va is_ac CHI co tren tang NHAN VIEN, tang quan ly toan bo bang 0 -> neu loc nham sang
+      tang quan ly se tra ve "0 khach mua lai", sai hoan toan nhung trong rat giong so that.
+    => Cau hoi ve khach mua lai / khach hoat dong: BAT BUOC loc TANG NHAN VIEN (employee_code KHONG
+       xuat hien lam manager_code cua ai). Va luon COUNT(DISTINCT customer_code), khong dem theo dong.
   So tren bang nay luon la LUY KE TU DAU THANG den ngay snapshot, KHONG phai so cua rieng ngay do -
   muon doi chieu voi vhoadon_otc thi phai SUM ca khoang thang ben vhoadon_otc, khong duoc lay 1 ngay.
   !!! BANG NAY CO HAI TANG CHONG LEN NHAU - CAI BAY NGHIEM TRONG NHAT CUA CA KHO !!!
@@ -159,6 +181,8 @@ fact_tonghopkhachhang: 1 dong = 1 (nhan vien, khach hang, ngay snapshot). Cot: e
   Bang nay KHONG co cot vung mien, phai LEFT JOIN dim_nhanvien de lay area_code - va o day co bay thu
   hai: 13 ma is_duplicate=1 khong lay duoc area_code nen roi ra thanh nhom "khong xac dinh vung" om
   9.371.467.450. Day KHONG phai loi du lieu, TUYET DOI KHONG bao la "can bo phan ky thuat kiem tra".
+  (Ben Bravo cot AreaCode phu du 186/186 ma, khong sot ai - nhung co y khong keo ve bang nay de tranh
+  2 nguon vung mien lech nhau; xem sync_warehouse.py::sync_fact_tonghopkhachhang.)
   Cung KHONG duoc loc bo chung cho gon - doc tiep quy tac ngay duoi.
   !!! is_duplicate: LOC HAY KHONG LA TUY MUC DICH - LOC NHAM CHO LA MAT TIEN THAT !!!
   4 trong so cac ma is_duplicate=1 la QLV THAT bi Bravo gan nham co trung lap (MN1 "Kenh MT" tuc kenh

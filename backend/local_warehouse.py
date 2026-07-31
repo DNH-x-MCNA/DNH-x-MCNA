@@ -99,9 +99,25 @@ CREATE INDEX IF NOT EXISTS idx_tk_item ON brv_tonkhodk(item_id);
 CREATE TABLE IF NOT EXISTS brvsx_tralai (doc_date TEXT, amount9 REAL, is_active INTEGER, stt TEXT, customer_code TEXT);
 CREATE INDEX IF NOT EXISTS idx_tralai_docdate ON brvsx_tralai(doc_date);
 
+-- 31/07/2026: them 6 cot. Bang goc FACT_TongHopKhachHang ben Bravo co 27 cot, truoc do kho chi keo
+-- ve 7 - phan con lai deu co du lieu 100% chu khong rong. Chi tiet ra soat: xem
+-- docs/ra_soat_dong_bo_bang_kpi.md ben repo D:\DNH.
+--   year_sale_target : chi tieu NAM, DA cong don san - dung de tra loi cau luy ke nam, truoc day
+--                      hoan toan khong tra loi duoc.
+--   is_ro / is_ac    : co khach MUA LAI / khach HOAT DONG. Truoc day chatbot phai SUY DIEN "khong
+--                      phai khach moi thi la mua lai" -> tra 6.002 trong khi so that la 5.373.
+--   max_customer_ord_amount : don hang lon nhat cua khach do trong ky.
+--   emp_dms_code     : ma nhan vien theo dinh dang HOA DON - noi thang KPI <-> hoa don tho, khong
+--                      phai vong qua dim_nhanvien.
+--   amount_cus       : CHUA RO khac amount_ct the nao ve nghiep vu. Ky 30-31/07 hai cot TRUNG KHIT,
+--                      nhung cac ky 2025 lech toi 46 dong (2025-08-31), 41 dong (2025-05/06). Keo ve
+--                      de DOI CHIEU, TUYET DOI KHONG tu y thay amount_ct bang cot nay khi tinh doanh
+--                      so - phai hoi DNH xac nhan cot nao la chuan truoc da.
 CREATE TABLE IF NOT EXISTS fact_tonghopkhachhang (
     employee_code TEXT, customer_code TEXT, amount_ct REAL,
-    month_sale_target REAL, save_date TEXT, is_nc INTEGER, manager_code TEXT
+    month_sale_target REAL, save_date TEXT, is_nc INTEGER, manager_code TEXT,
+    year_sale_target REAL, amount_cus REAL, is_ro INTEGER, is_ac INTEGER,
+    max_customer_ord_amount REAL, emp_dms_code TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_ftk_savedate ON fact_tonghopkhachhang(save_date);
 CREATE INDEX IF NOT EXISTS idx_ftk_employee ON fact_tonghopkhachhang(employee_code);
@@ -228,7 +244,9 @@ _COLUMN_MIGRATIONS = {
     "dim_nhanvien": [("dmsid", "TEXT"), ("start_date", "TEXT"), ("end_date", "TEXT"),
                       ("is_resigned", "INTEGER"), ("manager_area_code", "TEXT")],
     "brv_sanpham": [("id_code", "INTEGER")],
-    "fact_tonghopkhachhang": [("manager_code", "TEXT")],
+    "fact_tonghopkhachhang": [("manager_code", "TEXT"), ("year_sale_target", "REAL"),
+                               ("amount_cus", "REAL"), ("is_ro", "INTEGER"), ("is_ac", "INTEGER"),
+                               ("max_customer_ord_amount", "REAL"), ("emp_dms_code", "TEXT")],
 }
 
 

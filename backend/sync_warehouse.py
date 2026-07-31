@@ -280,18 +280,28 @@ def compress_aged_out_months():
 def sync_fact_tonghopkhachhang(days=90):
     """Chi dong bo N ngay gan nhat (snapshot SaveDate) - lich su xa hon it gia tri cho KPI hien tai.
     23/07/2026: them ManagerCode - cot THAT tu Bravo xac dinh "TDV nay bao cao truc tiep len QLV nao",
-    dung de thay the suy luan qua ma khu vuc (kem chinh xac hon, xem local_warehouse.py::SCHEMA)."""
+    dung de thay the suy luan qua ma khu vuc (kem chinh xac hon, xem local_warehouse.py::SCHEMA).
+    31/07/2026: them 6 cot (YearSaleTarget, Amount_Cus, IsRO, IsAC, MaxCustomerOrdAmount, EmpDMSCode).
+    Bang goc ben Bravo co 27 cot, truoc do kho chi keo 7 - 20 cot con lai deu phu du lieu 100% chu
+    khong rong. Y nghia tung cot va ly do chon: xem local_warehouse.py::SCHEMA phan bang nay.
+    Chi phi khong dang ke: kho chi giu 90 ngay ~ 3 ky x 13.000 dong.
+    LUU Y: AreaCode CO Y khong keo o day du no cung co san va phu 100% - bang fact_thongketinhluong
+    (Trieu them 30/07, ce6aeea) DA co cot do roi. Keo ve ca 2 noi se de 2 nguon lech nhau ma khong
+    biet tin ben nao."""
     start = dt.date.today() - dt.timedelta(days=days)
     _, rows = bravo_query(
-        "SELECT EmployeeCode, CustomerCode, Amount_CT, MonthSaleTarget, SaveDate, IsNC, ManagerCode "
+        "SELECT EmployeeCode, CustomerCode, Amount_CT, MonthSaleTarget, SaveDate, IsNC, ManagerCode, "
+        "YearSaleTarget, Amount_Cus, IsRO, IsAC, MaxCustomerOrdAmount, EmpDMSCode "
         "FROM dbo.FACT_TongHopKhachHang WHERE SaveDate >= :a", a=str(start),
     )
     conn = get_conn()
     conn.execute("DELETE FROM fact_tonghopkhachhang")
     if rows:
         conn.executemany(
-            "INSERT INTO fact_tonghopkhachhang (employee_code,customer_code,amount_ct,month_sale_target,save_date,is_nc,manager_code) "
-            "VALUES (?,?,?,?,?,?,?)", rows,
+            "INSERT INTO fact_tonghopkhachhang (employee_code,customer_code,amount_ct,month_sale_target,"
+            "save_date,is_nc,manager_code,year_sale_target,amount_cus,is_ro,is_ac,"
+            "max_customer_ord_amount,emp_dms_code) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)", rows,
         )
     conn.commit()
     conn.close()
