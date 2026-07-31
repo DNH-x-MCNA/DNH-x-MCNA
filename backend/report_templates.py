@@ -1786,6 +1786,8 @@ def audit_log_summary(days: int = 7, limit: int = 30, username: str = None, targ
 
     cost_by_session = {}
     cost_by_user = {}
+    cost_sessions_by_user = {}
+    cost_sessions = set()
     total_cost = 0.0
     total_tokens_in = total_tokens_out = 0
     if os.path.exists(COST_LOG_PATH):
@@ -1825,13 +1827,23 @@ def audit_log_summary(days: int = 7, limit: int = 30, username: str = None, targ
                 total_tokens_in += p_tok
                 total_tokens_out += c_tok
 
+                if sid:
+                    cost_sessions.add(sid)
+
                 # Chi gom theo nguoi khi la C-Level: tai khoan thuong khong duoc thay chi phi nguoi khac.
                 if is_clevel_admin:
-                    agg_u = cost_by_user.setdefault(owner or "(chua quy duoc)",
+                    _key = owner or "(chua quy duoc)"
+                    agg_u = cost_by_user.setdefault(_key,
                                                     {"cost_usd": 0.0, "input_tokens": 0, "output_tokens": 0})
                     agg_u["cost_usd"] += cost
                     agg_u["input_tokens"] += p_tok
                     agg_u["output_tokens"] += c_tok
+                    # Dem phien theo CUNG NGUON voi chi phi. Truoc 31/07/2026 so phien chi lay tu
+                    # audit_log, ma cac ban ghi audit cu chua co truong session_id -> hien "132 luot
+                    # nhung 0 phien", nguoi doc khong hieu noi. Gop ca 2 nguon o duoi de vua khop chi
+                    # phi vua khong bo sot phien chi co ben audit.
+                    if sid:
+                        cost_sessions_by_user.setdefault(_key, set()).add(sid)
 
                 if sid:
                     agg = cost_by_session.setdefault(sid, {"cost_usd": 0.0, "input_tokens": 0, "output_tokens": 0, "calls": 0})
@@ -1898,7 +1910,9 @@ def audit_log_summary(days: int = 7, limit: int = 30, username: str = None, targ
         user_breakdown = [{
             "username": u,
             "queries": queries_by_user.get(u, 0),
-            "sessions": len(sessions_by_user.get(u, ())),
+            # Hop 2 nguon: phien co phat sinh chi phi (cung nguon voi cot tien) + phien thay trong
+            # audit_log. Lay hop de khong bo sot ben nao, va de tong khop voi total_sessions ben duoi.
+            "sessions": len(cost_sessions_by_user.get(u, set()) | sessions_by_user.get(u, set())),
             "input_tokens": d["input_tokens"],
             "output_tokens": d["output_tokens"],
             "total_tokens": d["input_tokens"] + d["output_tokens"],
@@ -1912,7 +1926,7 @@ def audit_log_summary(days: int = 7, limit: int = 30, username: str = None, targ
         "scope": "toan cong ty" if (is_clevel_admin and not effective_target) else (f"nguoi dung {effective_target}" if effective_target else f"ca nhan {username}"),
         "days": days,
         "total_queries": len(my_entries),
-        "total_sessions": len(my_sessions),
+        "total_sessions": len(my_sessions | cost_sessions),
         "total_cost_usd": round(total_cost, 6),
         "total_cost_vnd": round(total_cost * USD_TO_VND_RATE, 2),
         "total_input_tokens": total_tokens_in,
