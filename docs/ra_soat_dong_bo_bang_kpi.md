@@ -116,7 +116,60 @@ python -c "import sqlite3; c=sqlite3.connect('warehouse.db'); [print(r) for r in
 
 ---
 
-## Đề xuất thay đổi
+## 🔄 Cập nhật 31/07 — Triều đã làm trước một phần, và lộ ra bẫy nặng hơn
+
+Commit `ce6aeea` (30/07) của Triều thêm bảng **`fact_thongketinhluong`** đồng bộ từ
+`FACT_ThongKeTinhLuong` với **52 cột**. Bảng này đã có sẵn phần lớn thứ tôi định kéo về:
+
+| Tôi định thêm | Triều đã có | Kết luận |
+|---|---|---|
+| `AreaCode` | `AreaCode` + `AreaCode2` | ✅ Xong |
+| `IsASO`, `IsCalASOBonus` | `ASOQuantity`, `ASOPercent_R`, `ASOBonus` | ✅ Tốt hơn — số thật thay vì cờ |
+| `NCMonth`, `ROMonth` | `NewCustomerQuantity`, `ROCustomerQuantity` | ✅ Xong |
+| 3 cột chỉ tiêu khách | `NewCusTarget`, `ReOrderCusTarget`, `ActiveCusTarget` | ✅ Xong |
+| **`YearSaleTarget`** | *(không có)* | ❌ **Vẫn thiếu** |
+| `IsRO`, `IsAC` theo từng khách | *(chỉ có số lượng gộp)* | ❌ Vẫn thiếu |
+| `Amount_Cus`, `MaxCustomerOrdAmount`, `EmpDMSCode` | *(không có)* | ❌ Vẫn thiếu |
+
+Nên phần việc còn lại **thu hẹp đáng kể**: chỉ còn `YearSaleTarget`, `Amount_Cus`, `IsRO`/`IsAC`,
+`MaxCustomerOrdAmount`, `EmpDMSCode`.
+
+### 🔴 Nhưng bảng mới có BA tầng, không phải hai
+
+Kỳ 31/07/2026, 206 mã. Cộng theo từng cấp:
+
+| Tầng | Số mã | `MonthSaleAmount` |
+|---|---:|---:|
+| TP (trưởng phòng / GĐ miền) | 3 | **33.307.889.644** |
+| QLV | 21 | **33.307.889.644** |
+| TDV + CS + TK + CTV (lá) | ~180 | **33.307.889.644** |
+| PP (lớp phủ thêm, chỉ MN) | 2 | 5.198.362.685 |
+| **Cộng cả bảng** | 206 | **105.122.031.617** |
+
+Ba tầng đều **đúng bằng doanh thu OTC thật**. Cộng cả bảng ra `3 × 33.307.889.644 + 5.198.362.685`
+= **105.122.031.617** — khớp tuyệt đối, tức **sai gấp hơn 3 lần**.
+
+> Điều này ứng nghiệm đúng lời cảnh báo Triều tự viết trong `kpi_ranking`:
+> *"Nếu sau này Bravo thêm cấp trên (vd TP quản lý QLV), cộng cả 2 cấp sẽ GẤP ĐÔI âm thầm."*
+> Bảng lương mới **chính là chỗ có TP**.
+
+Thêm một điểm: mẹo "mã nào không xuất hiện làm `ManagerCode`" — dùng đúng cho
+`fact_tonghopkhachhang` (2 tầng) — **sai trên bảng này**, vì QLV vừa quản lý người khác vừa bị TP
+quản lý. Áp mẹo đó ra **71.814.141.973**, sai gấp 2,16 lần.
+
+### Hiện tại chưa nguy hiểm, nhưng là mìn cài sẵn
+
+Tool `salary_detail` của Triều **an toàn**: trả đúng một dòng cho một người (`LIMIT 1`), phân quyền
+chặt, không cộng gộp gì. Và bảng này **chưa được khai trong `schema_context.py`** nên AI không thể
+tự viết SQL chạm vào.
+
+Rủi ro nằm ở tương lai: **ngay khi ai đó khai bảng này vào `schema_context.py`** để mở thêm câu hỏi,
+cái bẫy 3 tầng mở ra — và nó nặng hơn bẫy 2 tầng đã gây 4 câu trả lời sai hôm nay. Phải viết cảnh
+báo cùng lúc, không được khai bảng trước rồi cảnh báo sau.
+
+---
+
+## Đề xuất thay đổi *(phần còn lại sau khi trừ việc Triều đã làm)*
 
 ### Bước 1 — Mở rộng câu truy vấn đồng bộ
 
