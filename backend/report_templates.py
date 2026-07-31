@@ -1676,11 +1676,15 @@ def revenue_reconciliation_check(as_of_date: str = None, area_code: str = None,
         "tdv_count_in_tree": tdv_count,
         "zones_without_qlv": undetermined_zones,
         "note": (f"CA HAI VE deu tinh cho cung ky {month_start} -> {fdate} (luy ke tu dau thang den "
-                 "ngay chot snapshot KPI). Cong don tu duoi len LUON nho hon tong tren xuong (khong "
-                 "bao gio bang 100%) vi khong gom duoc khach ETC/mo coi + cac 'to' chua xac dinh QLV - "
-                 "day la GAP cau truc da biet, KHONG phai loi. coverage_pct qua thap bat thuong (vd "
-                 "giam dot ngot so ky truoc) moi dang nghi ngo co van de gan NV/vung sai. Khi trinh "
-                 "bay PHAI neu ro khoang thoi gian nay de nguoi doc khong tuong dang so 1 ngay voi 1 thang."),
+                 "ngay chot snapshot KPI) va CA HAI VE deu CHI kenh OTC - ETC da bi loai khoi ca tu so "
+                 "lan mau so nen KHONG phai ly do gay chenh lech, TUYET DOI KHONG giai thich khoang "
+                 "chenh bang 'do co kenh ETC'. Cong don tu duoi len LUON nho hon tong tren xuong (khong "
+                 "bao gio bang 100%) vi 3 ly do THAT: khach 'mo coi' trong hoa don OTC khong co NV phu "
+                 "trach, cac 'to' chua xac dinh QLV (xem zones_without_qlv), va TDV khong nam trong cay "
+                 "to chuc - day la GAP cau truc da biet, KHONG phai loi. coverage_pct qua thap bat "
+                 "thuong (vd giam dot ngot so ky truoc) moi dang nghi ngo co van de gan NV/vung sai. "
+                 "Khi trinh bay PHAI neu ro khoang thoi gian nay de nguoi doc khong tuong dang so 1 "
+                 "ngay voi 1 thang."),
     }
     if coverage_pct > 100.5:  # dung sai nho cho lam tron, > han han moi la dau hieu bug that (dem trung)
         result["warning"] = ("BAT THUONG: cong don tu duoi len VUOT QUA tong tren xuong - dau hieu co "
