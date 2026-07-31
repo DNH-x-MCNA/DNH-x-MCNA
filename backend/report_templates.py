@@ -11,6 +11,7 @@ lan dong bo gan nhat.
 import contextvars
 import datetime as dt
 import os
+import sqlite3
 from sqlalchemy import text
 from local_warehouse import get_conn, get_sync_meta
 from query_engine import _write_log, _get_engine
@@ -1727,9 +1728,32 @@ def audit_log_summary(days: int = 7, limit: int = 30, username: str = None, targ
     effective_target = target_username if (is_clevel_admin and target_username and str(target_username).lower() != 'all') else None
 
     # Ban do phien -> chu phien, dung de quy chi phi cho tung nguoi voi cac dong cost_log CU (ghi
-    # truoc 20bec9d 29/07/2026, khi do cost_log chua co truong username). Phai duyet TOAN BO entries
-    # chu khong phai my_entries, vi C-Level xem toan cong ty can tra duoc ca phien cua nguoi khac.
+    # truoc 20bec9d 29/07/2026, khi do cost_log chua co truong username).
+    #
+    # HAI NGUON, doc theo thu tu do ben dan:
+    #   1. bang sessions trong memory.db - nguon CHINH. Ben vung vi day la CSDL that, khong bi xoay
+    #      vong nhu file log. Cung cach cost_report.py::_session_owner_map() da dung tu truoc.
+    #   2. audit_log.jsonl - bo sung cho cac phien chua kip dang ky trong memory.db.
+    # Truoc 31/07/2026 chi dung nguon (2), ma audit_log bi cat bot theo thoi gian nen cac phien cu
+    # khong tra duoc chu -> 68% chi phi roi vao nhom "chua quy duoc" du van con tra duoc qua memory.db.
     session_owner = {}
+    try:
+        try:
+            from conversation_memory import DB_PATH as _MEM_DB
+        except Exception:
+            _MEM_DB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "memory.db")
+        if os.path.exists(_MEM_DB):
+            _mc = sqlite3.connect(_MEM_DB)
+            try:
+                for _sid, _owner in _mc.execute("SELECT session_id, owner_username FROM sessions"):
+                    if _sid and _owner:
+                        session_owner[_sid] = _owner
+            finally:
+                _mc.close()
+    except Exception as _e:
+        # Thieu bang/CSDL thi bo qua, van con nguon audit_log ben duoi - KHONG lam chet ca bao cao.
+        print(f"[audit_log_summary] Khong doc duoc sessions tu memory.db: {_e}")
+
     for e in entries:
         sid_e, u_e = e.get("session_id"), e.get("username")
         if sid_e and u_e and sid_e not in session_owner:
