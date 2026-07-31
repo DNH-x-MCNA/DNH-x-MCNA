@@ -505,6 +505,9 @@ def get_audit_logs_dashboard(
 
     cost_by_session = defaultdict(lambda: {"cost_usd": 0.0, "input_tokens": 0, "output_tokens": 0, "cache_tokens": 0, "total_tokens": 0, "calls": 0})
     cost_direct_by_user = defaultdict(lambda: {"cost_usd": 0.0, "input_tokens": 0, "output_tokens": 0, "cache_tokens": 0, "total_tokens": 0})
+    # Cac phien da duoc quy chi phi TRUC TIEP cho nguoi dung (log co username). Vong duyet audit ben
+    # duoi phai BO QUA chung khi cong vao user_stats, neu khong se cong hai lan -> chi phi gap doi.
+    sessions_attributed_directly = set()
     grand_cost_usd = 0.0
     grand_input_tokens = 0
     grand_output_tokens = 0
@@ -535,16 +538,11 @@ def get_audit_logs_dashboard(
                 grand_output_tokens += ot
                 grand_cache_tokens += cr + cw
 
-                uname_direct = (c.get("username") or "").strip()
-                if uname_direct:
-                    d = cost_direct_by_user[uname_direct]
-                    d["cost_usd"] += cost
-                    d["input_tokens"] += it
-                    d["output_tokens"] += ot
-                    d["cache_tokens"] += cr + cw
-                    d["total_tokens"] += it + ot + cr + cw
-                    continue
-
+                # LUON gom theo phien - day la nguon so cho bang chi tiet TUNG CAU HOI. Truoc 31/07
+                # khoi nay nam SAU mot "continue" cua nhanh username, ma tu 20bec9d (29/07) thi log
+                # NAO cung co username, nen cost_by_session vinh vien rong va moi dong trong bang deu
+                # hien 0 token / 0 d (tong theo nguoi va tong toan he thong van dung, chi bang chi
+                # tiet chet). Dat truoc nhanh username de khong bao gio bi bo qua nua.
                 sid = c.get("session_id")
                 if sid:
                     cost_by_session[sid]["cost_usd"] += cost
@@ -553,6 +551,17 @@ def get_audit_logs_dashboard(
                     cost_by_session[sid]["cache_tokens"] += cr + cw
                     cost_by_session[sid]["total_tokens"] += it + ot + cr + cw
                     cost_by_session[sid]["calls"] += 1
+
+                uname_direct = (c.get("username") or "").strip()
+                if uname_direct:
+                    d = cost_direct_by_user[uname_direct]
+                    d["cost_usd"] += cost
+                    d["input_tokens"] += it
+                    d["output_tokens"] += ot
+                    d["cache_tokens"] += cr + cw
+                    d["total_tokens"] += it + ot + cr + cw
+                    if sid:
+                        sessions_attributed_directly.add(sid)
 
     filtered_logs = []
     user_stats = defaultdict(lambda: {"query_count": 0, "input_tokens": 0, "output_tokens": 0, "cache_tokens": 0, "total_tokens": 0, "cost_usd": 0.0})
@@ -589,7 +598,9 @@ def get_audit_logs_dashboard(
         user_stats[uname]["query_count"] += 1
         user_stats[uname]["display_name"] = display_name
 
-        if sid and sid not in counted_sessions:
+        # Bo qua phien da quy truc tiep cho nguoi dung - phan do se duoc cong o vong
+        # cost_direct_by_user ben duoi. Cong ca hai cho = chi phi theo nguoi gap doi.
+        if sid and sid not in counted_sessions and sid not in sessions_attributed_directly:
             counted_sessions.add(sid)
             user_stats[uname]["input_tokens"] += c_it
             user_stats[uname]["output_tokens"] += c_ot
