@@ -130,6 +130,37 @@ fact_tonghopkhachhang: 1 dong = 1 (nhan vien, khach hang, ngay snapshot). Cot: e
   thang, MAX vi lap lai moi dong), save_date (ngay snapshot - dung MAX(save_date) <= ngay can xem de
   lay snapshot gan nhat), is_nc (=1 neu la KH moi trong thang). CHI CO ~90 NGAY GAN NHAT trong kho
   local (lich su xa hon khong dong bo vi it gia tri cho KPI hien tai).
+  So tren bang nay luon la LUY KE TU DAU THANG den ngay snapshot, KHONG phai so cua rieng ngay do -
+  muon doi chieu voi vhoadon_otc thi phai SUM ca khoang thang ben vhoadon_otc, khong duoc lay 1 ngay.
+  !!! BANG NAY CO HAI TANG CHONG LEN NHAU - CAI BAY NGHIEM TRONG NHAT CUA CA KHO !!!
+  Moi khoan doanh so duoc ghi HAI LAN: mot dong gan TDV, mot dong gan QUAN LY cua TDV do (qua
+  manager_code). Da kiem chung tren Bravo ky 31/07/2026: tang quan ly = 33.307.889.644, tang nhan
+  vien = 33.307.889.644, va doanh thu OTC thang 7 that tinh tu vhoadon_otc CUNG = 33.307.889.644 -
+  trung khit den tung dong. Cong ca bang ra 66.615.779.288, tuc DUNG GAP 2 LAN doanh thu that.
+  => TUYET DOI KHONG viet SUM(amount_ct) tren toan bang de ra "tong doanh so cong ty". PHAI CHON MOT
+     TANG truoc khi cong:
+     - Cau hoi ve nhan vien ban hang: JOIN dim_nhanvien, loc position_code='TDV' (tang duoi).
+     - Cau hoi cap cong ty/vung: chi lay cac ma co xuat hien lam manager_code cua nguoi khac (tang tren).
+     - TOT NHAT: dung cau hoi ve TONG DOANH THU thi KHONG dung bang nay - dung vhoadon_otc/vhoadon_etc
+       voi SUM(amount9), do moi la nguon doanh thu chuan va khong bi cong chong.
+  Bang nay KHONG co cot vung mien, phai LEFT JOIN dim_nhanvien de lay area_code - va o day co bay thu
+  hai: 13 ma is_duplicate=1 khong lay duoc area_code nen roi ra thanh nhom "khong xac dinh vung" om
+  9.371.467.450. Day KHONG phai loi du lieu, TUYET DOI KHONG bao la "can bo phan ky thuat kiem tra".
+  Cung KHONG duoc loc bo chung cho gon - doc tiep quy tac ngay duoi.
+  !!! is_duplicate: LOC HAY KHONG LA TUY MUC DICH - LOC NHAM CHO LA MAT TIEN THAT !!!
+  4 trong so cac ma is_duplicate=1 la QLV THAT bi Bravo gan nham co trung lap (MN1 "Kenh MT" tuc kenh
+  Modern Trade, MN4 "Cho si", MBKV12, TM25030101) - ho om doanh thu THAT. Kiem chung ky 31/07/2026,
+  tinh tren tang quan ly:
+     KHONG loc is_duplicate -> 33.307.889.644 = DUNG BANG doanh thu OTC that tu vhoadon_otc
+     CO loc is_duplicate    -> 24.381.156.216 = MAT 8.926.733.428 (26,8%) tien THAT
+  => Khi tinh TONG TIEN (tong doanh so, doanh thu vung, doanh thu cong ty): chon MOT TANG va KHONG
+     loc is_duplicate. Muon biet vung mien thi phai chap nhan nhom "chua ro vung" va NOI RO ra, chu
+     khong duoc loc bo de bang cho dep.
+  => Khi DEM SO NGUOI hoac XEP HANG CA NHAN (ai dat KPI, top nhan vien, bao nhieu nguoi dat chi tieu):
+     CO loc is_duplicate, vi ma bong khong phai nguoi that de dem/xep hang.
+  Rieng tool kpi_ranking(group_by='region') da xu ly dung viec nay san (gop theo manager_code, khong
+  dua vao position_code lan is_duplicate) - uu tien dung tool do thay vi tu viet SQL cho cau hoi KPI
+  theo vung.
   NGUONG tren amount_ct/month_sale_target - PHAN BIET BA MOC, TUYET DOI KHONG GOP:
   "DAT CHI TIEU" = >=100%. "DAT KPI" = >=80% (CHUNG cho moi vai tro - moc danh gia hieu qua cong
   viec). "DAT MUC THUONG NHOM HANG" = >=65% voi TDV (QD 0107/2026), >=70% voi QLV va cac cap quan ly
@@ -225,4 +256,19 @@ inventory (snapshot ton kho MOI NHAT, khong theo ngay): "item_code", "item_name"
     Voi cau hoi KPI/doanh so thong thuong (ai dat, xep hang, % hoan thanh) van dung tool
     get_employee_kpi/get_employee_daily_kpi/get_kpi_ranking binh thuong - chung da ap dung ca 3 moc
     o muc (A) va tra ve du ca 3 (count_full_target/count_kpi_achieved/count_above_target).
+12. TRUOC KHI KET LUAN "BAT THUONG" / "SO LIEU KHONG DANG TIN CAY" - BAT BUOC TU KIEM 3 DIEU:
+    (a) HAI VE CO CUNG KY KHONG? Loi that da xay ra 31/07/2026: lay so KPI LUY KE CA THANG 7
+        (24,86 ty) dem so voi hoa don RIENG NGAY 30/07 (4,14 ty) roi ket luan "lech 601%, so lieu
+        khong dang tin cay, can bo phan ky thuat kiem tra". Thuc te la dang so 1 THANG voi 1 NGAY,
+        khong he co gi bat thuong. fact_tonghopkhachhang = luy ke tu dau thang; vhoadon_otc = tung ngay.
+    (b) HAI VE CO CUNG TANG KHONG? Xem canh bao "hai tang chong len nhau" o fact_tonghopkhachhang.
+        Cong ca bang luon ra dung gap 2 lan - do la cau truc binh thuong cua bang, KHONG phai loi.
+    (c) NHOM "KHONG XAC DINH VUNG" CO PHAI LA 13 MA is_duplicate=1 KHONG? Neu dung thi do la cau truc
+        binh thuong da biet (kenh Modern Trade, Cho si...), KHONG phai loi du lieu - va cung KHONG
+        duoc loc bo, vi 4 trong so do la QLV that om 8,93 ty doanh thu THAT.
+    Neu chua kiem het 3 dieu tren thi TUYET DOI KHONG duoc dung cac tu: "bat thuong", "khong dang tin
+    cay", "co the dem trung nhan vien", "loi lien ket du lieu", "can bo phan ky thuat kiem tra".
+    Thay vao do hay noi "toi chua doi chieu duoc hai so nay ve cung mot ky/mot tang" va giai thich ly
+    do. Mot canh bao SAI khien nguoi dung mat niem tin vao TOAN BO cac cau tra loi khac - tac hai lon
+    hon nhieu so voi viec thua nhan chua doi chieu duoc.
 """
