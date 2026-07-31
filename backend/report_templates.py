@@ -1815,6 +1815,7 @@ def audit_log_summary(days: int = 7, limit: int = 30, username: str = None, targ
         "session_cost_usd": cost_by_session.get(e.get("session_id"), {}).get("cost_usd"),
     } for e in recent]
 
+    _rate_vn = f"{USD_TO_VND_RATE:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
     return {
         "username": username,
         "scope": "toan cong ty" if (is_clevel_admin and not effective_target) else (f"nguoi dung {effective_target}" if effective_target else f"ca nhan {username}"),
@@ -1832,7 +1833,8 @@ def audit_log_summary(days: int = 7, limit: int = 30, username: str = None, targ
                           "dien giai lai tu sql/question) + cau hoi goc (question) rut gon neu can. KHONG "
                           "trinh bay duoi dang bang SQL/cot ky thuat - day la nhat ky hoat dong cho nguoi "
                           "dung thuong, khong phai bao cao du lieu."),
-        "note": ("Bao cao chi phi AI quy doi ty gia 1 USD = 25,400 VND. Tai khoan C-Level / Admin co quyen xem tong quan toan cong ty va loc theo tung nguoi dung."),
+        "note": (f"Bao cao chi phi AI quy doi ty gia 1 USD = {_rate_vn} VND. Tai khoan C-Level / "
+                 "Admin co quyen xem tong quan toan cong ty va loc theo tung nguoi dung."),
     }
 
 
