@@ -1711,8 +1711,19 @@ def audit_log_summary(days: int = 7, limit: int = 30, username: str = None, targ
     cutoff = dt.datetime.now() - dt.timedelta(days=days) if days else None
     my_entries = []
     my_sessions = set()
-    
+    queries_by_user = {}
+    sessions_by_user = {}
+
     effective_target = target_username if (is_clevel_admin and target_username and str(target_username).lower() != 'all') else None
+
+    # Ban do phien -> chu phien, dung de quy chi phi cho tung nguoi voi cac dong cost_log CU (ghi
+    # truoc 20bec9d 29/07/2026, khi do cost_log chua co truong username). Phai duyet TOAN BO entries
+    # chu khong phai my_entries, vi C-Level xem toan cong ty can tra duoc ca phien cua nguoi khac.
+    session_owner = {}
+    for e in entries:
+        sid_e, u_e = e.get("session_id"), e.get("username")
+        if sid_e and u_e and sid_e not in session_owner:
+            session_owner[sid_e] = u_e
 
     for e in entries:
         user_in_log = e.get("username")
@@ -1730,8 +1741,13 @@ def audit_log_summary(days: int = 7, limit: int = 30, username: str = None, targ
         sid = e.get("session_id")
         if sid:
             my_sessions.add(sid)
+        if user_in_log:
+            queries_by_user[user_in_log] = queries_by_user.get(user_in_log, 0) + 1
+            if sid:
+                sessions_by_user.setdefault(user_in_log, set()).add(sid)
 
     cost_by_session = {}
+    cost_by_user = {}
     total_cost = 0.0
     total_tokens_in = total_tokens_out = 0
     if os.path.exists(COST_LOG_PATH):
@@ -1756,10 +1772,29 @@ def audit_log_summary(days: int = 7, limit: int = 30, username: str = None, targ
                 cost = c.get("cost_usd", 0.0) or 0.0
                 p_tok = c.get("input_tokens", 0) or 0
                 c_tok = c.get("output_tokens", 0) or 0
+
+                # username duoc ghi thang vao cost_log tu 20bec9d (29/07/2026); dong cu hon thi suy
+                # qua session_owner. Khong tra ra duoc ca hai -> xep vao nhom "chua quy duoc".
+                owner = (c.get("username") or "").strip() or session_owner.get(sid) or ""
+
+                # C-Level loc rieng 1 tai khoan thi CHI PHI cung phai loc theo tai khoan do. Truoc day
+                # vong nay khong loc theo effective_target, nen so luot hoi la cua 1 nguoi con so tien
+                # lai la cua CA CONG TY - hai con so canh nhau nhung khac pham vi.
+                if effective_target and owner != effective_target:
+                    continue
+
                 total_cost += cost
                 total_tokens_in += p_tok
                 total_tokens_out += c_tok
-                
+
+                # Chi gom theo nguoi khi la C-Level: tai khoan thuong khong duoc thay chi phi nguoi khac.
+                if is_clevel_admin:
+                    agg_u = cost_by_user.setdefault(owner or "(chua quy duoc)",
+                                                    {"cost_usd": 0.0, "input_tokens": 0, "output_tokens": 0})
+                    agg_u["cost_usd"] += cost
+                    agg_u["input_tokens"] += p_tok
+                    agg_u["output_tokens"] += c_tok
+
                 if sid:
                     agg = cost_by_session.setdefault(sid, {"cost_usd": 0.0, "input_tokens": 0, "output_tokens": 0, "calls": 0})
                     agg["cost_usd"] += cost
@@ -1816,6 +1851,24 @@ def audit_log_summary(days: int = 7, limit: int = 30, username: str = None, targ
     } for e in recent]
 
     _rate_vn = f"{USD_TO_VND_RATE:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+
+    # CHI C-Level xem toan cong ty moi duoc tach chi phi theo tung nguoi (chot voi nguoi dung
+    # 31/07/2026). Tai khoan thuong -> None, KHONG duoc lo chi phi cua dong nghiep. C-Level dang loc
+    # rieng 1 nguoi cung -> None vi luc do ca bao cao da chi con 1 nguoi, tach ra khong con y nghia.
+    user_breakdown = None
+    if is_clevel_admin and not effective_target:
+        user_breakdown = [{
+            "username": u,
+            "queries": queries_by_user.get(u, 0),
+            "sessions": len(sessions_by_user.get(u, ())),
+            "input_tokens": d["input_tokens"],
+            "output_tokens": d["output_tokens"],
+            "total_tokens": d["input_tokens"] + d["output_tokens"],
+            "cost_usd": round(d["cost_usd"], 6),
+            "cost_vnd": round(d["cost_usd"] * USD_TO_VND_RATE, 2),
+            "is_unattributed": u == "(chua quy duoc)",
+        } for u, d in sorted(cost_by_user.items(), key=lambda kv: -kv[1]["cost_usd"])]
+
     return {
         "username": username,
         "scope": "toan cong ty" if (is_clevel_admin and not effective_target) else (f"nguoi dung {effective_target}" if effective_target else f"ca nhan {username}"),
@@ -1828,13 +1881,22 @@ def audit_log_summary(days: int = 7, limit: int = 30, username: str = None, targ
         "total_output_tokens": total_tokens_out,
         "total_tokens": total_tokens_in + total_tokens_out,
         "history": history,
+        "user_breakdown": user_breakdown,
         "display_hint": ("Trinh bay ket qua o dang TIMELINE - moi dong 1 su kien, theo thu tu MOI NHAT "
                           "TRUOC: gio:phut (ts) + event_summary (da soan san, dung nguyen van, KHONG tu "
                           "dien giai lai tu sql/question) + cau hoi goc (question) rut gon neu can. KHONG "
                           "trinh bay duoi dang bang SQL/cot ky thuat - day la nhat ky hoat dong cho nguoi "
-                          "dung thuong, khong phai bao cao du lieu."),
+                          "dung thuong, khong phai bao cao du lieu. "
+                          "NEU co user_breakdown (khac null): he thong DA tach duoc chi phi theo tung tai "
+                          "khoan - trinh bay them 1 BANG chi phi theo nguoi dung (cot: tai khoan, so luot, "
+                          "so phien, token, tien VND) TRUOC phan timeline. TUYET DOI KHONG noi 'he thong "
+                          "chua tach duoc chi phi theo tung nguoi' khi truong nay co du lieu. Dong nao co "
+                          "is_unattributed=true thi ghi ro la phan CHUA QUY DUOC cho tai khoan nao, khong "
+                          "gan bua cho mot nguoi."),
         "note": (f"Bao cao chi phi AI quy doi ty gia 1 USD = {_rate_vn} VND. Tai khoan C-Level / "
-                 "Admin co quyen xem tong quan toan cong ty va loc theo tung nguoi dung."),
+                 "Admin co quyen xem tong quan toan cong ty va loc theo tung nguoi dung. "
+                 "user_breakdown=null nghia la tai khoan nay KHONG duoc phep xem chi phi cua nguoi "
+                 "khac (chi C-Level xem toan cong ty moi co), KHONG phai he thong thieu du lieu."),
     }
 
 
