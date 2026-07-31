@@ -4,7 +4,7 @@ from urllib.parse import quote_plus
 from sqlalchemy import create_engine
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-CONFIG_PATH = os.path.join(PROJECT_ROOT, 'config.yaml')
+CONFIG_PATH = os.path.join(PROJECT_ROOT, 'config', 'config.yaml')
 
 _cloud_engine = None
 _fast_cloud_engine = None
