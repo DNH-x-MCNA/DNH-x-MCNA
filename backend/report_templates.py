@@ -1723,11 +1723,11 @@ def audit_log_summary(days: int = 7, limit: int = 30, username: str = None, targ
                 except json.JSONDecodeError:
                     continue
 
+    UNATTRIBUTED = "(chua quy duoc)"
+
     cutoff = dt.datetime.now() - dt.timedelta(days=days) if days else None
     my_entries = []
     my_sessions = set()
-    queries_by_user = {}
-    sessions_by_user = {}
 
     effective_target = target_username if (is_clevel_admin and target_username and str(target_username).lower() != 'all') else None
 
@@ -1779,14 +1779,10 @@ def audit_log_summary(days: int = 7, limit: int = 30, username: str = None, targ
         sid = e.get("session_id")
         if sid:
             my_sessions.add(sid)
-        if user_in_log:
-            queries_by_user[user_in_log] = queries_by_user.get(user_in_log, 0) + 1
-            if sid:
-                sessions_by_user.setdefault(user_in_log, set()).add(sid)
 
     cost_by_session = {}
     cost_by_user = {}
-    cost_sessions_by_user = {}
+    cost_username_by_session = {}
     cost_sessions = set()
     total_cost = 0.0
     total_tokens_in = total_tokens_out = 0
@@ -1829,21 +1825,18 @@ def audit_log_summary(days: int = 7, limit: int = 30, username: str = None, targ
 
                 if sid:
                     cost_sessions.add(sid)
+                    # cost_log co truong username rieng (tu 20bec9d) - dung lam nguon BO SUNG cho ban
+                    # do chu phien, phong khi phien khong co trong memory.db lan audit_log.
+                    if owner and sid not in session_owner:
+                        cost_username_by_session.setdefault(sid, owner)
 
                 # Chi gom theo nguoi khi la C-Level: tai khoan thuong khong duoc thay chi phi nguoi khac.
                 if is_clevel_admin:
-                    _key = owner or "(chua quy duoc)"
-                    agg_u = cost_by_user.setdefault(_key,
+                    agg_u = cost_by_user.setdefault(owner or UNATTRIBUTED,
                                                     {"cost_usd": 0.0, "input_tokens": 0, "output_tokens": 0})
                     agg_u["cost_usd"] += cost
                     agg_u["input_tokens"] += p_tok
                     agg_u["output_tokens"] += c_tok
-                    # Dem phien theo CUNG NGUON voi chi phi. Truoc 31/07/2026 so phien chi lay tu
-                    # audit_log, ma cac ban ghi audit cu chua co truong session_id -> hien "132 luot
-                    # nhung 0 phien", nguoi doc khong hieu noi. Gop ca 2 nguon o duoi de vua khop chi
-                    # phi vua khong bo sot phien chi co ben audit.
-                    if sid:
-                        cost_sessions_by_user.setdefault(_key, set()).add(sid)
 
                 if sid:
                     agg = cost_by_session.setdefault(sid, {"cost_usd": 0.0, "input_tokens": 0, "output_tokens": 0, "calls": 0})
@@ -1851,6 +1844,25 @@ def audit_log_summary(days: int = 7, limit: int = 30, username: str = None, targ
                     agg["input_tokens"] += p_tok
                     agg["output_tokens"] += c_tok
                     agg["calls"] += 1
+
+    # ---- PHAN HOACH luot hoi va phien theo tung nguoi ----
+    # Lam SAU vong cost de co day du 3 nguon xac dinh chu phien. Dung phep CHIA (moi phien/luot thuoc
+    # DUNG MOT nguoi) chu khong phai hop cac tap dung rieng le - nho vay cong cac dong BUOC PHAI bang
+    # tong, thay vi hy vong no bang. Ban truoc (01748f1) lay hop 2 tap nen 1 phien co the roi vao 2
+    # nguoi -> cong cac dong ra 112 trong khi tong la 111. Va so luot chi dem ban ghi CO username nen
+    # 228/764 luot khong hien o dong nao, tao ra nghich ly "0 luot / 25 phien".
+    owner_of = dict(session_owner)
+    for _sid, _u in cost_username_by_session.items():
+        owner_of.setdefault(_sid, _u)
+
+    sessions_by_user = {}
+    for _sid in (my_sessions | cost_sessions):
+        sessions_by_user.setdefault(owner_of.get(_sid) or UNATTRIBUTED, set()).add(_sid)
+
+    queries_by_user = {}
+    for e in my_entries:
+        _k = e.get("username") or owner_of.get(e.get("session_id")) or UNATTRIBUTED
+        queries_by_user[_k] = queries_by_user.get(_k, 0) + 1
 
     def _event_summary(e: dict) -> str:
         """1 dong mo ta ngan gon kieu 'nhat ky hoat dong' (giong timeline audit log admin: 'Ai - lam
@@ -1907,19 +1919,25 @@ def audit_log_summary(days: int = 7, limit: int = 30, username: str = None, targ
     # rieng 1 nguoi cung -> None vi luc do ca bao cao da chi con 1 nguoi, tach ra khong con y nghia.
     user_breakdown = None
     if is_clevel_admin and not effective_target:
-        user_breakdown = [{
-            "username": u,
-            "queries": queries_by_user.get(u, 0),
-            # Hop 2 nguon: phien co phat sinh chi phi (cung nguon voi cot tien) + phien thay trong
-            # audit_log. Lay hop de khong bo sot ben nao, va de tong khop voi total_sessions ben duoi.
-            "sessions": len(cost_sessions_by_user.get(u, set()) | sessions_by_user.get(u, set())),
-            "input_tokens": d["input_tokens"],
-            "output_tokens": d["output_tokens"],
-            "total_tokens": d["input_tokens"] + d["output_tokens"],
-            "cost_usd": round(d["cost_usd"], 6),
-            "cost_vnd": round(d["cost_usd"] * USD_TO_VND_RATE, 2),
-            "is_unattributed": u == "(chua quy duoc)",
-        } for u, d in sorted(cost_by_user.items(), key=lambda kv: -kv[1]["cost_usd"])]
+        # Lay HOP cac khoa cua 3 bang: nguoi co chi phi, nguoi co phien, nguoi co luot hoi. Neu chi
+        # duyet cost_by_user thi nguoi co hoat dong ma khong tra duoc chi phi se bien mat khoi bang,
+        # va cong cac dong se khong con bang tong.
+        _zero = {"cost_usd": 0.0, "input_tokens": 0, "output_tokens": 0}
+        _keys = set(cost_by_user) | set(sessions_by_user) | set(queries_by_user)
+        user_breakdown = []
+        for u in sorted(_keys, key=lambda k: -cost_by_user.get(k, _zero)["cost_usd"]):
+            d = cost_by_user.get(u, _zero)
+            user_breakdown.append({
+                "username": u,
+                "queries": queries_by_user.get(u, 0),
+                "sessions": len(sessions_by_user.get(u, ())),
+                "input_tokens": d["input_tokens"],
+                "output_tokens": d["output_tokens"],
+                "total_tokens": d["input_tokens"] + d["output_tokens"],
+                "cost_usd": round(d["cost_usd"], 6),
+                "cost_vnd": round(d["cost_usd"] * USD_TO_VND_RATE, 2),
+                "is_unattributed": u == UNATTRIBUTED,
+            })
 
     return {
         "username": username,
