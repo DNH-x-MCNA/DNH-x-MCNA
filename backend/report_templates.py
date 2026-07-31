@@ -1631,18 +1631,25 @@ def revenue_reconciliation_check(as_of_date: str = None, area_code: str = None,
     # vung qua tien to ma KH (region_map.py) cho dong nao co area=NULL, roi moi loc theo area_code sau
     # khi da xac dinh vung. Neu KHONG loc vung, don gian SUM toan bo (khong can quan tam khach mo coi
     # thuoc vung nao vi dang tinh tong ca cong ty).
+    # !!! PHAI SO CUNG KY. fact_tonghopkhachhang (nguon cua bottom_up) la so LUY KE TU DAU THANG den
+    # ngay snapshot, con vhoadon_otc la so THEO TUNG NGAY. Truoc 31/07/2026 khoi nay lay
+    # "doc_date BETWEEN fdate AND fdate" tuc CHI 1 NGAY, roi dem so sanh voi ca thang -> bottom_up luon
+    # vuot xa top_down -> canh bao "BAT THUONG, co the dem trung TDV" ban ra SAI. Da xay ra that:
+    # 31/07/2026 tool bao "1,30 ty tren xuong vs 26,01 ty duoi len, ty le 2.006%, can bo phan van hanh
+    # kiem tra" trong khi doanh thu OTC ca thang 7 la ~34 ty va khong he co loi gi.
+    month_start = fdate[:8] + "01"
     if area_code:
         rows = _q("""
             SELECT v.customer_code cc, tp.area_code area, SUM(v.amount9) rev
             FROM vhoadon_otc v LEFT JOIN dms_khachhang kh ON kh.code=v.customer_code
             LEFT JOIN dim_tinhthanhpho tp ON tp.city_id=kh.city_id
             WHERE v.doc_date BETWEEN ? AND ? GROUP BY v.customer_code, tp.area_code
-            """, (fdate, fdate))
+            """, (month_start, fdate))
         top_down_rev = sum(_f(r["rev"]) for r in rows
                             if (r["area"] or region_from_customer_code(r["cc"])) == area_code)
     else:
         top_down_rev = _f(_q("SELECT COALESCE(SUM(amount9),0) rev FROM vhoadon_otc WHERE doc_date BETWEEN ? AND ?",
-                              (fdate, fdate))[0]["rev"])
+                              (month_start, fdate))[0]["rev"])
 
     # Doanh thu OTC CONG DON TU DUOI LEN: dung LAI cay to chuc cua revenue_tree() (TDV -> QLV -> TP)
     # thay vi tu viet lai truy van rieng - tranh 2 noi dinh nghia khac nhau ve "ai thuoc doi ai".
@@ -1661,15 +1668,18 @@ def revenue_reconciliation_check(as_of_date: str = None, area_code: str = None,
     coverage_pct = (bottom_up_rev / top_down_rev * 100) if top_down_rev else 0.0
     result = {
         "as_of": fdate, "area_code": area_code,
+        "period_from": month_start, "period_to": fdate,
         "top_down_revenue_otc": top_down_rev,
         "bottom_up_revenue_otc": bottom_up_rev,
         "coverage_pct": coverage_pct,
         "tdv_count_in_tree": tdv_count,
         "zones_without_qlv": undetermined_zones,
-        "note": ("Cong don tu duoi len LUON nho hon tong tren xuong (khong bao gio bang 100%) vi "
-                 "khong gom duoc khach ETC/mo coi + cac 'to' chua xac dinh QLV - day la GAP cau truc "
-                 "da biet, KHONG phai loi. coverage_pct qua thap bat thuong (vd giam dot ngot so ky "
-                 "truoc) moi dang nghi ngo co van de gan NV/vung sai."),
+        "note": (f"CA HAI VE deu tinh cho cung ky {month_start} -> {fdate} (luy ke tu dau thang den "
+                 "ngay chot snapshot KPI). Cong don tu duoi len LUON nho hon tong tren xuong (khong "
+                 "bao gio bang 100%) vi khong gom duoc khach ETC/mo coi + cac 'to' chua xac dinh QLV - "
+                 "day la GAP cau truc da biet, KHONG phai loi. coverage_pct qua thap bat thuong (vd "
+                 "giam dot ngot so ky truoc) moi dang nghi ngo co van de gan NV/vung sai. Khi trinh "
+                 "bay PHAI neu ro khoang thoi gian nay de nguoi doc khong tuong dang so 1 ngay voi 1 thang."),
     }
     if coverage_pct > 100.5:  # dung sai nho cho lam tron, > han han moi la dau hieu bug that (dem trung)
         result["warning"] = ("BAT THUONG: cong don tu duoi len VUOT QUA tong tren xuong - dau hieu co "
