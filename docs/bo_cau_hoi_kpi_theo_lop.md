@@ -60,8 +60,8 @@ Ký hiệu cột **Soi gì**: 🎯 chức năng thường · ⚠️ chạm bẫy
 
 | # | Câu hỏi | Chỉ số | Soi gì |
 |---|---|---|---|
-| 7 | Tháng 7/2026 toàn công ty có bao nhiêu khách hàng mới? | `IsNC` | ⚠️ **580 khách riêng biệt**. Trả **1.122** = đếm theo DÒNG, đã cộng chồng 2 tầng |
-| 8 | Bao nhiêu khách mua lại trong tháng 7/2026? | `IsRO` | 🔴 **Cột `IsRO` KHÔNG được đồng bộ về kho** — chatbot chỉ suy ra "không phải khách mới". Số đúng trên Bravo: **5.373** |
+| 7 | Tháng 7/2026 toàn công ty có bao nhiêu khách hàng mới? | `IsNC` | ⚠️ **601 khách riêng biệt** (kỳ 31/07). Cộng cả bảng = **1.178** vì `IsNC` có ở **cả hai tầng** |
+| 8 | Bao nhiêu khách mua lại trong tháng 7/2026? | `IsRO` | ⚠️ **5.594 khách** (kỳ 31/07). Cột đã kéo về kho từ 31/07. Lọc nhầm sang tầng quản lý sẽ ra **0** vì `IsRO` chỉ có ở tầng nhân viên |
 | 9 | Đơn hàng lớn nhất tháng 7/2026 là của khách nào, bao nhiêu tiền? | `MaxCustomerOrdAmount` | 🎯 |
 | 10 | Có bao nhiêu nhân viên đủ điều kiện tính thưởng ASO tháng 7/2026? | `IsCalASOBonus` | ⚠️ ASO tính theo **số lượng khách** (MB 40/MT 35/MN 25), **không phải %** |
 | 11 | Chỉ tiêu năm 2026 của miền Nam là bao nhiêu? | `YearSaleTarget` | ⚠️ Cột này **đã cộng dồn sẵn**, không cộng dồn lần nữa |
@@ -136,8 +136,9 @@ Ký hiệu cột **Soi gì**: 🎯 chức năng thường · ⚠️ chạm bẫy
 | Số mã tầng quản lý | **21** | |
 | Số mã tầng nhân viên | **165** | 186 (gộp cả 2 tầng) |
 | Số dòng một tầng | **6.574** | 13.148 |
-| Khách mới `IsNC=1` | **580 khách** | 1.122 (đếm theo dòng) |
-| Khách mua lại `IsRO=1` | **5.373 khách** | 6.002 *(cột chưa đồng bộ về kho)* |
+| Khách mới `IsNC=1` | **601 khách** | 1.178 (cộng cả 2 tầng) |
+| Khách mua lại `IsRO=1` | **5.594 khách** | **0** nếu lọc nhầm tầng quản lý |
+| Khách hoạt động `IsAC=1` | **45 khách** | **0** nếu lọc nhầm tầng quản lý |
 | Doanh số theo vùng (`AreaCode`) | MB **42,90 tỷ** · MN **16,18 tỷ** · MT **7,53 tỷ** | có nhóm "không rõ vùng" 9,37 tỷ |
 | Đạt chỉ tiêu ≥100% | **14** | |
 | Đạt KPI ≥80% | **50** | |

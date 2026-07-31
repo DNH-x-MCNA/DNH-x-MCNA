@@ -169,6 +169,34 @@ báo cùng lúc, không được khai bảng trước rồi cảnh báo sau.
 
 ---
 
+## ✅ Đã làm 31/07 — kéo về 6 cột, và một phát hiện bất ngờ
+
+Đã mở rộng `sync_fact_tonghopkhachhang` từ 7 lên **13 cột**, thêm: `YearSaleTarget`, `Amount_Cus`,
+`IsRO`, `IsAC`, `MaxCustomerOrdAmount`, `EmpDMSCode`. Kho cũ tự nâng cấp qua `_COLUMN_MIGRATIONS`
+(`ALTER TABLE`), đã kiểm: giữ nguyên dữ liệu, không phải dựng lại.
+
+**`AreaCode` cố ý KHÔNG kéo** dù nó phủ đủ 186/186 mã — vì bảng `fact_thongketinhluong` của Triều đã
+có sẵn cột đó. Kéo về hai nơi là tạo ra hai nguồn vùng miền có thể lệch nhau mà không biết tin bên nào.
+
+### 🔴 Ba cờ khách hàng hành xử KHÁC NHAU giữa hai tầng
+
+Đo trên Bravo kỳ 31/07/2026:
+
+| Tầng | `IsNC` | `IsRO` | `IsAC` |
+|---|---:|---:|---:|
+| Quản lý | 577 | **0** | **0** |
+| Nhân viên | 601 | 5.594 | 45 |
+
+Hai kiểu sai ngược chiều nhau:
+
+- **`IsNC` có ở cả hai tầng** → cộng cả bảng ra 1.178, gấp đôi số thật.
+- **`IsRO` và `IsAC` chỉ có ở tầng nhân viên** → lọc nhầm sang tầng quản lý ra **0**, và số 0 này
+  trông rất giống một câu trả lời hợp lệ nên khó phát hiện.
+
+Đã ghi cảnh báo vào `schema_context.py` kèm số đo thật.
+
+---
+
 ## Đề xuất thay đổi *(phần còn lại sau khi trừ việc Triều đã làm)*
 
 ### Bước 1 — Mở rộng câu truy vấn đồng bộ
