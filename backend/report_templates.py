@@ -1837,6 +1837,11 @@ def audit_log_summary(days: int = 7, limit: int = 30, username: str = None, targ
     cost_sessions = set()
     total_cost = 0.0
     total_tokens_in = total_tokens_out = 0
+    # 03/08/2026: Dem SO CAU HOI THAT (nhom theo session_id + question) thay vi dem audit_log entries
+    # (tuc la dem SQL). Mot cau hoi KPI sinh ra 10+ lenh SQL nhung van chi la 1 cau hoi - phai dem la 1.
+    _seen_q_keys = set()
+    questions_by_user = {}
+    cost_per_question = {}
     if os.path.exists(COST_LOG_PATH):
         with open(COST_LOG_PATH, encoding="utf-8") as f:
             for line in f:
@@ -1869,6 +1874,22 @@ def audit_log_summary(days: int = 7, limit: int = 30, username: str = None, targ
                 # lai la cua CA CONG TY - hai con so canh nhau nhung khac pham vi.
                 if effective_target and owner != effective_target:
                     continue
+
+                # --- 03/08/2026: Dem cau hoi + chi phi per-question ---
+                q_preview = c.get("question_preview", "")
+                q_key = (sid or "", q_preview)
+                cpq = cost_per_question.setdefault(q_key, {
+                    "cost_usd": 0.0, "input_tokens": 0, "output_tokens": 0,
+                    "cache_read_tokens": 0, "cache_write_tokens": 0, "ts": c.get("ts")})
+                cpq["cost_usd"] += cost
+                cpq["input_tokens"] += p_tok
+                cpq["output_tokens"] += c_tok
+                cpq["cache_read_tokens"] += (c.get("cache_read_tokens", 0) or 0)
+                cpq["cache_write_tokens"] += (c.get("cache_write_tokens", 0) or 0)
+                if q_key not in _seen_q_keys:
+                    _seen_q_keys.add(q_key)
+                    _q_owner = owner or UNATTRIBUTED
+                    questions_by_user[_q_owner] = questions_by_user.get(_q_owner, 0) + 1
 
                 total_cost += cost
                 total_tokens_in += p_tok
@@ -1910,10 +1931,15 @@ def audit_log_summary(days: int = 7, limit: int = 30, username: str = None, targ
     for _sid in (my_sessions | cost_sessions):
         sessions_by_user.setdefault(owner_of.get(_sid) or UNATTRIBUTED, set()).add(_sid)
 
-    queries_by_user = {}
-    for e in my_entries:
-        _k = e.get("username") or owner_of.get(e.get("session_id")) or UNATTRIBUTED
-        queries_by_user[_k] = queries_by_user.get(_k, 0) + 1
+    # 03/08/2026: Fallback - neu cost_log rong, dem dedup tu audit_log
+    if not questions_by_user:
+        _seen_audit_q = set()
+        for e in my_entries:
+            _k = e.get("username") or owner_of.get(e.get("session_id")) or UNATTRIBUTED
+            _aq_key = (e.get("session_id") or "", (e.get("question") or "")[:120])
+            if _aq_key not in _seen_audit_q:
+                _seen_audit_q.add(_aq_key)
+                questions_by_user[_k] = questions_by_user.get(_k, 0) + 1
 
     def _event_summary(e: dict) -> str:
         """1 dong mo ta ngan gon kieu 'nhat ky hoat dong' (giong timeline audit log admin: 'Ai - lam
@@ -1949,7 +1975,17 @@ def audit_log_summary(days: int = 7, limit: int = 30, username: str = None, targ
             line = f"{e['username']}: {line}"
         return line
 
-    recent = sorted(my_entries, key=lambda e: e.get("ts", ""), reverse=True)[:limit]
+    # 03/08/2026: Dedup history - moi (session, question) chi hien 1 dong, hien chi phi per-question.
+    _seen_history_q = set()
+    recent = []
+    for e in sorted(my_entries, key=lambda e: e.get("ts", ""), reverse=True):
+        _hq_key = (e.get("session_id") or "", (e.get("question") or "")[:120])
+        if _hq_key in _seen_history_q:
+            continue
+        _seen_history_q.add(_hq_key)
+        recent.append(e)
+        if len(recent) >= limit:
+            break
     history = [{
         "ts": e.get("ts"),
         "event_summary": _event_summary(e),
@@ -1960,7 +1996,12 @@ def audit_log_summary(days: int = 7, limit: int = 30, username: str = None, targ
         "row_count": e.get("row_count"),
         "duration_ms": e.get("duration_ms"),
         "error": e.get("error"),
-        "session_cost_usd": cost_by_session.get(e.get("session_id"), {}).get("cost_usd"),
+        "question_cost_usd": cost_per_question.get(
+            (e.get("session_id") or "", (e.get("question") or "")[:120]), {}).get("cost_usd"),
+        "question_input_tokens": cost_per_question.get(
+            (e.get("session_id") or "", (e.get("question") or "")[:120]), {}).get("input_tokens"),
+        "question_output_tokens": cost_per_question.get(
+            (e.get("session_id") or "", (e.get("question") or "")[:120]), {}).get("output_tokens"),
     } for e in recent]
 
     _rate_vn = f"{USD_TO_VND_RATE:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
@@ -1980,7 +2021,7 @@ def audit_log_summary(days: int = 7, limit: int = 30, username: str = None, targ
             d = cost_by_user.get(u, _zero)
             user_breakdown.append({
                 "username": u,
-                "queries": queries_by_user.get(u, 0),
+                "queries": questions_by_user.get(u, 0),
                 "sessions": len(sessions_by_user.get(u, ())),
                 "input_tokens": d["input_tokens"],
                 "output_tokens": d["output_tokens"],
@@ -1994,7 +2035,7 @@ def audit_log_summary(days: int = 7, limit: int = 30, username: str = None, targ
         "username": username,
         "scope": "toan cong ty" if (is_clevel_admin and not effective_target) else (f"nguoi dung {effective_target}" if effective_target else f"ca nhan {username}"),
         "days": days,
-        "total_queries": len(my_entries),
+        "total_queries": sum(questions_by_user.values()) or len(my_entries),
         "total_sessions": len(my_sessions | cost_sessions),
         "total_cost_usd": round(total_cost, 6),
         "total_cost_vnd": round(total_cost * USD_TO_VND_RATE, 2),
