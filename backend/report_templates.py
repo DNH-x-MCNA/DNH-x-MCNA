@@ -4,7 +4,7 @@ Cac truy van BAO CAO CHUAN - doc tu KHO LOCAL (SQLite, warehouse.db), duoc dong 
 qua sync_warehouse.py (xem file do). Doc local giup tra loi nhanh (<=10s) va co du lich su nhieu nam
 de so sanh, thay vi phai goi Bravo qua VPN cho moi cau hoi (cham + phu thuoc VPN on dinh).
 
-Du lieu co the tre toi da ~15-30 phut (chu ky dong bo) so voi Bravo that - chap nhan duoc cho hầu het
+Du lieu co the tre toi da ~15-30 phut (chu ky dong bo) so voi Bravo that - chap nhan duoc cho háº§u het
 cau hoi phan tich/bao cao. Neu can so lieu "ngay tuc thi", noi ro voi nguoi dung day la so lieu tai
 lan dong bo gan nhat.
 """
@@ -108,12 +108,12 @@ def sync_freshness_note(stale_minutes: int = 60) -> str:
             continue
         age_min = (dt.datetime.now() - last_dt).total_seconds() / 60
         if age_min > stale_minutes:
-            warnings.append(f"{table}: lần đồng bộ gần nhất cách đây {age_min:.0f} phút ({last_synced_at})")
+            warnings.append(f"{table}: láº§n Ä‘á»“ng bá»™ gáº§n nháº¥t cÃ¡ch Ä‘Ã¢y {age_min:.0f} phÃºt ({last_synced_at})")
     if not warnings:
         return ""
-    return ("CẢNH BÁO ĐỒNG BỘ: có thể tiến trình sync đã TREO/LỖI — " + "; ".join(warnings) +
-            " (chu kỳ bình thường 15-30 phút). PHẢI cảnh báo rõ người dùng trong câu trả lời rằng "
-            "dữ liệu có thể CŨ HƠN BÌNH THƯỜNG, không chỉ nói ngày dữ liệu như bình thường.")
+    return ("Cáº¢NH BÃO Äá»’NG Bá»˜: cÃ³ thá»ƒ tiáº¿n trÃ¬nh sync Ä‘Ã£ TREO/Lá»–I â€” " + "; ".join(warnings) +
+            " (chu ká»³ bÃ¬nh thÆ°á»ng 15-30 phÃºt). PHáº¢I cáº£nh bÃ¡o rÃµ ngÆ°á»i dÃ¹ng trong cÃ¢u tráº£ lá»i ráº±ng "
+            "dá»¯ liá»‡u cÃ³ thá»ƒ CÅ¨ HÆ N BÃŒNH THÆ¯á»œNG, khÃ´ng chá»‰ nÃ³i ngÃ y dá»¯ liá»‡u nhÆ° bÃ¬nh thÆ°á»ng.")
 
 
 # Hoa don CU HON 12 THANG duoc nen thanh KH x thang trong monthly_customer_summary (khong con
@@ -328,11 +328,11 @@ def top_customers(date_from: str, date_to: str, limit: int = 10, channel: str = 
 
 def _channel_sub_buckets():
     """Cac ban ghi 'kenh ao' trong dim_nhanvien (QLV gia dung de gan doanh thu kenh dac biet, vd
-    Modern Trade/Long Chau - Name bat dau bang 'Kênh', IsDuplicate=1) - KHONG phai QLV that, chi la
+    Modern Trade/Long Chau - Name bat dau bang 'KÃªnh', IsDuplicate=1) - KHONG phai QLV that, chi la
     cho gan doanh thu theo kenh ban hang. dmsid cua ban ghi nay khop voi vhoadon_otc.channel_code
     (tu EmpDMSCode2 tren Bravo, xem sync_warehouse.py) - CHI co o OTC, ETC khong co co che nay."""
     return _q("SELECT dmsid, name, area_code FROM dim_nhanvien "
-              "WHERE position_code='QLV' AND is_duplicate=1 AND name LIKE 'Kênh%' AND dmsid IS NOT NULL")
+              "WHERE position_code='QLV' AND is_duplicate=1 AND name LIKE 'KÃªnh%' AND dmsid IS NOT NULL")
 
 
 def revenue_by_region(date_from: str, date_to: str, scope_area_code: str = None, channel: str = "ALL",
@@ -474,14 +474,14 @@ def revenue_by_region(date_from: str, date_to: str, scope_area_code: str = None,
 # Giong nhau ca 3 mien MB/MT/MN. Con so 80 truoc day la MCNA tu dat, khong co can cu nghiep vu.
 # Repo bao cao D:\DNH (src/etl.py) doi cung ngay, cung gia tri - 2 he thong PHAI giong nhau.
 #
-# ⚠️ 23/07/2026 (chieu) - PHAN BIET 2 KHAI NIEM BI GOP NHAM SUOT TU DAU:
+# âš ï¸ 23/07/2026 (chieu) - PHAN BIET 2 KHAI NIEM BI GOP NHAM SUOT TU DAU:
 #   "DAT CHI TIEU"              = lam duoc >= 100% chi tieu thang. Giua thang gan nhu luon ~0 nguoi,
 #                                 vi doanh so moi luy ke toi hom nay con chi tieu la CA THANG.
 #   "DAT MUC THUONG NHOM HANG"  = >= nguong bat dau duoc tinh THUONG NHOM HANG (TDV 65%, quan ly 70%).
 # Hai cau hoi KHAC NHAU, ra 2 con so khac nhau. Nhan cu "Dat Chi Tieu (>=65%)" tu no da mau thuan:
 # dat chi tieu ma moi lam duoc 65% chi tieu. Tra ve CA HAI, va noi ro dang tra loi cai nao.
 #
-# ⚠️⚠️ VA DUNG GOI 65%/70% LA "NGUONG HUONG THUONG" CHUNG CHUNG. Do CHI la cong cua THUONG NHOM HANG
+# âš ï¸âš ï¸ VA DUNG GOI 65%/70% LA "NGUONG HUONG THUONG" CHUNG CHUNG. Do CHI la cong cua THUONG NHOM HANG
 # (DS.DM1/DM2/DM3). Trong dbo.DIM_BacThuong con it nhat 5 ho thuong khac, moc khac nhau va TRA THEO
 # CHI SO KHAC NHAU:
 #   V15  - dat 25% doanh so thang vao ngay 15        (moc giua ky, KHONG phai % ca thang)
@@ -493,10 +493,10 @@ def revenue_by_region(date_from: str, date_to: str, scope_area_code: str = None,
 # => Nguoi duoi 65% VAN CO THE duoc V15/ASO va VAN huong du luong co ban. TUYET DOI khong dien dat
 # thanh "khong duoc thuong" / "khong dat KPI" - do la noi sai ve tien luong cua nguoi that.
 #
-# ⚠️⚠️⚠️ 27/07/2026 - XAC NHAN VOI DNH: co BA MOC KHAC NHAU, TUYET DOI KHONG GOP:
+# âš ï¸âš ï¸âš ï¸ 27/07/2026 - XAC NHAN VOI DNH: co BA MOC KHAC NHAU, TUYET DOI KHONG GOP:
 #   >= 100%  DAT CHI TIEU        - lam du chi tieu thang duoc giao (nghia den).
 #   >=  80%  DAT KPI             - moc danh gia HIEU QUA CONG VIEC. AP DUNG CHO MOI VAI TRO
-#                                  (khong chia theo TDV/quan ly). Day la moc de cham 🟢/🟡/🔴.
+#                                  (khong chia theo TDV/quan ly). Day la moc de cham ðŸŸ¢/ðŸŸ¡/ðŸ”´.
 #   >=65/70% TOI MUC THUONG      - CONG bat dau duoc tinh THUONG NHOM HANG (DM1/DM2/DM3), theo
 #                                  DIM_BacThuong: TDV 65%, quan ly 70%. KHONG PHAI "dat KPI".
 #
@@ -533,7 +533,7 @@ def _not_duplicate_sql(alias: str = "nv") -> str:
 
 # 23/07/2026 - VA LOI "nguong quan ly khai bao nhung khong dung": KPI_ACHIEVED_THRESHOLD_MGR ton tai
 # tu ban va 65% buoi sang nhung KHONG duoc goi o BAT KY dau - moi vai tro deu bi cham o 65%. Hau qua
-# that: 1 QLV dat 67% duoc gan nhan "🟢 Tot"/"da dat", trong khi QD 0429/QD-HDQT.25 (van hieu luc voi
+# that: 1 QLV dat 67% duoc gan nhan "ðŸŸ¢ Tot"/"da dat", trong khi QD 0429/QD-HDQT.25 (van hieu luc voi
 # cap QLV) quy dinh duoi 70% huong 0% thuong danh muc - tuc la BAO SAI theo huong co loi.
 # Nguon: QD 0429-1 (MB) phu luc 02 bang 01, QD 0429-2 (MN), QD 0429-3 (MT) - deu co chu ky, deu chan
 # duoi o 70%. Rieng TDV da chuyen sang QD 0107/2026 (hieu luc 01/07/2026) nen chan duoi 65%.
@@ -552,14 +552,14 @@ def _bonus_threshold(position_code: str = None) -> int:
 def _kpi_status(pct: float, position_code: str = None) -> str:
     """Phan loai mau theo moc DAT KPI = 80% (KPI_ACHIEVED_THRESHOLD), CHUNG cho moi vai tro - xac
     nhan voi DNH 27/07/2026. CO Y khong cham theo 65/70: do la cong THUONG, khong phai thuoc do hieu
-    qua cong viec; cham theo 65/70 tung lam nguoi dat 67% duoc gan nhan "🟢 Tot"/"dat KPI" sai.
+    qua cong viec; cham theo 65/70 tung lam nguoi dat 67% duoc gan nhan "ðŸŸ¢ Tot"/"dat KPI" sai.
     >=80 Tot (xanh), 50..79 Trung binh (vang), <50 Nguy hiem (do).
     position_code giu lai cho tuong thich chu ky ham (khong con dung) - moc nay khong theo vai tro."""
     if pct >= KPI_ACHIEVED_THRESHOLD:
-        return "🟢 Tốt"
+        return "ðŸŸ¢ Tá»‘t"
     if pct >= KPI_WARN_THRESHOLD:
-        return "🟡 Trung bình"
-    return "🔴 Nguy hiểm"
+        return "ðŸŸ¡ Trung bÃ¬nh"
+    return "ðŸ”´ Nguy hiá»ƒm"
 
 
 def employee_kpi(as_of_date: str, limit: int = 10, order_by: str = "sales", filter: str = "all",
@@ -572,20 +572,20 @@ def employee_kpi(as_of_date: str, limit: int = 10, order_by: str = "sales", filt
     position_code: loc theo vai tro (vd 'TDV','QLV') - LUON dung tham so nay khi cau hoi chi dinh ro
     vai tro (vd "top TDV"), KHONG tu loc thu cong tu ket qua day du vi de sot/thieu chinh xac.
 
-    ⚠️ PHAN BIET BA MOC, TUYET DOI KHONG GOP:
+    âš ï¸ PHAN BIET BA MOC, TUYET DOI KHONG GOP:
       - "DAT CHI TIEU" = >=100% chi tieu thang -> dung "count_full_target" (va co "meets_full_target"
         tren tung dong). Giua thang con so nay gan nhu luon ~0 va DO LA DUNG: doanh so moi luy ke toi
         hom nay, con chi tieu la ca thang.
       - "DAT KPI" = >=80% ("kpi_threshold_pct", CHUNG cho moi vai tro) -> dung "count_kpi_achieved";
-        day cung la moc quyet dinh mau 🟢/🟡/🔴 o truong "status".
+        day cung la moc quyet dinh mau ðŸŸ¢/ðŸŸ¡/ðŸ”´ o truong "status".
       - "TOI MUC THUONG NHOM HANG" = >= "threshold" cua tung dong (TDV 65% theo QD 0107/2026,
         QLV va cac cap quan ly 70% theo QD 0429/.25) -> dung "count_above_target"/"count_below_target".
     Hoi "ai chua dat chi tieu" -> moc 100%; hoi "ai dat KPI" -> moc 80%; hoi "ai toi muc thuong nhom
     hang" -> "threshold". Neu cau hoi mo ho thi dua CA BA con so va noi ro tung cai la gi.
-    ⚠️ TUYET DOI khong goi 65%/70% la "dat KPI" - do chi la cong THUONG. Nguoi dat 67% la "da toi muc
+    âš ï¸ TUYET DOI khong goi 65%/70% la "dat KPI" - do chi la cong THUONG. Nguoi dat 67% la "da toi muc
     thuong nhom hang nhung CHUA dat KPI (80%)".
 
-    ⚠️ 65%/70% CHI la cong cua THUONG NHOM HANG (DM1/DM2/DM3), KHONG phai "nguong huong thuong" noi
+    âš ï¸ 65%/70% CHI la cong cua THUONG NHOM HANG (DM1/DM2/DM3), KHONG phai "nguong huong thuong" noi
     chung. Con V15 (25% doanh so vao ngay 15), V22, V25, ASO (theo SO LUONG khach hang: MB 40/MT 35/
     MN 25, khong phai %), thuong quy, thuong nam - moc khac va tra theo chi so khac. Luong co ban tu
     60% tro len van huong 100%. Nguoi duoi 65% VAN CO THE duoc cac khoan kia va VAN co luong co ban,
@@ -687,17 +687,17 @@ DAILY_KPI_YELLOW_MAX = 3.5   # 2.5% - 3.5%: vang; tren 3.5%: xanh
 
 def _daily_kpi_status(pct: float) -> str:
     if pct < DAILY_KPI_RED:
-        return "🔴 Đỏ"
+        return "ðŸ”´ Äá»"
     if pct <= DAILY_KPI_YELLOW_MAX:
-        return "🟡 Vàng"
-    return "🟢 Xanh"
+        return "ðŸŸ¡ VÃ ng"
+    return "ðŸŸ¢ Xanh"
 
 
 def employee_daily_kpi(employee_code: str, year_month: str, scope_area_code: str = None,
                         scope_employee_code: str = None) -> dict:
     """KPI THEO NGAY cho 1 nhan vien CA NHAN (co ma truc tiep tren hoa don, vd EmpDMSCode nhu
     'tungtx') trong 1 thang (YYYY-MM). Target 1 ngay = 4% MonthSaleTarget cua nhan vien (tuong duong
-    100% cua ngay). Phan loai tung ngay: 🔴 Do (<2.5%), 🟡 Vang (2.5%-3.5%), 🟢 Xanh (>3.5%). CHI tinh
+    100% cua ngay). Phan loai tung ngay: ðŸ”´ Do (<2.5%), ðŸŸ¡ Vang (2.5%-3.5%), ðŸŸ¢ Xanh (>3.5%). CHI tinh
     T2-T6 (bo qua T7/CN). Rieng "month_pct_of_target" la % TONG thang (thuc te/target*100, cach tinh
     CU khong lien quan 4%/ngay, KHONG co mau/nguong - chi la con so tham khao cuoi thang.
     KHONG dung cho ma khu vuc/quan ly vung (MBKV*, ASM*...) - cac ma nay khong xuat hien tren hoa don,
@@ -784,8 +784,8 @@ def employee_daily_kpi(employee_code: str, year_month: str, scope_area_code: str
                 pct = (rev / target * 100) if target else 0.0
                 status = _daily_kpi_status(pct)
                 days.append({"date": str(d), "revenue": rev, "pct_of_target": pct, "status": status})
-                if status.startswith("🔴"): count_red += 1
-                elif status.startswith("🟡"): count_yellow += 1
+                if status.startswith("ðŸ”´"): count_red += 1
+                elif status.startswith("ðŸŸ¡"): count_yellow += 1
                 else: count_green += 1
             d += dt.timedelta(days=1)
 
@@ -1128,8 +1128,8 @@ def order_timing_check(date_from: str, date_to: str, threshold_days: int = 2, li
 
 
 _AREA_TO_BRANCH = {"MB": "B02", "MT": "B03", "MN": "B04"}
-_BRANCH_LABEL = {"B01": "Sản xuất", "B02": "Kinh doanh Miền Bắc",
-                 "B03": "Kinh doanh Miền Trung", "B04": "Kinh doanh Miền Nam"}
+_BRANCH_LABEL = {"B01": "Sáº£n xuáº¥t", "B02": "Kinh doanh Miá»n Báº¯c",
+                 "B03": "Kinh doanh Miá»n Trung", "B04": "Kinh doanh Miá»n Nam"}
 
 
 def inventory_by_region(area_code: str = None, scope_area_code: str = None) -> list:
@@ -1261,7 +1261,7 @@ def receivables_overview(top_n: int = 10, scope_area_code: str = None) -> dict:
     return result
 
 
-# 29/07/2026 — GOP THEO THANG, khong ghim MOT save_date.
+# 29/07/2026 â€” GOP THEO THANG, khong ghim MOT save_date.
 #
 # Vi sao: DNH KHONG ghi snapshot thang thanh mot lan. Xac nhan tren Bravo 29/07/2026 - thang 7 co 2
 # snapshot, moi cai chua mot phan vung:
@@ -1272,8 +1272,8 @@ def receivables_overview(top_n: int = 10, scope_area_code: str = None) -> dict:
 # do lon. Cac thang da dong (31/05, 30/06...) chi co 1 snapshot tron ven nen loi chi lo GIUA THANG.
 #
 # Cach gop: trong THANG cua fdate, moi nhan vien lay save_date moi nhat cua CHINH ho. Kiem chung
-# 29/07/2026 tren Bravo: tong chi tieu ra dung 50.967.586.921d (MB 30.781.764.408 · MN 13.185.822.513
-# · MT 7.000.000.000) - khop tung dong voi gia tri da verify, va khoi phuc du ca 3 mien.
+# 29/07/2026 tren Bravo: tong chi tieu ra dung 50.967.586.921d (MB 30.781.764.408 Â· MN 13.185.822.513
+# Â· MT 7.000.000.000) - khop tung dong voi gia tri da verify, va khoi phuc du ca 3 mien.
 # LUON truyen tham so theo thu tu (fdate, fdate).
 _MONTH_LATEST_SUBQ = """(SELECT employee_code, MAX(save_date) d FROM fact_tonghopkhachhang
                           WHERE save_date<=? AND substr(save_date,1,7)=substr(?,1,7)
@@ -1380,12 +1380,12 @@ def revenue_tree(as_of_date: str = None, area_code: str = None, scope_area_code:
     (hoac dung get_revenue_by_region cho doanh thu hoa don thuc te, khac voi so KPI o day).
 
     27/07/2026 - DONG BO voi kpi_ranking()/_rollup_tier_codes(): truoc day danh sach "QLV" duoi moi TP
-    loc truc tiep position_code='QLV' AND is_duplicate<>1, BO SOT cac NHOM/KENH nhu 'Kênh MT'/'Chợ sỉ'
+    loc truc tiep position_code='QLV' AND is_duplicate<>1, BO SOT cac NHOM/KENH nhu 'KÃªnh MT'/'Chá»£ sá»‰'
     (Mien Nam - IsDuplicate=1 vi Bravo gan trung ma, khong phai QLV that bi trung). Hau qua THUC TE: cay
     QLV/TDV cua Mien Nam ra 3,50 ty trong khi tong vung (get_revenue_by_region) la 6,25 ty - nguoi dung
     phai HOI LAI "con thieu gi" moi duoc bao thieu Kenh MT (2,73 ty) + Cho si (0,15 ty). Gio dung CHUNG
     _rollup_tier_codes(fdate) (theo manager_code THAT) lam nguon danh sach QLV, giong het kpi_ranking -
-    2 tool nay LUON phai ra cung tong 1 vung, khong con truong hop tong khop nhung bóc tach le."""
+    2 tool nay LUON phai ra cung tong 1 vung, khong con truong hop tong khop nhung bÃ³c tach le."""
     if scope_area_code:
         area_code = scope_area_code
     if as_of_date is None:
@@ -1926,23 +1926,23 @@ def audit_log_summary(days: int = 7, limit: int = 30, username: str = None, targ
         status = e.get("status")
         if sql.startswith("<template:"):
             tool_name = sql.split(":", 1)[1].split(">", 1)[0]
-            action = f"Chạy báo cáo '{tool_name}'"
+            action = f"Cháº¡y bÃ¡o cÃ¡o '{tool_name}'"
         elif sql:
-            action = "Chạy truy vấn dữ liệu tự do (query_database)"
+            action = "Cháº¡y truy váº¥n dá»¯ liá»‡u tá»± do (query_database)"
         else:
-            action = "Thực hiện thao tác"
+            action = "Thá»±c hiá»‡n thao tÃ¡c"
         if status == "ok":
             rc = e.get("row_count")
-            detail = f" — {rc} dòng kết quả" if rc is not None else ""
+            detail = f" â€” {rc} dÃ²ng káº¿t quáº£" if rc is not None else ""
             dur = e.get("duration_ms")
             detail += f", {dur} ms" if dur is not None else ""
             line = f"{action}{detail}"
         elif status == "rejected":
-            line = f"{action} — BỊ TỪ CHỐI ({str(e.get('error', ''))[:80]})"
+            line = f"{action} â€” Bá»Š Tá»ª CHá»I ({str(e.get('error', ''))[:80]})"
         elif status == "blocked":
-            line = f"{action} — BỊ CHẶN (không đủ quyền)"
+            line = f"{action} â€” Bá»Š CHáº¶N (khÃ´ng Ä‘á»§ quyá»n)"
         elif status == "error":
-            line = f"{action} — LỖI ({str(e.get('error', ''))[:80]})"
+            line = f"{action} â€” Lá»–I ({str(e.get('error', ''))[:80]})"
         else:
             line = action
         if is_clevel_admin and not effective_target and e.get("username"):
@@ -2296,10 +2296,14 @@ def call_template(name: str, args: dict, question: str = "", username: str = Non
             # ghi chu o _ROLE_SCOPED_TEMPLATES) - chi ep scope_role de xac dinh co phai C-Level khong.
             call_args["scope_role"] = scope_role
         
-        # Fix SQLite BETWEEN trap globally: SQLite string comparison for BETWEEN excludes the final day
-        # if the column contains time (e.g. '2026-07-31 17:45:00' > '2026-07-31').
-        if "date_to" in call_args and isinstance(call_args["date_to"], str) and len(call_args["date_to"]) == 10:
-            call_args["date_to"] += " 23:59:59"
+        # 28/07/2026: Tu dong append " 23:59:59" vao bat ky tham so nao la date_to/date_to_a/date_to_b
+        # (YYYY-MM-DD) truoc khi truyen cho SQL. Neu khong co phan nay, "BETWEEN date_from AND date_to"
+        # trong SQLite se am tham LOAI BO hoan toan cac hoa don phat sinh TRONG ngay cuoi cung (date_to),
+        # vi string '2026-07-31' duoc hieu ngam la '2026-07-31 00:00:00', tuc la nho hon moi hoa don
+        # phat sinh luc '2026-07-31 08:00:00'. Day la nguyen nhan lech 6 ty tien doanh thu tung thay!
+        for key in ["date_to", "date_to_a", "date_to_b"]:
+            if key in call_args and isinstance(call_args[key], str) and len(call_args[key]) == 10:
+                call_args[key] += " 23:59:59"
 
         if scope_area_code and name not in _AREA_EXEMPT_TEMPLATES:
             call_args["scope_area_code"] = scope_area_code
