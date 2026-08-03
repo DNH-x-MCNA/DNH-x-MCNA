@@ -2021,6 +2021,58 @@ def audit_log_summary(days: int = 7, limit: int = 30, username: str = None, targ
     }
 
 
+def salary_achievement_summary(save_date: str = None, scope_area_code: str = None,
+                               scope_employee_code: str = None, scope_role: str = None) -> dict:
+    """Tong hop so luong nhan vien dat cac moc thuong tien do (V15, V22, V25) va ASO.
+    Tra ve so luong dat dieu kien va ty le % tren tong so nhan vien thuoc pham vi.
+    Phan quyen: scope_employee_code gioi han ve doi cua QLV."""
+    emp_sql, emp_params = _employee_scope_clause(scope_employee_code, "f")
+    area_sql = " AND f.area_code=?" if scope_area_code else ""
+    area_params = (scope_area_code,) if scope_area_code else ()
+    
+    cond_sql = emp_sql + area_sql
+    cond_params = emp_params + area_params
+    
+    date_cond = " AND f.save_date<=?" if save_date else ""
+    date_param = (save_date,) if save_date else ()
+
+    fdate_r = _q(f"SELECT MAX(f.save_date) d FROM fact_thongketinhluong f WHERE 1=1 {cond_sql}{date_cond} AND f.v25_percent IS NOT NULL", cond_params + date_param)
+    fdate = fdate_r[0]["d"] if fdate_r else None
+    if not fdate:
+        fdate_r = _q(f"SELECT MAX(f.save_date) d FROM fact_thongketinhluong f WHERE 1=1 {cond_sql}{date_cond}", cond_params + date_param)
+        fdate = fdate_r[0]["d"] if fdate_r else None
+    if not fdate:
+        return {"error": "Chua co du lieu thuong/luong trong ky nay hoac trong pham vi cua ban."}
+        
+    sql = f"""SELECT 
+        COUNT(f.employee_code) as total_emp,
+        SUM(CASE WHEN f.v15_bonus > 0 THEN 1 ELSE 0 END) as v15_achieved,
+        SUM(CASE WHEN f.v22_bonus > 0 THEN 1 ELSE 0 END) as v22_achieved,
+        SUM(CASE WHEN f.v25_bonus > 0 THEN 1 ELSE 0 END) as v25_achieved,
+        SUM(CASE WHEN f.aso_bonus > 0 THEN 1 ELSE 0 END) as aso_achieved
+        FROM fact_thongketinhluong f
+        WHERE f.save_date=? {cond_sql}
+        """
+    row = _q(sql, (fdate,) + cond_params)
+    if not row or row[0]["total_emp"] == 0:
+        return {"error": "Khong co nhan vien nao trong pham vi quan ly co du lieu tinh luong."}
+        
+    r = row[0]
+    total = r["total_emp"]
+    return {
+        "save_date": fdate,
+        "total_employees": total,
+        "v15_achieved_count": r["v15_achieved"],
+        "v15_achieved_pct": round(r["v15_achieved"] / total * 100, 1) if total else 0,
+        "v22_achieved_count": r["v22_achieved"],
+        "v22_achieved_pct": round(r["v22_achieved"] / total * 100, 1) if total else 0,
+        "v25_achieved_count": r["v25_achieved"],
+        "v25_achieved_pct": round(r["v25_achieved"] / total * 100, 1) if total else 0,
+        "aso_achieved_count": r["aso_achieved"],
+        "aso_achieved_pct": round(r["aso_achieved"] / total * 100, 1) if total else 0,
+        "note": "So luong nhan vien dat cac moc thuong V15, V22, V25 va ASO tren tong so nhan vien (dua tren du lieu co phat sinh tien thuong V15/V22/V25/ASO > 0)."
+    }
+
 
 def salary_detail(employee_code: str = None, save_date: str = None,
                    scope_employee_code: str = None, scope_role: str = None) -> dict:
@@ -2176,6 +2228,7 @@ TEMPLATES = {
     "get_receivables_overview": receivables_overview,
     "get_audit_log": audit_log_summary,
     "get_salary_detail": salary_detail,
+    "get_salary_achievement_summary": salary_achievement_summary,
 }
 
 # Tool tra du lieu RIENG CUA NGUOI DANG HOI (lich su truy van/chi phi cua chinh ho) - username PHAI
@@ -2196,7 +2249,7 @@ _SELF_SCOPED_TEMPLATES = {"get_audit_log"}
 # 28/07/2026 (KPI+luong moi): salary_detail() cung can scope_role tu server (C-Level moi duoc xem
 # nguoi khac) NHUNG khong nhan tham so 'username' (dung employee_code, khac get_audit_log) - tach
 # rieng khoi _SELF_SCOPED_TEMPLATES de khong ep nham 'username' vao ham khong co tham so do (TypeError).
-_ROLE_SCOPED_TEMPLATES = {"get_salary_detail"}
+_ROLE_SCOPED_TEMPLATES = {"get_salary_detail", "get_salary_achievement_summary"}
 
 # 28/07/2026: tool da bi gioi han bang co che MANH HON scope vung (ep username, xem
 # _SELF_SCOPED_TEMPLATES) nen KHONG nhan tham so scope_area_code - ham audit_log_summary() khong co
@@ -2206,7 +2259,7 @@ _ROLE_SCOPED_TEMPLATES = {"get_salary_detail"}
 # tool KHAC quen khai bao tham so nay van se no TypeError nhu cu, dung xoa dong nay de "sua" loi khac.
 # get_salary_detail: cung khong nhan scope_area_code (dung scope_employee_code + scope_role) - them
 # vao day vi ly do tuong tu.
-_AREA_EXEMPT_TEMPLATES = {"get_audit_log", "get_salary_detail"}
+_AREA_EXEMPT_TEMPLATES = {"get_audit_log", "get_salary_detail", "get_salary_achievement_summary"}
 
 
 # 23/07/2026 - DOI SANG CO CHE "DANH SACH CHO PHEP, FAIL-CLOSED" sau khi phat hien lo hong R-F
@@ -2248,10 +2301,11 @@ _PERSON_LEVEL_TEMPLATES = {"get_revenue_tree", "get_kpi_ranking", "get_employee_
                             # 28/07/2026: get_salary_detail - du lieu THUONG/LUONG CA NHAN, nhay cam
                             # nhat trong moi tool (tien that cua tung nguoi) - BAT BUOC ep scope, xem
                             # ham salary_detail() va _EMPLOYEE_SCOPED_TEMPLATES.
-                            "get_salary_detail"}
+                            "get_salary_detail", "get_salary_achievement_summary"}
 _EMPLOYEE_SCOPED_TEMPLATES = {"get_revenue_tree", "get_kpi_ranking", "get_employee_kpi",
                               "get_employee_daily_kpi", "get_revenue_by_channel", "get_top_customers",
-                              "get_top_products", "get_revenue_by_region", "compare_periods", "get_salary_detail"}
+                              "get_top_products", "get_revenue_by_region", "compare_periods", "get_salary_detail",
+                              "get_salary_achievement_summary"}
 # check_order_timing CO Y de ngoai _EMPLOYEE_SCOPED_TEMPLATES: day la bao cao CHONG GIAN LAN neu dich
 # danh nhan su nghi "chay don don KPI" - chua co xac nhan nghiep vu ai duoc phep xem, nen voi tai khoan
 # qlv thi CHAN han (fail-closed) cho toi khi DNH chot. Xem D1 trong docs/Cau_hoi_can_DNH_xac_nhan.md.
