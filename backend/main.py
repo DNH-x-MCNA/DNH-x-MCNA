@@ -114,10 +114,28 @@ def _check_public_auth_rate_limit(email: str, client_ip: str = "local"):
 
 
 def _require_session_access(session_id: str, user: dict):
+    """CHI dung cho DOC (GET /history) - C-Level duoc xem lich su cua nguoi khac (giam sat/kiem toan),
+    day la hanh vi co y, khong phai loi."""
     from conversation_memory import get_session_owner
     owner = get_session_owner(session_id)
     if owner is not None and owner != user["username"] and user["role"] != "c_level":
         raise HTTPException(403, "Khong co quyen truy cap cuoc tro chuyen nay")
+
+
+def _require_session_write_access(session_id: str, user: dict):
+    """Dung cho GHI vao phien (POST /chat, POST /clear) - KHONG co ngoai le cho C-Level, kem ca
+    DELETE /sessions da co san logic tuong tu ben duoi.
+    Phat hien 03/08/2026: _require_session_access() (chi danh cho doc) dang bi tai su dung cho ca
+    /chat va /clear, khien C-Level GUI DUOC tin nhan vao phien cua nguoi khac (messages khong co cot
+    nguoi gui rieng - tin nhan chen vao se LAN VAO lich su that cua ho, khong co dau hieu phan biet -
+    tuong duong mao danh) va XOA DUOC toan bo lich su cua ho (clear_session con xoa ca dong sessions).
+    Xem lich su la giam sat hop le; gui tin/xoa thay nguoi khac thi khong, phai chan tuyet doi bat ke
+    vai tro."""
+    from conversation_memory import get_session_owner
+    owner = get_session_owner(session_id)
+    if owner is not None and owner != user["username"]:
+        raise HTTPException(403, "Chi chu so huu moi duoc gui tin nhan hoac xoa cuoc tro chuyen nay. "
+                                  "C-Level chi co quyen XEM lich su, khong duoc thao tac thay nguoi khac.")
 
 
 # --- PYDANTIC SCHEMAS ---
@@ -429,17 +447,14 @@ def get_sessions(user: dict = Depends(require_approved_user)):
 
 @app.delete("/sessions/{session_id}", dependencies=[Depends(require_api_key)])
 def delete_session_endpoint(session_id: str, user: dict = Depends(require_approved_user)):
-    from conversation_memory import get_session_owner
-    owner = get_session_owner(session_id)
-    if owner is not None and owner != user["username"]:
-        raise HTTPException(403, "Chi chu so huu moi co quyen xoa cuoc tro chuyen nay")
+    _require_session_write_access(session_id, user)
     delete_conversation_session(session_id)
     return {"ok": True}
 
 
 @app.post("/clear/{session_id}", dependencies=[Depends(require_api_key)])
 def clear(session_id: str, user: dict = Depends(require_approved_user)):
-    _require_session_access(session_id, user)
+    _require_session_write_access(session_id, user)
     from conversation_memory import clear_session
     clear_session(session_id)
     return {"ok": True}
@@ -450,7 +465,7 @@ def chat(req: ChatRequest, user: dict = Depends(require_approved_user)):
     if not req.question or not req.question.strip():
         raise HTTPException(400, "Cau hoi khong duoc de trong")
     _check_rate_limit(user["username"])
-    _require_session_access(req.session_id, user)
+    _require_session_write_access(req.session_id, user)
     try:
         scope_area_code = user["scope_value"] if user["role"] in ("regional_director", "qlv") else None
         scope_employee_code = user["employee_code"] if user["role"] == "qlv" else None
