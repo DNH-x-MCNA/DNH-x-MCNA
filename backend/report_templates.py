@@ -2005,13 +2005,27 @@ def salary_detail(employee_code: str = None, save_date: str = None,
     ident = _resolve_employee_identity(target_code)
     lookup_code = ident["dmsid"] or target_code
 
-    if save_date:
-        fdate_r = _q("SELECT MAX(save_date) d FROM fact_thongketinhluong WHERE save_date<=? "
-                     "AND (employee_code=? OR employee_code=?)", (save_date, target_code, lookup_code))
-    else:
-        fdate_r = _q("SELECT MAX(save_date) d FROM fact_thongketinhluong "
-                     "WHERE employee_code=? OR employee_code=?", (target_code, lookup_code))
+    # 28/07/2026 (phat hien khi kiem thu Mien Bac): Bravo tao SAN 1 dong "khoi tao" cho ngay dau
+    # thang moi (vd SaveDate=2026-08-01) truoc ca khi co phat sinh - dong nay CO total_point=0.0
+    # (KHONG phai NULL - da kiem chung thuc te, loc "IS NOT NULL" KHONG loai duoc no) nhung
+    # v25_percent/v15_percent/... deu NULL that su va month_sale_amount=0. Neu chi lay MAX(save_date)
+    # don thuan se am tham lay nham dong RONG dau thang nay thay vi snapshot THAT cua ky truoc do da
+    # chot du lieu (vd 2026-07-31 co day du V15/V22/V25/ASO cho toan bo Mien Bac, dm_bonus>0) - day
+    # chinh la nguyen nhan chatbot tung bao sai "chua co du lieu V15/V22/V25/ASO" trong khi du lieu
+    # THAT SU da duoc dong bo day du. Dung v25_percent IS NOT NULL lam dau hieu "ky da chot" (dang
+    # tin hon total_point vi khong bi lam tron ve 0 nham).
+    base_cond = "(employee_code=? OR employee_code=?)"
+    base_params = (target_code, lookup_code)
+    date_cond = " AND save_date<=?" if save_date else ""
+    date_param = (save_date,) if save_date else ()
+
+    fdate_r = _q(f"SELECT MAX(save_date) d FROM fact_thongketinhluong WHERE {base_cond}{date_cond} "
+                 f"AND v25_percent IS NOT NULL", base_params + date_param)
     fdate = fdate_r[0]["d"] if fdate_r else None
+    if not fdate:
+        fdate_r = _q(f"SELECT MAX(save_date) d FROM fact_thongketinhluong WHERE {base_cond}{date_cond}",
+                     base_params + date_param)
+        fdate = fdate_r[0]["d"] if fdate_r else None
     if not fdate:
         return {"error": f"Chua co du lieu thuong/luong cho nhan vien '{target_code}' (co the ma sai, "
                           "hoac du lieu chua duoc dong bo/chua phat sinh trong ky nay)."}
