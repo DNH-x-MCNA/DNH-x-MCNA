@@ -372,18 +372,30 @@ TEMPLATE_TOOLS = [
     },
     {
         "name": "get_salary_detail",
-        "description": "Chi tiet THUONG KINH DOANH + PHU CAP thang cua 1 nhan vien, theo chinh sach "
-                        "thu nhap moi (QD 0429/.25 Mien Nam/Trung, QD 0107/2026 TDV toan quoc, hieu luc "
-                        "tu 28/07/2026) - dung khi nguoi dung hoi 'thuong thang nay cua toi/cua [ten] "
-                        "bao nhieu', 'thuong danh muc/ASO/tien do cua toi', 'ket qua KPI luong cua toi'. "
+        "description": "Chi tiet THUONG KINH DOANH + PHU CAP thang cua 1 nhan vien (V15/V22/V25 thuong "
+                        "tien do, ASO, thuong danh muc DM1/DM2/DM3, SKU, khach tai don/khach moi), theo "
+                        "chinh sach thu nhap moi (QD 0429/.25 Mien Nam/Trung, QD 0107/2026 TDV toan "
+                        "quoc, hieu luc tu 28/07/2026) - dung khi nguoi dung hoi 'thuong thang nay cua "
+                        "toi/cua [ten] bao nhieu', 'V15/V22/V25/ASO cua [ten]', 'thuong danh muc/tien do "
+                        "cua toi', 'ket qua KPI luong cua toi'. "
+                        "HOI NHIEU NGUOI CUNG LUC (vd 'V15/V22/V25/ASO cho ca 4 TDV cua QLV X', 'thuong "
+                        "cua tat ca nhan vien vung Y') -> GOI TOOL NAY LAP LAI, MOI LAN 1 employee_code, "
+                        "roi tong hop ca 4/N ket qua vao 1 bang duy nhat cho nguoi dung - TUYET DOI KHONG "
+                        "tu ket luan 'khong ho tro nhieu nguoi' hay 'chua co du lieu' chi vi tool mo ta "
+                        "'1 nhan vien' trong ten - do la CACH GOI (1 lan/nguoi), khong phai gioi han du "
+                        "lieu. Neu 1 nguoi trong danh sach bi loi/tu choi (vd khong du quyen), VAN tiep "
+                        "tuc goi cho nhung nguoi con lai va bao ro nguoi nao thieu, KHONG dung ca cau tra "
+                        "loi lai vi 1 loi. "
                         "!!! CANH BAO QUAN TRONG: ket qua CHUA GOM Luong co ban (LCB) - he thong hien "
                         "CHUA co du lieu LCB (Bravo khong luu san muc LCB theo Level). PHAI noi ro voi "
                         "nguoi dung day la THUONG KINH DOANH + PHU CAP, KHONG PHAI 'tong luong'/'tong "
                         "thu nhap' day du - neu ho hoi tong thu nhap/luong thang, tra loi phan thuong "
                         "nay VA noi ro con thieu LCB, de nghi lien he ke toan/HR de biet LCB chinh xac. "
                         "PHAN QUYEN: mac dinh CHI tra ve DUNG cua nguoi dang hoi (server tu dong xac "
-                        "dinh, KHONG the xem cua nguoi khac du truyen employee_code gi) - CHI C-Level "
-                        "moi xem duoc nguoi khac qua tham so employee_code.",
+                        "dinh, KHONG the xem cua nguoi khac du truyen employee_code gi) - tai khoan "
+                        "C-Level HOAC QLV (xem doi cua chinh minh) moi xem duoc nguoi khac qua tham so "
+                        "employee_code; QLV Bui Khac Dung hoi ve 4 TDV cua chinh minh la HOP LE, KHONG "
+                        "duoc tu choi truoc khi thu goi tool.",
         "input_schema": {
             "type": "object",
             "properties": {

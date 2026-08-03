@@ -2030,14 +2030,44 @@ def salary_detail(employee_code: str = None, save_date: str = None,
 
     save_date: ngay snapshot can xem (mac dinh: gan nhat hien co, thuong la cuoi thang/dot chot gan
     nhat - fact_thongketinhluong CHI co 1 snapshot/thang, khac fact_tonghopkhachhang nhieu dong/thang)."""
+    # 03/08/2026 (phat hien qua kiem thu QLV Bui Khac Dung hoi V15/V22/V25/ASO cho 4 TDV cua minh):
+    # TRUOC DAY chi C-Level moi duoc xem nguoi khac - QLV hoi ve CHINH DOI CUA MINH bi tu choi chung
+    # chung, khien AI (dung docstring cu "C-Level/QLV xem doi minh" nhung code khong lam dieu do) bao
+    # sai "chua co du lieu". Sua: QLV duoc xem TDV NEU va CHI NEU nguoi do co manager_code=chinh QLV
+    # (doi chieu qua fact_thongketinhluong.manager_code, KHONG tin employee_code AI truyen ma khong
+    # kiem tra quan he quan ly - tranh QLV do doi nguoi ngoai doi).
     is_clevel = bool(scope_role and str(scope_role).lower() in ("c_level", "super_admin", "ceo", "cfo"))
+    is_manager_role = bool(scope_role and str(scope_role).lower() in ("qlv", "regional_director"))
     target_code = employee_code
     if not is_clevel:
-        # QLV/TDV thuong: CHI duoc xem CHINH MINH - scope_employee_code (ep tu server) la nguon DUY
-        # NHAT dang tin, bo qua employee_code AI/nguoi dung tu truyen de tranh do doi nguoi khac.
         if not scope_employee_code:
             return {"error": "Khong xac dinh duoc ma nhan vien cua tai khoan nay de tra cuu thuong/luong."}
-        target_code = scope_employee_code
+        if employee_code and employee_code != scope_employee_code:
+            if not is_manager_role:
+                # TDV/vai tro khac: KHONG duoc xem nguoi khac trong bat ky truong hop nao.
+                target_code = scope_employee_code
+            else:
+                # QLV: kiem tra nguoi duoc hoi co THAT SU bao cao len minh khong (qua manager_code
+                # trong CHINH fact_thongketinhluong - nguon du lieu nay dang dung, khong phai suy
+                # luan tu bang khac de tranh lech dinh nghia "doi" giua 2 nguon).
+                target_ident = _resolve_employee_identity(employee_code)
+                target_lookup = target_ident["dmsid"] or employee_code
+                mgr_check = _q(
+                    "SELECT manager_code FROM fact_thongketinhluong "
+                    "WHERE (employee_code=? OR employee_code=?) AND manager_code IS NOT NULL "
+                    "ORDER BY save_date DESC LIMIT 1", (employee_code, target_lookup))
+                qlv_ident = _resolve_employee_identity(scope_employee_code)
+                qlv_lookup = qlv_ident["dmsid"] or scope_employee_code
+                is_direct_report = bool(mgr_check and mgr_check[0]["manager_code"] in
+                                         (scope_employee_code, qlv_lookup))
+                if not is_direct_report:
+                    return {"error": (
+                        f"Ban khong co quyen xem thuong/luong cua '{employee_code}' - nguoi nay khong "
+                        "thuoc doi cua ban (hoac he thong chua xac dinh duoc quan he quan ly). QLV chi "
+                        "duoc xem TDV BAO CAO TRUC TIEP len chinh minh.")}
+                target_code = employee_code
+        else:
+            target_code = scope_employee_code
 
     if not target_code:
         return {"error": "Can cho biet ma nhan vien (hoac ten) can tra cuu thuong/luong."}
