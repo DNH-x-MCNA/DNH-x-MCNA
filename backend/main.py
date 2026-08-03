@@ -520,6 +520,10 @@ def get_audit_logs_dashboard(
 
     cost_by_session = defaultdict(lambda: {"cost_usd": 0.0, "input_tokens": 0, "output_tokens": 0, "cache_tokens": 0, "total_tokens": 0, "calls": 0})
     cost_direct_by_user = defaultdict(lambda: {"cost_usd": 0.0, "input_tokens": 0, "output_tokens": 0, "cache_tokens": 0, "total_tokens": 0})
+    # 03/08/2026: Per-question cost - nhom theo (session_id, question_preview) de hien chi phi TUNG CAU
+    cost_per_question = defaultdict(lambda: {"cost_usd": 0.0, "input_tokens": 0, "output_tokens": 0,
+        "cache_read_tokens": 0, "cache_write_tokens": 0, "total_tokens": 0, "api_calls": 0,
+        "username": "", "first_ts": None})
     # Cac phien da duoc quy chi phi TRUC TIEP cho nguoi dung (log co username). Vong duyet audit ben
     # duoi phai BO QUA chung khi cong vao user_stats, neu khong se cong hai lan -> chi phi gap doi.
     sessions_attributed_directly = set()
@@ -566,6 +570,21 @@ def get_audit_logs_dashboard(
                     cost_by_session[sid]["cache_tokens"] += cr + cw
                     cost_by_session[sid]["total_tokens"] += it + ot + cr + cw
                     cost_by_session[sid]["calls"] += 1
+                    # 03/08/2026: gom chi phi theo tung cau hoi (session + question_preview)
+                    _qp = c.get("question_preview", "")
+                    _qk = (sid, _qp)
+                    _cpq = cost_per_question[_qk]
+                    _cpq["cost_usd"] += cost
+                    _cpq["input_tokens"] += it
+                    _cpq["output_tokens"] += ot
+                    _cpq["cache_read_tokens"] += cr
+                    _cpq["cache_write_tokens"] += cw
+                    _cpq["total_tokens"] += it + ot + cr + cw
+                    _cpq["api_calls"] += 1
+                    if not _cpq["username"]:
+                        _cpq["username"] = (c.get("username") or "").strip()
+                    if not _cpq["first_ts"]:
+                        _cpq["first_ts"] = c.get("ts")
 
                 uname_direct = (c.get("username") or "").strip()
                 if uname_direct:
@@ -578,6 +597,12 @@ def get_audit_logs_dashboard(
                     if sid:
                         sessions_attributed_directly.add(sid)
 
+    # 03/08/2026: Pre-compute so lenh SQL per question de hien thi
+    _sql_count_by_q = defaultdict(int)
+    for _e in audit_entries:
+        _qk = (_e.get("session_id") or "", (_e.get("question") or "")[:120])
+        _sql_count_by_q[_qk] += 1
+
     filtered_logs = []
     user_stats = defaultdict(lambda: {"query_count": 0, "input_tokens": 0, "output_tokens": 0, "cache_tokens": 0, "total_tokens": 0, "cost_usd": 0.0})
     total_cost_usd = 0.0
@@ -586,7 +611,7 @@ def get_audit_logs_dashboard(
     total_cache_tokens_attributed = 0
 
     target_user_str = (user_filter or "").strip().lower()
-    counted_sessions = set()
+    _seen_q = set()  # 03/08/2026: dedup by (session_id, question[:120])
 
     for e in audit_entries:
         uname = e.get("username") or "unknown"
@@ -600,32 +625,38 @@ def get_audit_logs_dashboard(
             except Exception:
                 pass
 
-        sid = e.get("session_id")
-        session_cost_data = cost_by_session.get(sid, {})
-        c_usd = session_cost_data.get("cost_usd", 0.0)
-        c_it = session_cost_data.get("input_tokens", 0)
-        c_ot = session_cost_data.get("output_tokens", 0)
-        c_ct = session_cost_data.get("cache_tokens", 0)
-        c_tt = session_cost_data.get("total_tokens", c_it + c_ot)
+        sid = e.get("session_id") or ""
+        q_key = (sid, (e.get("question") or "")[:120])
+
+        # 03/08/2026: Moi (session, question) chi hien 1 dong - 1 cau hoi KPI khong con lap 10 dong
+        if q_key in _seen_q:
+            continue
+        _seen_q.add(q_key)
+
+        cpq = cost_per_question.get(q_key, {})
+        c_usd = cpq.get("cost_usd", 0.0)
+        c_it = cpq.get("input_tokens", 0)
+        c_ot = cpq.get("output_tokens", 0)
+        c_cr = cpq.get("cache_read_tokens", 0)
+        c_cw = cpq.get("cache_write_tokens", 0)
+        c_tt = cpq.get("total_tokens", c_it + c_ot + c_cr + c_cw)
 
         display_name = get_name_by_username(uname) or uname
 
         user_stats[uname]["query_count"] += 1
         user_stats[uname]["display_name"] = display_name
 
-        # Bo qua phien da quy truc tiep cho nguoi dung - phan do se duoc cong o vong
-        # cost_direct_by_user ben duoi. Cong ca hai cho = chi phi theo nguoi gap doi.
-        if sid and sid not in counted_sessions and sid not in sessions_attributed_directly:
-            counted_sessions.add(sid)
+        # Chi phi per-question (khong con gom theo session de tranh cong trung)
+        if sid and sid not in sessions_attributed_directly:
             user_stats[uname]["input_tokens"] += c_it
             user_stats[uname]["output_tokens"] += c_ot
-            user_stats[uname]["cache_tokens"] += c_ct
+            user_stats[uname]["cache_tokens"] += c_cr + c_cw
             user_stats[uname]["total_tokens"] += c_tt
             user_stats[uname]["cost_usd"] += c_usd
             total_cost_usd += c_usd
             total_input_tokens += c_it
             total_output_tokens += c_ot
-            total_cache_tokens_attributed += c_ct
+            total_cache_tokens_attributed += c_cr + c_cw
 
         filtered_logs.append({
             "ts": e.get("ts"),
@@ -636,11 +667,69 @@ def get_audit_logs_dashboard(
             "status": e.get("status", "success"),
             "duration_ms": e.get("duration_ms"),
             "session_id": sid,
+            # 03/08/2026: Per-question tokens/cost (khong con per-session)
+            "input_tokens": c_it,
+            "output_tokens": c_ot,
+            "cache_read_tokens": c_cr,
+            "cache_write_tokens": c_cw,
+            "total_tokens": c_tt,
+            "cost_usd": round(c_usd, 6),
+            "cost_vnd": round(c_usd * USD_TO_VND_RATE, 2),
+            "api_calls": cpq.get("api_calls", 0),
+            "sql_count": _sql_count_by_q.get(q_key, 0),
+            # Backward compat: giu ten cu de frontend khong bi vo
             "session_input_tokens": c_it,
             "session_output_tokens": c_ot,
             "session_total_tokens": c_tt,
             "session_cost_usd": round(c_usd, 6),
             "session_cost_vnd": round(c_usd * USD_TO_VND_RATE, 2),
+        })
+
+    # 03/08/2026: Them cau hoi chi co trong cost_log ma KHONG co trong audit_log
+    # (vd nguoi dung goi "Chao bot" - AI tra loi thang, khong chay SQL nao)
+    for _qk2, _cpq2 in cost_per_question.items():
+        if _qk2 in _seen_q:
+            continue
+        _sid2, _qp2 = _qk2
+        _uname2 = _cpq2.get("username") or "unknown"
+        if target_user_str and target_user_str not in ("all", ""):
+            if target_user_str not in _uname2.lower():
+                continue
+        if cutoff and _cpq2.get("first_ts"):
+            try:
+                if dt.datetime.fromisoformat(_cpq2["first_ts"]) < cutoff:
+                    continue
+            except Exception:
+                pass
+        _seen_q.add(_qk2)
+        _dn2 = get_name_by_username(_uname2) or _uname2
+        user_stats[_uname2]["query_count"] += 1
+        if not user_stats[_uname2].get("display_name"):
+            user_stats[_uname2]["display_name"] = _dn2
+        _c2 = _cpq2.get("cost_usd", 0.0)
+        filtered_logs.append({
+            "ts": _cpq2.get("first_ts"),
+            "username": _uname2,
+            "user_name": _dn2,
+            "question": _qp2,
+            "sql": None,
+            "status": "no_sql",
+            "duration_ms": None,
+            "session_id": _sid2,
+            "input_tokens": _cpq2.get("input_tokens", 0),
+            "output_tokens": _cpq2.get("output_tokens", 0),
+            "cache_read_tokens": _cpq2.get("cache_read_tokens", 0),
+            "cache_write_tokens": _cpq2.get("cache_write_tokens", 0),
+            "total_tokens": _cpq2.get("total_tokens", 0),
+            "cost_usd": round(_c2, 6),
+            "cost_vnd": round(_c2 * USD_TO_VND_RATE, 2),
+            "api_calls": _cpq2.get("api_calls", 0),
+            "sql_count": 0,
+            "session_input_tokens": _cpq2.get("input_tokens", 0),
+            "session_output_tokens": _cpq2.get("output_tokens", 0),
+            "session_total_tokens": _cpq2.get("total_tokens", 0),
+            "session_cost_usd": round(_c2, 6),
+            "session_cost_vnd": round(_c2 * USD_TO_VND_RATE, 2),
         })
 
     filtered_logs.sort(key=lambda x: x.get("ts", ""), reverse=True)
