@@ -110,6 +110,17 @@ dim_targetvungmien: target doanh thu OTC theo vung/thang. Cot: area_code, channe
   (xem canh bao MT o dim_tinhthanhpho phia tren) chia cho amount tu dim_targetvungmien WHERE
   channel_code='MT' AND doc_date=ngay dau thang dang hoi.
 fact_kehoachtongetc: target tong ETC theo thang. Cot: doc_date (ngay dau thang), amount, item_group.
+!!! HAI KENH KHONG CO CHI TIEU CHO CUNG SO THANG - BAY NAY GAY KET LUAN NGUOC (do 31/07/2026):
+  OTC (dim_targetvungmien)  chi co chi tieu den het THANG 7/2026 -> cong lai 389.303.222.378.
+  ETC (fact_kehoachtongetc) co du CA 12 THANG                    -> cong lai 503.163.621.222.
+  Cong bua ca hai roi goi la "chi tieu nam" se ra OTC 78,8% (mau so 7 thang) vs ETC 44,9% (mau so 12
+  thang), dan den ket luan "OTC tot, ETC cham". KET LUAN DO SAI: chenh lech den tu DO DAI KY khac
+  nhau chu khong phai tu hieu suat. Da xay ra that voi nguoi dung ngay 31/07/2026.
+  => Khi tinh "% hoan thanh chi tieu" cho NHIEU KENH, BAT BUOC:
+     (1) Kiem MIN/MAX(doc_date) chi tieu cua TUNG kenh TRUOC khi cong.
+     (2) Neu hai kenh khac so thang, CHI so tren khoang thang CHUNG va NOI RO dang tinh cho ky nao.
+     (3) TUYET DOI KHONG goi tong cua vai thang la "chi tieu nam", va KHONG gop % cua hai kenh co
+         mau so khac ky thanh mot con so "tong".
 dmssx_khachhang: code (ma khach hang ETC), name, city_id (dung join vung mien cho ETC), id_code (Id
   noi bo DMS, khac code), kenh_bh (kenh ban hang dang text). KHONG co cot NV phu trach (ETC khong co
   truong nay tren Bravo - chi biet NV thuc te ban hang qua vhoadon_etc.employee_code).
@@ -144,8 +155,14 @@ fact_tonghopkhachhang: 1 dong = 1 (nhan vien, khach hang, ngay snapshot). Cot: e
   lay snapshot gan nhat), is_nc (=1 neu la KH moi trong thang). CHI CO ~90 NGAY GAN NHAT trong kho
   local (lich su xa hon khong dong bo vi it gia tri cho KPI hien tai).
   Cot moi tu 31/07/2026:
-    year_sale_target (chi tieu NAM, DA cong don san - dung MAX giong month_sale_target, TUYET DOI
-      KHONG SUM va cung KHONG nhan len 12 lan tu chi tieu thang),
+    year_sale_target - !!! CHUA XAC NHAN LA CHI TIEU CUA KY NAO. Do tren Bravo ky 31/07/2026, cong o
+      tang quan ly (= cap cong ty) ra 327.132.314.370, tuc chi bang 6,42 lan chi tieu thang 7
+      (50.967.586.921) - KHONG phai 12 thang, cung KHONG bang 389.303.222.378 la tong chi tieu OTC 7
+      thang da cong bo. Hai tang con cho hai so khac nhau (quan ly 327 ty, nhan vien 360 ty), khac
+      han month_sale_target von khop tuyet doi voi chi tieu cong ty. => TUYET DOI KHONG dung cot nay
+      de tra loi "dat bao nhieu % chi tieu NAM" cho toi khi DNH xac nhan no la chi tieu cua ky nao.
+      Neu nguoi dung hoi, noi ro la he thong co so nhung chua xac nhan y nghia ky han. Dung MAX chu
+      khong SUM (lap lai moi dong giong month_sale_target - da kiem: 185/186 NV co dung 1 gia tri),
     is_ro (=1 la khach MUA LAI trong thang) - DUNG COT NAY cho cau "bao nhieu khach mua lai", KHONG
       duoc suy dien "khong phai khach moi thi la mua lai": cach suy dien cu tra 6.002 trong khi so
       that la 5.373,
