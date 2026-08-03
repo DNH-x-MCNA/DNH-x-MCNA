@@ -2253,6 +2253,12 @@ def call_template(name: str, args: dict, question: str = "", username: str = Non
             # Giong _SELF_SCOPED_TEMPLATES nhung KHONG ep 'username' (tool dung employee_code, xem
             # ghi chu o _ROLE_SCOPED_TEMPLATES) - chi ep scope_role de xac dinh co phai C-Level khong.
             call_args["scope_role"] = scope_role
+        
+        # Fix SQLite BETWEEN trap globally: SQLite string comparison for BETWEEN excludes the final day
+        # if the column contains time (e.g. '2026-07-31 17:45:00' > '2026-07-31').
+        if "date_to" in call_args and isinstance(call_args["date_to"], str) and len(call_args["date_to"]) == 10:
+            call_args["date_to"] += " 23:59:59"
+
         if scope_area_code and name not in _AREA_EXEMPT_TEMPLATES:
             call_args["scope_area_code"] = scope_area_code
         if scope_employee_code and name in _PERSON_LEVEL_TEMPLATES:
