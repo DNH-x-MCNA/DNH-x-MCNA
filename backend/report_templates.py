@@ -143,8 +143,30 @@ def _monthly_summary_scope_clause(scope_area_code: str, channel: str):
             f"WHERE kh.code=m.customer_code AND tp.area_code=?)", (scope_area_code,))
 
 
+def _get_team_dms_ids(scope_employee_code: str) -> list:
+    """Tra ve danh sach DMSId cua tat ca TDV thuoc quyen quan ly cua 1 QLV."""
+    from org_hierarchy import qlv_zones
+    zones = qlv_zones(scope_employee_code)
+    if not zones:
+        return []
+    placeholders = ",".join(["?"] * len(zones))
+    # name NOT LIKE '%(QLV)%' de loai ban ghi bong, lay dung TDV ban hang
+    rows = _q(f"SELECT dmsid FROM dim_nhanvien WHERE manager_area_code IN ({placeholders}) "
+              f"AND end_date IS NULL AND COALESCE(is_resigned,0)<>1 AND name NOT LIKE '%(QLV)%'", tuple(zones))
+    return [r["dmsid"] for r in rows if r.get("dmsid")]
+
+def _employee_scope_clause(scope_employee_code: str, alias: str) -> tuple:
+    if not scope_employee_code:
+        return "", ()
+    dms_ids = _get_team_dms_ids(scope_employee_code)
+    if not dms_ids:
+        return " AND 1=0", ()
+    placeholders = ",".join(["?"] * len(dms_ids))
+    return f" AND {alias}.employee_code IN ({placeholders})", tuple(dms_ids)
+
+
 def revenue_by_channel(date_from: str, date_to: str, scope_area_code: str = None,
-                        scope_channel: str = None) -> dict:
+                        scope_channel: str = None, scope_employee_code: str = None) -> dict:
     """Doanh thu + so hoa don theo kenh OTC/ETC trong khoang [date_from, date_to].
     scope_area_code: NEU duoc truyen (tai khoan QLV/GD mien bi gioi han vung), CHI tinh doanh thu
     cua dung vung do (join qua bang khach hang) - do la co che ep buoc o tang code, khong phu thuoc
@@ -153,6 +175,9 @@ def revenue_by_channel(date_from: str, date_to: str, scope_area_code: str = None
     kem co "channel_scope" bao hieu day la du lieu bi gioi han kenh (khac scope_area_code, co che
     nay doc lap va ap dung duoc cho moi role)."""
     scope_sql, scope_params = _scope_clause(scope_area_code)
+    emp_sql, emp_params = _employee_scope_clause(scope_employee_code, "v")
+    scope_sql += emp_sql
+    scope_params += emp_params
     join_o = _otc_area_join("v", scope_area_code)
     o = _q(f"SELECT COALESCE(SUM(v.amount9),0) rev, COUNT(DISTINCT v.stt) hd FROM vhoadon_otc v {join_o} "
            f"WHERE v.doc_date BETWEEN ? AND ?{scope_sql}", (date_from, date_to) + scope_params)[0]
@@ -172,12 +197,18 @@ def revenue_by_channel(date_from: str, date_to: str, scope_area_code: str = None
         summary_to = min(date_to, cutoff)
         ym_from, ym_to = date_from[:7], summary_to[:7]
         msc_o, msc_o_params = _monthly_summary_scope_clause(scope_area_code, "OTC")
+        msc_emp_sql, msc_emp_params = _employee_scope_clause(scope_employee_code, "m")
+        msc_o += msc_emp_sql
+        msc_o_params += msc_emp_params
         so = _q(f"SELECT COALESCE(SUM(m.revenue),0) rev, COALESCE(SUM(m.invoice_count),0) hd "
                 f"FROM monthly_customer_summary m WHERE m.channel='OTC' AND m.year_month BETWEEN ? AND ?{msc_o}",
                 (ym_from, ym_to) + msc_o_params)[0]
         otc_rev += _f(so["rev"]); otc_hd += int(so["hd"] or 0)
         if scope_channel != "OTC":
             msc_e, msc_e_params = _monthly_summary_scope_clause(scope_area_code, "ETC")
+            msc_emp_sql, msc_emp_params = _employee_scope_clause(scope_employee_code, "m")
+            msc_e += msc_emp_sql
+            msc_e_params += msc_emp_params
             se = _q(f"SELECT COALESCE(SUM(m.revenue),0) rev, COALESCE(SUM(m.invoice_count),0) hd "
                     f"FROM monthly_customer_summary m WHERE m.channel='ETC' AND m.year_month BETWEEN ? AND ?{msc_e}",
                     (ym_from, ym_to) + msc_e_params)[0]
@@ -238,12 +269,15 @@ def top_products(date_from: str, date_to: str, limit: int = 10, channel: str = "
 
 
 def top_customers(date_from: str, date_to: str, limit: int = 10, channel: str = "ALL",
-                   scope_area_code: str = None, scope_channel: str = None) -> list:
+                   scope_area_code: str = None, scope_channel: str = None, scope_employee_code: str = None) -> list:
     """Top N khach hang theo doanh thu. scope_area_code: ep loc theo vung khi tai khoan bi gioi han.
     scope_channel: EP GHI DE tham so channel khi tai khoan bi gioi han kenh (xem top_products)."""
     if scope_channel:
         channel = scope_channel
     scope_sql, scope_params = _scope_clause(scope_area_code)
+    emp_sql, emp_params = _employee_scope_clause(scope_employee_code, "v")
+    scope_sql += emp_sql
+    scope_params += emp_params
     parts, part_params = [], []
     if channel in ("OTC", "ALL"):
         join = _otc_area_join("v", scope_area_code)
@@ -264,11 +298,17 @@ def top_customers(date_from: str, date_to: str, limit: int = 10, channel: str = 
         ym_from, ym_to = date_from[:7], summary_to[:7]
         if channel in ("OTC", "ALL"):
             msc_sql, msc_params = _monthly_summary_scope_clause(scope_area_code, "OTC")
+            msc_emp_sql, msc_emp_params = _employee_scope_clause(scope_employee_code, "m")
+            msc_sql += msc_emp_sql
+            msc_params += msc_emp_params
             parts.append(f"SELECT m.customer_code, m.revenue AS amount9 FROM monthly_customer_summary m "
                          f"WHERE m.channel='OTC' AND m.year_month BETWEEN ? AND ?{msc_sql}")
             part_params.append((ym_from, ym_to) + msc_params)
         if channel in ("ETC", "ALL"):
             msc_sql, msc_params = _monthly_summary_scope_clause(scope_area_code, "ETC")
+            msc_emp_sql, msc_emp_params = _employee_scope_clause(scope_employee_code, "m")
+            msc_sql += msc_emp_sql
+            msc_params += msc_emp_params
             parts.append(f"SELECT m.customer_code, m.revenue AS amount9 FROM monthly_customer_summary m "
                          f"WHERE m.channel='ETC' AND m.year_month BETWEEN ? AND ?{msc_sql}")
             part_params.append((ym_from, ym_to) + msc_params)
@@ -2169,7 +2209,7 @@ _PERSON_LEVEL_TEMPLATES = {"get_revenue_tree", "get_kpi_ranking", "get_employee_
                             # ham salary_detail() va _EMPLOYEE_SCOPED_TEMPLATES.
                             "get_salary_detail"}
 _EMPLOYEE_SCOPED_TEMPLATES = {"get_revenue_tree", "get_kpi_ranking", "get_employee_kpi",
-                               "get_employee_daily_kpi", "get_salary_detail"}
+                              "get_employee_daily_kpi", "get_revenue_by_channel", "get_top_customers", "get_salary_detail"}
 # check_order_timing CO Y de ngoai _EMPLOYEE_SCOPED_TEMPLATES: day la bao cao CHONG GIAN LAN neu dich
 # danh nhan su nghi "chay don don KPI" - chua co xac nhan nghiep vu ai duoc phep xem, nen voi tai khoan
 # qlv thi CHAN han (fail-closed) cho toi khi DNH chot. Xem D1 trong docs/Cau_hoi_can_DNH_xac_nhan.md.
