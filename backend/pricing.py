@@ -9,8 +9,8 @@ Don vi: USD / 1,000,000 token.
 
 MODEL_PRICING = {
     "claude-sonnet-5": {
-        "input": 2.00,        # gia gioi thieu den 31/08/2026, sau do $3.00
-        "output": 10.00,      # gia gioi thieu den 31/08/2026, sau do $15.00
+        "input": 3.00,        # gia chuan cua Anthropic
+        "output": 15.00,      # gia chuan cua Anthropic
         "cache_read": 0.20,   # 0.1x input - he so chuan Anthropic
         "cache_write": 2.50,  # 1.25x input (cache TTL 5 phut) - he so chuan Anthropic, DA XAC MINH
                                # 29/07/2026 voi bang gia chinh thuc. KHONG con la uoc tinh.
