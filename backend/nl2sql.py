@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """NL2SQL: dung Claude (tool use) de hieu cau hoi tieng Viet, tra loi tu nhien.
 
 Kien truc HYBRID de tang do chinh xac cho cac bao cao hay dung:
@@ -49,7 +49,7 @@ TEMPLATE_TOOLS = [
     {
         "name": "get_top_products",
         "description": "Top N san pham theo doanh thu trong 1 khoang ngay (da tu dong loai hang khuyen mai khoi so luong). "
-                        "UU TIEN dung tool nay cho moi cau hoi ve san pham ban chay/top san pham.",
+                        "UU TIEN dung tool nay cho moi cau hoi ve san pham ban chay/top san pham. Tu dong tra ve top san pham cua rieng doi QLV neu duoc hoi.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -120,20 +120,20 @@ TEMPLATE_TOOLS = [
                         "tieu thang -> dung 'count_full_target'; giua thang con so nay gan nhu luon ~0 va do la "
                         "DUNG (doanh so luy ke toi hom nay vs chi tieu ca thang). (b) 'DAT KPI' = >=80% "
                         "('kpi_threshold_pct', CHUNG cho moi vai tro) -> dung 'count_kpi_achieved'; day cung la "
-                        "moc quyet dinh mau 🟢/🟡/🔴 o truong 'status'. (c) 'TOI MUC THUONG NHOM HANG' = "
+                        "moc quyet dinh mau ðŸŸ¢/ðŸŸ¡/ðŸ”´ o truong 'status'. (c) 'TOI MUC THUONG NHOM HANG' = "
                         ">= truong 'threshold' cua tung dong (TDV 65% theo QD 0107/2026, QLV va cac cap quan ly "
                         "70% theo QD 0429/.25) -> dung 'count_above_target'/'count_below_target'. Hoi 'ai chua "
                         "dat chi tieu' -> moc 100%; hoi 'ai dat KPI' -> moc 80%; hoi 'ai toi muc thuong nhom "
                         "hang' -> 'threshold'. Cau hoi mo ho thi dua CA BA va noi ro tung cai la gi. "
-                        "⚠️ TUYET DOI khong goi 65%/70% la 'dat KPI' - do chi la cong THUONG. Nguoi dat 67% la "
+                        "âš ï¸ TUYET DOI khong goi 65%/70% la 'dat KPI' - do chi la cong THUONG. Nguoi dat 67% la "
                         "'da toi muc thuong nhom hang nhung CHUA dat KPI (80%)'. "
-                        "⚠️ 65%/70% CHI la cong cua THUONG NHOM HANG (DM1/DM2/DM3), KHONG phai 'nguong huong "
+                        "âš ï¸ 65%/70% CHI la cong cua THUONG NHOM HANG (DM1/DM2/DM3), KHONG phai 'nguong huong "
                         "thuong' noi chung: con V15/V22/V25, ASO (tinh theo SO LUONG khach hang hoat dong - MB 40 "
                         "/ MT 35 / MN 25, khong phai %), thuong quy, thuong nam - moc khac han va tra theo chi so "
                         "khac; luong co ban tu 60% tro len van huong 100%. Nguoi duoi 65% VAN CO THE duoc cac "
                         "khoan kia, nen TUYET DOI khong noi ho 'khong duoc thuong' / 'khong dat KPI'. "
                         "Truong 'status' "
-                        "(🟢 Tot / 🟡 Trung binh / 🔴 Nguy hiem) chia theo muc THUONG NHOM HANG chu khong theo moc "
+                        "(ðŸŸ¢ Tot / ðŸŸ¡ Trung binh / ðŸ”´ Nguy hiem) chia theo muc THUONG NHOM HANG chu khong theo moc "
                         "100% - LUON hien thi nguyen status kem ten/ma NV, KHONG tu tinh nguong khac, KHONG ap "
                         "nguong cua vai tro nay sang vai tro kia. "
                         "UU TIEN dung tool nay cho moi cau hoi ve KPI/doanh so nhan vien/sales. "
@@ -165,7 +165,7 @@ TEMPLATE_TOOLS = [
                         "hoac get_revenue_tree (doanh so ca doi). "
                         "Trong 1 thang. Target 1 ngay = 4% MonthSaleTarget cua nhan vien do "
                         "(4% = 100% cua ngay). Ket qua co san 'days' (danh sach tung ngay T2-T6 trong thang, "
-                        "moi ngay co 'status': 🔴 Do <2.5%, 🟡 Vang 2.5%-3.5%, 🟢 Xanh >3.5% - LUON dung "
+                        "moi ngay co 'status': ðŸ”´ Do <2.5%, ðŸŸ¡ Vang 2.5%-3.5%, ðŸŸ¢ Xanh >3.5% - LUON dung "
                         "nguyen status nay, khong tu tinh nguong khac) va dem san count_red/count_yellow/"
                         "count_green. 'month_pct_of_target' la % TONG CA THANG (thuc te/target*100, cach "
                         "tinh CU, KHONG lien quan gi 4%/ngay va KHONG co mau) - chi dung khi hoi tong ket "
@@ -356,7 +356,7 @@ TEMPLATE_TOOLS = [
     },
     {
         "name": "get_audit_log",
-        "description": "Lich su truy van va token/chi phi AI quy doi VND/USD. Voi tai khoan C-Level hoac Admin: ho tro xem BÁO CÁO CHI PHÍ AI TOÀN CÔNG TY hoac loc theo nguoi dung (target_username). Voi tai khoan QLV/TDV: xem chi phi va lich su ca nhan. "
+        "description": "Lich su truy van va token/chi phi AI quy doi VND/USD. Voi tai khoan C-Level hoac Admin: ho tro xem BÃO CÃO CHI PHÃ AI TOÃ€N CÃ”NG TY hoac loc theo nguoi dung (target_username). Voi tai khoan QLV/TDV: xem chi phi va lich su ca nhan. "
                         "CACH TRINH BAY: ket qua co truong 'display_hint' - PHAI theo dung huong dan do "
                         "(dang TIMELINE, moi dong 1 su kien voi gio + event_summary DA SOAN SAN dung "
                         "nguyen van, moi nhat len dau, KHONG trinh bay thanh bang SQL/cot ky thuat).",
@@ -365,7 +365,7 @@ TEMPLATE_TOOLS = [
             "properties": {
                 "days": {"type": "integer", "description": "So ngay gan nhat can xem, mac dinh 7"},
                 "limit": {"type": "integer", "description": "So dong lich su gan nhat toi da tra ve, mac dinh 30"},
-                "target_username": {"type": "string", "description": "Ten tai khoan nguoi dung can loc (chi danh cho C-Level/Admin), hoac 'all' de xem toàn cong ty"},
+                "target_username": {"type": "string", "description": "Ten tai khoan nguoi dung can loc (chi danh cho C-Level/Admin), hoac 'all' de xem toÃ n cong ty"},
             },
             "required": [],
         },
@@ -488,7 +488,7 @@ hoi "doanh thu thang 6" roi hoi tiep "con thang 5?", hieu la van hoi doanh thu t
 tuong tu nhung doi sang thang 5) - KHONG hoi lai nguoi dung nhung gi da ro tu ngu canh truoc.
 
 QUAN TRONG VE CHON TOOL:
-- ⚠️ KHONG BAO GIO nhac ten tool/ham/truong ky thuat trong cau tra loi cho nguoi dung. Nguoi doc la
+- âš ï¸ KHONG BAO GIO nhac ten tool/ham/truong ky thuat trong cau tra loi cho nguoi dung. Nguoi doc la
   lanh dao kinh doanh, khong phai lap trinh vien. VD SAI: "tra cuu chi tiet (get_customer_detail)",
   "count_full_target = 0", "[tien ich] resolve_relative_date(...)". VD DUNG: "toi co the tra cuu chi
   tiet tung khach hang de xem ai phu trach". Mo ta viec lam bang ngon ngu nghiep vu, giau het ten ky
@@ -527,7 +527,7 @@ QUAN TRONG VE CHON TOOL:
       Giua thang con so nay gan nhu luon ~0 va DO LA DUNG, khong phai loi: doanh so moi luy ke toi hom
       nay con chi tieu la ca thang. Noi ro dieu do thay vi de nguoi doc tuong he thong hong.
     - Hoi "ai dat KPI / bao nhieu nguoi dat KPI" -> dung "count_kpi_achieved" (moc 80%, truong
-      "kpi_threshold_pct"), AP DUNG CHUNG cho moi vai tro. Day cung la moc quyet dinh mau 🟢/🟡/🔴.
+      "kpi_threshold_pct"), AP DUNG CHUNG cho moi vai tro. Day cung la moc quyet dinh mau ðŸŸ¢/ðŸŸ¡/ðŸ”´.
     - Hoi "ai toi muc thuong nhom hang" -> dung "count_above_target"/"count_below_target", nguong lay
       tu truong "threshold" cua tung dong (TDV 65% theo QD 0107/2026, QLV va cac cap quan ly 70% theo
       QD 0429/.25 - van hieu luc voi cap quan ly).
@@ -535,7 +535,7 @@ QUAN TRONG VE CHON TOOL:
     - Cau hoi mo ho -> dua CA BA con so kem nhan ro rang, dung tu chon 1 cai roi im lang.
     - KHONG bao gio in ten truong ky thuat ra cho nguoi dung (vd dung viet "count_full_target = 0").
       Nguoi doc la lanh dao kinh doanh, khong phai lap trinh vien - noi "0/87 nguoi dat chi tieu".
-  ⚠️ 65%/70% CHI la cong cua THUONG NHOM HANG (DM1/DM2/DM3). DNH con it nhat 5 ho thuong khac, moc
+  âš ï¸ 65%/70% CHI la cong cua THUONG NHOM HANG (DM1/DM2/DM3). DNH con it nhat 5 ho thuong khac, moc
   khac va tra theo CHI SO KHAC: V15 (dat 25% doanh so thang vao ngay 15), V22 (55% + ty le target
   >=75/80%), V25 (>=70% tinh den ngay 25), ASO (theo SO LUONG khach hang hoat dong: MB 40 / MT 35 /
   MN 25 - KHONG phai %), thuong quy (>=80% quy), thuong nam (>=75% nam). Luong co ban: tu 60% tro len
@@ -544,13 +544,13 @@ QUAN TRONG VE CHON TOOL:
   thuong" - do la noi SAI ve tien luong cua nguoi that. Chi duoc noi dung pham vi: "chua toi muc
   thuong nhom hang". He thong hien CHUA co du lieu de tinh V15/V22/ASO nen KHONG duoc suy doan ho co
   duoc cac khoan do hay khong.
-  Truong "status" (🟢 Tot / 🟡 Trung binh / 🔴 Nguy hiem) chia theo moc DAT KPI 80% (KHONG phai muc
+  Truong "status" (ðŸŸ¢ Tot / ðŸŸ¡ Trung binh / ðŸ”´ Nguy hiem) chia theo moc DAT KPI 80% (KHONG phai muc
   huong thuong 65/70%) - LUON dat emoji nay canh ten/ma NV, khong tu nghi nguong khac. Vi du dung:
   "QLV Nguyen Van A dat 67% chi tieu - da toi muc huong thuong nhom hang (70%) nhung CHUA dat KPI
   (80%), va con cach xa moc dat chi tieu 100%".
 - Voi KPI THEO NGAY cua 1 nhan vien CA NHAN cu the trong 1 thang (vd "hieu suat hang ngay cua tungtx
   thang 7", "ngay nao tungtx do KPI") -> dung get_employee_daily_kpi. Nguong theo NGAY khac hoan toan
-  nguong thang: 🔴 Do <2.5%, 🟡 Vang 2.5%-3.5%, 🟢 Xanh >3.5% (target ngay = 4% MonthSaleTarget). Tool
+  nguong thang: ðŸ”´ Do <2.5%, ðŸŸ¡ Vang 2.5%-3.5%, ðŸŸ¢ Xanh >3.5% (target ngay = 4% MonthSaleTarget). Tool
   nay KHONG dung duoc cho ma khu vuc/quan ly vung.
 - Voi 1 khach hang CU THE (biet ma khach hang, hoi doanh thu/cong no/ai phu trach...) -> dung
   get_customer_detail. Ket qua co san "position_label" (vd "Trinh duoc vien"/"Quan ly vung") cho biet
@@ -671,7 +671,7 @@ def ask(question: str, session_id: str = "default", username: str = None, scope_
     api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
     if not api_key or api_key == "mock-key-for-local-testing":
         return {
-            "answer": "⚠️ **Chưa cấu hình API Key Claude/Anthropic**: Vui lòng bổ sung biến `ANTHROPIC_API_KEY=sk-ant-api03...` vào file `backend/.env` để khởi chạy tính năng Phân tích Dữ liệu AI.",
+            "answer": "âš ï¸ **ChÆ°a cáº¥u hÃ¬nh API Key Claude/Anthropic**: Vui lÃ²ng bá»• sung biáº¿n `ANTHROPIC_API_KEY=sk-ant-api03...` vÃ o file `backend/.env` Ä‘á»ƒ khá»Ÿi cháº¡y tÃ­nh nÄƒng PhÃ¢n tÃ­ch Dá»¯ liá»‡u AI.",
             "sql_used": [],
             "last_result": None
         }
@@ -726,8 +726,8 @@ def ask(question: str, session_id: str = "default", username: str = None, scope_
                 compute_and_log_cost(resp2.usage, MODEL, question, session_id, username)
                 answer_text = "".join(b.text for b in resp2.content if b.type == "text").strip()
                 if not answer_text:
-                    answer_text = ("Xin lỗi, dữ liệu trả về quá lớn để tổng hợp gọn trong 1 câu trả lời. "
-                                    "Bạn thử hỏi cụ thể/thu hẹp phạm vi hơn giúp mình nhé (vd theo vùng, theo thời gian ngắn hơn).")
+                    answer_text = ("Xin lá»—i, dá»¯ liá»‡u tráº£ vá» quÃ¡ lá»›n Ä‘á»ƒ tá»•ng há»£p gá»n trong 1 cÃ¢u tráº£ lá»i. "
+                                    "Báº¡n thá»­ há»i cá»¥ thá»ƒ/thu háº¹p pháº¡m vi hÆ¡n giÃºp mÃ¬nh nhÃ© (vd theo vÃ¹ng, theo thá»i gian ngáº¯n hÆ¡n).")
             append_message(session_id, "user", question)
             append_message(session_id, "assistant", answer_text)
             if last_tool_used:
