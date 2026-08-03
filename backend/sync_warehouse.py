@@ -32,7 +32,7 @@ from sqlalchemy import text
 from query_engine import _get_engine
 from local_warehouse import get_conn, init_schema, set_sync_meta
 
-N_RECENT_DAYS = 10  # so ngay gan nhat can refresh moi lan chay incremental (du lieu Bravo con "sơ bo")
+N_RECENT_DAYS = 45  # so ngay gan nhat can refresh moi lan chay incremental (du lieu Bravo con "sơ bo")
 
 
 def _sqlite_val(v):

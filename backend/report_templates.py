@@ -227,14 +227,19 @@ def revenue_by_channel(date_from: str, date_to: str, scope_area_code: str = None
 
 
 def top_products(date_from: str, date_to: str, limit: int = 10, channel: str = "ALL",
-                  scope_area_code: str = None, scope_channel: str = None) -> list:
+                  scope_area_code: str = None, scope_channel: str = None,
+                  scope_employee_code: str = None) -> list:
     """Top N san pham theo doanh thu. Loai hang khuyen mai (unit_price=0) khoi so luong ban that.
     scope_area_code: ep loc theo vung khi tai khoan bi gioi han (xem revenue_by_channel).
     scope_channel: EP GHI DE tham so channel (bo qua gia tri AI truyen vao) khi tai khoan bi gioi
-    han kenh - dam bao khong the "mo khoa" kenh khac bang cach truyen channel='ETC'/'ALL'."""
+    han kenh - dam bao khong chi xem duoc tung kenh rieng le theo scope_channel.
+    scope_employee_code: GIOI HAN san pham top theo tung doi QLV."""
     if scope_channel:
         channel = scope_channel
     scope_sql, scope_params = _scope_clause(scope_area_code)
+    emp_sql, emp_params = _employee_scope_clause(scope_employee_code, "v")
+    scope_sql += emp_sql
+    scope_params += emp_params
     parts, part_params = [], []
     if channel in ("OTC", "ALL"):
         join = _otc_area_join("v", scope_area_code)
@@ -331,7 +336,7 @@ def _channel_sub_buckets():
 
 
 def revenue_by_region(date_from: str, date_to: str, scope_area_code: str = None, channel: str = "ALL",
-                       scope_channel: str = None) -> list:
+                       scope_channel: str = None, scope_employee_code: str = None) -> list:
     """Doanh thu theo vung mien (MB/MT/MN). channel: 'ALL' (mac dinh, gop OTC+ETC), 'OTC', hoac 'ETC' -
     scope_channel: EP GHI DE tham so channel (bo qua gia tri AI truyen vao) khi tai khoan bi gioi han
     kenh (xem top_products/top_customers) - dam bao tai khoan chi duoc xem OTC khong the tu hoi ETC
@@ -355,22 +360,26 @@ def revenue_by_region(date_from: str, date_to: str, scope_area_code: str = None,
     vung nhung can hien thi tach biet vi ban chat kinh doanh khac (chuoi lon vs kenh thuong)."""
     if scope_channel:
         channel = scope_channel
+    
+    emp_sql_o, emp_params_o = _employee_scope_clause(scope_employee_code, "o")
+    emp_sql_e, emp_params_e = _employee_scope_clause(scope_employee_code, "e")
+    
     parts = []
     part_params = []
     if channel != "ETC":
-        parts.append("""
+        parts.append(f"""
         SELECT o.customer_code cc, tp.area_code area, SUM(o.amount9) rev
         FROM vhoadon_otc o LEFT JOIN dms_khachhang kh ON kh.code=o.customer_code
         LEFT JOIN dim_tinhthanhpho tp ON tp.city_id=kh.city_id
-        WHERE o.doc_date BETWEEN ? AND ? GROUP BY o.customer_code, tp.area_code""")
-        part_params.append((date_from, date_to))
+        WHERE o.doc_date BETWEEN ? AND ?{emp_sql_o} GROUP BY o.customer_code, tp.area_code""")
+        part_params.append((date_from, date_to) + emp_params_o)
     if channel != "OTC":
-        parts.append("""
+        parts.append(f"""
         SELECT e.customer_code cc, tp.area_code area, SUM(e.amount9) rev
         FROM vhoadon_etc e LEFT JOIN dmssx_khachhang kh ON kh.code=e.customer_code
         LEFT JOIN dim_tinhthanhpho tp ON tp.city_id=kh.city_id
-        WHERE e.doc_date BETWEEN ? AND ? GROUP BY e.customer_code, tp.area_code""")
-        part_params.append((date_from, date_to))
+        WHERE e.doc_date BETWEEN ? AND ?{emp_sql_e} GROUP BY e.customer_code, tp.area_code""")
+        part_params.append((date_from, date_to) + emp_params_e)
     params = tuple(p for pp in part_params for p in pp)
     rows = _q(" UNION ALL ".join(parts), params)
 
@@ -380,22 +389,23 @@ def revenue_by_region(date_from: str, date_to: str, scope_area_code: str = None,
     if date_from < cutoff:
         summary_to = min(date_to, cutoff)
         ym_from, ym_to = date_from[:7], summary_to[:7]
+        emp_sql_m, emp_params_m = _employee_scope_clause(scope_employee_code, "m")
         summary_parts = []
         summary_params = []
         if channel != "ETC":
-            summary_parts.append("""
+            summary_parts.append(f"""
             SELECT m.customer_code cc, tp.area_code area, SUM(m.revenue) rev
             FROM monthly_customer_summary m LEFT JOIN dms_khachhang kh ON kh.code=m.customer_code
             LEFT JOIN dim_tinhthanhpho tp ON tp.city_id=kh.city_id
-            WHERE m.channel='OTC' AND m.year_month BETWEEN ? AND ? GROUP BY m.customer_code, tp.area_code""")
-            summary_params.append((ym_from, ym_to))
+            WHERE m.channel='OTC' AND m.year_month BETWEEN ? AND ?{emp_sql_m} GROUP BY m.customer_code, tp.area_code""")
+            summary_params.append((ym_from, ym_to) + emp_params_m)
         if channel != "OTC":
-            summary_parts.append("""
+            summary_parts.append(f"""
             SELECT m.customer_code cc, tp.area_code area, SUM(m.revenue) rev
             FROM monthly_customer_summary m LEFT JOIN dmssx_khachhang kh ON kh.code=m.customer_code
             LEFT JOIN dim_tinhthanhpho tp ON tp.city_id=kh.city_id
-            WHERE m.channel='ETC' AND m.year_month BETWEEN ? AND ? GROUP BY m.customer_code, tp.area_code""")
-            summary_params.append((ym_from, ym_to))
+            WHERE m.channel='ETC' AND m.year_month BETWEEN ? AND ?{emp_sql_m} GROUP BY m.customer_code, tp.area_code""")
+            summary_params.append((ym_from, ym_to) + emp_params_m)
         rows = list(rows) + _q(" UNION ALL ".join(summary_parts),
                                 tuple(p for pp in summary_params for p in pp))
 
@@ -866,11 +876,12 @@ def employee_directory(search: str = None, position_code: str = None, area_code:
 
 
 def compare_periods(date_from_a: str, date_to_a: str, date_from_b: str, date_to_b: str,
-                     scope_area_code: str = None, scope_channel: str = None) -> dict:
+                     scope_area_code: str = None, scope_channel: str = None,
+                     scope_employee_code: str = None) -> dict:
     """So sanh nhanh doanh thu giua 2 khoang thoi gian (vd thang nay vs thang truoc, cung ky nam truoc).
     Vi kho local co day du lich su (nhieu nam) nen so sanh xa duoc, khong chi vai ngay gan day."""
-    a = revenue_by_channel(date_from_a, date_to_a, scope_area_code, scope_channel)
-    b = revenue_by_channel(date_from_b, date_to_b, scope_area_code, scope_channel)
+    a = revenue_by_channel(date_from_a, date_to_a, scope_area_code, scope_channel, scope_employee_code)
+    b = revenue_by_channel(date_from_b, date_to_b, scope_area_code, scope_channel, scope_employee_code)
     delta = a["total"]["revenue"] - b["total"]["revenue"]
     pct_change = (delta / b["total"]["revenue"] * 100) if b["total"]["revenue"] else None
     return {"period_a": a, "period_b": b, "delta": delta, "pct_change": pct_change}
@@ -2239,7 +2250,8 @@ _PERSON_LEVEL_TEMPLATES = {"get_revenue_tree", "get_kpi_ranking", "get_employee_
                             # ham salary_detail() va _EMPLOYEE_SCOPED_TEMPLATES.
                             "get_salary_detail"}
 _EMPLOYEE_SCOPED_TEMPLATES = {"get_revenue_tree", "get_kpi_ranking", "get_employee_kpi",
-                              "get_employee_daily_kpi", "get_revenue_by_channel", "get_top_customers", "get_salary_detail"}
+                              "get_employee_daily_kpi", "get_revenue_by_channel", "get_top_customers",
+                              "get_top_products", "get_revenue_by_region", "compare_periods", "get_salary_detail"}
 # check_order_timing CO Y de ngoai _EMPLOYEE_SCOPED_TEMPLATES: day la bao cao CHONG GIAN LAN neu dich
 # danh nhan su nghi "chay don don KPI" - chua co xac nhan nghiep vu ai duoc phep xem, nen voi tai khoan
 # qlv thi CHAN han (fail-closed) cho toi khi DNH chot. Xem D1 trong docs/Cau_hoi_can_DNH_xac_nhan.md.
