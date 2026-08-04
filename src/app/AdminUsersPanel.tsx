@@ -83,9 +83,9 @@ export default function AdminUsersPanel({ authToken, onClose }: AdminUsersPanelP
         },
         body: JSON.stringify({
           role,
-          scope_value: role === "c_level" ? null : scopeValue,
-          employee_code: role === "qlv" ? employeeCode : null,
-          scope_channel: scopeChannel || null,
+          scope_value: (role === "c_level" || role === "admin_ops") ? null : (scopeValue || null),
+          employee_code: role === "qlv" ? (employeeCode.trim() || null) : null,
+          scope_channel: (role === "c_level" || role === "admin_ops") ? null : (scopeChannel || null),
         }),
       });
 
@@ -279,6 +279,7 @@ export default function AdminUsersPanel({ authToken, onClose }: AdminUsersPanelP
                     <td className="p-3 text-slate-600">
                       <div><span className="font-semibold">Role:</span> {u.role}</div>
                       {u.scope_value && <div><span className="font-semibold">Vùng:</span> {u.scope_value}</div>}
+                      {u.scope_channel && <div><span className="font-semibold">Kênh:</span> {u.scope_channel}</div>}
                       {u.employee_code && <div><span className="font-semibold">Mã NV:</span> {u.employee_code}</div>}
                     </td>
                     <td className="p-3 text-right space-x-2">
@@ -286,7 +287,7 @@ export default function AdminUsersPanel({ authToken, onClose }: AdminUsersPanelP
                         onClick={() => {
                           setSelectedUser(u);
                           setRole(u.role || "qlv");
-                          setScopeValue(u.scope_value || "MB");
+                          setScopeValue(u.scope_value || "");
                           setEmployeeCode(u.employee_code || "");
                           setScopeChannel(u.scope_channel || "");
                         }}
@@ -318,7 +319,7 @@ export default function AdminUsersPanel({ authToken, onClose }: AdminUsersPanelP
             <h3 className="text-sm font-bold text-emerald-400 mb-3">
               ⚙️ Cấu hình Phân quyền cho: <span className="text-white">{selectedUser.username}</span> ({selectedUser.email})
             </h3>
-            <form onSubmit={handleApprove} className="grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
+            <form onSubmit={handleApprove} className="grid grid-cols-1 md:grid-cols-5 gap-3 items-end">
               <div>
                 <label className="block text-xs text-slate-300 mb-1 font-medium">Vai trò (Role)</label>
                 <select
@@ -326,26 +327,41 @@ export default function AdminUsersPanel({ authToken, onClose }: AdminUsersPanelP
                   onChange={(e) => setRole(e.target.value)}
                   className="w-full p-2 bg-slate-800 border border-slate-700 rounded text-xs text-white focus:outline-none focus:border-blue-500"
                 >
-                  <option value="qlv">QLV (Quản lý vùng con / TDV)</option>
-                  <option value="regional_director">Regional Director (Giám đốc Vùng)</option>
-                  <option value="c_level">C-Level (Toàn công ty)</option>
+                  <option value="qlv">QLV (Quản lý vùng / TDV)</option>
+                  <option value="regional_director">Regional Director (Giám đốc Miền / Kênh)</option>
+                  <option value="c_level">C-Level (Tổng Giám Đốc)</option>
+                  <option value="admin_ops">Admin Vận Hành (Hệ thống)</option>
                 </select>
               </div>
 
-              {role !== "c_level" && (
-                <div>
-                  <label className="block text-xs text-slate-300 mb-1 font-medium">Phạm vi Miền (Scope Value)</label>
-                  <select
-                    value={scopeValue}
-                    onChange={(e) => setScopeValue(e.target.value)}
-                    className="w-full p-2 bg-slate-800 border border-slate-700 rounded text-xs text-white focus:outline-none focus:border-blue-500"
-                  >
-                    <option value="MB">Miền Bắc (MB)</option>
-                    <option value="MT">Miền Trung (MT)</option>
-                    <option value="MN">Miền Nam (MN)</option>
-                  </select>
-                </div>
-              )}
+              <div>
+                <label className="block text-xs text-slate-300 mb-1 font-medium">Phụ trách Vùng</label>
+                <select
+                  value={scopeValue}
+                  onChange={(e) => setScopeValue(e.target.value)}
+                  disabled={role === "c_level" || role === "admin_ops"}
+                  className="w-full p-2 bg-slate-800 border border-slate-700 rounded text-xs text-white focus:outline-none focus:border-blue-500 disabled:opacity-50"
+                >
+                  <option value="">-- Tất cả / Không --</option>
+                  <option value="MB">Miền Bắc (MB)</option>
+                  <option value="MT">Miền Trung (MT)</option>
+                  <option value="MN">Miền Nam (MN)</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-xs text-slate-300 mb-1 font-medium">Phụ trách Kênh</label>
+                <select
+                  value={scopeChannel}
+                  onChange={(e) => setScopeChannel(e.target.value)}
+                  disabled={role === "c_level" || role === "admin_ops"}
+                  className="w-full p-2 bg-slate-800 border border-slate-700 rounded text-xs text-white focus:outline-none focus:border-blue-500 disabled:opacity-50"
+                >
+                  <option value="">-- Tất cả / Không --</option>
+                  <option value="OTC">Kênh Nhà thuốc (OTC)</option>
+                  <option value="ETC">Kênh Bệnh viện (ETC)</option>
+                </select>
+              </div>
 
               {role === "qlv" && (
                 <div>
