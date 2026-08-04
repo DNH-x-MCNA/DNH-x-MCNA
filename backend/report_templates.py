@@ -2409,6 +2409,7 @@ TEMPLATES = {
     "get_audit_log": audit_log_summary,
     "get_salary_detail": salary_detail,
     "get_salary_achievement_summary": salary_achievement_summary,
+    "get_salary_ranking": salary_ranking,
 }
 
 # Tool tra du lieu RIENG CUA NGUOI DANG HOI (lich su truy van/chi phi cua chinh ho) - username PHAI
@@ -2429,7 +2430,7 @@ _SELF_SCOPED_TEMPLATES = {"get_audit_log"}
 # 28/07/2026 (KPI+luong moi): salary_detail() cung can scope_role tu server (C-Level moi duoc xem
 # nguoi khac) NHUNG khong nhan tham so 'username' (dung employee_code, khac get_audit_log) - tach
 # rieng khoi _SELF_SCOPED_TEMPLATES de khong ep nham 'username' vao ham khong co tham so do (TypeError).
-_ROLE_SCOPED_TEMPLATES = {"get_salary_detail", "get_salary_achievement_summary"}
+_ROLE_SCOPED_TEMPLATES = {"get_salary_detail", "get_salary_achievement_summary", "get_salary_ranking"}
 
 # 28/07/2026: tool da bi gioi han bang co che MANH HON scope vung (ep username, xem
 # _SELF_SCOPED_TEMPLATES) nen KHONG nhan tham so scope_area_code - ham audit_log_summary() khong co
@@ -2439,7 +2440,7 @@ _ROLE_SCOPED_TEMPLATES = {"get_salary_detail", "get_salary_achievement_summary"}
 # tool KHAC quen khai bao tham so nay van se no TypeError nhu cu, dung xoa dong nay de "sua" loi khac.
 # get_salary_detail: cung khong nhan scope_area_code (dung scope_employee_code + scope_role) - them
 # vao day vi ly do tuong tu.
-_AREA_EXEMPT_TEMPLATES = {"get_audit_log", "get_salary_detail", "get_salary_achievement_summary"}
+_AREA_EXEMPT_TEMPLATES = {"get_audit_log", "get_salary_detail", "get_salary_achievement_summary", "get_salary_ranking"}
 
 
 # 23/07/2026 - DOI SANG CO CHE "DANH SACH CHO PHEP, FAIL-CLOSED" sau khi phat hien lo hong R-F
