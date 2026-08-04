@@ -695,6 +695,14 @@ def _daily_kpi_status(pct: float) -> str:
 
 def employee_daily_kpi(employee_code: str, year_month: str, scope_area_code: str = None,
                         scope_employee_code: str = None) -> dict:
+    if employee_code and "," in employee_code:
+        codes = [c.strip() for c in employee_code.split(",") if c.strip()]
+        results = []
+        for code in codes[:30]:
+            r_single = employee_daily_kpi(employee_code=code, year_month=year_month, scope_area_code=scope_area_code, scope_employee_code=scope_employee_code)
+            if r_single and "error" not in r_single:
+                results.append(r_single)
+        return {"is_bulk": True, "count": len(results), "employees": results}
     """KPI THEO NGAY cho 1 nhan vien CA NHAN (co ma truc tiep tren hoa don, vd EmpDMSCode nhu
     'tungtx') trong 1 thang (YYYY-MM). Target 1 ngay = 4% MonthSaleTarget cua nhan vien (tuong duong
     100% cua ngay). Phan loai tung ngay: ðŸ”´ Do (<2.5%), ðŸŸ¡ Vang (2.5%-3.5%), ðŸŸ¢ Xanh (>3.5%). CHI tinh
@@ -970,6 +978,14 @@ def _customer_receivable(customer_code: str, channel: str) -> dict:
 
 def customer_detail(customer_code: str, date_from: str, date_to: str, scope_area_code: str = None,
                      scope_channel: str = None) -> dict:
+    if customer_code and "," in customer_code:
+        codes = [c.strip() for c in customer_code.split(",") if c.strip()]
+        results = []
+        for code in codes[:30]:
+            r_single = customer_detail(customer_code=code, date_from=date_from, date_to=date_to, scope_area_code=scope_area_code, scope_channel=scope_channel)
+            if r_single and "error" not in r_single:
+                results.append(r_single)
+        return {"is_bulk": True, "count": len(results), "customers": results}
     """Chi tiet 1 khach hang: gop doanh thu thuc te (kho local, tu Bravo) + du no/qua han (Supabase) +
     mapping vung mien/NV phu trach (DMS_KhachHang + DIM_NhanVien). Doanh thu tinh trong [date_from,date_to],
     du no/qua han la SNAPSHOT KY GAN NHAT hien co (khong theo date_from/date_to).
