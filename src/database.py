@@ -101,8 +101,13 @@ def run_with_failover(label, pg_fn, mssql_fn):
 
 
 def load_config():
+    global CONFIG_PATH
     if not os.path.exists(CONFIG_PATH):
-        raise FileNotFoundError(f"Config file not found at {CONFIG_PATH}")
+        alt_path = os.path.join(PROJECT_ROOT, 'config', 'config.yaml')
+        if os.path.exists(alt_path):
+            CONFIG_PATH = alt_path
+        else:
+            raise FileNotFoundError(f"Config file not found at {CONFIG_PATH} or {alt_path}")
     with open(CONFIG_PATH, 'r', encoding='utf-8') as f:
         return yaml.safe_load(f)
 
