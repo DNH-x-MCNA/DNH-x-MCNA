@@ -15,6 +15,7 @@ Ho tro NHO NGU CANH da luot (conversation_memory.py) - moi session (1 phien chat
 nho lai vai cau hoi/tra loi gan nhat, de cau hoi tiep theo khong can nhac lai tu dau.
 """
 import os
+import json
 from collections import defaultdict
 import anthropic
 from schema_context import SCHEMA_CONTEXT
