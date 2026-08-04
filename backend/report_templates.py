@@ -2142,6 +2142,22 @@ def salary_detail(employee_code: str = None, save_date: str = None,
     # kiem tra quan he quan ly - tranh QLV do doi nguoi ngoai doi).
     is_clevel = bool(scope_role and str(scope_role).lower() in ("c_level", "super_admin", "ceo", "cfo", "admin_ops", "admin"))
     is_manager_role = bool(scope_role and str(scope_role).lower() in ("qlv", "regional_director"))
+
+    # Bulk query support for comma-separated employee codes to avoid multi-round tool token explosion
+    if employee_code and "," in employee_code:
+        codes = [c.strip() for c in employee_code.split(",") if c.strip()]
+        results = []
+        for code in codes[:30]:
+            r_single = salary_detail(employee_code=code, save_date=save_date, scope_employee_code=scope_employee_code, scope_role=scope_role)
+            if r_single and "error" not in r_single:
+                results.append(r_single)
+        return {
+            "is_bulk": True,
+            "count": len(results),
+            "employees": results,
+            "warning": "CHUA GOM LUONG CO BAN (LCB): So lieu chi la Thuong kinh doanh + Phu cap."
+        }
+
     target_code = employee_code
     if not is_clevel:
         if not scope_employee_code:

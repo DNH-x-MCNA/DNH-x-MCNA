@@ -405,13 +405,9 @@ TEMPLATE_TOOLS = [
                         "He thong chi luu snapshot luong CUOI KY (vd 30/06, 31/07). Neu user hoi tien do giua thang (vd 25/07), tool se tra ve cua "
                         "thang truoc do (30/06). KHI TRA LOI PHAI KET LUAN/NOI RO diem nay: 'He thong chi chot luong cuoi ky, day la ket qua luong thang truoc da chot, khong phai tien do thang nay'. "
                         "HOI NHIEU NGUOI CUNG LUC (vd 'V15/V22/V25/ASO cho ca 4 TDV cua QLV X', 'thuong "
-                        "cua tat ca nhan vien vung Y') -> GOI TOOL NAY LAP LAI, MOI LAN 1 employee_code, "
-                        "roi tong hop ca 4/N ket qua vao 1 bang duy nhat cho nguoi dung - TUYET DOI KHONG "
-                        "tu ket luan 'khong ho tro nhieu nguoi' hay 'chua co du lieu' chi vi tool mo ta "
-                        "'1 nhan vien' trong ten - do la CACH GOI (1 lan/nguoi), khong phai gioi han du "
-                        "lieu. Neu 1 nguoi trong danh sach bi loi/tu choi (vd khong du quyen), VAN tiep "
-                        "tuc goi cho nhung nguoi con lai va bao ro nguoi nao thieu, KHONG dung ca cau tra "
-                        "loi lai vi 1 loi. "
+                        "cua tat ca nhan vien vung Y') -> TRUYEN DANH SACH CAC MA NHAN VIEN PHAN CACH BANG DAU PHAY "
+                        "(vd employee_code='MBKV1,MBKV2,MBKV3,MBKV4') TRONG DUNG 1 LAN GOI TOOL DUY NHAT. "
+                        "TUYET DOI KHONG GOI TOOL NAY NHIEU LAN LAP LAI CHO TUNG NGUOI DE TIET KIEM TOKEN VA TIEN. "
                         "!!! CANH BAO QUAN TRONG: ket qua CHUA GOM Luong co ban (LCB) - he thong hien "
                         "CHUA co du lieu LCB (Bravo khong luu san muc LCB theo Level). PHAI noi ro voi "
                         "nguoi dung day la THUONG KINH DOANH + PHU CAP, KHONG PHAI 'tong luong'/'tong "
@@ -764,6 +760,8 @@ def ask(question: str, session_id: str = "default", username: str = None, scope_
             return {"answer": answer_text, "sql_used": sql_used, "last_result": last_result}
 
         tool_results = []
+        # Cap maximum 3 tool executions per turn to avoid message/token explosion
+        tool_uses = tool_uses[:3]
         for tu in tool_uses:
             if tu.name in LOCAL_UTIL_TOOLS:
                 # Tool "tien ich" chay bang code thuan, khong cham DB - xu ly ngay tai cho, khong qua
