@@ -934,24 +934,8 @@ def _build_teams_adaptive_card(title, summary, severity, table_headers=None, tab
     body.append({"type": "TextBlock", "text": summary, "wrap": True, "spacing": "Small" if issue else "Medium"})
 
     # Compact Table Container using Action.ToggleVisibility
-    has_details = table_headers and table_rows
-    if has_details:
-        body.append({
-            "type": "Container",
-            "id": "compactTableDetails",
-            "isVisible": True,
-            "spacing": "Medium",
-            "items": [
-                {
-                    "type": "TextBlock",
-                    "text": "Chi tiết danh sách:",
-                    "weight": "Bolder",
-                    "size": "Small"
-                },
-                _build_detail_table(table_headers, table_rows)
-            ]
-        })
-
+    # KHÔNG DÙNG bảng (Table - schema 1.5) nữa vì Power Automate Teams connector lỗi/không hỗ trợ,
+    # và vượt quá giới hạn size 28KB. (Chỉ dựa vào Action.OpenUrl gọi Chatbot).
     body.append({
         "type": "TextBlock",
         "text": f"Hệ thống Giám sát DWH Dược Nam Hà (DNH) • {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
@@ -964,7 +948,7 @@ def _build_teams_adaptive_card(title, summary, severity, table_headers=None, tab
     adaptive_card = {
         "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
         "type": "AdaptiveCard",
-        "version": "1.5",
+        "version": "1.4",
         "body": body
     }
 
@@ -1213,27 +1197,10 @@ def _build_teams_consolidated_card(alerts):
             item_items.append({"type": "TextBlock", "text": main_summary, "wrap": True, "spacing": "Small" if issue_text else "Small"})
 
         # Compact Table Toggle inside list if headers & rows present
+        # Đã loại bỏ _build_detail_table vì giới hạn payload và tương thích schema 1.4
         table_headers = a.get("table_headers")
         table_rows = a.get("table_rows")
         item_actions = []
-
-        if table_headers and table_rows:
-            toggle_id = f"compactTable_{i}"
-            item_items.append({
-                "type": "Container",
-                "id": toggle_id,
-                "isVisible": False,
-                "spacing": "Small",
-                "items": [
-                    {"type": "TextBlock", "text": "Chi tiết danh sách (tối đa 5 dòng):", "weight": "Bolder", "size": "Small"},
-                    _build_detail_table(table_headers, table_rows, max_rows=5)
-                ]
-            })
-            item_actions.append({
-                "type": "Action.ToggleVisibility",
-                "title": "Xem nhanh danh sách",
-                "targetElements": [toggle_id]
-            })
 
         # Phone action if related to debt
         is_debt = any(w in a["alert_name"].lower() or w in str(a.get("issue") or "").lower() for w in ("nợ", "overdue", "credit", "limit", "hạn mức"))
@@ -1267,7 +1234,7 @@ def _build_teams_consolidated_card(alerts):
     adaptive_card = {
         "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
         "type": "AdaptiveCard",
-        "version": "1.5",
+        "version": "1.4",
         "body": body,
         "actions": [{
             "type": "Action.OpenUrl",
