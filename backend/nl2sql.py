@@ -27,10 +27,10 @@ from cost_logger import compute_and_log_cost
 
 MODEL = "claude-sonnet-5"
 MAX_TOOL_ROUNDS = 8  # gioi han so lan model duoc goi lai tool trong 1 cau hoi (tranh loop vo han)
-MAX_ROWS_TO_MODEL = 50  # chi gui toi da 50 dong ket qua ve cho model doc, tranh ton token
+MAX_ROWS_TO_MODEL = 30 # Giam tu 50 -> 30 tiet kiem token
+MAX_HISTORY_TURNS = 6 # Giam tu 10 -> 6 tiet kiem token
 MAX_TOKENS = 8192  # du du cho ca "thinking" (Sonnet 5 tu bat mac dinh) lan text tra loi cuoi cung,
                     # tranh truong hop thinking an het ngan sach lam text tra ve rong
-MAX_HISTORY_TURNS = 10  # so cap hoi-dap gan nhat duoc nho lai trong 1 session
 
 TEMPLATE_TOOLS = [
     {
