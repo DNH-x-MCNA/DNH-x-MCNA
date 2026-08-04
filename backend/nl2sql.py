@@ -763,44 +763,56 @@ def ask(question: str, session_id: str = "default", username: str = None, scope_
             return {"answer": answer_text, "sql_used": sql_used, "last_result": last_result}
 
         tool_results = []
-        # Universal Tool Merger: If model emits multiple calls to the same bulk-capable tool,
-        # merge their primary parameters into a single comma-separated bulk tool execution!
+        original_tool_uses = [b for b in resp.content if b.type == "tool_use"]
         bulk_tools_map = {
             "get_salary_detail": "employee_code",
             "get_customer_detail": "customer_code",
             "get_employee_daily_kpi": "employee_code",
         }
-        
-        merged_tool_uses = []
+
+        # Find primary tool_use for each bulk-capable tool name and collect all codes
+        merged_sub_ids = set()
         tool_by_name = defaultdict(list)
-        for tu in tool_uses:
+        for tu in original_tool_uses:
             tool_by_name[tu.name].append(tu)
 
-        processed_names = set()
-        for tu in tool_uses:
-            if tu.name in processed_names:
-                continue
-            processed_names.add(tu.name)
-            
-            same_calls = tool_by_name[tu.name]
-            if tu.name in bulk_tools_map and len(same_calls) > 1:
-                param_name = bulk_tools_map[tu.name]
+        for name, tu_list in tool_by_name.items():
+            if name in bulk_tools_map and len(tu_list) > 1:
+                primary = tu_list[0]
+                param_name = bulk_tools_map[name]
                 codes = []
-                for sc in same_calls:
+                for sc in tu_list:
                     val = (sc.input.get(param_name) or "").strip()
                     if val and val not in codes:
                         codes.append(val)
                 if codes:
-                    merged_input = dict(tu.input)
+                    merged_input = dict(primary.input)
                     merged_input[param_name] = ",".join(codes)
-                    tu.input = merged_input
-                merged_tool_uses.append(tu)
-            else:
-                merged_tool_uses.extend(same_calls)
+                    primary.input = merged_input
+                for sub in tu_list[1:]:
+                    merged_sub_ids.add(sub.id)
 
-        # Cap maximum 3 tool executions per turn to avoid message/token explosion
-        tool_uses = merged_tool_uses[:3]
-        for tu in tool_uses:
+        executed_count = 0
+        for tu in original_tool_uses:
+            if tu.id in merged_sub_ids:
+                # Merged into primary tool_use -> return matching dummy tool_result to satisfy Anthropic API contract
+                tool_results.append({
+                    "type": "tool_result",
+                    "tool_use_id": tu.id,
+                    "content": json.dumps({"note": "Đã gộp kết quả tra cứu hàng loạt vào lượt gọi trước."}),
+                })
+                continue
+
+            if executed_count >= 3:
+                # Capped execution -> return notice to satisfy Anthropic API contract
+                tool_results.append({
+                    "type": "tool_result",
+                    "tool_use_id": tu.id,
+                    "content": json.dumps({"note": "Đã đạt giới hạn số lượng gọi tool trong 1 lượt. Vui lòng tổng hợp kết quả từ các dữ liệu đã lấy."}),
+                })
+                continue
+
+            executed_count += 1
             if tu.name in LOCAL_UTIL_TOOLS:
                 # Tool "tien ich" chay bang code thuan, khong cham DB - xu ly ngay tai cho, khong qua
                 # run_query/call_template (khong can audit log SQL vi khong co SQL nao ca).
@@ -850,7 +862,7 @@ def ask(question: str, session_id: str = "default", username: str = None, scope_
             tool_results.append({
                 "type": "tool_result",
                 "tool_use_id": tu.id,
-                "content": str(payload),
+                "content": json.dumps(payload, ensure_ascii=False) if isinstance(payload, (dict, list)) else str(payload),
             })
 
         messages.append({"role": "user", "content": tool_results})
