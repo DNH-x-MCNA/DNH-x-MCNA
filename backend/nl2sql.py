@@ -429,6 +429,26 @@ TEMPLATE_TOOLS = [
             "required": [],
         },
     },
+    {
+        "name": "get_salary_ranking",
+        "description": "Xep hang TOP N nhan vien co THUONG CAO NHAT (hoac thuong V15, V22, V25, ASO, Thuong danh muc DM) "
+                        "trong ky/thang. DUNG KHI HOI 'top 30 nhan vien duoc thuong nhieu nhat', 'top thuong MB', "
+                        "'ai duoc thuong V15 cao nhat', 'danh sach top thuong thang 7', 'top 10 thuong mien bac', "
+                        "'top 30 theo MB', 'tong thuong luon'. "
+                        "Tra ve bang xep hang day du (thuong total, V15, V22, V25, ASO, allowance, % target) "
+                        "chay sieu toc trong 0.01 giay. TUYET DOI KHONG dung SQL ad-hoc hoac tool khac cho nhu cau nay.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "year_month": {"type": "string", "description": "Thang/ky can xem (YYYY-MM hoac YYYY-MM-DD, vd '2026-07')"},
+                "area_code": {"type": "string", "description": "Ma vung mien loc (MB, MT, MN, hoac bo trong neu xem toan quoc)"},
+                "position_code": {"type": "string", "description": "Chuc danh loc (TDV, QLV, TP, hoac bo trong)"},
+                "bonus_type": {"type": "string", "enum": ["total", "v15", "v22", "v25", "aso", "dm"], "description": "Loai thuong quan tam: 'total' (tong thuong KD), 'v15', 'v22', 'v25', 'aso', 'dm' (thuong danh muc)"},
+                "limit": {"type": "integer", "description": "So luong nhan vien muon lay (mac dinh 30, toi da 100)"}
+            },
+            "required": [],
+        },
+    },
 ]
 
 QUERY_TOOL = {

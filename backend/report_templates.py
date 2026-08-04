@@ -2282,6 +2282,113 @@ def salary_detail(employee_code: str = None, save_date: str = None,
     }
 
 
+def salary_ranking(year_month: str = None, area_code: str = None, position_code: str = None,
+                   bonus_type: str = "total", limit: int = 30,
+                   scope_area_code: str = None, scope_role: str = None) -> dict:
+    """Xep hang TOP N nhan vien co THUONG CAO NHAT (hoac thuong V15, V22, V25, ASO, Thuong danh muc DM)
+    trong ky/thang.
+
+    year_month: Thang can xem (YYYY-MM hoac YYYY-MM-DD, mac dinh: snapshot gan nhat da chot luong).
+    area_code: Loc theo vung MB/MT/MN (mac dinh: toan cong ty).
+    position_code: Loc theo chuc danh TDV/QLV/TP (mac dinh: tat ca).
+    bonus_type: 'total' (Tong thuong KD), 'v15', 'v22', 'v25', 'aso', 'dm' (Thuong danh muc DM1+DM2+DM3).
+    limit: So luong nhan vien tra ve trong bang xep hang (mac dinh 30, toi da 100).
+    scope_area_code: Ep gioi han vung theo phan quyen tai khoan.
+    """
+    if scope_area_code:
+        area_code = scope_area_code
+
+    limit = min(max(int(limit or 30), 1), 100)
+
+    date_cond = ""
+    date_params = []
+    if year_month:
+        ym = str(year_month)[:7]
+        date_cond = " WHERE substr(save_date, 1, 7)=? "
+        date_params.append(ym)
+
+    fdate_r = _q(f"SELECT MAX(save_date) d FROM fact_thongketinhluong {date_cond}"
+                 f"{'AND' if date_cond else 'WHERE'} v25_percent IS NOT NULL", date_params)
+    fdate = fdate_r[0]["d"] if fdate_r else None
+    if not fdate:
+        fdate_r = _q(f"SELECT MAX(save_date) d FROM fact_thongketinhluong {date_cond}", date_params)
+        fdate = fdate_r[0]["d"] if fdate_r else None
+    if not fdate:
+        return {"error": "Chua co du lieu thong ke tinh luong cho ky nay."}
+
+    order_col = "(COALESCE(dm_bonus,0) + COALESCE(v15_bonus,0) + COALESCE(v22_bonus,0) + COALESCE(v25_bonus,0) + COALESCE(aso_bonus,0))"
+    btype = str(bonus_type or "total").lower()
+    if btype == "v15":
+        order_col = "COALESCE(v15_bonus,0)"
+    elif btype == "v22":
+        order_col = "COALESCE(v22_bonus,0)"
+    elif btype == "v25":
+        order_col = "COALESCE(v25_bonus,0)"
+    elif btype == "aso":
+        order_col = "COALESCE(aso_bonus,0)"
+    elif btype in ("dm", "danh_muc"):
+        order_col = "COALESCE(dm_bonus,0)"
+
+    where_clauses = ["save_date = ?"]
+    params = [fdate]
+
+    if area_code:
+        where_clauses.append("area_code = ?")
+        params.append(area_code)
+
+    if position_code:
+        where_clauses.append("position_code = ?")
+        params.append(position_code)
+
+    where_sql = " WHERE " + " AND ".join(where_clauses)
+    query_sql = f"""
+        SELECT employee_code, employee_name, area_code, position_code, save_date,
+               month_sale_amount, month_sale_target, month_sale_percent,
+               dm_bonus, v15_bonus, v22_bonus, v25_bonus, aso_bonus,
+               (COALESCE(lunch_amount,0) + COALESCE(transport_amount,0) + COALESCE(phone_amount,0)) allowance,
+               (COALESCE(dm_bonus,0) + COALESCE(v15_bonus,0) + COALESCE(v22_bonus,0) + COALESCE(v25_bonus,0) + COALESCE(aso_bonus,0)) total_bonus
+        FROM fact_thongketinhluong
+        {where_sql}
+        ORDER BY {order_col} DESC
+        LIMIT ?
+    """
+    params.append(limit)
+    rows = _q(query_sql, params)
+
+    ranking = []
+    for idx, r in enumerate(rows, 1):
+        pct = _f(r["month_sale_percent"]) * 100
+        threshold = _bonus_threshold(r["position_code"])
+        ranking.append({
+            "rank": idx,
+            "employee_code": r["employee_code"],
+            "employee_name": r["employee_name"],
+            "area_code": r["area_code"],
+            "position_code": r["position_code"],
+            "month_sale_amount": _f(r["month_sale_amount"]),
+            "month_sale_target": _f(r["month_sale_target"]),
+            "month_sale_percent": round(pct, 1),
+            "meets_bonus_threshold": pct >= threshold,
+            "dm_bonus": _f(r["dm_bonus"]),
+            "v15_bonus": _f(r["v15_bonus"]),
+            "v22_bonus": _f(r["v22_bonus"]),
+            "v25_bonus": _f(r["v25_bonus"]),
+            "aso_bonus": _f(r["aso_bonus"]),
+            "allowance": _f(r["allowance"]),
+            "total_bonus": _f(r["total_bonus"]),
+        })
+
+    return {
+        "save_date": fdate,
+        "bonus_type": btype,
+        "area_code": area_code or "Toàn công ty",
+        "position_code": position_code or "Tất cả",
+        "count": len(ranking),
+        "ranking": ranking,
+        "warning": "CHƯA GỒM LƯƠNG CƠ BẢN (LCB): Số liệu là Thưởng kinh doanh + Phụ cấp."
+    }
+
+
 TEMPLATES = {
     "get_revenue_by_channel": revenue_by_channel,
     "get_top_products": top_products,
