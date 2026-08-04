@@ -4,6 +4,19 @@ import time
 import argparse
 from datetime import datetime
 from dotenv import load_dotenv
+
+def load_env():
+    root_dir = os.path.dirname(os.path.abspath(__file__))
+    for env_name in [".env", "backend/.env", "config/.env"]:
+        env_path = os.path.join(root_dir, env_name)
+        if os.path.exists(env_path):
+            load_dotenv(env_path, override=True)
+            for line in open(env_path, encoding="utf-8"):
+                line = line.strip()
+                if line and not line.startswith("#") and "=" in line:
+                    k, v = line.split("=", 1)
+                    os.environ.setdefault(k.strip(), v.strip())
+load_env()
 from src.database import get_db_engines, load_config
 from src.etl import get_daily_digest_metrics, get_weekly_digest_metrics, get_monthly_digest_metrics
 from src.notifier import build_digest_email, send_email, flush_critical_teams_queue, send_teams_alert
