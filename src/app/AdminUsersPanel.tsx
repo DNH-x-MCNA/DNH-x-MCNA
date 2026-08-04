@@ -37,10 +37,12 @@ export default function AdminUsersPanel({ authToken, onClose }: AdminUsersPanelP
   const [actionLoading, setActionLoading] = useState<boolean>(false);
 
   // Form tạo tài khoản mới state
+  const [newUsername, setNewUsername] = useState<string>("");
+  const [newPassword, setNewPassword] = useState<string>("");
   const [newEmail, setNewEmail] = useState<string>("");
   const [newName, setNewName] = useState<string>("");
   const [newRole, setNewRole] = useState<string>("qlv");
-  const [newScopeValue, setNewScopeValue] = useState<string>("MB");
+  const [newScopeValue, setNewScopeValue] = useState<string>("");
   const [newEmployeeCode, setNewEmployeeCode] = useState<string>("");
   const [newScopeChannel, setNewScopeChannel] = useState<string>("");
   const [createMsg, setCreateMsg] = useState<{ text: string; type: "success" | "error"; pwd?: string } | null>(null);
@@ -112,11 +114,13 @@ export default function AdminUsersPanel({ authToken, onClose }: AdminUsersPanelP
           Authorization: `Bearer ${authToken}`,
         },
         body: JSON.stringify({
-          email: newEmail,
-          name: newName,
+          username: newUsername.trim(),
+          password: newPassword.trim() || null,
+          email: newEmail.trim() || null,
+          name: newName.trim() || null,
           role: newRole,
-          scope_value: newRole === "c_level" ? null : newScopeValue,
-          employee_code: newRole === "qlv" ? newEmployeeCode : null,
+          scope_value: newRole === "c_level" ? null : (newScopeValue || null),
+          employee_code: newRole === "qlv" ? (newEmployeeCode.trim() || null) : null,
           scope_channel: newScopeChannel || null,
         }),
       });
@@ -131,9 +135,13 @@ export default function AdminUsersPanel({ authToken, onClose }: AdminUsersPanelP
       });
 
       // Reset form
+      setNewUsername("");
+      setNewPassword("");
       setNewEmail("");
       setNewName("");
       setNewEmployeeCode("");
+      setNewScopeValue("");
+      setNewScopeChannel("");
       fetchUsers();
     } catch (err: any) {
       setCreateMsg({ text: err.message, type: "error" });
@@ -407,30 +415,56 @@ export default function AdminUsersPanel({ authToken, onClose }: AdminUsersPanelP
                   </div>
                 )}
 
-                <div>
-                  <label className="block font-semibold text-slate-700 mb-1">Email công ty Dược Nam Hà (@namhapharma.com)</label>
-                  <input
-                    type="email"
-                    required
-                    placeholder="tennhanvien@namhapharma.com"
-                    value={newEmail}
-                    onChange={(e) => setNewEmail(e.target.value)}
-                    className="w-full p-2.5 border border-slate-300 rounded-lg text-xs focus:outline-none focus:border-blue-600"
-                  />
-                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block font-semibold text-slate-700 mb-1">Tên đăng nhập (Username) <span className="text-rose-500">*</span></label>
+                    <input
+                      type="text"
+                      required
+                      placeholder="Ví dụ: vui.hoangthi"
+                      value={newUsername}
+                      onChange={(e) => setNewUsername(e.target.value)}
+                      className="w-full p-2.5 border border-slate-300 rounded-lg text-xs focus:outline-none focus:border-blue-600"
+                    />
+                  </div>
 
-                <div>
-                  <label className="block font-semibold text-slate-700 mb-1">Họ và tên nhân viên (Tùy chọn)</label>
-                  <input
-                    type="text"
-                    placeholder="Ví dụ: Nguyễn Văn A"
-                    value={newName}
-                    onChange={(e) => setNewName(e.target.value)}
-                    className="w-full p-2.5 border border-slate-300 rounded-lg text-xs focus:outline-none focus:border-blue-600"
-                  />
+                  <div>
+                    <label className="block font-semibold text-slate-700 mb-1">Mật khẩu (Tùy chọn)</label>
+                    <input
+                      type="text"
+                      placeholder="Để trống tự sinh mật khẩu"
+                      value={newPassword}
+                      onChange={(e) => setNewPassword(e.target.value)}
+                      className="w-full p-2.5 border border-slate-300 rounded-lg text-xs focus:outline-none focus:border-blue-600"
+                    />
+                  </div>
                 </div>
 
                 <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block font-semibold text-slate-700 mb-1">Họ và tên nhân viên (Tùy chọn)</label>
+                    <input
+                      type="text"
+                      placeholder="Ví dụ: Hoàng Thị Vui"
+                      value={newName}
+                      onChange={(e) => setNewName(e.target.value)}
+                      className="w-full p-2.5 border border-slate-300 rounded-lg text-xs focus:outline-none focus:border-blue-600"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block font-semibold text-slate-700 mb-1">Email nhận mật khẩu (Tùy chọn)</label>
+                    <input
+                      type="email"
+                      placeholder="vui.hoangthi@namhapharma.com"
+                      value={newEmail}
+                      onChange={(e) => setNewEmail(e.target.value)}
+                      className="w-full p-2.5 border border-slate-300 rounded-lg text-xs focus:outline-none focus:border-blue-600"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-3 gap-2">
                   <div>
                     <label className="block font-semibold text-slate-700 mb-1">Vai trò (Role)</label>
                     <select
@@ -438,26 +472,39 @@ export default function AdminUsersPanel({ authToken, onClose }: AdminUsersPanelP
                       onChange={(e) => setNewRole(e.target.value)}
                       className="w-full p-2.5 border border-slate-300 rounded-lg text-xs focus:outline-none focus:border-blue-600"
                     >
-                      <option value="qlv">QLV (Quản lý vùng con / TDV)</option>
-                      <option value="regional_director">Regional Director (Giám đốc Vùng)</option>
+                      <option value="qlv">QLV (Quản lý vùng / TDV)</option>
+                      <option value="regional_director">Regional Director (Giám đốc Vùng / Kênh)</option>
                       <option value="c_level">C-Level (Toàn công ty)</option>
                     </select>
                   </div>
 
-                  {newRole !== "c_level" && (
-                    <div>
-                      <label className="block font-semibold text-slate-700 mb-1">Phạm vi Miền (Scope Value)</label>
-                      <select
-                        value={newScopeValue}
-                        onChange={(e) => setNewScopeValue(e.target.value)}
-                        className="w-full p-2.5 border border-slate-300 rounded-lg text-xs focus:outline-none focus:border-blue-600"
-                      >
-                        <option value="MB">Miền Bắc (MB)</option>
-                        <option value="MT">Miền Trung (MT)</option>
-                        <option value="MN">Miền Nam (MN)</option>
-                      </select>
-                    </div>
-                  )}
+                  <div>
+                    <label className="block font-semibold text-slate-700 mb-1">Phụ trách Vùng</label>
+                    <select
+                      value={newScopeValue}
+                      onChange={(e) => setNewScopeValue(e.target.value)}
+                      disabled={newRole === "c_level"}
+                      className="w-full p-2.5 border border-slate-300 rounded-lg text-xs focus:outline-none focus:border-blue-600 disabled:bg-slate-100"
+                    >
+                      <option value="">-- Tất cả / Không --</option>
+                      <option value="MB">Miền Bắc (MB)</option>
+                      <option value="MT">Miền Trung (MT)</option>
+                      <option value="MN">Miền Nam (MN)</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block font-semibold text-slate-700 mb-1">Phụ trách Kênh</label>
+                    <select
+                      value={newScopeChannel}
+                      onChange={(e) => setNewScopeChannel(e.target.value)}
+                      className="w-full p-2.5 border border-slate-300 rounded-lg text-xs focus:outline-none focus:border-blue-600"
+                    >
+                      <option value="">-- Tất cả / Không --</option>
+                      <option value="OTC">Kênh Nhà thuốc (OTC)</option>
+                      <option value="ETC">Kênh Bệnh viện (ETC)</option>
+                    </select>
+                  </div>
                 </div>
 
                 {newRole === "qlv" && (
