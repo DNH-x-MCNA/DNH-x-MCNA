@@ -132,13 +132,15 @@ def create_pending_user(email: str, name: str = None) -> tuple[dict, str]:
     return user_info, raw_pwd
 
 
-def admin_create_user(email: str, name: str = None, role: str = 'qlv', scope_value: str = None,
-                      employee_code: str = None, scope_channel: str = None) -> tuple[dict, str]:
-    """Admin tao tai khoan moi truc tiep voi status=approved, sinh mat khau ngau nhien va phan quyen ngay."""
-    clean_email = email.lower().strip()
-    raw_pwd = generate_password(10)
-    username = clean_email
-    display_name = name or clean_email.split('@')[0]
+def admin_create_user(username: str, name: str = None, role: str = 'qlv', scope_value: str = None,
+                      employee_code: str = None, scope_channel: str = None,
+                      email: str = None, password: str = None) -> tuple[dict, str]:
+    """Admin tao tai khoan moi truc tiep voi status=approved.
+    Neu khong truyen password, se sinh mat khau ngau nhien.
+    Email la optional - khong bat buoc @namhapharma.com nua."""
+    raw_pwd = password or generate_password(10)
+    clean_email = email.lower().strip() if email else None
+    display_name = name or username
 
     user_info = create_user(
         username=username,

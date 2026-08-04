@@ -246,8 +246,10 @@ def login(req: LoginRequest):
 
 
 class AdminCreateUserRequest(BaseModel):
-    email: str
+    username: str
+    password: Optional[str] = None       # Neu khong truyen -> sinh ngau nhien
     name: Optional[str] = None
+    email: Optional[str] = None          # Optional, khong bat buoc nua
     role: str = "qlv"
     scope_value: Optional[str] = None
     employee_code: Optional[str] = None
@@ -256,14 +258,8 @@ class AdminCreateUserRequest(BaseModel):
 
 @app.post("/auth/register", dependencies=[Depends(require_api_key)])
 def register(req: RegisterRequest):
-    """CO TINH VO HIEU HOA - giu endpoint de tra loi ro rang neu con client cu goi vao, thay vi 404.
-
-    Ly do khong cho tu dang ky: Bravo KHONG luu email nhan vien (da kiem 29/07/2026:
-    INFORMATION_SCHEMA.COLUMNS LIKE '%mail%' tra ve 0 dong tren toan bo database). Nghia la he thong
-    khong co cach nao biet nguoi vua dang ky ung voi ma nhan vien nao, nen khong the tu gan pham vi
-    xem du lieu. So huu hop thu @namhapharma.com chi chung minh LA NGUOI CUA DNH, khong chung minh
-    LA AI. Vi vay tai khoan phai do C-Level tao va gan quyen truc tiep (POST /admin/users/create)."""
-    raise HTTPException(403, "Chức năng tự đăng ký đã bị tắt. Chỉ Quản trị viên (C-Level) mới có quyền khởi tạo tài khoản mới.")
+    """CO TINH VO HIEU HOA - giu endpoint de tra loi ro rang neu con client cu goi vao, thay vi 404."""
+    raise HTTPException(403, "Chức năng tự đăng ký đã bị tắt. Vui lòng liên hệ Quản trị viên để được cấp tài khoản (username + mật khẩu).")
 
 
 @app.post("/auth/forgot-password", dependencies=[Depends(require_api_key)])
@@ -352,46 +348,45 @@ def create_user_by_admin(req: AdminCreateUserRequest, user: dict = Depends(requi
     if user["role"] != "c_level":
         raise HTTPException(403, "Chỉ Quản trị viên C-Level mới có quyền tạo tài khoản mới")
 
-    if not req.email or not req.email.strip():
-        raise HTTPException(400, "Vui lòng nhập Email công ty Dược Nam Hà")
+    if not req.username or not req.username.strip():
+        raise HTTPException(400, "Vui lòng nhập Username cho tài khoản mới")
 
-    clean_email = req.email.strip().lower()
-    parts = clean_email.split("@")
-    if len(parts) != 2 or parts[1] != ALLOWED_EMAIL_DOMAIN:
-        raise HTTPException(400, f"Chỉ hỗ trợ tạo tài khoản cho email công ty Dược Nam Hà (@{ALLOWED_EMAIL_DOMAIN})")
+    clean_username = req.username.strip().lower()
 
-    existing = get_user_by_email_or_username(clean_email)
+    existing = get_user_by_email_or_username(clean_username)
     if existing:
-        raise HTTPException(400, f"Tài khoản email {clean_email} đã tồn tại trong hệ thống.")
+        raise HTTPException(400, f"Tài khoản {clean_username} đã tồn tại trong hệ thống.")
 
     if req.role not in ("c_level", "regional_director", "qlv"):
         raise HTTPException(400, f"Vai trò không hợp lệ: {req.role}")
 
     user_info, generated_pwd = admin_create_user(
-        email=clean_email,
+        username=clean_username,
         name=req.name,
         role=req.role,
         scope_value=req.scope_value if req.role != "c_level" else None,
         employee_code=req.employee_code if req.role == "qlv" else None,
-        scope_channel=req.scope_channel
+        scope_channel=req.scope_channel,
+        email=req.email.strip().lower() if req.email else None,
+        password=req.password,
     )
 
-    # Gửi email chứa mật khẩu ngẫu nhiên tới nhân viên. Bao dung SU THAT ve viec gui duoc hay khong -
-    # neu SMTP chua cau hinh/loi ma van bao "da gui" thi admin tuong xong viec, nhan vien khong bao gio
-    # nhan duoc mat khau va khong ai biet tai sao.
-    email_sent = send_password_email(clean_email, generated_pwd, is_reset=False)
+    # Gui email neu co cung cap email
+    email_sent = False
+    if req.email:
+        email_sent = send_password_email(req.email.strip().lower(), generated_pwd, is_reset=False)
 
     if email_sent:
-        message = f"Tạo tài khoản thành công cho {clean_email} và đã gửi mật khẩu qua Outlook!"
+        message = f"Tạo tài khoản thành công cho {clean_username} và đã gửi mật khẩu qua email!"
     else:
-        message = (f"Đã tạo tài khoản cho {clean_email} NHƯNG GỬI EMAIL THẤT BẠI. "
-                   f"Vui lòng copy mật khẩu bên dưới và chuyển trực tiếp cho nhân viên.")
+        message = f"Đã tạo tài khoản cho {clean_username} thành công."
 
     return {
         "ok": True,
         "message": message,
         "email_sent": email_sent,
-        "generated_password": generated_pwd
+        "username": clean_username,
+        "generated_password": generated_pwd,
     }
 
 
