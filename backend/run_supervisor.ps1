@@ -1,9 +1,13 @@
-# === Giam sat & tu khoi dong lai: Backend (FastAPI) + Telegram Bot + Sync Scheduler + Cloudflared
-#     Supervisor cho DNH AI Chatbot ===
-# Chay thuong tru, "giam sat cua giam sat" - giu ca 4 tien trinh nen song, tu restart neu bi crash.
-# Tu khoi dong cung Windows qua shortcut trong Startup folder (day la script DUY NHAT can shortcut -
-# 3 tien trinh con lai deu do chinh script nay khoi dong va theo doi).
-$BACKEND_DIR = "C:\Users\DANG TRIEU\dnh_chatbot\backend"
+# === Giam sat & tu khoi dong lai: Backend + Sync Scheduler + Cloudflared ===
+# (May chu DNH - ket noi Bravo TRUC TIEP, khong qua VPN)
+# 23/07/2026: BO HAN Telegram Bot khoi bundle nay - kenh chat da chuyen han sang web (dnh-bot.vercel.app),
+# Telegram khong con dung. Day cung la nguon sinh tien trinh mo coi: moi lan supervisor nay tu khoi dong
+# lai (reboot/restart thu cong) se spawn 1 the he telegram_bot.py MOI ma KHONG kill the he cu (bien
+# $botProc chi ton tai trong phien PowerShell hien tai, tien trinh con cu bi "mo coi" khi cha restart) -
+# phat hien thuc te 23/07/2026: 4 tien trinh telegram_bot.py song song, tao ngay 16/07, 20/07, 21/07,
+# 22/07, khong cai nao chet. Xem docs/kich_ban_demo1_chatbot.md (repo D:\DNH) va memory
+# may24_orphan_process_duplication cho boi canh day du ve lop loi nay.
+$BACKEND_DIR = "C:\dnh_chatbot\backend"
 $LOG_DIR = "$BACKEND_DIR\logs"
 $SUPERVISOR_LOG = "$LOG_DIR\supervisor.log"
 $CHECK_INTERVAL_SEC = 30
@@ -16,7 +20,8 @@ function Log($msg) {
 }
 
 function Start-Backend {
-    Start-Process -FilePath "py" -ArgumentList "-m uvicorn main:app --host 0.0.0.0 --port 8000" `
+    # Cong 8010 (KHONG dung 8000 - da bi 1 du an WebChatbot khac cua dong nghiep chiem tren may nay)
+    Start-Process -FilePath "python" -ArgumentList "-m uvicorn main:app --host 0.0.0.0 --port 8010" `
         -WorkingDirectory $BACKEND_DIR -WindowStyle Hidden -PassThru `
         -RedirectStandardOutput "$LOG_DIR\uvicorn.log" -RedirectStandardError "$LOG_DIR\uvicorn.err.log"
 }
@@ -27,15 +32,19 @@ function Start-SyncScheduler {
         -WorkingDirectory $BACKEND_DIR -WindowStyle Hidden -PassThru
 }
 
+function Start-CloudflaredSupervisor {
+    Start-Process -FilePath "powershell.exe" `
+        -ArgumentList @("-WindowStyle", "Hidden", "-ExecutionPolicy", "Bypass", "-File", "`"$BACKEND_DIR\cloudflared_supervisor.ps1`"") `
+        -WorkingDirectory $BACKEND_DIR -WindowStyle Hidden -PassThru
+}
+
 Log "=== Supervisor khoi dong ==="
-Log "(LUU Y 7/2026: Telegram bot + Cloudflared tunnel da CHUYEN het sang may chu DNH (ket noi Bravo"
-Log " truc tiep, khong VPN). May PC nay CHI con giu backend+sync o che do DU PHONG (khong phuc vu"
-Log " traffic that) - KHONG con chay cloudflared tunnel nua de tranh tu dong ghi de BACKEND_API_URL"
-Log " tren Vercel (da tung gay bug: PC ghi de URL may chu bang URL cua chinh no)."
 $backendProc = Start-Backend
-Log "Backend (uvicorn :8000) started, PID=$($backendProc.Id)"
+Log "Backend (uvicorn :8010) started, PID=$($backendProc.Id)"
 $syncProc = Start-SyncScheduler
 Log "Sync scheduler started, PID=$($syncProc.Id)"
+$cfProc = Start-CloudflaredSupervisor
+Log "Cloudflared supervisor started, PID=$($cfProc.Id)"
 
 while ($true) {
     Start-Sleep -Seconds $CHECK_INTERVAL_SEC
@@ -49,5 +58,10 @@ while ($true) {
         Log "CANH BAO: Sync scheduler da thoat (ExitCode=$($syncProc.ExitCode)) -> khoi dong lai"
         $syncProc = Start-SyncScheduler
         Log "Sync scheduler restarted, PID=$($syncProc.Id)"
+    }
+    if ($cfProc.HasExited) {
+        Log "CANH BAO: Cloudflared supervisor da thoat (ExitCode=$($cfProc.ExitCode)) -> khoi dong lai"
+        $cfProc = Start-CloudflaredSupervisor
+        Log "Cloudflared supervisor restarted, PID=$($cfProc.Id)"
     }
 }
