@@ -2015,7 +2015,7 @@ def audit_log_summary(days: int = 7, limit: int = 30, username: str = None, targ
         # duyet cost_by_user thi nguoi co hoat dong ma khong tra duoc chi phi se bien mat khoi bang,
         # va cong cac dong se khong con bang tong.
         _zero = {"cost_usd": 0.0, "input_tokens": 0, "output_tokens": 0}
-        _keys = set(cost_by_user) | set(sessions_by_user) | set(queries_by_user)
+        _keys = set(cost_by_user) | set(sessions_by_user) | set(questions_by_user)
         user_breakdown = []
         for u in sorted(_keys, key=lambda k: -cost_by_user.get(k, _zero)["cost_usd"]):
             d = cost_by_user.get(u, _zero)
