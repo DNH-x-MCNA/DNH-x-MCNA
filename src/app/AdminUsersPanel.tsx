@@ -474,7 +474,8 @@ export default function AdminUsersPanel({ authToken, onClose }: AdminUsersPanelP
                     >
                       <option value="qlv">QLV (Quản lý vùng / TDV)</option>
                       <option value="regional_director">Regional Director (Giám đốc Vùng / Kênh)</option>
-                      <option value="c_level">C-Level (Toàn công ty)</option>
+                      <option value="c_level">C-Level (Tổng Giám Đốc)</option>
+                      <option value="admin_ops">Admin Vận Hành (Hệ thống)</option>
                     </select>
                   </div>
 

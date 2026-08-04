@@ -346,9 +346,10 @@ type AuditDashboardData = {
 
 
 const ROLE_LABELS: Record<string, string> = {
-  c_level: "Ban Điều Hành (toàn công ty)",
-  regional_director: "Giám đốc miền",
-  qlv: "Quản lý vùng",
+  admin_ops: "Admin Vận Hành (Hệ thống)",
+  c_level: "Tổng Giám Đốc (C-Level)",
+  regional_director: "Giám đốc Miền / Kênh",
+  qlv: "Quản lý Vùng (QLV)",
 };
 
 // Style rieng cho tung the Markdown trong bong bong chat cua bot (bang, in dam, danh sach...)
@@ -589,8 +590,13 @@ export default function Home() {
   const isCLevel = Boolean(
     userInfo && (
       userInfo.role?.toLowerCase() === "c_level" ||
-      userInfo.role?.toLowerCase() === "admin"
+      userInfo.role?.toLowerCase() === "admin" ||
+      userInfo.role?.toLowerCase() === "admin_ops"
     )
+  );
+
+  const isOpsAdmin = Boolean(
+    userInfo && userInfo.role?.toLowerCase() === "admin_ops"
   );
 
   // Danh sach chu so huu co trong lich su, kem so cuoc tro chuyen - dung dung nguon `sessions` dang

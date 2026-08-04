@@ -37,6 +37,7 @@ from auth import (
     list_users,
     delete_all_sessions_for_user,
     get_user_by_email_or_username,
+    get_subordinate_usernames,
 )
 from mailer import send_password_email
 from conversation_memory import (
@@ -114,12 +115,21 @@ def _check_public_auth_rate_limit(email: str, client_ip: str = "local"):
 
 
 def _require_session_access(session_id: str, user: dict):
-    """CHI dung cho DOC (GET /history) - C-Level duoc xem lich su cua nguoi khac (giam sat/kiem toan),
-    day la hanh vi co y, khong phai loi."""
+    """Chi dung cho DOC (GET /history) - admin_ops & c_level duoc xem tat ca, regional_director xem duoc cua QLV thuoc scope."""
     from conversation_memory import get_session_owner
     owner = get_session_owner(session_id)
-    if owner is not None and owner != user["username"] and user["role"] != "c_level":
-        raise HTTPException(403, "Khong co quyen truy cap cuoc tro chuyen nay")
+    if owner is None:
+        return
+    role = user.get("role")
+    if role in ("c_level", "admin_ops"):
+        return
+    if owner == user["username"]:
+        return
+    if role == "regional_director":
+        subordinates = get_subordinate_usernames(user)
+        if subordinates and owner in subordinates:
+            return
+    raise HTTPException(403, "Khong co quyen truy cap cuoc tro chuyen nay")
 
 
 def _require_session_write_access(session_id: str, user: dict):
@@ -337,28 +347,21 @@ def me(user: dict = Depends(require_user)):
 # --- ADMIN ENDPOINTS (Chỉ dành cho C-Level đã được duyệt) ---
 
 @app.get("/admin/users", dependencies=[Depends(require_api_key)])
-def get_users_list(status: Optional[str] = None, user: dict = Depends(require_approved_user)):
-    if user["role"] != "c_level":
-        raise HTTPException(403, "Chỉ Quản trị viên C-Level mới có quyền truy cập trang này")
-    return list_users(status)
+def get_users_list(status: Optional[str] = Query(default=None), user: dict = Depends(require_approved_user)):
+    if user["role"] not in ("c_level", "admin_ops"):
+        raise HTTPException(403, "Chi Quản trị viên mới có quyền xem danh sách tài khoản")
+    return list_users(status=status)
 
 
 @app.post("/admin/users/create", dependencies=[Depends(require_api_key)])
 def create_user_by_admin(req: AdminCreateUserRequest, user: dict = Depends(require_approved_user)):
-    if user["role"] != "c_level":
-        raise HTTPException(403, "Chỉ Quản trị viên C-Level mới có quyền tạo tài khoản mới")
-
-    if not req.username or not req.username.strip():
-        raise HTTPException(400, "Vui lòng nhập Username cho tài khoản mới")
+    if user["role"] not in ("c_level", "admin_ops"):
+        raise HTTPException(403, "Chi Quản trị viên mới có quyền tạo tài khoản mới")
 
     clean_username = req.username.strip().lower()
-
     existing = get_user_by_email_or_username(clean_username)
     if existing:
-        raise HTTPException(400, f"Tài khoản {clean_username} đã tồn tại trong hệ thống.")
-
-    if req.role not in ("c_level", "regional_director", "qlv"):
-        raise HTTPException(400, f"Vai trò không hợp lệ: {req.role}")
+        raise HTTPException(400, f"Tài khoản hoặc username '{clean_username}' đã tồn tại")
 
     user_info, generated_pwd = admin_create_user(
         username=clean_username,
@@ -371,32 +374,26 @@ def create_user_by_admin(req: AdminCreateUserRequest, user: dict = Depends(requi
         password=req.password,
     )
 
-    # Gui email neu co cung cap email
-    email_sent = False
-    if req.email:
-        email_sent = send_password_email(req.email.strip().lower(), generated_pwd, is_reset=False)
-
-    if email_sent:
-        message = f"Tạo tài khoản thành công cho {clean_username} và đã gửi mật khẩu qua email!"
-    else:
-        message = f"Đã tạo tài khoản cho {clean_username} thành công."
+    if req.email and req.email.strip():
+        send_password_email(
+            to_email=req.email.strip(),
+            user_name=req.name or clean_username,
+            password=generated_pwd
+        )
 
     return {
         "ok": True,
-        "message": message,
-        "email_sent": email_sent,
+        "message": f"Khởi tạo tài khoản {clean_username} thành công!",
         "username": clean_username,
-        "generated_password": generated_pwd,
+        "email": req.email,
+        "generated_password": generated_pwd if not req.password else None
     }
 
 
 @app.post("/admin/users/{username}/approve", dependencies=[Depends(require_api_key)])
 def approve_user_endpoint(username: str, req: ApproveUserRequest, user: dict = Depends(require_approved_user)):
-    if user["role"] != "c_level":
-        raise HTTPException(403, "Chỉ Quản trị viên C-Level mới có quyền phê duyệt tài khoản")
-
-    if req.role not in ("c_level", "regional_director", "qlv"):
-        raise HTTPException(400, f"Vai trò không hợp lệ: {req.role}")
+    if user["role"] not in ("c_level", "admin_ops"):
+        raise HTTPException(403, "Chi Quản trị viên mới có quyền phê duyệt tài khoản")
 
     success = approve_user(username, req.role, req.scope_value, req.employee_code, req.scope_channel)
     if not success:
@@ -406,8 +403,8 @@ def approve_user_endpoint(username: str, req: ApproveUserRequest, user: dict = D
 
 @app.post("/admin/users/{username}/toggle-active", dependencies=[Depends(require_api_key)])
 def toggle_user_active_endpoint(username: str, user: dict = Depends(require_approved_user)):
-    if user["role"] != "c_level":
-        raise HTTPException(403, "Chỉ Quản trị viên C-Level mới có quyền bật/tắt tài khoản")
+    if user["role"] not in ("c_level", "admin_ops"):
+        raise HTTPException(403, "Chi Quản trị viên mới có quyền bật/tắt tài khoản")
 
     res = toggle_user_active(username)
     if not res:
@@ -425,10 +422,19 @@ def get_history(session_id: str, user: dict = Depends(require_approved_user)):
 
 @app.get("/sessions", response_model=list[SessionSummary], dependencies=[Depends(require_api_key)])
 def get_sessions(user: dict = Depends(require_approved_user)):
-    rows = list_sessions(None if user["role"] == "c_level" else user["username"])
+    role = user["role"]
+    if role in ("c_level", "admin_ops"):
+        rows = list_sessions(None)
+    elif role == "regional_director":
+        subordinates = get_subordinate_usernames(user)
+        all_rows = list_sessions(None)
+        rows = [r for r in all_rows if subordinates and r["owner_username"] in subordinates]
+    else:
+        rows = list_sessions(user["username"])
+
     out = []
     for r in rows:
-        owner_name = get_name_by_username(r["owner_username"]) if user["role"] == "c_level" else user.get("name")
+        owner_name = get_name_by_username(r["owner_username"]) if role in ("c_level", "admin_ops", "regional_director") else user.get("name")
         out.append(SessionSummary(
             session_id=r["session_id"],
             title=r["title"],
@@ -457,6 +463,8 @@ def clear(session_id: str, user: dict = Depends(require_approved_user)):
 
 @app.post("/chat", response_model=ChatResponse, dependencies=[Depends(require_api_key)])
 def chat(req: ChatRequest, user: dict = Depends(require_approved_user)):
+    if user["role"] == "admin_ops":
+        raise HTTPException(403, "Tài khoản Admin Vận Hành (admin.dnh) chỉ dùng để quản trị hệ thống, không có quyền truy vấn dữ liệu kinh doanh qua Chatbot.")
     if not req.question or not req.question.strip():
         raise HTTPException(400, "Cau hoi khong duoc de trong")
     _check_rate_limit(user["username"])
@@ -492,8 +500,8 @@ def get_audit_logs_dashboard(
     user_filter: Optional[str] = None,
     user: dict = Depends(require_approved_user)
 ):
-    if user["role"] != "c_level":
-        raise HTTPException(403, "Chi tai khoan C-Level / Ban Dieu Hanh moi co quyen xem Dashboard Audit Log")
+    if user["role"] not in ("c_level", "admin_ops"):
+        raise HTTPException(403, "Chi Quản trị viên / C-Level mới có quyền xem Dashboard Audit Log")
 
     _LOGS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs")
     AUDIT_LOG_PATH = os.path.join(_LOGS_DIR, "audit_log.jsonl")
