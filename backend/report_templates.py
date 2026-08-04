@@ -1759,7 +1759,7 @@ def audit_log_summary(days: int = 7, limit: int = 30, username: str = None, targ
     #     'admin.nguyen' hay 'ceo.tro.ly' se duoc quyen xem chi phi toan cong ty ma khong ai co y do.
     # Quyen phai doc tu vai tro trong CSDL tai khoan, khong doc tu cach dat ten.
     is_clevel_admin = bool(
-        scope_role and str(scope_role).lower() in ('c_level', 'super_admin', 'ceo', 'cfo')
+        scope_role and str(scope_role).lower() in ('c_level', 'super_admin', 'ceo', 'cfo', 'admin_ops', 'admin')
     )
 
     entries = []
@@ -2140,7 +2140,7 @@ def salary_detail(employee_code: str = None, save_date: str = None,
     # sai "chua co du lieu". Sua: QLV duoc xem TDV NEU va CHI NEU nguoi do co manager_code=chinh QLV
     # (doi chieu qua fact_thongketinhluong.manager_code, KHONG tin employee_code AI truyen ma khong
     # kiem tra quan he quan ly - tranh QLV do doi nguoi ngoai doi).
-    is_clevel = bool(scope_role and str(scope_role).lower() in ("c_level", "super_admin", "ceo", "cfo"))
+    is_clevel = bool(scope_role and str(scope_role).lower() in ("c_level", "super_admin", "ceo", "cfo", "admin_ops", "admin"))
     is_manager_role = bool(scope_role and str(scope_role).lower() in ("qlv", "regional_director"))
     target_code = employee_code
     if not is_clevel:
