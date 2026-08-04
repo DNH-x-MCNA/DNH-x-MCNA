@@ -906,7 +906,7 @@ export default function Home() {
             <span className="status-dot-live h-2 w-2 shrink-0 rounded-full bg-emerald-500" title="Dữ liệu realtime" />
           </button>
         )}
-        {isCLevel && sessionOwners.length > 1 && (
+        {(isCLevel || userInfo?.role === "regional_director") && sessionOwners.length > 1 && (
           <div className="mx-3 mt-3">
             <select
               value={effectiveOwnerFilter}

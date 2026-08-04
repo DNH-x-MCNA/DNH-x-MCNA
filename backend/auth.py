@@ -428,6 +428,13 @@ def migrate_and_seed_users():
         else:
             conn.execute("UPDATE users SET role='c_level' WHERE username='dnh'")
             conn.commit()
+
+        # 3. Dam bao tat ca cac tai khoan Giam doc Mien / Kenh (co scope_value hoac scope_channel hoac username cap manager) KHONG bi set lam c_level
+        conn.execute(
+            "UPDATE users SET role='regional_director' "
+            "WHERE username NOT IN ('dnh', 'admin.dnh') AND (scope_value IS NOT NULL OR scope_channel IS NOT NULL OR username LIKE 'manager_%')"
+        )
+        conn.commit()
     finally:
         conn.close()
 
