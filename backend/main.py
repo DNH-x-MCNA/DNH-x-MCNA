@@ -805,6 +805,127 @@ def get_audit_logs_dashboard(
     }
 
 
+@app.get("/audit-logs/weekly", dependencies=[Depends(require_api_key)])
+def get_weekly_audit_dashboard(
+    week_offset: int = Query(default=0, ge=-52, le=52),
+    user: dict = Depends(require_approved_user)
+):
+    if user["role"] not in ("c_level", "admin_ops"):
+        raise HTTPException(403, "Chỉ Quản trị viên / C-Level mới có quyền xem Dashboard Chi phí AI")
+
+    _LOGS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs")
+    COST_LOG_PATH = os.path.join(_LOGS_DIR, "cost_log.jsonl")
+
+    now = dt.datetime.now()
+    current_monday = now.date() - dt.timedelta(days=now.weekday())
+    target_monday = current_monday + dt.timedelta(weeks=week_offset)
+    target_sunday = target_monday + dt.timedelta(days=6)
+
+    target_start_dt = dt.datetime.combine(target_monday, dt.time.min)
+    target_end_dt = dt.datetime.combine(target_sunday, dt.time.max)
+
+    day_names = ["Thứ Hai", "Thứ Ba", "Thứ Tư", "Thứ Năm", "Thứ Sáu", "Thứ Bảy", "Chủ Nhật"]
+    daily_data = {
+        i: {
+            "day_index": i,
+            "day_name": day_names[i],
+            "date_str": (target_monday + dt.timedelta(days=i)).strftime("%Y-%m-%d"),
+            "display_date": (target_monday + dt.timedelta(days=i)).strftime("%d/%m"),
+            "is_today": (target_monday + dt.timedelta(days=i)) == now.date(),
+            "query_count": 0,
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "cache_tokens": 0,
+            "total_tokens": 0,
+            "cost_usd": 0.0,
+            "cost_vnd": 0.0,
+        }
+        for i in range(7)
+    }
+
+    user_weekly_cost = defaultdict(lambda: {"query_count": 0, "total_tokens": 0, "cost_usd": 0.0})
+
+    if os.path.exists(COST_LOG_PATH):
+        with open(COST_LOG_PATH, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    c = json.loads(line)
+                    ts_str = c.get("ts")
+                    if not ts_str:
+                        continue
+                    entry_dt = dt.datetime.fromisoformat(ts_str)
+                    if target_start_dt <= entry_dt <= target_end_dt:
+                        day_idx = (entry_dt.date() - target_monday).days
+                        if 0 <= day_idx <= 6:
+                            cost = c.get("cost_usd", 0.0) or 0.0
+                            it = c.get("input_tokens", 0) or 0
+                            ot = c.get("output_tokens", 0) or 0
+                            cr = c.get("cache_read_tokens", 0) or 0
+                            cw = c.get("cache_write_tokens", 0) or 0
+
+                            d = daily_data[day_idx]
+                            d["query_count"] += 1
+                            d["input_tokens"] += it
+                            d["output_tokens"] += ot
+                            d["cache_tokens"] += cr + cw
+                            d["total_tokens"] += it + ot + cr + cw
+                            d["cost_usd"] += cost
+                            d["cost_vnd"] += cost * USD_TO_VND_RATE
+
+                            u = (c.get("username") or "unknown").strip()
+                            user_weekly_cost[u]["query_count"] += 1
+                            user_weekly_cost[u]["total_tokens"] += it + ot + cr + cw
+                            user_weekly_cost[u]["cost_usd"] += cost
+                except Exception:
+                    continue
+
+    daily_list = []
+    total_week_cost_usd = 0.0
+    total_week_cost_vnd = 0.0
+    total_week_tokens = 0
+    total_week_queries = 0
+
+    for i in range(7):
+        item = daily_data[i]
+        item["cost_usd"] = round(item["cost_usd"], 6)
+        item["cost_vnd"] = round(item["cost_vnd"], 2)
+        total_week_cost_usd += item["cost_usd"]
+        total_week_cost_vnd += item["cost_vnd"]
+        total_week_tokens += item["total_tokens"]
+        total_week_queries += item["query_count"]
+        daily_list.append(item)
+
+    user_breakdown = []
+    for u, stats in user_weekly_cost.items():
+        user_breakdown.append({
+            "username": u,
+            "user_name": get_name_by_username(u) or u,
+            "query_count": stats["query_count"],
+            "total_tokens": stats["total_tokens"],
+            "cost_usd": round(stats["cost_usd"], 6),
+            "cost_vnd": round(stats["cost_usd"] * USD_TO_VND_RATE, 2)
+        })
+    user_breakdown.sort(key=lambda x: x["cost_usd"], reverse=True)
+
+    return {
+        "week_offset": week_offset,
+        "week_start": target_monday.strftime("%Y-%m-%d"),
+        "week_end": target_sunday.strftime("%Y-%m-%d"),
+        "week_label": f"{target_monday.strftime('%d/%m/%Y')} - {target_sunday.strftime('%d/%m/%Y')}",
+        "is_current_week": week_offset == 0,
+        "total_queries": total_week_queries,
+        "total_tokens": total_week_tokens,
+        "total_cost_usd": round(total_week_cost_usd, 4),
+        "total_cost_vnd": round(total_week_cost_vnd, 2),
+        "daily_breakdown": daily_list,
+        "user_breakdown": user_breakdown,
+    }
+
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)

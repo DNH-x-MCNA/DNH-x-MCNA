@@ -318,6 +318,44 @@ type UserBreakdownItem = {
   is_unattributed?: boolean;
 };
 
+type WeeklyDailyItem = {
+  day_index: number;
+  day_name: string;
+  date_str: string;
+  display_date: string;
+  is_today: boolean;
+  query_count: number;
+  input_tokens: number;
+  output_tokens: number;
+  cache_tokens: number;
+  total_tokens: number;
+  cost_usd: number;
+  cost_vnd: number;
+};
+
+type WeeklyUserItem = {
+  username: string;
+  user_name: string;
+  query_count: number;
+  total_tokens: number;
+  cost_usd: number;
+  cost_vnd: number;
+};
+
+type WeeklyAuditData = {
+  week_offset: number;
+  week_start: string;
+  week_end: string;
+  week_label: string;
+  is_current_week: boolean;
+  total_queries: number;
+  total_tokens: number;
+  total_cost_usd: number;
+  total_cost_vnd: number;
+  daily_breakdown: WeeklyDailyItem[];
+  user_breakdown: WeeklyUserItem[];
+};
+
 // Cac truong session_* la so cua CA PHIEN chat, khong phai cua rieng luot hoi tren dong do:
 // cost_log ghi theo tung lan goi API, mot luot hoi sinh nhieu lan goi nen khong tach duoc xuong
 // tung cau hoi. Nhieu dong cung mot phien se hien CUNG mot so - dung cong tay cac dong nay lai,
@@ -572,7 +610,10 @@ export default function Home() {
   const [auditData, setAuditData] = useState<AuditDashboardData | null>(null);
   const [auditDays, setAuditDays] = useState<number>(30);
   const [auditUserFilter, setAuditUserFilter] = useState<string>("all");
-  const [auditActiveTab, setAuditActiveTab] = useState<"users" | "logs">("users");
+  const [auditActiveTab, setAuditActiveTab] = useState<"users" | "weekly" | "logs">("users");
+  const [weeklyData, setWeeklyData] = useState<WeeklyAuditData | null>(null);
+  const [weeklyOffset, setWeeklyOffset] = useState<number>(0);
+  const [weeklyLoading, setWeeklyLoading] = useState<boolean>(false);
 
   // Admin & Change Password Modal States
   const [adminUsersOpen, setAdminUsersOpen] = useState(false);
@@ -653,9 +694,29 @@ export default function Home() {
       .finally(() => setAuditLoading(false));
   };
 
+  const fetchWeeklyAuditData = (offset: number) => {
+    if (!authToken) return;
+    setWeeklyLoading(true);
+    fetch(`${API_URL}/audit-logs/weekly?week_offset=${offset}`, { headers: authHeaders(authToken) })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data: WeeklyAuditData | null) => {
+        if (data) setWeeklyData(data);
+      })
+      .catch((e) => console.error("Error fetching weekly audit logs:", e))
+      .finally(() => setWeeklyLoading(false));
+  };
+
+  useEffect(() => {
+    if (auditModalOpen && auditActiveTab === "weekly") {
+      fetchWeeklyAuditData(weeklyOffset);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [auditModalOpen, auditActiveTab, weeklyOffset]);
+
   const openAuditDashboard = () => {
     setAuditModalOpen(true);
     fetchAuditData(auditDays, auditUserFilter);
+    fetchWeeklyAuditData(weeklyOffset);
   };
 
 
@@ -1217,6 +1278,14 @@ export default function Home() {
                     👥 Theo Người Dùng
                   </button>
                   <button
+                    onClick={() => setAuditActiveTab("weekly")}
+                    className={`rounded-full px-3.5 py-1.5 font-medium transition ${
+                      auditActiveTab === "weekly" ? "bg-white text-indigo-700 shadow-sm" : "text-slate-600 hover:text-slate-900"
+                    }`}
+                  >
+                    📅 Chi Phí Theo Tuần
+                  </button>
+                  <button
                     onClick={() => setAuditActiveTab("logs")}
                     className={`rounded-full px-3.5 py-1.5 font-medium transition ${
                       auditActiveTab === "logs" ? "bg-white text-indigo-700 shadow-sm" : "text-slate-600 hover:text-slate-900"
@@ -1425,6 +1494,176 @@ export default function Home() {
                       </div>
                     );
                   })()}
+
+                  {/* TAB 2: WEEKLY TOKEN COST DASHBOARD */}
+                  {auditActiveTab === "weekly" && (
+                    <div className="flex flex-col gap-4">
+                      {/* Week Navigation Header */}
+                      <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-indigo-100 bg-gradient-to-r from-indigo-50/80 via-purple-50/50 to-blue-50/80 p-3.5 shadow-sm">
+                        <div className="flex items-center gap-2">
+                          <button
+                            onClick={() => setWeeklyOffset((prev) => prev - 1)}
+                            className="flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 shadow-sm transition hover:bg-slate-100 hover:text-indigo-600"
+                          >
+                            ◀️ Tuần trước
+                          </button>
+                          <button
+                            onClick={() => setWeeklyOffset(0)}
+                            disabled={weeklyOffset === 0}
+                            className={`rounded-lg border px-3 py-1.5 text-xs font-semibold shadow-sm transition ${
+                              weeklyOffset === 0
+                                ? "border-slate-200 bg-slate-100 text-slate-400 cursor-not-allowed"
+                                : "border-indigo-300 bg-indigo-50 text-indigo-700 hover:bg-indigo-100"
+                            }`}
+                          >
+                            🔄 Tuần này
+                          </button>
+                          <button
+                            onClick={() => setWeeklyOffset((prev) => prev + 1)}
+                            disabled={weeklyOffset >= 0}
+                            className={`flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-semibold shadow-sm transition ${
+                              weeklyOffset >= 0
+                                ? "border-slate-200 bg-slate-100 text-slate-400 cursor-not-allowed"
+                                : "border-slate-300 bg-white text-slate-700 hover:bg-slate-100 hover:text-indigo-600"
+                            }`}
+                          >
+                            Tuần sau ▶️
+                          </button>
+                        </div>
+                        <div className="text-right">
+                          <div className="flex items-center gap-2 text-xs sm:text-sm font-bold text-slate-800">
+                            <span>📅 Tuần: {weeklyData?.week_label || "Đang tải..."}</span>
+                            {weeklyData?.is_current_week && (
+                              <span className="rounded-full bg-emerald-100 px-2.5 py-0.5 text-[10px] font-bold text-emerald-800 border border-emerald-300 shadow-sm">
+                                Tuần hiện tại
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Weekly Summary Cards */}
+                      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                        <div className="rounded-xl border border-blue-200 bg-blue-50/50 p-3 shadow-sm">
+                          <div className="text-[11px] font-medium text-blue-700">🪙 Tổng Tokens Tuần</div>
+                          <div className="mt-1 text-base font-bold tabular-nums text-blue-900">
+                            {(weeklyData?.total_tokens || 0).toLocaleString()}
+                          </div>
+                        </div>
+                        <div className="rounded-xl border border-amber-200 bg-amber-50/50 p-3 shadow-sm">
+                          <div className="text-[11px] font-medium text-amber-700">🇻🇳 Tổng VNĐ Tuần</div>
+                          <div className="mt-1 text-base font-bold tabular-nums text-amber-900">
+                            {(weeklyData?.total_cost_vnd || 0).toLocaleString("vi-VN")} đ
+                          </div>
+                        </div>
+                        <div className="rounded-xl border border-emerald-200 bg-emerald-50/50 p-3 shadow-sm">
+                          <div className="text-[11px] font-medium text-emerald-700">💵 Chi Phí (USD)</div>
+                          <div className="mt-1 text-base font-bold tabular-nums text-emerald-900">
+                            ${(weeklyData?.total_cost_usd || 0).toFixed(4)}
+                          </div>
+                        </div>
+                        <div className="rounded-xl border border-purple-200 bg-purple-50/50 p-3 shadow-sm">
+                          <div className="text-[11px] font-medium text-purple-700">💬 Số Lượt Truy Vấn</div>
+                          <div className="mt-1 text-base font-bold tabular-nums text-purple-900">
+                            {(weeklyData?.total_queries || 0).toLocaleString()} lượt
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* 7-Day Breakdown Grid Cards */}
+                      <div>
+                        <h4 className="mb-2 text-xs font-bold text-slate-700">📆 Chi Phí & Tokens Chi Tiết Theo Thứ Trong Tuần</h4>
+                        {weeklyLoading && !weeklyData ? (
+                          <div className="flex h-32 items-center justify-center text-xs text-slate-400">
+                            Đang tải dữ liệu tuần...
+                          </div>
+                        ) : (
+                          <div className="grid grid-cols-1 gap-2 sm:grid-cols-7">
+                            {weeklyData?.daily_breakdown.map((day) => {
+                              const maxCost = Math.max(1, ...(weeklyData.daily_breakdown.map((d) => d.cost_vnd) || [1]));
+                              const barPct = Math.min(100, Math.round((day.cost_vnd / maxCost) * 100));
+                              return (
+                                <div
+                                  key={day.day_index}
+                                  className={`flex flex-col justify-between rounded-xl border p-3 transition shadow-sm ${
+                                    day.is_today
+                                      ? "border-indigo-400 bg-gradient-to-b from-indigo-50/90 to-white ring-2 ring-indigo-300"
+                                      : day.query_count > 0
+                                      ? "border-slate-200 bg-white hover:border-slate-300"
+                                      : "border-slate-100 bg-slate-50/50 opacity-70"
+                                  }`}
+                                >
+                                  <div>
+                                    <div className="flex items-center justify-between border-b border-slate-100 pb-1.5">
+                                      <span className="text-xs font-bold text-slate-800">{day.day_name}</span>
+                                      <span className={`text-[10px] font-semibold ${day.is_today ? "text-indigo-600 font-bold" : "text-slate-400"}`}>
+                                        {day.display_date} {day.is_today && "⭐"}
+                                      </span>
+                                    </div>
+                                    <div className="mt-2 text-sm font-bold tabular-nums text-amber-700">
+                                      {day.cost_vnd.toLocaleString("vi-VN")} đ
+                                    </div>
+                                    <div className="text-[11px] tabular-nums text-slate-500">
+                                      {day.total_tokens.toLocaleString()} tokens
+                                    </div>
+                                    <div className="text-[10px] text-slate-400">
+                                      {day.query_count} lượt hỏi
+                                    </div>
+                                  </div>
+                                  <div className="mt-2.5">
+                                    <div className="h-1.5 w-full overflow-hidden rounded-full bg-slate-100">
+                                      <div
+                                        style={{ width: `${barPct}%` }}
+                                        className={`h-full rounded-full transition-all duration-300 ${
+                                          day.is_today ? "bg-indigo-600" : "bg-amber-500"
+                                        }`}
+                                      />
+                                    </div>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Weekly User Breakdown Table */}
+                      <div className="flex flex-col gap-2">
+                        <h4 className="text-xs font-bold text-slate-700">👥 Thống Kê Theo Tài Khoản Trong Tuần Này</h4>
+                        <div className="max-h-48 overflow-auto rounded-xl border border-slate-200 shadow-sm">
+                          <table className="min-w-full text-xs tabular-nums">
+                            <thead className="sticky top-0 bg-slate-100 text-slate-700 font-semibold shadow-[0_1px_0_0_theme(colors.slate.200)]">
+                              <tr>
+                                <th className="px-3 py-2 text-left">Người Dùng</th>
+                                <th className="px-3 py-2 text-center">Tài Khoản</th>
+                                <th className="px-3 py-2 text-right">Số Câu Hỏi</th>
+                                <th className="px-3 py-2 text-right">Tổng Tokens</th>
+                                <th className="px-3 py-2 text-right font-bold text-amber-700">Chi Phí (VNĐ)</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-100 bg-white">
+                              {weeklyData?.user_breakdown.map((u) => (
+                                <tr key={u.username} className="hover:bg-slate-50">
+                                  <td className="px-3 py-2 font-medium text-slate-900">{u.user_name}</td>
+                                  <td className="px-3 py-2 text-center text-slate-500 font-mono">{u.username}</td>
+                                  <td className="px-3 py-2 text-right font-semibold text-slate-700">{u.query_count}</td>
+                                  <td className="px-3 py-2 text-right text-slate-600">{u.total_tokens.toLocaleString()}</td>
+                                  <td className="px-3 py-2 text-right font-bold text-amber-700">{u.cost_vnd.toLocaleString("vi-VN")} đ</td>
+                                </tr>
+                              ))}
+                              {(!weeklyData || weeklyData.user_breakdown.length === 0) && (
+                                <tr>
+                                  <td colSpan={5} className="px-3 py-4 text-center text-slate-400 italic">
+                                    Chưa có dữ liệu truy vấn trong tuần này.
+                                  </td>
+                                </tr>
+                              )}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    </div>
+                  )}
 
                   {/* TAB 2: DETAILED QUERY AUDIT LOGS TABLE */}
                   {auditActiveTab === "logs" && (
