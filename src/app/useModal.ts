@@ -18,6 +18,14 @@ const FOCUSABLE_SELECTOR =
 export function useModal(active: boolean, onClose: () => void) {
   const containerRef = useRef<HTMLDivElement>(null);
   const previousFocusRef = useRef<HTMLElement | null>(null);
+  // Giu ham onClose moi nhat qua ref, KHONG dua vao dependency array cua effect ben duoi. Neu
+  // component cha truyen onClose dang inline arrow function (rat pho bien, vd
+  // "() => setOpen(false)"), no se bi tao lai moi lan render - neu dua vao deps, moi lan nguoi
+  // dung go chu trong 1 input KIEM SOAT (controlled input) trong modal se lam component cha
+  // re-render, tao onClose moi, kich hoat lai effect va CUOP FOCUS ve phan tu focusable dau tien
+  // (thuong la nut dong "X") ngay giua luc dang go - bug thuc te da gap 05/08/2026.
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
 
   useEffect(() => {
     if (!active) return;
@@ -33,7 +41,7 @@ export function useModal(active: boolean, onClose: () => void) {
     function handleKeyDown(e: KeyboardEvent) {
       if (e.key === "Escape") {
         e.stopPropagation();
-        onClose();
+        onCloseRef.current();
         return;
       }
       if (e.key !== "Tab" || !containerRef.current) return;
@@ -56,7 +64,8 @@ export function useModal(active: boolean, onClose: () => void) {
       document.body.style.overflow = prevOverflow;
       previousFocusRef.current?.focus?.();
     };
-  }, [active, onClose]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [active]);
 
   return containerRef;
 }
