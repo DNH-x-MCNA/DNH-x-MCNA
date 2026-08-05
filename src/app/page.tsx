@@ -1220,10 +1220,9 @@ export default function Home() {
                 type="button"
                 onClick={handleCancelQuestion}
                 title="Dừng suy luận"
-                className="flex items-center gap-1.5 rounded-full bg-rose-600 px-3.5 py-2 text-xs font-bold text-white shadow-sm transition hover:bg-rose-700 hover:scale-105 active:scale-95"
+                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-rose-600 text-white shadow-sm transition hover:bg-rose-700 hover:scale-105 active:scale-95"
               >
-                <IconSquare className="h-3.5 w-3.5 fill-current" />
-                <span>Dừng</span>
+                <IconSquare className="h-4 w-4 fill-current text-white" />
               </button>
             ) : (
               <button
