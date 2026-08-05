@@ -1011,15 +1011,6 @@ export default function Home() {
             <span className="status-dot-live h-2 w-2 shrink-0 rounded-full bg-emerald-500" title="Dữ liệu realtime" />
           </button>
         )}
-        {isCLevel && (
-          <button
-            onClick={openSecurityAuditDashboard}
-            className="mx-3 mt-2 flex items-center gap-2 rounded-lg bg-amber-50 px-3 py-2 text-left text-sm font-semibold text-amber-900 shadow-sm ring-1 ring-inset ring-amber-200 transition hover:bg-amber-100"
-          >
-            <span className="text-sm shrink-0">🔐</span>
-            <span className="flex-1">Nhật ký Đổi MK & Login</span>
-          </button>
-        )}
         {(isCLevel || userInfo?.role === "regional_director") && sessionOwners.length > 1 && (
           <div className="mx-3 mt-3">
             <select
@@ -1131,16 +1122,6 @@ export default function Home() {
                   >
                     <IconChart className="h-4 w-4" />
                     <span className="hidden md:inline">Audit Log & Chi phí AI</span>
-                  </button>
-                )}
-                {isCLevel && (
-                  <button
-                    onClick={openSecurityAuditDashboard}
-                    className="flex items-center gap-1.5 rounded-xl px-3 py-2 text-xs font-semibold text-purple-200 bg-purple-950/60 border border-purple-500/40 hover:bg-purple-900/80 transition shadow-sm"
-                    title="Mở Lịch sử Đổi mật khẩu, Đăng nhập & Hoạt động Bảo mật"
-                  >
-                    <span>🔐</span>
-                    <span className="hidden md:inline">Nhật ký Đổi MK & Login</span>
                   </button>
                 )}
                 <button
@@ -1366,14 +1347,6 @@ export default function Home() {
                     }`}
                   >
                     📝 Nhật Ký Truy Vấn
-                  </button>
-                  <button
-                    onClick={() => setAuditActiveTab("security")}
-                    className={`rounded-full px-3.5 py-1.5 font-medium transition ${
-                      auditActiveTab === "security" ? "bg-white text-indigo-700 shadow-sm" : "text-slate-600 hover:text-slate-900"
-                    }`}
-                  >
-                    🔐 Nhật Ký Đổi MK & Đăng Nhập
                   </button>
                 </div>
               </div>
@@ -1870,98 +1843,6 @@ export default function Home() {
                       </div>
                     </div>
                   )}
-
-                  {/* TAB 4: DEDICATED SECURITY & ACCOUNT LOGS */}
-                  {auditActiveTab === "security" && (() => {
-                    const securityLogs = (auditData?.logs || []).filter((l) => {
-                      const q = (l.question || "").toLowerCase();
-                      const sql = (l.sql || "").toLowerCase();
-                      return (
-                        sql.startsWith("<auth:") ||
-                        sql.startsWith("<admin:") ||
-                        q.includes("đổi mật khẩu") ||
-                        q.includes("đăng nhập") ||
-                        q.includes("reset") ||
-                        q.includes("quên") ||
-                        q.includes("tạo tài khoản") ||
-                        q.includes("phê duyệt") ||
-                        q.includes("khóa")
-                      );
-                    });
-
-                    return (
-                      <div className="flex flex-col gap-3">
-                        <div className="flex items-center justify-between">
-                          <h3 className="text-sm font-bold text-slate-800">
-                            🔐 Nhật Ký Đổi Mật Khẩu, Đăng Nhập & Thao Tác Quản Trị ({securityLogs.length} sự kiện)
-                          </h3>
-                          <span className="text-xs text-slate-500">Ghi nhận chính xác thời gian & tài khoản thực hiện</span>
-                        </div>
-                        <div className="max-h-[420px] overflow-auto rounded-xl border border-slate-200 shadow-sm">
-                          <table className="min-w-full text-xs tabular-nums">
-                            <thead className="sticky top-0 z-10 bg-[#F1F5F9] text-slate-700 font-semibold shadow-[0_1px_0_0_theme(colors.slate.200)]">
-                              <tr>
-                                <th className="px-4 py-3 text-left">Thời Gian</th>
-                                <th className="px-4 py-3 text-left">Tài Khoản</th>
-                                <th className="px-4 py-3 text-left">Họ Tên</th>
-                                <th className="px-4 py-3 text-left">Nội Dung Sự Kiện / Thao Tác</th>
-                                <th className="px-4 py-3 text-center">Trạng Thái</th>
-                              </tr>
-                            </thead>
-                            <tbody className="divide-y divide-slate-100 bg-white">
-                              {securityLogs.map((log, idx) => {
-                                const isError = log.status === "error";
-                                const qText = log.question || "";
-                                const isPasswordChange = qText.includes("Đổi mật khẩu");
-                                const isLogin = qText.includes("Đăng nhập");
-                                const isReset = qText.includes("Reset") || qText.includes("Quên");
-                                return (
-                                  <tr key={idx} className="transition hover:bg-slate-50">
-                                    <td className="px-4 py-3 font-mono text-slate-600 whitespace-nowrap">
-                                      {log.ts ? log.ts.replace("T", " ").slice(0, 19) : "—"}
-                                    </td>
-                                    <td className="px-4 py-3 font-semibold text-slate-900 whitespace-nowrap">
-                                      {log.username}
-                                    </td>
-                                    <td className="px-4 py-3 text-slate-700 whitespace-nowrap">
-                                      {log.user_name}
-                                    </td>
-                                    <td className="px-4 py-3 font-medium">
-                                      <span className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs ${
-                                        isPasswordChange
-                                          ? "bg-amber-100 text-amber-900 font-bold border border-amber-300"
-                                          : isLogin
-                                          ? "bg-emerald-100 text-emerald-900 border border-emerald-300"
-                                          : isReset
-                                          ? "bg-purple-100 text-purple-900 border border-purple-300"
-                                          : "bg-blue-100 text-blue-900 border border-blue-300"
-                                      }`}>
-                                        {qText}
-                                      </span>
-                                    </td>
-                                    <td className="px-4 py-3 text-center whitespace-nowrap">
-                                      {isError ? (
-                                        <span className="rounded-full bg-rose-100 px-2.5 py-0.5 text-[11px] font-bold text-rose-700">Thất bại</span>
-                                      ) : (
-                                        <span className="rounded-full bg-emerald-100 px-2.5 py-0.5 text-[11px] font-bold text-emerald-700">Thành công</span>
-                                      )}
-                                    </td>
-                                  </tr>
-                                );
-                              })}
-                              {securityLogs.length === 0 && (
-                                <tr>
-                                  <td colSpan={5} className="px-4 py-8 text-center text-slate-400 italic">
-                                    Chưa có sự kiện đổi mật khẩu hoặc đăng nhập nào trong khoảng thời gian này.
-                                  </td>
-                                </tr>
-                              )}
-                            </tbody>
-                          </table>
-                        </div>
-                      </div>
-                    );
-                  })()}
                 </div>
               ) : (
                 <div className="flex h-64 items-center justify-center text-sm text-slate-400">
