@@ -744,6 +744,12 @@ export default function Home() {
     fetchWeeklyAuditData(weeklyOffset);
   };
 
+  const openSecurityAuditDashboard = () => {
+    setAuditActiveTab("security");
+    setAuditModalOpen(true);
+    fetchAuditData(auditDays, auditUserFilter);
+  };
+
 
   // Kiem tra token da luu (neu co) ngay khi mo trang - xac nhan qua /auth/me truoc khi cho vao chat
   useEffect(() => {
@@ -1005,6 +1011,15 @@ export default function Home() {
             <span className="status-dot-live h-2 w-2 shrink-0 rounded-full bg-emerald-500" title="Dữ liệu realtime" />
           </button>
         )}
+        {isCLevel && (
+          <button
+            onClick={openSecurityAuditDashboard}
+            className="mx-3 mt-2 flex items-center gap-2 rounded-lg bg-amber-50 px-3 py-2 text-left text-sm font-semibold text-amber-900 shadow-sm ring-1 ring-inset ring-amber-200 transition hover:bg-amber-100"
+          >
+            <span className="text-sm shrink-0">🔐</span>
+            <span className="flex-1">Nhật ký Đổi MK & Login</span>
+          </button>
+        )}
         {(isCLevel || userInfo?.role === "regional_director") && sessionOwners.length > 1 && (
           <div className="mx-3 mt-3">
             <select
@@ -1116,6 +1131,16 @@ export default function Home() {
                   >
                     <IconChart className="h-4 w-4" />
                     <span className="hidden md:inline">Audit Log & Chi phí AI</span>
+                  </button>
+                )}
+                {isCLevel && (
+                  <button
+                    onClick={openSecurityAuditDashboard}
+                    className="flex items-center gap-1.5 rounded-xl px-3 py-2 text-xs font-semibold text-purple-200 bg-purple-950/60 border border-purple-500/40 hover:bg-purple-900/80 transition shadow-sm"
+                    title="Mở Lịch sử Đổi mật khẩu, Đăng nhập & Hoạt động Bảo mật"
+                  >
+                    <span>🔐</span>
+                    <span className="hidden md:inline">Nhật ký Đổi MK & Login</span>
                   </button>
                 )}
                 <button
