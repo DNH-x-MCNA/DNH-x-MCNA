@@ -47,6 +47,7 @@ from conversation_memory import (
     get_session_history,
 )
 from nl2sql import ask
+from query_engine import _write_log
 from pricing import USD_TO_VND_RATE
 
 init_auth_schema()
@@ -243,6 +244,13 @@ def login(req: LoginRequest):
         raise HTTPException(403, "Tài khoản của bạn đã bị khóa. Vui lòng liên hệ Quản trị viên.")
 
     token = create_session(user["id"])
+    _write_log({
+        "ts": dt.datetime.now().isoformat(),
+        "username": user["username"],
+        "question": "🔑 Đăng nhập hệ thống",
+        "sql": "<auth:login>",
+        "status": "ok"
+    })
     return LoginResponse(
         token=token,
         username=user["username"],
@@ -295,10 +303,24 @@ def forgot_password(req: ForgotPasswordRequest, request: Request):
         if send_password_email(clean_email, new_pwd, is_reset=True):
             set_password(clean_email, new_pwd)
             delete_all_sessions_for_user(user["id"])
+            _write_log({
+                "ts": dt.datetime.now().isoformat(),
+                "username": user["username"],
+                "question": f"🔑 Quên/Reset mật khẩu thành công qua email ({clean_email})",
+                "sql": "<auth:forgot_password>",
+                "status": "ok"
+            })
         else:
             # Gui that bai -> KHONG doi gi ca, mat khau cu van dung duoc binh thuong.
             # Chi ghi nhan su co (KHONG ghi mat khau) de admin doi chieu khi co nguoi bao khong nhan duoc mail.
             print(f"[FORGOT-PASSWORD] Gui mail that bai cho {clean_email} - GIU NGUYEN mat khau cu")
+            _write_log({
+                "ts": dt.datetime.now().isoformat(),
+                "username": user["username"],
+                "question": f"⚠️ Gửi email reset mật khẩu thất bại ({clean_email})",
+                "sql": "<auth:forgot_password_failed>",
+                "status": "error"
+            })
 
     # Luon tra CUNG MOT thong bao, du email co ton tai hay khong va du gui mail thanh cong hay khong.
     # Neu phan biet (vd tra 500 khi email co that), ke ngoai chi can thu lan luot vai email roi xem
@@ -320,6 +342,13 @@ def change_password(req: ChangePasswordRequest, user: dict = Depends(require_use
         raise HTTPException(400, "Mật khẩu hiện tại không chính xác")
 
     set_password(user["username"], req.new_password)
+    _write_log({
+        "ts": dt.datetime.now().isoformat(),
+        "username": user["username"],
+        "question": "🔐 Đổi mật khẩu tài khoản thành công",
+        "sql": "<auth:change_password>",
+        "status": "ok"
+    })
     return {"ok": True, "message": "Đổi mật khẩu thành công!"}
 
 
@@ -381,6 +410,14 @@ def create_user_by_admin(req: AdminCreateUserRequest, user: dict = Depends(requi
             password=generated_pwd
         )
 
+    _write_log({
+        "ts": dt.datetime.now().isoformat(),
+        "username": user["username"],
+        "question": f"👤 Admin tạo tài khoản mới: {clean_username} (vai trò {req.role})",
+        "sql": "<admin:create_user>",
+        "status": "ok"
+    })
+
     return {
         "ok": True,
         "message": f"Khởi tạo tài khoản {clean_username} thành công!",
@@ -398,6 +435,13 @@ def approve_user_endpoint(username: str, req: ApproveUserRequest, user: dict = D
     success = approve_user(username, req.role, req.scope_value, req.employee_code, req.scope_channel)
     if not success:
         raise HTTPException(404, "Không tìm thấy tài khoản để phê duyệt")
+    _write_log({
+        "ts": dt.datetime.now().isoformat(),
+        "username": user["username"],
+        "question": f"✅ Phê duyệt tài khoản {username} (vai trò {req.role})",
+        "sql": "<admin:approve_user>",
+        "status": "ok"
+    })
     return {"ok": True, "message": f"Phê duyệt tài khoản {username} thành công"}
 
 
@@ -409,6 +453,13 @@ def toggle_user_active_endpoint(username: str, user: dict = Depends(require_appr
     res = toggle_user_active(username)
     if not res:
         raise HTTPException(404, "Không tìm thấy tài khoản")
+    _write_log({
+        "ts": dt.datetime.now().isoformat(),
+        "username": user["username"],
+        "question": f"🔒 Bật/Tắt khóa tài khoản {username} ({'Mở khóa' if res.get('is_active') == 1 else 'Khóa'})",
+        "sql": "<admin:toggle_active>",
+        "status": "ok"
+    })
     return {"ok": True, "result": res}
 
 

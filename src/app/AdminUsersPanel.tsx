@@ -14,6 +14,8 @@ interface UserItem {
   status: string;
   is_active: number;
   created_at: string;
+  password_changed_at?: string | null;
+  last_login_at?: string | null;
 }
 
 interface AdminUsersPanelProps {
@@ -249,6 +251,7 @@ export default function AdminUsersPanel({ authToken, onClose }: AdminUsersPanelP
                   <th className="p-3">Họ tên</th>
                   <th className="p-3">Trạng thái</th>
                   <th className="p-3">Vai trò & Phạm vi</th>
+                  <th className="p-3">Hoạt động (Login / Đổi MK)</th>
                   <th className="p-3 text-right">Thao tác</th>
                 </tr>
               </thead>
@@ -281,6 +284,18 @@ export default function AdminUsersPanel({ authToken, onClose }: AdminUsersPanelP
                       {u.scope_value && <div><span className="font-semibold">Vùng:</span> {u.scope_value}</div>}
                       {u.scope_channel && <div><span className="font-semibold">Kênh:</span> {u.scope_channel}</div>}
                       {u.employee_code && <div><span className="font-semibold">Mã NV:</span> {u.employee_code}</div>}
+                    </td>
+                    <td className="p-3 text-[11px] text-slate-600">
+                      {u.last_login_at ? (
+                        <div className="font-medium text-emerald-700">🕒 Login: {u.last_login_at.slice(0, 16).replace("T", " ")}</div>
+                      ) : (
+                        <div className="text-slate-400">🕒 Chưa login</div>
+                      )}
+                      {u.password_changed_at ? (
+                        <div className="font-medium text-amber-700">🔑 Đổi MK: {u.password_changed_at.slice(0, 16).replace("T", " ")}</div>
+                      ) : (
+                        <div className="text-slate-400">🔑 MK khởi tạo</div>
+                      )}
                     </td>
                     <td className="p-3 text-right space-x-2">
                       <button
