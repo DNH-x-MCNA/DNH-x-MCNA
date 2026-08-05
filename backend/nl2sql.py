@@ -30,11 +30,15 @@ from cost_logger import compute_and_log_cost
 MODEL = "claude-sonnet-5"
 MAX_TOOL_ROUNDS = 4  # 04/08/2026: giam tu 8 -> 4 (tiet kiem thoi gian + token). Tool Merger da gop
                       # nhieu tool call thanh 1, nen 4 vong la du cho moi tinh huong thuc te.
-MAX_ROWS_TO_MODEL = 30 # Giam tu 50 -> 30 tiet kiem token
+MAX_ROWS_TO_MODEL = 20 # Giam tu 50 -> 30 -> 20 tiet kiem token (ad-hoc SQL, template tools khong dung)
 MAX_HISTORY_TURNS = 4  # 04/08/2026: giam tu 6 -> 4 tiet kiem token (ngu canh 4 luot la du, moi luot
                        # cu cong don token lich su khien vong sau cham di dang ke)
 MAX_TOKENS = 6144  # 04/08/2026: giam tu 8192 -> 6144 ep Claude tra loi ngan gon hon, giam thoi gian
                    # sinh output (~2-3s nhanh hon). Van du cho thinking + bang 30 dong.
+MAX_PAYLOAD_CHARS = 6000  # Gioi han ky tu payload gui cho AI (~1500 tokens). Template tools (employee_kpi,
+                          # revenue_tree...) tra JSON KHONG gioi han kich thuoc, truoc day co the len 20K-50K
+                          # chars, gay phình context 7K->49K tokens khi AI goi nhieu tool lien tiep. last_result
+                          # (cho UI) VAN giu nguyen day du, chi phan gui cho AI bi cat.
 
 TEMPLATE_TOOLS = [
     {
@@ -616,6 +620,12 @@ QUAN TRONG VE DO DAI CAU TRA LOI (tiet kiem chi phi - moi token output deu tinh 
   KHONG viet thanh doan van dai. Neu ket qua co nhieu dong, dung BANG (markdown table) thay vi mo ta
   bang loi van. Chi mo rong nhan xet/phan tich khi nguoi dung hoi ro "vi sao"/"nhan xet"/"danh gia".
 - Neu tool tra ve loi hoac khong co du lieu phu hop, noi ngan gon cho nguoi dung, khong doan bua.
+
+TIET KIEM TOKEN - QUAN TRONG:
+- Sau khi nhan du lieu tu tool, TRA LOI NGAY cho nguoi dung. Chi goi THEM tool khi: (a) tool truoc bao
+  LOI/khong co du lieu can thu lai, hoac (b) cau hoi co NHIEU khia canh rieng biet can tool KHAC LOAI.
+- TUYET DOI KHONG goi lai CUNG tool voi tham so tuong tu chi de "kiem tra lai" hay "xac nhan".
+- Du lieu tra ve tu tool co the bi cat bot (neu qua dai) nhung DA DU de tra loi - khong can query lai.
 """
 
 
@@ -882,10 +892,17 @@ def ask(question: str, session_id: str = "default", username: str = None, scope_
                     payload = {"du_lieu": payload,
                                "CANH_BAO_BAT_BUOC_NOI_VOI_NGUOI_DUNG": tresult["canh_bao"]}
 
+            # Gioi han kich thuoc payload gui cho AI de tranh context phinh to khi goi nhieu tool
+            # lien tiep (truoc day template tools tra JSON 20K-50K chars, cong don qua cac vong lam
+            # input tang tu 7K len 49K tokens cho 1 cau hoi). last_result (dong 804) VAN giu nguyen
+            # ket qua day du cho UI frontend - chi phan gui cho AI model bi cat.
+            payload_str = json.dumps(payload, ensure_ascii=False) if isinstance(payload, (dict, list)) else str(payload)
+            if len(payload_str) > MAX_PAYLOAD_CHARS:
+                payload_str = payload_str[:MAX_PAYLOAD_CHARS] + "\n...(du lieu bi cat bot vi qua dai, phan tren DA DU de tra loi - KHONG can query lai)"
             tool_results.append({
                 "type": "tool_result",
                 "tool_use_id": tu.id,
-                "content": json.dumps(payload, ensure_ascii=False) if isinstance(payload, (dict, list)) else str(payload),
+                "content": payload_str,
             })
 
         messages.append({"role": "user", "content": tool_results})
