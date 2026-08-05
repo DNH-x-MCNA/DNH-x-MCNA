@@ -1570,59 +1570,121 @@ export default function Home() {
                         </div>
                       </div>
 
-                      {/* 7-Day Breakdown Grid Cards */}
-                      <div>
-                        <h4 className="mb-2 text-xs font-bold text-slate-700">📆 Chi Phí & Tokens Chi Tiết Theo Thứ Trong Tuần</h4>
+                      {/* 7-Day Vertical Bar Chart */}
+                      <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+                        <div className="flex items-center justify-between mb-4 border-b border-slate-100 pb-3">
+                          <div className="flex items-center gap-2">
+                            <h4 className="text-xs font-bold text-slate-800">📊 Đồ Thị Chi Phí & Tokens Chi Tiết Theo Thứ Trong Tuần</h4>
+                            <span className="rounded-md bg-indigo-50 px-2 py-0.5 text-[10px] font-semibold text-indigo-700 border border-indigo-200">
+                              Đồ thị cột đứng
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-3 text-[11px] font-medium text-slate-500">
+                            <div className="flex items-center gap-1.5">
+                              <span className="h-2.5 w-2.5 rounded-sm bg-gradient-to-t from-amber-500 to-amber-400" />
+                              <span>Chi phí ngày thường</span>
+                            </div>
+                            <div className="flex items-center gap-1.5">
+                              <span className="h-2.5 w-2.5 rounded-sm bg-gradient-to-t from-indigo-600 to-purple-500" />
+                              <span>Hôm nay ⭐</span>
+                            </div>
+                          </div>
+                        </div>
+
                         {weeklyLoading && !weeklyData ? (
-                          <div className="flex h-32 items-center justify-center text-xs text-slate-400">
+                          <div className="flex h-64 items-center justify-center text-xs text-slate-400">
                             Đang tải dữ liệu tuần...
                           </div>
                         ) : (
-                          <div className="grid grid-cols-1 gap-2 sm:grid-cols-7">
-                            {weeklyData?.daily_breakdown.map((day) => {
-                              const maxCost = Math.max(1, ...(weeklyData.daily_breakdown.map((d) => d.cost_vnd) || [1]));
-                              const barPct = Math.min(100, Math.round((day.cost_vnd / maxCost) * 100));
-                              return (
-                                <div
-                                  key={day.day_index}
-                                  className={`flex flex-col justify-between rounded-xl border p-3 transition shadow-sm ${
-                                    day.is_today
-                                      ? "border-indigo-400 bg-gradient-to-b from-indigo-50/90 to-white ring-2 ring-indigo-300"
-                                      : day.query_count > 0
-                                      ? "border-slate-200 bg-white hover:border-slate-300"
-                                      : "border-slate-100 bg-slate-50/50 opacity-70"
-                                  }`}
-                                >
-                                  <div>
-                                    <div className="flex items-center justify-between border-b border-slate-100 pb-1.5">
-                                      <span className="text-xs font-bold text-slate-800">{day.day_name}</span>
-                                      <span className={`text-[10px] font-semibold ${day.is_today ? "text-indigo-600 font-bold" : "text-slate-400"}`}>
-                                        {day.display_date} {day.is_today && "⭐"}
+                          <div className="flex flex-col gap-2">
+                            {/* Chart Body */}
+                            <div className="grid grid-cols-7 gap-2 sm:gap-3 h-64 items-end pt-6 pb-2 px-1 border-b border-slate-200">
+                              {weeklyData?.daily_breakdown.map((day) => {
+                                const maxCost = Math.max(1, ...(weeklyData.daily_breakdown.map((d) => d.cost_vnd) || [1]));
+                                const barPct = Math.min(100, Math.round((day.cost_vnd / maxCost) * 100));
+                                const displayBarHeight = day.cost_vnd > 0 ? Math.max(6, barPct) : 0;
+                                return (
+                                  <div
+                                    key={day.day_index}
+                                    className="group relative flex h-full flex-col justify-end items-center"
+                                  >
+                                    {/* Value Labels Above Bar */}
+                                    <div className="mb-2 flex flex-col items-center text-center transition group-hover:-translate-y-1">
+                                      <span className={`text-[11px] font-bold tabular-nums ${
+                                        day.is_today ? "text-indigo-700" : day.cost_vnd > 0 ? "text-amber-700" : "text-slate-400"
+                                      }`}>
+                                        {day.cost_vnd > 0 ? `${day.cost_vnd.toLocaleString("vi-VN")} đ` : "0 đ"}
+                                      </span>
+                                      <span className="text-[9px] tabular-nums text-slate-400 font-medium">
+                                        {day.total_tokens > 0 ? (
+                                          day.total_tokens >= 1000000
+                                            ? `${(day.total_tokens / 1000000).toFixed(2)}M tokens`
+                                            : `${Math.round(day.total_tokens / 1000)}k tokens`
+                                        ) : "0 tokens"}
+                                      </span>
+                                      <span className="text-[9px] text-slate-400 hidden sm:inline">
+                                        {day.query_count} lượt
                                       </span>
                                     </div>
-                                    <div className="mt-2 text-sm font-bold tabular-nums text-amber-700">
-                                      {day.cost_vnd.toLocaleString("vi-VN")} đ
-                                    </div>
-                                    <div className="text-[11px] tabular-nums text-slate-500">
-                                      {day.total_tokens.toLocaleString()} tokens
-                                    </div>
-                                    <div className="text-[10px] text-slate-400">
-                                      {day.query_count} lượt hỏi
-                                    </div>
-                                  </div>
-                                  <div className="mt-2.5">
-                                    <div className="h-1.5 w-full overflow-hidden rounded-full bg-slate-100">
+
+                                    {/* Vertical Bar Container Track */}
+                                    <div className="relative flex h-full w-full max-w-[48px] flex-col justify-end overflow-hidden rounded-t-xl bg-slate-100/80 p-0.5 group-hover:bg-slate-200/60 transition">
                                       <div
-                                        style={{ width: `${barPct}%` }}
-                                        className={`h-full rounded-full transition-all duration-300 ${
-                                          day.is_today ? "bg-indigo-600" : "bg-amber-500"
+                                        style={{ height: `${displayBarHeight}%` }}
+                                        className={`w-full rounded-t-lg transition-all duration-500 ease-out ${
+                                          day.is_today
+                                            ? "bg-gradient-to-t from-indigo-600 via-indigo-500 to-purple-500 shadow-md shadow-indigo-200"
+                                            : day.query_count > 0
+                                            ? "bg-gradient-to-t from-amber-500 via-amber-400 to-amber-300 shadow-sm"
+                                            : "bg-slate-200"
                                         }`}
                                       />
                                     </div>
+
+                                    {/* Hover Detailed Tooltip Card */}
+                                    <div className="pointer-events-none absolute bottom-full mb-2 z-20 hidden w-44 rounded-xl border border-slate-200 bg-slate-900 p-2.5 text-white shadow-xl group-hover:block transition animate-in fade-in zoom-in-95">
+                                      <div className="flex items-center justify-between border-b border-slate-700 pb-1 text-[11px] font-bold">
+                                        <span>{day.day_name} ({day.display_date})</span>
+                                        {day.is_today && <span className="text-amber-400 font-normal">Hôm nay</span>}
+                                      </div>
+                                      <div className="mt-1.5 flex flex-col gap-1 text-[10px] tabular-nums">
+                                        <div className="flex justify-between text-amber-300">
+                                          <span>Chi phí:</span>
+                                          <span className="font-bold">{day.cost_vnd.toLocaleString("vi-VN")} đ</span>
+                                        </div>
+                                        <div className="flex justify-between text-slate-300">
+                                          <span>Tokens:</span>
+                                          <span>{day.total_tokens.toLocaleString()}</span>
+                                        </div>
+                                        <div className="flex justify-between text-slate-300">
+                                          <span>Lượt truy vấn:</span>
+                                          <span>{day.query_count} lượt</span>
+                                        </div>
+                                      </div>
+                                    </div>
                                   </div>
+                                );
+                              })}
+                            </div>
+
+                            {/* X-Axis Labels (Day Names & Dates) */}
+                            <div className="grid grid-cols-7 gap-2 sm:gap-3 text-center pt-1">
+                              {weeklyData?.daily_breakdown.map((day) => (
+                                <div
+                                  key={day.day_index}
+                                  className={`flex flex-col items-center rounded-lg py-1 px-0.5 transition ${
+                                    day.is_today
+                                      ? "bg-indigo-50 border border-indigo-200 text-indigo-900"
+                                      : "text-slate-700"
+                                  }`}
+                                >
+                                  <span className="text-xs font-bold leading-tight">{day.day_name}</span>
+                                  <span className={`text-[10px] font-semibold ${day.is_today ? "text-indigo-600" : "text-slate-400"}`}>
+                                    {day.display_date} {day.is_today && "⭐"}
+                                  </span>
                                 </div>
-                              );
-                            })}
+                              ))}
+                            </div>
                           </div>
                         )}
                       </div>
