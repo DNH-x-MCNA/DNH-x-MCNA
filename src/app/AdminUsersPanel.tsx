@@ -268,143 +268,145 @@ export default function AdminUsersPanel({ authToken, onClose }: AdminUsersPanelP
           )}
         </div>
 
-        {/* Filter Bar for Users Tab */}
+        {/* Filter Bar & Content Table for Users Tab */}
         {activeTab === "users" && (
-          <div className="bg-slate-50 border-b border-slate-200 p-4 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <span className="text-xs font-semibold text-slate-600">Lọc trạng thái:</span>
-            <button
-              onClick={() => setFilterStatus("")}
-              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition ${
-                filterStatus === ""
-                  ? "bg-blue-600 text-white shadow-sm"
-                  : "bg-white text-slate-600 border border-slate-200 hover:bg-slate-100"
-              }`}
-            >
-              📋 Tất cả tài khoản
-            </button>
-            <button
-              onClick={() => setFilterStatus("pending")}
-              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition ${
-                filterStatus === "pending"
-                  ? "bg-amber-600 text-white shadow-sm"
-                  : "bg-white text-slate-600 border border-slate-200 hover:bg-slate-100"
-              }`}
-            >
-              ⏳ Chờ duyệt (Pending)
-            </button>
-            <button
-              onClick={() => setFilterStatus("approved")}
-              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition ${
-                filterStatus === "approved"
-                  ? "bg-emerald-600 text-white shadow-sm"
-                  : "bg-white text-slate-600 border border-slate-200 hover:bg-slate-100"
-              }`}
-            >
-              ✅ Đã duyệt (Approved)
-            </button>
-          </div>
+          <>
+            <div className="bg-slate-50 border-b border-slate-200 p-4 flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-semibold text-slate-600">Lọc trạng thái:</span>
+                <button
+                  onClick={() => setFilterStatus("")}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition ${
+                    filterStatus === ""
+                      ? "bg-blue-600 text-white shadow-sm"
+                      : "bg-white text-slate-600 border border-slate-200 hover:bg-slate-100"
+                  }`}
+                >
+                  📋 Tất cả tài khoản
+                </button>
+                <button
+                  onClick={() => setFilterStatus("pending")}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition ${
+                    filterStatus === "pending"
+                      ? "bg-amber-600 text-white shadow-sm"
+                      : "bg-white text-slate-600 border border-slate-200 hover:bg-slate-100"
+                  }`}
+                >
+                  ⏳ Chờ duyệt (Pending)
+                </button>
+                <button
+                  onClick={() => setFilterStatus("approved")}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition ${
+                    filterStatus === "approved"
+                      ? "bg-emerald-600 text-white shadow-sm"
+                      : "bg-white text-slate-600 border border-slate-200 hover:bg-slate-100"
+                  }`}
+                >
+                  ✅ Đã duyệt (Approved)
+                </button>
+              </div>
 
-          <button
-            onClick={fetchUsers}
-            className="text-xs font-semibold text-blue-700 hover:text-blue-900 bg-blue-50 px-3 py-1.5 rounded-lg border border-blue-200"
-          >
-            🔄 Tải lại
-          </button>
-        </div>
+              <button
+                onClick={fetchUsers}
+                className="text-xs font-semibold text-blue-700 hover:text-blue-900 bg-blue-50 px-3 py-1.5 rounded-lg border border-blue-200"
+              >
+                🔄 Tải lại
+              </button>
+            </div>
 
-        {/* Content Table */}
-        <div className="p-5 max-h-[60vh] overflow-y-auto">
-          {error && <div className="p-3 bg-rose-50 text-rose-800 text-xs rounded-lg mb-4">{error}</div>}
+            {/* Content Table */}
+            <div className="p-5 max-h-[60vh] overflow-y-auto">
+              {error && <div className="p-3 bg-rose-50 text-rose-800 text-xs rounded-lg mb-4">{error}</div>}
 
-          {loading ? (
-            <div className="py-12 text-center text-slate-500 text-sm">Đang tải danh sách tài khoản...</div>
-          ) : users.length === 0 ? (
-            <div className="py-12 text-center text-slate-400 text-sm">Không có tài khoản nào phù hợp với bộ lọc.</div>
-          ) : (
-            <table className="w-full text-left text-xs border-collapse">
-              <thead>
-                <tr className="border-b border-slate-200 text-slate-500 font-semibold bg-slate-50">
-                  <th className="p-3">Tài khoản / Email</th>
-                  <th className="p-3">Họ tên</th>
-                  <th className="p-3">Trạng thái</th>
-                  <th className="p-3">Vai trò & Phạm vi</th>
-                  <th className="p-3">Hoạt động (Login / Đổi MK)</th>
-                  <th className="p-3 text-right">Thao tác</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {users.map((u) => (
-                  <tr key={u.id} className="hover:bg-slate-50/80 transition">
-                    <td className="p-3">
-                      <div className="font-semibold text-slate-900">{u.username}</div>
-                      {u.email && <div className="text-slate-400 text-[11px]">{u.email}</div>}
-                    </td>
-                    <td className="p-3 text-slate-700">{u.name || "-"}</td>
-                    <td className="p-3">
-                      {u.status === "pending" ? (
-                        <span className="px-2 py-1 bg-amber-100 text-amber-800 rounded font-semibold text-[10px]">
-                          ⏳ Chờ duyệt
-                        </span>
-                      ) : (
-                        <span className="px-2 py-1 bg-emerald-100 text-emerald-800 rounded font-semibold text-[10px]">
-                          ✅ Đã duyệt
-                        </span>
-                      )}
-                      {u.is_active === 0 && (
-                        <span className="ml-1.5 px-2 py-1 bg-rose-100 text-rose-800 rounded font-semibold text-[10px]">
-                          🔒 Khóa
-                        </span>
-                      )}
-                    </td>
-                    <td className="p-3 text-slate-600">
-                      <div><span className="font-semibold">Role:</span> {u.role}</div>
-                      {u.scope_value && <div><span className="font-semibold">Vùng:</span> {u.scope_value}</div>}
-                      {u.scope_channel && <div><span className="font-semibold">Kênh:</span> {u.scope_channel}</div>}
-                      {u.employee_code && <div><span className="font-semibold">Mã NV:</span> {u.employee_code}</div>}
-                    </td>
-                    <td className="p-3 text-[11px] text-slate-600">
-                      {u.last_login_at ? (
-                        <div className="font-medium text-emerald-700">🕒 Login: {u.last_login_at.slice(0, 16).replace("T", " ")}</div>
-                      ) : (
-                        <div className="text-slate-400">🕒 Chưa login</div>
-                      )}
-                      {u.password_changed_at ? (
-                        <div className="font-medium text-amber-700">🔑 Đổi MK: {u.password_changed_at.slice(0, 16).replace("T", " ")}</div>
-                      ) : (
-                        <div className="text-slate-400">🔑 MK khởi tạo</div>
-                      )}
-                    </td>
-                    <td className="p-3 text-right space-x-2">
-                      <button
-                        onClick={() => {
-                          setSelectedUser(u);
-                          setRole(u.role || "qlv");
-                          setScopeValue(u.scope_value || "");
-                          setEmployeeCode(u.employee_code || "");
-                          setScopeChannel(u.scope_channel || "");
-                        }}
-                        className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded font-semibold text-[11px] shadow-sm"
-                      >
-                        {u.status === "pending" ? "Phê duyệt ⚙️" : "Sửa quyền ⚙️"}
-                      </button>
-                      <button
-                        onClick={() => handleToggleActive(u.username)}
-                        className={`px-2.5 py-1.5 rounded font-semibold text-[11px] border ${
-                          u.is_active === 1
-                            ? "bg-rose-50 text-rose-700 border-rose-200 hover:bg-rose-100"
-                            : "bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100"
-                        }`}
-                      >
-                        {u.is_active === 1 ? "Khóa 🔒" : "Mở 🔓"}
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-        </div>
+              {loading ? (
+                <div className="py-12 text-center text-slate-500 text-sm">Đang tải danh sách tài khoản...</div>
+              ) : users.length === 0 ? (
+                <div className="py-12 text-center text-slate-400 text-sm">Không có tài khoản nào phù hợp với bộ lọc.</div>
+              ) : (
+                <table className="w-full text-left text-xs border-collapse">
+                  <thead>
+                    <tr className="border-b border-slate-200 text-slate-500 font-semibold bg-slate-50">
+                      <th className="p-3">Tài khoản / Email</th>
+                      <th className="p-3">Họ tên</th>
+                      <th className="p-3">Trạng thái</th>
+                      <th className="p-3">Vai trò & Phạm vi</th>
+                      <th className="p-3">Hoạt động (Login / Đổi MK)</th>
+                      <th className="p-3 text-right">Thao tác</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {users.map((u) => (
+                      <tr key={u.id} className="hover:bg-slate-50/80 transition">
+                        <td className="p-3">
+                          <div className="font-semibold text-slate-900">{u.username}</div>
+                          {u.email && <div className="text-slate-400 text-[11px]">{u.email}</div>}
+                        </td>
+                        <td className="p-3 text-slate-700">{u.name || "-"}</td>
+                        <td className="p-3">
+                          {u.status === "pending" ? (
+                            <span className="px-2 py-1 bg-amber-100 text-amber-800 rounded font-semibold text-[10px]">
+                              ⏳ Chờ duyệt
+                            </span>
+                          ) : (
+                            <span className="px-2 py-1 bg-emerald-100 text-emerald-800 rounded font-semibold text-[10px]">
+                              ✅ Đã duyệt
+                            </span>
+                          )}
+                          {u.is_active === 0 && (
+                            <span className="ml-1.5 px-2 py-1 bg-rose-100 text-rose-800 rounded font-semibold text-[10px]">
+                              🔒 Khóa
+                            </span>
+                          )}
+                        </td>
+                        <td className="p-3 text-slate-600">
+                          <div><span className="font-semibold">Role:</span> {u.role}</div>
+                          {u.scope_value && <div><span className="font-semibold">Vùng:</span> {u.scope_value}</div>}
+                          {u.scope_channel && <div><span className="font-semibold">Kênh:</span> {u.scope_channel}</div>}
+                          {u.employee_code && <div><span className="font-semibold">Mã NV:</span> {u.employee_code}</div>}
+                        </td>
+                        <td className="p-3 text-[11px] text-slate-600">
+                          {u.last_login_at ? (
+                            <div className="font-medium text-emerald-700">🕒 Login: {u.last_login_at.slice(0, 16).replace("T", " ")}</div>
+                          ) : (
+                            <div className="text-slate-400">🕒 Chưa login</div>
+                          )}
+                          {u.password_changed_at ? (
+                            <div className="font-medium text-amber-700">🔑 Đổi MK: {u.password_changed_at.slice(0, 16).replace("T", " ")}</div>
+                          ) : (
+                            <div className="text-slate-400">🔑 MK khởi tạo</div>
+                          )}
+                        </td>
+                        <td className="p-3 text-right space-x-2">
+                          <button
+                            onClick={() => {
+                              setSelectedUser(u);
+                              setRole(u.role || "qlv");
+                              setScopeValue(u.scope_value || "");
+                              setEmployeeCode(u.employee_code || "");
+                              setScopeChannel(u.scope_channel || "");
+                            }}
+                            className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded font-semibold text-[11px] shadow-sm"
+                          >
+                            {u.status === "pending" ? "Phê duyệt ⚙️" : "Sửa quyền ⚙️"}
+                          </button>
+                          <button
+                            onClick={() => handleToggleActive(u.username)}
+                            className={`px-2.5 py-1.5 rounded font-semibold text-[11px] border ${
+                              u.is_active === 1
+                                ? "bg-rose-50 text-rose-700 border-rose-200 hover:bg-rose-100"
+                                : "bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100"
+                            }`}
+                          >
+                            {u.is_active === 1 ? "Khóa 🔒" : "Mở 🔓"}
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          </>
         )}
 
         {/* Security Logs Tab View */}
