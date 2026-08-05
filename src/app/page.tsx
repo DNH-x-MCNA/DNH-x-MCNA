@@ -5,6 +5,12 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import AuthScreens from "./AuthScreens";
 import AdminUsersPanel from "./AdminUsersPanel";
+import {
+  IconChart, IconLogout, IconPlus, IconTrash, IconSend, IconSearch,
+  IconUsers, IconCoin, IconMenu, IconClose, IconRefresh, IconSquare,
+  IconKey, IconCheck,
+} from "./icons";
+import { useModal } from "./useModal";
 
 type ChatResponse = {
   answer: string;
@@ -29,75 +35,6 @@ type SessionSummary = {
   created_at: string;
   updated_at: string;
 };
-
-// ============================================================================
-// Icon SVG nhẹ (tự vẽ, không phụ thuộc thư viện ngoài) — dùng cho header, sidebar,
-// ô nhập và modal Audit Log theo yêu cầu Executive Light Theme 29/07/2026.
-// ============================================================================
-type IconProps = { className?: string };
-const IconChart = ({ className }: IconProps) => (
-  <svg viewBox="0 0 24 24" fill="none" className={className} aria-hidden="true">
-    <path d="M4 20V10M10 20V4M16 20v-7M22 20H2" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-  </svg>
-);
-const IconLogout = ({ className }: IconProps) => (
-  <svg viewBox="0 0 24 24" fill="none" className={className} aria-hidden="true">
-    <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-  </svg>
-);
-const IconPlus = ({ className }: IconProps) => (
-  <svg viewBox="0 0 24 24" fill="none" className={className} aria-hidden="true">
-    <path d="M12 5v14M5 12h14" stroke="currentColor" strokeWidth="2.25" strokeLinecap="round" />
-  </svg>
-);
-const IconTrash = ({ className }: IconProps) => (
-  <svg viewBox="0 0 24 24" fill="none" className={className} aria-hidden="true">
-    <path d="M3 6h18M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2m3 0-1 14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2L4 6h16Z" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
-  </svg>
-);
-const IconSend = ({ className }: IconProps) => (
-  <svg viewBox="0 0 24 24" fill="none" className={className} aria-hidden="true">
-    <path d="M4 20 20.5 12 4 4l2.5 7.2L4 20Zm2.5-7.8h10" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
-  </svg>
-);
-const IconSearch = ({ className }: IconProps) => (
-  <svg viewBox="0 0 24 24" fill="none" className={className} aria-hidden="true">
-    <circle cx="11" cy="11" r="7" stroke="currentColor" strokeWidth="2" />
-    <path d="m20 20-3.5-3.5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-  </svg>
-);
-const IconUsers = ({ className }: IconProps) => (
-  <svg viewBox="0 0 24 24" fill="none" className={className} aria-hidden="true">
-    <circle cx="9" cy="8" r="3.2" stroke="currentColor" strokeWidth="1.8" />
-    <path d="M2.8 19c.6-3.2 3.2-5 6.2-5s5.6 1.8 6.2 5M16 8.3a3 3 0 1 1 3.6 4.9M19 13.4c2.2.5 3.7 2 4.2 4.4" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
-  </svg>
-);
-const IconCoin = ({ className }: IconProps) => (
-  <svg viewBox="0 0 24 24" fill="none" className={className} aria-hidden="true">
-    <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="1.8" />
-    <path d="M12 7v10M9.5 9.3c0-1.1 1.1-2 2.5-2s2.5.7 2.5 1.7c0 2.3-5 1.4-5 3.7 0 1 1.1 1.7 2.5 1.7s2.5-.9 2.5-2" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
-  </svg>
-);
-const IconMenu = ({ className }: IconProps) => (
-  <svg viewBox="0 0 24 24" fill="none" className={className} aria-hidden="true">
-    <path d="M4 6h16M4 12h16M4 18h16" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-  </svg>
-);
-const IconClose = ({ className }: IconProps) => (
-  <svg viewBox="0 0 24 24" fill="none" className={className} aria-hidden="true">
-    <path d="m6 6 12 12M18 6 6 18" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-  </svg>
-);
-const IconRefresh = ({ className }: IconProps) => (
-  <svg viewBox="0 0 24 24" fill="none" className={className} aria-hidden="true">
-    <path d="M20 11A8 8 0 1 0 18.5 16M20 5v6h-6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
-  </svg>
-);
-const IconSquare = ({ className }: IconProps) => (
-  <svg viewBox="0 0 24 24" fill="currentColor" className={className} aria-hidden="true">
-    <rect x="6" y="6" width="12" height="12" rx="2" />
-  </svg>
-);
 
 // Tag mau co dinh cho ky hieu kenh/vung xuat hien DUNG NGUYEN VAN trong 1 o bang - chi khop chinh
 // xac (sau khi trim), KHONG doan/parse noi dung cau tra loi cua AI nen khong co rui ro hien sai so
@@ -479,7 +416,7 @@ const MessageList = memo(function MessageList({
             }`}
           >
             {m.role === "bot" ? (
-              <div className="markdown-body">
+              <div>
                 <ReactMarkdown remarkPlugins={[remarkGfm, remarkAlignNumericColumns]} components={markdownComponents}>
                   {m.text}
                 </ReactMarkdown>
@@ -617,6 +554,8 @@ export default function Home() {
   // chinh minh (loc o backend, xem GET /sessions trong main.py).
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [confirmDeleteSid, setConfirmDeleteSid] = useState<string | null>(null);
+  const confirmDeleteModalRef = useModal(Boolean(confirmDeleteSid), () => setConfirmDeleteSid(null));
   // Loc lich su tro chuyen theo nguoi dung. Chi C-Level moi thay nhieu chu so huu trong `sessions`,
   // nen bo loc cung chi hien voi ho - tai khoan thuong luon chi co dung 1 chu so huu la chinh minh.
   const [ownerFilter, setOwnerFilter] = useState<string>("all");
@@ -625,17 +564,14 @@ export default function Home() {
   const [authToken, setAuthToken] = useState<string | null>(null);
   const [userInfo, setUserInfo] = useState<UserInfo | null>(null);
   const [authChecking, setAuthChecking] = useState(true);
-  const [loginUsername, setLoginUsername] = useState("");
-  const [loginPassword, setLoginPassword] = useState("");
-  const [loginError, setLoginError] = useState("");
-  const [loginSubmitting, setLoginSubmitting] = useState(false);
   // Audit Log & Cost Dashboard Modal State
   const [auditModalOpen, setAuditModalOpen] = useState(false);
+  const auditModalRef = useModal(auditModalOpen, () => setAuditModalOpen(false));
   const [auditLoading, setAuditLoading] = useState(false);
   const [auditData, setAuditData] = useState<AuditDashboardData | null>(null);
   const [auditDays, setAuditDays] = useState<number>(30);
   const [auditUserFilter, setAuditUserFilter] = useState<string>("all");
-  const [auditActiveTab, setAuditActiveTab] = useState<"users" | "weekly" | "logs" | "security">("users");
+  const [auditActiveTab, setAuditActiveTab] = useState<"users" | "weekly" | "logs">("users");
   const [weeklyData, setWeeklyData] = useState<WeeklyAuditData | null>(null);
   const [weeklyOffset, setWeeklyOffset] = useState<number>(0);
   const [weeklyLoading, setWeeklyLoading] = useState<boolean>(false);
@@ -659,10 +595,6 @@ export default function Home() {
       userInfo.role?.toLowerCase() === "admin" ||
       userInfo.role?.toLowerCase() === "admin_ops"
     )
-  );
-
-  const isOpsAdmin = Boolean(
-    userInfo && userInfo.role?.toLowerCase() === "admin_ops"
   );
 
   // Danh sach chu so huu co trong lich su, kem so cuoc tro chuyen - dung dung nguon `sessions` dang
@@ -744,13 +676,6 @@ export default function Home() {
     fetchWeeklyAuditData(weeklyOffset);
   };
 
-  const openSecurityAuditDashboard = () => {
-    setAuditActiveTab("security");
-    setAuditModalOpen(true);
-    fetchAuditData(auditDays, auditUserFilter);
-  };
-
-
   // Kiem tra token da luu (neu co) ngay khi mo trang - xac nhan qua /auth/me truoc khi cho vao chat
   useEffect(() => {
     const saved = typeof window !== "undefined" ? window.localStorage.getItem(AUTH_TOKEN_KEY) : null;
@@ -818,9 +743,15 @@ export default function Home() {
     setSidebarOpen(false);
   }
 
-  async function deleteSession(sid: string, e: React.MouseEvent) {
+  function requestDeleteSession(sid: string, e: React.MouseEvent) {
     e.stopPropagation();
-    if (!confirm("Xóa cuộc trò chuyện này? Không thể hoàn tác.")) return;
+    setConfirmDeleteSid(sid);
+  }
+
+  async function confirmDeleteSession() {
+    const sid = confirmDeleteSid;
+    if (!sid) return;
+    setConfirmDeleteSid(null);
     try {
       await fetch(`${API_URL}/sessions/${sid}`, { method: "DELETE", headers: authHeaders(authToken) });
     } catch {
@@ -829,32 +760,6 @@ export default function Home() {
     setSessions((prev) => prev.filter((s) => s.session_id !== sid));
     if (sid === sessionId) {
       startNewConversation();
-    }
-  }
-
-  async function handleLogin(e: FormEvent) {
-    e.preventDefault();
-    if (!loginUsername.trim() || !loginPassword || loginSubmitting) return;
-    setLoginSubmitting(true);
-    setLoginError("");
-    try {
-      const res = await fetch(`${API_URL}/auth/login`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ username: loginUsername.trim(), password: loginPassword }),
-      });
-      if (!res.ok) {
-        throw new Error("Tài khoản hoặc mật khẩu không đúng");
-      }
-      const data = await res.json();
-      window.localStorage.setItem(AUTH_TOKEN_KEY, data.token);
-      setAuthToken(data.token);
-      setUserInfo({ username: loginUsername.trim(), name: data.name, role: data.role, scope_value: data.scope_value });
-      setLoginPassword("");
-    } catch (e) {
-      setLoginError((e as Error).message);
-    } finally {
-      setLoginSubmitting(false);
     }
   }
 
@@ -1019,7 +924,7 @@ export default function Home() {
               title="Lọc lịch sử trò chuyện theo người dùng"
               className="w-full rounded-lg border border-slate-300 bg-white px-2.5 py-2 text-xs text-slate-700 outline-none transition focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
             >
-              <option value="all">👥 Tất cả người dùng ({sessions.length})</option>
+              <option value="all">Tất cả người dùng ({sessions.length})</option>
               {sessionOwners.map((o) => (
                 <option key={o.username} value={o.username}>
                   {o.label} ({o.count})
@@ -1059,8 +964,8 @@ export default function Home() {
                   </div>
                   {s.owner_username === userInfo?.username && (
                     <button
-                      onClick={(e) => deleteSession(s.session_id, e)}
-                      className="hidden shrink-0 rounded p-1.5 text-slate-400 transition hover:bg-red-50 hover:text-red-500 group-hover:block"
+                      onClick={(e) => requestDeleteSession(s.session_id, e)}
+                      className="shrink-0 rounded p-1.5 text-slate-400 opacity-100 transition hover:bg-red-50 hover:text-red-500 md:opacity-0 md:group-hover:opacity-100"
                       title="Xóa cuộc trò chuyện"
                     >
                       <IconTrash className="h-3.5 w-3.5" />
@@ -1075,7 +980,7 @@ export default function Home() {
 
       <div className="flex min-w-0 flex-1 flex-col">
       <header className="relative z-10 border-b border-slate-800/80 bg-slate-900/95 backdrop-blur-md px-4 sm:px-8 py-3 text-white shadow-lg">
-        <div className="mx-auto flex w-full max-w-7xl items-center justify-between gap-4">
+        <div className="mx-auto flex w-full max-w-5xl items-center justify-between gap-4">
           {/* Left Title & Logo */}
           <div className="flex items-center gap-3.5">
             <button
@@ -1114,22 +1019,12 @@ export default function Home() {
                     <span className="hidden md:inline">Quản lý Tài khoản</span>
                   </button>
                 )}
-                {isCLevel && (
-                  <button
-                    onClick={openAuditDashboard}
-                    className="flex items-center gap-1.5 rounded-xl px-3 py-2 text-xs font-semibold text-amber-300 bg-amber-950/60 border border-amber-500/40 hover:bg-amber-900/80 transition shadow-sm"
-                    title="Mở Dashboard Audit Log & Chi phí AI toàn công ty"
-                  >
-                    <IconChart className="h-4 w-4" />
-                    <span className="hidden md:inline">Audit Log & Chi phí AI</span>
-                  </button>
-                )}
                 <button
                   onClick={() => { setPwdChangeMsg(null); setChangePwdOpen(true); }}
                   className="flex items-center gap-1.5 rounded-xl px-3 py-2 text-xs font-semibold text-slate-200 bg-slate-800 border border-slate-700 hover:bg-slate-700 transition shadow-sm"
                   title="Đổi mật khẩu tài khoản"
                 >
-                  🔑 <span className="hidden sm:inline">Đổi MK</span>
+                  <IconKey className="w-3.5 h-3.5" /> <span className="hidden sm:inline">Đổi MK</span>
                 </button>
 
                 {/* User Info Badge */}
@@ -1171,14 +1066,14 @@ export default function Home() {
           </div>
           <button
             onClick={() => { setPwdChangeMsg(null); setChangePwdOpen(true); }}
-            className="px-3 py-1 bg-amber-600 hover:bg-amber-700 text-white rounded font-semibold text-xs shadow-sm transition"
+            className="px-3 py-1 bg-amber-600 hover:bg-amber-700 text-white rounded font-semibold text-xs shadow-sm transition flex items-center gap-1"
           >
-            🔑 Đổi mật khẩu
+            <IconKey className="w-3.5 h-3.5" /> Đổi mật khẩu
           </button>
         </div>
       )}
 
-      <main className="mx-auto flex w-full max-w-3xl flex-1 flex-col overflow-hidden px-4">
+      <main className="mx-auto flex w-full max-w-5xl flex-1 flex-col overflow-hidden px-4">
         <div className="flex-1 overflow-y-auto py-6">
           {historyLoaded && messages.length === 0 && (
             <div className="mt-8">
@@ -1249,7 +1144,14 @@ export default function Home() {
       {/* AUDIT LOG & COST DASHBOARD MODAL FOR C-LEVEL */}
       {auditModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 overflow-y-auto">
-          <div className="flex flex-col w-full max-w-5xl max-h-[90vh] bg-white rounded-2xl shadow-2xl overflow-hidden border border-slate-200">
+          <div
+            ref={auditModalRef}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="audit-modal-title"
+            tabIndex={-1}
+            className="flex flex-col w-full max-w-5xl max-h-[90vh] bg-white rounded-2xl shadow-2xl overflow-hidden border border-slate-200 outline-none"
+          >
             {/* Modal Header */}
             <div className="flex items-center justify-between bg-[var(--brand-navy)] px-6 py-4 text-white">
               <div className="flex items-center gap-3">
@@ -1257,7 +1159,7 @@ export default function Home() {
                   <IconChart className="h-5 w-5" />
                 </span>
                 <div>
-                  <h2 className="text-lg font-bold">Dashboard Audit Log & Chi phí AI Toàn Công ty</h2>
+                  <h2 id="audit-modal-title" className="text-lg font-bold">Dashboard Audit Log & Chi phí AI Toàn Công ty</h2>
                   <p className="text-xs text-slate-300">Dành riêng cho Ban Điều Hành (C-Level) · Tra cứu trực tiếp dữ liệu realtime</p>
                 </div>
               </div>
@@ -1326,11 +1228,11 @@ export default function Home() {
                 <div className="flex rounded-full bg-slate-200/70 p-1 text-xs">
                   <button
                     onClick={() => setAuditActiveTab("users")}
-                    className={`rounded-full px-3.5 py-1.5 font-medium transition ${
+                    className={`rounded-full px-3.5 py-1.5 font-medium transition flex items-center gap-1 ${
                       auditActiveTab === "users" ? "bg-white text-indigo-700 shadow-sm" : "text-slate-600 hover:text-slate-900"
                     }`}
                   >
-                    👥 Theo Người Dùng
+                    <IconUsers className="w-3.5 h-3.5" /> Theo Người Dùng
                   </button>
                   <button
                     onClick={() => setAuditActiveTab("weekly")}
@@ -1479,8 +1381,8 @@ export default function Home() {
                     const hasZeroCostUser = realUsers.some((u) => u.query_count > 0 && u.cost_usd === 0);
                     return (
                       <div className="flex flex-col gap-3">
-                        <h3 className="text-sm font-bold text-slate-800">
-                          📊 Bảng Thống Kê Token & Chi Phí Theo Người Dùng
+                        <h3 className="text-sm font-bold text-slate-800 flex items-center gap-1.5">
+                          <IconChart className="w-4 h-4" /> Bảng Thống Kê Token & Chi Phí Theo Người Dùng
                         </h3>
                         {(hasUnattributed || hasZeroCostUser) && (
                           <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] leading-relaxed text-amber-900">
@@ -1629,7 +1531,7 @@ export default function Home() {
                       <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
                         <div className="flex items-center justify-between mb-4 border-b border-slate-100 pb-3">
                           <div className="flex items-center gap-2">
-                            <h4 className="text-xs font-bold text-slate-800">📊 Đồ Thị Chi Phí & Tokens Chi Tiết Theo Thứ Trong Tuần</h4>
+                            <h4 className="text-xs font-bold text-slate-800 flex items-center gap-1.5"><IconChart className="w-3.5 h-3.5" /> Đồ Thị Chi Phí & Tokens Chi Tiết Theo Thứ Trong Tuần</h4>
                             <span className="rounded-md bg-indigo-50 px-2 py-0.5 text-[10px] font-semibold text-indigo-700 border border-indigo-200">
                               Đồ thị cột đứng
                             </span>
@@ -1697,7 +1599,7 @@ export default function Home() {
                                     </div>
 
                                     {/* Hover Detailed Tooltip Card */}
-                                    <div className="pointer-events-none absolute bottom-full mb-2 z-20 hidden w-44 rounded-xl border border-slate-200 bg-slate-900 p-2.5 text-white shadow-xl group-hover:block transition animate-in fade-in zoom-in-95">
+                                    <div className="pointer-events-none absolute bottom-full mb-2 z-20 hidden w-44 rounded-xl border border-slate-200 bg-slate-900 p-2.5 text-white shadow-xl group-hover:block transition">
                                       <div className="flex items-center justify-between border-b border-slate-700 pb-1 text-[11px] font-bold">
                                         <span>{day.day_name} ({day.display_date})</span>
                                         {day.is_today && <span className="text-amber-400 font-normal">Hôm nay</span>}
@@ -1746,7 +1648,7 @@ export default function Home() {
 
                       {/* Weekly User Breakdown Table */}
                       <div className="flex flex-col gap-2">
-                        <h4 className="text-xs font-bold text-slate-700">👥 Thống Kê Theo Tài Khoản Trong Tuần Này</h4>
+                        <h4 className="text-xs font-bold text-slate-700 flex items-center gap-1.5"><IconUsers className="w-3.5 h-3.5" /> Thống Kê Theo Tài Khoản Trong Tuần Này</h4>
                         <div className="max-h-48 overflow-auto rounded-xl border border-slate-200 shadow-sm">
                           <table className="min-w-full text-xs tabular-nums">
                             <thead className="sticky top-0 bg-slate-100 text-slate-700 font-semibold shadow-[0_1px_0_0_theme(colors.slate.200)]">
@@ -1882,8 +1784,8 @@ export default function Home() {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 backdrop-blur-sm p-4">
           <div className="w-full max-w-md bg-white rounded-2xl shadow-2xl overflow-hidden border border-slate-200">
             <div className="bg-slate-900 text-white p-4 flex justify-between items-center">
-              <h3 className="font-bold text-sm">🔑 Đổi Mật Khẩu Tài Khoản</h3>
-              <button onClick={() => setChangePwdOpen(false)} className="text-slate-400 hover:text-white">✕</button>
+              <h3 id="change-pwd-title" className="font-bold text-sm flex items-center gap-1.5"><IconKey className="w-4 h-4" /> Đổi Mật Khẩu Tài Khoản</h3>
+              <button onClick={() => setChangePwdOpen(false)} className="text-slate-400 hover:text-white"><IconClose className="w-4 h-4" /></button>
             </div>
             <form
               onSubmit={async (e) => {
@@ -1958,12 +1860,48 @@ export default function Home() {
                 <button
                   type="submit"
                   disabled={pwdChangeSubmitting}
-                  className="px-4 py-2 bg-blue-700 hover:bg-blue-800 text-white rounded-lg text-xs font-semibold shadow disabled:opacity-50"
+                  className="px-4 py-2 bg-blue-700 hover:bg-blue-800 text-white rounded-lg text-xs font-semibold shadow disabled:opacity-50 flex items-center gap-1.5"
                 >
-                  {pwdChangeSubmitting ? "Đang lưu..." : "Cập nhật Mật Khẩu 💾"}
+                  {pwdChangeSubmitting ? "Đang lưu..." : (<>Cập nhật Mật Khẩu <IconCheck className="w-3.5 h-3.5" /></>)}
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {confirmDeleteSid && (
+        <div
+          className="fixed inset-0 bg-slate-950/70 backdrop-blur-sm z-50 flex items-center justify-center p-4"
+          onClick={() => setConfirmDeleteSid(null)}
+        >
+          <div
+            ref={confirmDeleteModalRef}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="confirm-delete-title"
+            tabIndex={-1}
+            className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-5 outline-none"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 id="confirm-delete-title" className="text-sm font-bold text-slate-900 mb-2">Xóa cuộc trò chuyện?</h3>
+            <p className="text-xs text-slate-600 mb-4">Không thể hoàn tác sau khi xóa.</p>
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setConfirmDeleteSid(null)}
+                className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-semibold"
+              >
+                Hủy
+              </button>
+              <button
+                type="button"
+                onClick={confirmDeleteSession}
+                className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-lg text-xs font-semibold shadow"
+              >
+                Xóa
+              </button>
+            </div>
           </div>
         </div>
       )}

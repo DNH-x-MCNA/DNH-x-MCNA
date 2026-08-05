@@ -1,6 +1,12 @@
 "use client";
 
 import React, { useState, useEffect } from "react";
+import {
+  IconShield, IconPlus, IconClose, IconUsers, IconShieldLock, IconRefresh,
+  IconClipboard, IconClock, IconCheck, IconLock, IconUnlock, IconKey,
+  IconSettings, IconMail,
+} from "./icons";
+import { useModal } from "./useModal";
 
 interface UserItem {
   id: number;
@@ -32,6 +38,7 @@ export default function AdminUsersPanel({ authToken, onClose }: AdminUsersPanelP
   const [showCreateModal, setShowCreateModal] = useState<boolean>(false);
 
   // Form phê duyệt state
+  const [actionError, setActionError] = useState<string | null>(null);
   const [role, setRole] = useState<string>("qlv");
   const [scopeValue, setScopeValue] = useState<string>("MB");
   const [employeeCode, setEmployeeCode] = useState<string>("");
@@ -119,6 +126,7 @@ export default function AdminUsersPanel({ authToken, onClose }: AdminUsersPanelP
     if (!selectedUser) return;
 
     setActionLoading(true);
+    setActionError(null);
     try {
       const res = await fetch(`/api/admin/users/${encodeURIComponent(selectedUser.username)}/approve`, {
         method: "POST",
@@ -140,7 +148,7 @@ export default function AdminUsersPanel({ authToken, onClose }: AdminUsersPanelP
       setSelectedUser(null);
       fetchUsers();
     } catch (err: any) {
-      alert("Lỗi: " + err.message);
+      setActionError(err.message);
     } finally {
       setActionLoading(false);
     }
@@ -196,6 +204,7 @@ export default function AdminUsersPanel({ authToken, onClose }: AdminUsersPanelP
   };
 
   const handleToggleActive = async (username: string) => {
+    setActionError(null);
     try {
       const res = await fetch(`/api/admin/users/${encodeURIComponent(username)}/toggle-active`, {
         method: "POST",
@@ -205,17 +214,29 @@ export default function AdminUsersPanel({ authToken, onClose }: AdminUsersPanelP
       if (!res.ok) throw new Error(data.detail || "Thao tác thất bại");
       fetchUsers();
     } catch (err: any) {
-      alert("Lỗi: " + err.message);
+      setActionError(err.message);
     }
   };
 
+  // Tam dung bay focus/Escape cua khung chinh khi modal tao tai khoan (long ben trong) dang mo,
+  // de Escape/Tab chi tac dong len modal tren cung, tranh 2 modal cung phan hoi 1 luc.
+  const panelRef = useModal(!showCreateModal, onClose);
+  const createModalRef = useModal(showCreateModal, () => setShowCreateModal(false));
+
   return (
     <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 overflow-y-auto">
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-4xl border border-slate-200 overflow-hidden my-8">
+      <div
+        ref={panelRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="admin-panel-title"
+        tabIndex={-1}
+        className="bg-white rounded-2xl shadow-2xl w-full max-w-4xl border border-slate-200 overflow-hidden my-8 outline-none"
+      >
         {/* Header */}
         <div className="bg-slate-900 text-white p-5 flex items-center justify-between">
           <div>
-            <h2 className="text-lg font-bold">🛡️ Quản lý & Phê duyệt Tài khoản Nhân viên</h2>
+            <h2 id="admin-panel-title" className="text-lg font-bold flex items-center gap-2"><IconShield className="w-5 h-5" /> Quản lý & Phê duyệt Tài khoản Nhân viên</h2>
             <p className="text-xs text-slate-400">Dành riêng cho Quản trị viên C-Level / Ban Điều Hành</p>
           </div>
           <div className="flex items-center gap-3">
@@ -223,13 +244,13 @@ export default function AdminUsersPanel({ authToken, onClose }: AdminUsersPanelP
               onClick={() => { setShowCreateModal(true); setCreateMsg(null); }}
               className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-bold text-xs shadow-md transition flex items-center gap-1.5"
             >
-              ➕ Tạo Tài khoản Mới
+              <IconPlus className="w-3.5 h-3.5" /> Tạo Tài khoản Mới
             </button>
             <button
               onClick={onClose}
               className="w-8 h-8 rounded-full bg-slate-800 hover:bg-slate-700 text-slate-300 flex items-center justify-center font-bold text-sm transition"
             >
-              ✕
+              <IconClose className="w-3.5 h-3.5" />
             </button>
           </div>
         </div>
@@ -239,34 +260,43 @@ export default function AdminUsersPanel({ authToken, onClose }: AdminUsersPanelP
           <div className="flex gap-2 text-xs font-semibold">
             <button
               onClick={() => setActiveTab("users")}
-              className={`px-4 py-2 rounded-xl transition ${
+              className={`px-4 py-2 rounded-xl transition flex items-center gap-1.5 ${
                 activeTab === "users"
                   ? "bg-indigo-600 text-white shadow-sm font-bold"
                   : "bg-white text-slate-600 border border-slate-200 hover:bg-slate-50"
               }`}
             >
-              👥 Danh sách & Quyền Tài khoản
+              <IconUsers className="w-3.5 h-3.5" /> Danh sách & Quyền Tài khoản
             </button>
             <button
               onClick={() => setActiveTab("security")}
-              className={`px-4 py-2 rounded-xl transition ${
+              className={`px-4 py-2 rounded-xl transition flex items-center gap-1.5 ${
                 activeTab === "security"
                   ? "bg-purple-600 text-white shadow-sm font-bold"
                   : "bg-white text-slate-600 border border-slate-200 hover:bg-slate-50"
               }`}
             >
-              🔐 Nhật ký Đổi MK & Đăng nhập ({securityLogs.length})
+              <IconShieldLock className="w-3.5 h-3.5" /> Nhật ký Đổi MK & Đăng nhập ({securityLogs.length})
             </button>
           </div>
           {activeTab === "security" && (
             <button
               onClick={fetchSecurityLogs}
-              className="text-xs font-semibold text-purple-700 hover:text-purple-900 bg-purple-50 px-3 py-1.5 rounded-lg border border-purple-200"
+              className="text-xs font-semibold text-purple-700 hover:text-purple-900 bg-purple-50 px-3 py-1.5 rounded-lg border border-purple-200 flex items-center gap-1.5"
             >
-              🔄 Tải lại Nhật ký
+              <IconRefresh className="w-3.5 h-3.5" /> Tải lại Nhật ký
             </button>
           )}
         </div>
+
+        {actionError && (
+          <div className="mx-5 mt-3 p-3 bg-rose-50 border border-rose-200 text-rose-800 text-xs rounded-lg flex items-center justify-between gap-2">
+            <span>Lỗi: {actionError}</span>
+            <button onClick={() => setActionError(null)} className="text-rose-500 hover:text-rose-700 shrink-0">
+              <IconClose className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        )}
 
         {/* Filter Bar & Content Table for Users Tab */}
         {activeTab === "users" && (
@@ -276,41 +306,41 @@ export default function AdminUsersPanel({ authToken, onClose }: AdminUsersPanelP
                 <span className="text-xs font-semibold text-slate-600">Lọc trạng thái:</span>
                 <button
                   onClick={() => setFilterStatus("")}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition ${
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition flex items-center gap-1.5 ${
                     filterStatus === ""
                       ? "bg-blue-600 text-white shadow-sm"
                       : "bg-white text-slate-600 border border-slate-200 hover:bg-slate-100"
                   }`}
                 >
-                  📋 Tất cả tài khoản
+                  <IconClipboard className="w-3.5 h-3.5" /> Tất cả tài khoản
                 </button>
                 <button
                   onClick={() => setFilterStatus("pending")}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition ${
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition flex items-center gap-1.5 ${
                     filterStatus === "pending"
                       ? "bg-amber-600 text-white shadow-sm"
                       : "bg-white text-slate-600 border border-slate-200 hover:bg-slate-100"
                   }`}
                 >
-                  ⏳ Chờ duyệt (Pending)
+                  <IconClock className="w-3.5 h-3.5" /> Chờ duyệt (Pending)
                 </button>
                 <button
                   onClick={() => setFilterStatus("approved")}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition ${
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition flex items-center gap-1.5 ${
                     filterStatus === "approved"
                       ? "bg-emerald-600 text-white shadow-sm"
                       : "bg-white text-slate-600 border border-slate-200 hover:bg-slate-100"
                   }`}
                 >
-                  ✅ Đã duyệt (Approved)
+                  <IconCheck className="w-3.5 h-3.5" /> Đã duyệt (Approved)
                 </button>
               </div>
 
               <button
                 onClick={fetchUsers}
-                className="text-xs font-semibold text-blue-700 hover:text-blue-900 bg-blue-50 px-3 py-1.5 rounded-lg border border-blue-200"
+                className="text-xs font-semibold text-blue-700 hover:text-blue-900 bg-blue-50 px-3 py-1.5 rounded-lg border border-blue-200 flex items-center gap-1.5"
               >
-                🔄 Tải lại
+                <IconRefresh className="w-3.5 h-3.5" /> Tải lại
               </button>
             </div>
 
@@ -344,17 +374,17 @@ export default function AdminUsersPanel({ authToken, onClose }: AdminUsersPanelP
                         <td className="p-3 text-slate-700">{u.name || "-"}</td>
                         <td className="p-3">
                           {u.status === "pending" ? (
-                            <span className="px-2 py-1 bg-amber-100 text-amber-800 rounded font-semibold text-[10px]">
-                              ⏳ Chờ duyệt
+                            <span className="px-2 py-1 bg-amber-100 text-amber-800 rounded font-semibold text-[10px] inline-flex items-center gap-1">
+                              <IconClock className="w-3 h-3" /> Chờ duyệt
                             </span>
                           ) : (
-                            <span className="px-2 py-1 bg-emerald-100 text-emerald-800 rounded font-semibold text-[10px]">
-                              ✅ Đã duyệt
+                            <span className="px-2 py-1 bg-emerald-100 text-emerald-800 rounded font-semibold text-[10px] inline-flex items-center gap-1">
+                              <IconCheck className="w-3 h-3" /> Đã duyệt
                             </span>
                           )}
                           {u.is_active === 0 && (
-                            <span className="ml-1.5 px-2 py-1 bg-rose-100 text-rose-800 rounded font-semibold text-[10px]">
-                              🔒 Khóa
+                            <span className="ml-1.5 px-2 py-1 bg-rose-100 text-rose-800 rounded font-semibold text-[10px] inline-flex items-center gap-1">
+                              <IconLock className="w-3 h-3" /> Khóa
                             </span>
                           )}
                         </td>
@@ -366,14 +396,14 @@ export default function AdminUsersPanel({ authToken, onClose }: AdminUsersPanelP
                         </td>
                         <td className="p-3 text-[11px] text-slate-600">
                           {u.last_login_at ? (
-                            <div className="font-medium text-emerald-700">🕒 Login: {u.last_login_at.slice(0, 16).replace("T", " ")}</div>
+                            <div className="font-medium text-emerald-700 flex items-center gap-1"><IconClock className="w-3 h-3" /> Login: {u.last_login_at.slice(0, 16).replace("T", " ")}</div>
                           ) : (
-                            <div className="text-slate-400">🕒 Chưa login</div>
+                            <div className="text-slate-400 flex items-center gap-1"><IconClock className="w-3 h-3" /> Chưa login</div>
                           )}
                           {u.password_changed_at ? (
-                            <div className="font-medium text-amber-700">🔑 Đổi MK: {u.password_changed_at.slice(0, 16).replace("T", " ")}</div>
+                            <div className="font-medium text-amber-700 flex items-center gap-1"><IconKey className="w-3 h-3" /> Đổi MK: {u.password_changed_at.slice(0, 16).replace("T", " ")}</div>
                           ) : (
-                            <div className="text-slate-400">🔑 MK khởi tạo</div>
+                            <div className="text-slate-400 flex items-center gap-1"><IconKey className="w-3 h-3" /> MK khởi tạo</div>
                           )}
                         </td>
                         <td className="p-3 text-right space-x-2">
@@ -385,19 +415,19 @@ export default function AdminUsersPanel({ authToken, onClose }: AdminUsersPanelP
                               setEmployeeCode(u.employee_code || "");
                               setScopeChannel(u.scope_channel || "");
                             }}
-                            className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded font-semibold text-[11px] shadow-sm"
+                            className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded font-semibold text-[11px] shadow-sm inline-flex items-center gap-1"
                           >
-                            {u.status === "pending" ? "Phê duyệt ⚙️" : "Sửa quyền ⚙️"}
+                            {u.status === "pending" ? "Phê duyệt" : "Sửa quyền"} <IconSettings className="w-3 h-3" />
                           </button>
                           <button
                             onClick={() => handleToggleActive(u.username)}
-                            className={`px-2.5 py-1.5 rounded font-semibold text-[11px] border ${
+                            className={`px-2.5 py-1.5 rounded font-semibold text-[11px] border inline-flex items-center gap-1 ${
                               u.is_active === 1
                                 ? "bg-rose-50 text-rose-700 border-rose-200 hover:bg-rose-100"
                                 : "bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100"
                             }`}
                           >
-                            {u.is_active === 1 ? "Khóa 🔒" : "Mở 🔓"}
+                            {u.is_active === 1 ? (<>Khóa <IconLock className="w-3 h-3" /></>) : (<>Mở <IconUnlock className="w-3 h-3" /></>)}
                           </button>
                         </td>
                       </tr>
@@ -413,8 +443,8 @@ export default function AdminUsersPanel({ authToken, onClose }: AdminUsersPanelP
         {activeTab === "security" && (
           <div className="p-5 max-h-[60vh] overflow-y-auto">
             <div className="flex items-center justify-between mb-3">
-              <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider">
-                🔐 Lịch sử Đổi Mật Khẩu, Đăng Nhập & Thao Tác Quản Trị ({securityLogs.length} sự kiện)
+              <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider flex items-center gap-1.5">
+                <IconShieldLock className="w-3.5 h-3.5" /> Lịch sử Đổi Mật Khẩu, Đăng Nhập & Thao Tác Quản Trị ({securityLogs.length} sự kiện)
               </h3>
               <span className="text-[11px] text-slate-500">Tự động đồng bộ từ database & audit log</span>
             </div>
@@ -483,8 +513,8 @@ export default function AdminUsersPanel({ authToken, onClose }: AdminUsersPanelP
         {/* Modal Phê Duyệt / Gán Quyền */}
         {selectedUser && (
           <div className="p-5 bg-slate-900 text-white border-t border-slate-800">
-            <h3 className="text-sm font-bold text-emerald-400 mb-3">
-              ⚙️ Cấu hình Phân quyền cho: <span className="text-white">{selectedUser.username}</span> ({selectedUser.email})
+            <h3 className="text-sm font-bold text-emerald-400 mb-3 flex items-center gap-1.5">
+              <IconSettings className="w-4 h-4" /> Cấu hình Phân quyền cho: <span className="text-white">{selectedUser.username}</span> ({selectedUser.email})
             </h3>
             <form onSubmit={handleApprove} className="grid grid-cols-1 md:grid-cols-5 gap-3 items-end">
               <div>
@@ -547,9 +577,9 @@ export default function AdminUsersPanel({ authToken, onClose }: AdminUsersPanelP
                 <button
                   type="submit"
                   disabled={actionLoading}
-                  className="flex-1 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded text-xs shadow transition disabled:opacity-50"
+                  className="flex-1 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded text-xs shadow transition disabled:opacity-50 flex items-center justify-center gap-1.5"
                 >
-                  {actionLoading ? "Đang lưu..." : "Xác nhận Phê Duyệt ✅"}
+                  {actionLoading ? "Đang lưu..." : (<>Xác nhận Phê Duyệt <IconCheck className="w-3.5 h-3.5" /></>)}
                 </button>
                 <button
                   type="button"
@@ -566,17 +596,24 @@ export default function AdminUsersPanel({ authToken, onClose }: AdminUsersPanelP
         {/* Modal Tạo Tài Khoản Mới Trực Tiếp cho Admin C-Level */}
         {showCreateModal && (
           <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-md z-50 flex items-center justify-center p-4">
-            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden border border-slate-200">
-              <div className="bg-gradient-to-r from-blue-700 to-emerald-600 text-white p-5 flex items-center justify-between">
+            <div
+              ref={createModalRef}
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="create-user-title"
+              tabIndex={-1}
+              className="bg-white rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden border border-slate-200 outline-none"
+            >
+              <div className="bg-gradient-to-r from-blue-700 to-indigo-800 text-white p-5 flex items-center justify-between">
                 <div>
-                  <h3 className="font-bold text-base">➕ Tạo Tài khoản Mới cho Nhân viên</h3>
+                  <h3 id="create-user-title" className="font-bold text-base flex items-center gap-1.5"><IconPlus className="w-4 h-4" /> Tạo Tài khoản Mới cho Nhân viên</h3>
                   <p className="text-xs text-white/80">Khởi tạo trực tiếp & Tự động gửi mật khẩu qua Outlook</p>
                 </div>
                 <button
                   onClick={() => setShowCreateModal(false)}
                   className="text-white/80 hover:text-white font-bold text-lg"
                 >
-                  ✕
+                  <IconClose className="w-4 h-4" />
                 </button>
               </div>
 
@@ -591,8 +628,8 @@ export default function AdminUsersPanel({ authToken, onClose }: AdminUsersPanelP
                   >
                     <div>{createMsg.text}</div>
                     {createMsg.pwd && (
-                      <div className="mt-2 p-2 bg-white rounded border border-emerald-300 font-mono text-sm font-bold text-emerald-700">
-                        🔑 Mật khẩu vừa sinh: <span className="select-all">{createMsg.pwd}</span>
+                      <div className="mt-2 p-2 bg-white rounded border border-emerald-300 font-mono text-sm font-bold text-emerald-700 flex items-center gap-1.5">
+                        <IconKey className="w-4 h-4 shrink-0" /> Mật khẩu vừa sinh: <span className="select-all">{createMsg.pwd}</span>
                       </div>
                     )}
                   </div>
@@ -715,9 +752,9 @@ export default function AdminUsersPanel({ authToken, onClose }: AdminUsersPanelP
                   <button
                     type="submit"
                     disabled={actionLoading}
-                    className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-semibold shadow disabled:opacity-50"
+                    className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-semibold shadow disabled:opacity-50 flex items-center gap-1.5"
                   >
-                    {actionLoading ? "Đang khởi tạo..." : "Tạo Tài Khoản & Gửi Mail 📩"}
+                    {actionLoading ? "Đang khởi tạo..." : (<>Tạo Tài Khoản & Gửi Mail <IconMail className="w-4 h-4" /></>)}
                   </button>
                 </div>
               </form>
