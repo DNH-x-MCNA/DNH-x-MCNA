@@ -572,6 +572,43 @@ def get_audit_logs_dashboard(
                 except Exception:
                     continue
 
+    # 05/08/2026: Nạp bổ sung lịch sử Đổi MK, Đăng nhập & Khởi tạo tài khoản từ auth.db
+    # để hiển thị lại toàn bộ các sự kiện trước đây (khi chưa có file audit_log)
+    try:
+        from auth import list_users
+        all_u = list_users()
+        for u in all_u:
+            uname = u.get("username")
+            if u.get("created_at"):
+                audit_entries.append({
+                    "ts": u["created_at"],
+                    "username": uname,
+                    "question": f"👤 Khởi tạo tài khoản: {uname}",
+                    "sql": "<auth:create_user>",
+                    "status": "ok"
+                })
+            if u.get("password_changed_at"):
+                audit_entries.append({
+                    "ts": u["password_changed_at"],
+                    "username": uname,
+                    "question": "🔐 Đổi mật khẩu tài khoản thành công",
+                    "sql": "<auth:change_password>",
+                    "status": "ok"
+                })
+            if u.get("last_login_at"):
+                audit_entries.append({
+                    "ts": u["last_login_at"],
+                    "username": uname,
+                    "question": "🔑 Đăng nhập hệ thống",
+                    "sql": "<auth:login>",
+                    "status": "ok"
+                })
+    except Exception as ex:
+        print("[AUDIT-LOG] Lỗi nạp lịch sử từ auth.db:", ex)
+
+    # Sắp xếp toàn bộ log theo thời gian mới nhất lên đầu
+    audit_entries.sort(key=lambda x: x.get("ts") or "", reverse=True)
+
     cost_by_session = defaultdict(lambda: {"cost_usd": 0.0, "input_tokens": 0, "output_tokens": 0, "cache_tokens": 0, "total_tokens": 0, "calls": 0})
     cost_direct_by_user = defaultdict(lambda: {"cost_usd": 0.0, "input_tokens": 0, "output_tokens": 0, "cache_tokens": 0, "total_tokens": 0})
     # 03/08/2026: Per-question cost - nhom theo (session_id, question_preview) de hien chi phi TUNG CAU

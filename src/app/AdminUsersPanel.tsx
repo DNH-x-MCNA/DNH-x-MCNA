@@ -49,6 +49,49 @@ export default function AdminUsersPanel({ authToken, onClose }: AdminUsersPanelP
   const [newScopeChannel, setNewScopeChannel] = useState<string>("");
   const [createMsg, setCreateMsg] = useState<{ text: string; type: "success" | "error"; pwd?: string } | null>(null);
 
+  // Active Tab state inside Admin Users Panel
+  const [activeTab, setActiveTab] = useState<"users" | "security">("users");
+  const [securityLogs, setSecurityLogs] = useState<any[]>([]);
+  const [logsLoading, setLogsLoading] = useState<boolean>(false);
+
+  const fetchSecurityLogs = async () => {
+    setLogsLoading(true);
+    try {
+      const res = await fetch("/api/audit-logs?days=90", {
+        headers: { Authorization: `Bearer ${authToken}` },
+      });
+      const data = await res.json();
+      if (res.ok && data.logs) {
+        const sec = data.logs.filter((l: any) => {
+          const q = (l.question || "").toLowerCase();
+          const sql = (l.sql || "").toLowerCase();
+          return (
+            sql.startsWith("<auth:") ||
+            sql.startsWith("<admin:") ||
+            q.includes("đổi mật khẩu") ||
+            q.includes("đăng nhập") ||
+            q.includes("reset") ||
+            q.includes("quên") ||
+            q.includes("tạo tài khoản") ||
+            q.includes("phê duyệt") ||
+            q.includes("khóa")
+          );
+        });
+        setSecurityLogs(sec);
+      }
+    } catch (err: any) {
+      console.error("Lỗi tải nhật ký bảo mật:", err);
+    } finally {
+      setLogsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (activeTab === "security") {
+      fetchSecurityLogs();
+    }
+  }, [activeTab]);
+
   const fetchUsers = async () => {
     setLoading(true);
     setError(null);
@@ -191,8 +234,43 @@ export default function AdminUsersPanel({ authToken, onClose }: AdminUsersPanelP
           </div>
         </div>
 
-        {/* Filter Bar */}
-        <div className="bg-slate-50 border-b border-slate-200 p-4 flex items-center justify-between">
+        {/* Top Navigation Tabs Bar */}
+        <div className="bg-slate-100 border-b border-slate-200 px-5 py-2.5 flex items-center justify-between">
+          <div className="flex gap-2 text-xs font-semibold">
+            <button
+              onClick={() => setActiveTab("users")}
+              className={`px-4 py-2 rounded-xl transition ${
+                activeTab === "users"
+                  ? "bg-indigo-600 text-white shadow-sm font-bold"
+                  : "bg-white text-slate-600 border border-slate-200 hover:bg-slate-50"
+              }`}
+            >
+              👥 Danh sách & Quyền Tài khoản
+            </button>
+            <button
+              onClick={() => setActiveTab("security")}
+              className={`px-4 py-2 rounded-xl transition ${
+                activeTab === "security"
+                  ? "bg-purple-600 text-white shadow-sm font-bold"
+                  : "bg-white text-slate-600 border border-slate-200 hover:bg-slate-50"
+              }`}
+            >
+              🔐 Nhật ký Đổi MK & Đăng nhập ({securityLogs.length})
+            </button>
+          </div>
+          {activeTab === "security" && (
+            <button
+              onClick={fetchSecurityLogs}
+              className="text-xs font-semibold text-purple-700 hover:text-purple-900 bg-purple-50 px-3 py-1.5 rounded-lg border border-purple-200"
+            >
+              🔄 Tải lại Nhật ký
+            </button>
+          )}
+        </div>
+
+        {/* Filter Bar for Users Tab */}
+        {activeTab === "users" && (
+          <div className="bg-slate-50 border-b border-slate-200 p-4 flex items-center justify-between">
           <div className="flex items-center gap-2">
             <span className="text-xs font-semibold text-slate-600">Lọc trạng thái:</span>
             <button
@@ -327,6 +405,78 @@ export default function AdminUsersPanel({ authToken, onClose }: AdminUsersPanelP
             </table>
           )}
         </div>
+        )}
+
+        {/* Security Logs Tab View */}
+        {activeTab === "security" && (
+          <div className="p-5 max-h-[60vh] overflow-y-auto">
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider">
+                🔐 Lịch sử Đổi Mật Khẩu, Đăng Nhập & Thao Tác Quản Trị ({securityLogs.length} sự kiện)
+              </h3>
+              <span className="text-[11px] text-slate-500">Tự động đồng bộ từ database & audit log</span>
+            </div>
+            {logsLoading ? (
+              <div className="py-12 text-center text-slate-500 text-sm">Đang tải nhật ký bảo mật...</div>
+            ) : securityLogs.length === 0 ? (
+              <div className="py-12 text-center text-slate-400 text-sm">Chưa có dữ liệu nhật ký bảo mật.</div>
+            ) : (
+              <table className="w-full text-left text-xs border-collapse">
+                <thead>
+                  <tr className="border-b border-slate-200 text-slate-500 font-semibold bg-slate-50">
+                    <th className="p-3">Thời gian</th>
+                    <th className="p-3">Tài khoản</th>
+                    <th className="p-3">Họ tên</th>
+                    <th className="p-3">Nội dung thao tác / Sự kiện</th>
+                    <th className="p-3 text-center">Trạng thái</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {securityLogs.map((log: any, idx: number) => {
+                    const isError = log.status === "error";
+                    const qText = log.question || "";
+                    const isPasswordChange = qText.includes("Đổi mật khẩu");
+                    const isLogin = qText.includes("Đăng nhập");
+                    const isReset = qText.includes("Reset") || qText.includes("Quên");
+                    return (
+                      <tr key={idx} className="hover:bg-slate-50/80 transition">
+                        <td className="p-3 font-mono text-slate-600 whitespace-nowrap">
+                          {log.ts ? log.ts.replace("T", " ").slice(0, 19) : "—"}
+                        </td>
+                        <td className="p-3 font-semibold text-slate-900 whitespace-nowrap">
+                          {log.username}
+                        </td>
+                        <td className="p-3 text-slate-700 whitespace-nowrap">
+                          {log.user_name}
+                        </td>
+                        <td className="p-3 font-medium">
+                          <span className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-semibold ${
+                            isPasswordChange
+                              ? "bg-amber-100 text-amber-900 border border-amber-300"
+                              : isLogin
+                              ? "bg-emerald-100 text-emerald-900 border border-emerald-300"
+                              : isReset
+                              ? "bg-purple-100 text-purple-900 border border-purple-300"
+                              : "bg-blue-100 text-blue-900 border border-blue-300"
+                          }`}>
+                            {qText}
+                          </span>
+                        </td>
+                        <td className="p-3 text-center whitespace-nowrap">
+                          {isError ? (
+                            <span className="px-2 py-0.5 bg-rose-100 text-rose-800 rounded font-semibold text-[10px]">Thất bại</span>
+                          ) : (
+                            <span className="px-2 py-0.5 bg-emerald-100 text-emerald-800 rounded font-semibold text-[10px]">Thành công</span>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            )}
+          </div>
+        )}
 
         {/* Modal Phê Duyệt / Gán Quyền */}
         {selectedUser && (
