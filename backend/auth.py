@@ -59,6 +59,8 @@ def init_schema():
         ("email", "TEXT"),
         ("status", "TEXT DEFAULT 'approved'"),
         ("must_change_password", "INTEGER DEFAULT 0"),
+        ("password_changed_at", "TEXT"),
+        ("last_login_at", "TEXT"),
     ]:
         col_name, col_type = col_def
         try:
@@ -218,11 +220,12 @@ def set_password(identifier: str, new_password: str) -> bool:
     clean_id = identifier.lower().strip()
     salt = secrets.token_hex(16)
     pwd_hash = _hash_password(new_password, salt)
+    now_iso = dt.datetime.now().isoformat()
     conn = get_conn()
     try:
         cur = conn.execute(
-            "UPDATE users SET password_hash=?, salt=?, must_change_password=0 WHERE username=? OR email=?",
-            (pwd_hash, salt, clean_id, clean_id)
+            "UPDATE users SET password_hash=?, salt=?, must_change_password=0, password_changed_at=? WHERE username=? OR email=?",
+            (pwd_hash, salt, now_iso, clean_id, clean_id)
         )
         conn.commit()
         return cur.rowcount > 0
@@ -269,13 +272,13 @@ def list_users(status: str = None) -> list[dict]:
     try:
         if status:
             rows = conn.execute(
-                "SELECT id, username, email, name, role, scope_value, employee_code, scope_channel, status, is_active, created_at "
+                "SELECT id, username, email, name, role, scope_value, employee_code, scope_channel, status, is_active, created_at, password_changed_at, last_login_at "
                 "FROM users WHERE status=? ORDER BY id DESC",
                 (status,)
             ).fetchall()
         else:
             rows = conn.execute(
-                "SELECT id, username, email, name, role, scope_value, employee_code, scope_channel, status, is_active, created_at "
+                "SELECT id, username, email, name, role, scope_value, employee_code, scope_channel, status, is_active, created_at, password_changed_at, last_login_at "
                 "FROM users ORDER BY id DESC"
             ).fetchall()
 
@@ -284,7 +287,7 @@ def list_users(status: str = None) -> list[dict]:
                 "id": r[0], "username": r[1], "email": r[2], "name": r[3],
                 "role": r[4], "scope_value": r[5], "employee_code": r[6],
                 "scope_channel": r[7], "status": r[8] or 'approved', "is_active": r[9],
-                "created_at": r[10]
+                "created_at": r[10], "password_changed_at": r[11], "last_login_at": r[12]
             }
             for r in rows
         ]
@@ -314,14 +317,17 @@ def get_name_by_username(username: str) -> str | None:
 def create_session(user_id: int) -> str:
     token = secrets.token_urlsafe(32)
     now = dt.datetime.now()
+    now_iso = now.isoformat()
     expires = now + dt.timedelta(hours=SESSION_TTL_HOURS)
     conn = get_conn()
     try:
         conn.execute(
             "INSERT INTO sessions (token, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)",
-            (token, user_id, now.isoformat(), expires.isoformat()),
+            (token, user_id, now_iso, expires.isoformat())
         )
+        conn.execute("UPDATE users SET last_login_at=? WHERE id=?", (now_iso, user_id))
         conn.commit()
+        return token
     finally:
         conn.close()
     return token
