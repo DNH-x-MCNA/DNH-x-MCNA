@@ -93,6 +93,11 @@ const IconRefresh = ({ className }: IconProps) => (
     <path d="M20 11A8 8 0 1 0 18.5 16M20 5v6h-6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
   </svg>
 );
+const IconSquare = ({ className }: IconProps) => (
+  <svg viewBox="0 0 24 24" fill="currentColor" className={className} aria-hidden="true">
+    <rect x="6" y="6" width="12" height="12" rx="2" />
+  </svg>
+);
 
 // Tag mau co dinh cho ky hieu kenh/vung xuat hien DUNG NGUYEN VAN trong 1 o bang - chi khop chinh
 // xac (sau khi trim), KHONG doan/parse noi dung cau tra loi cua AI nen khong co rui ro hien sai so
@@ -452,10 +457,12 @@ const markdownComponents = {
 const MessageList = memo(function MessageList({
   messages,
   loading,
+  onCancel,
   bottomRef,
 }: {
   messages: Message[];
   loading: boolean;
+  onCancel?: () => void;
   bottomRef: RefObject<HTMLDivElement | null>;
 }) {
   return (
@@ -545,13 +552,23 @@ const MessageList = memo(function MessageList({
 
       {loading && (
         <div className="flex justify-start">
-          <div className="flex items-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-400 shadow-sm">
+          <div className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700 shadow-sm">
             <span className="flex gap-1">
-              <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-slate-400 [animation-delay:-0.3s]" />
-              <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-slate-400 [animation-delay:-0.15s]" />
-              <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-slate-400" />
+              <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-indigo-600 [animation-delay:-0.3s]" />
+              <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-indigo-600 [animation-delay:-0.15s]" />
+              <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-indigo-600" />
             </span>
-            Đang truy vấn dữ liệu...
+            <span className="font-medium text-slate-600">Đang suy luận...</span>
+            {onCancel && (
+              <button
+                type="button"
+                onClick={onCancel}
+                className="ml-2 flex items-center gap-1 rounded-full bg-rose-50 px-2.5 py-1 text-xs font-semibold text-rose-600 border border-rose-200 transition hover:bg-rose-100 hover:text-rose-700"
+              >
+                <IconSquare className="h-3 w-3 fill-rose-600" />
+                <span>Dừng</span>
+              </button>
+            )}
           </div>
         </div>
       )}
@@ -587,6 +604,14 @@ export default function Home() {
   const [loading, setLoading] = useState(false);
   const [historyLoaded, setHistoryLoaded] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const abortControllerRef = useRef<AbortController | null>(null);
+
+  function handleCancelQuestion() {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+    }
+  }
 
   // Danh sach cuoc tro chuyen (kieu ChatGPT) - c_level thay cua tat ca nguoi, con lai chi thay cua
   // chinh minh (loc o backend, xem GET /sessions trong main.py).
@@ -850,11 +875,16 @@ export default function Home() {
     setMessages((prev) => [...prev, { role: "user", text: question }]);
     setInput("");
     setLoading(true);
+
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+
     try {
       const res = await fetch(`${API_URL}/chat`, {
         method: "POST",
         headers: authHeaders(authToken),
         body: JSON.stringify({ question, session_id: sessionId }),
+        signal: controller.signal,
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({ detail: "Lỗi không xác định" }));
@@ -873,12 +903,20 @@ export default function Home() {
       ]);
       refreshSessions();
     } catch (e) {
-      setMessages((prev) => [
-        ...prev,
-        { role: "bot", text: `Xin lỗi, có lỗi xảy ra: ${(e as Error).message}`, error: true },
-      ]);
+      if ((e as Error).name === "AbortError") {
+        setMessages((prev) => [
+          ...prev,
+          { role: "bot", text: "⏹️ Đã dừng suy luận theo yêu cầu của bạn.", error: true },
+        ]);
+      } else {
+        setMessages((prev) => [
+          ...prev,
+          { role: "bot", text: `Xin lỗi, có lỗi xảy ra: ${(e as Error).message}`, error: true },
+        ]);
+      }
     } finally {
       setLoading(false);
+      abortControllerRef.current = null;
     }
   }
 
@@ -1162,7 +1200,7 @@ export default function Home() {
             </div>
           )}
 
-          <MessageList messages={messages} loading={loading} bottomRef={bottomRef} />
+          <MessageList messages={messages} loading={loading} onCancel={handleCancelQuestion} bottomRef={bottomRef} />
         </div>
 
         {/* Banner "Danh cho C-Level" da bo (29/07/2026): loi vao Dashboard Audit Log da co san o 2 cho
@@ -1177,15 +1215,27 @@ export default function Home() {
               className="flex-1 bg-transparent px-3 py-1.5 text-sm outline-none placeholder:text-slate-400"
               disabled={loading}
             />
-            <button
-              type="submit"
-              disabled={loading || !input.trim()}
-              title="Gửi"
-              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-white shadow-sm transition hover:scale-105 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:scale-100"
-              style={{ background: "linear-gradient(135deg, #4F46E5, #2563EB)" }}
-            >
-              <IconSend className="h-4 w-4" />
-            </button>
+            {loading ? (
+              <button
+                type="button"
+                onClick={handleCancelQuestion}
+                title="Dừng suy luận"
+                className="flex items-center gap-1.5 rounded-full bg-rose-600 px-3.5 py-2 text-xs font-bold text-white shadow-sm transition hover:bg-rose-700 hover:scale-105 active:scale-95"
+              >
+                <IconSquare className="h-3.5 w-3.5 fill-current" />
+                <span>Dừng</span>
+              </button>
+            ) : (
+              <button
+                type="submit"
+                disabled={!input.trim()}
+                title="Gửi"
+                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-white shadow-sm transition hover:scale-105 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:scale-100"
+                style={{ background: "linear-gradient(135deg, #4F46E5, #2563EB)" }}
+              >
+                <IconSend className="h-4 w-4" />
+              </button>
+            )}
           </div>
         </form>
       </main>
