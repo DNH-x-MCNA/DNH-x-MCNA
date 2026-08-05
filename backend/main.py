@@ -680,12 +680,14 @@ def get_audit_logs_dashboard(
                 pass
 
         sid = e.get("session_id") or ""
-        q_key = (sid, (e.get("question") or "")[:120])
+        sql_str = e.get("sql") or ""
+        is_security_event = sql_str.startswith("<auth:") or sql_str.startswith("<admin:")
 
-        # 03/08/2026: Moi (session, question) chi hien 1 dong - 1 cau hoi KPI khong con lap 10 dong
-        if q_key in _seen_q:
+        # Security/Auth events (login, change_password, create_user...) NEVER deduplicated!
+        if not is_security_event and q_key in _seen_q:
             continue
-        _seen_q.add(q_key)
+        if not is_security_event:
+            _seen_q.add(q_key)
 
         cpq = cost_per_question.get(q_key, {})
         c_usd = cpq.get("cost_usd", 0.0)
