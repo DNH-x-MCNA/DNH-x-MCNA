@@ -644,6 +644,23 @@ def get_audit_logs_dashboard(
     # Sắp xếp toàn bộ log theo thời gian mới nhất lên đầu
     audit_entries.sort(key=lambda x: x.get("ts") or "", reverse=True)
 
+    # 06/08/2026: chuyen len truoc vong duyet cost_log de dung ngay tai day - truoc do user_filter/
+    # role_filter CHI duoc ap trong vong duyet audit_entries ben duoi, khien grand_cost_usd (=> the
+    # "Tong chi phi AI" tren dashboard) va cost_direct_by_user luon cong TOAN BO nguoi dung bat ke
+    # dang loc ai, nen loc theo Chuc vu nhin nhu khong co tac dung (tong tien/token khong doi, danh
+    # sach nguoi dung van lot nguoi khac role vao qua nhanh cost_direct_by_user ben duoi).
+    target_user_str = (user_filter or "").strip().lower()
+    target_role_str = (role_filter or "").strip().lower()
+
+    def _passes_user_role_filter(uname: str) -> bool:
+        if target_user_str and target_user_str not in ("all", ""):
+            if target_user_str not in (uname or "").lower():
+                return False
+        if target_role_str and target_role_str != "all":
+            if (_username_to_role.get(uname) or "").lower() != target_role_str:
+                return False
+        return True
+
     cost_by_session = defaultdict(lambda: {"cost_usd": 0.0, "input_tokens": 0, "output_tokens": 0, "cache_tokens": 0, "total_tokens": 0, "calls": 0})
     cost_direct_by_user = defaultdict(lambda: {"cost_usd": 0.0, "input_tokens": 0, "output_tokens": 0, "cache_tokens": 0, "total_tokens": 0})
     # 03/08/2026: Per-question cost - nhom theo (session_id, question_preview) de hien chi phi TUNG CAU
@@ -674,10 +691,14 @@ def get_audit_logs_dashboard(
                 ot = c.get("output_tokens", 0) or 0
                 cr = c.get("cache_read_tokens", 0) or 0
                 cw = c.get("cache_write_tokens", 0) or 0
-                grand_cost_usd += cost
-                grand_input_tokens += it
-                grand_output_tokens += ot
-                grand_cache_tokens += cr + cw
+                uname_direct = (c.get("username") or "").strip()
+                _passes_filter = _passes_user_role_filter(uname_direct)
+
+                if _passes_filter:
+                    grand_cost_usd += cost
+                    grand_input_tokens += it
+                    grand_output_tokens += ot
+                    grand_cache_tokens += cr + cw
 
                 # LUON gom theo phien - day la nguon so cho bang chi tiet TUNG CAU HOI. Truoc 31/07
                 # khoi nay nam SAU mot "continue" cua nhanh username, ma tu 20bec9d (29/07) thi log
@@ -704,12 +725,11 @@ def get_audit_logs_dashboard(
                     _cpq["total_tokens"] += it + ot + cr + cw
                     _cpq["api_calls"] += 1
                     if not _cpq["username"]:
-                        _cpq["username"] = (c.get("username") or "").strip()
+                        _cpq["username"] = uname_direct
                     if not _cpq["first_ts"]:
                         _cpq["first_ts"] = c.get("ts")
 
-                uname_direct = (c.get("username") or "").strip()
-                if uname_direct:
+                if uname_direct and _passes_filter:
                     d = cost_direct_by_user[uname_direct]
                     d["cost_usd"] += cost
                     d["input_tokens"] += it
@@ -732,18 +752,12 @@ def get_audit_logs_dashboard(
     total_output_tokens = 0
     total_cache_tokens_attributed = 0
 
-    target_user_str = (user_filter or "").strip().lower()
-    target_role_str = (role_filter or "").strip().lower()
     _seen_q = set()  # 03/08/2026: dedup by (session_id, question[:120])
 
     for e in audit_entries:
         uname = e.get("username") or "unknown"
-        if target_user_str and target_user_str not in ("all", ""):
-            if target_user_str not in uname.lower():
-                continue
-        if target_role_str and target_role_str != "all":
-            if (_username_to_role.get(uname) or "").lower() != target_role_str:
-                continue
+        if not _passes_user_role_filter(uname):
+            continue
         if not _passes_time_filter(e.get("ts")):
             continue
 
@@ -823,12 +837,8 @@ def get_audit_logs_dashboard(
             continue
         _sid2, _qp2 = _qk2
         _uname2 = _cpq2.get("username") or "unknown"
-        if target_user_str and target_user_str not in ("all", ""):
-            if target_user_str not in _uname2.lower():
-                continue
-        if target_role_str and target_role_str != "all":
-            if (_username_to_role.get(_uname2) or "").lower() != target_role_str:
-                continue
+        if not _passes_user_role_filter(_uname2):
+            continue
         if not _passes_time_filter(_cpq2.get("first_ts")):
             continue
         _seen_q.add(_qk2)
