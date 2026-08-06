@@ -10,11 +10,13 @@ export async function GET(request: Request) {
   const date = searchParams.get("date") || "";
   const limit = searchParams.get("limit") || "200";
   const userFilter = searchParams.get("user_filter") || "";
+  const roleFilter = searchParams.get("role_filter") || "";
 
   const queryParams = new URLSearchParams({
     limit,
     ...(date ? { date } : { days }),
     ...(userFilter ? { user_filter: userFilter } : {}),
+    ...(roleFilter ? { role_filter: roleFilter } : {}),
   });
 
   const authHeader = request.headers.get("authorization");

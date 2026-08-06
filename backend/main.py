@@ -550,6 +550,7 @@ def get_audit_logs_dashboard(
     date: Optional[str] = Query(default=None, description="Loc theo 1 ngay cu the (YYYY-MM-DD). Neu truyen, bo qua tham so days."),
     limit: int = Query(default=200, ge=1, le=1000),
     user_filter: Optional[str] = None,
+    role_filter: Optional[str] = None,
     user: dict = Depends(require_approved_user)
 ):
     if user["role"] not in ("c_level", "admin_ops"):
@@ -603,11 +604,16 @@ def get_audit_logs_dashboard(
 
     # 05/08/2026: Nạp bổ sung lịch sử Đổi MK, Đăng nhập & Khởi tạo tài khoản từ auth.db
     # để hiển thị lại toàn bộ các sự kiện trước đây (khi chưa có file audit_log)
+    # 06/08/2026: cung xay username -> role tu chinh danh sach nay de phuc vu bo loc "Chuc vu" -
+    # dung 1 lan goi list_users(), khong query rieng.
+    _username_to_role: dict = {}
     try:
         from auth import list_users
         all_u = list_users()
         for u in all_u:
             uname = u.get("username")
+            if uname:
+                _username_to_role[uname] = (u.get("role") or "").strip()
             if u.get("created_at"):
                 audit_entries.append({
                     "ts": u["created_at"],
@@ -727,12 +733,16 @@ def get_audit_logs_dashboard(
     total_cache_tokens_attributed = 0
 
     target_user_str = (user_filter or "").strip().lower()
+    target_role_str = (role_filter or "").strip().lower()
     _seen_q = set()  # 03/08/2026: dedup by (session_id, question[:120])
 
     for e in audit_entries:
         uname = e.get("username") or "unknown"
         if target_user_str and target_user_str not in ("all", ""):
             if target_user_str not in uname.lower():
+                continue
+        if target_role_str and target_role_str != "all":
+            if (_username_to_role.get(uname) or "").lower() != target_role_str:
                 continue
         if not _passes_time_filter(e.get("ts")):
             continue
@@ -815,6 +825,9 @@ def get_audit_logs_dashboard(
         _uname2 = _cpq2.get("username") or "unknown"
         if target_user_str and target_user_str not in ("all", ""):
             if target_user_str not in _uname2.lower():
+                continue
+        if target_role_str and target_role_str != "all":
+            if (_username_to_role.get(_uname2) or "").lower() != target_role_str:
                 continue
         if not _passes_time_filter(_cpq2.get("first_ts")):
             continue
