@@ -8,7 +8,7 @@ import AdminUsersPanel from "./AdminUsersPanel";
 import {
   IconChart, IconLogout, IconPlus, IconTrash, IconSend, IconSearch,
   IconUsers, IconCoin, IconMenu, IconClose, IconRefresh, IconSquare,
-  IconKey, IconCheck,
+  IconKey, IconCheck, IconMessage,
 } from "./icons";
 import { useModal } from "./useModal";
 
@@ -949,38 +949,55 @@ export default function Home() {
             <p className="px-2 text-xs text-slate-400">Người này chưa có cuộc trò chuyện nào.</p>
           )}
           {sessionGroups.map((group) => (
-            <div key={group.label} className="mb-3">
-              <div className="px-2.5 pb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+            <div key={group.label} className="mb-4">
+              <div className="px-2.5 pb-1.5 text-[11px] font-semibold uppercase tracking-wider text-slate-400">
                 {group.label}
               </div>
-              {group.items.map((s) => (
-                <div
-                  key={s.session_id}
-                  onClick={() => switchToSession(s.session_id)}
-                  className={`group mb-1 flex cursor-pointer items-center justify-between gap-1 rounded-lg px-3 py-2 text-sm transition ${
-                    s.session_id === sessionId ? "bg-indigo-50 text-indigo-700" : "text-slate-600 hover:bg-slate-50"
-                  }`}
-                >
-                  <div className="min-w-0 flex-1">
-                    <div className="fade-truncate">{s.title || "Cuộc trò chuyện mới"}</div>
-                    <div className="fade-truncate text-xs text-slate-400">
-                      {formatRelativeTime(s.updated_at)}
-                      {isCLevel && s.owner_username !== userInfo?.username
-                        ? ` · ${s.owner_name || s.owner_username}`
-                        : ""}
-                    </div>
-                  </div>
-                  {s.owner_username === userInfo?.username && (
-                    <button
-                      onClick={(e) => requestDeleteSession(s.session_id, e)}
-                      className="shrink-0 rounded p-1.5 text-slate-400 opacity-100 transition hover:bg-red-50 hover:text-red-500 md:opacity-0 md:group-hover:opacity-100"
-                      title="Xóa cuộc trò chuyện"
+              <div className="flex flex-col gap-0.5">
+                {group.items.map((s) => {
+                  const isActive = s.session_id === sessionId;
+                  return (
+                    <div
+                      key={s.session_id}
+                      onClick={() => switchToSession(s.session_id)}
+                      className={`group relative flex cursor-pointer items-center gap-2.5 rounded-xl px-2.5 py-2.5 text-sm transition ${
+                        isActive ? "bg-indigo-50 ring-1 ring-inset ring-indigo-100" : "hover:bg-slate-100/80"
+                      }`}
                     >
-                      <IconTrash className="h-3.5 w-3.5" />
-                    </button>
-                  )}
-                </div>
-              ))}
+                      {isActive && (
+                        <span className="absolute left-0 top-1/2 h-5 w-1 -translate-y-1/2 rounded-r-full bg-indigo-600" />
+                      )}
+                      <span
+                        className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full transition ${
+                          isActive ? "bg-indigo-600 text-white" : "bg-slate-100 text-slate-400 group-hover:bg-slate-200"
+                        }`}
+                      >
+                        <IconMessage className="h-4 w-4" />
+                      </span>
+                      <div className="min-w-0 flex-1">
+                        <div className={`fade-truncate ${isActive ? "font-semibold text-indigo-700" : "font-medium text-slate-700"}`}>
+                          {s.title || "Cuộc trò chuyện mới"}
+                        </div>
+                        <div className="fade-truncate text-xs text-slate-400">
+                          {formatRelativeTime(s.updated_at)}
+                          {isCLevel && s.owner_username !== userInfo?.username
+                            ? ` · ${s.owner_name || s.owner_username}`
+                            : ""}
+                        </div>
+                      </div>
+                      {s.owner_username === userInfo?.username && (
+                        <button
+                          onClick={(e) => requestDeleteSession(s.session_id, e)}
+                          className="shrink-0 rounded-full p-1.5 text-slate-400 opacity-100 transition hover:bg-red-50 hover:text-red-500 md:opacity-0 md:group-hover:opacity-100"
+                          title="Xóa cuộc trò chuyện"
+                        >
+                          <IconTrash className="h-3.5 w-3.5" />
+                        </button>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
             </div>
           ))}
         </div>

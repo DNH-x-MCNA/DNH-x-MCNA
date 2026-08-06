@@ -142,3 +142,8 @@ export const IconLightbulb = ({ className }: IconProps) => (
     <path d="M9 18h6M10 21h4M12 3a6 6 0 0 0-3.5 10.9c.6.4 1 1.1 1 1.9v.2h5v-.2c0-.8.4-1.5 1-1.9A6 6 0 0 0 12 3Z" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
   </svg>
 );
+export const IconMessage = ({ className }: IconProps) => (
+  <svg viewBox="0 0 24 24" fill="none" className={className} aria-hidden="true">
+    <path d="M4 4.8h16A1.2 1.2 0 0 1 21.2 6v10a1.2 1.2 0 0 1-1.2 1.2H8l-4.5 3.5a.5.5 0 0 1-.8-.4V6a1.2 1.2 0 0 1 1.2-1.2Z" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" />
+  </svg>
+);
