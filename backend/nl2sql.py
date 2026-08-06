@@ -744,6 +744,8 @@ def ask(question: str, session_id: str = "default", username: str = None, scope_
     # vong. Chi giu 1 marker "dang hoat dong" tai 1 thoi diem (xoa marker vong truoc khi dat vong
     # moi) de khong vuot qua 4 breakpoint/request; cache server-side van doc duoc prefix da ghi tu
     # vong truoc nho co che nhin lui 20 block, khong can giu marker cu.
+    # LUU Y breakpoint nay dung TTL MAC DINH (5 phut), khac 2 breakpoint kia dung "1h" - ly do day du
+    # o cho dat cache_control trong vong lap ben duoi.
     _last_msg_cache_block = None
 
     sql_used = []
@@ -929,7 +931,18 @@ def ask(question: str, session_id: str = "default", username: str = None, scope_
             if _last_msg_cache_block is not None:
                 _last_msg_cache_block.pop("cache_control", None)
             tool_results[-1] = dict(tool_results[-1])
-            tool_results[-1]["cache_control"] = {"type": "ephemeral", "ttl": "1h"}
+            # 06/08/2026: TTL MAC DINH (5 phut), CO Y khac 2 breakpoint kia (system + tools dung "1h").
+            # Gia GHI cache phu thuoc TTL: 5 phut = 1,25x gia input ($2,50/M), 1 gio = 2x ($4,00/M).
+            # Khoi tool_result nay chi duoc doc lai TRONG CHINH cau hoi do - cac vong cach nhau vai
+            # giay - nen khong bao gio huong loi tu TTL 1 gio, ma van phai tra gia ghi dat hon 60%.
+            # Do that 06/08: cache_write la thanh phan DAT NHAT (37,8% chi phi/cau, ~4.426 token),
+            # phan lon den tu chinh breakpoint di dong nay (ghi lai moi vong, ~2,86 vong/cau).
+            # Ha ve 5 phut tiet kiem ~0,0066 USD/cau (~14% tong chi phi).
+            # System prompt + tool definitions thi NGUOC LAI: dung lai qua nhieu cau hoi trong nhieu
+            # gio, nen giu "1h" (xem system_blocks va tools_for_request o dau ham).
+            # Rui ro: cache 5 phut chi hong neu 2 vong goi tool cach nhau qua 5 phut - do thuc te cau
+            # cham nhat la 1,3 phut cho CA cau hoi, con xa nguong.
+            tool_results[-1]["cache_control"] = {"type": "ephemeral"}
             _last_msg_cache_block = tool_results[-1]
         messages.append({"role": "user", "content": tool_results})
 
