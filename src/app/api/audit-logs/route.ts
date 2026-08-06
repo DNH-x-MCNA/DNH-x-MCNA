@@ -7,10 +7,15 @@ export async function GET(request: Request) {
 
   const { searchParams } = new URL(request.url);
   const days = searchParams.get("days") || "30";
+  const date = searchParams.get("date") || "";
   const limit = searchParams.get("limit") || "200";
   const userFilter = searchParams.get("user_filter") || "";
 
-  const queryParams = new URLSearchParams({ days, limit, ...(userFilter ? { user_filter: userFilter } : {}) });
+  const queryParams = new URLSearchParams({
+    limit,
+    ...(date ? { date } : { days }),
+    ...(userFilter ? { user_filter: userFilter } : {}),
+  });
 
   const authHeader = request.headers.get("authorization");
   const res = await fetch(`${backendUrl}/audit-logs?${queryParams.toString()}`, {
