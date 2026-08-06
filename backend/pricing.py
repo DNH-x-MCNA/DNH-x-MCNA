@@ -12,10 +12,19 @@ MODEL_PRICING = {
         "input": 2.00,        # gia gioi thieu den 31/08/2026, sau do $3.00
         "output": 10.00,      # gia gioi thieu den 31/08/2026, sau do $15.00
         "cache_read": 0.20,   # 0.1x input - he so chuan Anthropic
-        "cache_write": 4.00,  # 2x input - he so cache TTL 1 GIO (khong phai 5 phut). nl2sql.py goi
-                               # cache_control voi ttl="1h" (dong 519/753/759), nen he so dung la 2x
-                               # chu khong phai 1.25x cua TTL 5 phut. Sua 05/08/2026 - truoc do ghi
-                               # 2.50 (1.25x) lam MOI bao cao chi phi cache-write bi bao THIEU ~37%.
+        "cache_write": 4.00,  # 2x input - he so cache TTL 1 GIO. Sua 05/08/2026 - truoc do ghi
+                               # 2.50 (1.25x cua TTL 5 phut) lam MOI bao cao chi phi cache-write bi
+                               # bao THIEU ~37%.
+                               #
+                               # HAN CHE DO DAC (06/08/2026): tu nay nl2sql.py dung HAI TTL khac nhau
+                               # - system prompt + tool definitions van "1h" (2x = 4.00), rieng
+                               # breakpoint tren tool_results ha ve mac dinh 5 phut (1.25x = 2.50) vi
+                               # chi doc lai trong cung 1 cau hoi. Bang gia nay chi co MOT don gia
+                               # cache_write nen phan ghi 5 phut dang bi tinh theo gia 1 gio ->
+                               # bao cao chi phi cache-write hoi CAO HON thuc te (nguoc voi loi cu la
+                               # bao thap hon). Chua kiem chung duoc API co tra ve token ghi tach
+                               # rieng theo tung TTL hay khong (can goi that, luc sua thi API key dang
+                               # ngat). Neu co, tach thanh 2 don gia rieng va sua cost_logger.py.
     },
     "claude-haiku-4-5": {
         "input": 1.00,
