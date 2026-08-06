@@ -547,6 +547,7 @@ def chat(req: ChatRequest, user: dict = Depends(require_approved_user)):
 @app.get("/audit-logs", dependencies=[Depends(require_api_key)])
 def get_audit_logs_dashboard(
     days: int = Query(default=30, ge=1, le=365),
+    date: Optional[str] = Query(default=None, description="Loc theo 1 ngay cu the (YYYY-MM-DD). Neu truyen, bo qua tham so days."),
     limit: int = Query(default=200, ge=1, le=1000),
     user_filter: Optional[str] = None,
     user: dict = Depends(require_approved_user)
@@ -558,7 +559,35 @@ def get_audit_logs_dashboard(
     AUDIT_LOG_PATH = os.path.join(_LOGS_DIR, "audit_log.jsonl")
     COST_LOG_PATH = os.path.join(_LOGS_DIR, "cost_log.jsonl")
 
-    cutoff = dt.datetime.now() - dt.timedelta(days=days) if days else None
+    # 06/08/2026: Cho xem theo 1 NGAY CU THE thay vi chi "N ngay gan nhat". Neu co `date`, no thang
+    # the cho `days` - chi giu lai entry roi vao dung ngay do (00:00:00 -> 23:59:59.999999).
+    target_date = None
+    if date:
+        try:
+            target_date = dt.date.fromisoformat(date)
+        except ValueError:
+            raise HTTPException(400, "Tham so date khong hop le, dung dinh dang YYYY-MM-DD")
+
+    date_start = date_end = None
+    cutoff = None
+    if target_date:
+        date_start = dt.datetime.combine(target_date, dt.time.min)
+        date_end = dt.datetime.combine(target_date, dt.time.max)
+    elif days:
+        cutoff = dt.datetime.now() - dt.timedelta(days=days)
+
+    def _passes_time_filter(ts_str):
+        if not ts_str:
+            return True
+        try:
+            ts_dt = dt.datetime.fromisoformat(ts_str)
+        except Exception:
+            return True
+        if target_date:
+            return date_start <= ts_dt <= date_end
+        if cutoff:
+            return ts_dt >= cutoff
+        return True
 
     audit_entries = []
     if os.path.exists(AUDIT_LOG_PATH):
@@ -632,12 +661,8 @@ def get_audit_logs_dashboard(
                     c = json.loads(line)
                 except Exception:
                     continue
-                if cutoff:
-                    try:
-                        if dt.datetime.fromisoformat(c["ts"]) < cutoff:
-                            continue
-                    except Exception:
-                        pass
+                if not _passes_time_filter(c.get("ts")):
+                    continue
                 cost = c.get("cost_usd", 0.0) or 0.0
                 it = c.get("input_tokens", 0) or 0
                 ot = c.get("output_tokens", 0) or 0
@@ -709,12 +734,8 @@ def get_audit_logs_dashboard(
         if target_user_str and target_user_str not in ("all", ""):
             if target_user_str not in uname.lower():
                 continue
-        if cutoff:
-            try:
-                if dt.datetime.fromisoformat(e["ts"]) < cutoff:
-                    continue
-            except Exception:
-                pass
+        if not _passes_time_filter(e.get("ts")):
+            continue
 
         sid = e.get("session_id") or ""
         # 06/08/2026: KHOI PHUC dong nay - commit d705ad9 (05/08) khi them tab Security Audit Log da
@@ -795,12 +816,8 @@ def get_audit_logs_dashboard(
         if target_user_str and target_user_str not in ("all", ""):
             if target_user_str not in _uname2.lower():
                 continue
-        if cutoff and _cpq2.get("first_ts"):
-            try:
-                if dt.datetime.fromisoformat(_cpq2["first_ts"]) < cutoff:
-                    continue
-            except Exception:
-                pass
+        if not _passes_time_filter(_cpq2.get("first_ts")):
+            continue
         _seen_q.add(_qk2)
         _dn2 = get_name_by_username(_uname2) or _uname2
         user_stats[_uname2]["query_count"] += 1
@@ -895,7 +912,8 @@ def get_audit_logs_dashboard(
             "grand_total_tokens": grand_input_tokens + grand_output_tokens + grand_cache_tokens,
             "total_queries": len(filtered_logs),
             "unique_users_count": len([u for u in user_stats if u and u.lower() != "unknown"]),
-            "days": days
+            "days": days,
+            "date": target_date.strftime("%Y-%m-%d") if target_date else None
         },
         "user_breakdown": user_breakdown,
         "logs": recent_logs

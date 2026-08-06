@@ -243,6 +243,7 @@ type AuditSummary = {
   total_queries: number;
   unique_users_count: number;
   days: number;
+  date: string | null;
 };
 
 type UserBreakdownItem = {
@@ -570,6 +571,8 @@ export default function Home() {
   const [auditLoading, setAuditLoading] = useState(false);
   const [auditData, setAuditData] = useState<AuditDashboardData | null>(null);
   const [auditDays, setAuditDays] = useState<number>(30);
+  // Rong = dang loc theo "N ngay gan nhat" (auditDays); co gia tri (YYYY-MM-DD) = loc dung 1 ngay.
+  const [auditSpecificDate, setAuditSpecificDate] = useState<string>("");
   const [auditUserFilter, setAuditUserFilter] = useState<string>("all");
   const [auditActiveTab, setAuditActiveTab] = useState<"users" | "weekly" | "logs">("users");
   const [weeklyData, setWeeklyData] = useState<WeeklyAuditData | null>(null);
@@ -635,10 +638,15 @@ export default function Home() {
     [sessions, effectiveOwnerFilter]
   );
 
-  const fetchAuditData = (daysVal: number, userVal: string) => {
+  const fetchAuditData = (daysVal: number, userVal: string, dateVal: string = "") => {
     if (!authToken) return;
     setAuditLoading(true);
-    const params = new URLSearchParams({ days: String(daysVal), limit: "300" });
+    const params = new URLSearchParams({ limit: "300" });
+    if (dateVal) {
+      params.append("date", dateVal);
+    } else {
+      params.append("days", String(daysVal));
+    }
     if (userVal && userVal !== "all") {
       params.append("user_filter", userVal);
     }
@@ -672,7 +680,7 @@ export default function Home() {
 
   const openAuditDashboard = () => {
     setAuditModalOpen(true);
-    fetchAuditData(auditDays, auditUserFilter);
+    fetchAuditData(auditDays, auditUserFilter, auditSpecificDate);
     fetchWeeklyAuditData(weeklyOffset);
   };
 
@@ -1179,17 +1187,45 @@ export default function Home() {
                   <span>Khoảng thời gian:</span>
                   <select
                     value={auditDays}
+                    disabled={Boolean(auditSpecificDate)}
                     onChange={(e) => {
                       const val = Number(e.target.value);
                       setAuditDays(val);
-                      fetchAuditData(val, auditUserFilter);
+                      fetchAuditData(val, auditUserFilter, "");
                     }}
-                    className="rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs text-slate-800 outline-none transition focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
+                    className="rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs text-slate-800 outline-none transition focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 disabled:opacity-50"
                   >
                     <option value={7}>7 ngày gần nhất</option>
                     <option value={30}>30 ngày gần nhất</option>
                     <option value={90}>90 ngày gần nhất</option>
                   </select>
+                </div>
+
+                {/* Specific Date Filter */}
+                <div className="flex items-center gap-1.5 text-xs font-medium text-slate-600">
+                  <span>Ngày cụ thể:</span>
+                  <input
+                    type="date"
+                    value={auditSpecificDate}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setAuditSpecificDate(val);
+                      fetchAuditData(auditDays, auditUserFilter, val);
+                    }}
+                    className="rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs text-slate-800 outline-none transition focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
+                  />
+                  {auditSpecificDate && (
+                    <button
+                      onClick={() => {
+                        setAuditSpecificDate("");
+                        fetchAuditData(auditDays, auditUserFilter, "");
+                      }}
+                      title="Bỏ lọc theo ngày, quay lại xem theo khoảng thời gian"
+                      className="rounded-full p-1 text-slate-400 transition hover:bg-slate-200 hover:text-slate-700"
+                    >
+                      <IconClose className="h-3 w-3" />
+                    </button>
+                  )}
                 </div>
 
                 {/* User Filter Dropdown */}
@@ -1200,7 +1236,7 @@ export default function Home() {
                     onChange={(e) => {
                       const val = e.target.value;
                       setAuditUserFilter(val);
-                      fetchAuditData(auditDays, val);
+                      fetchAuditData(auditDays, val, auditSpecificDate);
                     }}
                     className="max-w-[160px] truncate rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs text-slate-800 outline-none transition focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
                   >
@@ -1217,7 +1253,7 @@ export default function Home() {
               {/* Refresh & Tabs */}
               <div className="flex items-center gap-2">
                 <button
-                  onClick={() => fetchAuditData(auditDays, auditUserFilter)}
+                  onClick={() => fetchAuditData(auditDays, auditUserFilter, auditSpecificDate)}
                   className="flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 transition hover:bg-slate-50 disabled:opacity-60"
                   disabled={auditLoading}
                 >
@@ -1352,7 +1388,9 @@ export default function Home() {
                         {auditData.summary.total_queries.toLocaleString()} lượt
                       </div>
                       <div className="text-[11px] tabular-nums text-emerald-600">
-                        Trong {auditData.summary.days} ngày · trung bình {(auditData.summary.total_queries / Math.max(1, auditData.summary.days)).toFixed(1)} lượt/ngày
+                        {auditData.summary.date
+                          ? `Ngày ${auditData.summary.date.split("-").reverse().join("/")}`
+                          : `Trong ${auditData.summary.days} ngày · trung bình ${(auditData.summary.total_queries / Math.max(1, auditData.summary.days)).toFixed(1)} lượt/ngày`}
                       </div>
                     </div>
 
