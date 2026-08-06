@@ -326,10 +326,14 @@ type AuditDashboardData = {
 };
 
 
+// 06/08/2026: DNH xac nhan "Giam doc Mien" = "Truong phong" = "Truong kenh" = "Giam doc Kenh" deu la
+// MOT chuc vu (role `regional_director`, tuong ung position_code 'TP' trong dim_nhanvien). Nhan phai
+// nhac ca 2 cach goi pho bien nhat de nguoi dung tu nhan ra minh - truoc day 4 cho viet 4 kieu khac
+// nhau (co cho con ghi nham "Giam doc Vung"). Moi noi hien thi role PHAI dung map nay, dung tu che.
 const ROLE_LABELS: Record<string, string> = {
   admin_ops: "Admin Vận Hành (Hệ thống)",
   c_level: "Tổng Giám Đốc (C-Level)",
-  regional_director: "Giám đốc Miền / Kênh",
+  regional_director: "Giám đốc Miền / Kênh (Trưởng phòng)",
   qlv: "Quản lý Vùng (QLV)",
 };
 
@@ -1283,10 +1287,9 @@ export default function Home() {
                     className="rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs text-slate-800 outline-none transition focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
                   >
                     <option value="all">Tất cả chức vụ</option>
-                    <option value="c_level">C-Level (Tổng Giám Đốc)</option>
-                    <option value="admin_ops">Admin Vận Hành</option>
-                    <option value="regional_director">Regional Director (Giám đốc Miền)</option>
-                    <option value="qlv">QLV (Quản lý vùng / TDV)</option>
+                    {Object.entries(ROLE_LABELS).map(([value, label]) => (
+                      <option key={value} value={value}>{label}</option>
+                    ))}
                   </select>
                 </div>
               </div>

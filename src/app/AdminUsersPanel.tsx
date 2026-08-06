@@ -602,9 +602,9 @@ export default function AdminUsersPanel({ authToken, onClose }: AdminUsersPanelP
                   onChange={(e) => setRole(e.target.value)}
                   className="w-full p-2 bg-slate-800 border border-slate-700 rounded text-xs text-white focus:outline-none focus:border-blue-500"
                 >
-                  <option value="qlv">QLV (Quản lý vùng / TDV)</option>
-                  <option value="regional_director">Regional Director (Giám đốc Miền / Kênh)</option>
-                  <option value="c_level">C-Level (Tổng Giám Đốc)</option>
+                  <option value="qlv">Quản lý Vùng (QLV)</option>
+                  <option value="regional_director">Giám đốc Miền / Kênh (Trưởng phòng)</option>
+                  <option value="c_level">Tổng Giám Đốc (C-Level)</option>
                   <option value="admin_ops">Admin Vận Hành (Hệ thống)</option>
                 </select>
               </div>
@@ -770,9 +770,9 @@ export default function AdminUsersPanel({ authToken, onClose }: AdminUsersPanelP
                       onChange={(e) => setNewRole(e.target.value)}
                       className="w-full p-2.5 border border-slate-300 rounded-lg text-xs focus:outline-none focus:border-blue-600"
                     >
-                      <option value="qlv">QLV (Quản lý vùng / TDV)</option>
-                      <option value="regional_director">Regional Director (Giám đốc Vùng / Kênh)</option>
-                      <option value="c_level">C-Level (Tổng Giám Đốc)</option>
+                      <option value="qlv">Quản lý Vùng (QLV)</option>
+                      <option value="regional_director">Giám đốc Miền / Kênh (Trưởng phòng)</option>
+                      <option value="c_level">Tổng Giám Đốc (C-Level)</option>
                       <option value="admin_ops">Admin Vận Hành (Hệ thống)</option>
                     </select>
                   </div>
