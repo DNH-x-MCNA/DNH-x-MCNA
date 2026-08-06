@@ -1,10 +1,10 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 import {
   IconShield, IconPlus, IconClose, IconUsers, IconShieldLock, IconRefresh,
   IconClipboard, IconClock, IconCheck, IconLock, IconUnlock, IconKey,
-  IconSettings, IconMail,
+  IconSettings, IconMail, IconSearch,
 } from "./icons";
 import { useModal } from "./useModal";
 
@@ -28,6 +28,18 @@ interface AdminUsersPanelProps {
   authToken: string;
   onClose: () => void;
 }
+
+// Phan loai theo tien to `sql` ma backend da ghi (<auth:...>/<admin:...>) - dung hon la doan tu
+// khoa tren `question` (isPasswordChange/isLogin/isReset ben duoi) vi khong phu thuoc emoji/cau chu.
+const SEC_EVENT_CATEGORIES: { value: string; label: string; match: (sql: string) => boolean }[] = [
+  { value: "all", label: "Tất cả sự kiện", match: () => true },
+  { value: "login", label: "Đăng nhập", match: (sql) => sql === "<auth:login>" },
+  { value: "change_password", label: "Đổi mật khẩu", match: (sql) => sql === "<auth:change_password>" },
+  { value: "forgot_password", label: "Quên / Reset mật khẩu", match: (sql) => sql.startsWith("<auth:forgot_password") },
+  { value: "create_user", label: "Tạo tài khoản", match: (sql) => sql === "<auth:create_user>" || sql === "<admin:create_user>" },
+  { value: "approve_user", label: "Phê duyệt tài khoản", match: (sql) => sql === "<admin:approve_user>" },
+  { value: "toggle_active", label: "Khóa / Mở khóa tài khoản", match: (sql) => sql === "<admin:toggle_active>" },
+];
 
 export default function AdminUsersPanel({ authToken, onClose }: AdminUsersPanelProps) {
   const [users, setUsers] = useState<UserItem[]>([]);
@@ -60,6 +72,11 @@ export default function AdminUsersPanel({ authToken, onClose }: AdminUsersPanelP
   const [activeTab, setActiveTab] = useState<"users" | "security">("users");
   const [securityLogs, setSecurityLogs] = useState<any[]>([]);
   const [logsLoading, setLogsLoading] = useState<boolean>(false);
+  // Bo loc phia client cho tab Nhat ky bao mat (03/08/2026 -> 06/08/2026: them tim kiem/loc theo
+  // su kien/ngay) - khong can goi lai backend, 90 ngay du lieu da tai san co du de loc tai cho.
+  const [secSearch, setSecSearch] = useState<string>("");
+  const [secEventFilter, setSecEventFilter] = useState<string>("all");
+  const [secDateFilter, setSecDateFilter] = useState<string>("");
 
   const fetchSecurityLogs = async () => {
     setLogsLoading(true);
@@ -98,6 +115,22 @@ export default function AdminUsersPanel({ authToken, onClose }: AdminUsersPanelP
       fetchSecurityLogs();
     }
   }, [activeTab]);
+
+  const filteredSecurityLogs = useMemo(() => {
+    const cat = SEC_EVENT_CATEGORIES.find((c) => c.value === secEventFilter) || SEC_EVENT_CATEGORIES[0];
+    const q = secSearch.trim().toLowerCase();
+    return securityLogs.filter((log: any) => {
+      if (!cat.match(log.sql || "")) return false;
+      if (secDateFilter && (log.ts || "").slice(0, 10) !== secDateFilter) return false;
+      if (q) {
+        const hay = `${log.username || ""} ${log.user_name || ""} ${log.question || ""}`.toLowerCase();
+        if (!hay.includes(q)) return false;
+      }
+      return true;
+    });
+  }, [securityLogs, secEventFilter, secDateFilter, secSearch]);
+
+  const secFiltersActive = secEventFilter !== "all" || Boolean(secDateFilter) || Boolean(secSearch.trim());
 
   const fetchUsers = async () => {
     setLoading(true);
@@ -444,14 +477,59 @@ export default function AdminUsersPanel({ authToken, onClose }: AdminUsersPanelP
           <div className="p-5 max-h-[60vh] overflow-y-auto">
             <div className="flex items-center justify-between mb-3">
               <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider flex items-center gap-1.5">
-                <IconShieldLock className="w-3.5 h-3.5" /> Lịch sử Đổi Mật Khẩu, Đăng Nhập & Thao Tác Quản Trị ({securityLogs.length} sự kiện)
+                <IconShieldLock className="w-3.5 h-3.5" /> Lịch sử Đổi Mật Khẩu, Đăng Nhập & Thao Tác Quản Trị ({filteredSecurityLogs.length}
+                {filteredSecurityLogs.length !== securityLogs.length ? ` / ${securityLogs.length}` : ""} sự kiện)
               </h3>
               <span className="text-[11px] text-slate-500">Tự động đồng bộ từ database & audit log</span>
             </div>
+
+            {/* Filter Bar: tim kiem, loai su kien, ngay cu the */}
+            <div className="mb-4 flex flex-wrap items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 p-3">
+              <div className="relative flex-1 min-w-[180px]">
+                <IconSearch className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400" />
+                <input
+                  type="text"
+                  value={secSearch}
+                  onChange={(e) => setSecSearch(e.target.value)}
+                  placeholder="Tìm theo tài khoản, họ tên, nội dung..."
+                  className="w-full rounded-lg border border-slate-300 bg-white py-1.5 pl-8 pr-2.5 text-xs text-slate-800 outline-none transition focus:border-purple-400 focus:ring-2 focus:ring-purple-100"
+                />
+              </div>
+              <select
+                value={secEventFilter}
+                onChange={(e) => setSecEventFilter(e.target.value)}
+                className="rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs text-slate-800 outline-none transition focus:border-purple-400 focus:ring-2 focus:ring-purple-100"
+              >
+                {SEC_EVENT_CATEGORIES.map((c) => (
+                  <option key={c.value} value={c.value}>{c.label}</option>
+                ))}
+              </select>
+              <input
+                type="date"
+                value={secDateFilter}
+                onChange={(e) => setSecDateFilter(e.target.value)}
+                className="rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs text-slate-800 outline-none transition focus:border-purple-400 focus:ring-2 focus:ring-purple-100"
+              />
+              {secFiltersActive && (
+                <button
+                  onClick={() => {
+                    setSecSearch("");
+                    setSecEventFilter("all");
+                    setSecDateFilter("");
+                  }}
+                  className="flex items-center gap-1 rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-600 transition hover:bg-slate-100"
+                >
+                  <IconClose className="h-3 w-3" /> Xóa lọc
+                </button>
+              )}
+            </div>
+
             {logsLoading ? (
               <div className="py-12 text-center text-slate-500 text-sm">Đang tải nhật ký bảo mật...</div>
             ) : securityLogs.length === 0 ? (
               <div className="py-12 text-center text-slate-400 text-sm">Chưa có dữ liệu nhật ký bảo mật.</div>
+            ) : filteredSecurityLogs.length === 0 ? (
+              <div className="py-12 text-center text-slate-400 text-sm">Không có sự kiện nào khớp với bộ lọc hiện tại.</div>
             ) : (
               <table className="w-full text-left text-xs border-collapse">
                 <thead>
@@ -464,7 +542,7 @@ export default function AdminUsersPanel({ authToken, onClose }: AdminUsersPanelP
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {securityLogs.map((log: any, idx: number) => {
+                  {filteredSecurityLogs.map((log: any, idx: number) => {
                     const isError = log.status === "error";
                     const qText = log.question || "";
                     const isPasswordChange = qText.includes("Đổi mật khẩu");
