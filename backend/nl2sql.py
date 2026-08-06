@@ -767,6 +767,15 @@ def ask(question: str, session_id: str = "default", username: str = None, scope_
         {"type": "text", "text": _dynamic_context_note(question, session_id, scope_area_code, scope_employee_code, scope_channel)},
     ]
 
+    # 06/08/2026: GO BO output_config={"effort": "medium"} (them 05/08) sau khi do tren du lieu that.
+    # Effort thap khien model suy luan nong hon MOI luot nen phai di NHIEU VONG tool hon moi ra dap an,
+    # cham tran MAX_TOOL_ROUNDS roi roi vao nhanh fallback "cau hoi qua phuc tap":
+    #   - ty le nguoi dung nhan cau tu choi: 0,5% (2/384, 20/07-04/08) -> 27,0% (10/37, 06/08)
+    #   - ty le cham tran 4 vong: 8,2% -> 37,1%; phan bo so lenh goi don dong dung tai moc 4
+    # KHONG phai do MAX_TOOL_ROUNDS=4: ngay 04/08 tran da la 4 ma ty le tu choi van 0%.
+    # Doi lai, effort chi tiet kiem ~0,005 USD/cau (output 1.473 -> 990 token) trong khi breakpoint
+    # cache o duoi tiet kiem ~0,025 USD/cau (input 14.734 -> 1.791) - bo effort chi mat ~10% khoan
+    # tiet kiem nhung lay lai 27% so cau tra loi duoc. Cac toi uu khac GIU NGUYEN.
     for _ in range(MAX_TOOL_ROUNDS):
         resp = client.messages.create(
             model=MODEL,
@@ -774,7 +783,6 @@ def ask(question: str, session_id: str = "default", username: str = None, scope_
             system=system_blocks,
             tools=tools_for_request,
             messages=messages,
-            output_config={"effort": "medium"},
             extra_headers=_CACHE_BETA_HEADERS,
         )
         compute_and_log_cost(resp.usage, MODEL, question, session_id, username)
@@ -786,14 +794,13 @@ def ask(question: str, session_id: str = "default", username: str = None, scope_
             if not answer_text:
                 # Truong hop hy huu: het ngan sach token cho phan suy luan (thinking) khien khong con
                 # cho phan text tra ve - thu lai 1 lan voi yeu cau tra loi ngay, ngan gon.
-                # 05/08/2026: nguyen nhan goc la Sonnet 5 bat thinking MAC DINH o effort "high" khi
-                # khong truyen output_config - thinking an het MAX_TOKENS truoc khi con cho text tra
-                # loi. Da them effort="medium" o ca 2 lenh goi (dong ~766 va ~785) de giam rui ro nay,
-                # nhung van giu lai co che thu lai nay phong khi van xay ra.
+                # 05/08/2026: nguyen nhan goc la Sonnet 5 bat thinking MAC DINH khi khong truyen
+                # output_config - thinking an het MAX_TOKENS truoc khi con cho text tra loi.
+                # 06/08/2026: da GO effort="medium" o ca 2 lenh goi (xem ghi chu dai o vong lap tren) -
+                # co che thu lai nay GIU NGUYEN vi no van la luoi an toan cho dung tinh huong tren.
                 messages.append({"role": "user", "content": "Hay tra loi ngay bay gio, ngan gon truc tiep."})
                 resp2 = client.messages.create(model=MODEL, max_tokens=MAX_TOKENS, system=system_blocks,
                                                 tools=tools_for_request, messages=messages,
-                                                output_config={"effort": "medium"},
                                                 extra_headers=_CACHE_BETA_HEADERS)
                 compute_and_log_cost(resp2.usage, MODEL, question, session_id, username)
                 answer_text = "".join(b.text for b in resp2.content if b.type == "text").strip()
