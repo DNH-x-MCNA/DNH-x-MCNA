@@ -1685,10 +1685,19 @@ export default function Home() {
                   )}
 
                   {/* TAB 2: DETAILED QUERY AUDIT LOGS TABLE */}
-                  {auditActiveTab === "logs" && (
+                  {auditActiveTab === "logs" && (() => {
+                    // Bang nay chi de hien cau hoi thuc su gui cho AI - loai bo su kien dang nhap/doi
+                    // MK/tao tai khoan (sql bat dau "<auth:"/"<admin:"), vi cac su kien do da co rieng
+                    // tab "Nhat ky Doi MK & Dang nhap" trong Quan ly Tai khoan, tron chung vao day gay
+                    // kho doc (06/08/2026, theo phan hoi truc tiep khi xem bang that).
+                    const queryOnlyLogs = auditData.logs.filter((l) => {
+                      const s = l.sql || "";
+                      return !s.startsWith("<auth:") && !s.startsWith("<admin:");
+                    });
+                    return (
                     <div className="flex flex-col gap-3">
                       <h3 className="text-sm font-bold text-slate-800">
-                        📝 Nhật Ký Truy Vấn Chi Tiết ({auditData.logs.length} dòng gần nhất)
+                        📝 Nhật Ký Truy Vấn Chi Tiết ({queryOnlyLogs.length} dòng gần nhất)
                       </h3>
                       <div className="max-h-[420px] overflow-auto rounded-xl border border-slate-200 shadow-sm">
                         <table className="min-w-full text-xs tabular-nums">
@@ -1705,7 +1714,7 @@ export default function Home() {
                             </tr>
                           </thead>
                           <tbody className="divide-y divide-slate-100 bg-white">
-                            {auditData.logs.map((log, idx) => (
+                            {queryOnlyLogs.map((log, idx) => (
                               <tr key={idx} className="transition hover:bg-slate-50">
                                 <td className="px-4 py-3 text-slate-500 whitespace-nowrap">
                                   {log.ts ? log.ts.replace("T", " ").slice(0, 19) : "—"}
@@ -1744,7 +1753,8 @@ export default function Home() {
                         </table>
                       </div>
                     </div>
-                  )}
+                    );
+                  })()}
                 </div>
               ) : (
                 <div className="flex h-64 items-center justify-center text-sm text-slate-400">
