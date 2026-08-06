@@ -574,6 +574,7 @@ export default function Home() {
   // Rong = dang loc theo "N ngay gan nhat" (auditDays); co gia tri (YYYY-MM-DD) = loc dung 1 ngay.
   const [auditSpecificDate, setAuditSpecificDate] = useState<string>("");
   const [auditUserFilter, setAuditUserFilter] = useState<string>("all");
+  const [auditRoleFilter, setAuditRoleFilter] = useState<string>("all");
   const [auditActiveTab, setAuditActiveTab] = useState<"users" | "weekly" | "logs">("users");
   const [weeklyData, setWeeklyData] = useState<WeeklyAuditData | null>(null);
   const [weeklyOffset, setWeeklyOffset] = useState<number>(0);
@@ -638,7 +639,7 @@ export default function Home() {
     [sessions, effectiveOwnerFilter]
   );
 
-  const fetchAuditData = (daysVal: number, userVal: string, dateVal: string = "") => {
+  const fetchAuditData = (daysVal: number, userVal: string, dateVal: string = "", roleVal: string = "all") => {
     if (!authToken) return;
     setAuditLoading(true);
     const params = new URLSearchParams({ limit: "300" });
@@ -649,6 +650,9 @@ export default function Home() {
     }
     if (userVal && userVal !== "all") {
       params.append("user_filter", userVal);
+    }
+    if (roleVal && roleVal !== "all") {
+      params.append("role_filter", roleVal);
     }
     fetch(`${API_URL}/audit-logs?${params.toString()}`, { headers: authHeaders(authToken) })
       .then((r) => (r.ok ? r.json() : null))
@@ -680,7 +684,7 @@ export default function Home() {
 
   const openAuditDashboard = () => {
     setAuditModalOpen(true);
-    fetchAuditData(auditDays, auditUserFilter, auditSpecificDate);
+    fetchAuditData(auditDays, auditUserFilter, auditSpecificDate, auditRoleFilter);
     fetchWeeklyAuditData(weeklyOffset);
   };
 
@@ -1208,7 +1212,7 @@ export default function Home() {
                     onChange={(e) => {
                       const val = Number(e.target.value);
                       setAuditDays(val);
-                      fetchAuditData(val, auditUserFilter, "");
+                      fetchAuditData(val, auditUserFilter, "", auditRoleFilter);
                     }}
                     className="rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs text-slate-800 outline-none transition focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 disabled:opacity-50"
                   >
@@ -1227,7 +1231,7 @@ export default function Home() {
                     onChange={(e) => {
                       const val = e.target.value;
                       setAuditSpecificDate(val);
-                      fetchAuditData(auditDays, auditUserFilter, val);
+                      fetchAuditData(auditDays, auditUserFilter, val, auditRoleFilter);
                     }}
                     className="rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs text-slate-800 outline-none transition focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
                   />
@@ -1235,7 +1239,7 @@ export default function Home() {
                     <button
                       onClick={() => {
                         setAuditSpecificDate("");
-                        fetchAuditData(auditDays, auditUserFilter, "");
+                        fetchAuditData(auditDays, auditUserFilter, "", auditRoleFilter);
                       }}
                       title="Bỏ lọc theo ngày, quay lại xem theo khoảng thời gian"
                       className="rounded-full p-1 text-slate-400 transition hover:bg-slate-200 hover:text-slate-700"
@@ -1253,7 +1257,7 @@ export default function Home() {
                     onChange={(e) => {
                       const val = e.target.value;
                       setAuditUserFilter(val);
-                      fetchAuditData(auditDays, val, auditSpecificDate);
+                      fetchAuditData(auditDays, val, auditSpecificDate, auditRoleFilter);
                     }}
                     className="max-w-[160px] truncate rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs text-slate-800 outline-none transition focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
                   >
@@ -1265,12 +1269,32 @@ export default function Home() {
                     ))}
                   </select>
                 </div>
+
+                {/* Role Filter Dropdown */}
+                <div className="flex items-center gap-1.5 text-xs font-medium text-slate-600">
+                  <span>Chức vụ:</span>
+                  <select
+                    value={auditRoleFilter}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setAuditRoleFilter(val);
+                      fetchAuditData(auditDays, auditUserFilter, auditSpecificDate, val);
+                    }}
+                    className="rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs text-slate-800 outline-none transition focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
+                  >
+                    <option value="all">Tất cả chức vụ</option>
+                    <option value="c_level">C-Level (Tổng Giám Đốc)</option>
+                    <option value="admin_ops">Admin Vận Hành</option>
+                    <option value="regional_director">Regional Director (Giám đốc Miền)</option>
+                    <option value="qlv">QLV (Quản lý vùng / TDV)</option>
+                  </select>
+                </div>
               </div>
 
               {/* Refresh & Tabs */}
               <div className="flex items-center gap-2">
                 <button
-                  onClick={() => fetchAuditData(auditDays, auditUserFilter, auditSpecificDate)}
+                  onClick={() => fetchAuditData(auditDays, auditUserFilter, auditSpecificDate, auditRoleFilter)}
                   className="flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 transition hover:bg-slate-50 disabled:opacity-60"
                   disabled={auditLoading}
                 >
