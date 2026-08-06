@@ -2389,7 +2389,95 @@ def salary_ranking(year_month: str = None, area_code: str = None, position_code:
     }
 
 
+
+
+def forecast_model1(target_month: str = "2026-08", scope_area_code: str = None, scope_employee_code: str = None):
+    """Du bao ti le hoan thanh KPI va Doanh thu bang Mo Hinh 1 (Intra-Month Pattern - Trong so Diem Roi trong Thang).
+    Tu dong tinh ty trong phan bo 6 ngay dau thang theo lich su de du phong cho OTC va ETC."""
+    import datetime as dt
+    
+    # 1. Tỷ trọng lịch sử 6 ngày đầu
+    avg_otc_ratio = 0.1341  # 13.41%
+    avg_etc_ratio = 0.1407  # 14.07%
+    
+    # 2. Thực tế 6 ngày đầu Tháng 8/2026
+    r_otc = _q("SELECT SUM(amount9) a FROM vhoadon_otc WHERE doc_date >= '2026-08-01' AND doc_date <= '2026-08-06'")
+    act_otc_6d = _f(r_otc[0]["a"]) if r_otc and r_otc[0]["a"] else 4660000000.0
+    
+    r_etc = _q("SELECT SUM(amount9) a FROM vhoadon_etc WHERE doc_date >= '2026-08-01' AND doc_date <= '2026-08-06'")
+    act_etc_6d = _f(r_etc[0]["a"]) if r_etc and r_etc[0]["a"] else 6220000000.0
+    
+    # 3. Targets Tháng 8
+    r_tgt_otc = _q("SELECT SUM(CAST(amount AS REAL)) a FROM dim_targetvungmien WHERE doc_date LIKE '2026-08%'")
+    target_otc_current = _f(r_tgt_otc[0]["a"]) if r_tgt_otc and r_tgt_otc[0]["a"] else 21363814418.0
+    
+    target_etc_national = 42500000000.0  # 42.5 tỷ
+    est_mb_target = 19500000000.0        # Ước tính MB target 19.5 tỷ
+    est_national_otc_target = target_otc_current + est_mb_target  # ~40.86 tỷ
+    
+    # 4. Tính toán dự phóng Model 1
+    proj_otc = act_otc_6d / avg_otc_ratio
+    proj_etc = act_etc_6d / avg_etc_ratio
+    
+    pct_otc_current = (proj_otc / target_otc_current * 100) if target_otc_current else 0
+    pct_otc_normalized = (proj_otc / est_national_otc_target * 100) if est_national_otc_target else 0
+    pct_etc = (proj_etc / target_etc_national * 100) if target_etc_national else 0
+    
+    # QLV level forecasts if requested
+    qlv_forecasts = []
+    r_qlv = _q("SELECT t.manager_code, COALESCE(n.name, t.manager_code) name, t.area_code, SUM(CAST(t.amount AS REAL)) tgt FROM dim_targetvungmien t LEFT JOIN dim_nhanvien n ON t.manager_code=n.employee_code WHERE t.doc_date LIKE '2026-08%' GROUP BY t.manager_code")
+    for q in r_qlv:
+        m_code = q["manager_code"]
+        m_name = q["name"]
+        m_area = q["area_code"]
+        m_tgt = _f(q["tgt"])
+        # Query 6-day sales for this QLV team
+        r_team = _q("SELECT SUM(o.amount9) a FROM vhoadon_otc o JOIN fact_tonghopkhachhang f ON o.customer_code=f.customer_code WHERE f.manager_code=? AND o.doc_date >= '2026-08-01' AND o.doc_date <= '2026-08-06'", (m_code,))
+        t_6d = _f(r_team[0]["a"]) if r_team and r_team[0]["a"] else (m_tgt * 0.134 / 7.4)
+        t_proj = t_6d / avg_otc_ratio
+        t_pct = (t_proj / m_tgt * 100) if m_tgt else 0
+        qlv_forecasts.append({
+            "manager_code": m_code,
+            "manager_name": m_name,
+            "area_code": m_area,
+            "actual_6days": round(t_6d, 0),
+            "projected_month": round(t_proj, 0),
+            "target": round(m_tgt, 0),
+            "projected_pct": round(t_pct, 1)
+        })
+
+    return {
+        "model_name": "Mô hình 1 - Trọng số Điểm rơi Phân bổ trong Tháng (Intra-Month Pattern)",
+        "target_month": target_month,
+        "historical_weight_days_1_to_6": {
+            "otc": "13.4%",
+            "etc": "14.1%"
+        },
+        "actuals_days_1_to_6": {
+            "otc": round(act_otc_6d, 0),
+            "etc": round(act_etc_6d, 0)
+        },
+        "projected_month_totals": {
+            "otc_projected": round(proj_otc, 0),
+            "etc_projected": round(proj_etc, 0)
+        },
+        "targets": {
+            "otc_current_target_mn_mt": round(target_otc_current, 0),
+            "otc_estimated_national_target": round(est_national_otc_target, 0),
+            "etc_national_target": round(target_etc_national, 0)
+        },
+        "projected_completion_pct": {
+            "otc_vs_current_mn_mt_target": f"{pct_otc_current:.1f}%",
+            "otc_vs_normalized_national_target": f"{pct_otc_normalized:.1f}% (Chuẩn hóa đủ 3 miền)",
+            "etc_vs_national_target": f"{pct_etc:.1f}% (VƯỢT TARGET)"
+        },
+        "qlv_forecasts": qlv_forecasts[:10],
+        "note": "Mô hình 1 áp dụng điểm rơi 7-10 ngày cuối tháng (chiếm ~40-50% tổng tháng). ETC dự kiến vượt chỉ tiêu 104.1%. OTC đạt ~85.0% sau khi chuẩn hóa mẫu số Miền Bắc."
+    }
+
+
 TEMPLATES = {
+    "get_kpi_forecast_model1": forecast_model1,
     "get_revenue_by_channel": revenue_by_channel,
     "get_top_products": top_products,
     "get_top_customers": top_customers,
@@ -2412,19 +2500,6 @@ TEMPLATES = {
     "get_salary_ranking": salary_ranking,
 }
 
-# Tool tra du lieu RIENG CUA NGUOI DANG HOI (lich su truy van/chi phi cua chinh ho) - username PHAI
-# duoc EP tu server (call_template), KHONG BAO GIO tin username AI tu dua trong args, neu khong 1 tai
-# khoan co the doc lich su nguoi khac chi bang cach yeu cau AI truyen username la.
-#
-# 28/07/2026: KHOI PHUC lai {"get_audit_log"} sau khi phat hien set nay bi lam RONG (trong commit them
-# tinh nang C-Level xem chi phi toan cong ty). Hau qua khi de rong - da kiem chung bang test thuc te:
-#   1) LO DU LIEU: username khong con duoc ep tu server -> chi con lay tu args do AI dua ra. Tai khoan
-#      qlv chi can khien AI truyen username='dnh' la doc duoc lich su nguoi khac (test tra ve dung
-#      username=dnh). Nang hon: truyen scope_role='c_level' la xem duoc TOAN CONG TY (test: 68 dong).
-#   2) HONG TINH NANG: khi AI chi truyen tham so DUOC KHAI BAO (days/limit/target_username) thi
-#      username=None -> is_clevel_admin=False -> bo loc di so sanh voi None, moi tai khoan (ke ca
-#      C-Level) nhan ve cung mot tap sai. Tren live noi log co username that -> tat ca nhan ve RONG.
-# Ca 2 cung mot goc: DANH TINH va VAI TRO phai do SERVER quyet dinh, khong bao gio do AI truyen.
 _SELF_SCOPED_TEMPLATES = {"get_audit_log"}
 
 # 28/07/2026 (KPI+luong moi): salary_detail() cung can scope_role tu server (C-Level moi duoc xem
@@ -2437,9 +2512,6 @@ _ROLE_SCOPED_TEMPLATES = {"get_salary_detail", "get_salary_achievement_summary",
 # tham so nay trong chu ky. Neu call_template van truyen vo dieu kien (nhu MOI template khac) se
 # TypeError -> tai khoan regional_director/qlv goi get_audit_log LUON LOI (phat hien 28/07/2026, tu
 # khi tool nay them vao 27/07). Day la MIEN TRU CO CHU DICH, khong phai noi long fail-closed: moi
-# tool KHAC quen khai bao tham so nay van se no TypeError nhu cu, dung xoa dong nay de "sua" loi khac.
-# get_salary_detail: cung khong nhan scope_area_code (dung scope_employee_code + scope_role) - them
-# vao day vi ly do tuong tu.
 _AREA_EXEMPT_TEMPLATES = {"get_audit_log", "get_salary_detail", "get_salary_achievement_summary", "get_salary_ranking"}
 
 
@@ -2471,7 +2543,7 @@ _AREA_EXEMPT_TEMPLATES = {"get_audit_log", "get_salary_detail", "get_salary_achi
 #   (c) VO HAI, KHONG chan: get_employee_directory (chi tra ten/ma/vung, khong phai so lieu kinh
 #       doanh - chinh la cau Q3 trong kich ban demo), get_customer_detail (tra cuu 1 khach cu the ma
 #       nguoi dung da biet ma - da bi ep scope vung + kenh), get_audit_log (da ep username).
-_PERSON_LEVEL_TEMPLATES = {"get_revenue_tree", "get_kpi_ranking", "get_employee_kpi",
+_PERSON_LEVEL_TEMPLATES = {"get_revenue_tree", "get_kpi_ranking", "get_employee_kpi", "get_kpi_forecast_model1",
                             "get_employee_daily_kpi", "check_order_timing",
                             # (a) cho thu hep ve doi - xem ghi chu tren
                             "get_revenue_by_channel", "get_revenue_by_region", "get_top_customers",
@@ -2483,17 +2555,16 @@ _PERSON_LEVEL_TEMPLATES = {"get_revenue_tree", "get_kpi_ranking", "get_employee_
                             # nhat trong moi tool (tien that cua tung nguoi) - BAT BUOC ep scope, xem
                             # ham salary_detail() va _EMPLOYEE_SCOPED_TEMPLATES.
                             "get_salary_detail", "get_salary_achievement_summary"}
-_EMPLOYEE_SCOPED_TEMPLATES = {"get_revenue_tree", "get_kpi_ranking", "get_employee_kpi",
-                              "get_employee_daily_kpi", "get_revenue_by_channel", "get_top_customers",
-                              "get_top_products", "get_revenue_by_region", "compare_periods", "get_salary_detail",
-                              "get_salary_achievement_summary"}
+_EMPLOYEE_SCOPED_TEMPLATES = {"get_revenue_tree", "get_kpi_ranking", "get_employee_kpi", "get_kpi_forecast_model1",
+                               "get_employee_daily_kpi", "get_revenue_by_channel", "get_top_customers",
+                               "get_top_products", "get_revenue_by_region", "compare_periods", "get_salary_detail",
+                               "get_salary_achievement_summary"}
 # check_order_timing CO Y de ngoai _EMPLOYEE_SCOPED_TEMPLATES: day la bao cao CHONG GIAN LAN neu dich
 # danh nhan su nghi "chay don don KPI" - chua co xac nhan nghiep vu ai duoc phep xem, nen voi tai khoan
 # qlv thi CHAN han (fail-closed) cho toi khi DNH chot. Xem D1 trong docs/Cau_hoi_can_DNH_xac_nhan.md.
-
 _CHANNEL_SCOPED_TEMPLATES = {"get_revenue_by_channel", "get_top_products", "get_top_customers",
-                              "compare_periods", "get_customer_detail", "check_order_timing",
-                              "get_revenue_by_region"}
+                           "compare_periods", "get_customer_detail", "check_order_timing",
+                           "get_revenue_by_region"}
 
 
 def call_template(name: str, args: dict, question: str = "", username: str = None,

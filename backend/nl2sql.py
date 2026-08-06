@@ -313,6 +313,17 @@ TEMPLATE_TOOLS = [
         },
     },
     {
+        "name": "get_kpi_forecast_model1",
+        "description": "Du bao ti le hoan thanh KPI va Doanh thu bang Mo Hinh 1 (Intra-Month Pattern). Dung khi nguoi dung hoi du doan, du phong, uoc tinh thang 8.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "target_month": {"type": "string", "description": "Thang du bao YYYY-MM"}
+            },
+            "required": []
+        }
+    },
+    {
         "name": "get_kpi_ranking",
         "description": "Xep hang % dat KPI, TOT NHAT truoc - dung khi hoi 'QLV nao dat KPI tot/kem "
                         "nhat', 'xep hang cac vung theo KPI', 'so sanh KPI giua cac QLV/vung'.",
@@ -534,7 +545,10 @@ QUAN TRONG VE CHON TOOL:
   nguoi dang hoi, THUONG KINH DOANH/PHU CAP thang cua 1 nhan vien -> BAT BUOC dung tool tuong ung
   (get_revenue_by_channel, get_top_products, get_top_customers, get_revenue_by_region, get_employee_kpi,
   get_employee_daily_kpi, compare_periods, get_customer_detail, get_employee_directory, check_order_timing,
-  get_inventory_by_region, get_qlv_change_history, get_revenue_tree, get_kpi_ranking,
+  get_inventory_by_region, get_qlv_change_history, get_revenue_tree, get_kpi_ranking`
+    - `get_kpi_forecast_model1`: Dự báo tỷ lệ hoàn thành KPI và Doanh thu Tháng 8/2026 bằng Mô hình 1 (Trọng số Điểm rơi Phân bổ trong Tháng - Intra-Month Pattern). Dùng khi người dùng hỏi "dự đoán", "dự phóng", "dự kiến hoàn thành tháng 8", "ước tính doanh thu tháng 8".
+
+    - `get_kpi_ranking,
   get_revenue_reconciliation, get_receivables_overview, get_audit_log, get_salary_detail,
   get_salary_achievement_summary).
   Day la cac truy van DA DUOC KIEM CHUNG khop voi du lieu goc, KHONG tu sinh SQL thay the.
@@ -649,7 +663,7 @@ def _dynamic_context_note(question: str = "", session_id: str = "", scope_area_c
             # 23/07/2026: truoc day chi liet ke 2 tool; nay moi bao cao hieu suat theo tung nguoi deu bi
             # gioi han theo doi (xem _PERSON_LEVEL_TEMPLATES trong report_templates.py).
             f'MOI bao cao hieu suat theo tung nguoi (get_employee_kpi, get_employee_daily_kpi, '
-            f'get_revenue_tree, get_kpi_ranking) deu CHI tra ve du lieu CUA CHINH DOI HO - khong thay '
+            f'get_revenue_tree, get_kpi_ranking, get_kpi_forecast_model1) deu CHI tra ve du lieu CUA CHINH DOI HO - khong thay '
             f'ten/so lieu KPI ca nhan cua QLV khac hay TDV doi khac trong cung vung '
             f'{scope_area_code or ""} - day la du lieu hieu suat nhay cam cua dong nghiep, khac voi so '
             f'lieu doanh thu/ton kho tong hop thong thuong. '
@@ -702,7 +716,10 @@ def ask(question: str, session_id: str = "default", username: str = None, scope_
     (query_database/query_inventory_receivables) se bi LOAI HAN khoi danh sach tool kha dung - day la
     lop bao ve du lieu THAT (khong phu thuoc AI co lam dung huong dan hay khong).
     scope_employee_code: CHI danh cho tai khoan qlv - gioi han rieng cac bao cao lo hieu suat CA NHAN
-    dong nghiep (get_revenue_tree/get_kpi_ranking) chi con doi cua rieng ho, khong thay KPI ca nhan
+    dong nghiep (get_revenue_tree/get_kpi_ranking`
+    - `get_kpi_forecast_model1`: Dự báo tỷ lệ hoàn thành KPI và Doanh thu Tháng 8/2026 bằng Mô hình 1 (Trọng số Điểm rơi Phân bổ trong Tháng - Intra-Month Pattern). Dùng khi người dùng hỏi "dự đoán", "dự phóng", "dự kiến hoàn thành tháng 8", "ước tính doanh thu tháng 8".
+
+    - `get_kpi_ranking) chi con doi cua rieng ho, khong thay KPI ca nhan
     cua cac QLV khac trong cung vung (khac scope_area_code van cho xem so lieu TONG HOP ca vung o cac
     tool khac nhu doanh thu/ton kho - 2 co che tach biet, xem main.py).
     scope_channel: doc lap voi 2 co che tren - CHI gioi han theo kenh (vd 'OTC') khi tai khoan duoc gan
