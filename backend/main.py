@@ -717,6 +717,13 @@ def get_audit_logs_dashboard(
                 pass
 
         sid = e.get("session_id") or ""
+        # 06/08/2026: KHOI PHUC dong nay - commit d705ad9 (05/08) khi them tab Security Audit Log da
+        # vo tinh GHI DE dong dinh nghia q_key bang 2 dong sql_str/is_security_event ben duoi, trong
+        # khi q_key van con duoc dung o 4 cho phia sau. Hau qua: gap dong log truy van thuong dau tien
+        # la NameError -> endpoint tra 500 -> dashboard Audit Log/Chi phi TRONG HOAN TOAN va frontend
+        # bao "Unexpected token 'I', Internal S... is not valid JSON". Phai khop dung dang khoa cua
+        # cost_per_question (session_id, question_preview[:120]) thi moi tra ve dung chi phi tung cau.
+        q_key = (sid, (e.get("question") or "")[:120])
         sql_str = e.get("sql") or ""
         is_security_event = sql_str.startswith("<auth:") or sql_str.startswith("<admin:")
 
