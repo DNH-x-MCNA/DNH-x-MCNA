@@ -856,7 +856,7 @@ def _chatbot_deep_link(question=None):
     chatbot mới có prefill câu hỏi từ `?q=` hay RBAC theo tài khoản giống hệt không — đó là code
     của người khác (frontend/app.js trong repo này là frontend CŨ, không còn phục vụ nữa).
     """
-    base = os.getenv("CHATBOT_WEB_URL", "http://127.0.0.1:8000").rstrip('/')
+    base = os.getenv("CHATBOT_WEB_URL", "https://dnh-bot.vercel.app").rstrip('/')
     if question:
         return f"{base}/?q={quote(question)}"
     return base
