@@ -87,7 +87,25 @@ def _get_period_warning_alerts(start_dt, end_dt, region=None, channel=None):
     try:
         conn = sqlite3.connect(STATE_DB_PATH)
         cursor = conn.cursor()
-        existing_cols = {row[1] for row in conn.execute("PRAGMA table_info(alert_severity_log)").fetchall()}
+        
+        # Ensure table and schema exist before reading (in case no alert was triggered yet)
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS alert_severity_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                alert_name TEXT NOT NULL,
+                severity TEXT NOT NULL,
+                sent_at TIMESTAMP NOT NULL,
+                region TEXT,
+                alert_key TEXT,
+                issue TEXT,
+                channel TEXT
+            )
+        ''')
+        existing_cols = {row[1] for row in cursor.execute("PRAGMA table_info(alert_severity_log)").fetchall()}
+        for col in ["region", "alert_key", "issue", "channel"]:
+            if col not in existing_cols:
+                cursor.execute(f"ALTER TABLE alert_severity_log ADD COLUMN {col} TEXT")
+        conn.commit()
         has_channel = "channel" in existing_cols
         
         sql = '''
@@ -302,7 +320,7 @@ def get_etc_return_rate(force_refresh=False):
                 etc_sales = float(s_row[0]) if s_row else 0.0
 
                 r_row = conn.execute(text('''
-                    SELECT COALESCE(SUM(TotalAmount), 0) FROM dbo.BRVSX_TraLai
+                    SELECT COALESCE(SUM(Amount9), 0) FROM dbo.BRVSX_TraLai
                     WHERE DocDate >= :start AND DocDate < :end
                 '''), {"start": month_start.strftime("%Y-%m-%d"), "end": now.strftime("%Y-%m-%d %H:%M:%S")}).fetchone()
                 etc_returns = float(r_row[0]) if r_row else 0.0
