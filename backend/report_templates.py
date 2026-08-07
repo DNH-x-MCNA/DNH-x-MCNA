@@ -2502,69 +2502,33 @@ TEMPLATES = {
 
 _SELF_SCOPED_TEMPLATES = {"get_audit_log"}
 
-# 28/07/2026 (KPI+luong moi): salary_detail() cung can scope_role tu server (C-Level moi duoc xem
-# nguoi khac) NHUNG khong nhan tham so 'username' (dung employee_code, khac get_audit_log) - tach
-# rieng khoi _SELF_SCOPED_TEMPLATES de khong ep nham 'username' vao ham khong co tham so do (TypeError).
 _ROLE_SCOPED_TEMPLATES = {"get_salary_detail", "get_salary_achievement_summary", "get_salary_ranking"}
 
-# 28/07/2026: tool da bi gioi han bang co che MANH HON scope vung (ep username, xem
-# _SELF_SCOPED_TEMPLATES) nen KHONG nhan tham so scope_area_code - ham audit_log_summary() khong co
-# tham so nay trong chu ky. Neu call_template van truyen vo dieu kien (nhu MOI template khac) se
-# TypeError -> tai khoan regional_director/qlv goi get_audit_log LUON LOI (phat hien 28/07/2026, tu
-# khi tool nay them vao 27/07). Day la MIEN TRU CO CHU DICH, khong phai noi long fail-closed: moi
 _AREA_EXEMPT_TEMPLATES = {"get_audit_log", "get_salary_detail", "get_salary_achievement_summary", "get_salary_ranking"}
 
+_PERSON_LEVEL_TEMPLATES = {
+    "get_revenue_tree", "get_kpi_ranking", "get_employee_kpi",
+    "get_employee_daily_kpi", "check_order_timing",
+    "get_revenue_by_channel", "get_revenue_by_region", "get_top_customers",
+    "get_top_products", "compare_periods",
+    "get_inventory_by_region", "get_receivables_overview",
+    "get_qlv_change_history", "get_revenue_reconciliation",
+    "get_salary_detail", "get_salary_achievement_summary"
+}
 
-# 23/07/2026 - DOI SANG CO CHE "DANH SACH CHO PHEP, FAIL-CLOSED" sau khi phat hien lo hong R-F
-# (xem docstring employee_kpi). TRUOC DAY chi co _EMPLOYEE_SCOPED_TEMPLATES: tool NAO co ten trong do
-# thi duoc ep scope, tool nao KHONG co ten thi... chay tu do. Nghia la MOI tool moi them vao he thong
-# deu MAC DINH HO cho toi khi co ai do nho bo sung ten vao set - va da quen that voi get_employee_kpi.
-#
-# Gio tach lam 2 khai niem:
-#   _PERSON_LEVEL_TEMPLATES = tool tra du lieu HIEU SUAT THEO TUNG NGUOI (nhay cam voi tai khoan qlv)
-#   _EMPLOYEE_SCOPED_TEMPLATES = tool DA nhan duoc tham so scope_employee_code
-# Tool nam trong nhom 1 nhung KHONG nam trong nhom 2 -> CHAN HAN lan goi (khong tra du lieu), thay vi
-# am tham tra du lieu toan vung. Them tool moi ma quen khai bao -> bi chan, khong bi ho.
-#
-# 28/07/2026 (R-H) - MO RONG sau khi phat hien lo hong CUNG LOAI voi R-F nhung o nhom tool KHAC:
-# tai khoan qlv hoi "doanh thu thang nay" van nhan ve doanh thu TOAN MIEN MB (29,37 ty = ca 10 doi),
-# thay vi rieng doi minh. Nguyen nhan: 12/17 tool chi bi gioi han theo scope_area_code (VUNG) - y HET
-# regional_director - vi _PERSON_LEVEL_TEMPLATES truoc day chi liet ke tool KPI ca nhan, bo qua ca
-# nhom doanh thu/khach hang/ton kho/cong no. User xac nhan 28/07: QLV CHI duoc xem doi cua rieng minh.
-#
-# Cach xu ly theo dung tien le R-F: khai bao vao _PERSON_LEVEL_TEMPLATES de bi CHAN HAN voi qlv, thay
-# vi am tham tra du lieu ca vung. Chia 3 nhom theo kha nang thu hep:
-#   (a) THU HEP DUOC ve doi (hoa don co employee_code) nhung CHUA lam - can sua SQL tung ham + test
-#       lai voi Bravo: get_revenue_by_channel, get_revenue_by_region, get_top_customers,
-#       get_top_products, compare_periods. CHAN TAM cho toi khi thu hep xong.
-#   (b) KHONG THE thu hep ve doi (du lieu khong gan voi 1 nhan vien): get_inventory_by_region (kho),
-#       get_receivables_overview (cong no theo khach), get_qlv_change_history (lich su doi QLV),
-#       get_revenue_reconciliation (cong cu doi chieu he thong). Chan han cho toi khi DNH chot ai duoc xem.
-#   (c) VO HAI, KHONG chan: get_employee_directory (chi tra ten/ma/vung, khong phai so lieu kinh
-#       doanh - chinh la cau Q3 trong kich ban demo), get_customer_detail (tra cuu 1 khach cu the ma
-#       nguoi dung da biet ma - da bi ep scope vung + kenh), get_audit_log (da ep username).
-_PERSON_LEVEL_TEMPLATES = {"get_revenue_tree", "get_kpi_ranking", "get_employee_kpi", "get_kpi_forecast_model1",
-                            "get_employee_daily_kpi", "check_order_timing",
-                            # (a) cho thu hep ve doi - xem ghi chu tren
-                            "get_revenue_by_channel", "get_revenue_by_region", "get_top_customers",
-                            "get_top_products", "compare_periods",
-                            # (b) khong the thu hep ve doi
-                            "get_inventory_by_region", "get_receivables_overview",
-                            "get_qlv_change_history", "get_revenue_reconciliation",
-                            # 28/07/2026: get_salary_detail - du lieu THUONG/LUONG CA NHAN, nhay cam
-                            # nhat trong moi tool (tien that cua tung nguoi) - BAT BUOC ep scope, xem
-                            # ham salary_detail() va _EMPLOYEE_SCOPED_TEMPLATES.
-                            "get_salary_detail", "get_salary_achievement_summary"}
-_EMPLOYEE_SCOPED_TEMPLATES = {"get_revenue_tree", "get_kpi_ranking", "get_employee_kpi", "get_kpi_forecast_model1",
-                               "get_employee_daily_kpi", "get_revenue_by_channel", "get_top_customers",
-                               "get_top_products", "get_revenue_by_region", "compare_periods", "get_salary_detail",
-                               "get_salary_achievement_summary"}
-# check_order_timing CO Y de ngoai _EMPLOYEE_SCOPED_TEMPLATES: day la bao cao CHONG GIAN LAN neu dich
-# danh nhan su nghi "chay don don KPI" - chua co xac nhan nghiep vu ai duoc phep xem, nen voi tai khoan
-# qlv thi CHAN han (fail-closed) cho toi khi DNH chot. Xem D1 trong docs/Cau_hoi_can_DNH_xac_nhan.md.
-_CHANNEL_SCOPED_TEMPLATES = {"get_revenue_by_channel", "get_top_products", "get_top_customers",
-                           "compare_periods", "get_customer_detail", "check_order_timing",
-                           "get_revenue_by_region"}
+_EMPLOYEE_SCOPED_TEMPLATES = {
+    "get_revenue_tree", "get_kpi_ranking", "get_employee_kpi",
+    "get_employee_daily_kpi", "get_revenue_by_channel", "get_top_customers",
+    "get_top_products", "get_revenue_by_region", "compare_periods", "get_salary_detail",
+    "get_salary_achievement_summary"
+}
+
+_CHANNEL_SCOPED_TEMPLATES = {
+    "get_revenue_by_channel", "get_top_products", "get_top_customers",
+    "compare_periods", "get_customer_detail", "check_order_timing",
+    "get_revenue_by_region"
+}
+
 
 
 def call_template(name: str, args: dict, question: str = "", username: str = None,

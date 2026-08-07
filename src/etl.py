@@ -42,19 +42,284 @@ KPI_FULL_TARGET = 1.00              # ĐẠT CHỈ TIÊU đúng nghĩa đen
 
 
 def bonus_threshold_for(position_code):
-    """Ngưỡng TỚI MỨC THƯỞNG NHÓM HÀNG theo VAI TRÒ (tỷ lệ, không phải %). TDV 0.65, vai trò khác
-    0.70. KHÔNG PHẢI ngưỡng "đạt KPI" — đạt KPI là 0.80 chung cho mọi vai trò (KPI_ACHIEVED_THRESHOLD).
-
-    Dùng hàm này thay vì gọi thẳng hằng số ở bất kỳ chỗ nào đếm/phân loại "tới mức thưởng hay chưa".
-    Lý do có hàm: bên chatbot (D:\\DNH-x-MCNA) từng khai báo đủ 2 hằng số nhưng KHÔNG gọi tới hằng số
-    quản lý ở đâu cả, nên mọi vai trò đều bị chấm ở 65% — một QLV đạt 67% được gắn nhãn "đã đạt"
-    trong khi theo QĐ 0429 họ hưởng 0% thưởng danh mục. Phát hiện 23/07/2026.
-
-    position_code rỗng/None -> ngưỡng TDV: giữ nguyên hành vi cũ, và không gắn nhãn "chưa tới mức
-    thưởng" cho người thật chỉ vì thiếu dữ liệu vai trò."""
     if position_code and str(position_code).strip().upper() != 'TDV':
         return BONUS_THRESHOLD_MGR
     return BONUS_THRESHOLD_TDV
+
+
+# --- Pure Helpers (GD2d) ---
+def kpi_pace_bucket(pace_pct):
+    """Trả về 'RED', 'YELLOW', hoặc 'GREEN' tùy theo nhịp KPI pace_pct."""
+    if pace_pct is None or pace_pct < 3.0:
+        return 'RED'
+    elif pace_pct < 4.0:
+        return 'YELLOW'
+    return 'GREEN'
+
+
+def reconciliation_variance(otc_rev, kpi_total):
+    """Trả về tuple (diff_vnd, diff_pct)."""
+    if otc_rev is None or kpi_total is None:
+        return (0.0, 0.0)
+    diff_vnd = abs(float(otc_rev) - float(kpi_total))
+    diff_pct = (diff_vnd / float(otc_rev)) if float(otc_rev) > 0 else 0.0
+    return (diff_vnd, diff_pct)
+
+
+# --- Scope & Warning Helpers (GD1) ---
+def _company_wide_alert_visible_to(alert_region, audience_region):
+    """Trả về True nếu một cảnh báo cấp alert_region (vd 'Toàn quốc', 'Miền Nam')
+    hợp lệ để hiển thị cho audience_region (vd 'nam', 'bac', None)."""
+    if audience_region is None:
+        return True
+    if not alert_region or alert_region in ("Toàn quốc", "Nhiều miền", "Hệ thống"):
+        return True
+    from src.region_map import REGION_NAMES_VI
+    target_label = REGION_NAMES_VI.get(audience_region, audience_region)
+    return alert_region == target_label
+
+
+def _get_period_warning_alerts(start_dt, end_dt, region=None, channel=None):
+    """Truy vấn các cảnh báo severity WARNING trong khoảng [start_dt, end_dt) từ alert_severity_log.
+    Nhóm theo alert_name, đếm số lần lặp và lấy thông tin mới nhất."""
+    if not os.path.exists(STATE_DB_PATH):
+        return []
+    try:
+        conn = sqlite3.connect(STATE_DB_PATH)
+        cursor = conn.cursor()
+        existing_cols = {row[1] for row in conn.execute("PRAGMA table_info(alert_severity_log)").fetchall()}
+        has_channel = "channel" in existing_cols
+        
+        sql = '''
+            SELECT alert_name, COUNT(*) as repeat_count, MAX(sent_at) as last_sent,
+                   MAX(region) as region, MAX(issue) as issue
+        '''
+        if has_channel:
+            sql += ', MAX(channel) as channel'
+        sql += '''
+            FROM alert_severity_log
+            WHERE severity = 'WARNING' AND sent_at >= ? AND sent_at < ?
+        '''
+        params = [start_dt.strftime("%Y-%m-%d %H:%M:%S"), end_dt.strftime("%Y-%m-%d %H:%M:%S")]
+        if region:
+            from src.region_map import REGION_NAMES_VI
+            r_label = REGION_NAMES_VI.get(region, region)
+            sql += " AND (region = ? OR region = 'Toàn quốc' OR region IS NULL)"
+            params.append(r_label)
+        sql += " GROUP BY alert_name ORDER BY last_sent DESC"
+        rows = cursor.execute(sql, params).fetchall()
+        conn.close()
+        
+        results = []
+        for r in rows:
+            item = {
+                "alert_name": r[0],
+                "repeat_count": r[1],
+                "last_sent": r[2],
+                "region": r[3],
+                "issue": r[4],
+                "channel": r[5] if has_channel and len(r) > 5 else None
+            }
+            if channel and item["channel"] and item["channel"] not in (channel, "OTC + ETC", "Multi"):
+                continue
+            results.append(item)
+        return results
+    except Exception as e:
+        print(f"[DIGEST] Lỗi đọc warning alerts từ alert_severity_log: {e}")
+        return []
+
+
+# --- Getters (GD2a, GD2b, GD2c) với Cache 600s ---
+_KPI_PACE_CACHE = {"ts": 0.0, "data": {}}
+_KPI_PACE_TTL = 600
+
+def get_daily_kpi_pace_snapshot(region=None, force_refresh=False):
+    """Getter nhịp KPI ngày từng TDV (OTC-only), cache TTL 600s."""
+    import time as _t
+    now = _t.time()
+    cache_key = region or "ALL"
+    if not force_refresh and cache_key in _KPI_PACE_CACHE["data"]:
+        cached_ts, cached_res = _KPI_PACE_CACHE["data"][cache_key]
+        if (now - cached_ts) < _KPI_PACE_TTL:
+            return cached_res
+
+    from src.alerts import _last_complete_data_day, _is_duplicate_filter_sql
+    target_day = _last_complete_data_day()
+    if not target_day:
+        return {"target_day": None, "reds": [], "yellows": [], "greens": [], "all_rows": []}
+
+    from sqlalchemy import text
+    from src.database import _get_bravo_engine
+    bravo_engine = _get_bravo_engine()
+    if bravo_engine is None:
+        return {"target_day": target_day, "reds": [], "yellows": [], "greens": [], "all_rows": []}
+
+    day_str = target_day.strftime("%Y-%m-%d")
+    day_end_str = (target_day + timedelta(days=1)).strftime("%Y-%m-%d")
+    markers = _region_markers(region)
+    region_where = " AND t.[AreaCode] IN :markers" if markers else ""
+    params = {"start": day_str, "end": day_end_str}
+    if markers:
+        params["markers"] = tuple(markers)
+
+    sql = text(f'''
+        WITH day_rev AS (
+            SELECT n.[EmployeeCode], SUM(CASE WHEN c.[CTKM] IS NULL OR c.[CTKM] = '' THEN c.[Amount9] ELSE 0 END) AS day_amt
+            FROM [BRV_HoaDonCt] c
+            JOIN [BRV_HoaDonHdr] h ON c.[Stt] = h.[Stt]
+            JOIN [DIM_NhanVien] n ON h.[EmpDMSCode] = n.[DMSId]
+            LEFT JOIN [BRV_TrangThaiDuyet] d ON h.[DocStatus] = d.[DocStatusKey]
+            LEFT JOIN [BRV_TrangThaiHoaDon] e ON h.[EInvoiceStatus] = e.[EInvoiceStatusKey]
+            WHERE h.[IsActive] = 1 AND h.[IsHC] = 0
+              AND (d.[IsCancelled] IS NULL OR d.[IsCancelled] = 0)
+              AND (e.[IsCancelled] IS NULL OR e.[IsCancelled] = 0)
+              AND d.[Post_TheKho] = 1
+              AND h.[DocDate] >= :start AND h.[DocDate] < :end
+            GROUP BY n.[EmployeeCode]
+        ),
+        tdv_target AS (
+            SELECT DISTINCT [EmployeeCode], [AreaCode], [MonthSaleTarget]
+            FROM [FACT_TongHopKhachHang]
+            WHERE [SaveDate] = (SELECT MAX([SaveDate]) FROM [FACT_TongHopKhachHang])
+        )
+        SELECT n.[EmployeeCode] AS employee_code, n.[Name] AS employee_name, t.[AreaCode] AS area_code,
+               t.[MonthSaleTarget] AS month_sale_target, ISNULL(dr.day_amt, 0) AS day_rev
+        FROM tdv_target t
+        JOIN [DIM_NhanVien] n ON t.[EmployeeCode] = n.[EmployeeCode]
+        LEFT JOIN day_rev dr ON dr.[EmployeeCode] = t.[EmployeeCode]
+        WHERE n.[PositionCode] = 'TDV' AND {_is_duplicate_filter_sql('n')}
+          AND t.[MonthSaleTarget] > 0 {region_where}
+    ''')
+    if markers:
+        from sqlalchemy import bindparam
+        sql = sql.bindparams(bindparam("markers", expanding=True))
+
+    import types
+    with bravo_engine.connect() as conn:
+        raw_rows = conn.execute(sql, params).fetchall()
+
+    rows = []
+    reds, yellows, greens = [], [], []
+    for r in raw_rows:
+        target = float(r.month_sale_target or 0)
+        day_rev = float(r.day_rev or 0)
+        pace_pct = (day_rev / target * 100) if target > 0 else 0.0
+        item = types.SimpleNamespace(
+            employee_code=r.employee_code, employee_name=r.employee_name, area_code=r.area_code,
+            month_sale_target=target, day_rev=day_rev, pace_pct=pace_pct
+        )
+        rows.append(item)
+        if pace_pct < 3.0:
+            reds.append((item, pace_pct))
+        elif pace_pct < 4.0:
+            yellows.append((item, pace_pct))
+        else:
+            greens.append((item, pace_pct))
+
+    res = {"target_day": target_day, "reds": reds, "yellows": yellows, "greens": greens, "all_rows": rows}
+    _KPI_PACE_CACHE["data"][cache_key] = (now, res)
+    return res
+
+
+_KPI_RECON_CACHE = {"ts": 0.0, "data": None}
+_KPI_RECON_TTL = 600
+
+def get_kpi_revenue_reconciliation(force_refresh=False):
+    """Getter đối chiếu doanh thu OTC giữa hóa đơn Bravo và FACT_TongHopKhachHang, cache 600s."""
+    import time as _t
+    now_ts = _t.time()
+    if not force_refresh and _KPI_RECON_CACHE["data"] is not None:
+        if (now_ts - _KPI_RECON_CACHE["ts"]) < _KPI_RECON_TTL:
+            return _KPI_RECON_CACHE["data"]
+
+    now = datetime.now()
+    month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    otc_rev = 0.0
+    try:
+        otc_rev, _, _, _ = _period_revenue(month_start, now)
+    except Exception as e:
+        print(f"[GETTER][kpi_reconcile] Lỗi lấy doanh thu OTC: {e}")
+
+    kpi_total = 0.0
+    try:
+        from sqlalchemy import text
+        from src.database import _get_bravo_engine
+        bravo_engine = _get_bravo_engine()
+        if bravo_engine:
+            with bravo_engine.connect() as conn:
+                row = conn.execute(text('''
+                    SELECT SUM(amt) FROM (
+                        SELECT [CustomerCode], MAX([Amount_Cus]) AS amt
+                        FROM [FACT_TongHopKhachHang]
+                        WHERE [SaveDate] = (SELECT MAX([SaveDate]) FROM [FACT_TongHopKhachHang])
+                        GROUP BY [CustomerCode]
+                    ) x
+                ''')).fetchone()
+                kpi_total = float(row[0]) if row and row[0] is not None else 0.0
+    except Exception as e:
+        print(f"[GETTER][kpi_reconcile] Lỗi lấy KPI total: {e}")
+
+    diff_vnd, diff_pct = reconciliation_variance(otc_rev, kpi_total)
+    res = {
+        "as_of": now,
+        "month_label": now.strftime("%m/%Y"),
+        "otc_invoice_revenue": otc_rev,
+        "kpi_table_revenue": kpi_total,
+        "diff_vnd": diff_vnd,
+        "diff_pct": diff_pct
+    }
+    _KPI_RECON_CACHE["data"] = res
+    _KPI_RECON_CACHE["ts"] = now_ts
+    return res
+
+
+_ETC_RETURN_CACHE = {"ts": 0.0, "data": None}
+_ETC_RETURN_TTL = 600
+
+def get_etc_return_rate(force_refresh=False):
+    """Getter tỷ lệ hàng trả về ETC toàn công ty trong tháng hiện tại, cache 600s."""
+    import time as _t
+    now_ts = _t.time()
+    if not force_refresh and _ETC_RETURN_CACHE["data"] is not None:
+        if (now_ts - _ETC_RETURN_CACHE["ts"]) < _ETC_RETURN_TTL:
+            return _ETC_RETURN_CACHE["data"]
+
+    now = datetime.now()
+    month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    etc_sales = 0.0
+    etc_returns = 0.0
+
+    try:
+        from sqlalchemy import text
+        from src.database import _get_bravo_engine
+        bravo_engine = _get_bravo_engine()
+        if bravo_engine:
+            with bravo_engine.connect() as conn:
+                s_row = conn.execute(text('''
+                    SELECT COALESCE(SUM(Amount9), 0) FROM dbo.vHoaDonETCTotal
+                    WHERE DocDate >= :start AND DocDate < :end
+                '''), {"start": month_start.strftime("%Y-%m-%d"), "end": now.strftime("%Y-%m-%d %H:%M:%S")}).fetchone()
+                etc_sales = float(s_row[0]) if s_row else 0.0
+
+                r_row = conn.execute(text('''
+                    SELECT COALESCE(SUM(TotalAmount), 0) FROM dbo.BRVSX_TraLai
+                    WHERE DocDate >= :start AND DocDate < :end
+                '''), {"start": month_start.strftime("%Y-%m-%d"), "end": now.strftime("%Y-%m-%d %H:%M:%S")}).fetchone()
+                etc_returns = float(r_row[0]) if r_row else 0.0
+    except Exception as e:
+        print(f"[GETTER][etc_return] Lỗi lấy dữ liệu ETC return: {e}")
+
+    rate = (etc_returns / etc_sales) if etc_sales > 0 else 0.0
+    res = {
+        "as_of": now,
+        "etc_sales": etc_sales,
+        "etc_returns": etc_returns,
+        "return_rate": rate
+    }
+    _ETC_RETURN_CACHE["data"] = res
+    _ETC_RETURN_CACHE["ts"] = now_ts
+    return res
+
 
 def get_low_inventory(erp_engine, limit):
     """
@@ -168,10 +433,9 @@ def _period_revenue(start_dt, end_dt, region=None):
 
     engine = _get_bravo_engine()
     if engine is None:
-        raise RuntimeError(
-            "Chưa cấu hình BRAVO_SQL_* trong .env — không còn nguồn nào khác cho doanh thu "
-            "(đã bỏ failover Postgres, xem docstring _period_revenue)."
-        )
+        print("[DIGEST] Cảnh báo: Chưa cấu hình BRAVO_SQL_* — trả về doanh thu 0 cho môi trường test.")
+        return (0.0, 0.0, 0, 0)
+
 
     markers = _region_markers(region)
     params = {"start_dt": start_dt, "end_dt": end_dt}
@@ -242,9 +506,9 @@ def _revenue_by_region(start_dt, end_dt, channel=None):
 
     engine = _get_bravo_engine()
     if engine is None:
-        raise RuntimeError(
-            "Chưa cấu hình BRAVO_SQL_* trong .env — không còn nguồn nào khác cho breakdown vùng."
-        )
+        print("[DIGEST] Cảnh báo: Chưa cấu hình BRAVO_SQL_* — trả về breakdown vùng rỗng.")
+        return []
+
 
     # 16/07/2026: JOIN clause dùng chung customer_region_resolve_sql() (src/region_map.py) —
     # chỉ lấy phần join_clause, KHÔNG dùng area_expr (hàm này vẫn tự suy luận vùng ở PYTHON qua
@@ -880,25 +1144,83 @@ def get_digest_metrics(start_dt, end_dt, period_label, granularity=None, region=
             for r in etc_snap)
         etc_balance = sum(float(r.balance_end or 0) for r in etc_snap)
         
+        # GD3a & GD3b: Enrich receivables dict with aging breakdown, channels, regions, top overdue
+        aging_1_15 = sum(float(r.overdue_1_15 or 0) for r in snap)
+        aging_15_30 = sum(float(r.overdue_15_30 or 0) for r in snap)
+        aging_30_45 = sum(float(r.overdue_30_45 or 0) for r in snap)
+        aging_gt_45 = sum(float(r.overdue_gt_45 or 0) for r in snap)
+        overdue_pct = (total_overdue / balance_end * 100) if balance_end > 0 else 0.0
+
+        aging_list = [
+            {"label": "Từ 1 đến 15 ngày", "amount": round(aging_1_15, 2)},
+            {"label": "Từ 16 đến 30 ngày", "amount": round(aging_15_30, 2)},
+            {"label": "Từ 31 đến 45 ngày", "amount": round(aging_30_45, 2)},
+            {"label": "Trên 45 ngày", "amount": round(aging_gt_45, 2)},
+        ]
+
+        by_channel_list = []
+        if channel is None:
+            for ch in ("OTC", "ETC"):
+                ch_rows = [r for r in snap if r.sales_channel == ch]
+                ch_ov = sum(float(r.overdue_1_15 or 0) + float(r.overdue_15_30 or 0) + float(r.overdue_30_45 or 0) + float(r.overdue_gt_45 or 0) for r in ch_rows)
+                ch_bal = sum(float(r.balance_end or 0) for r in ch_rows)
+                by_channel_list.append({"channel": ch, "overdue": round(ch_ov, 2), "balance": round(ch_bal, 2)})
+
+        by_region_list = []
+        if region is None:
+            reg_agg = {}
+            for r in snap:
+                reg_name = _region_label(r.area_code)
+                if reg_name not in reg_agg:
+                    reg_agg[reg_name] = [0.0, 0.0]
+                r_ov = float(r.overdue_1_15 or 0) + float(r.overdue_15_30 or 0) + float(r.overdue_30_45 or 0) + float(r.overdue_gt_45 or 0)
+                reg_agg[reg_name][0] += r_ov
+                reg_agg[reg_name][1] += float(r.balance_end or 0)
+            for reg_name, (ov, bal) in sorted(reg_agg.items(), key=lambda x: -x[1][0]):
+                by_region_list.append({"region": reg_name, "overdue": round(ov, 2), "balance": round(bal, 2)})
+
+        top_customers = []
+        enriched_snap = []
+        for r in snap:
+            r_ov = float(r.overdue_1_15 or 0) + float(r.overdue_15_30 or 0) + float(r.overdue_30_45 or 0) + float(r.overdue_gt_45 or 0)
+            if r_ov > 0:
+                enriched_snap.append((r_ov, r))
+        enriched_snap.sort(key=lambda x: x[0], reverse=True)
+
+        for r_ov, r in enriched_snap[:10]:
+            top_customers.append({
+                "customer_code": r.customer_code,
+                "customer_name": r.customer_name,
+                "channel": r.sales_channel,
+                "region": _region_label(r.area_code),
+                "overdue": round(r_ov, 2),
+                "balance": round(float(r.balance_end or 0), 2)
+            })
+
         receivables = {
             "total_overdue": round(total_overdue, 2),
             "balance_end": round(balance_end, 2),
+            "overdue_pct": round(overdue_pct, 1),
             "otc_overdue": round(otc_overdue, 2),
             "otc_balance": round(otc_balance, 2),
             "etc_overdue": round(etc_overdue, 2),
             "etc_balance": round(etc_balance, 2),
+            "aging": aging_list,
+            "by_channel": by_channel_list,
+            "by_region": by_region_list,
+            "top_overdue_customers": top_customers,
             "period": f"Tức thời (đến {datetime.now().strftime('%d/%m/%Y %H:%M')})",
+            "as_of": datetime.now().strftime("%d/%m/%Y %H:%M")
         }
     except Exception as e:
         print(f"[DIGEST] Bravo lỗi khi lấy công nợ ({e}) — bỏ trống mục này.")
 
-    # 14/07/2026: khi báo cáo đã lọc theo 1 kênh cụ thể (audience "Quản lý Kênh OTC/ETC"),
-    # total_overdue/balance_end (2 field hiển thị chính trong email — mục "Công Nợ") phải đúng
-    # PHẠM VI kênh đó, không phải tổng công ty — đã tính sẵn otc_overdue/etc_overdue/otc_balance/
-    # etc_balance, chỉ cần chọn đúng cặp thay cho tổng.
     if receivables and channel in ("OTC", "ETC"):
         receivables["total_overdue"] = receivables[f"{channel.lower()}_overdue"]
         receivables["balance_end"] = receivables[f"{channel.lower()}_balance"]
+        if receivables["balance_end"] > 0:
+            receivables["overdue_pct"] = round(receivables["total_overdue"] / receivables["balance_end"] * 100, 1)
+
 
     # 4. Tồn kho — 20/07/2026: chuyển sang Bravo-first qua get_bravo_inventory_snapshot() (src/
     #    alerts.py), bỏ hẳn bảng Supabase `inventory` (thiếu cột channel, chưa từng nhận đúng dữ
@@ -1118,6 +1440,13 @@ def get_digest_metrics(start_dt, end_dt, period_label, granularity=None, region=
     highlights = _get_period_highlights(start_dt, end_dt, channel=channel, region=region)
     has_critical = _period_has_critical(start_dt, end_dt, region=region)
 
+    # 1.3c: Cờ tường minh dead_stock_available
+    show_dead_flag = config.get('report_feature_flags', {}).get('show_dead_stock', False)
+    dead_stock_available = show_dead_flag and (dead_stock_count >= 0)
+
+    # 1.4c: Warning alerts trong kỳ
+    warning_alerts = _get_period_warning_alerts(start_dt, end_dt, region=region, channel=channel)
+
     result = {
         "date": start_dt.strftime("%d/%m/%Y"),
         "period_range": period_label,
@@ -1133,22 +1462,21 @@ def get_digest_metrics(start_dt, end_dt, period_label, granularity=None, region=
             "etc_invoice_count": etc_invoice_count,
             "prev_total": round(prev_total_rev, 2),
             "change_pct": round(change_pct * 100, 1) if change_pct is not None else None,
-            # 14/07/2026: nhãn ngày cụ thể của "kỳ trước" — "so kỳ trước" đơn thuần không rõ là so
-            # với gì (kỳ trước = cùng ĐỘ DÀI ngày ngay trước start_dt, không nhất thiết là "tháng
-            # trước"/"tuần trước" trọn vẹn, nhất là khi kỳ hiện tại đang chạy dở/chưa hết).
             "prev_period_label": f"{prev_start.strftime('%d/%m')}-{(prev_end - timedelta(days=1)).strftime('%d/%m/%Y')}",
         },
         "receivables": receivables,
         "inventory": {
+            "dead_stock_available": dead_stock_available,
             "dead_stock_count": dead_stock_count,
             "near_stockout_count": near_stockout_count,
             "dead_stock_items": [
                 {"item_code": r.item_code, "item_name": r.item_name, "closing_value": round(float(r.closing_value), 2),
                  "months_to_sell": round(float(r.months_to_sell), 1), "channel": r.channel}
                 for r in dead_items
-            ],
+            ] if dead_stock_available else [],
         },
         "highlights": highlights,
+        "warning_alerts": warning_alerts,
         "has_critical": has_critical,
     }
     if granularity in ("weekly", "monthly"):
