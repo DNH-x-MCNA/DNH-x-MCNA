@@ -107,7 +107,8 @@ def run_all_alert_checks(config, erp_engine=None, crm_engine=None):
     check_company_overdue_ratio_alert()
     check_overdue_customer_new_orders_alert()
     check_debt_aging_migration_alert()
-    check_dead_stock_alert()
+    if flags.get('dead_stock_check', True):
+        check_dead_stock_alert()
     if flags.get('near_expiry_check', True):
         check_near_expiry_alert()
     check_customer_churn_alert()
@@ -145,16 +146,21 @@ def _digest_table(metrics):
     if scoped_channel != "OTC":
         rows.append(["Số hóa đơn ETC", str(metrics['revenue']['etc_invoice_count'])])
     rows.append(["Tổng số hóa đơn", str(metrics['revenue']['invoice_count'])])
-    rows.append(["Mặt hàng tồn chết", str(metrics['inventory']['dead_stock_count'])])
+    
+    # 1.3d: Bỏ dòng Mặt hàng tồn chết khi dead_stock_available là False
+    if metrics.get('inventory', {}).get('dead_stock_available') != False:
+        rows.append(["Mặt hàng tồn chết", str(metrics['inventory']['dead_stock_count'])])
+        
     rows.append(["Mặt hàng sắp hết hàng", str(metrics['inventory']['near_stockout_count'])])
     for h in metrics.get('highlights', []):
         rows.append([f"Cảnh báo: {h['label']}", f"{h['value_display']} (lúc {h['sent_at_display']})"])
 
     return headers, rows
 
-def send_daily_digest():
+def send_daily_digest(dry_run=False, audience_filter=None, webhook_override=None):
     print(f"[{datetime.now()}] Đang chuẩn bị báo cáo Daily Digest...")
     from src.region_map import REGION_NAMES_VI
+    from src.etl import get_daily_kpi_pace_snapshot, get_kpi_revenue_reconciliation, get_etc_return_rate
 
     config = load_config()
     recipients = config.get('report_recipients') or []
@@ -162,12 +168,19 @@ def send_daily_digest():
         print(f"[{datetime.now()}] Chưa cấu hình report_recipients — gửi Daily Digest bản không lọc (hành vi cũ).")
         recipients = [{"audience": None, "region": None, "channel": None, "teams_webhook": None}]
 
+    if audience_filter:
+        recipients = [r for r in recipients if r.get('audience') == audience_filter]
+        if not recipients:
+            print(f"[{datetime.now()}] KHÔNG tìm thấy audience_filter '{audience_filter}' trong report_recipients.")
+            return False
+
     overall_ok = True
     for r in recipients:
         audience = r.get('audience')
         region = r.get('region')
         channel = r.get('channel')
-        webhook = (r.get('teams_webhook') or '').strip() or None
+        webhook = webhook_override or (r.get('teams_webhook') or '').strip() or None
+
         try:
             metrics = get_daily_digest_metrics(region=region, channel=channel)
             headers, rows = _digest_table(metrics)
@@ -177,6 +190,80 @@ def send_daily_digest():
                 f"Tổng hợp hoạt động ERP/CRM ngày {metrics['date']}."
                 f" Dữ liệu cập nhật lúc {metrics.get('updated_at', 'N/A')}."
             )
+
+            # Build sections (1.4f, GD2g, GD3c)
+            sections = []
+
+            # 1.4f: Warning alerts section (collapsed by default, capped at 8)
+            warning_alerts = metrics.get('warning_alerts', [])
+            if warning_alerts:
+                w_items = []
+                for w in warning_alerts[:8]:
+                    cnt = w.get('repeat_count', 1)
+                    note = f" (lặp {cnt} lần)" if cnt > 1 else ""
+                    w_items.append(f"• {w['alert_name']} [{w.get('channel') or 'Multi'}]: {w.get('issue') or 'Bất thường'}{note}")
+                sections.append({
+                    "id": "section_warning_alerts",
+                    "title": f"⚠️ CẢNH BÁO TRONG KỲ ({len(warning_alerts)})",
+                    "is_collapsed": True,
+                    "items": w_items
+                })
+
+            # GD2g: Operations section
+            ops_items = []
+            if channel != "ETC":
+                kpi_pace_data = get_daily_kpi_pace_snapshot(region=region)
+                if kpi_pace_data.get("target_day"):
+                    r_cnt = len(kpi_pace_data.get("reds", []))
+                    y_cnt = len(kpi_pace_data.get("yellows", []))
+                    g_cnt = len(kpi_pace_data.get("greens", []))
+                    tot = len(kpi_pace_data.get("all_rows", []))
+                    ops_items.append(f"• Nhịp KPI ngày ({kpi_pace_data['target_day'].strftime('%d/%m')}): Đỏ {r_cnt} · Vàng {y_cnt} · Xanh {g_cnt} (tổng {tot} TDV)")
+
+                recon_data = get_kpi_revenue_reconciliation()
+                if recon_data:
+                    diff_str = f"{recon_data['diff_vnd']:,.0f}đ ({recon_data['diff_pct']*100:.2f}%)" if recon_data['diff_vnd'] > 0 else "0đ (Khớp tuyệt đối)"
+                    ops_items.append(f"• Đối chiếu KPI OTC: Lệch {diff_str}")
+
+            if channel != "OTC":
+                etc_ret_data = get_etc_return_rate()
+                if etc_ret_data:
+                    ops_items.append(f"• Tỷ lệ hàng trả về ETC: {etc_ret_data['return_rate']*100:.2f}% (Trả {format_vietnamese_money(etc_ret_data['etc_returns'])} / Doanh số {format_vietnamese_money(etc_ret_data['etc_sales'])})")
+
+            if ops_items:
+                sections.append({
+                    "id": "section_operations",
+                    "title": "⚙️ VẬN HÀNH & GIÁM SÁT DỮ LIỆU",
+                    "is_collapsed": False,
+                    "items": ops_items
+                })
+
+            # GD3c: Receivables detail section (top 5)
+            receivables = metrics.get('receivables')
+            if receivables:
+                rec_items = []
+                rec_items.append(f"• Tổng dư nợ: {format_vietnamese_money(receivables['balance_end'])} | Nợ quá hạn: {format_vietnamese_money(receivables['total_overdue'])} ({receivables.get('overdue_pct', 0.0)}%)")
+                if receivables.get('aging'):
+                    aging_str = " · ".join([f"{a['label']}: {format_vietnamese_money(a['amount'])}" for a in receivables['aging']])
+                    rec_items.append(f"• Phân loại tuổi nợ: {aging_str}")
+                if receivables.get('top_overdue_customers'):
+                    rec_items.append("• Top 5 khách nợ quá hạn cao nhất:")
+                    for c in receivables['top_overdue_customers'][:5]:
+                        rec_items.append(f"   - {c['customer_name']} ({c['customer_code']}) [{c['region']} - {c['channel']}]: Nợ {format_vietnamese_money(c['overdue'])} / Tổng dư nợ {format_vietnamese_money(c['balance'])}")
+                sections.append({
+                    "id": "section_receivables_detail",
+                    "title": "💳 CHI TIẾT CÔNG NỢ & TUỔI NỢ",
+                    "is_collapsed": False,
+                    "items": rec_items
+                })
+
+            if dry_run:
+                print(f"[DRY-RUN] Gửi Daily Digest thành công cho '{audience or 'mặc định'}' (Webhook: {webhook or 'Mặc định'})")
+                print(f" - Title: {title}")
+                print(f" - Table Rows: {len(rows)}")
+                print(f" - Sections: {len(sections)}")
+                continue
+
             sent = send_teams_alert(
                 title=title,
                 summary=summary,
@@ -187,6 +274,7 @@ def send_daily_digest():
                 channel=channel or "OTC + ETC (gộp)",
                 region=region_label,
                 webhook_url_override=webhook,
+                sections=sections
             )
             if sent:
                 print(f"[{datetime.now()}] Daily Digest cho '{audience or 'mặc định'}' đã gửi thành công.")
@@ -207,12 +295,18 @@ def _scope_label(region, channel):
         parts.append(f"Kênh {channel}")
     return " — ".join(parts) if parts else "Toàn quốc, tất cả kênh"
 
-def _send_periodic_email_report(get_metrics_fn, period_label, report_title):
+def _send_periodic_email_report(get_metrics_fn, period_label, report_title, dry_run=False, audience_filter=None):
     config = load_config()
     recipients = config.get('report_recipients') or []
     if not recipients:
         print(f"[{datetime.now()}] Chưa cấu hình report_recipients — gửi {report_title} bản không lọc (hành vi cũ).")
         recipients = [{"audience": None, "region": None, "channel": None, "emails": None}]
+
+    if audience_filter:
+        recipients = [r for r in recipients if r.get('audience') == audience_filter]
+        if not recipients:
+            print(f"[{datetime.now()}] KHÔNG tìm thấy audience_filter '{audience_filter}' trong report_recipients.")
+            return False
 
     overall_ok = True
     for r in recipients:
@@ -227,6 +321,13 @@ def _send_periodic_email_report(get_metrics_fn, period_label, report_title):
             subject_suffix = f" ({audience})" if audience else ""
             subject = f"{report_title}{subject_suffix} — {metrics.get('period_range', metrics['date'])}"
             html_content = build_digest_email(metrics, period_label=period_label, audience=audience, scope_label=scope)
+
+            if dry_run:
+                print(f"[DRY-RUN] Gửi {report_title} cho '{audience or 'mặc định'}' thành công (Emails: {emails or 'Mặc định'}).")
+                print(f" - Subject: {subject}")
+                print(f" - HTML Length: {len(html_content)} bytes")
+                continue
+
             if send_email(subject, html_content, recipient_override=emails or None, importance=None):
                 print(f"[{datetime.now()}] {report_title} cho '{audience or 'mặc định'}' đã gửi thành công.")
             else:
@@ -237,18 +338,21 @@ def _send_periodic_email_report(get_metrics_fn, period_label, report_title):
             overall_ok = False
     return overall_ok
 
-def send_weekly_report():
-    return _send_periodic_email_report(get_weekly_digest_metrics, "Weekly", "Báo cáo tổng hợp TUẦN")
+def send_weekly_report(dry_run=False, audience_filter=None):
+    return _send_periodic_email_report(get_weekly_digest_metrics, "Weekly", "Báo cáo tổng hợp TUẦN", dry_run=dry_run, audience_filter=audience_filter)
 
-def send_monthly_report():
-    return _send_periodic_email_report(get_monthly_digest_metrics, "Monthly", "Báo cáo tổng hợp THÁNG")
+def send_monthly_report(dry_run=False, audience_filter=None):
+    return _send_periodic_email_report(get_monthly_digest_metrics, "Monthly", "Báo cáo tổng hợp THÁNG", dry_run=dry_run, audience_filter=audience_filter)
 
 def main():
     parser = argparse.ArgumentParser(description="Pipeline ETL & Cảnh báo thời gian thực ERP/CRM")
     parser.add_argument('--once', action='store_true', help='Chạy trích xuất và kiểm tra cảnh báo 1 lần duy nhất rồi thoát')
-    parser.add_argument('--send-daily', action='store_true', help='Gửi báo cáo Daily Digest (Email) ngay lập tức rồi thoát')
+    parser.add_argument('--send-daily', action='store_true', help='Gửi báo cáo Daily Digest (Email/Teams) ngay lập tức rồi thoát')
     parser.add_argument('--send-weekly', action='store_true', help='Gửi báo cáo Weekly (Email) ngay lập tức rồi thoát')
     parser.add_argument('--send-monthly', action='store_true', help='Gửi báo cáo Monthly (Email) ngay lập tức rồi thoát')
+    parser.add_argument('--dry-run', action='store_true', help='Chạy thử không gửi mail/webhook thật, chỉ in payload/log')
+    parser.add_argument('--audience', type=str, help='Lọc chạy báo cáo cho duy nhất 1 audience (vd: "Quản lý Miền Bắc")')
+    parser.add_argument('--teams-webhook-override', type=str, help='Ghi đè Webhook URL Teams để gửi test')
     args = parser.parse_args()
 
     config = load_config()
@@ -262,13 +366,13 @@ def main():
             print(f"[{datetime.now()}] Cảnh báo: không tạo được mock ERP/CRM engine (bỏ qua bản mock): {e}")
 
     if args.send_daily:
-        send_daily_digest()
+        send_daily_digest(dry_run=args.dry_run, audience_filter=args.audience, webhook_override=args.teams_webhook_override)
         sys.exit(0)
     if args.send_weekly:
-        send_weekly_report()
+        send_weekly_report(dry_run=args.dry_run, audience_filter=args.audience)
         sys.exit(0)
     if args.send_monthly:
-        send_monthly_report()
+        send_monthly_report(dry_run=args.dry_run, audience_filter=args.audience)
         sys.exit(0)
 
     if args.once:

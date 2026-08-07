@@ -46,7 +46,8 @@ Hệ thống báo cáo / cảnh báo / chatbot **đã chạy trên dữ liệu t
 
 **Đã giải quyết phần công thức**: DNH đã cung cấp SP gốc `usp_StockLotFinance_Report` (17/07) — đối chiếu đã phát hiện và sửa 2 lỗi thật (thiếu quy đổi đơn vị cho ~2,2% mặt hàng ETC; công thức vận tốc bán dùng nhầm mọi lượt xuất kho thay vì doanh số bán thật). **Số lượng tồn giờ đã đúng.**
 
-**Còn thiếu**: chưa có nguồn giá để quy đổi *số lượng tồn → tiền*. Hệ quả cụ thể: mục **"Tồn kho chết"** trong mọi báo cáo/cảnh báo hiện **luôn hiển thị 0** (vì lọc theo giá trị tồn > ngưỡng, mà giá trị đang = 0). Đây không phải lỗi — chỉ là thiếu dữ liệu nguồn.
+**Còn thiếu**: chưa có nguồn giá để quy đổi *số lượng tồn → tiền*. Hệ quả cụ thể: mục **"Tồn kho chết"** trong mọi báo cáo/cảnh báo từng **luôn hiển thị 0** (vì lọc theo giá trị tồn > ngưỡng, mà giá trị đang = 0).
+*(Cập nhật 07/08/2026: Đã tạm thời ẩn hoàn toàn mục/bảng "Mặt hàng tồn chết" khỏi các báo cáo Teams/Email và tắt trigger cảnh báo tương ứng qua cờ cấu hình `report_feature_flags.show_dead_stock: false` & `alert_feature_flags.dead_stock_check: false`, đồng thời bổ sung dòng ghi chú lý do ẩn rõ ràng trong template email).*
 
 **❓ Cần xác nhận**: Nguồn giá đúng để tính giá trị tồn kho là gì — giá vốn bình quân, giá nhập gần nhất, hay một bảng giá riêng?
 
