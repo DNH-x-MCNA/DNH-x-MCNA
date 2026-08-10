@@ -2408,9 +2408,52 @@ def salary_ranking(year_month: str = None, area_code: str = None, position_code:
 
 
 
+# =============================================================================================
+# 10/08/2026 - HAM NAY DANG BI TAT. Tool "get_kpi_forecast_model1" da duoc GO khoi TEMPLATE_TOOLS
+# trong nl2sql.py nen model KHONG the goi. Giu lai ham de sua tiep sau demo 13/08.
+#
+# LOI CHET NGUOI (phai sua truoc tien):
+#   0. CRASH 100% so lan goi, tu ngay duoc viet (309d2f2, 06/08). Doan qlv_forecasts truy van
+#      "SELECT t.manager_code ... FROM dim_targetvungmien t" nhung bang do CHI CO 4 cot:
+#      area_code, channel_code, amount, doc_date (local_warehouse.py:52; dong bo tu Bravo cung chi
+#      keo 4 cot do - sync_warehouse.py::SMALL_TABLES). Cot manager_code CHUA TUNG ton tai.
+#      Chay thu tren may 24 ngay 10/08: "OperationalError: no such column: t.manager_code".
+#      => Chua tung co ai nhan duoc ket qua tu tool nay.
+#
+# SAU KHI HET CRASH, VAN CON 6 VAN DE - dung bat lai truoc khi xu ly het:
+#   1. Nhan "(VUOT TARGET)" dan cung vao chuoi etc_vs_national_target -> ETC dat 60% van in ra
+#      "60.0% (VUOT TARGET)". Phai tinh theo dieu kien.
+#   2. Truong "note" la chuoi CO DINH ("ETC du kien vuot chi tieu 104.1%. OTC dat ~85.0%") nen no
+#      MAU THUAN voi chinh cac so vua tinh trong cung mot phan hoi. Phai sinh tu gia tri that.
+#   3. BIA SO khi thieu du lieu - 4 cho: thieu OTC -> 4,66 ty; thieu ETC -> 6,22 ty; thieu target ->
+#      21.363.814.418; doi QLV khong co doanh so -> m_tgt*0.134/7.4 (bia doanh so TU CHI TIEU, khien
+#      QLV ban 0 dong van hien du bao dep). Du lieu thieu PHAI bao loi, khong duoc doan.
+#   4. BO QUA PHAN QUYEN: nhan scope_area_code/scope_employee_code nhung khong dung; qlv_forecasts
+#      liet ke toi 10 QLV moi mien. Lai khong nam trong _PERSON_LEVEL_TEMPLATES lan
+#      _EMPLOYEE_SCOPED_TEMPLATES nen tang code cung khong chan ho => tai khoan QLV se thay ten va
+#      % cua QLV khac. Khi bat lai PHAI them vao ca 2 tap do VA thuc su loc trong than ham.
+#   5. target_month la tham so TRANG TRI - moi cau SQL deu cung ngay '2026-08'. Hoi thang 9 tra so
+#      thang 8 dan nhan thang 9.
+#   6. (10/08 - DA XAC MINH, KHONG PHAI cau hoi cho DNH, la BUG THUAN) est_mb_target=19,5 ty va
+#      target_etc_national=42,5 ty tuong la "so uoc tinh" nhung thuc ra du lieu THAT da co san trong
+#      kho, code chi khong chiu doc:
+#        - fact_kehoachtongetc thang 8/2026 SUM = 42,5 ty - KHOP CHINH XAC hang so hardcode. Dev cu
+#          chup 1 lan roi dong cung, dung ra phai SELECT SUM(amount) FROM fact_kehoachtongetc WHERE
+#          doc_date LIKE '<thang>%'.
+#        - dim_targetvungmien da co dong area_code='MB' THAT (34,16 ty). Nghiem trong hon: cau SQL
+#          o r_tgt_otc KHONG loc area_code, nen no DA CONG CA MB THAT vao target_otc_current roi -
+#          the ma code van cong THEM est_mb_target=19,5 ty len tren => MB BI TINH TRUNG 2 LAN (1 lan
+#          that + 1 lan doan). Hang so fallback 21.363.814.418 khop khit tong MN+MT that (8,19+5,67+
+#          7,5=21,36 ty) - luc viet code MB chua co du lieu target nen dev doan tam, nay Bravo da co
+#          du roi ma khong ai go phan doan di. Sua dung: loc area_code ro rang cho tung vung, BO HAN
+#          est_mb_target.
+#   7. Docstring goc noi "Tu dong tinh ty trong phan bo 6 ngay dau thang theo lich su" - khong dung,
+#      thuc te la 2 hang so go tay (0.1341 / 0.1407).
+# =============================================================================================
 def forecast_model1(target_month: str = "2026-08", scope_area_code: str = None, scope_employee_code: str = None):
-    """Du bao ti le hoan thanh KPI va Doanh thu bang Mo Hinh 1 (Intra-Month Pattern - Trong so Diem Roi trong Thang).
-    Tu dong tinh ty trong phan bo 6 ngay dau thang theo lich su de du phong cho OTC va ETC."""
+    """DANG BI TAT - xem khoi ghi chu ngay tren. Du bao ty le hoan thanh KPI/doanh thu theo Mo Hinh 1
+    (Intra-Month Pattern). CANH BAO: ty trong 6 ngay dau thang la HANG SO GO TAY (0.1341/0.1407),
+    KHONG phai tu tinh tu lich su nhu ten goi gay hieu nham."""
     import datetime as dt
     
     # 1. Tỷ trọng lịch sử 6 ngày đầu
