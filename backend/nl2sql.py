@@ -372,20 +372,24 @@ TEMPLATE_TOOLS = [
     },
     {
         "name": "get_salary_detail",
-        "description": "Chi tiet THUONG KINH DOANH + PHU CAP thang cua 1 nhan vien (V15/V22/V25 thuong "
-                        "tien do, ASO, thuong danh muc DM1/DM2/DM3, SKU, khach tai don/khach moi), theo "
-                        "chinh sach thu nhap moi (QD 0429/.25 Mien Nam/Trung, QD 0107/2026 TDV toan "
-                        "quoc, hieu luc tu 28/07/2026) - dung khi nguoi dung hoi 'thuong thang nay cua "
-                        "toi/cua [ten] bao nhieu', 'V15/V22/V25/ASO cua [ten]', 'thuong danh muc/tien do "
-                        "cua toi', 'ket qua KPI luong cua toi'. "
+        "description": "Chi tiet THUONG KINH DOANH + PHU CAP thang cua 1 hoac NHIEU nhan vien (V15/V22/"
+                        "V25 thuong tien do, ASO, thuong danh muc DM1/DM2/DM3, SKU, khach tai don/khach "
+                        "moi), theo chinh sach thu nhap moi (QD 0429/.25 Mien Nam/Trung, QD 0107/2026 TDV "
+                        "toan quoc, hieu luc tu 28/07/2026) - dung khi nguoi dung hoi 'thuong thang nay "
+                        "cua toi/cua [ten] bao nhieu', 'V15/V22/V25/ASO cua [ten]', 'thuong danh muc/tien "
+                        "do cua toi', 'ket qua KPI luong cua toi'. "
                         "HOI NHIEU NGUOI CUNG LUC (vd 'V15/V22/V25/ASO cho ca 4 TDV cua QLV X', 'thuong "
-                        "cua tat ca nhan vien vung Y') -> GOI TOOL NAY LAP LAI, MOI LAN 1 employee_code, "
-                        "roi tong hop ca 4/N ket qua vao 1 bang duy nhat cho nguoi dung - TUYET DOI KHONG "
-                        "tu ket luan 'khong ho tro nhieu nguoi' hay 'chua co du lieu' chi vi tool mo ta "
-                        "'1 nhan vien' trong ten - do la CACH GOI (1 lan/nguoi), khong phai gioi han du "
-                        "lieu. Neu 1 nguoi trong danh sach bi loi/tu choi (vd khong du quyen), VAN tiep "
-                        "tuc goi cho nhung nguoi con lai va bao ro nguoi nao thieu, KHONG dung ca cau tra "
-                        "loi lai vi 1 loi. "
+                        "cua tat ca nhan vien vung Y', 'top 30 nguoi tot nhat') -> BAT BUOC dung tham so "
+                        "'employee_codes' (list) de goi 1 LAN DUY NHAT cho CA danh sach, KHONG duoc goi "
+                        "lai tool nay nhieu lan (moi lan lap lai ton them 1 vong goi API day du lich su "
+                        "hoi thoai - rat ton kem, da phat hien qua log chi phi thuc te: cau hoi 'top 30' "
+                        "kieu nay tung ton toi 8 vong goi/~$1.2 khi bi goi lap tung nguoi mot). Ket qua "
+                        "tra ve {'employees': [{...ket qua hoac 'error', 'requested_employee_code'}, ...]} "
+                        "- TUYET DOI KHONG tu ket luan 'khong ho tro nhieu nguoi' hay 'chua co du lieu' "
+                        "chi vi mo ta ten tool nghe nhu '1 nhan vien'. Neu 1 nguoi trong danh sach bi loi/"
+                        "tu choi (vd khong du quyen), CAC nguoi con lai VAN co ket qua binh thuong trong "
+                        "cung 1 lan goi - bao ro nguoi nao thieu/vi sao, KHONG dung ca cau tra loi lai vi "
+                        "1 loi. Hoi CHI 1 nguoi -> dung 'employee_code' (string) nhu cu, don gian hon. "
                         "!!! CANH BAO QUAN TRONG: ket qua CHUA GOM Luong co ban (LCB) - he thong hien "
                         "CHUA co du lieu LCB (Bravo khong luu san muc LCB theo Level). PHAI noi ro voi "
                         "nguoi dung day la THUONG KINH DOANH + PHU CAP, KHONG PHAI 'tong luong'/'tong "
@@ -394,12 +398,14 @@ TEMPLATE_TOOLS = [
                         "PHAN QUYEN: mac dinh CHI tra ve DUNG cua nguoi dang hoi (server tu dong xac "
                         "dinh, KHONG the xem cua nguoi khac du truyen employee_code gi) - tai khoan "
                         "C-Level HOAC QLV (xem doi cua chinh minh) moi xem duoc nguoi khac qua tham so "
-                        "employee_code; QLV Bui Khac Dung hoi ve 4 TDV cua chinh minh la HOP LE, KHONG "
-                        "duoc tu choi truoc khi thu goi tool.",
+                        "employee_code/employee_codes; QLV Bui Khac Dung hoi ve 4 TDV cua chinh minh la "
+                        "HOP LE, KHONG duoc tu choi truoc khi thu goi tool. Phan quyen AP DUNG RIENG cho "
+                        "TUNG nguoi trong employee_codes, khong noi long chi vi goi hang loat.",
         "input_schema": {
             "type": "object",
             "properties": {
-                "employee_code": {"type": "string", "description": "Ma/ten nhan vien can tra cuu - CHI co hieu luc voi tai khoan C-Level, bi bo qua voi tai khoan thuong (tu dong dung chinh nguoi hoi)"},
+                "employee_code": {"type": "string", "description": "Ma/ten 1 nhan vien can tra cuu - dung khi CHI hoi 1 nguoi. CHI co hieu luc voi tai khoan C-Level/QLV xem doi minh, bi bo qua voi tai khoan thuong (tu dong dung chinh nguoi hoi)"},
+                "employee_codes": {"type": "array", "items": {"type": "string"}, "description": "Danh sach ma/ten NHIEU nhan vien can tra cuu CUNG LUC (vd ca doi TDV cua 1 QLV, top N nguoi) - UU TIEN dung tham so nay thay vi goi lai tool nhieu lan. Neu truyen ca 2 tham so, employee_codes duoc uu tien, employee_code bi bo qua."},
                 "save_date": {"type": "string", "description": "YYYY-MM-DD, mac dinh la snapshot moi nhat hien co (thuong cuoi thang/dot chot gan nhat)"},
             },
             "required": [],

@@ -2022,7 +2022,7 @@ def audit_log_summary(days: int = 7, limit: int = 30, username: str = None, targ
 
 
 
-def salary_detail(employee_code: str = None, save_date: str = None,
+def salary_detail(employee_code: str = None, employee_codes: list = None, save_date: str = None,
                    scope_employee_code: str = None, scope_role: str = None) -> dict:
     """Chi tiet THUONG KINH DOANH + PHU CAP theo chinh sach thu nhap moi (QD 0429/.25 Mien Nam/Trung,
     QD 0107/2026 TDV) - doc TRUC TIEP tu fact_thongketinhluong, nguon Bravo FACT_ThongKeTinhLuong DA
@@ -2040,7 +2040,36 @@ def salary_detail(employee_code: str = None, save_date: str = None,
     doi minh (xem call_template). scope_role='c_level' moi duoc bo qua gioi han nay.
 
     save_date: ngay snapshot can xem (mac dinh: gan nhat hien co, thuong la cuoi thang/dot chot gan
-    nhat - fact_thongketinhluong CHI co 1 snapshot/thang, khac fact_tonghopkhachhang nhieu dong/thang)."""
+    nhat - fact_thongketinhluong CHI co 1 snapshot/thang, khac fact_tonghopkhachhang nhieu dong/thang).
+
+    employee_codes: 04/08/2026 (toi uu chi phi AI - phat hien qua cost_log.jsonl: cau hoi "top 30
+    theo MB"/"V15/V22/V25/ASO top 30 nguoi" ton 7-8 VONG goi API/cau hoi, ~$0.6-1.2/cau vi AI phai
+    goi lai tool nay LAP LAI tung nguoi 1 (moi vong gui lai TOAN BO lich su hoi thoai tich luy, khong
+    cache duoc vi noi dung tool_result doi lien tuc) - xem ghi chu nl2sql.py. THEM tham so nay de tra
+    NHIEU nguoi trong 1 LAN GOI: neu duoc truyen (list ma/ten nhan vien), employee_code bi bo qua va
+    ham lap qua tung ma, AP DUNG Y HET logic phan quyen/snapshot nhu duong don-nguoi cho TUNG nguoi
+    (khong noi long fail-closed vi goi hang loat) - tra ve {"employees": [{employee_code, ...KET QUA
+    hoac "error"}, ...]}. 1 nguoi loi (vd ngoai doi QLV) KHONG lam hong ca lo, chi ghi error rieng
+    dong do - giu dung tinh than "1 loi khong duoc dung ca cau tra loi" da ghi trong mo ta tool."""
+    if employee_codes:
+        results = []
+        for code in employee_codes:
+            one = _salary_detail_one(employee_code=code, save_date=save_date,
+                                      scope_employee_code=scope_employee_code, scope_role=scope_role)
+            # Ghi de/them "requested_employee_code" (KHONG dung "employee_code" de tranh de len ten
+            # cot that tra ve khi thanh cong) de AI/nguoi doc luon biet dong loi nay ung voi ma nao -
+            # ham con (_salary_detail_one) khong biet no dang bi goi hang loat nen khong tu gan duoc.
+            one["requested_employee_code"] = code
+            results.append(one)
+        return {"employees": results}
+    return _salary_detail_one(employee_code=employee_code, save_date=save_date,
+                               scope_employee_code=scope_employee_code, scope_role=scope_role)
+
+
+def _salary_detail_one(employee_code: str = None, save_date: str = None,
+                        scope_employee_code: str = None, scope_role: str = None) -> dict:
+    """Logic that cho DUNG 1 nhan vien - tach rieng tu salary_detail() de dung chung cho ca duong
+    don-nguoi (employee_code) va duong hang loat (employee_codes, xem salary_detail)."""
     # 03/08/2026 (phat hien qua kiem thu QLV Bui Khac Dung hoi V15/V22/V25/ASO cho 4 TDV cua minh):
     # TRUOC DAY chi C-Level moi duoc xem nguoi khac - QLV hoi ve CHINH DOI CUA MINH bi tu choi chung
     # chung, khien AI (dung docstring cu "C-Level/QLV xem doi minh" nhung code khong lam dieu do) bao
