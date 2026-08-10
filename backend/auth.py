@@ -59,6 +59,8 @@ def init_schema():
         ("email", "TEXT"),
         ("status", "TEXT DEFAULT 'approved'"),
         ("must_change_password", "INTEGER DEFAULT 0"),
+        ("password_changed_at", "TEXT"),
+        ("last_login_at", "TEXT"),
     ]:
         col_name, col_type = col_def
         try:
@@ -75,6 +77,9 @@ def init_schema():
         pass
 
     conn.close()
+    
+    # Run user migration and seeding
+    migrate_and_seed_users()
 
 
 def _hash_password(password: str, salt: str) -> str:
@@ -90,7 +95,7 @@ def generate_password(length: int = 10) -> str:
 def create_user(username: str, password: str, name: str, role: str, scope_value: str = None,
                 employee_code: str = None, scope_channel: str = None, email: str = None,
                 status: str = 'approved') -> dict:
-    if role not in ("c_level", "regional_director", "qlv"):
+    if role not in ("c_level", "admin_ops", "regional_director", "qlv"):
         raise ValueError(f"Vai tro khong hop le: {role}")
     salt = secrets.token_hex(16)
     pwd_hash = _hash_password(password, salt)
@@ -132,13 +137,15 @@ def create_pending_user(email: str, name: str = None) -> tuple[dict, str]:
     return user_info, raw_pwd
 
 
-def admin_create_user(email: str, name: str = None, role: str = 'qlv', scope_value: str = None,
-                      employee_code: str = None, scope_channel: str = None) -> tuple[dict, str]:
-    """Admin tao tai khoan moi truc tiep voi status=approved, sinh mat khau ngau nhien va phan quyen ngay."""
-    clean_email = email.lower().strip()
-    raw_pwd = generate_password(10)
-    username = clean_email
-    display_name = name or clean_email.split('@')[0]
+def admin_create_user(username: str, name: str = None, role: str = 'qlv', scope_value: str = None,
+                      employee_code: str = None, scope_channel: str = None,
+                      email: str = None, password: str = None) -> tuple[dict, str]:
+    """Admin tao tai khoan moi truc tiep voi status=approved.
+    Neu khong truyen password, se sinh mat khau ngau nhien.
+    Email la optional - khong bat buoc @namhapharma.com nua."""
+    raw_pwd = password or generate_password(10)
+    clean_email = email.lower().strip() if email else None
+    display_name = name or username
 
     user_info = create_user(
         username=username,
@@ -213,11 +220,12 @@ def set_password(identifier: str, new_password: str) -> bool:
     clean_id = identifier.lower().strip()
     salt = secrets.token_hex(16)
     pwd_hash = _hash_password(new_password, salt)
+    now_iso = dt.datetime.now().isoformat()
     conn = get_conn()
     try:
         cur = conn.execute(
-            "UPDATE users SET password_hash=?, salt=?, must_change_password=0 WHERE username=? OR email=?",
-            (pwd_hash, salt, clean_id, clean_id)
+            "UPDATE users SET password_hash=?, salt=?, must_change_password=0, password_changed_at=? WHERE username=? OR email=?",
+            (pwd_hash, salt, now_iso, clean_id, clean_id)
         )
         conn.commit()
         return cur.rowcount > 0
@@ -264,13 +272,13 @@ def list_users(status: str = None) -> list[dict]:
     try:
         if status:
             rows = conn.execute(
-                "SELECT id, username, email, name, role, scope_value, employee_code, scope_channel, status, is_active, created_at "
+                "SELECT id, username, email, name, role, scope_value, employee_code, scope_channel, status, is_active, created_at, password_changed_at, last_login_at "
                 "FROM users WHERE status=? ORDER BY id DESC",
                 (status,)
             ).fetchall()
         else:
             rows = conn.execute(
-                "SELECT id, username, email, name, role, scope_value, employee_code, scope_channel, status, is_active, created_at "
+                "SELECT id, username, email, name, role, scope_value, employee_code, scope_channel, status, is_active, created_at, password_changed_at, last_login_at "
                 "FROM users ORDER BY id DESC"
             ).fetchall()
 
@@ -279,7 +287,7 @@ def list_users(status: str = None) -> list[dict]:
                 "id": r[0], "username": r[1], "email": r[2], "name": r[3],
                 "role": r[4], "scope_value": r[5], "employee_code": r[6],
                 "scope_channel": r[7], "status": r[8] or 'approved', "is_active": r[9],
-                "created_at": r[10]
+                "created_at": r[10], "password_changed_at": r[11], "last_login_at": r[12]
             }
             for r in rows
         ]
@@ -309,14 +317,17 @@ def get_name_by_username(username: str) -> str | None:
 def create_session(user_id: int) -> str:
     token = secrets.token_urlsafe(32)
     now = dt.datetime.now()
+    now_iso = now.isoformat()
     expires = now + dt.timedelta(hours=SESSION_TTL_HOURS)
     conn = get_conn()
     try:
         conn.execute(
             "INSERT INTO sessions (token, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)",
-            (token, user_id, now.isoformat(), expires.isoformat()),
+            (token, user_id, now_iso, expires.isoformat())
         )
+        conn.execute("UPDATE users SET last_login_at=? WHERE id=?", (now_iso, user_id))
         conn.commit()
+        return token
     finally:
         conn.close()
     return token
@@ -355,6 +366,88 @@ def delete_session(token: str):
         conn.close()
 
 
+def get_subordinate_usernames(director_user: dict) -> list[str] | None:
+    """Lay danh sach username cua QLV thuoc cung scope_value (Mien) va/hoac scope_channel (Kenh) cua director."""
+    role = director_user.get("role")
+    if role in ("c_level", "admin_ops"):
+        return None  # Xem duoc tat ca
+    
+    scope_val = director_user.get("scope_value")
+    scope_chan = director_user.get("scope_channel")
+    username = director_user.get("username")
+    
+    conn = get_conn()
+    try:
+        query = "SELECT username FROM users WHERE role='qlv'"
+        params = []
+        if scope_val:
+            query += " AND scope_value=?"
+            params.append(scope_val)
+        if scope_chan:
+            query += " AND scope_channel=?"
+            params.append(scope_chan)
+            
+        rows = conn.execute(query, params).fetchall()
+        result = [r[0] for r in rows]
+        if username and username not in result:
+            result.append(username)
+        return result
+    finally:
+        conn.close()
+
+
+def migrate_and_seed_users():
+    """Tudong migration: trieu.dang -> admin.dnh (giu nguyen mat khau hash), va khoi tao dnh (c_level)."""
+    conn = get_conn()
+    try:
+        # 1. Doi username trieu.dang -> admin.dnh neu co
+        row_trieu = conn.execute("SELECT id FROM users WHERE username='trieu.dang' OR email='trieu.dang@namhapharma.com'").fetchone()
+        row_admin = conn.execute("SELECT id FROM users WHERE username='admin.dnh'").fetchone()
+        
+        if row_trieu and not row_admin:
+            conn.execute("UPDATE users SET username='admin.dnh', role='admin_ops', name='Admin Vận Hành' WHERE id=?", (row_trieu[0],))
+            conn.commit()
+        elif not row_trieu and not row_admin:
+            salt = secrets.token_hex(16)
+            pwd_hash = _hash_password("dnh@admin2026", salt)
+            conn.execute(
+                "INSERT INTO users (username, email, password_hash, salt, name, role, status, created_at) "
+                "VALUES ('admin.dnh', 'admin@namhapharma.com', ?, ?, 'Admin Vận Hành', 'admin_ops', 'approved', ?)",
+                (pwd_hash, salt, dt.datetime.now().isoformat())
+            )
+            conn.commit()
+        else:
+            conn.execute("UPDATE users SET role='admin_ops' WHERE username='admin.dnh'")
+            conn.commit()
+
+        # 2. Dam bao tai khoan dnh (C-Level duy nhat) ton tai
+        row_dnh = conn.execute("SELECT id FROM users WHERE username='dnh'").fetchone()
+        if not row_dnh:
+            salt = secrets.token_hex(16)
+            pwd_hash = _hash_password("dnh@clevel2026", salt)
+            conn.execute(
+                "INSERT INTO users (username, email, password_hash, salt, name, role, status, created_at) "
+                "VALUES ('dnh', 'dnh@namhapharma.com', ?, ?, 'Tổng Giám Đốc', 'c_level', 'approved', ?)",
+                (pwd_hash, salt, dt.datetime.now().isoformat())
+            )
+            conn.commit()
+        else:
+            conn.execute("UPDATE users SET role='c_level' WHERE username='dnh'")
+            conn.commit()
+
+        # 3. Dam bao cac tai khoan Giam doc Mien / Kenh demo (manager_*) la regional_director
+        conn.execute("UPDATE users SET role='regional_director' WHERE username LIKE 'manager_%'")
+        # Phuc hoi role='qlv' cho tat ca tai khoan QLV nhan vien (nhu tungtx) bi set nham thanh regional_director
+        conn.execute(
+            "UPDATE users SET role='qlv' "
+            "WHERE username NOT IN ('dnh', 'admin.dnh') AND username NOT LIKE 'manager_%' AND (role='regional_director' OR role='c_level')"
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
 if __name__ == "__main__":
     init_schema()
     print(f"Schema auth da tao/xac nhan tai: {DB_PATH}")
+

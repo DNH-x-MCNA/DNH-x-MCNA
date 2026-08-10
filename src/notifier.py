@@ -29,27 +29,54 @@ STATE_DB_PATH = os.path.join(PROJECT_ROOT, 'data', 'alerts_state.db')
 # trực tiếp không hiển thị được trên Outlook Desktop và không được Teams Adaptive Card hỗ trợ ổn
 # định). Đổi logo: push file mới vào repo đó, giữ nguyên tên/đường dẫn file.
 DNH_LOGO_URL = "https://raw.githubusercontent.com/danglvmcna/dnh-assets/main/dnh_logo.png"
+_TEAMS_DETAIL_MAX_ROWS = 10
+
+
+def _fit_teams_payload(card_dict, max_bytes=28000):
+    """Giới hạn dung lượng JSON payload gửi tới Teams Webhook dưới max_bytes (mặc định 28KB).
+    Nếu vượt quá dung lượng, tự động thu gọn số dòng trong các bảng Table cho đến khi vừa."""
+    if not card_dict:
+        return card_dict
+    import copy
+    card = copy.deepcopy(card_dict)
+
+    def _calc_bytes(d):
+        return len(json.dumps(d, ensure_ascii=False).encode('utf-8'))
+
+    if _calc_bytes(card) <= max_bytes:
+        return card
+
+    def _trim_tables(obj):
+        if isinstance(obj, dict):
+            if obj.get("type") == "Table" and "rows" in obj and len(obj["rows"]) > 2:
+                obj["rows"].pop()
+                return True
+            for v in obj.values():
+                if _trim_tables(v):
+                    return True
+        elif isinstance(obj, list):
+            for item in obj:
+                if _trim_tables(item):
+                    return True
+        return False
+
+    attempts = 0
+    while _calc_bytes(card) > max_bytes and attempts < 100:
+        if not _trim_tables(card):
+            break
+        attempts += 1
+    return card
+
 
 
 def _dnh_logo_data_uri():
     return DNH_LOGO_URL
 
 
-def _log_alert_severity(alert_name, severity, region=None):
+def _log_alert_severity(alert_name, severity, region=None, alert_key=None, issue=None, channel=None):
     """
-    Ghi lại (tên alert, mức độ, vùng, thời điểm) vào data/alerts_state.db mỗi khi 1 alert THỰC SỰ
-    được gửi — phục vụ báo cáo Weekly/Monthly (main.py::_send_periodic_email_report) biết kỳ vừa
-    qua có alert CRITICAL nào không, để gắn cờ Outlook Importance:High cho đúng email digest đó,
-    và để hiện đúng banner "có cảnh báo nghiêm trọng" cho báo cáo đã scope theo vùng
-    (xem src/etl.py::_period_has_critical).
-
-    KHÔNG dùng chung bảng sent_alerts (src/alerts.py) vì bảng đó chỉ giữ TRẠNG THÁI MỚI NHẤT theo
-    alert_key (ghi đè liên tục, phục vụ cooldown) — không phải lịch sử theo thời gian như cần ở
-    đây. Lỗi ghi log không được chặn việc gửi alert thật (chỉ log + bỏ qua).
-
-    21/07/2026: thêm `region` — nhận đúng giá trị đã truyền vào send_alert_to_all_channels(region=...)
-    ở nơi gọi (vd "Miền Nam" nếu alert quy được về đúng 1 vùng cụ thể, "Toàn quốc"/"Nhiều miền" nếu
-    không) — xem lý do tương tự record_alert_sent(..., region=...) trong src/alerts.py.
+    Ghi lại (tên alert, mức độ, vùng, alert_key, issue, channel, thời điểm) vào data/alerts_state.db
+    mỗi khi 1 alert THỰC SỰ được gửi — phục vụ báo cáo Weekly/Monthly và Daily Digest.
     """
     try:
         os.makedirs(os.path.dirname(STATE_DB_PATH), exist_ok=True)
@@ -60,21 +87,25 @@ def _log_alert_severity(alert_name, severity, region=None):
                 alert_name TEXT NOT NULL,
                 severity TEXT NOT NULL,
                 sent_at TIMESTAMP NOT NULL,
-                region TEXT
+                region TEXT,
+                alert_key TEXT,
+                issue TEXT,
+                channel TEXT
             )
         ''')
-        # Migration cho DB cũ đã tồn tại trước khi có cột `region`.
         existing_cols = {row[1] for row in conn.execute("PRAGMA table_info(alert_severity_log)").fetchall()}
-        if "region" not in existing_cols:
-            conn.execute("ALTER TABLE alert_severity_log ADD COLUMN region TEXT")
+        for col in ["region", "alert_key", "issue", "channel"]:
+            if col not in existing_cols:
+                conn.execute(f"ALTER TABLE alert_severity_log ADD COLUMN {col} TEXT")
         conn.execute(
-            'INSERT INTO alert_severity_log (alert_name, severity, sent_at, region) VALUES (?, ?, ?, ?)',
-            (alert_name, severity, datetime.now(), region)
+            'INSERT INTO alert_severity_log (alert_name, severity, sent_at, region, alert_key, issue, channel) VALUES (?, ?, ?, ?, ?, ?, ?)',
+            (alert_name, severity, datetime.now(), region, alert_key, issue, channel)
         )
         conn.commit()
         conn.close()
     except Exception as e:
         print(f"[NOTIFIER] Không ghi được alert_severity_log (bỏ qua, không ảnh hưởng gửi alert): {e}")
+
 
 
 def _count_alert_occurrences_this_month(alert_name):
@@ -532,30 +563,38 @@ DIGEST_EMAIL_TEMPLATE = """
 
             <!-- Tồn kho Section -->
             <div class="section-title">Tồn Kho</div>
+            {% if metrics.inventory.dead_stock_available == False %}
+            <div style="font-size: 13px; color: #64748b; font-style: italic; margin-bottom: 12px; background: #f8fafc; padding: 8px 12px; border-radius: 6px; border-left: 3px solid #cbd5e1;">
+                Mục Tồn kho chết đang tạm ẩn do chưa có nguồn dữ liệu giá trị tồn chính thức được xác nhận.
+            </div>
+            {% endif %}
             <div class="grid">
                 <!--[if mso]>
-                <table role="presentation" width="100%" style="border-collapse: collapse; border: 0;"><tr><td width="50%" valign="top" style="padding: 8px;">
+                <table role="presentation" width="100%" style="border-collapse: collapse; border: 0;"><tr>
                 <![endif]-->
+                {% if metrics.inventory.dead_stock_available != False %}
+                <!--[if mso]><td width="50%" valign="top" style="padding: 8px;"><![endif]-->
                 <div class="col" style="width: 100%; max-width: 290px; padding: 8px;">
                     <div class="kpi-card failed">
                         <div class="lbl">Tồn Chết (&ge;12 tháng)</div>
                         <div class="val" style="color: #d94e1c;">{{ metrics.inventory.dead_stock_count }}</div>
                     </div>
                 </div>
-                <!--[if mso]>
-                </td><td width="50%" valign="top" style="padding: 8px;">
-                <![endif]-->
-                <div class="col" style="width: 100%; max-width: 290px; padding: 8px;">
+                <!--[if mso]></td><![endif]-->
+                {% endif %}
+                <!--[if mso]><td width="50%" valign="top" style="padding: 8px;"><![endif]-->
+                <div class="col" style="width: 100%; max-width: {% if metrics.inventory.dead_stock_available == False %}580px{% else %}290px{% endif %}; padding: 8px;">
                     <div class="kpi-card failed">
                         <div class="lbl">Sắp Hết Hàng (&le;1 tháng)</div>
                         <div class="val" style="color: #ef4444;">{{ metrics.inventory.near_stockout_count }}</div>
                     </div>
                 </div>
+                <!--[if mso]></td><![endif]-->
                 <!--[if mso]>
-                </td></tr></table>
+                </tr></table>
                 <![endif]-->
             </div>
-            {% if metrics.inventory.dead_stock_items %}
+            {% if metrics.inventory.dead_stock_available != False and metrics.inventory.dead_stock_items %}
             <table class="data-table">
                 <thead><tr><th>Mã SKU</th><th>Tên hàng</th><th>Giá trị tồn</th><th>Số tháng bán</th></tr></thead>
                 <tbody>
@@ -817,7 +856,7 @@ def _chatbot_deep_link(question=None):
     chatbot mới có prefill câu hỏi từ `?q=` hay RBAC theo tài khoản giống hệt không — đó là code
     của người khác (frontend/app.js trong repo này là frontend CŨ, không còn phục vụ nữa).
     """
-    base = os.getenv("CHATBOT_WEB_URL", "http://127.0.0.1:8000").rstrip('/')
+    base = os.getenv("CHATBOT_WEB_URL", "https://dnh-bot.vercel.app").rstrip('/')
     if question:
         return f"{base}/?q={quote(question)}"
     return base
@@ -862,20 +901,10 @@ def _build_detail_table(table_headers, table_rows, max_rows=None):
 
 
 def _build_teams_adaptive_card(title, summary, severity, table_headers=None, table_rows=None,
-                                period=None, channel=None, region=None, issue=None):
+                                period=None, channel=None, region=None, issue=None, sections=None):
     """
-    Dung Adaptive Card (schema 1.5) thay vi text Markdown tho, de Teams hien thi
-    co mau theo severity (do=CRITICAL, vang=WARNING, xanh=INFO).
-
-    period/channel/region/issue la cac truong CO CAU TRUC moi (tuy chon, None thi bo qua) de
-    nguoi nhan biet NGAY: canh bao nay cua KY/NGAY nao, KENH OTC/ETC nao, KHU VUC mien nao, va
-    VAN DE cu the la gi — thay vi phai doc het doan van `summary` moi suy ra duoc.
-
-    KHÔNG còn vẽ bảng chi tiết (table_headers/table_rows) trong card — bảng dài gây rối mắt, nhất
-    là trên Teams mobile. Thay bằng 1 nút "Xem chi tiết trên Chatbot" dẫn tới _chatbot_deep_link()
-    kèm sẵn câu hỏi tương ứng (lấy từ issue, dự phòng title). table_headers/table_rows vẫn nhận
-    vào hàm — KHÔNG đổi chữ ký để không phải sửa lại toàn bộ các nơi gọi trong src/alerts.py — chỉ
-    không dùng để vẽ Table nữa (email vẫn hiển thị bảng bình thường, không đổi).
+    Dùng Adaptive Card (schema 1.5) phân màu theo severity (đỏ=CRITICAL, vàng=WARNING, xanh=INFO).
+    Bổ sung hỗ trợ tham số `sections` để truyền các khối nội dung mở rộng (như Warning Alerts).
     """
     style = _severity_to_card_style(severity)
     body = [
@@ -933,9 +962,14 @@ def _build_teams_adaptive_card(title, summary, severity, table_headers=None, tab
 
     body.append({"type": "TextBlock", "text": summary, "wrap": True, "spacing": "Small" if issue else "Medium"})
 
+    # Actions list
+    actions = []
+
     # Compact Table Container using Action.ToggleVisibility
     has_details = table_headers and table_rows
     if has_details:
+        total_r = len(table_rows)
+        shown_r = min(total_r, _TEAMS_DETAIL_MAX_ROWS)
         body.append({
             "type": "Container",
             "id": "compactTableDetails",
@@ -944,13 +978,51 @@ def _build_teams_adaptive_card(title, summary, severity, table_headers=None, tab
             "items": [
                 {
                     "type": "TextBlock",
-                    "text": "Chi tiết danh sách:",
+                    "text": f"Chi tiết danh sách (hiển thị {shown_r}/{total_r} dòng):",
                     "weight": "Bolder",
                     "size": "Small"
                 },
-                _build_detail_table(table_headers, table_rows)
+                _build_detail_table(table_headers, table_rows, max_rows=_TEAMS_DETAIL_MAX_ROWS)
             ]
         })
+        actions.append({
+            "type": "Action.ToggleVisibility",
+            "title": "Thu gọn / Hiện chi tiết",
+            "targetElements": ["compactTableDetails"]
+        })
+
+    # Render additional sections if passed
+    if sections:
+        for idx, sec in enumerate(sections, 1):
+            sec_id = sec.get("id", f"section_container_{idx}")
+            sec_title = sec.get("title", "")
+            sec_collapsed = sec.get("is_collapsed", False)
+            sec_items = sec.get("items", [])
+
+            container_items = []
+            if sec_title:
+                container_items.append({"type": "TextBlock", "text": sec_title, "weight": "Bolder", "size": "Medium", "wrap": True})
+
+            for item in sec_items:
+                if isinstance(item, str):
+                    container_items.append({"type": "TextBlock", "text": item, "wrap": True, "size": "Small"})
+                elif isinstance(item, dict):
+                    container_items.append(item)
+
+            body.append({
+                "type": "Container",
+                "id": sec_id,
+                "isVisible": not sec_collapsed,
+                "spacing": "Medium",
+                "items": container_items
+            })
+
+            if sec_collapsed and sec_title:
+                actions.append({
+                    "type": "Action.ToggleVisibility",
+                    "title": f"Hiện/Thu gọn: {sec_title}",
+                    "targetElements": [sec_id]
+                })
 
     body.append({
         "type": "TextBlock",
@@ -960,22 +1032,6 @@ def _build_teams_adaptive_card(title, summary, severity, table_headers=None, tab
         "spacing": "Medium",
         "wrap": True
     })
-
-    adaptive_card = {
-        "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
-        "type": "AdaptiveCard",
-        "version": "1.5",
-        "body": body
-    }
-
-    # Actions list
-    actions = []
-    if has_details:
-        actions.append({
-            "type": "Action.ToggleVisibility",
-            "title": "Thu gọn / Hiện chi tiết",
-            "targetElements": ["compactTableDetails"]
-        })
 
     # Hotline Call Button for debt-related issues
     is_debt = any(w in title.lower() or w in str(issue or "").lower() for w in ("nợ", "overdue", "credit", "limit", "hạn mức"))
@@ -994,10 +1050,16 @@ def _build_teams_adaptive_card(title, summary, severity, table_headers=None, tab
             "url": _chatbot_deep_link(f"Cho tôi xem chi tiết: {chat_question}")
         })
 
+    adaptive_card = {
+        "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+        "type": "AdaptiveCard",
+        "version": "1.5",
+        "body": body
+    }
     if actions:
         adaptive_card["actions"] = actions
 
-    return {
+    result_payload = {
         "type": "message",
         "attachments": [
             {
@@ -1006,14 +1068,15 @@ def _build_teams_adaptive_card(title, summary, severity, table_headers=None, tab
             }
         ]
     }
+    return _fit_teams_payload(result_payload)
+
 
 def send_teams_alert(title, summary, table_headers=None, table_rows=None, severity="INFO",
-                      period=None, channel=None, region=None, issue=None, webhook_url_override=None):
+                      period=None, channel=None, region=None, issue=None, webhook_url_override=None,
+                      sections=None):
     """
-    Gửi tin nhắn cảnh báo qua Microsoft Teams Incoming Webhook dưới dạng Adaptive Card
-    (phân màu theo severity thay vì text Markdown thô).
-    webhook_url_override: nếu truyền vào (không rỗng) thì gửi tới URL này thay vì
-    TEAMS_WEBHOOK_URL mặc định — dùng khi định tuyến theo audience (xem _resolve_teams_webhooks).
+    Gửi tin nhắn cảnh báo qua Microsoft Teams Incoming Webhook dưới dạng Adaptive Card.
+    Hỗ trợ `sections` mở rộng và tự động fit payload dưới 28KB.
     """
     webhook_url = webhook_url_override or os.getenv("TEAMS_WEBHOOK_URL")
     if not webhook_url:
@@ -1021,10 +1084,11 @@ def send_teams_alert(title, summary, table_headers=None, table_rows=None, severi
         return False
 
     payload = _build_teams_adaptive_card(title, summary, severity, table_headers, table_rows,
-                                          period=period, channel=channel, region=region, issue=issue)
+                                          period=period, channel=channel, region=region, issue=issue,
+                                          sections=sections)
 
     try:
-        data = json.dumps(payload).encode('utf-8')
+        data = json.dumps(payload, ensure_ascii=False).encode('utf-8')
         req = urllib.request.Request(
             webhook_url.strip(),
             data=data,
@@ -1036,6 +1100,7 @@ def send_teams_alert(title, summary, table_headers=None, table_rows=None, severi
     except Exception as e:
         print(f"[TEAMS] Loi gui Teams: {e}")
         return False
+
 
 
 def _resolve_teams_webhooks(region_label, channel_label):
@@ -1219,14 +1284,16 @@ def _build_teams_consolidated_card(alerts):
 
         if table_headers and table_rows:
             toggle_id = f"compactTable_{i}"
+            total_r = len(table_rows)
+            shown_r = min(total_r, _TEAMS_DETAIL_MAX_ROWS)
             item_items.append({
                 "type": "Container",
                 "id": toggle_id,
                 "isVisible": False,
                 "spacing": "Small",
                 "items": [
-                    {"type": "TextBlock", "text": "Chi tiết danh sách (tối đa 5 dòng):", "weight": "Bolder", "size": "Small"},
-                    _build_detail_table(table_headers, table_rows, max_rows=5)
+                    {"type": "TextBlock", "text": f"Chi tiết danh sách (hiển thị {shown_r}/{total_r} dòng):", "weight": "Bolder", "size": "Small"},
+                    _build_detail_table(table_headers, table_rows, max_rows=_TEAMS_DETAIL_MAX_ROWS)
                 ]
             })
             item_actions.append({
@@ -1275,7 +1342,7 @@ def _build_teams_consolidated_card(alerts):
             "url": _chatbot_deep_link()
         }]
     }
-    return {
+    result_payload = {
         "type": "message",
         "attachments": [
             {
@@ -1284,28 +1351,18 @@ def _build_teams_consolidated_card(alerts):
             }
         ]
     }
+    return _fit_teams_payload(result_payload)
+
 
 def send_alert_to_all_channels(alert_name, severity, summary, table_headers=None, table_rows=None,
                                 channels=("email", "teams"), period=None, channel=None, region=None,
-                                issue=None, require_critical_for_teams=True):
+                                issue=None, require_critical_for_teams=True, sections=None, *, alert_key=None):
     """
     Gửi cảnh báo qua các kênh được chỉ định trong `channels` (mặc định: Email, Teams).
-    Dùng `channels` để định tuyến theo loại nội dung — vd. alert tức thời/daily digest chỉ đi
-    Teams, báo cáo tuần/tháng chỉ đi Email (xem main.py/src/alerts.py). Kênh Telegram đã bỏ hẳn
-    23/07/2026 (chuyển hoàn toàn qua web) — không còn code gửi Telegram trong hàm này.
-
-    period/channel/region/issue: các trường có cấu trúc (tùy chọn) chỉ áp dụng cho card Teams —
-    xem _build_teams_adaptive_card. Không đổi định dạng Email hiện có.
-
-    require_critical_for_teams (mặc định True, thêm 10/07/2026): chống nhiễu — CHỈ severity
-    CRITICAL mới thực sự bắn Teams, WARNING/INFO vẫn được LOG (_log_alert_severity, không đổi)
-    nhưng không chủ động đẩy thông báo. Áp dụng cho alert nghiệp vụ THỜI GIAN THỰC (src/alerts.py)
-    — nơi nhiều loại cảnh báo có thể cùng trigger 1 lúc sau 1 chu kỳ quét, từng gây dồn 5-6 card
-    cùng lúc. Daily Digest (main.py) KHÔNG bị ảnh hưởng — gửi 1 lần/ngày theo lịch cố định, không
-    có hiện tượng dồn dập nên chủ động truyền require_critical_for_teams=False để bỏ qua bộ lọc.
+    Bổ sung `alert_key` (keyword-only) và `sections`.
     """
     print(f"\n--- BAT DAU GUI CANH BAO: {alert_name} [{severity}] (kenh: {', '.join(channels)}) ---")
-    _log_alert_severity(alert_name, severity, region=region)
+    _log_alert_severity(alert_name, severity, region=region, alert_key=alert_key, issue=issue, channel=channel)
     any_sent = False
 
     # 1. Gui qua Email
