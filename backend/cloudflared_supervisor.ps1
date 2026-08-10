@@ -107,7 +107,11 @@ function Update-VercelUrl($url) {
         # KHONG dung "vercel deploy" (build tu $FRONTEND_DIR cuc bo) - xem ghi chu su co 10/08
         # o dau file. "vercel redeploy" build lai tu dung nguon git cua deployment production
         # HIEN CO, an toan voi noi dung dia cua may nay.
-        & npx vercel redeploy $PRODUCTION_DOMAIN --yes *> "$LOG_DIR\cloudflared_deploy.log"
+        # 10/08/2026: "vercel redeploy" KHONG nhan "--yes" (khac voi "vercel deploy"/"vercel env"
+        # - xac nhan thuc te qua "npx vercel redeploy --help" tren CLI 58.9.0) - dung
+        # "--non-interactive" (global option, tu dong bo qua xac nhan khi chay khong co TTY) va
+        # "--target production" de tuong minh dich nham, tranh phu thuoc alias suy luan sai target.
+        & npx vercel redeploy $PRODUCTION_DOMAIN --non-interactive --target production *> "$LOG_DIR\cloudflared_deploy.log"
         if ($LASTEXITCODE -eq 0) {
             Set-Content -Path $LAST_URL_FILE -Value $url -Encoding utf8
             if (Test-Path $NEEDS_FIX_FILE) { Remove-Item $NEEDS_FIX_FILE -Force }
