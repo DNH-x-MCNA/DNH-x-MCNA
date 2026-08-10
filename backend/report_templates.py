@@ -1454,6 +1454,24 @@ def revenue_tree(as_of_date: str = None, area_code: str = None, scope_area_code:
                 qlv_entry["ghi_chu"] = (f"'{qlv['name']}' la NHOM/KENH ban hang (khong phai mot ca "
                                         "nhan/khong co doi TDV rieng) - khi tra loi phai goi dung la "
                                         "kenh/nhom, KHONG duoc noi nhu mot QLV thong thuong.")
+            # 10/08/2026: phat hien khi test cau "doanh so mien bac theo qlv" - MB co 1 QLV
+            # (MBKV12, ba Nguyen Thi Thanh Thuy, 0 TDV) TRUNG TEN voi chinh TP dang quan ly ca vung
+            # MB (cung la Nguyen Thi Thanh Thuy). Day la ca da duoc ghi nhan tu 21/07/2026 (muc A4,
+            # Cau_hoi_can_DNH_xac_nhan.md) - nghi Bravo co 2 ban ghi cho cung 1 nguoi (1 o cap TP quan
+            # ly ca vung, 1 o cap QLV rieng le), CHUA duoc DNH xac nhan la QLV that hay chi la ban ghi
+            # trung. Neu khong danh dau, model de bi cau hoi "doanh so theo QLV" cua vung nay lam roi
+            # (thay 1 nguoi vua la sep vung vua la "nhan vien" duoi quyen chinh minh) roi goi lai tool
+            # nhieu lan/di do SQL tho thay vi tra loi thang - xem ghi chu doi chieu voi hanh vi that
+            # trong nl2sql.py (session 20b6c3d5, 10/08, cau "doanh so mien bac theo qlv").
+            elif qlv["name"] and tp["name"] and qlv["name"].strip() == tp["name"].strip():
+                qlv_entry["ghi_chu"] = (
+                    f"CANH BAO DU LIEU: '{qlv['name']}' (ma QLV {qlv['employee_code']}) TRUNG TEN voi "
+                    f"chinh Truong phong dang phu trach ca vung {tp['area_code']} (ma {tp['employee_code']}) "
+                    "- rat co the la CUNG MOT NGUOI, Bravo dang luu 2 ban ghi rieng (1 cap TP, 1 cap QLV "
+                    "voi 0 TDV). Day la ca DANG CHO DNH XAC NHAN (xem muc A4 trong "
+                    "Cau_hoi_can_DNH_xac_nhan.md), CHUA RO day la QLV that hay ban ghi trung. KHI TRA "
+                    "LOI ve nguoi/ma nay: PHAI neu ro nghi van trung ban ghi voi Truong phong vung, "
+                    "KHONG duoc trinh bay nhu mot QLV thong thuong khac trong doi hinh.")
             qlv_list.append(qlv_entry)
         tree.append({"employee_code": tp["employee_code"], "name": tp["name"], "area_code": tp["area_code"],
                       **tp_kpi, "qlv_count": len(qlv_list), "qlv": qlv_list})
