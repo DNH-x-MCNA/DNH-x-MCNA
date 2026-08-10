@@ -1,3 +1,5 @@
+import { proxyFetch } from "../../../_proxy";
+
 export async function POST(request: Request) {
   const backendUrl = process.env.BACKEND_API_URL;
   const apiKey = process.env.BACKEND_API_KEY;
@@ -8,7 +10,7 @@ export async function POST(request: Request) {
   const authHeader = request.headers.get("Authorization");
   const body = await request.text();
 
-  const res = await fetch(`${backendUrl}/admin/users/create`, {
+  return proxyFetch(`${backendUrl}/admin/users/create`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -16,11 +18,5 @@ export async function POST(request: Request) {
       ...(apiKey ? { "X-API-Key": apiKey } : {}),
     },
     body,
-  });
-
-  const data = await res.text();
-  return new Response(data, {
-    status: res.status,
-    headers: { "Content-Type": "application/json" },
   });
 }

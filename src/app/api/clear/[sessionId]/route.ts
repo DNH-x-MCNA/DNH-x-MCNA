@@ -1,3 +1,5 @@
+import { proxyFetch } from "../../_proxy";
+
 export async function POST(request: Request, ctx: RouteContext<"/api/clear/[sessionId]">) {
   const { sessionId } = await ctx.params;
   const backendUrl = process.env.BACKEND_API_URL;
@@ -7,17 +9,11 @@ export async function POST(request: Request, ctx: RouteContext<"/api/clear/[sess
   }
 
   const authHeader = request.headers.get("authorization");
-  const res = await fetch(`${backendUrl}/clear/${encodeURIComponent(sessionId)}`, {
+  return proxyFetch(`${backendUrl}/clear/${encodeURIComponent(sessionId)}`, {
     method: "POST",
     headers: {
       ...(apiKey ? { "X-API-Key": apiKey } : {}),
       ...(authHeader ? { Authorization: authHeader } : {}),
     },
-  });
-
-  const data = await res.text();
-  return new Response(data, {
-    status: res.status,
-    headers: { "Content-Type": "application/json" },
   });
 }
