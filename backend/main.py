@@ -438,11 +438,11 @@ def approve_user_endpoint(username: str, req: ApproveUserRequest, user: dict = D
     _write_log({
         "ts": dt.datetime.now().isoformat(),
         "username": user["username"],
-        "question": f"✅ Phê duyệt tài khoản {username} (vai trò {req.role})",
+        "question": f"⚙️ Đổi quyền / Phê duyệt tài khoản {username} (Role: {req.role}, Vùng: {req.scope_value or 'Tất cả'}, Kênh: {req.scope_channel or 'Tất cả'})",
         "sql": "<admin:approve_user>",
         "status": "ok"
     })
-    return {"ok": True, "message": f"Phê duyệt tài khoản {username} thành công"}
+    return {"ok": True, "message": f"Phê duyệt/Sửa quyền tài khoản {username} thành công"}
 
 
 @app.post("/admin/users/{username}/toggle-active", dependencies=[Depends(require_api_key)])
@@ -719,6 +719,7 @@ def get_audit_logs_dashboard(
         sid = e.get("session_id") or ""
         sql_str = e.get("sql") or ""
         is_security_event = sql_str.startswith("<auth:") or sql_str.startswith("<admin:")
+        q_key = (sid, (e.get("question") or "")[:120])
 
         # Security/Auth events (login, change_password, create_user...) NEVER deduplicated!
         if not is_security_event and q_key in _seen_q:

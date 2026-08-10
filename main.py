@@ -2,7 +2,7 @@ import os
 import sys
 import time
 import argparse
-from datetime import datetime
+from datetime import datetime, timedelta
 from dotenv import load_dotenv
 
 def load_env():
@@ -128,7 +128,7 @@ def run_all_alert_checks(config, erp_engine=None, crm_engine=None):
 
 load_dotenv()
 
-def _digest_table(metrics):
+def _digest_table(metrics, warnings=None):
     headers = ["Chỉ số", "Giá trị"]
     change_pct = metrics['revenue']['change_pct']
     prev_label = metrics['revenue'].get('prev_period_label', '')
@@ -147,14 +147,39 @@ def _digest_table(metrics):
     rows.append(["Tổng số hóa đơn", str(metrics['revenue']['invoice_count'])])
     rows.append(["Mặt hàng tồn chết", str(metrics['inventory']['dead_stock_count'])])
     rows.append(["Mặt hàng sắp hết hàng", str(metrics['inventory']['near_stockout_count'])])
+    
+    oq = metrics.get('operational_quality')
+    if oq:
+        kpi = oq.get("kpi_pace")
+        if kpi:
+            rows.append(["Tỷ lệ TDV Đỏ (KPI chậm)", f"{len(kpi['reds'])}/{kpi['total']} ({len(kpi['reds'])/kpi['total']*100:.1f}%)"])
+        
+        recon = oq.get("reconciliation")
+        if recon:
+            rows.append(["Lệch D.Thu (Hóa đơn vs KPI)", format_vietnamese_money(recon["diff_vnd"])])
+            
+        etc_ret = oq.get("etc_return")
+        if etc_ret:
+            rows.append(["Tỷ lệ trả hàng ETC", f"{etc_ret['rate']*100:.2f}%"])
     for h in metrics.get('highlights', []):
         rows.append([f"Cảnh báo: {h['label']}", f"{h['value_display']} (lúc {h['sent_at_display']})"])
 
-    return headers, rows
+    sections = None
+    if warnings:
+        warnings = warnings[:8]
+        sec_rows = [[w["label"], w["value_display"]] for w in warnings]
+        sections = [{
+            "title": f"⚠️ Cảnh báo trong ngày ({len(warnings)})",
+            "table_headers": ["Cảnh báo", "Số lần xuất hiện"],
+            "table_rows": sec_rows
+        }]
 
-def send_daily_digest():
+    return headers, rows, sections
+
+def send_daily_digest(audience_filter=None, webhook_override=None, dry_run=False, show_operational_quality_override=False):
     print(f"[{datetime.now()}] Đang chuẩn bị báo cáo Daily Digest...")
     from src.region_map import REGION_NAMES_VI
+    from src.etl import _get_period_warning_alerts
 
     config = load_config()
     recipients = config.get('report_recipients') or []
@@ -162,32 +187,45 @@ def send_daily_digest():
         print(f"[{datetime.now()}] Chưa cấu hình report_recipients — gửi Daily Digest bản không lọc (hành vi cũ).")
         recipients = [{"audience": None, "region": None, "channel": None, "teams_webhook": None}]
 
+    now = datetime.now()
+    start_dt = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    end_dt = start_dt + timedelta(days=1)
+
     overall_ok = True
     for r in recipients:
         audience = r.get('audience')
+        if audience_filter and audience != audience_filter:
+            continue
         region = r.get('region')
         channel = r.get('channel')
-        webhook = (r.get('teams_webhook') or '').strip() or None
+        webhook = webhook_override or (r.get('teams_webhook') or '').strip() or None
+        show_oq = show_operational_quality_override or r.get('show_operational_quality', False)
         try:
-            metrics = get_daily_digest_metrics(region=region, channel=channel)
-            headers, rows = _digest_table(metrics)
+            metrics = get_daily_digest_metrics(region=region, channel=channel, show_operational_quality=show_oq)
+            warnings = _get_period_warning_alerts(start_dt, end_dt, region=region)
+            headers, rows, sections = _digest_table(metrics, warnings=warnings)
             region_label = REGION_NAMES_VI.get(region, region) if region else "Toàn quốc"
             title = f"BÁO CÁO TỔNG HỢP HÀNG NGÀY ({metrics['date']})" + (f" — {audience}" if audience else "")
             summary = (
                 f"Tổng hợp hoạt động ERP/CRM ngày {metrics['date']}."
                 f" Dữ liệu cập nhật lúc {metrics.get('updated_at', 'N/A')}."
             )
-            sent = send_teams_alert(
-                title=title,
-                summary=summary,
-                table_headers=headers,
-                table_rows=rows,
-                severity="INFO",
-                period=metrics['date'],
-                channel=channel or "OTC + ETC (gộp)",
-                region=region_label,
-                webhook_url_override=webhook,
-            )
+            if dry_run:
+                print(f"[DRY-RUN] Sẽ gửi '{title}' tới webhook: {webhook}")
+                sent = True
+            else:
+                sent = send_teams_alert(
+                    title=title,
+                    summary=summary,
+                    table_headers=headers,
+                    table_rows=rows,
+                    severity="INFO",
+                    period=metrics['date'],
+                    channel=channel or "OTC + ETC (gộp)",
+                    region=region_label,
+                    webhook_url_override=webhook,
+                    sections=sections
+                )
             if sent:
                 print(f"[{datetime.now()}] Daily Digest cho '{audience or 'mặc định'}' đã gửi thành công.")
             else:
@@ -249,6 +287,10 @@ def main():
     parser.add_argument('--send-daily', action='store_true', help='Gửi báo cáo Daily Digest (Email) ngay lập tức rồi thoát')
     parser.add_argument('--send-weekly', action='store_true', help='Gửi báo cáo Weekly (Email) ngay lập tức rồi thoát')
     parser.add_argument('--send-monthly', action='store_true', help='Gửi báo cáo Monthly (Email) ngay lập tức rồi thoát')
+    parser.add_argument('--dry-run', action='store_true', help='Chỉ in ra log, không gửi thật (chỉ dùng với --send-daily/weekly/monthly)')
+    parser.add_argument('--audience', type=str, help='Chỉ gửi báo cáo cho audience cụ thể (chỉ dùng với --send-daily/weekly/monthly)')
+    parser.add_argument('--teams-webhook-override', type=str, help='Ghi đè URL webhook (để test)')
+    parser.add_argument('--show-operational-quality', action='store_true', help='Bật cờ show_operational_quality cho Daily Digest')
     args = parser.parse_args()
 
     config = load_config()
@@ -262,7 +304,7 @@ def main():
             print(f"[{datetime.now()}] Cảnh báo: không tạo được mock ERP/CRM engine (bỏ qua bản mock): {e}")
 
     if args.send_daily:
-        send_daily_digest()
+        send_daily_digest(audience_filter=args.audience, webhook_override=args.teams_webhook_override, dry_run=args.dry_run, show_operational_quality_override=args.show_operational_quality)
         sys.exit(0)
     if args.send_weekly:
         send_weekly_report()

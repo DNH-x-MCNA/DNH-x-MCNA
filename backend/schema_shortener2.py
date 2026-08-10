@@ -1,0 +1,17 @@
+import re
+
+with open('D:/DNH-x-MCNA/backend/schema_context.py', 'r', encoding='utf-8') as f:
+    content = f.read()
+
+new_content = content.replace(
+    '(B) CHINH SACH THU NHAP TDV OTC MOI (Level/LCB, SKU, KH tai don, KH moi, SP trong tam/DM1-3,\n        ASO/KH hoat dong, thuong tien do V15/V22, thuong Quy/Nam) - day la BO CHI SO CHI TIET HON,\n        KHAC voi moc (A) o tren. XAC NHAN 23/07/2026: co VAN BAN CHINH THUC (3 Quyet dinh HDQT rieng\n        Nam/Trung/Bac, hieu luc van ban tu 01/07/2026, cong thuc chi tiet xem\n        docs_chinh_sach_thu_nhap_TDV_OTC.md) NHUNG theo DA phia DNH xac nhan, CHUA duoc ap dung THUC\n        TE de tinh luong thang 7/2026 - co do tre giua ngay hieu luc van ban va ngay van hanh that.\n        KHO LOCAL/SUPABASE KHONG CO bang du lieu nao chua cac chi so nay (fact_tonghopkhachhang chi\n        co doanh so/target/khach moi don gian). Neu nguoi dung hoi ve cac chi so chi tiet nay: PHAI\n        noi ro 2 y - (1) chinh sach CHUA duoc ap dung thuc te (du van ban da co hieu luc), (2) he\n        thong cung chua co nguon du lieu de tinh. TUYET DOI KHONG tu tinh/bia so lieu du BIET RO\n        cong thuc tu van ban - cong thuc dung khong co nghia du lieu dau vao dang duoc ghi nhan.\n        KHONG nham lan voi BA MOC KPI o muc (A) - 2 thu hoan toan tach biet, KHONG duoc tron lan.',
+    '(B) CHINH SACH THU NHAP TDV OTC MOI (Level/LCB, SKU, KH tai don/khach moi, V15/V22, thuong Quy/Nam): CHUA AP DUNG THUC TE cho tinh luong. KHO LOCAL CHUA CO DU LIEU cho cac chi so nay. Khong tu tinh toan so lieu.'
+)
+
+new_content = new_content.replace(
+    '12. TRUOC KHI KET LUAN "BAT THUONG" / "SO LIEU KHONG DANG TIN CAY" - BAT BUOC TU KIEM 3 DIEU:\n    (a) HAI VE CO CUNG KY KHONG? Loi that da xay ra 31/07/2026: lay so KPI LUY KE CA THANG 7\n        (24,86 ty) dem so voi hoa don RIENG NGAY 30/07 (4,14 ty) roi ket luan "lech 601%, so lieu\n        khong dang tin cay, can bo phan ky thuat kiem tra". Thuc te la dang so 1 THANG voi 1 NGAY,\n        khong he co gi bat thuong. fact_tonghopkhachhang = luy ke tu dau thang; vhoadon_otc = tung ngay.\n    (b) HAI VE CO CUNG TANG KHONG? Xem canh bao "hai tang chong len nhau" o fact_tonghopkhachhang.\n        Cong ca bang luon ra dung gap 2 lan - do la cau truc binh thuong cua bang, KHONG phai loi.\n    (c) NHOM "KHONG XAC DINH VUNG" CO PHAI LA 13 MA is_duplicate=1 KHONG? Neu dung thi do la cau truc\n        binh thuong da biet (kenh Modern Trade, Cho si...), KHONG phai loi du lieu - va cung KHONG\n        duoc loc bo, vi 4 trong so do la QLV that om 8,93 ty doanh thu THAT.\n    Neu chua kiem het 3 dieu tren thi TUYET DOI KHONG duoc dung cac tu: "bat thuong", "khong dang tin\n    cay", "co the dem trung nhan vien", "loi lien ket du lieu", "can bo phan ky thuat kiem tra".\n    Thay vao do hay noi "toi chua doi chieu duoc hai so nay ve cung mot ky/mot tang" va giai thich ly\n    do. Mot canh bao SAI khien nguoi dung mat niem tin vao TOAN BO cac cau tra loi khac - tac hai lon\n    hon nhieu so voi viec thua nhan chua doi chieu duoc.',
+    '12. TRUOC KHI KET LUAN "BAT THUONG" / "SO LIEU KHONG DANG TIN CAY": BAT BUOC tu kiem: (a) CUNG KY khong? (b) CUNG TANG khong? (c) Nhóm "KHONG XAC DINH VUNG" la 13 ma is_duplicate=1 => binh thuong. Neu chua kiem het, TUYET DOI KHONG dung tu "bat thuong", hay tra loi "chua doi chieu duoc do...".'
+)
+
+with open('D:/DNH-x-MCNA/backend/schema_context.py', 'w', encoding='utf-8') as f:
+    f.write(new_content)

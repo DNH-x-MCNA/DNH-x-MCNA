@@ -255,7 +255,7 @@ export default function AdminUsersPanel({ authToken, onClose }: AdminUsersPanelP
                   : "bg-white text-slate-600 border border-slate-200 hover:bg-slate-50"
               }`}
             >
-              🔐 Nhật ký Đổi MK & Đăng nhập ({securityLogs.length})
+              📋 Nhật ký Hoạt động ({securityLogs.length})
             </button>
           </div>
           {activeTab === "security" && (
@@ -409,19 +409,19 @@ export default function AdminUsersPanel({ authToken, onClose }: AdminUsersPanelP
           </>
         )}
 
-        {/* Security Logs Tab View */}
+        {/* Security & Activity Logs Tab View */}
         {activeTab === "security" && (
           <div className="p-5 max-h-[60vh] overflow-y-auto">
             <div className="flex items-center justify-between mb-3">
               <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider">
-                🔐 Lịch sử Đổi Mật Khẩu, Đăng Nhập & Thao Tác Quản Trị ({securityLogs.length} sự kiện)
+                📋 Lịch sử Hoạt Động (Đổi Mật Khẩu, Đổi Quyền Admin, Đăng Nhập) ({securityLogs.length} sự kiện)
               </h3>
-              <span className="text-[11px] text-slate-500">Tự động đồng bộ từ database & audit log</span>
+              <span className="text-[11px] text-slate-500">Tự động đồng bộ thời gian thực từ hệ thống</span>
             </div>
             {logsLoading ? (
-              <div className="py-12 text-center text-slate-500 text-sm">Đang tải nhật ký bảo mật...</div>
+              <div className="py-12 text-center text-slate-500 text-sm">Đang tải nhật ký hoạt động...</div>
             ) : securityLogs.length === 0 ? (
-              <div className="py-12 text-center text-slate-400 text-sm">Chưa có dữ liệu nhật ký bảo mật.</div>
+              <div className="py-12 text-center text-slate-400 text-sm">Chưa có dữ liệu nhật ký hoạt động.</div>
             ) : (
               <table className="w-full text-left text-xs border-collapse">
                 <thead>
@@ -437,6 +437,7 @@ export default function AdminUsersPanel({ authToken, onClose }: AdminUsersPanelP
                   {securityLogs.map((log: any, idx: number) => {
                     const isError = log.status === "error";
                     const qText = log.question || "";
+                    const isRoleChange = qText.includes("Đổi quyền") || qText.includes("Phê duyệt") || qText.includes("Sửa quyền");
                     const isPasswordChange = qText.includes("Đổi mật khẩu");
                     const isLogin = qText.includes("Đăng nhập");
                     const isReset = qText.includes("Reset") || qText.includes("Quên");
@@ -453,8 +454,10 @@ export default function AdminUsersPanel({ authToken, onClose }: AdminUsersPanelP
                         </td>
                         <td className="p-3 font-medium">
                           <span className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-semibold ${
-                            isPasswordChange
-                              ? "bg-amber-100 text-amber-900 border border-amber-300"
+                            isRoleChange
+                              ? "bg-indigo-100 text-indigo-900 border border-indigo-300 font-bold"
+                              : isPasswordChange
+                              ? "bg-amber-100 text-amber-900 border border-amber-300 font-bold"
                               : isLogin
                               ? "bg-emerald-100 text-emerald-900 border border-emerald-300"
                               : isReset

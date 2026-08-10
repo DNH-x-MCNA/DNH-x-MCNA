@@ -1,12 +1,37 @@
 import os
 import sys
 import sqlite3
+import time
+from functools import wraps
 from collections import namedtuple
 from datetime import datetime, timedelta
 from src.database import load_config, get_db_engines
 from src.etl import get_low_inventory, get_recent_failed_orders, get_unresolved_urgent_tickets
 from src.notifier import send_alert_to_all_channels
 import math
+
+def ttl_cache(ttl=600):
+    """
+    Decorator lưu cache kết quả hàm trong vòng `ttl` giây.
+    Dùng để tránh query lặp lại vào DB khi cùng một metrics được gọi nhiều lần 
+    (vd: khi gửi báo cáo cho nhiều audience).
+    """
+    def decorator(func):
+        cache = {}
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            # Ép kiểu an toàn thành chuỗi để làm key, phù hợp với các tham số đơn giản
+            key = str(args) + str(kwargs)
+            now = time.time()
+            if key in cache:
+                val, timestamp = cache[key]
+                if now - timestamp < ttl:
+                    return val
+            val = func(*args, **kwargs)
+            cache[key] = (val, now)
+            return val
+        return wrapper
+    return decorator
 
 # Đảm bảo terminal/log ghi nhận được tiếng Việt có dấu
 if hasattr(sys.stdout, 'reconfigure'):
@@ -2011,22 +2036,16 @@ def check_revenue_concentration_alert():
 
 # ---- Nhóm E: Hàng trả về ---------------------------------------------------
 
-def check_return_rate_alert():
-    """E: Tỷ lệ giá trị hàng trả về (brvsx_tralai) / doanh số ETC tháng mới nhất vượt ngưỡng.
-
-    15/07/2026: doanh số ETC (mẫu số) đổi sang dùng _period_revenue() (view vHoaDonETCTotal đã
-    kiểm chứng khớp 100% số DNH báo) thay vì tự tính SUM("TotalAmount") từ brvsx_hoadonhdr/
-    BRVSX_HoaDonHdr — công thức tự ráp cũ dính đúng lỗi đã tìm thấy nhiều nơi khác trong đợt rà
-    soát hôm nay: không trừ đúng hàng trả lại theo cách view gốc làm, không lọc Post_TheKho=1/
-    chứng từ hủy qua BRV_TrangThaiDuyet — khiến mẫu số tỷ lệ trả hàng KHÔNG khớp với doanh thu ETC
-    chính thức dùng ở mọi báo cáo/cảnh báo khác trong hệ thống (2 con số lẽ ra phải nhất quán).
-    Không còn failover Postgres cho phần doanh số (giống các hàm doanh thu khác đã sửa) — riêng
-    phần "hàng trả về" vẫn đọc BRVSX_TraLai trực tiếp trên Bravo."""
+@ttl_cache(ttl=600)
+def get_etc_return_rate():
+    """
+    Tính tỷ lệ hàng trả về / doanh số kênh ETC cho tháng mới nhất có dữ liệu.
+    Trả về dict: {'rate': float, 'ret_value': float, 'etc_sales': float, 'month_start': datetime}
+    """
     from sqlalchemy import text
     from src.database import _get_bravo_engine
     from src.etl import _period_revenue
-    threshold = float(_biz_threshold('return_rate_pct', 0.05))
-
+    
     try:
         engine = _get_bravo_engine()
         if engine is None:
@@ -2034,11 +2053,9 @@ def check_return_rate_alert():
         with engine.connect() as conn:
             mx_row = conn.execute(text("SELECT MAX(DocDate) FROM dbo.vHoaDonETCTotal")).fetchone()
         if not mx_row or not mx_row[0]:
-            print("[ALERTS][return_rate] Chưa có dữ liệu ETC để tính tỷ lệ trả hàng.")
-            return
+            return None
+            
         max_date = mx_row[0]
-        # Driver ODBC cũ ("SQL Server") có thể trả cột date dạng chuỗi thay vì datetime.date gốc —
-        # cùng lỗi đã xác nhận thực tế ở _last_complete_data_day và nơi khác trong file này.
         if isinstance(max_date, str):
             max_date = datetime.strptime(max_date[:10], "%Y-%m-%d")
         elif not hasattr(max_date, "strftime"):
@@ -2056,14 +2073,45 @@ def check_return_rate_alert():
                 WHERE IsActive = 1 AND DocDate >= :a AND DocDate < :b
             '''), {"a": month_start, "b": month_end}).fetchone()
         ret_value = float(ret_row[0]) if ret_row else 0.0
+        
+        rate = return_rate(ret_value, etc_sales)
+        if rate is None:
+            return None
+            
+        return {
+            "rate": rate,
+            "ret_value": ret_value,
+            "etc_sales": etc_sales,
+            "month_start": month_start
+        }
     except Exception as e:
         print(f"[ALERTS][return_rate] Lỗi: {e}")
+        return None
+
+
+def check_return_rate_alert():
+    """E: Tỷ lệ giá trị hàng trả về (brvsx_tralai) / doanh số ETC tháng mới nhất vượt ngưỡng.
+
+    15/07/2026: doanh số ETC (mẫu số) đổi sang dùng _period_revenue() (view vHoaDonETCTotal đã
+    kiểm chứng khớp 100% số DNH báo) thay vì tự tính SUM("TotalAmount") từ brvsx_hoadonhdr/
+    BRVSX_HoaDonHdr — công thức tự ráp cũ dính đúng lỗi đã tìm thấy nhiều nơi khác trong đợt rà
+    soát hôm nay: không trừ đúng hàng trả lại theo cách view gốc làm, không lọc Post_TheKho=1/
+    chứng từ hủy qua BRV_TrangThaiDuyet — khiến mẫu số tỷ lệ trả hàng KHÔNG khớp với doanh thu ETC
+    chính thức dùng ở mọi báo cáo/cảnh báo khác trong hệ thống (2 con số lẽ ra phải nhất quán).
+    Không còn failover Postgres cho phần doanh số (giống các hàm doanh thu khác đã sửa) — riêng
+    phần "hàng trả về" vẫn đọc BRVSX_TraLai trực tiếp trên Bravo."""
+    threshold = float(_biz_threshold('return_rate_pct', 0.05))
+
+    ret_data = get_etc_return_rate()
+    if not ret_data:
+        print("[ALERTS][return_rate] Chưa đủ dữ liệu để tính tỷ lệ trả hàng ETC.")
         return
 
-    rate = return_rate(ret_value, etc_sales)
-    if rate is None:
-        print("[ALERTS][return_rate] Chưa đủ dữ liệu (doanh số ETC = 0) để tính tỷ lệ trả hàng.")
-        return
+    rate = ret_data["rate"]
+    ret_value = ret_data["ret_value"]
+    etc_sales = ret_data["etc_sales"]
+    month_start = ret_data["month_start"]
+
     print(f"[ALERTS][return_rate] Tỷ lệ trả hàng ETC = {rate*100:.2f}% (ngưỡng {threshold*100:.0f}%).")
     if rate > threshold:
         alert_key = "etc_return_rate"
@@ -2283,56 +2331,30 @@ def check_kpi_sales_force_risk_alert():
         record_alert_sent(alert_key, current_value, region="Miền Nam")
 
 
-def check_daily_kpi_pace_alert():
+@ttl_cache(ttl=600)
+def get_kpi_pace_summary():
     """
-    Nhịp KPI theo NGÀY của từng TDV: doanh số phát sinh TRONG NGÀY / chỉ tiêu THÁNG của chính TDV
-    đó — <3% Đỏ, 3%-<4% Vàng, >=4% Xanh (nhịp ~4%/ngày khớp đủ chỉ tiêu qua ~25 ngày làm việc).
-
-    LƯU Ý QUAN TRỌNG (phát hiện thực tế khi backtest 57 ngày làm việc 05-07/2026): doanh số bán
-    buôn dược phẩm đến theo TỪNG ĐƠN LỚN không đều, KHÔNG rải đều 1/25 chỉ tiêu mỗi ngày như giả
-    định ban đầu — trung bình 39.7/49 TDV (81%) đã ở mức Đỏ NGAY CẢ VÀO NGÀY KINH DOANH BÌNH
-    THƯỜNG (thấp nhất quan sát được: 23/49, cao nhất 49/49). Vì vậy ngưỡng ">=5 người Đỏ" gần như
-    LUÔN đúng — đã trao đổi lại và CHỐT: giữ nguyên ngưỡng 5 nhưng đổi bản chất từ "cảnh báo bất
-    thường" (WARNING) sang "báo cáo tóm tắt hàng ngày" (INFO, kèm đầy đủ số liệu Đỏ/Vàng/Xanh) —
-    không dùng ngưỡng số người Đỏ này để suy luận mức độ nghiêm trọng.
-
-    Chủ nhật LUÔN 100% Đỏ (10/10 Chủ nhật quan sát được đều 49/49 — công ty không kinh doanh ngày
-    này) nên KHÔNG chạy report vào Chủ nhật, tránh gửi 1 báo cáo vô nghĩa mỗi tuần.
-
-    BRAVO TRỰC TIẾP (10/07/2026, bỏ hẳn fallback Supabase 20/07/2026 — bảng kpi_summary xác nhận
-    dữ liệu thiếu nghiêm trọng, chỉ 6/20 QLV thật): query nhiều JOIN dịch sang T-SQL (BRV_HoaDonCt/
-    HoaDonHdr/DIM_NhanVien/trạng thái duyệt/hóa đơn điện tử), chỉ tiêu tháng lấy qua
-    FACT_TongHopKhachHang (giống get_bravo_kpi_tdv_snapshot). Bravo lỗi thì bỏ qua kỳ này (không
-    còn số liệu cũ/thiếu nào để dùng tạm).
-
-    GIỚI HẠN DỮ LIỆU: CHỈ khả thi kênh OTC — BRVSX_HoaDonHdr (ETC) không có cột nhân viên nào trên
-    hóa đơn. FACT_TongHopKhachHang có đủ TDV mọi miền (xác nhận thực tế chạy ra 146 TDV đủ Bắc/
-    Trung/Nam).
+    Trả về dictionary tóm tắt nhịp KPI hàng ngày (đỏ/vàng/xanh).
+    Dùng chung cho alert và hiển thị Operational Quality trên Daily Digest.
     """
     from sqlalchemy import text
     import types
 
     red_pct = float(_biz_threshold('kpi_pace_red_pct', 3.0))
     yellow_pct = float(_biz_threshold('kpi_pace_yellow_pct', 4.0))
-    red_alert_count = int(_biz_threshold('kpi_pace_red_alert_count', 5))
 
-    target_day = None
-    rows = []
     try:
         from src.database import _get_bravo_engine
         bravo_engine = _get_bravo_engine()
         if bravo_engine is None:
             raise RuntimeError("Không có Bravo engine")
         with bravo_engine.connect() as conn:
-            # Dùng ngày LIỀN TRƯỚC ngày mới nhất có dữ liệu — cùng lý do đã ghi ở bản Supabase cũ
-            # (ngày mới nhất luôn có thể chưa đồng bộ xong).
             overall_max_row = conn.execute(text(
                 'SELECT MAX([DocDate]) FROM [BRV_HoaDonHdr] WHERE [IsActive]=1'
             )).fetchone()
             overall_max = overall_max_row[0] if overall_max_row else None
             if not overall_max:
-                print("[ALERTS][kpi_pace] Chưa có dữ liệu hóa đơn OTC để tính nhịp KPI.")
-                return
+                return None
             overall_max_str = overall_max.strftime("%Y-%m-%d") if hasattr(overall_max, "strftime") else str(overall_max)
 
             target_row = conn.execute(text(
@@ -2340,12 +2362,10 @@ def check_daily_kpi_pace_alert():
             ), {"overall_max": overall_max_str}).fetchone()
             target_raw = target_row[0] if target_row else None
             if not target_raw:
-                print("[ALERTS][kpi_pace] Chưa đủ 2 ngày dữ liệu để xác định ngày đã đồng bộ xong — bỏ qua.")
-                return
+                return None
             target_day = target_raw if hasattr(target_raw, "strftime") else datetime.strptime(str(target_raw)[:10], "%Y-%m-%d").date()
-            if target_day.weekday() == 6:  # Chủ nhật — luôn 100% Đỏ (không kinh doanh), bỏ qua
-                print(f"[ALERTS][kpi_pace] Ngày {target_day} là Chủ nhật — không kinh doanh, bỏ qua report.")
-                return
+            if target_day.weekday() == 6:  # Chủ nhật
+                return None
             target_day_str = target_day.strftime("%Y-%m-%d")
 
             bravo_rows = conn.execute(text(f'''
@@ -2382,12 +2402,11 @@ def check_daily_kpi_pace_alert():
             month_sale_target=float(r.month_sale_target or 0), day_rev=float(r.day_rev or 0))
             for r in bravo_rows]
     except Exception as e:
-        print(f"[ALERTS][kpi_pace] Bravo lỗi ({e}) — bỏ qua kỳ này.")
-        return
+        print(f"[ALERTS][kpi_pace] Lỗi lấy dữ liệu nhịp KPI: {e}")
+        return None
 
     if not rows:
-        print("[ALERTS][kpi_pace] Không có TDV nào (position_code='TDV', có chỉ tiêu tháng) để tính nhịp KPI.")
-        return
+        return None
 
     reds, yellows, greens = [], [], []
     for r in rows:
@@ -2399,8 +2418,56 @@ def check_daily_kpi_pace_alert():
         else:
             greens.append((r, pct))
 
+    return {
+        "target_day": target_day_str,
+        "reds": reds,
+        "yellows": yellows,
+        "greens": greens,
+        "total": len(rows),
+        "red_pct_threshold": red_pct,
+        "yellow_pct_threshold": yellow_pct
+    }
+
+def check_daily_kpi_pace_alert():
+    """
+    Nhịp KPI theo NGÀY của từng TDV: doanh số phát sinh TRONG NGÀY / chỉ tiêu THÁNG của chính TDV
+    đó — <3% Đỏ, 3%-<4% Vàng, >=4% Xanh (nhịp ~4%/ngày khớp đủ chỉ tiêu qua ~25 ngày làm việc).
+
+    LƯU Ý QUAN TRỌNG (phát hiện thực tế khi backtest 57 ngày làm việc 05-07/2026): doanh số bán
+    buôn dược phẩm đến theo TỪNG ĐƠN LỚN không đều, KHÔNG rải đều 1/25 chỉ tiêu mỗi ngày như giả
+    định ban đầu — trung bình 39.7/49 TDV (81%) đã ở mức Đỏ NGAY CẢ VÀO NGÀY KINH DOANH BÌNH
+    THƯỜNG (thấp nhất quan sát được: 23/49, cao nhất 49/49). Vì vậy ngưỡng ">=5 người Đỏ" gần như
+    LUÔN đúng — đã trao đổi lại và CHỐT: giữ nguyên ngưỡng 5 nhưng đổi bản chất từ "cảnh báo bất
+    thường" (WARNING) sang "báo cáo tóm tắt hàng ngày" (INFO, kèm đầy đủ số liệu Đỏ/Vàng/Xanh) —
+    không dùng ngưỡng số người Đỏ này để suy luận mức độ nghiêm trọng.
+
+    Chủ nhật LUÔN 100% Đỏ (10/10 Chủ nhật quan sát được đều 49/49 — công ty không kinh doanh ngày
+    này) nên KHÔNG chạy report vào Chủ nhật, tránh gửi 1 báo cáo vô nghĩa mỗi tuần.
+
+    BRAVO TRỰC TIẾP (10/07/2026, bỏ hẳn fallback Supabase 20/07/2026 — bảng kpi_summary xác nhận
+    dữ liệu thiếu nghiêm trọng, chỉ 6/20 QLV thật): query nhiều JOIN dịch sang T-SQL (BRV_HoaDonCt/
+    HoaDonHdr/DIM_NhanVien/trạng thái duyệt/hóa đơn điện tử), chỉ tiêu tháng lấy qua
+    FACT_TongHopKhachHang (giống get_bravo_kpi_tdv_snapshot). Bravo lỗi thì bỏ qua kỳ này (không
+    còn số liệu cũ/thiếu nào để dùng tạm).
+
+    GIỚI HẠN DỮ LIỆU: CHỈ khả thi kênh OTC — BRVSX_HoaDonHdr (ETC) không có cột nhân viên nào trên
+    hóa đơn. FACT_TongHopKhachHang có đủ TDV mọi miền (xác nhận thực tế chạy ra 146 TDV đủ Bắc/
+    Trung/Nam).
+    """
+    summary = get_kpi_pace_summary()
+    if not summary:
+        return
+        
+    reds = summary["reds"]
+    yellows = summary["yellows"]
+    greens = summary["greens"]
+    target_day = summary["target_day"]
+    total = summary["total"]
+
+    red_alert_count = int(_biz_threshold('kpi_pace_red_alert_count', 5))
+
     print(f"[ALERTS][kpi_pace] Ngày {target_day}: Đỏ {len(reds)} / Vàng {len(yellows)} / Xanh {len(greens)} "
-          f"(tổng {len(rows)} TDV, ngưỡng gửi report: Đỏ >={red_alert_count}).")
+          f"(tổng {total} TDV, ngưỡng gửi report: Đỏ >={red_alert_count}).")
 
     if len(reds) < red_alert_count:
         return
@@ -2717,6 +2784,52 @@ def check_etl_freshness_alert():
             record_alert_sent(alert_key, str(int(age_days)), region="Toàn quốc (hệ thống)")
 
 
+@ttl_cache(ttl=600)
+def get_revenue_reconciliation_diff():
+    """
+    Lấy doanh thu hóa đơn OTC và doanh thu KPI để đối chiếu. Trả về dict:
+    {'otc_rev': float, 'kpi_total': float, 'diff_vnd': float, 'diff_pct': float}
+    """
+    from src.etl import _period_revenue
+    from sqlalchemy import text
+    
+    now = datetime.now()
+    month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+
+    try:
+        otc_rev, _, _, _ = _period_revenue(month_start, now)
+    except Exception as e:
+        print(f"[ALERTS][kpi_reconcile] Lỗi lấy doanh thu OTC từ hóa đơn: {e}")
+        return None
+
+    try:
+        from src.database import _get_bravo_engine
+        bravo_engine = _get_bravo_engine()
+        if bravo_engine is None:
+            raise RuntimeError("Không có Bravo engine")
+        with bravo_engine.connect() as conn:
+            row = conn.execute(text('''
+                SELECT SUM(amt) FROM (
+                    SELECT [CustomerCode], MAX([Amount_Cus]) AS amt
+                    FROM [FACT_TongHopKhachHang]
+                    WHERE [SaveDate] = (SELECT MAX([SaveDate]) FROM [FACT_TongHopKhachHang])
+                    GROUP BY [CustomerCode]
+                ) x
+            ''')).fetchone()
+        kpi_total = float(row[0]) if row and row[0] is not None else 0.0
+    except Exception as e:
+        print(f"[ALERTS][kpi_reconcile] Bravo lỗi ({e}) — bỏ qua đối chiếu kỳ này.")
+        return None
+        
+    diff_vnd = abs(otc_rev - kpi_total)
+    diff_pct = diff_vnd / otc_rev if otc_rev > 0 else 0
+    return {
+        "otc_rev": otc_rev,
+        "kpi_total": kpi_total,
+        "diff_vnd": diff_vnd,
+        "diff_pct": diff_pct
+    }
+
 def check_kpi_revenue_reconciliation_alert():
     """
     G3 (16/07/2026): Đối chiếu TỔNG doanh thu OTC tính từ hóa đơn Bravo (_period_revenue —
@@ -2752,47 +2865,23 @@ def check_kpi_revenue_reconciliation_alert():
     LỎNG khi doanh thu công ty tăng (vd 5% của 20 tỷ = 1 tỷ đồng lọt qua không báo). ZERO-TOLERANCE
     theo yêu cầu (mặc định 0đ) — lệch dù chỉ 1 đơn/1 đồng cũng phải báo, không có vùng đệm nào.
     """
-    from src.etl import _period_revenue
     threshold_vnd = float(_biz_threshold('kpi_reconciliation_tolerance_vnd', 0))
-
     now = datetime.now()
-    month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
 
-    try:
-        otc_rev, _, _, _ = _period_revenue(month_start, now)
-    except Exception as e:
-        print(f"[ALERTS][kpi_reconcile] Lỗi lấy doanh thu OTC từ hóa đơn: {e}")
+    diff_data = get_revenue_reconciliation_diff()
+    if not diff_data:
         return
 
-    kpi_total = None
-    data_source = None
-    try:
-        from sqlalchemy import text
-        from src.database import _get_bravo_engine
-        bravo_engine = _get_bravo_engine()
-        if bravo_engine is None:
-            raise RuntimeError("Không có Bravo engine")
-        with bravo_engine.connect() as conn:
-            row = conn.execute(text('''
-                SELECT SUM(amt) FROM (
-                    SELECT [CustomerCode], MAX([Amount_Cus]) AS amt
-                    FROM [FACT_TongHopKhachHang]
-                    WHERE [SaveDate] = (SELECT MAX([SaveDate]) FROM [FACT_TongHopKhachHang])
-                    GROUP BY [CustomerCode]
-                ) x
-            ''')).fetchone()
-        kpi_total = float(row[0]) if row and row[0] is not None else 0.0
-        data_source = "Bravo (FACT_TongHopKhachHang, theo khách hàng)"
-    except Exception as e:
-        print(f"[ALERTS][kpi_reconcile] Bravo lỗi ({e}) — bỏ qua đối chiếu kỳ này.")
-        return
+    otc_rev = diff_data["otc_rev"]
+    kpi_total = diff_data["kpi_total"]
+    diff_vnd = diff_data["diff_vnd"]
+    diff_pct = diff_data["diff_pct"]
+    data_source = "Bravo (FACT_TongHopKhachHang, theo khách hàng)"
 
     if otc_rev <= 0:
         print("[ALERTS][kpi_reconcile] Chưa có doanh thu OTC tháng này để đối chiếu.")
         return
 
-    diff_vnd = abs(otc_rev - kpi_total)
-    diff_pct = diff_vnd / otc_rev
     print(f"[ALERTS][kpi_reconcile] Doanh thu OTC hóa đơn={otc_rev:,.0f}đ vs Tổng KPI ({data_source})={kpi_total:,.0f}đ "
           f"(lệch {diff_vnd:,.0f}đ / {diff_pct*100:.2f}%, ngưỡng {threshold_vnd:,.0f}đ).")
 

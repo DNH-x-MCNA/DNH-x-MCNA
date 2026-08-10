@@ -426,6 +426,15 @@ def _highlight_matches_region(region, alert_region):
     from src.region_map import REGION_NAMES_VI
     return alert_region == REGION_NAMES_VI.get(region)
 
+def _company_wide_alert_visible_to(region, alert_region):
+    """1.4d Hàm mới _company_wide_alert_visible_to() — audience cấp vùng thấy tiêu đề + số tổng của alert toàn quốc."""
+    if region is None:
+        return True
+    if alert_region in (None, "Toàn quốc", "Nhiều miền"):
+        return True
+    from src.region_map import REGION_NAMES_VI
+    return alert_region == REGION_NAMES_VI.get(region)
+
 def _format_highlight_date_part(part):
     """Nếu 1 mảnh suffix của alert_key là ngày/tháng (YYYY-MM-DD, YYYY-MM, hoặc "M_YYYY" — định
     dạng period dùng ở receivable_detail/check_debt_aging_migration_alert), đổi sang định dạng
@@ -518,6 +527,57 @@ def _humanize_highlight(alert_key, sent_at, value):
     }
 
 _HIGHLIGHTS_MAX_ROWS = 15  # xem _get_period_highlights — trần số dòng hiển thị sau khi đã gộp nhóm
+
+def _get_period_warning_alerts(start_dt, end_dt, region=None):
+    """1.4c Hàm mới _get_period_warning_alerts() — đọc alert_severity_log, GROUP BY alert_name, COUNT(*)"""
+    if not os.path.exists(STATE_DB_PATH):
+        return []
+    try:
+        conn = sqlite3.connect(STATE_DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT alert_name, region, COUNT(*) FROM alert_severity_log "
+            "WHERE severity = 'WARNING' AND sent_at >= ? AND sent_at < ? "
+            "GROUP BY alert_name, region",
+            (start_dt.strftime("%Y-%m-%d %H:%M:%S"), end_dt.strftime("%Y-%m-%d %H:%M:%S"))
+        )
+        rows = cursor.fetchall()
+        conn.close()
+    except Exception as e:
+        print(f"[DIGEST] Lỗi đọc warning từ alerts_state.db: {e}")
+        return []
+
+    results = []
+    seen = set()
+    for alert_name, alert_region, count in rows:
+        if alert_name in seen:
+            continue
+            
+        excluded = False
+        for prefix in _HIGHLIGHT_EXCLUDE_PREFIXES:
+            label = _HIGHLIGHT_LABELS.get(prefix, (prefix, ""))[0]
+            if label.lower() in alert_name.lower() or prefix.lower() in alert_name.lower():
+                excluded = True
+                break
+            if prefix == "data_sanity_zero" and "DỮ LIỆU BẤT THƯỜNG" in alert_name.upper():
+                excluded = True
+            if prefix == "etl_stale" and "ETL" in alert_name.upper():
+                excluded = True
+            if prefix == "sales_kpi_insights_report" and "BÁO CÁO PHÂN TÍCH" in alert_name.upper():
+                excluded = True
+        
+        if excluded:
+            continue
+            
+        if not _company_wide_alert_visible_to(region, alert_region):
+            continue
+            
+        seen.add(alert_name)
+        results.append({
+            "label": alert_name,
+            "value_display": f"đã lặp {_format_highlight_value(count, 'count')} lần hôm nay"
+        })
+    return results
 
 def _get_period_highlights(start_dt, end_dt, channel=None, region=None):
     """"Điểm nổi bật trong kỳ": các cảnh báo nghiệp vụ đã THỰC SỰ fire trong [start_dt, end_dt),
@@ -1162,7 +1222,7 @@ def get_digest_metrics(start_dt, end_dt, period_label, granularity=None, region=
         result["channel_share"] = channel_share
     return result
 
-def get_daily_digest_metrics(region=None, channel=None):
+def get_daily_digest_metrics(region=None, channel=None, show_operational_quality=False):
     """Tổng hợp dữ liệu trong ngày phục vụ Daily Digest (Teams).
     13/07/2026: thêm region/channel (trước đó luôn None — chỉ có 1 bản toàn công ty gửi cho
     audience C-Level, 5 audience còn lại không nhận Daily Digest). Xem send_daily_digest()
@@ -1170,7 +1230,17 @@ def get_daily_digest_metrics(region=None, channel=None):
     region/channel: lọc phạm vi báo cáo theo audience (xem get_digest_metrics)."""
     today_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
     today_end = today_start + timedelta(days=1)
-    return get_digest_metrics(today_start, today_end, today_start.strftime("%d/%m/%Y"), region=region, channel=channel)
+    metrics = get_digest_metrics(today_start, today_end, today_start.strftime("%d/%m/%Y"), region=region, channel=channel)
+    
+    if show_operational_quality:
+        from src.alerts import get_kpi_pace_summary, get_revenue_reconciliation_diff, get_etc_return_rate
+        metrics["operational_quality"] = {
+            "kpi_pace": get_kpi_pace_summary(),
+            "reconciliation": get_revenue_reconciliation_diff(),
+            "etc_return": get_etc_return_rate()
+        }
+        
+    return metrics
 
 def get_weekly_digest_metrics(region=None, channel=None):
     """Tổng hợp dữ liệu TUẦN ĐANG CHẠY (thứ 2 tới hiện tại) phục vụ Weekly Report (Email).

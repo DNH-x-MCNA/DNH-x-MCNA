@@ -410,12 +410,15 @@ def migrate_and_seed_users():
         elif not row_trieu and not row_admin:
             salt = secrets.token_hex(16)
             pwd_hash = _hash_password("dnh@admin2026", salt)
-            conn.execute(
-                "INSERT INTO users (username, email, password_hash, salt, name, role, status, created_at) "
-                "VALUES ('admin.dnh', 'admin@namhapharma.com', ?, ?, 'Admin Vận Hành', 'admin_ops', 'approved', ?)",
-                (pwd_hash, salt, dt.datetime.now().isoformat())
-            )
-            conn.commit()
+            try:
+                conn.execute(
+                    "INSERT INTO users (username, email, password_hash, salt, name, role, status, created_at) "
+                    "VALUES ('admin.dnh', 'admin@namhapharma.com', ?, ?, 'Admin Vận Hành', 'admin_ops', 'approved', ?)",
+                    (pwd_hash, salt, dt.datetime.now().isoformat())
+                )
+                conn.commit()
+            except sqlite3.IntegrityError:
+                pass
         else:
             conn.execute("UPDATE users SET role='admin_ops' WHERE username='admin.dnh'")
             conn.commit()
@@ -425,12 +428,15 @@ def migrate_and_seed_users():
         if not row_dnh:
             salt = secrets.token_hex(16)
             pwd_hash = _hash_password("dnh@clevel2026", salt)
-            conn.execute(
-                "INSERT INTO users (username, email, password_hash, salt, name, role, status, created_at) "
-                "VALUES ('dnh', 'dnh@namhapharma.com', ?, ?, 'Tổng Giám Đốc', 'c_level', 'approved', ?)",
-                (pwd_hash, salt, dt.datetime.now().isoformat())
-            )
-            conn.commit()
+            try:
+                conn.execute(
+                    "INSERT INTO users (username, email, password_hash, salt, name, role, status, created_at) "
+                    "VALUES ('dnh', 'dnh@namhapharma.com', ?, ?, 'Tổng Giám Đốc', 'c_level', 'approved', ?)",
+                    (pwd_hash, salt, dt.datetime.now().isoformat())
+                )
+                conn.commit()
+            except sqlite3.IntegrityError:
+                pass
         else:
             conn.execute("UPDATE users SET role='c_level' WHERE username='dnh'")
             conn.commit()

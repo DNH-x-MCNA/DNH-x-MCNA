@@ -862,7 +862,7 @@ def _build_detail_table(table_headers, table_rows, max_rows=None):
 
 
 def _build_teams_adaptive_card(title, summary, severity, table_headers=None, table_rows=None,
-                                period=None, channel=None, region=None, issue=None):
+                                period=None, channel=None, region=None, issue=None, sections=None):
     """
     Dung Adaptive Card (schema 1.5) thay vi text Markdown tho, de Teams hien thi
     co mau theo severity (do=CRITICAL, vang=WARNING, xanh=INFO).
@@ -952,6 +952,31 @@ def _build_teams_adaptive_card(title, summary, severity, table_headers=None, tab
             ]
         })
 
+    if sections:
+        for i, sec in enumerate(sections):
+            sec_title = sec.get("title", "Chi tiết")
+            sec_headers = sec.get("table_headers", [])
+            sec_rows = sec.get("table_rows", [])
+            if not sec_headers or not sec_rows:
+                continue
+                
+            toggle_id = f"sectionTableDetails_{i}"
+            body.append({
+                "type": "Container",
+                "id": toggle_id,
+                "isVisible": False,
+                "spacing": "Medium",
+                "items": [
+                    {
+                        "type": "TextBlock",
+                        "text": sec_title,
+                        "weight": "Bolder",
+                        "size": "Small"
+                    },
+                    _build_detail_table(sec_headers, sec_rows)
+                ]
+            })
+
     body.append({
         "type": "TextBlock",
         "text": f"Hệ thống Giám sát DWH Dược Nam Hà (DNH) • {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
@@ -976,6 +1001,16 @@ def _build_teams_adaptive_card(title, summary, severity, table_headers=None, tab
             "title": "Thu gọn / Hiện chi tiết",
             "targetElements": ["compactTableDetails"]
         })
+
+    if sections:
+        for i, sec in enumerate(sections):
+            sec_title = sec.get("title", "Chi tiết")
+            if sec.get("table_headers") and sec.get("table_rows"):
+                actions.append({
+                    "type": "Action.ToggleVisibility",
+                    "title": f"Hiện/Ẩn {sec_title}",
+                    "targetElements": [f"sectionTableDetails_{i}"]
+                })
 
     # Hotline Call Button for debt-related issues
     is_debt = any(w in title.lower() or w in str(issue or "").lower() for w in ("nợ", "overdue", "credit", "limit", "hạn mức"))
@@ -1008,7 +1043,7 @@ def _build_teams_adaptive_card(title, summary, severity, table_headers=None, tab
     }
 
 def send_teams_alert(title, summary, table_headers=None, table_rows=None, severity="INFO",
-                      period=None, channel=None, region=None, issue=None, webhook_url_override=None):
+                      period=None, channel=None, region=None, issue=None, webhook_url_override=None, sections=None):
     """
     Gửi tin nhắn cảnh báo qua Microsoft Teams Incoming Webhook dưới dạng Adaptive Card
     (phân màu theo severity thay vì text Markdown thô).
@@ -1021,7 +1056,7 @@ def send_teams_alert(title, summary, table_headers=None, table_rows=None, severi
         return False
 
     payload = _build_teams_adaptive_card(title, summary, severity, table_headers, table_rows,
-                                          period=period, channel=channel, region=region, issue=issue)
+                                          period=period, channel=channel, region=region, issue=issue, sections=sections)
 
     try:
         data = json.dumps(payload).encode('utf-8')
