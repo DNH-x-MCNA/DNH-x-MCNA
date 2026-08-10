@@ -358,9 +358,34 @@ TEMPLATE_TOOLS = [
             "required": [],
         },
     },
+    # 10/08/2026: bo sung khoi "GOI DUNG 1 LAN LA DU" sau khi cau hoi "Bao cao chi phi AI chi tiet theo
+    # nguoi dung" that bai 2 lan lien tiep trong 1 buoi (14:10 va 14:12, 2 phien khac nhau), nguoi dung
+    # nhan cau tu choi "cau hoi qua phuc tap". Doc audit_log 2 phien do thay cung 1 khuon mau:
+    #   vong 1: get_audit_log(target_username='all') -> DA co san user_breakdown (dnh, vui.hoangthi,
+    #           diag_test) - tuc la da du de tra loi ngay tu day
+    #   vong 2-4: goi LAI tool cho TUNG username mot, roi doi limit, roi quet sqlite_master tim bang
+    #           chi phi khac -> can MAX_TOOL_ROUNDS, roi vao fallback
+    # Nguyen nhan: audit_log_summary() CO Y tra user_breakdown=None khi loc 1 nguoi cu the (luc do bao
+    # cao chi con 1 nguoi, tach ra khong con y nghia - xem report_templates.py ~2029). Model doc thay
+    # null thi tuong bi loi/thieu quyen nen cang co thu them. Day KHONG phai loi du lieu va KHONG phai
+    # do effort (da go 06/08) - chi la mo ta tool chua noi ro. Cach chua giong het get_salary_detail
+    # ben duoi (cung benh: goi lap cho tung nguoi).
     {
         "name": "get_audit_log",
         "description": "Lich su truy van va token/chi phi AI quy doi VND/USD. Voi tai khoan C-Level hoac Admin: ho tro xem BÁO CÁO CHI PHÍ AI TOÀN CÔNG TY hoac loc theo nguoi dung (target_username). Voi tai khoan QLV/TDV: xem chi phi va lich su ca nhan. "
+                        "GOI DUNG 1 LAN LA DU voi cac cau kieu 'chi phi AI chi tiet theo nguoi dung', "
+                        "'ai ton bao nhieu tien', 'bao cao chi phi toan cong ty': MOT lan goi "
+                        "target_username='all' DA tra ve san truong 'user_breakdown' - bang chi phi TACH "
+                        "SAN theo TUNG tai khoan (so luot, so phien, token, USD, VND). Do CHINH LA phan "
+                        "'chi tiet theo nguoi dung' ma nguoi hoi can, lay thang tu do ma trinh bay. "
+                        "TUYET DOI KHONG goi lai tool nay rieng cho tung username de 'dao sau them', va "
+                        "KHONG dung query_database/sqlite_master de tim nguon chi phi khac (khong co bang "
+                        "nao khac) - lam vay chi ton token va tien, lai de cham tran so vong goi tool "
+                        "khien ca cau hoi that bai. "
+                        "LUU Y QUAN TRONG: khi loc DUNG 1 nguoi (target_username='<ten>') thi "
+                        "'user_breakdown' CO Y tra ve null, vi luc do bao cao chi con 1 nguoi nen khong "
+                        "con gi de tach - day KHONG PHAI loi, KHONG PHAI thieu quyen, KHONG duoc goi lai "
+                        "de thu. Chi truyen ten cu the khi nguoi hoi dich danh DUNG 1 nguoi. "
                         "CACH TRINH BAY: ket qua co truong 'display_hint' - PHAI theo dung huong dan do "
                         "(dang TIMELINE, moi dong 1 su kien voi gio + event_summary DA SOAN SAN dung "
                         "nguyen van, moi nhat len dau, KHONG trinh bay thanh bang SQL/cot ky thuat).",
@@ -369,7 +394,7 @@ TEMPLATE_TOOLS = [
             "properties": {
                 "days": {"type": "integer", "description": "So ngay gan nhat can xem, mac dinh 7"},
                 "limit": {"type": "integer", "description": "So dong lich su gan nhat toi da tra ve, mac dinh 30"},
-                "target_username": {"type": "string", "description": "Ten tai khoan nguoi dung can loc (chi danh cho C-Level/Admin), hoac 'all' de xem toàn cong ty"},
+                "target_username": {"type": "string", "description": "Ten tai khoan nguoi dung can loc (chi danh cho C-Level/Admin), hoac 'all' de xem toàn cong ty. NEN dung 'all': ket qua da co san user_breakdown tach chi phi theo TUNG nguoi, KHONG can goi lai cho tung username. Chi truyen ten cu the khi nguoi hoi dich danh dung 1 nguoi."},
             },
             "required": [],
         },
