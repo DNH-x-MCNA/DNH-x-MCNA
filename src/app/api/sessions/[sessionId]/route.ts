@@ -1,3 +1,5 @@
+import { proxyFetch } from "../../_proxy";
+
 export async function DELETE(request: Request, ctx: RouteContext<"/api/sessions/[sessionId]">) {
   const { sessionId } = await ctx.params;
   const backendUrl = process.env.BACKEND_API_URL;
@@ -7,17 +9,11 @@ export async function DELETE(request: Request, ctx: RouteContext<"/api/sessions/
   }
 
   const authHeader = request.headers.get("authorization");
-  const res = await fetch(`${backendUrl}/sessions/${encodeURIComponent(sessionId)}`, {
+  return proxyFetch(`${backendUrl}/sessions/${encodeURIComponent(sessionId)}`, {
     method: "DELETE",
     headers: {
       ...(apiKey ? { "X-API-Key": apiKey } : {}),
       ...(authHeader ? { Authorization: authHeader } : {}),
     },
-  });
-
-  const data = await res.text();
-  return new Response(data, {
-    status: res.status,
-    headers: { "Content-Type": "application/json" },
   });
 }
