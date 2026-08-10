@@ -100,7 +100,8 @@ thresholds:
     concentration_top_n: 3        # Rủi ro tập trung: top N khách...
     concentration_pct: 0.50       # ...chiếm > 50% tổng doanh thu kỳ
     return_rate_pct: 0.05         # Tỷ lệ giá trị hàng trả về / doanh số ETC vượt 5%
-    etl_stale_hours: 3            # Meta-alert: dữ liệu (MAX SyncAt) không mới quá 3 giờ -> nghi ETL đứng
+    bravo_stale_days: 2           # Meta-alert: hóa đơn Bravo mới nhất không mới quá 2 ngày -> nghi Bravo/ETL đứng
+    # etl_stale_hours: 3          # [DEPRECATED] Dùng bravo_stale_days thay thế
 
     # Nhịp KPI theo NGÀY của từng TDV (doanh số phát sinh trong ngày / chỉ tiêu THÁNG của chính
     # TDV đó) — chỉ khả thi kênh OTC (brvsx_hoadonhdr/ETC không có cột nhân viên trên hóa đơn).
@@ -146,10 +147,14 @@ debt_aging:
   date_basis: "doc_date_plus_term"
   provisional: true
 
+report_feature_flags:
+  show_dead_stock: false     # Ẩn section/bảng tồn kho chết khỏi các báo cáo cho đến khi có dữ liệu chính thức
+
 # Bật/tắt các trigger đang bị DATA GAP (thiếu cột nguồn) — tắt để đỡ tốn 1 query Supabase mỗi
 # chu kỳ quét cho việc chỉ để in "chưa có dữ liệu". Bật lại (đổi thành true) ngay khi DNH bổ
 # sung cột nguồn tương ứng vào mart, KHÔNG cần sửa code.
 alert_feature_flags:
+  dead_stock_check: false     # Ẩn/tắt cảnh báo tồn kho chết
   credit_limit_check: false   # cần cột hạn mức tín dụng trong dms_khachhang/receivable_detail
   near_expiry_check: false    # cần cột ExpiryDate lô hàng (map lô -> hạn dùng) trong mart tồn kho
   etl_freshness_check: false  # TẠM TẮT: đang trỏ CLOUD_DB_URL sang Supabase dev/test (snapshot
@@ -169,13 +174,13 @@ alert_feature_flags:
 # DNH_Realtime_Alerts (main.py) chỉ còn vai trò lưới an toàn dự phòng nên có thể để chu kỳ dài.
 # Báo cáo Daily/Weekly/Monthly cũng đã tách sang scheduled task riêng
 # (scripts/register_digest_schedule.bat: DNH_Daily_Digest_1745 17:45 hàng ngày,
-# DNH_Weekly_Report thứ Hai 17:45, DNH_Monthly_Report ngày 1 hàng tháng 17:45) — 2 dòng cấu hình
+# DNH_Weekly_Report thứ Bảy 18:00, DNH_Monthly_Report ngày 1 hàng tháng 17:45) — 2 dòng cấu hình
 # daily_digest_time/weekly_digest_day bên dưới không còn được main.py đọc nữa, giữ lại chỉ để
 # tham khảo giờ đang đăng ký trong Task Scheduler.
 scheduler:
   etl_check_interval_seconds: 3600  # Quét dự phòng mỗi 1 giờ — lưới an toàn, không phải nguồn trigger chính
   daily_digest_time: "17:45"        # Tham khảo — giờ thật đăng ký trong DNH_Daily_Digest_1745
-  weekly_digest_day: "Monday"       # Tham khảo — giờ thật đăng ký trong DNH_Weekly_Report
+  weekly_digest_day: "Saturday 18:00"       # Tham khảo — giờ thật đăng ký trong DNH_Weekly_Report
 
   # 15/07/2026: chỉ gửi cảnh báo nghiệp vụ thời gian thực (Teams) trong giờ hành chính — trước đó
   # vòng lặp dự phòng (etl_check_interval_seconds, chạy 24/7 không phân biệt giờ) vẫn bắn cảnh báo

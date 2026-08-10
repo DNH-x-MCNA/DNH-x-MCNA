@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState } from "react";
+import { IconKey, IconUnlock, IconCheck, IconWarning, IconLightbulb } from "./icons";
 
 interface AuthScreensProps {
   onLoginSuccess: (token: string, user: any) => void;
@@ -64,7 +65,7 @@ export default function AuthScreens({ onLoginSuccess }: AuthScreensProps) {
     <div className="min-h-screen flex items-center justify-center bg-slate-900 px-4 py-8">
       <div className="w-full max-w-md bg-white rounded-2xl shadow-2xl overflow-hidden border border-slate-100">
         {/* Header */}
-        <div className="bg-gradient-to-r from-blue-700 to-emerald-600 p-6 text-white text-center">
+        <div className="bg-gradient-to-r from-blue-700 to-indigo-800 p-6 text-white text-center">
           <div className="flex justify-center mb-3">
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
@@ -81,23 +82,23 @@ export default function AuthScreens({ onLoginSuccess }: AuthScreensProps) {
         <div className="flex border-b border-slate-200 bg-slate-50">
           <button
             onClick={() => { setTab("login"); setMessage(null); }}
-            className={`flex-1 py-3.5 text-xs font-semibold transition-all ${
+            className={`flex-1 py-3.5 text-xs font-semibold transition-all flex items-center justify-center gap-1.5 ${
               tab === "login"
                 ? "bg-white text-blue-700 border-b-2 border-blue-700 shadow-sm"
                 : "text-slate-500 hover:text-blue-600"
             }`}
           >
-            🔑 1. Đăng nhập hệ thống
+            <IconKey className="w-3.5 h-3.5" /> Đăng nhập hệ thống
           </button>
           <button
             onClick={() => { setTab("forgot"); setMessage(null); }}
-            className={`flex-1 py-3.5 text-xs font-semibold transition-all ${
+            className={`flex-1 py-3.5 text-xs font-semibold transition-all flex items-center justify-center gap-1.5 ${
               tab === "forgot"
                 ? "bg-white text-amber-700 border-b-2 border-amber-700 shadow-sm"
                 : "text-slate-500 hover:text-amber-600"
             }`}
           >
-            🔓 2. Quên mật khẩu
+            <IconUnlock className="w-3.5 h-3.5" /> Quên mật khẩu
           </button>
         </div>
 
@@ -111,7 +112,7 @@ export default function AuthScreens({ onLoginSuccess }: AuthScreensProps) {
                   : "bg-rose-50 text-rose-800 border border-rose-200"
               }`}
             >
-              <span>{message.type === "success" ? "✅" : "⚠️"}</span>
+              <span>{message.type === "success" ? <IconCheck className="w-4 h-4" /> : <IconWarning className="w-4 h-4" />}</span>
               <span className="flex-1">{message.text}</span>
             </div>
           )}
@@ -147,8 +148,9 @@ export default function AuthScreens({ onLoginSuccess }: AuthScreensProps) {
                 />
               </div>
 
-              <div className="bg-slate-50 border border-slate-200 p-3 rounded text-[11px] text-slate-600">
-                💡 <strong>Lưu ý:</strong> Tài khoản mới do Quản trị viên (C-Level) khởi tạo. Mật khẩu khởi tạo được gửi trực tiếp về email Outlook của nhân viên.
+              <div className="bg-slate-50 border border-slate-200 p-3 rounded text-[11px] text-slate-600 flex items-start gap-1.5">
+                <IconLightbulb className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                <span><strong>Lưu ý:</strong> Tài khoản mới do Quản trị viên (C-Level) khởi tạo. Mật khẩu khởi tạo được gửi trực tiếp về email Outlook của nhân viên.</span>
               </div>
 
               <button
@@ -185,9 +187,9 @@ export default function AuthScreens({ onLoginSuccess }: AuthScreensProps) {
               <button
                 type="submit"
                 disabled={loading}
-                className="w-full py-3 bg-gradient-to-r from-amber-600 to-amber-700 hover:from-amber-700 hover:to-amber-800 text-white font-semibold text-sm rounded-lg shadow-md transition disabled:opacity-50"
+                className="w-full py-3 bg-gradient-to-r from-amber-600 to-amber-700 hover:from-amber-700 hover:to-amber-800 text-white font-semibold text-sm rounded-lg shadow-md transition disabled:opacity-50 flex items-center justify-center gap-1.5"
               >
-                {loading ? "Đang xử lý..." : "Cấp lại mật khẩu mới qua Email 🔓"}
+                {loading ? "Đang xử lý..." : (<>Cấp lại mật khẩu mới qua Email <IconUnlock className="w-4 h-4" /></>)}
               </button>
             </form>
           )}

@@ -27,9 +27,10 @@ from pricing import MODEL_PRICING
 
 # Gia SAU khi het khuyen mai (Sonnet 5 tang tu 31/08/2026: input $2->$3, output $10->$15, cache theo
 # ty le tuong ung). Haiku/Opus giu nguyen (chua cong bo tang). Dieu chinh lai neu Anthropic cong bo khac.
+# cache_write=6.00 la 2x input (TTL 1 gio, giong pricing.py) - KHONG phai 1.25x cua TTL 5 phut.
 POST_PROMO_PRICING = {
     **{k: dict(v) for k, v in MODEL_PRICING.items()},
-    "claude-sonnet-5": {"input": 3.00, "output": 15.00, "cache_read": 0.30, "cache_write": 3.75},
+    "claude-sonnet-5": {"input": 3.00, "output": 15.00, "cache_read": 0.30, "cache_write": 6.00},
 }
 
 

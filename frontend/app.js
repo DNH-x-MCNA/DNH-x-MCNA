@@ -70,10 +70,12 @@ const btnLogout = document.getElementById("btn-logout");
 
 // Views
 const viewChatbot = document.getElementById("view-chatbot");
+const viewAdmin = document.getElementById("view-admin");
 const pageTitle = document.getElementById("page-title");
 
 // Menu items
 const menuChatbot = document.getElementById("menu-chatbot");
+const menuAdmin = document.getElementById("menu-admin");
 
 // On Load
 document.addEventListener("DOMContentLoaded", () => {
@@ -172,6 +174,12 @@ function showApp() {
     userDisplayName.innerText = currentUsername.toUpperCase();
     userRole.innerText = currentRole;
 
+    if (currentRole === "c_level") {
+        menuAdmin.style.display = "flex";
+    } else {
+        menuAdmin.style.display = "none";
+    }
+
     // Khôi phục lịch sử chat đã lưu
     restoreChat();
 
@@ -191,12 +199,23 @@ function showApp() {
 
 // Navigation Logic
 menuChatbot.addEventListener("click", (e) => { e.preventDefault(); switchView("chatbot"); });
+if (menuAdmin) menuAdmin.addEventListener("click", (e) => { e.preventDefault(); switchView("admin"); });
 
 function switchView(viewName) {
+    // Reset tabs
+    menuChatbot.classList.remove("active");
+    if (menuAdmin) menuAdmin.classList.remove("active");
+    viewChatbot.style.display = "none";
+    if (viewAdmin) viewAdmin.style.display = "none";
+
     if (viewName === "chatbot") {
         menuChatbot.classList.add("active");
         viewChatbot.style.display = "block";
         pageTitle.innerText = "AI Chatbot Trợ Lý Phân Tích Dữ Liệu Dược Nam Hà";
+    } else if (viewName === "admin") {
+        if (menuAdmin) menuAdmin.classList.add("active");
+        if (viewAdmin) viewAdmin.style.display = "block";
+        pageTitle.innerText = "Quản lý Tài khoản (Dành cho Quản trị viên)";
     }
 }
 
@@ -614,4 +633,72 @@ document.addEventListener("keydown", (e) => {
         if (!modalGuide.classList.contains("hidden")) closeGuideModal();
     }
 });
+
+// ============================================================
+//  ADMIN: TẠO TÀI KHOẢN MỚI
+// ============================================================
+const adminCreateUserForm = document.getElementById("admin-create-user-form");
+if (adminCreateUserForm) {
+    adminCreateUserForm.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        
+        const errorMsg = document.getElementById("admin-error-msg");
+        const successMsg = document.getElementById("admin-success-msg");
+        const btnSubmit = document.getElementById("btn-admin-submit");
+        
+        errorMsg.style.display = "none";
+        successMsg.style.display = "none";
+        
+        // Thu thập dữ liệu form
+        const username = document.getElementById("admin-username").value.trim();
+        const password = document.getElementById("admin-password").value.trim() || null;
+        const name = document.getElementById("admin-name").value.trim() || null;
+        const email = document.getElementById("admin-email").value.trim() || null;
+        const role = document.getElementById("admin-role").value;
+        const scope_value = document.getElementById("admin-scope-value").value || null;
+        const scope_channel = document.getElementById("admin-scope-channel").value || null;
+        const employee_code = document.getElementById("admin-employee-code").value.trim() || null;
+
+        btnSubmit.disabled = true;
+        btnSubmit.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Đang tạo...';
+
+        try {
+            const resp = await fetch(`${API_BASE}/api/admin/users/create`, {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                    "Authorization": `Bearer ${authToken}`
+                },
+                body: JSON.stringify({
+                    username, password, name, email, role,
+                    scope_value, scope_channel, employee_code
+                })
+            });
+            
+            const data = await resp.json();
+            if (!resp.ok) throw new Error(data.detail || "Không thể tạo tài khoản");
+
+            // Thành công
+            let successHtml = `<strong><i class="fa-solid fa-circle-check"></i> ${data.message}</strong>`;
+            successHtml += `<br>Tên đăng nhập: <code>${data.username}</code>`;
+            if (data.generated_password) {
+                successHtml += `<br>Mật khẩu: <code style="user-select: all; background: #fff; border: 1px solid #ccc; padding: 2px 6px;">${data.generated_password}</code> (Vui lòng copy mật khẩu này)`;
+            }
+            
+            successMsg.innerHTML = successHtml;
+            successMsg.style.display = "block";
+            
+            // Reset form
+            adminCreateUserForm.reset();
+
+        } catch (err) {
+            errorMsg.innerText = err.message;
+            errorMsg.style.display = "block";
+        } finally {
+            btnSubmit.disabled = false;
+            btnSubmit.innerHTML = '<i class="fa-solid fa-plus"></i> Tạo tài khoản';
+        }
+    });
+}
+
 

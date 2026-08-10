@@ -5,6 +5,12 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import AuthScreens from "./AuthScreens";
 import AdminUsersPanel from "./AdminUsersPanel";
+import {
+  IconChart, IconLogout, IconPlus, IconTrash, IconSend, IconSearch,
+  IconUsers, IconCoin, IconMenu, IconClose, IconRefresh, IconSquare,
+  IconKey, IconCheck, IconMessage,
+} from "./icons";
+import { useModal } from "./useModal";
 
 type ChatResponse = {
   answer: string;
@@ -29,70 +35,6 @@ type SessionSummary = {
   created_at: string;
   updated_at: string;
 };
-
-// ============================================================================
-// Icon SVG nhẹ (tự vẽ, không phụ thuộc thư viện ngoài) — dùng cho header, sidebar,
-// ô nhập và modal Audit Log theo yêu cầu Executive Light Theme 29/07/2026.
-// ============================================================================
-type IconProps = { className?: string };
-const IconChart = ({ className }: IconProps) => (
-  <svg viewBox="0 0 24 24" fill="none" className={className} aria-hidden="true">
-    <path d="M4 20V10M10 20V4M16 20v-7M22 20H2" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-  </svg>
-);
-const IconLogout = ({ className }: IconProps) => (
-  <svg viewBox="0 0 24 24" fill="none" className={className} aria-hidden="true">
-    <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-  </svg>
-);
-const IconPlus = ({ className }: IconProps) => (
-  <svg viewBox="0 0 24 24" fill="none" className={className} aria-hidden="true">
-    <path d="M12 5v14M5 12h14" stroke="currentColor" strokeWidth="2.25" strokeLinecap="round" />
-  </svg>
-);
-const IconTrash = ({ className }: IconProps) => (
-  <svg viewBox="0 0 24 24" fill="none" className={className} aria-hidden="true">
-    <path d="M3 6h18M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2m3 0-1 14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2L4 6h16Z" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
-  </svg>
-);
-const IconSend = ({ className }: IconProps) => (
-  <svg viewBox="0 0 24 24" fill="none" className={className} aria-hidden="true">
-    <path d="M4 20 20.5 12 4 4l2.5 7.2L4 20Zm2.5-7.8h10" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
-  </svg>
-);
-const IconSearch = ({ className }: IconProps) => (
-  <svg viewBox="0 0 24 24" fill="none" className={className} aria-hidden="true">
-    <circle cx="11" cy="11" r="7" stroke="currentColor" strokeWidth="2" />
-    <path d="m20 20-3.5-3.5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-  </svg>
-);
-const IconUsers = ({ className }: IconProps) => (
-  <svg viewBox="0 0 24 24" fill="none" className={className} aria-hidden="true">
-    <circle cx="9" cy="8" r="3.2" stroke="currentColor" strokeWidth="1.8" />
-    <path d="M2.8 19c.6-3.2 3.2-5 6.2-5s5.6 1.8 6.2 5M16 8.3a3 3 0 1 1 3.6 4.9M19 13.4c2.2.5 3.7 2 4.2 4.4" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
-  </svg>
-);
-const IconCoin = ({ className }: IconProps) => (
-  <svg viewBox="0 0 24 24" fill="none" className={className} aria-hidden="true">
-    <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="1.8" />
-    <path d="M12 7v10M9.5 9.3c0-1.1 1.1-2 2.5-2s2.5.7 2.5 1.7c0 2.3-5 1.4-5 3.7 0 1 1.1 1.7 2.5 1.7s2.5-.9 2.5-2" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
-  </svg>
-);
-const IconMenu = ({ className }: IconProps) => (
-  <svg viewBox="0 0 24 24" fill="none" className={className} aria-hidden="true">
-    <path d="M4 6h16M4 12h16M4 18h16" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-  </svg>
-);
-const IconClose = ({ className }: IconProps) => (
-  <svg viewBox="0 0 24 24" fill="none" className={className} aria-hidden="true">
-    <path d="m6 6 12 12M18 6 6 18" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-  </svg>
-);
-const IconRefresh = ({ className }: IconProps) => (
-  <svg viewBox="0 0 24 24" fill="none" className={className} aria-hidden="true">
-    <path d="M20 11A8 8 0 1 0 18.5 16M20 5v6h-6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
-  </svg>
-);
 
 // Tag mau co dinh cho ky hieu kenh/vung xuat hien DUNG NGUYEN VAN trong 1 o bang - chi khop chinh
 // xac (sau khi trim), KHONG doan/parse noi dung cau tra loi cua AI nen khong co rui ro hien sai so
@@ -301,6 +243,7 @@ type AuditSummary = {
   total_queries: number;
   unique_users_count: number;
   days: number;
+  date: string | null;
 };
 
 type UserBreakdownItem = {
@@ -316,6 +259,44 @@ type UserBreakdownItem = {
   cost_usd: number;
   cost_vnd: number;
   is_unattributed?: boolean;
+};
+
+type WeeklyDailyItem = {
+  day_index: number;
+  day_name: string;
+  date_str: string;
+  display_date: string;
+  is_today: boolean;
+  query_count: number;
+  input_tokens: number;
+  output_tokens: number;
+  cache_tokens: number;
+  total_tokens: number;
+  cost_usd: number;
+  cost_vnd: number;
+};
+
+type WeeklyUserItem = {
+  username: string;
+  user_name: string;
+  query_count: number;
+  total_tokens: number;
+  cost_usd: number;
+  cost_vnd: number;
+};
+
+type WeeklyAuditData = {
+  week_offset: number;
+  week_start: string;
+  week_end: string;
+  week_label: string;
+  is_current_week: boolean;
+  total_queries: number;
+  total_tokens: number;
+  total_cost_usd: number;
+  total_cost_vnd: number;
+  daily_breakdown: WeeklyDailyItem[];
+  user_breakdown: WeeklyUserItem[];
 };
 
 // Cac truong session_* la so cua CA PHIEN chat, khong phai cua rieng luot hoi tren dong do:
@@ -345,10 +326,15 @@ type AuditDashboardData = {
 };
 
 
+// 06/08/2026: DNH xac nhan "Giam doc Mien" = "Truong phong" = "Truong kenh" = "Giam doc Kenh" deu la
+// MOT chuc vu (role `regional_director`, tuong ung position_code 'TP' trong dim_nhanvien). Nhan phai
+// nhac ca 2 cach goi pho bien nhat de nguoi dung tu nhan ra minh - truoc day 4 cho viet 4 kieu khac
+// nhau (co cho con ghi nham "Giam doc Vung"). Moi noi hien thi role PHAI dung map nay, dung tu che.
 const ROLE_LABELS: Record<string, string> = {
-  c_level: "Ban Điều Hành (toàn công ty)",
-  regional_director: "Giám đốc miền",
-  qlv: "Quản lý vùng",
+  admin_ops: "Admin Vận Hành (Hệ thống)",
+  c_level: "Tổng Giám Đốc (C-Level)",
+  regional_director: "Giám đốc Miền / Kênh (Trưởng phòng)",
+  qlv: "Quản lý Vùng (QLV)",
 };
 
 // Style rieng cho tung the Markdown trong bong bong chat cua bot (bang, in dam, danh sach...)
@@ -413,10 +399,12 @@ const markdownComponents = {
 const MessageList = memo(function MessageList({
   messages,
   loading,
+  onCancel,
   bottomRef,
 }: {
   messages: Message[];
   loading: boolean;
+  onCancel?: () => void;
   bottomRef: RefObject<HTMLDivElement | null>;
 }) {
   return (
@@ -433,7 +421,7 @@ const MessageList = memo(function MessageList({
             }`}
           >
             {m.role === "bot" ? (
-              <div className="markdown-body">
+              <div>
                 <ReactMarkdown remarkPlugins={[remarkGfm, remarkAlignNumericColumns]} components={markdownComponents}>
                   {m.text}
                 </ReactMarkdown>
@@ -506,13 +494,23 @@ const MessageList = memo(function MessageList({
 
       {loading && (
         <div className="flex justify-start">
-          <div className="flex items-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-400 shadow-sm">
+          <div className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700 shadow-sm">
             <span className="flex gap-1">
-              <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-slate-400 [animation-delay:-0.3s]" />
-              <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-slate-400 [animation-delay:-0.15s]" />
-              <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-slate-400" />
+              <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-indigo-600 [animation-delay:-0.3s]" />
+              <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-indigo-600 [animation-delay:-0.15s]" />
+              <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-indigo-600" />
             </span>
-            Đang truy vấn dữ liệu...
+            <span className="font-medium text-slate-600">Đang suy luận...</span>
+            {onCancel && (
+              <button
+                type="button"
+                onClick={onCancel}
+                className="ml-2 flex items-center gap-1 rounded-full bg-rose-50 px-2.5 py-1 text-xs font-semibold text-rose-600 border border-rose-200 transition hover:bg-rose-100 hover:text-rose-700"
+              >
+                <IconSquare className="h-3 w-3 fill-rose-600" />
+                <span>Dừng</span>
+              </button>
+            )}
           </div>
         </div>
       )}
@@ -548,11 +546,21 @@ export default function Home() {
   const [loading, setLoading] = useState(false);
   const [historyLoaded, setHistoryLoaded] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const abortControllerRef = useRef<AbortController | null>(null);
+
+  function handleCancelQuestion() {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+    }
+  }
 
   // Danh sach cuoc tro chuyen (kieu ChatGPT) - c_level thay cua tat ca nguoi, con lai chi thay cua
   // chinh minh (loc o backend, xem GET /sessions trong main.py).
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [confirmDeleteSid, setConfirmDeleteSid] = useState<string | null>(null);
+  const confirmDeleteModalRef = useModal(Boolean(confirmDeleteSid), () => setConfirmDeleteSid(null));
   // Loc lich su tro chuyen theo nguoi dung. Chi C-Level moi thay nhieu chu so huu trong `sessions`,
   // nen bo loc cung chi hien voi ho - tai khoan thuong luon chi co dung 1 chu so huu la chinh minh.
   const [ownerFilter, setOwnerFilter] = useState<string>("all");
@@ -561,17 +569,20 @@ export default function Home() {
   const [authToken, setAuthToken] = useState<string | null>(null);
   const [userInfo, setUserInfo] = useState<UserInfo | null>(null);
   const [authChecking, setAuthChecking] = useState(true);
-  const [loginUsername, setLoginUsername] = useState("");
-  const [loginPassword, setLoginPassword] = useState("");
-  const [loginError, setLoginError] = useState("");
-  const [loginSubmitting, setLoginSubmitting] = useState(false);
   // Audit Log & Cost Dashboard Modal State
   const [auditModalOpen, setAuditModalOpen] = useState(false);
+  const auditModalRef = useModal(auditModalOpen, () => setAuditModalOpen(false));
   const [auditLoading, setAuditLoading] = useState(false);
   const [auditData, setAuditData] = useState<AuditDashboardData | null>(null);
   const [auditDays, setAuditDays] = useState<number>(30);
+  // Rong = dang loc theo "N ngay gan nhat" (auditDays); co gia tri (YYYY-MM-DD) = loc dung 1 ngay.
+  const [auditSpecificDate, setAuditSpecificDate] = useState<string>("");
   const [auditUserFilter, setAuditUserFilter] = useState<string>("all");
-  const [auditActiveTab, setAuditActiveTab] = useState<"users" | "logs">("users");
+  const [auditRoleFilter, setAuditRoleFilter] = useState<string>("all");
+  const [auditActiveTab, setAuditActiveTab] = useState<"users" | "weekly" | "logs">("users");
+  const [weeklyData, setWeeklyData] = useState<WeeklyAuditData | null>(null);
+  const [weeklyOffset, setWeeklyOffset] = useState<number>(0);
+  const [weeklyLoading, setWeeklyLoading] = useState<boolean>(false);
 
   // Admin & Change Password Modal States
   const [adminUsersOpen, setAdminUsersOpen] = useState(false);
@@ -589,7 +600,8 @@ export default function Home() {
   const isCLevel = Boolean(
     userInfo && (
       userInfo.role?.toLowerCase() === "c_level" ||
-      userInfo.role?.toLowerCase() === "admin"
+      userInfo.role?.toLowerCase() === "admin" ||
+      userInfo.role?.toLowerCase() === "admin_ops"
     )
   );
 
@@ -631,12 +643,20 @@ export default function Home() {
     [sessions, effectiveOwnerFilter]
   );
 
-  const fetchAuditData = (daysVal: number, userVal: string) => {
+  const fetchAuditData = (daysVal: number, userVal: string, dateVal: string = "", roleVal: string = "all") => {
     if (!authToken) return;
     setAuditLoading(true);
-    const params = new URLSearchParams({ days: String(daysVal), limit: "300" });
+    const params = new URLSearchParams({ limit: "300" });
+    if (dateVal) {
+      params.append("date", dateVal);
+    } else {
+      params.append("days", String(daysVal));
+    }
     if (userVal && userVal !== "all") {
       params.append("user_filter", userVal);
+    }
+    if (roleVal && roleVal !== "all") {
+      params.append("role_filter", roleVal);
     }
     fetch(`${API_URL}/audit-logs?${params.toString()}`, { headers: authHeaders(authToken) })
       .then((r) => (r.ok ? r.json() : null))
@@ -647,11 +667,30 @@ export default function Home() {
       .finally(() => setAuditLoading(false));
   };
 
-  const openAuditDashboard = () => {
-    setAuditModalOpen(true);
-    fetchAuditData(auditDays, auditUserFilter);
+  const fetchWeeklyAuditData = (offset: number) => {
+    if (!authToken) return;
+    setWeeklyLoading(true);
+    fetch(`${API_URL}/audit-logs/weekly?week_offset=${offset}`, { headers: authHeaders(authToken) })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data: WeeklyAuditData | null) => {
+        if (data) setWeeklyData(data);
+      })
+      .catch((e) => console.error("Error fetching weekly audit logs:", e))
+      .finally(() => setWeeklyLoading(false));
   };
 
+  useEffect(() => {
+    if (auditModalOpen && auditActiveTab === "weekly") {
+      fetchWeeklyAuditData(weeklyOffset);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [auditModalOpen, auditActiveTab, weeklyOffset]);
+
+  const openAuditDashboard = () => {
+    setAuditModalOpen(true);
+    fetchAuditData(auditDays, auditUserFilter, auditSpecificDate, auditRoleFilter);
+    fetchWeeklyAuditData(weeklyOffset);
+  };
 
   // Kiem tra token da luu (neu co) ngay khi mo trang - xac nhan qua /auth/me truoc khi cho vao chat
   useEffect(() => {
@@ -720,9 +759,15 @@ export default function Home() {
     setSidebarOpen(false);
   }
 
-  async function deleteSession(sid: string, e: React.MouseEvent) {
+  function requestDeleteSession(sid: string, e: React.MouseEvent) {
     e.stopPropagation();
-    if (!confirm("Xóa cuộc trò chuyện này? Không thể hoàn tác.")) return;
+    setConfirmDeleteSid(sid);
+  }
+
+  async function confirmDeleteSession() {
+    const sid = confirmDeleteSid;
+    if (!sid) return;
+    setConfirmDeleteSid(null);
     try {
       await fetch(`${API_URL}/sessions/${sid}`, { method: "DELETE", headers: authHeaders(authToken) });
     } catch {
@@ -731,32 +776,6 @@ export default function Home() {
     setSessions((prev) => prev.filter((s) => s.session_id !== sid));
     if (sid === sessionId) {
       startNewConversation();
-    }
-  }
-
-  async function handleLogin(e: FormEvent) {
-    e.preventDefault();
-    if (!loginUsername.trim() || !loginPassword || loginSubmitting) return;
-    setLoginSubmitting(true);
-    setLoginError("");
-    try {
-      const res = await fetch(`${API_URL}/auth/login`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ username: loginUsername.trim(), password: loginPassword }),
-      });
-      if (!res.ok) {
-        throw new Error("Tài khoản hoặc mật khẩu không đúng");
-      }
-      const data = await res.json();
-      window.localStorage.setItem(AUTH_TOKEN_KEY, data.token);
-      setAuthToken(data.token);
-      setUserInfo({ username: loginUsername.trim(), name: data.name, role: data.role, scope_value: data.scope_value });
-      setLoginPassword("");
-    } catch (e) {
-      setLoginError((e as Error).message);
-    } finally {
-      setLoginSubmitting(false);
     }
   }
 
@@ -783,11 +802,16 @@ export default function Home() {
     setMessages((prev) => [...prev, { role: "user", text: question }]);
     setInput("");
     setLoading(true);
+
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+
     try {
       const res = await fetch(`${API_URL}/chat`, {
         method: "POST",
         headers: authHeaders(authToken),
         body: JSON.stringify({ question, session_id: sessionId }),
+        signal: controller.signal,
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({ detail: "Lỗi không xác định" }));
@@ -806,12 +830,20 @@ export default function Home() {
       ]);
       refreshSessions();
     } catch (e) {
-      setMessages((prev) => [
-        ...prev,
-        { role: "bot", text: `Xin lỗi, có lỗi xảy ra: ${(e as Error).message}`, error: true },
-      ]);
+      if ((e as Error).name === "AbortError") {
+        setMessages((prev) => [
+          ...prev,
+          { role: "bot", text: "⏹️ Đã dừng suy luận theo yêu cầu của bạn.", error: true },
+        ]);
+      } else {
+        setMessages((prev) => [
+          ...prev,
+          { role: "bot", text: `Xin lỗi, có lỗi xảy ra: ${(e as Error).message}`, error: true },
+        ]);
+      }
     } finally {
       setLoading(false);
+      abortControllerRef.current = null;
     }
   }
 
@@ -900,7 +932,7 @@ export default function Home() {
             <span className="status-dot-live h-2 w-2 shrink-0 rounded-full bg-emerald-500" title="Dữ liệu realtime" />
           </button>
         )}
-        {isCLevel && sessionOwners.length > 1 && (
+        {(isCLevel || userInfo?.role === "regional_director") && sessionOwners.length > 1 && (
           <div className="mx-3 mt-3">
             <select
               value={effectiveOwnerFilter}
@@ -908,7 +940,7 @@ export default function Home() {
               title="Lọc lịch sử trò chuyện theo người dùng"
               className="w-full rounded-lg border border-slate-300 bg-white px-2.5 py-2 text-xs text-slate-700 outline-none transition focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
             >
-              <option value="all">👥 Tất cả người dùng ({sessions.length})</option>
+              <option value="all">Tất cả người dùng ({sessions.length})</option>
               {sessionOwners.map((o) => (
                 <option key={o.username} value={o.username}>
                   {o.label} ({o.count})
@@ -925,38 +957,55 @@ export default function Home() {
             <p className="px-2 text-xs text-slate-400">Người này chưa có cuộc trò chuyện nào.</p>
           )}
           {sessionGroups.map((group) => (
-            <div key={group.label} className="mb-3">
-              <div className="px-2.5 pb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+            <div key={group.label} className="mb-4">
+              <div className="px-2.5 pb-1.5 text-[11px] font-semibold uppercase tracking-wider text-slate-400">
                 {group.label}
               </div>
-              {group.items.map((s) => (
-                <div
-                  key={s.session_id}
-                  onClick={() => switchToSession(s.session_id)}
-                  className={`group mb-1 flex cursor-pointer items-center justify-between gap-1 rounded-lg px-3 py-2 text-sm transition ${
-                    s.session_id === sessionId ? "bg-indigo-50 text-indigo-700" : "text-slate-600 hover:bg-slate-50"
-                  }`}
-                >
-                  <div className="min-w-0 flex-1">
-                    <div className="fade-truncate">{s.title || "Cuộc trò chuyện mới"}</div>
-                    <div className="fade-truncate text-xs text-slate-400">
-                      {formatRelativeTime(s.updated_at)}
-                      {isCLevel && s.owner_username !== userInfo?.username
-                        ? ` · ${s.owner_name || s.owner_username}`
-                        : ""}
-                    </div>
-                  </div>
-                  {s.owner_username === userInfo?.username && (
-                    <button
-                      onClick={(e) => deleteSession(s.session_id, e)}
-                      className="hidden shrink-0 rounded p-1.5 text-slate-400 transition hover:bg-red-50 hover:text-red-500 group-hover:block"
-                      title="Xóa cuộc trò chuyện"
+              <div className="flex flex-col gap-0.5">
+                {group.items.map((s) => {
+                  const isActive = s.session_id === sessionId;
+                  return (
+                    <div
+                      key={s.session_id}
+                      onClick={() => switchToSession(s.session_id)}
+                      className={`group relative flex cursor-pointer items-center gap-2.5 rounded-xl px-2.5 py-2.5 text-sm transition ${
+                        isActive ? "bg-indigo-50 ring-1 ring-inset ring-indigo-100" : "hover:bg-slate-100/80"
+                      }`}
                     >
-                      <IconTrash className="h-3.5 w-3.5" />
-                    </button>
-                  )}
-                </div>
-              ))}
+                      {isActive && (
+                        <span className="absolute left-0 top-1/2 h-5 w-1 -translate-y-1/2 rounded-r-full bg-indigo-600" />
+                      )}
+                      <span
+                        className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full transition ${
+                          isActive ? "bg-indigo-600 text-white" : "bg-slate-100 text-slate-400 group-hover:bg-slate-200"
+                        }`}
+                      >
+                        <IconMessage className="h-4 w-4" />
+                      </span>
+                      <div className="min-w-0 flex-1">
+                        <div className={`fade-truncate ${isActive ? "font-semibold text-indigo-700" : "font-medium text-slate-700"}`}>
+                          {s.title || "Cuộc trò chuyện mới"}
+                        </div>
+                        <div className="fade-truncate text-xs text-slate-400">
+                          {formatRelativeTime(s.updated_at)}
+                          {isCLevel && s.owner_username !== userInfo?.username
+                            ? ` · ${s.owner_name || s.owner_username}`
+                            : ""}
+                        </div>
+                      </div>
+                      {s.owner_username === userInfo?.username && (
+                        <button
+                          onClick={(e) => requestDeleteSession(s.session_id, e)}
+                          className="shrink-0 rounded-full p-1.5 text-slate-400 opacity-100 transition hover:bg-red-50 hover:text-red-500 md:opacity-0 md:group-hover:opacity-100"
+                          title="Xóa cuộc trò chuyện"
+                        >
+                          <IconTrash className="h-3.5 w-3.5" />
+                        </button>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
             </div>
           ))}
         </div>
@@ -964,7 +1013,7 @@ export default function Home() {
 
       <div className="flex min-w-0 flex-1 flex-col">
       <header className="relative z-10 border-b border-slate-800/80 bg-slate-900/95 backdrop-blur-md px-4 sm:px-8 py-3 text-white shadow-lg">
-        <div className="mx-auto flex w-full max-w-7xl items-center justify-between gap-4">
+        <div className="mx-auto flex w-full max-w-5xl items-center justify-between gap-4">
           {/* Left Title & Logo */}
           <div className="flex items-center gap-3.5">
             <button
@@ -1003,22 +1052,12 @@ export default function Home() {
                     <span className="hidden md:inline">Quản lý Tài khoản</span>
                   </button>
                 )}
-                {isCLevel && (
-                  <button
-                    onClick={openAuditDashboard}
-                    className="flex items-center gap-1.5 rounded-xl px-3 py-2 text-xs font-semibold text-amber-300 bg-amber-950/60 border border-amber-500/40 hover:bg-amber-900/80 transition shadow-sm"
-                    title="Mở Dashboard Audit Log & Chi phí AI toàn công ty"
-                  >
-                    <IconChart className="h-4 w-4" />
-                    <span className="hidden md:inline">Audit Log & Chi phí AI</span>
-                  </button>
-                )}
                 <button
                   onClick={() => { setPwdChangeMsg(null); setChangePwdOpen(true); }}
                   className="flex items-center gap-1.5 rounded-xl px-3 py-2 text-xs font-semibold text-slate-200 bg-slate-800 border border-slate-700 hover:bg-slate-700 transition shadow-sm"
                   title="Đổi mật khẩu tài khoản"
                 >
-                  🔑 <span className="hidden sm:inline">Đổi MK</span>
+                  <IconKey className="w-3.5 h-3.5" /> <span className="hidden sm:inline">Đổi MK</span>
                 </button>
 
                 {/* User Info Badge */}
@@ -1060,14 +1099,14 @@ export default function Home() {
           </div>
           <button
             onClick={() => { setPwdChangeMsg(null); setChangePwdOpen(true); }}
-            className="px-3 py-1 bg-amber-600 hover:bg-amber-700 text-white rounded font-semibold text-xs shadow-sm transition"
+            className="px-3 py-1 bg-amber-600 hover:bg-amber-700 text-white rounded font-semibold text-xs shadow-sm transition flex items-center gap-1"
           >
-            🔑 Đổi mật khẩu
+            <IconKey className="w-3.5 h-3.5" /> Đổi mật khẩu
           </button>
         </div>
       )}
 
-      <main className="mx-auto flex w-full max-w-3xl flex-1 flex-col overflow-hidden px-4">
+      <main className="mx-auto flex w-full max-w-5xl flex-1 flex-col overflow-hidden px-4">
         <div className="flex-1 overflow-y-auto py-6">
           {historyLoaded && messages.length === 0 && (
             <div className="mt-8">
@@ -1095,7 +1134,7 @@ export default function Home() {
             </div>
           )}
 
-          <MessageList messages={messages} loading={loading} bottomRef={bottomRef} />
+          <MessageList messages={messages} loading={loading} onCancel={handleCancelQuestion} bottomRef={bottomRef} />
         </div>
 
         {/* Banner "Danh cho C-Level" da bo (29/07/2026): loi vao Dashboard Audit Log da co san o 2 cho
@@ -1110,15 +1149,26 @@ export default function Home() {
               className="flex-1 bg-transparent px-3 py-1.5 text-sm outline-none placeholder:text-slate-400"
               disabled={loading}
             />
-            <button
-              type="submit"
-              disabled={loading || !input.trim()}
-              title="Gửi"
-              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-white shadow-sm transition hover:scale-105 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:scale-100"
-              style={{ background: "linear-gradient(135deg, #4F46E5, #2563EB)" }}
-            >
-              <IconSend className="h-4 w-4" />
-            </button>
+            {loading ? (
+              <button
+                type="button"
+                onClick={handleCancelQuestion}
+                title="Dừng suy luận"
+                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-rose-600 text-white shadow-sm transition hover:bg-rose-700 hover:scale-105 active:scale-95"
+              >
+                <IconSquare className="h-4 w-4 fill-current text-white" />
+              </button>
+            ) : (
+              <button
+                type="submit"
+                disabled={!input.trim()}
+                title="Gửi"
+                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-white shadow-sm transition hover:scale-105 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:scale-100"
+                style={{ background: "linear-gradient(135deg, #4F46E5, #2563EB)" }}
+              >
+                <IconSend className="h-4 w-4" />
+              </button>
+            )}
           </div>
         </form>
       </main>
@@ -1127,7 +1177,14 @@ export default function Home() {
       {/* AUDIT LOG & COST DASHBOARD MODAL FOR C-LEVEL */}
       {auditModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 overflow-y-auto">
-          <div className="flex flex-col w-full max-w-5xl max-h-[90vh] bg-white rounded-2xl shadow-2xl overflow-hidden border border-slate-200">
+          <div
+            ref={auditModalRef}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="audit-modal-title"
+            tabIndex={-1}
+            className="flex flex-col w-full max-w-5xl max-h-[90vh] bg-white rounded-2xl shadow-2xl overflow-hidden border border-slate-200 outline-none"
+          >
             {/* Modal Header */}
             <div className="flex items-center justify-between bg-[var(--brand-navy)] px-6 py-4 text-white">
               <div className="flex items-center gap-3">
@@ -1135,7 +1192,7 @@ export default function Home() {
                   <IconChart className="h-5 w-5" />
                 </span>
                 <div>
-                  <h2 className="text-lg font-bold">Dashboard Audit Log & Chi phí AI Toàn Công ty</h2>
+                  <h2 id="audit-modal-title" className="text-lg font-bold">Dashboard Audit Log & Chi phí AI Toàn Công ty</h2>
                   <p className="text-xs text-slate-300">Dành riêng cho Ban Điều Hành (C-Level) · Tra cứu trực tiếp dữ liệu realtime</p>
                 </div>
               </div>
@@ -1155,17 +1212,45 @@ export default function Home() {
                   <span>Khoảng thời gian:</span>
                   <select
                     value={auditDays}
+                    disabled={Boolean(auditSpecificDate)}
                     onChange={(e) => {
                       const val = Number(e.target.value);
                       setAuditDays(val);
-                      fetchAuditData(val, auditUserFilter);
+                      fetchAuditData(val, auditUserFilter, "", auditRoleFilter);
                     }}
-                    className="rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs text-slate-800 outline-none transition focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
+                    className="rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs text-slate-800 outline-none transition focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 disabled:opacity-50"
                   >
                     <option value={7}>7 ngày gần nhất</option>
                     <option value={30}>30 ngày gần nhất</option>
                     <option value={90}>90 ngày gần nhất</option>
                   </select>
+                </div>
+
+                {/* Specific Date Filter */}
+                <div className="flex items-center gap-1.5 text-xs font-medium text-slate-600">
+                  <span>Ngày cụ thể:</span>
+                  <input
+                    type="date"
+                    value={auditSpecificDate}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setAuditSpecificDate(val);
+                      fetchAuditData(auditDays, auditUserFilter, val, auditRoleFilter);
+                    }}
+                    className="rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs text-slate-800 outline-none transition focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
+                  />
+                  {auditSpecificDate && (
+                    <button
+                      onClick={() => {
+                        setAuditSpecificDate("");
+                        fetchAuditData(auditDays, auditUserFilter, "", auditRoleFilter);
+                      }}
+                      title="Bỏ lọc theo ngày, quay lại xem theo khoảng thời gian"
+                      className="rounded-full p-1 text-slate-400 transition hover:bg-slate-200 hover:text-slate-700"
+                    >
+                      <IconClose className="h-3 w-3" />
+                    </button>
+                  )}
                 </div>
 
                 {/* User Filter Dropdown */}
@@ -1176,7 +1261,7 @@ export default function Home() {
                     onChange={(e) => {
                       const val = e.target.value;
                       setAuditUserFilter(val);
-                      fetchAuditData(auditDays, val);
+                      fetchAuditData(auditDays, val, auditSpecificDate, auditRoleFilter);
                     }}
                     className="max-w-[160px] truncate rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs text-slate-800 outline-none transition focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
                   >
@@ -1188,12 +1273,31 @@ export default function Home() {
                     ))}
                   </select>
                 </div>
+
+                {/* Role Filter Dropdown */}
+                <div className="flex items-center gap-1.5 text-xs font-medium text-slate-600">
+                  <span>Chức vụ:</span>
+                  <select
+                    value={auditRoleFilter}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setAuditRoleFilter(val);
+                      fetchAuditData(auditDays, auditUserFilter, auditSpecificDate, val);
+                    }}
+                    className="rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs text-slate-800 outline-none transition focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
+                  >
+                    <option value="all">Tất cả chức vụ</option>
+                    {Object.entries(ROLE_LABELS).map(([value, label]) => (
+                      <option key={value} value={value}>{label}</option>
+                    ))}
+                  </select>
+                </div>
               </div>
 
               {/* Refresh & Tabs */}
               <div className="flex items-center gap-2">
                 <button
-                  onClick={() => fetchAuditData(auditDays, auditUserFilter)}
+                  onClick={() => fetchAuditData(auditDays, auditUserFilter, auditSpecificDate, auditRoleFilter)}
                   className="flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 transition hover:bg-slate-50 disabled:opacity-60"
                   disabled={auditLoading}
                 >
@@ -1204,11 +1308,19 @@ export default function Home() {
                 <div className="flex rounded-full bg-slate-200/70 p-1 text-xs">
                   <button
                     onClick={() => setAuditActiveTab("users")}
-                    className={`rounded-full px-3.5 py-1.5 font-medium transition ${
+                    className={`rounded-full px-3.5 py-1.5 font-medium transition flex items-center gap-1 ${
                       auditActiveTab === "users" ? "bg-white text-indigo-700 shadow-sm" : "text-slate-600 hover:text-slate-900"
                     }`}
                   >
-                    👥 Theo Người Dùng
+                    <IconUsers className="w-3.5 h-3.5" /> Theo Người Dùng
+                  </button>
+                  <button
+                    onClick={() => setAuditActiveTab("weekly")}
+                    className={`rounded-full px-3.5 py-1.5 font-medium transition ${
+                      auditActiveTab === "weekly" ? "bg-white text-indigo-700 shadow-sm" : "text-slate-600 hover:text-slate-900"
+                    }`}
+                  >
+                    📅 Chi Phí Theo Tuần
                   </button>
                   <button
                     onClick={() => setAuditActiveTab("logs")}
@@ -1320,7 +1432,9 @@ export default function Home() {
                         {auditData.summary.total_queries.toLocaleString()} lượt
                       </div>
                       <div className="text-[11px] tabular-nums text-emerald-600">
-                        Trong {auditData.summary.days} ngày · trung bình {(auditData.summary.total_queries / Math.max(1, auditData.summary.days)).toFixed(1)} lượt/ngày
+                        {auditData.summary.date
+                          ? `Ngày ${auditData.summary.date.split("-").reverse().join("/")}`
+                          : `Trong ${auditData.summary.days} ngày · trung bình ${(auditData.summary.total_queries / Math.max(1, auditData.summary.days)).toFixed(1)} lượt/ngày`}
                       </div>
                     </div>
 
@@ -1349,8 +1463,8 @@ export default function Home() {
                     const hasZeroCostUser = realUsers.some((u) => u.query_count > 0 && u.cost_usd === 0);
                     return (
                       <div className="flex flex-col gap-3">
-                        <h3 className="text-sm font-bold text-slate-800">
-                          📊 Bảng Thống Kê Token & Chi Phí Theo Người Dùng
+                        <h3 className="text-sm font-bold text-slate-800 flex items-center gap-1.5">
+                          <IconChart className="w-4 h-4" /> Bảng Thống Kê Token & Chi Phí Theo Người Dùng
                         </h3>
                         {(hasUnattributed || hasZeroCostUser) && (
                           <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] leading-relaxed text-amber-900">
@@ -1420,11 +1534,252 @@ export default function Home() {
                     );
                   })()}
 
+                  {/* TAB 2: WEEKLY TOKEN COST DASHBOARD */}
+                  {auditActiveTab === "weekly" && (
+                    <div className="flex flex-col gap-4">
+                      {/* Week Navigation Header */}
+                      <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-indigo-100 bg-gradient-to-r from-indigo-50/80 via-purple-50/50 to-blue-50/80 p-3.5 shadow-sm">
+                        <div className="flex items-center gap-2">
+                          <button
+                            onClick={() => setWeeklyOffset((prev) => prev - 1)}
+                            className="flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 shadow-sm transition hover:bg-slate-100 hover:text-indigo-600"
+                          >
+                            ◀️ Tuần trước
+                          </button>
+                          <button
+                            onClick={() => setWeeklyOffset(0)}
+                            disabled={weeklyOffset === 0}
+                            className={`rounded-lg border px-3 py-1.5 text-xs font-semibold shadow-sm transition ${
+                              weeklyOffset === 0
+                                ? "border-slate-200 bg-slate-100 text-slate-400 cursor-not-allowed"
+                                : "border-indigo-300 bg-indigo-50 text-indigo-700 hover:bg-indigo-100"
+                            }`}
+                          >
+                            🔄 Tuần này
+                          </button>
+                          <button
+                            onClick={() => setWeeklyOffset((prev) => prev + 1)}
+                            disabled={weeklyOffset >= 0}
+                            className={`flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-semibold shadow-sm transition ${
+                              weeklyOffset >= 0
+                                ? "border-slate-200 bg-slate-100 text-slate-400 cursor-not-allowed"
+                                : "border-slate-300 bg-white text-slate-700 hover:bg-slate-100 hover:text-indigo-600"
+                            }`}
+                          >
+                            Tuần sau ▶️
+                          </button>
+                        </div>
+                        <div className="text-right">
+                          <div className="flex items-center gap-2 text-xs sm:text-sm font-bold text-slate-800">
+                            <span>📅 Tuần: {weeklyData?.week_label || "Đang tải..."}</span>
+                            {weeklyData?.is_current_week && (
+                              <span className="rounded-full bg-emerald-100 px-2.5 py-0.5 text-[10px] font-bold text-emerald-800 border border-emerald-300 shadow-sm">
+                                Tuần hiện tại
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Weekly Summary Cards */}
+                      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                        <div className="rounded-xl border border-blue-200 bg-blue-50/50 p-3 shadow-sm">
+                          <div className="text-[11px] font-medium text-blue-700">🪙 Tổng Tokens Tuần</div>
+                          <div className="mt-1 text-base font-bold tabular-nums text-blue-900">
+                            {(weeklyData?.total_tokens || 0).toLocaleString()}
+                          </div>
+                        </div>
+                        <div className="rounded-xl border border-amber-200 bg-amber-50/50 p-3 shadow-sm">
+                          <div className="text-[11px] font-medium text-amber-700">🇻🇳 Tổng VNĐ Tuần</div>
+                          <div className="mt-1 text-base font-bold tabular-nums text-amber-900">
+                            {(weeklyData?.total_cost_vnd || 0).toLocaleString("vi-VN")} đ
+                          </div>
+                        </div>
+                        <div className="rounded-xl border border-emerald-200 bg-emerald-50/50 p-3 shadow-sm">
+                          <div className="text-[11px] font-medium text-emerald-700">💵 Chi Phí (USD)</div>
+                          <div className="mt-1 text-base font-bold tabular-nums text-emerald-900">
+                            ${(weeklyData?.total_cost_usd || 0).toFixed(4)}
+                          </div>
+                        </div>
+                        <div className="rounded-xl border border-purple-200 bg-purple-50/50 p-3 shadow-sm">
+                          <div className="text-[11px] font-medium text-purple-700">💬 Số Lượt Truy Vấn</div>
+                          <div className="mt-1 text-base font-bold tabular-nums text-purple-900">
+                            {(weeklyData?.total_queries || 0).toLocaleString()} lượt
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* 7-Day Vertical Bar Chart */}
+                      <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+                        <div className="flex items-center justify-between mb-4 border-b border-slate-100 pb-3">
+                          <div className="flex items-center gap-2">
+                            <h4 className="text-xs font-bold text-slate-800 flex items-center gap-1.5"><IconChart className="w-3.5 h-3.5" /> Đồ Thị Chi Phí & Tokens Chi Tiết Theo Thứ Trong Tuần</h4>
+                            <span className="rounded-md bg-indigo-50 px-2 py-0.5 text-[10px] font-semibold text-indigo-700 border border-indigo-200">
+                              Đồ thị cột đứng
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-3 text-[11px] font-medium text-slate-500">
+                            <div className="flex items-center gap-1.5">
+                              <span className="h-2.5 w-2.5 rounded-sm bg-gradient-to-t from-amber-500 to-amber-400" />
+                              <span>Chi phí ngày thường</span>
+                            </div>
+                            <div className="flex items-center gap-1.5">
+                              <span className="h-2.5 w-2.5 rounded-sm bg-gradient-to-t from-indigo-600 to-purple-500" />
+                              <span>Hôm nay ⭐</span>
+                            </div>
+                          </div>
+                        </div>
+
+                        {weeklyLoading && !weeklyData ? (
+                          <div className="flex h-64 items-center justify-center text-xs text-slate-400">
+                            Đang tải dữ liệu tuần...
+                          </div>
+                        ) : (
+                          <div className="flex flex-col gap-2">
+                            {/* Chart Body */}
+                            <div className="grid grid-cols-7 gap-2 sm:gap-3 h-64 items-end pt-6 pb-2 px-1 border-b border-slate-200">
+                              {weeklyData?.daily_breakdown.map((day) => {
+                                const maxCost = Math.max(1, ...(weeklyData.daily_breakdown.map((d) => d.cost_vnd) || [1]));
+                                const barPct = Math.min(100, Math.round((day.cost_vnd / maxCost) * 100));
+                                const displayBarHeight = day.cost_vnd > 0 ? Math.max(6, barPct) : 0;
+                                return (
+                                  <div
+                                    key={day.day_index}
+                                    className="group relative flex h-full flex-col justify-end items-center"
+                                  >
+                                    {/* Value Labels Above Bar */}
+                                    <div className="mb-2 flex flex-col items-center text-center transition group-hover:-translate-y-1">
+                                      <span className={`text-[11px] font-bold tabular-nums ${
+                                        day.is_today ? "text-indigo-700" : day.cost_vnd > 0 ? "text-amber-700" : "text-slate-400"
+                                      }`}>
+                                        {day.cost_vnd > 0 ? `${day.cost_vnd.toLocaleString("vi-VN")} đ` : "0 đ"}
+                                      </span>
+                                      <span className="text-[9px] tabular-nums text-slate-400 font-medium">
+                                        {day.total_tokens > 0 ? (
+                                          day.total_tokens >= 1000000
+                                            ? `${(day.total_tokens / 1000000).toFixed(2)}M tokens`
+                                            : `${Math.round(day.total_tokens / 1000)}k tokens`
+                                        ) : "0 tokens"}
+                                      </span>
+                                      <span className="text-[9px] text-slate-400 hidden sm:inline">
+                                        {day.query_count} lượt
+                                      </span>
+                                    </div>
+
+                                    {/* Vertical Bar Container Track */}
+                                    <div className="relative flex h-full w-full max-w-[48px] flex-col justify-end overflow-hidden rounded-t-xl bg-slate-100/80 p-0.5 group-hover:bg-slate-200/60 transition">
+                                      <div
+                                        style={{ height: `${displayBarHeight}%` }}
+                                        className={`w-full rounded-t-lg transition-all duration-500 ease-out ${
+                                          day.is_today
+                                            ? "bg-gradient-to-t from-indigo-600 via-indigo-500 to-purple-500 shadow-md shadow-indigo-200"
+                                            : day.query_count > 0
+                                            ? "bg-gradient-to-t from-amber-500 via-amber-400 to-amber-300 shadow-sm"
+                                            : "bg-slate-200"
+                                        }`}
+                                      />
+                                    </div>
+
+                                    {/* Hover Detailed Tooltip Card */}
+                                    <div className="pointer-events-none absolute bottom-full mb-2 z-20 hidden w-44 rounded-xl border border-slate-200 bg-slate-900 p-2.5 text-white shadow-xl group-hover:block transition">
+                                      <div className="flex items-center justify-between border-b border-slate-700 pb-1 text-[11px] font-bold">
+                                        <span>{day.day_name} ({day.display_date})</span>
+                                        {day.is_today && <span className="text-amber-400 font-normal">Hôm nay</span>}
+                                      </div>
+                                      <div className="mt-1.5 flex flex-col gap-1 text-[10px] tabular-nums">
+                                        <div className="flex justify-between text-amber-300">
+                                          <span>Chi phí:</span>
+                                          <span className="font-bold">{day.cost_vnd.toLocaleString("vi-VN")} đ</span>
+                                        </div>
+                                        <div className="flex justify-between text-slate-300">
+                                          <span>Tokens:</span>
+                                          <span>{day.total_tokens.toLocaleString()}</span>
+                                        </div>
+                                        <div className="flex justify-between text-slate-300">
+                                          <span>Lượt truy vấn:</span>
+                                          <span>{day.query_count} lượt</span>
+                                        </div>
+                                      </div>
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+
+                            {/* X-Axis Labels (Day Names & Dates) */}
+                            <div className="grid grid-cols-7 gap-2 sm:gap-3 text-center pt-1">
+                              {weeklyData?.daily_breakdown.map((day) => (
+                                <div
+                                  key={day.day_index}
+                                  className={`flex flex-col items-center rounded-lg py-1 px-0.5 transition ${
+                                    day.is_today
+                                      ? "bg-indigo-50 border border-indigo-200 text-indigo-900"
+                                      : "text-slate-700"
+                                  }`}
+                                >
+                                  <span className="text-xs font-bold leading-tight">{day.day_name}</span>
+                                  <span className={`text-[10px] font-semibold ${day.is_today ? "text-indigo-600" : "text-slate-400"}`}>
+                                    {day.display_date} {day.is_today && "⭐"}
+                                  </span>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Weekly User Breakdown Table */}
+                      <div className="flex flex-col gap-2">
+                        <h4 className="text-xs font-bold text-slate-700 flex items-center gap-1.5"><IconUsers className="w-3.5 h-3.5" /> Thống Kê Theo Tài Khoản Trong Tuần Này</h4>
+                        <div className="max-h-48 overflow-auto rounded-xl border border-slate-200 shadow-sm">
+                          <table className="min-w-full text-xs tabular-nums">
+                            <thead className="sticky top-0 bg-slate-100 text-slate-700 font-semibold shadow-[0_1px_0_0_theme(colors.slate.200)]">
+                              <tr>
+                                <th className="px-3 py-2 text-left">Người Dùng</th>
+                                <th className="px-3 py-2 text-center">Tài Khoản</th>
+                                <th className="px-3 py-2 text-right">Số Câu Hỏi</th>
+                                <th className="px-3 py-2 text-right">Tổng Tokens</th>
+                                <th className="px-3 py-2 text-right font-bold text-amber-700">Chi Phí (VNĐ)</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-100 bg-white">
+                              {weeklyData?.user_breakdown.map((u) => (
+                                <tr key={u.username} className="hover:bg-slate-50">
+                                  <td className="px-3 py-2 font-medium text-slate-900">{u.user_name}</td>
+                                  <td className="px-3 py-2 text-center text-slate-500 font-mono">{u.username}</td>
+                                  <td className="px-3 py-2 text-right font-semibold text-slate-700">{u.query_count}</td>
+                                  <td className="px-3 py-2 text-right text-slate-600">{u.total_tokens.toLocaleString()}</td>
+                                  <td className="px-3 py-2 text-right font-bold text-amber-700">{u.cost_vnd.toLocaleString("vi-VN")} đ</td>
+                                </tr>
+                              ))}
+                              {(!weeklyData || weeklyData.user_breakdown.length === 0) && (
+                                <tr>
+                                  <td colSpan={5} className="px-3 py-4 text-center text-slate-400 italic">
+                                    Chưa có dữ liệu truy vấn trong tuần này.
+                                  </td>
+                                </tr>
+                              )}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
                   {/* TAB 2: DETAILED QUERY AUDIT LOGS TABLE */}
-                  {auditActiveTab === "logs" && (
+                  {auditActiveTab === "logs" && (() => {
+                    // Bang nay chi de hien cau hoi thuc su gui cho AI - loai bo su kien dang nhap/doi
+                    // MK/tao tai khoan (sql bat dau "<auth:"/"<admin:"), vi cac su kien do da co rieng
+                    // tab "Nhat ky Doi MK & Dang nhap" trong Quan ly Tai khoan, tron chung vao day gay
+                    // kho doc (06/08/2026, theo phan hoi truc tiep khi xem bang that).
+                    const queryOnlyLogs = auditData.logs.filter((l) => {
+                      const s = l.sql || "";
+                      return !s.startsWith("<auth:") && !s.startsWith("<admin:");
+                    });
+                    return (
                     <div className="flex flex-col gap-3">
                       <h3 className="text-sm font-bold text-slate-800">
-                        📝 Nhật Ký Truy Vấn Chi Tiết ({auditData.logs.length} dòng gần nhất)
+                        📝 Nhật Ký Truy Vấn Chi Tiết ({queryOnlyLogs.length} dòng gần nhất)
                       </h3>
                       <div className="max-h-[420px] overflow-auto rounded-xl border border-slate-200 shadow-sm">
                         <table className="min-w-full text-xs tabular-nums">
@@ -1441,7 +1796,7 @@ export default function Home() {
                             </tr>
                           </thead>
                           <tbody className="divide-y divide-slate-100 bg-white">
-                            {auditData.logs.map((log, idx) => (
+                            {queryOnlyLogs.map((log, idx) => (
                               <tr key={idx} className="transition hover:bg-slate-50">
                                 <td className="px-4 py-3 text-slate-500 whitespace-nowrap">
                                   {log.ts ? log.ts.replace("T", " ").slice(0, 19) : "—"}
@@ -1480,7 +1835,8 @@ export default function Home() {
                         </table>
                       </div>
                     </div>
-                  )}
+                    );
+                  })()}
                 </div>
               ) : (
                 <div className="flex h-64 items-center justify-center text-sm text-slate-400">
@@ -1520,8 +1876,8 @@ export default function Home() {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 backdrop-blur-sm p-4">
           <div className="w-full max-w-md bg-white rounded-2xl shadow-2xl overflow-hidden border border-slate-200">
             <div className="bg-slate-900 text-white p-4 flex justify-between items-center">
-              <h3 className="font-bold text-sm">🔑 Đổi Mật Khẩu Tài Khoản</h3>
-              <button onClick={() => setChangePwdOpen(false)} className="text-slate-400 hover:text-white">✕</button>
+              <h3 id="change-pwd-title" className="font-bold text-sm flex items-center gap-1.5"><IconKey className="w-4 h-4" /> Đổi Mật Khẩu Tài Khoản</h3>
+              <button onClick={() => setChangePwdOpen(false)} className="text-slate-400 hover:text-white"><IconClose className="w-4 h-4" /></button>
             </div>
             <form
               onSubmit={async (e) => {
@@ -1596,12 +1952,48 @@ export default function Home() {
                 <button
                   type="submit"
                   disabled={pwdChangeSubmitting}
-                  className="px-4 py-2 bg-blue-700 hover:bg-blue-800 text-white rounded-lg text-xs font-semibold shadow disabled:opacity-50"
+                  className="px-4 py-2 bg-blue-700 hover:bg-blue-800 text-white rounded-lg text-xs font-semibold shadow disabled:opacity-50 flex items-center gap-1.5"
                 >
-                  {pwdChangeSubmitting ? "Đang lưu..." : "Cập nhật Mật Khẩu 💾"}
+                  {pwdChangeSubmitting ? "Đang lưu..." : (<>Cập nhật Mật Khẩu <IconCheck className="w-3.5 h-3.5" /></>)}
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {confirmDeleteSid && (
+        <div
+          className="fixed inset-0 bg-slate-950/70 backdrop-blur-sm z-50 flex items-center justify-center p-4"
+          onClick={() => setConfirmDeleteSid(null)}
+        >
+          <div
+            ref={confirmDeleteModalRef}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="confirm-delete-title"
+            tabIndex={-1}
+            className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-5 outline-none"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 id="confirm-delete-title" className="text-sm font-bold text-slate-900 mb-2">Xóa cuộc trò chuyện?</h3>
+            <p className="text-xs text-slate-600 mb-4">Không thể hoàn tác sau khi xóa.</p>
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setConfirmDeleteSid(null)}
+                className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-semibold"
+              >
+                Hủy
+              </button>
+              <button
+                type="button"
+                onClick={confirmDeleteSession}
+                className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-lg text-xs font-semibold shadow"
+              >
+                Xóa
+              </button>
+            </div>
           </div>
         </div>
       )}

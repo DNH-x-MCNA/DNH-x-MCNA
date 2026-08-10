@@ -15,6 +15,8 @@ Ho tro NHO NGU CANH da luot (conversation_memory.py) - moi session (1 phien chat
 nho lai vai cau hoi/tra loi gan nhat, de cau hoi tiep theo khong can nhac lai tu dau.
 """
 import os
+import json
+from collections import defaultdict
 import anthropic
 from schema_context import SCHEMA_CONTEXT
 from query_engine import run_query
@@ -26,11 +28,17 @@ from longterm_memory import save_example, retrieve_similar_examples
 from cost_logger import compute_and_log_cost
 
 MODEL = "claude-sonnet-5"
-MAX_TOOL_ROUNDS = 8  # gioi han so lan model duoc goi lai tool trong 1 cau hoi (tranh loop vo han)
-MAX_ROWS_TO_MODEL = 50  # chi gui toi da 50 dong ket qua ve cho model doc, tranh ton token
-MAX_TOKENS = 8192  # du du cho ca "thinking" (Sonnet 5 tu bat mac dinh) lan text tra loi cuoi cung,
-                    # tranh truong hop thinking an het ngan sach lam text tra ve rong
-MAX_HISTORY_TURNS = 10  # so cap hoi-dap gan nhat duoc nho lai trong 1 session
+MAX_TOOL_ROUNDS = 4  # 04/08/2026: giam tu 8 -> 4 (tiet kiem thoi gian + token). Tool Merger da gop
+                      # nhieu tool call thanh 1, nen 4 vong la du cho moi tinh huong thuc te.
+MAX_ROWS_TO_MODEL = 20 # Giam tu 50 -> 30 -> 20 tiet kiem token (ad-hoc SQL, template tools khong dung)
+MAX_HISTORY_TURNS = 4  # 04/08/2026: giam tu 6 -> 4 tiet kiem token (ngu canh 4 luot la du, moi luot
+                       # cu cong don token lich su khien vong sau cham di dang ke)
+MAX_TOKENS = 6144  # 04/08/2026: giam tu 8192 -> 6144 ep Claude tra loi ngan gon hon, giam thoi gian
+                   # sinh output (~2-3s nhanh hon). Van du cho thinking + bang 30 dong.
+MAX_PAYLOAD_CHARS = 6000  # Gioi han ky tu payload gui cho AI (~1500 tokens). Template tools (employee_kpi,
+                          # revenue_tree...) tra JSON KHONG gioi han kich thuoc, truoc day co the len 20K-50K
+                          # chars, gay phình context 7K->49K tokens khi AI goi nhieu tool lien tiep. last_result
+                          # (cho UI) VAN giu nguyen day du, chi phan gui cho AI bi cat.
 
 TEMPLATE_TOOLS = [
     {
@@ -49,7 +57,7 @@ TEMPLATE_TOOLS = [
     {
         "name": "get_top_products",
         "description": "Top N san pham theo doanh thu trong 1 khoang ngay (da tu dong loai hang khuyen mai khoi so luong). "
-                        "UU TIEN dung tool nay cho moi cau hoi ve san pham ban chay/top san pham.",
+                        "UU TIEN dung tool nay cho moi cau hoi ve san pham ban chay/top san pham. Tu dong tra ve top san pham cua rieng doi QLV neu duoc hoi.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -114,31 +122,15 @@ TEMPLATE_TOOLS = [
     },
     {
         "name": "get_employee_kpi",
-        "description": "KPI nhan vien tinh tu snapshot gan nhat <= as_of_date - LUON tra ve san so luong "
-                        "total_employees/count_below_target/count_above_target (khong can lay het danh sach moi biet tong quan). "
-                        "PHAN BIET 3 MOC KHAC NHAU, TUYET DOI KHONG GOP: (a) 'DAT CHI TIEU' = >=100% chi "
-                        "tieu thang -> dung 'count_full_target'; giua thang con so nay gan nhu luon ~0 va do la "
-                        "DUNG (doanh so luy ke toi hom nay vs chi tieu ca thang). (b) 'DAT KPI' = >=80% "
-                        "('kpi_threshold_pct', CHUNG cho moi vai tro) -> dung 'count_kpi_achieved'; day cung la "
-                        "moc quyet dinh mau 🟢/🟡/🔴 o truong 'status'. (c) 'TOI MUC THUONG NHOM HANG' = "
-                        ">= truong 'threshold' cua tung dong (TDV 65% theo QD 0107/2026, QLV va cac cap quan ly "
-                        "70% theo QD 0429/.25) -> dung 'count_above_target'/'count_below_target'. Hoi 'ai chua "
-                        "dat chi tieu' -> moc 100%; hoi 'ai dat KPI' -> moc 80%; hoi 'ai toi muc thuong nhom "
-                        "hang' -> 'threshold'. Cau hoi mo ho thi dua CA BA va noi ro tung cai la gi. "
-                        "⚠️ TUYET DOI khong goi 65%/70% la 'dat KPI' - do chi la cong THUONG. Nguoi dat 67% la "
-                        "'da toi muc thuong nhom hang nhung CHUA dat KPI (80%)'. "
-                        "⚠️ 65%/70% CHI la cong cua THUONG NHOM HANG (DM1/DM2/DM3), KHONG phai 'nguong huong "
-                        "thuong' noi chung: con V15/V22/V25, ASO (tinh theo SO LUONG khach hang hoat dong - MB 40 "
-                        "/ MT 35 / MN 25, khong phai %), thuong quy, thuong nam - moc khac han va tra theo chi so "
-                        "khac; luong co ban tu 60% tro len van huong 100%. Nguoi duoi 65% VAN CO THE duoc cac "
-                        "khoan kia, nen TUYET DOI khong noi ho 'khong duoc thuong' / 'khong dat KPI'. "
-                        "Truong 'status' "
-                        "(🟢 Tot / 🟡 Trung binh / 🔴 Nguy hiem) chia theo muc THUONG NHOM HANG chu khong theo moc "
-                        "100% - LUON hien thi nguyen status kem ten/ma NV, KHONG tu tinh nguong khac, KHONG ap "
-                        "nguong cua vai tro nay sang vai tro kia. "
-                        "UU TIEN dung tool nay cho moi cau hoi ve KPI/doanh so nhan vien/sales. "
-                        "Voi cau hoi 'ai chua dat KPI/target' -> dung filter='below_target' (KHONG dung limit lon roi tu loc thu cong, "
-                        "gay ton du lieu va co the khong tra loi duoc). "
+        "description": "KPI nhan vien tu snapshot gan nhat <= as_of_date. Tra ve total_employees + 3 muc do "
+                        "rieng: count_full_target (dat chi tieu), count_kpi_achieved (dat KPI), "
+                        "count_above_target/count_below_target (toi muc thuong nhom hang) - dinh nghia/nguong "
+                        "day du cua 3 muc nay va y nghia mau status da co o system prompt, KHONG tu suy dien "
+                        "lai o day. "
+                        "UU TIEN dung cho MOI cau hoi ve KPI/doanh so nhan vien TONG QUAN/xep hang (ke ca ma "
+                        "khu vuc MBKV*/ASM*) - KHONG dung cho KPI THEO NGAY 1 nguoi (dung get_employee_daily_kpi). "
+                        "Voi cau hoi 'ai chua dat KPI/target' -> dung filter='below_target' (KHONG dung limit lon "
+                        "roi tu loc thu cong, gay ton du lieu va co the khong tra loi duoc). "
                         "Voi cau hoi chi dinh ro VAI TRO (vd 'top TDV', 'cac QLV chua dat KPI') -> BAT BUOC dung "
                         "tham so position_code (vd 'TDV','QLV') de loc NGAY TU DAU, TUYET DOI KHONG tu loc thu "
                         "cong ket qua sau khi nhan ve (da tung gay sot du lieu, vd 1 QLV lot vao top TDV).",
@@ -150,7 +142,7 @@ TEMPLATE_TOOLS = [
                 "order_by": {"type": "string", "enum": ["sales", "pct"], "description": "Chi ap dung khi filter='all': xep hang theo doanh so tuyet doi hay % dat target, mac dinh sales"},
                 "filter": {"type": "string", "enum": ["all", "below_target", "above_target"],
                            "description": "'all'=top N tot nhat (mac dinh), 'below_target'=CHUA toi muc huong thuong (te nhat truoc), 'above_target'=DA toi muc huong thuong (tot nhat truoc). Muc huong thuong lay THEO VAI TRO cua tung nguoi (TDV 65%, quan ly 70%). LUU Y day KHONG phai moc 'dat chi tieu' (=100%) - muon dem so nguoi dat chi tieu thi doc 'count_full_target' trong ket qua"},
-                "position_code": {"type": "string", "description": "Loc theo vai tro cu the: TDV/QLV/CTV/CS/TP/PP/TBP/TK (khong bat buoc - de trong neu hoi chung tat ca vai tro)"},
+                "position_code": {"type": "string", "description": "Loc theo vai tro cu the: TDV/QLV/CTV/CS/TP/PP/TBP/TK (khong bat buoc - de trong neu hoi chung tat ca vai tro). TP = Truong phong = Giam doc Mien = Giam doc Kenh (cap quan ly mien/kenh). TK = Truong kenh = Truong kenh MT (Modern Trade) - cap QLV, KHONG phai TP. CS = Cho si - cung cap QLV."},
             },
             "required": ["as_of_date"],
         },
@@ -230,7 +222,7 @@ TEMPLATE_TOOLS = [
             "type": "object",
             "properties": {
                 "search": {"type": "string", "description": "Tim gan dung theo ten hoac ma nhan vien (khong bat buoc)"},
-                "position_code": {"type": "string", "description": "Loc theo vai tro: TDV/QLV/CTV/CS/TP/PP/TBP/TK (khong bat buoc)"},
+                "position_code": {"type": "string", "description": "Loc theo vai tro: TDV/QLV/CTV/CS/TP/PP/TBP/TK (khong bat buoc). TP = Truong phong = Giam doc Mien = Giam doc Kenh (cap quan ly mien/kenh). TK = Truong kenh = Truong kenh MT (Modern Trade) - cap QLV, KHONG phai TP. CS = Cho si - cung cap QLV."},
                 "area_code": {"type": "string", "description": "Loc theo vung: MB/MT/MN (khong bat buoc)"},
                 "limit": {"type": "integer", "description": "So luong toi da tra ve, mac dinh 30"},
             },
@@ -306,7 +298,8 @@ TEMPLATE_TOOLS = [
     },
     {
         "name": "get_revenue_tree",
-        "description": "Cay doanh thu/KPI 3 cap: Truong phong/GD mien -> QLV -> Trinh duoc vien, dung "
+        "description": "Cay doanh thu/KPI 3 cap: Truong phong (=GD Mien =GD Kenh) -> QLV (gom ca Truong "
+                        "kenh MT va Cho si) -> Trinh duoc vien, dung "
                         "khi hoi kieu 'doanh so mien nay chia theo QLV/TDV the nao', 'cay to chuc doanh "
                         "thu vung X'. LUON dung tool nay cho cau hoi co ca 3 cap cung luc, KHONG tu ghep "
                         "nhieu tool KPI rieng le. Ket qua RAT DAI neu khong loc vung - KHUYEN KHICH truyen "
@@ -319,6 +312,17 @@ TEMPLATE_TOOLS = [
             },
             "required": [],
         },
+    },
+    {
+        "name": "get_kpi_forecast_model1",
+        "description": "Du bao ti le hoan thanh KPI va Doanh thu bang Mo Hinh 1 (Intra-Month Pattern). Dung khi nguoi dung hoi du doan, du phong, uoc tinh thang 8.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "target_month": {"type": "string", "description": "Thang du bao YYYY-MM"}
+            },
+            "required": []
+        }
     },
     {
         "name": "get_kpi_ranking",
@@ -371,25 +375,45 @@ TEMPLATE_TOOLS = [
         },
     },
     {
+        "name": "get_salary_achievement_summary",
+        "description": "Bao cao tong hop/thong ke so luong nhan vien dat cac moc thuong tien do (V15, V22, V25) va ASO tren toan cong ty hoac toan doi cua QLV. "
+                       "Dung khi nguoi dung hoi 'co bao nhieu nguoi dat V15', 'tong hop V22 toan quoc/toan doi', 'thong ke ASO', v.v. "
+                       "Phan quyen: neu nguoi hoi la C-Level se thay toan bo, neu la QLV se tu dong bi gioi han ve doi cua minh. "
+                       "Ve dieu kien ap dung V15/V22/V25 theo vai tro va quy tac snapshot CUOI KY (KHONG phai tien do "
+                       "thang hien tai) - xem chi tiet o mo ta tool get_salary_detail, ap dung giong het o day.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "save_date": {
+                    "type": "string",
+                    "description": "Thang can tra cuu (YYYY-MM). Neu de trong se lay ky luong gan nhat.",
+                },
+                "scope_area_code": {
+                    "type": "string",
+                    "description": "Ma vung mien can tra cuu (MB, MT, MN, ...). Khong bat buoc.",
+                },
+            },
+            "required": [],
+        },
+    },
+    {
         "name": "get_salary_detail",
-        "description": "Chi tiet THUONG KINH DOANH + PHU CAP thang cua 1 hoac NHIEU nhan vien (V15/V22/"
-                        "V25 thuong tien do, ASO, thuong danh muc DM1/DM2/DM3, SKU, khach tai don/khach "
-                        "moi), theo chinh sach thu nhap moi (QD 0429/.25 Mien Nam/Trung, QD 0107/2026 TDV "
-                        "toan quoc, hieu luc tu 28/07/2026) - dung khi nguoi dung hoi 'thuong thang nay "
-                        "cua toi/cua [ten] bao nhieu', 'V15/V22/V25/ASO cua [ten]', 'thuong danh muc/tien "
-                        "do cua toi', 'ket qua KPI luong cua toi'. "
+        "description": "Chi tiet THUONG KINH DOANH + PHU CAP thang cua 1 nhan vien (V15/V22/V25 thuong "
+                        "tien do, ASO, thuong danh muc DM1/DM2/DM3, SKU, khach tai don/khach moi), theo "
+                        "chinh sach thu nhap moi (QD 0429/.25 Mien Nam/Trung, QD 0107/2026 TDV toan "
+                        "quoc, hieu luc tu 28/07/2026) - dung khi nguoi dung hoi 'thuong thang nay cua "
+                        "toi/cua [ten] bao nhieu', 'V15/V22/V25/ASO cua [ten]', 'thuong danh muc/tien do "
+                        "cua toi', 'ket qua KPI luong cua toi'. "
+                        "QUAN TRONG VE HIEU LUC: V15, V22 chi ap dung cho TDV. V25 chi ap dung cho Truong phong, Quan ly vung, Cho si, Kenh MT. "
+                        "He thong chi luu snapshot luong CUOI KY (vd 30/06, 31/07). Neu user hoi tien do giua thang (vd 25/07), tool se tra ve cua "
+                        "thang truoc do (30/06). KHI TRA LOI PHAI KET LUAN/NOI RO diem nay: 'He thong chi chot luong cuoi ky, day la ket qua luong thang truoc da chot, khong phai tien do thang nay'. "
                         "HOI NHIEU NGUOI CUNG LUC (vd 'V15/V22/V25/ASO cho ca 4 TDV cua QLV X', 'thuong "
-                        "cua tat ca nhan vien vung Y', 'top 30 nguoi tot nhat') -> BAT BUOC dung tham so "
-                        "'employee_codes' (list) de goi 1 LAN DUY NHAT cho CA danh sach, KHONG duoc goi "
-                        "lai tool nay nhieu lan (moi lan lap lai ton them 1 vong goi API day du lich su "
-                        "hoi thoai - rat ton kem, da phat hien qua log chi phi thuc te: cau hoi 'top 30' "
-                        "kieu nay tung ton toi 8 vong goi/~$1.2 khi bi goi lap tung nguoi mot). Ket qua "
-                        "tra ve {'employees': [{...ket qua hoac 'error', 'requested_employee_code'}, ...]} "
-                        "- TUYET DOI KHONG tu ket luan 'khong ho tro nhieu nguoi' hay 'chua co du lieu' "
-                        "chi vi mo ta ten tool nghe nhu '1 nhan vien'. Neu 1 nguoi trong danh sach bi loi/"
-                        "tu choi (vd khong du quyen), CAC nguoi con lai VAN co ket qua binh thuong trong "
-                        "cung 1 lan goi - bao ro nguoi nao thieu/vi sao, KHONG dung ca cau tra loi lai vi "
-                        "1 loi. Hoi CHI 1 nguoi -> dung 'employee_code' (string) nhu cu, don gian hon. "
+                        "cua tat ca nhan vien vung Y') -> TRUYEN DANH SACH CAC MA NHAN VIEN PHAN CACH BANG DAU PHAY "
+                        "(vd employee_code='MBKV1,MBKV2,MBKV3,MBKV4') TRONG DUNG 1 LAN GOI TOOL DUY NHAT. "
+                        "TUYET DOI KHONG GOI TOOL NAY NHIEU LAN LAP LAI CHO TUNG NGUOI DE TIET KIEM TOKEN VA TIEN. "
+                        "Neu 1 nguoi trong danh sach bi loi/tu choi (vd khong du quyen), ket qua se bao ro "
+                        "nguoi do va ly do trong truong 'errors' - KHONG duoc im lang bo qua, phai neu ro "
+                        "voi nguoi dung ai bi thieu va vi sao. "
                         "!!! CANH BAO QUAN TRONG: ket qua CHUA GOM Luong co ban (LCB) - he thong hien "
                         "CHUA co du lieu LCB (Bravo khong luu san muc LCB theo Level). PHAI noi ro voi "
                         "nguoi dung day la THUONG KINH DOANH + PHU CAP, KHONG PHAI 'tong luong'/'tong "
@@ -398,15 +422,34 @@ TEMPLATE_TOOLS = [
                         "PHAN QUYEN: mac dinh CHI tra ve DUNG cua nguoi dang hoi (server tu dong xac "
                         "dinh, KHONG the xem cua nguoi khac du truyen employee_code gi) - tai khoan "
                         "C-Level HOAC QLV (xem doi cua chinh minh) moi xem duoc nguoi khac qua tham so "
-                        "employee_code/employee_codes; QLV Bui Khac Dung hoi ve 4 TDV cua chinh minh la "
-                        "HOP LE, KHONG duoc tu choi truoc khi thu goi tool. Phan quyen AP DUNG RIENG cho "
-                        "TUNG nguoi trong employee_codes, khong noi long chi vi goi hang loat.",
+                        "employee_code; QLV Bui Khac Dung hoi ve 4 TDV cua chinh minh la HOP LE, KHONG "
+                        "duoc tu choi truoc khi thu goi tool. Phan quyen AP DUNG RIENG cho TUNG nguoi "
+                        "trong danh sach, khong noi long chi vi goi hang loat.",
         "input_schema": {
             "type": "object",
             "properties": {
-                "employee_code": {"type": "string", "description": "Ma/ten 1 nhan vien can tra cuu - dung khi CHI hoi 1 nguoi. CHI co hieu luc voi tai khoan C-Level/QLV xem doi minh, bi bo qua voi tai khoan thuong (tu dong dung chinh nguoi hoi)"},
-                "employee_codes": {"type": "array", "items": {"type": "string"}, "description": "Danh sach ma/ten NHIEU nhan vien can tra cuu CUNG LUC (vd ca doi TDV cua 1 QLV, top N nguoi) - UU TIEN dung tham so nay thay vi goi lai tool nhieu lan. Neu truyen ca 2 tham so, employee_codes duoc uu tien, employee_code bi bo qua."},
+                "employee_code": {"type": "string", "description": "Ma/ten nhan vien can tra cuu - co the truyen NHIEU ma cach nhau bang dau phay (vd 'MBKV1,MBKV2,MBKV3') de tra ve ca danh sach trong 1 lan goi. CHI co hieu luc voi tai khoan C-Level/QLV xem doi minh, bi bo qua voi tai khoan thuong (tu dong dung chinh nguoi hoi)"},
                 "save_date": {"type": "string", "description": "YYYY-MM-DD, mac dinh la snapshot moi nhat hien co (thuong cuoi thang/dot chot gan nhat)"},
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "get_salary_ranking",
+        "description": "Xep hang TOP N nhan vien co THUONG CAO NHAT (hoac thuong V15, V22, V25, ASO, Thuong danh muc DM) "
+                        "trong ky/thang. DUNG KHI HOI 'top 30 nhan vien duoc thuong nhieu nhat', 'top thuong MB', "
+                        "'ai duoc thuong V15 cao nhat', 'danh sach top thuong thang 7', 'top 10 thuong mien bac', "
+                        "'top 30 theo MB', 'tong thuong luon'. "
+                        "Tra ve bang xep hang day du (thuong total, V15, V22, V25, ASO, allowance, % target) "
+                        "chay sieu toc trong 0.01 giay. TUYET DOI KHONG dung SQL ad-hoc hoac tool khac cho nhu cau nay.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "year_month": {"type": "string", "description": "Thang/ky can xem (YYYY-MM hoac YYYY-MM-DD, vd '2026-07')"},
+                "area_code": {"type": "string", "description": "Ma vung mien loc (MB, MT, MN, hoac bo trong neu xem toan quoc)"},
+                "position_code": {"type": "string", "description": "Chuc danh loc (TDV, QLV, TP, TK, hoac bo trong). TP = Truong phong = Giam doc Mien = Giam doc Kenh (cap quan ly mien/kenh). TK = Truong kenh = Truong kenh MT (Modern Trade) - cap QLV, KHONG phai TP. CS = Cho si - cung cap QLV."},
+                "bonus_type": {"type": "string", "enum": ["total", "v15", "v22", "v25", "aso", "dm"], "description": "Loai thuong quan tam: 'total' (tong thuong KD), 'v15', 'v22', 'v25', 'aso', 'dm' (thuong danh muc)"},
+                "limit": {"type": "integer", "description": "So luong nhan vien muon lay (mac dinh 30, toi da 100)"}
             },
             "required": [],
         },
@@ -494,7 +537,7 @@ hoi "doanh thu thang 6" roi hoi tiep "con thang 5?", hieu la van hoi doanh thu t
 tuong tu nhung doi sang thang 5) - KHONG hoi lai nguoi dung nhung gi da ro tu ngu canh truoc.
 
 QUAN TRONG VE CHON TOOL:
-- ⚠️ KHONG BAO GIO nhac ten tool/ham/truong ky thuat trong cau tra loi cho nguoi dung. Nguoi doc la
+- ⚠️  KHONG BAO GIO nhac ten tool/ham/truong ky thuat trong cau tra loi cho nguoi dung. Nguoi doc la
   lanh dao kinh doanh, khong phai lap trinh vien. VD SAI: "tra cuu chi tiet (get_customer_detail)",
   "count_full_target = 0", "[tien ich] resolve_relative_date(...)". VD DUNG: "toi co the tra cuu chi
   tiet tung khach hang de xem ai phu trach". Mo ta viec lam bang ngon ngu nghiep vu, giau het ten ky
@@ -507,8 +550,12 @@ QUAN TRONG VE CHON TOOL:
   nguoi dang hoi, THUONG KINH DOANH/PHU CAP thang cua 1 nhan vien -> BAT BUOC dung tool tuong ung
   (get_revenue_by_channel, get_top_products, get_top_customers, get_revenue_by_region, get_employee_kpi,
   get_employee_daily_kpi, compare_periods, get_customer_detail, get_employee_directory, check_order_timing,
-  get_inventory_by_region, get_qlv_change_history, get_revenue_tree, get_kpi_ranking,
-  get_revenue_reconciliation, get_receivables_overview, get_audit_log, get_salary_detail).
+  get_inventory_by_region, get_qlv_change_history, get_revenue_tree, get_kpi_ranking`
+    - `get_kpi_forecast_model1`: Dự báo tỷ lệ hoàn thành KPI và Doanh thu Tháng 8/2026 bằng Mô hình 1 (Trọng số Điểm rơi Phân bổ trong Tháng - Intra-Month Pattern). Dùng khi người dùng hỏi "dự đoán", "dự phóng", "dự kiến hoàn thành tháng 8", "ước tính doanh thu tháng 8".
+
+    - `get_kpi_ranking,
+  get_revenue_reconciliation, get_receivables_overview, get_audit_log, get_salary_detail,
+  get_salary_achievement_summary).
   Day la cac truy van DA DUOC KIEM CHUNG khop voi du lieu goc, KHONG tu sinh SQL thay the.
 - Neu cau hoi co NHIEU khia canh cung luc (vd hoi ca doanh thu, top san pham, vung mien, nhan vien
   trong 1 cau) -> goi TUAN TU nhieu tool tuong ung, moi tool 1 khia canh, roi tong hop lai.
@@ -566,6 +613,8 @@ QUAN TRONG VE CHON TOOL:
 
 {SCHEMA_CONTEXT}
 
+- TIET KIEM TOKEN VA TOC DO: VOI BAT KY TOOL NAO (get_salary_detail, get_customer_detail, get_employee_daily_kpi...), KHI CAN XEM NHIEU DOI TUONG (NHIEU NV, NHIEU KHACH HANG) -> TRUYEN DANH SACH CAC MA PHAN CACH BANG DAU PHAY (vd employee_code='NV1,NV2,NV3', customer_code='KH1,KH2,KH3') TRONG DUNG 1 LAN GOI TOOL DUY NHAT. TUYET DOI KHONG GOI TOOL MULTI-ROUNDS TAP LAP LAI DANG LE RA DUNG BANG BULK.
+
 QUAN TRONG VE DO DAI CAU TRA LOI (tiet kiem chi phi - moi token output deu tinh tien):
 - Tra loi NGAN GON, DI THANG vao so lieu - KHONG mo dau dai dong, KHONG nhac lai cau hoi, KHONG giai
   thich lai nhung gi tool da tra ve neu nguoi dung khong hoi "tai sao"/"giai thich".
@@ -573,6 +622,12 @@ QUAN TRONG VE DO DAI CAU TRA LOI (tiet kiem chi phi - moi token output deu tinh 
   KHONG viet thanh doan van dai. Neu ket qua co nhieu dong, dung BANG (markdown table) thay vi mo ta
   bang loi van. Chi mo rong nhan xet/phan tich khi nguoi dung hoi ro "vi sao"/"nhan xet"/"danh gia".
 - Neu tool tra ve loi hoac khong co du lieu phu hop, noi ngan gon cho nguoi dung, khong doan bua.
+
+TIET KIEM TOKEN - QUAN TRONG:
+- Sau khi nhan du lieu tu tool, TRA LOI NGAY cho nguoi dung. Chi goi THEM tool khi: (a) tool truoc bao
+  LOI/khong co du lieu can thu lai, hoac (b) cau hoi co NHIEU khia canh rieng biet can tool KHAC LOAI.
+- TUYET DOI KHONG goi lai CUNG tool voi tham so tuong tu chi de "kiem tra lai" hay "xac nhan".
+- Du lieu tra ve tu tool co the bi cat bot (neu qua dai) nhung DA DU de tra loi - khong can query lai.
 """
 
 
@@ -613,7 +668,7 @@ def _dynamic_context_note(question: str = "", session_id: str = "", scope_area_c
             # 23/07/2026: truoc day chi liet ke 2 tool; nay moi bao cao hieu suat theo tung nguoi deu bi
             # gioi han theo doi (xem _PERSON_LEVEL_TEMPLATES trong report_templates.py).
             f'MOI bao cao hieu suat theo tung nguoi (get_employee_kpi, get_employee_daily_kpi, '
-            f'get_revenue_tree, get_kpi_ranking) deu CHI tra ve du lieu CUA CHINH DOI HO - khong thay '
+            f'get_revenue_tree, get_kpi_ranking, get_kpi_forecast_model1) deu CHI tra ve du lieu CUA CHINH DOI HO - khong thay '
             f'ten/so lieu KPI ca nhan cua QLV khac hay TDV doi khac trong cung vung '
             f'{scope_area_code or ""} - day la du lieu hieu suat nhay cam cua dong nghiep, khac voi so '
             f'lieu doanh thu/ton kho tong hop thong thuong. '
@@ -666,7 +721,10 @@ def ask(question: str, session_id: str = "default", username: str = None, scope_
     (query_database/query_inventory_receivables) se bi LOAI HAN khoi danh sach tool kha dung - day la
     lop bao ve du lieu THAT (khong phu thuoc AI co lam dung huong dan hay khong).
     scope_employee_code: CHI danh cho tai khoan qlv - gioi han rieng cac bao cao lo hieu suat CA NHAN
-    dong nghiep (get_revenue_tree/get_kpi_ranking) chi con doi cua rieng ho, khong thay KPI ca nhan
+    dong nghiep (get_revenue_tree/get_kpi_ranking`
+    - `get_kpi_forecast_model1`: Dự báo tỷ lệ hoàn thành KPI và Doanh thu Tháng 8/2026 bằng Mô hình 1 (Trọng số Điểm rơi Phân bổ trong Tháng - Intra-Month Pattern). Dùng khi người dùng hỏi "dự đoán", "dự phóng", "dự kiến hoàn thành tháng 8", "ước tính doanh thu tháng 8".
+
+    - `get_kpi_ranking) chi con doi cua rieng ho, khong thay KPI ca nhan
     cua cac QLV khac trong cung vung (khac scope_area_code van cho xem so lieu TONG HOP ca vung o cac
     tool khac nhu doanh thu/ton kho - 2 co che tach biet, xem main.py).
     scope_channel: doc lap voi 2 co che tren - CHI gioi han theo kenh (vd 'OTC') khi tai khoan duoc gan
@@ -685,6 +743,14 @@ def ask(question: str, session_id: str = "default", username: str = None, scope_
     client = anthropic.Anthropic(api_key=api_key)
     history = load_history(session_id, max_turns=MAX_HISTORY_TURNS)
     messages = list(history) + [{"role": "user", "content": question}]
+    # Breakpoint cache thu 3 (ngoai tools + system tinh) - danh dau cuoi khoi tool_result MOI NHAT
+    # de cache duoc ca lich su + tool_result cua cac vong truoc, khong bi tinh lai gia day du moi
+    # vong. Chi giu 1 marker "dang hoat dong" tai 1 thoi diem (xoa marker vong truoc khi dat vong
+    # moi) de khong vuot qua 4 breakpoint/request; cache server-side van doc duoc prefix da ghi tu
+    # vong truoc nho co che nhin lui 20 block, khong can giu marker cu.
+    # LUU Y breakpoint nay dung TTL MAC DINH (5 phut), khac 2 breakpoint kia dung "1h" - ly do day du
+    # o cho dat cache_control trong vong lap ben duoi.
+    _last_msg_cache_block = None
 
     sql_used = []
     last_result = None
@@ -707,6 +773,15 @@ def ask(question: str, session_id: str = "default", username: str = None, scope_
         {"type": "text", "text": _dynamic_context_note(question, session_id, scope_area_code, scope_employee_code, scope_channel)},
     ]
 
+    # 06/08/2026: GO BO output_config={"effort": "medium"} (them 05/08) sau khi do tren du lieu that.
+    # Effort thap khien model suy luan nong hon MOI luot nen phai di NHIEU VONG tool hon moi ra dap an,
+    # cham tran MAX_TOOL_ROUNDS roi roi vao nhanh fallback "cau hoi qua phuc tap":
+    #   - ty le nguoi dung nhan cau tu choi: 0,5% (2/384, 20/07-04/08) -> 27,0% (10/37, 06/08)
+    #   - ty le cham tran 4 vong: 8,2% -> 37,1%; phan bo so lenh goi don dong dung tai moc 4
+    # KHONG phai do MAX_TOOL_ROUNDS=4: ngay 04/08 tran da la 4 ma ty le tu choi van 0%.
+    # Doi lai, effort chi tiet kiem ~0,005 USD/cau (output 1.473 -> 990 token) trong khi breakpoint
+    # cache o duoi tiet kiem ~0,025 USD/cau (input 14.734 -> 1.791) - bo effort chi mat ~10% khoan
+    # tiet kiem nhung lay lai 27% so cau tra loi duoc. Cac toi uu khac GIU NGUYEN.
     for _ in range(MAX_TOOL_ROUNDS):
         resp = client.messages.create(
             model=MODEL,
@@ -725,6 +800,10 @@ def ask(question: str, session_id: str = "default", username: str = None, scope_
             if not answer_text:
                 # Truong hop hy huu: het ngan sach token cho phan suy luan (thinking) khien khong con
                 # cho phan text tra ve - thu lai 1 lan voi yeu cau tra loi ngay, ngan gon.
+                # 05/08/2026: nguyen nhan goc la Sonnet 5 bat thinking MAC DINH khi khong truyen
+                # output_config - thinking an het MAX_TOKENS truoc khi con cho text tra loi.
+                # 06/08/2026: da GO effort="medium" o ca 2 lenh goi (xem ghi chu dai o vong lap tren) -
+                # co che thu lai nay GIU NGUYEN vi no van la luoi an toan cho dung tinh huong tren.
                 messages.append({"role": "user", "content": "Hay tra loi ngay bay gio, ngan gon truc tiep."})
                 resp2 = client.messages.create(model=MODEL, max_tokens=MAX_TOKENS, system=system_blocks,
                                                 tools=tools_for_request, messages=messages,
@@ -743,7 +822,56 @@ def ask(question: str, session_id: str = "default", username: str = None, scope_
             return {"answer": answer_text, "sql_used": sql_used, "last_result": last_result}
 
         tool_results = []
-        for tu in tool_uses:
+        original_tool_uses = [b for b in resp.content if b.type == "tool_use"]
+        bulk_tools_map = {
+            "get_salary_detail": "employee_code",
+            "get_customer_detail": "customer_code",
+            "get_employee_daily_kpi": "employee_code",
+        }
+
+        # Find primary tool_use for each bulk-capable tool name and collect all codes
+        merged_sub_ids = set()
+        tool_by_name = defaultdict(list)
+        for tu in original_tool_uses:
+            tool_by_name[tu.name].append(tu)
+
+        for name, tu_list in tool_by_name.items():
+            if name in bulk_tools_map and len(tu_list) > 1:
+                primary = tu_list[0]
+                param_name = bulk_tools_map[name]
+                codes = []
+                for sc in tu_list:
+                    val = (sc.input.get(param_name) or "").strip()
+                    if val and val not in codes:
+                        codes.append(val)
+                if codes:
+                    merged_input = dict(primary.input)
+                    merged_input[param_name] = ",".join(codes)
+                    primary.input = merged_input
+                for sub in tu_list[1:]:
+                    merged_sub_ids.add(sub.id)
+
+        executed_count = 0
+        for tu in original_tool_uses:
+            if tu.id in merged_sub_ids:
+                # Merged into primary tool_use -> return matching dummy tool_result to satisfy Anthropic API contract
+                tool_results.append({
+                    "type": "tool_result",
+                    "tool_use_id": tu.id,
+                    "content": json.dumps({"note": "Đã gộp kết quả tra cứu hàng loạt vào lượt gọi trước."}),
+                })
+                continue
+
+            if executed_count >= 3:
+                # Capped execution -> return notice to satisfy Anthropic API contract
+                tool_results.append({
+                    "type": "tool_result",
+                    "tool_use_id": tu.id,
+                    "content": json.dumps({"note": "Đã đạt giới hạn số lượng gọi tool trong 1 lượt. Vui lòng tổng hợp kết quả từ các dữ liệu đã lấy."}),
+                })
+                continue
+
+            executed_count += 1
             if tu.name in LOCAL_UTIL_TOOLS:
                 # Tool "tien ich" chay bang code thuan, khong cham DB - xu ly ngay tai cho, khong qua
                 # run_query/call_template (khong can audit log SQL vi khong co SQL nao ca).
@@ -790,12 +918,36 @@ def ask(question: str, session_id: str = "default", username: str = None, scope_
                     payload = {"du_lieu": payload,
                                "CANH_BAO_BAT_BUOC_NOI_VOI_NGUOI_DUNG": tresult["canh_bao"]}
 
+            # Gioi han kich thuoc payload gui cho AI de tranh context phinh to khi goi nhieu tool
+            # lien tiep (truoc day template tools tra JSON 20K-50K chars, cong don qua cac vong lam
+            # input tang tu 7K len 49K tokens cho 1 cau hoi). last_result (dong 804) VAN giu nguyen
+            # ket qua day du cho UI frontend - chi phan gui cho AI model bi cat.
+            payload_str = json.dumps(payload, ensure_ascii=False) if isinstance(payload, (dict, list)) else str(payload)
+            if len(payload_str) > MAX_PAYLOAD_CHARS:
+                payload_str = payload_str[:MAX_PAYLOAD_CHARS] + "\n...(du lieu bi cat bot vi qua dai, phan tren DA DU de tra loi - KHONG can query lai)"
             tool_results.append({
                 "type": "tool_result",
                 "tool_use_id": tu.id,
-                "content": str(payload),
+                "content": payload_str,
             })
 
+        if tool_results:
+            if _last_msg_cache_block is not None:
+                _last_msg_cache_block.pop("cache_control", None)
+            tool_results[-1] = dict(tool_results[-1])
+            # 06/08/2026: TTL MAC DINH (5 phut), CO Y khac 2 breakpoint kia (system + tools dung "1h").
+            # Gia GHI cache phu thuoc TTL: 5 phut = 1,25x gia input ($2,50/M), 1 gio = 2x ($4,00/M).
+            # Khoi tool_result nay chi duoc doc lai TRONG CHINH cau hoi do - cac vong cach nhau vai
+            # giay - nen khong bao gio huong loi tu TTL 1 gio, ma van phai tra gia ghi dat hon 60%.
+            # Do that 06/08: cache_write la thanh phan DAT NHAT (37,8% chi phi/cau, ~4.426 token),
+            # phan lon den tu chinh breakpoint di dong nay (ghi lai moi vong, ~2,86 vong/cau).
+            # Ha ve 5 phut tiet kiem ~0,0066 USD/cau (~14% tong chi phi).
+            # System prompt + tool definitions thi NGUOC LAI: dung lai qua nhieu cau hoi trong nhieu
+            # gio, nen giu "1h" (xem system_blocks va tools_for_request o dau ham).
+            # Rui ro: cache 5 phut chi hong neu 2 vong goi tool cach nhau qua 5 phut - do thuc te cau
+            # cham nhat la 1,3 phut cho CA cau hoi, con xa nguong.
+            tool_results[-1]["cache_control"] = {"type": "ephemeral"}
+            _last_msg_cache_block = tool_results[-1]
         messages.append({"role": "user", "content": tool_results})
 
     fallback = "Xin loi, cau hoi qua phuc tap can nhieu buoc truy van, vui long hoi cu the hon."

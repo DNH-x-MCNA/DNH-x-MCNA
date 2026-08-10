@@ -6,21 +6,12 @@ export async function GET(request: Request) {
   }
 
   const { searchParams } = new URL(request.url);
-  const days = searchParams.get("days") || "30";
-  const date = searchParams.get("date") || "";
-  const limit = searchParams.get("limit") || "200";
-  const userFilter = searchParams.get("user_filter") || "";
-  const roleFilter = searchParams.get("role_filter") || "";
+  const weekOffset = searchParams.get("week_offset") || "0";
 
-  const queryParams = new URLSearchParams({
-    limit,
-    ...(date ? { date } : { days }),
-    ...(userFilter ? { user_filter: userFilter } : {}),
-    ...(roleFilter ? { role_filter: roleFilter } : {}),
-  });
+  const queryParams = new URLSearchParams({ week_offset: weekOffset });
 
   const authHeader = request.headers.get("authorization");
-  const res = await fetch(`${backendUrl}/audit-logs?${queryParams.toString()}`, {
+  const res = await fetch(`${backendUrl}/audit-logs/weekly?${queryParams.toString()}`, {
     headers: {
       ...(apiKey ? { "X-API-Key": apiKey } : {}),
       ...(authHeader ? { Authorization: authHeader } : {}),
