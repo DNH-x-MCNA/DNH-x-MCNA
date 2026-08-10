@@ -567,20 +567,18 @@ QUAN TRONG VE CHON TOOL:
   "count_full_target = 0", "[tien ich] resolve_relative_date(...)". VD DUNG: "toi co the tra cuu chi
   tiet tung khach hang de xem ai phu trach". Mo ta viec lam bang ngon ngu nghiep vu, giau het ten ky
   thuat ben trong.
-- Neu cau hoi thuoc 1 trong 17 nhom: doanh thu theo kenh, top san pham, top khach hang, doanh thu
+- Neu cau hoi thuoc 1 trong 18 nhom: doanh thu theo kenh, top san pham, top khach hang, doanh thu
   theo vung mien, KPI/doanh so nhan vien (tong quan/thang), KPI THEO NGAY 1 nhan vien ca nhan, SO SANH
   2 khoang thoi gian, CHI TIET 1 khach hang cu the, TRA CUU ma/ten/vai tro nhan vien, KIEM TRA don hang
   bat thuong/chay don KPI, TON KHO THEO VUNG, LICH SU DOI QLV, CAY DOANH THU/KPI TP-QLV-TDV, XEP HANG
-  KPI, DOI CHIEU doanh thu tu tren xuong vs cong don tu duoi len, LICH SU TRUY VAN/CHI PHI AI cua chinh
+  KPI, DU BAO/DU PHONG KPI - doanh thu cuoi thang ("du doan", "du phong", "uoc tinh thang nay"),
+  DOI CHIEU doanh thu tu tren xuong vs cong don tu duoi len, LICH SU TRUY VAN/CHI PHI AI cua chinh
   nguoi dang hoi, THUONG KINH DOANH/PHU CAP thang cua 1 nhan vien -> BAT BUOC dung tool tuong ung
   (get_revenue_by_channel, get_top_products, get_top_customers, get_revenue_by_region, get_employee_kpi,
   get_employee_daily_kpi, compare_periods, get_customer_detail, get_employee_directory, check_order_timing,
-  get_inventory_by_region, get_qlv_change_history, get_revenue_tree, get_kpi_ranking`
-    - `get_kpi_forecast_model1`: Dự báo tỷ lệ hoàn thành KPI và Doanh thu Tháng 8/2026 bằng Mô hình 1 (Trọng số Điểm rơi Phân bổ trong Tháng - Intra-Month Pattern). Dùng khi người dùng hỏi "dự đoán", "dự phóng", "dự kiến hoàn thành tháng 8", "ước tính doanh thu tháng 8".
-
-    - `get_kpi_ranking,
-  get_revenue_reconciliation, get_receivables_overview, get_audit_log, get_salary_detail,
-  get_salary_achievement_summary).
+  get_inventory_by_region, get_qlv_change_history, get_revenue_tree, get_kpi_ranking,
+  get_kpi_forecast_model1, get_revenue_reconciliation, get_receivables_overview, get_audit_log,
+  get_salary_detail, get_salary_achievement_summary).
   Day la cac truy van DA DUOC KIEM CHUNG khop voi du lieu goc, KHONG tu sinh SQL thay the.
 - Neu cau hoi co NHIEU khia canh cung luc (vd hoi ca doanh thu, top san pham, vung mien, nhan vien
   trong 1 cau) -> goi TUAN TU nhieu tool tuong ung, moi tool 1 khia canh, roi tong hop lai.
@@ -746,10 +744,7 @@ def ask(question: str, session_id: str = "default", username: str = None, scope_
     (query_database/query_inventory_receivables) se bi LOAI HAN khoi danh sach tool kha dung - day la
     lop bao ve du lieu THAT (khong phu thuoc AI co lam dung huong dan hay khong).
     scope_employee_code: CHI danh cho tai khoan qlv - gioi han rieng cac bao cao lo hieu suat CA NHAN
-    dong nghiep (get_revenue_tree/get_kpi_ranking`
-    - `get_kpi_forecast_model1`: Dự báo tỷ lệ hoàn thành KPI và Doanh thu Tháng 8/2026 bằng Mô hình 1 (Trọng số Điểm rơi Phân bổ trong Tháng - Intra-Month Pattern). Dùng khi người dùng hỏi "dự đoán", "dự phóng", "dự kiến hoàn thành tháng 8", "ước tính doanh thu tháng 8".
-
-    - `get_kpi_ranking) chi con doi cua rieng ho, khong thay KPI ca nhan
+    dong nghiep (get_revenue_tree/get_kpi_ranking) chi con doi cua rieng ho, khong thay KPI ca nhan
     cua cac QLV khac trong cung vung (khac scope_area_code van cho xem so lieu TONG HOP ca vung o cac
     tool khac nhu doanh thu/ton kho - 2 co che tach biet, xem main.py).
     scope_channel: doc lap voi 2 co che tren - CHI gioi han theo kenh (vd 'OTC') khi tai khoan duoc gan
