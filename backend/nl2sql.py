@@ -20,7 +20,7 @@ from collections import defaultdict
 import anthropic
 from schema_context import SCHEMA_CONTEXT
 from query_engine import run_query
-from report_templates import call_template, latest_data_date
+from report_templates import call_template, latest_data_date, sync_freshness_note
 from conversation_memory import load_history, append_message, get_query_state, set_query_state
 from realtime_context import REALTIME_TOOLS, REALTIME_TOOL_NAMES, get_current_datetime, resolve_relative_date
 from glossary_memory import save_glossary_term, retrieve_relevant_glossary
@@ -30,6 +30,12 @@ from cost_logger import compute_and_log_cost
 MODEL = "claude-sonnet-5"
 MAX_TOOL_ROUNDS = 4  # 04/08/2026: giam tu 8 -> 4 (tiet kiem thoi gian + token). Tool Merger da gop
                       # nhieu tool call thanh 1, nen 4 vong la du cho moi tinh huong thuc te.
+                      # 10/08/2026: GIU NGUYEN 4. Ca 2 ca "cau hoi qua phuc tap" truy duoc nguyen nhan
+                      # trong ngay (get_audit_log, get_revenue_tree) deu do MO TA TOOL chua ro khien
+                      # model goi lap, sua cau chu la het - khong phai do thieu vong.
+MAX_TOOLS_PER_ROUND = 5  # 10/08/2026: truoc day so 3 nam hardcode giua ham ask(). Nang 3 -> 5 vi sau
+                          # khi va loi Tool Merger (xem _merge_bulk_tool_calls), cac lenh goi KHAC
+                          # tham so nay chay THAT thay vi bi bo am tham, nen can them cho.
 MAX_ROWS_TO_MODEL = 20 # Giam tu 50 -> 30 -> 20 tiet kiem token (ad-hoc SQL, template tools khong dung)
 MAX_HISTORY_TURNS = 4  # 04/08/2026: giam tu 6 -> 4 tiet kiem token (ngu canh 4 luot la du, moi luot
                        # cu cong don token lich su khien vong sau cham di dang ke)
@@ -659,6 +665,93 @@ TIET KIEM TOKEN - QUAN TRONG:
 """
 
 
+# Cac tool nhan DANH SACH ma ngan cach bang dau phay -> nhieu lenh goi trong CUNG mot luot co the gop
+# lam mot, tiet kiem token. Gia tri = ten tham so chua ma. CHI duoc them tool vao day khi tool do THAT
+# SU co tham so nay VA ham xu ly biet tach chuoi "A,B,C" - xem get_salary_detail lam mau.
+# CANH BAO (10/08/2026): da tung co nguoi dinh them "get_employee_kpi": "employee_code" - SAI, tool do
+# khong he co tham so employee_code (chi co as_of_date/limit/order_by/filter/position_code). Them nham
+# se lam moi lenh goi thu 2 tro di cua tool do bi bo trong im lang.
+BULK_TOOLS_MAP = {
+    "get_salary_detail": "employee_code",
+    "get_customer_detail": "customer_code",
+    "get_employee_daily_kpi": "employee_code",
+}
+
+
+def _merge_bulk_tool_calls(tool_uses, bulk_tools_map=None):
+    """Gop nhieu lenh goi CUNG mot tool trong CUNG mot luot thanh mot lenh goi duy nhat mang danh sach
+    ma ngan cach bang dau phay. Tra ve tap id cua cac lenh goi DA BI GOP vao lenh khac (caller phai
+    tra ve tool_result gia cho chung de giu dung hop dong cua Anthropic API).
+
+    SUA 10/08/2026 - VA HAI LOI GAY MAT DU LIEU AM THAM. Ban cu (nam lan trong ask()) lam the nay:
+
+        if codes:
+            ... gop ...
+        for sub in tu_list[1:]:        # <-- NAM NGOAI khoi `if codes:`
+            merged_sub_ids.add(sub.id)
+
+    1. DANH DAU "da gop" KE CA KHI KHONG GOP DUOC GI. Khi tool khong co tham so khoa (vd bi them nham
+       vao bang), `codes` rong nen khong gop gi ca, NHUNG cac lenh goi thu 2 tro di van bi danh dau va
+       bi bo. Model nhan lai dung cau "Da gop ket qua tra cuu hang loat vao luot goi truoc" - mot loi
+       noi doi - roi tra loi tu tin bang du lieu thieu.
+    2. CHI GOP MOT THAM SO KHOA, AM THAM VUT MOI THAM SO KHAC. Hoi "so sanh doanh so khach X thang 7
+       voi thang 8" -> model goi get_customer_detail 2 lan CUNG customer_code nhung KHAC date_from/
+       date_to. Sau khu trung, codes chi con ['X'], lenh goi thu 2 bi bo -> model chi co thang 7 nhung
+       tuong da co ca hai.
+
+    Cach sua: gom cac lenh goi theo "van tay" = toan bo tham so NGOAI khoa gop. Chi gop trong cung mot
+    nhom (tuc la moi thu khac deu giong het, chi khac moi ma). Va chi danh dau da-gop khi THUC SU gop.
+    Khac tham so -> de chay rieng, tha ton them mot luot con hon tra so thieu ma khong ai biet.
+    """
+    if bulk_tools_map is None:
+        bulk_tools_map = BULK_TOOLS_MAP
+
+    merged_sub_ids = set()
+    tool_by_name = defaultdict(list)
+    for tu in tool_uses:
+        tool_by_name[tu.name].append(tu)
+
+    for name, tu_list in tool_by_name.items():
+        if name not in bulk_tools_map or len(tu_list) <= 1:
+            continue
+        param_name = bulk_tools_map[name]
+
+        # Van tay: moi tham so TRU khoa gop. json.dumps de gia tri dict/list cung so sanh duoc
+        # (tham so cua tool khong phai luc nao cung la chuoi/so).
+        groups = defaultdict(list)
+        for tu in tu_list:
+            fingerprint = tuple(sorted(
+                (k, json.dumps(v, sort_keys=True, ensure_ascii=False, default=str))
+                for k, v in (tu.input or {}).items() if k != param_name
+            ))
+            groups[fingerprint].append(tu)
+
+        for grp in groups.values():
+            if len(grp) <= 1:
+                continue
+            codes = []
+            for sc in grp:
+                val = ((sc.input or {}).get(param_name) or "")
+                val = val.strip() if isinstance(val, str) else str(val).strip()
+                if val and val not in codes:
+                    codes.append(val)
+            if not codes:
+                # Khong lay duoc ma nao -> tool nay khong co tham so khoa (bi them nham vao bang).
+                # TUYET DOI khong danh dau da-gop o day - de tat ca chay binh thuong. Day chinh la
+                # loi (1) neu tren: ban cu van danh dau, khien lenh goi thu 2 bi bo trong im lang.
+                continue
+            # Den day: cung tool, cung moi tham so phu, chi khac ma (hoac trung hoan toan) -> gop
+            # an toan. codes co 1 phan tu nghia la cac lenh goi trung het nhau, gop lai la dung.
+            primary = grp[0]
+            merged_input = dict(primary.input or {})
+            merged_input[param_name] = ",".join(codes)
+            primary.input = merged_input
+            for sub in grp[1:]:
+                merged_sub_ids.add(sub.id)
+
+    return merged_sub_ids
+
+
 def _dynamic_context_note(question: str = "", session_id: str = "", scope_area_code: str = None,
                            scope_employee_code: str = None, scope_channel: str = None) -> str:
     """Phan DONG cua system prompt (ngay du lieu + ngu canh doi theo tung cau hoi) - tach rieng khoi
@@ -667,6 +760,15 @@ def _dynamic_context_note(question: str = "", session_id: str = "", scope_area_c
     latest = latest_data_date()
     parts = [f'Ngay co du lieu moi nhat trong kho hien tai: {latest} (dung lam moc cho "hom nay"/'
              f'"gan day" neu nguoi dung khong noi ro ngay; kho local co the tre toi da ~15-30 phut so voi Bravo that).']
+
+    # 10/08/2026: sync_freshness_note() da co san day du logic (report_templates.py) tu truoc nhung
+    # CHUA TUNG duoc goi o dau ca - phat hien khi doi chieu mot ban "Technical Spec" voi code that.
+    # No tu tra chuoi RONG khi moi thu binh thuong (khong lam nhieu prompt vo co), chi len tieng khi
+    # tien trinh sync co dau hieu TREO qua 60 phut. Neu sang demo 13/08 sync chet ma khong ai biet,
+    # day la cach chatbot TU NOI RA thay vi lang le tra so cu nhu the la so moi.
+    freshness = sync_freshness_note()
+    if freshness:
+        parts.append(freshness)
 
     if scope_area_code:
         parts.append(
@@ -855,33 +957,9 @@ def ask(question: str, session_id: str = "default", username: str = None, scope_
 
         tool_results = []
         original_tool_uses = [b for b in resp.content if b.type == "tool_use"]
-        bulk_tools_map = {
-            "get_salary_detail": "employee_code",
-            "get_customer_detail": "customer_code",
-            "get_employee_daily_kpi": "employee_code",
-        }
-
-        # Find primary tool_use for each bulk-capable tool name and collect all codes
-        merged_sub_ids = set()
-        tool_by_name = defaultdict(list)
-        for tu in original_tool_uses:
-            tool_by_name[tu.name].append(tu)
-
-        for name, tu_list in tool_by_name.items():
-            if name in bulk_tools_map and len(tu_list) > 1:
-                primary = tu_list[0]
-                param_name = bulk_tools_map[name]
-                codes = []
-                for sc in tu_list:
-                    val = (sc.input.get(param_name) or "").strip()
-                    if val and val not in codes:
-                        codes.append(val)
-                if codes:
-                    merged_input = dict(primary.input)
-                    merged_input[param_name] = ",".join(codes)
-                    primary.input = merged_input
-                for sub in tu_list[1:]:
-                    merged_sub_ids.add(sub.id)
+        # Gop cac lenh goi cung tool + cung tham so phu thanh mot (xem _merge_bulk_tool_calls - da tach
+        # ra ngoai de test duoc, va da va 2 loi gay mat du lieu am tham vao 10/08/2026).
+        merged_sub_ids = _merge_bulk_tool_calls(original_tool_uses)
 
         executed_count = 0
         for tu in original_tool_uses:
@@ -894,12 +972,12 @@ def ask(question: str, session_id: str = "default", username: str = None, scope_
                 })
                 continue
 
-            if executed_count >= 3:
+            if executed_count >= MAX_TOOLS_PER_ROUND:
                 # Capped execution -> return notice to satisfy Anthropic API contract
                 tool_results.append({
                     "type": "tool_result",
                     "tool_use_id": tu.id,
-                    "content": json.dumps({"note": "Đã đạt giới hạn số lượng gọi tool trong 1 lượt. Vui lòng tổng hợp kết quả từ các dữ liệu đã lấy."}),
+                    "content": json.dumps({"note": f"Đã đạt giới hạn {MAX_TOOLS_PER_ROUND} lượt gọi tool trong 1 lượt. Hãy tổng hợp từ dữ liệu đã lấy, hoặc gọi các tool còn lại ở lượt kế tiếp."}),
                 })
                 continue
 
