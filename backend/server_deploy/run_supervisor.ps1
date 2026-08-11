@@ -1,4 +1,4 @@
-# === Giam sat & tu khoi dong lai: Backend + Sync Scheduler + Cloudflared ===
+# === Giam sat & tu khoi dong lai: Backend + Sync Scheduler ===
 # (May chu DNH - ket noi Bravo TRUC TIEP, khong qua VPN)
 # 23/07/2026: BO HAN Telegram Bot khoi bundle nay - kenh chat da chuyen han sang web (dnh-bot.vercel.app),
 # Telegram khong con dung. Day cung la nguon sinh tien trinh mo coi: moi lan supervisor nay tu khoi dong
@@ -7,6 +7,19 @@
 # phat hien thuc te 23/07/2026: 4 tien trinh telegram_bot.py song song, tao ngay 16/07, 20/07, 21/07,
 # 22/07, khong cai nao chet. Xem docs/kich_ban_demo1_chatbot.md (repo D:\DNH) va memory
 # may24_orphan_process_duplication cho boi canh day du ve lop loi nay.
+#
+# 11/08/2026: GO HAN viec tu spawn Cloudflared Supervisor khoi day (truoc kia co Start-CloudflaredSupervisor
+# o day). Ly do: service NSSM "DNH_Chatbot_Backend" (chay script nay) dung tai khoan LocalSystem - tai
+# khoan may, KHONG co ho so nguoi dung nen KHONG co dang nhap "npx vercel". Moi lan Restart-Service
+# DNH_Chatbot_Backend, ban cloudflared con cua CHINH script nay se giet tunnel dang chay tot (do service
+# rieng "DNH_Chatbot_Tunnel", chay duoi .\Administrator, co dang nhap Vercel that) roi tu dung mot tunnel
+# MOI - nhung tu cap nhat Vercel that bai ("npx vercel CHUA dang nhap tren may nay"), de lai file
+# CAN_SUA_VERCEL.txt va URL cu chet, gay loi HTTP 530 tren toan bo chatbot production cho toi khi co
+# nguoi sua tay. Xay ra 2 lan lien tiep ngay 11/08 (14:49 va 15:15), moi lan deu do RESTART BACKEND -
+# mot thao tac tuong doi thuong xuyen (deploy code moi) - vo tinh lam sap tunnel.
+# Tu nay: quan ly tunnel CHI con 1 noi duy nhat - service NSSM "DNH_Chatbot_Tunnel" (da cai + kiem chung
+# 10/08/2026, tu phuc hoi dung sau reboot, dung dung tai khoan co quyen cap nhat Vercel). Script nay
+# CHI con phu trach Backend (uvicorn) + Sync Scheduler, khong dong toi cloudflared nua.
 $BACKEND_DIR = "C:\dnh_chatbot\backend"
 $LOG_DIR = "$BACKEND_DIR\logs"
 $SUPERVISOR_LOG = "$LOG_DIR\supervisor.log"
@@ -32,19 +45,11 @@ function Start-SyncScheduler {
         -WorkingDirectory $BACKEND_DIR -WindowStyle Hidden -PassThru
 }
 
-function Start-CloudflaredSupervisor {
-    Start-Process -FilePath "powershell.exe" `
-        -ArgumentList @("-WindowStyle", "Hidden", "-ExecutionPolicy", "Bypass", "-File", "`"$BACKEND_DIR\cloudflared_supervisor.ps1`"") `
-        -WorkingDirectory $BACKEND_DIR -WindowStyle Hidden -PassThru
-}
-
 Log "=== Supervisor khoi dong ==="
 $backendProc = Start-Backend
 Log "Backend (uvicorn :8010) started, PID=$($backendProc.Id)"
 $syncProc = Start-SyncScheduler
 Log "Sync scheduler started, PID=$($syncProc.Id)"
-$cfProc = Start-CloudflaredSupervisor
-Log "Cloudflared supervisor started, PID=$($cfProc.Id)"
 
 while ($true) {
     Start-Sleep -Seconds $CHECK_INTERVAL_SEC
@@ -58,10 +63,5 @@ while ($true) {
         Log "CANH BAO: Sync scheduler da thoat (ExitCode=$($syncProc.ExitCode)) -> khoi dong lai"
         $syncProc = Start-SyncScheduler
         Log "Sync scheduler restarted, PID=$($syncProc.Id)"
-    }
-    if ($cfProc.HasExited) {
-        Log "CANH BAO: Cloudflared supervisor da thoat (ExitCode=$($cfProc.ExitCode)) -> khoi dong lai"
-        $cfProc = Start-CloudflaredSupervisor
-        Log "Cloudflared supervisor restarted, PID=$($cfProc.Id)"
     }
 }
