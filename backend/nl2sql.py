@@ -313,17 +313,19 @@ TEMPLATE_TOOLS = [
             "required": [],
         },
     },
-    {
-        "name": "get_kpi_forecast_model1",
-        "description": "Du bao ti le hoan thanh KPI va Doanh thu bang Mo Hinh 1 (Intra-Month Pattern). Dung khi nguoi dung hoi du doan, du phong, uoc tinh thang 8.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "target_month": {"type": "string", "description": "Thang du bao YYYY-MM"}
-            },
-            "required": []
-        }
-    },
+    # 10/08/2026: GO tool "get_kpi_forecast_model1" khoi danh sach tool kha dung.
+    # Ly do truc tiep: no CRASH 100% so lan goi, va da nhu vay tu ngay duoc viet (309d2f2, 06/08).
+    # forecast_model1() truy van "SELECT t.manager_code ... FROM dim_targetvungmien t" nhung bang do
+    # CHI CO 4 cot (area_code, channel_code, amount, doc_date - xem local_warehouse.py:52 va
+    # sync_warehouse.py::SMALL_TABLES). Cot manager_code CHUA TUNG ton tai. Da chay thu tren may 24
+    # (10/08): "OperationalError: no such column: t.manager_code".
+    # Ngoai loi chet nguoi tren, con 6 van de PHAI xu ly truoc khi bat lai - xem khoi ghi chu day du o
+    # report_templates.py ngay tren def forecast_model1(). Tom tat: nhan "(VUOT TARGET)" dan cung, note
+    # dan cung choi lai so vua tinh, 4 cho bia so khi thieu du lieu, bo qua phan quyen vung/doi,
+    # target_month la tham so trang tri, va mau so co phan la so doan (est_mb_target 19,5 ty +
+    # target_etc_national 42,5 ty khong lay tu bang nao).
+    # Ham forecast_model1() va TEMPLATES entry duoc GIU LAI de sua tiep sau demo 13/08; go o day la du
+    # de model khong the goi (tool khong nam trong danh sach thi khong goi duoc).
     {
         "name": "get_kpi_ranking",
         "description": "Xep hang % dat KPI, TOT NHAT truoc - dung khi hoi 'QLV nao dat KPI tot/kem "
@@ -358,9 +360,34 @@ TEMPLATE_TOOLS = [
             "required": [],
         },
     },
+    # 10/08/2026: bo sung khoi "GOI DUNG 1 LAN LA DU" sau khi cau hoi "Bao cao chi phi AI chi tiet theo
+    # nguoi dung" that bai 2 lan lien tiep trong 1 buoi (14:10 va 14:12, 2 phien khac nhau), nguoi dung
+    # nhan cau tu choi "cau hoi qua phuc tap". Doc audit_log 2 phien do thay cung 1 khuon mau:
+    #   vong 1: get_audit_log(target_username='all') -> DA co san user_breakdown (dnh, vui.hoangthi,
+    #           diag_test) - tuc la da du de tra loi ngay tu day
+    #   vong 2-4: goi LAI tool cho TUNG username mot, roi doi limit, roi quet sqlite_master tim bang
+    #           chi phi khac -> can MAX_TOOL_ROUNDS, roi vao fallback
+    # Nguyen nhan: audit_log_summary() CO Y tra user_breakdown=None khi loc 1 nguoi cu the (luc do bao
+    # cao chi con 1 nguoi, tach ra khong con y nghia - xem report_templates.py ~2029). Model doc thay
+    # null thi tuong bi loi/thieu quyen nen cang co thu them. Day KHONG phai loi du lieu va KHONG phai
+    # do effort (da go 06/08) - chi la mo ta tool chua noi ro. Cach chua giong het get_salary_detail
+    # ben duoi (cung benh: goi lap cho tung nguoi).
     {
         "name": "get_audit_log",
         "description": "Lich su truy van va token/chi phi AI quy doi VND/USD. Voi tai khoan C-Level hoac Admin: ho tro xem BÁO CÁO CHI PHÍ AI TOÀN CÔNG TY hoac loc theo nguoi dung (target_username). Voi tai khoan QLV/TDV: xem chi phi va lich su ca nhan. "
+                        "GOI DUNG 1 LAN LA DU voi cac cau kieu 'chi phi AI chi tiet theo nguoi dung', "
+                        "'ai ton bao nhieu tien', 'bao cao chi phi toan cong ty': MOT lan goi "
+                        "target_username='all' DA tra ve san truong 'user_breakdown' - bang chi phi TACH "
+                        "SAN theo TUNG tai khoan (so luot, so phien, token, USD, VND). Do CHINH LA phan "
+                        "'chi tiet theo nguoi dung' ma nguoi hoi can, lay thang tu do ma trinh bay. "
+                        "TUYET DOI KHONG goi lai tool nay rieng cho tung username de 'dao sau them', va "
+                        "KHONG dung query_database/sqlite_master de tim nguon chi phi khac (khong co bang "
+                        "nao khac) - lam vay chi ton token va tien, lai de cham tran so vong goi tool "
+                        "khien ca cau hoi that bai. "
+                        "LUU Y QUAN TRONG: khi loc DUNG 1 nguoi (target_username='<ten>') thi "
+                        "'user_breakdown' CO Y tra ve null, vi luc do bao cao chi con 1 nguoi nen khong "
+                        "con gi de tach - day KHONG PHAI loi, KHONG PHAI thieu quyen, KHONG duoc goi lai "
+                        "de thu. Chi truyen ten cu the khi nguoi hoi dich danh DUNG 1 nguoi. "
                         "CACH TRINH BAY: ket qua co truong 'display_hint' - PHAI theo dung huong dan do "
                         "(dang TIMELINE, moi dong 1 su kien voi gio + event_summary DA SOAN SAN dung "
                         "nguyen van, moi nhat len dau, KHONG trinh bay thanh bang SQL/cot ky thuat).",
@@ -369,7 +396,7 @@ TEMPLATE_TOOLS = [
             "properties": {
                 "days": {"type": "integer", "description": "So ngay gan nhat can xem, mac dinh 7"},
                 "limit": {"type": "integer", "description": "So dong lich su gan nhat toi da tra ve, mac dinh 30"},
-                "target_username": {"type": "string", "description": "Ten tai khoan nguoi dung can loc (chi danh cho C-Level/Admin), hoac 'all' de xem toàn cong ty"},
+                "target_username": {"type": "string", "description": "Ten tai khoan nguoi dung can loc (chi danh cho C-Level/Admin), hoac 'all' de xem toàn cong ty. NEN dung 'all': ket qua da co san user_breakdown tach chi phi theo TUNG nguoi, KHONG can goi lai cho tung username. Chi truyen ten cu the khi nguoi hoi dich danh dung 1 nguoi."},
             },
             "required": [],
         },
@@ -550,12 +577,13 @@ QUAN TRONG VE CHON TOOL:
   nguoi dang hoi, THUONG KINH DOANH/PHU CAP thang cua 1 nhan vien -> BAT BUOC dung tool tuong ung
   (get_revenue_by_channel, get_top_products, get_top_customers, get_revenue_by_region, get_employee_kpi,
   get_employee_daily_kpi, compare_periods, get_customer_detail, get_employee_directory, check_order_timing,
-  get_inventory_by_region, get_qlv_change_history, get_revenue_tree, get_kpi_ranking`
-    - `get_kpi_forecast_model1`: Dự báo tỷ lệ hoàn thành KPI và Doanh thu Tháng 8/2026 bằng Mô hình 1 (Trọng số Điểm rơi Phân bổ trong Tháng - Intra-Month Pattern). Dùng khi người dùng hỏi "dự đoán", "dự phóng", "dự kiến hoàn thành tháng 8", "ước tính doanh thu tháng 8".
-
-    - `get_kpi_ranking,
+  get_inventory_by_region, get_qlv_change_history, get_revenue_tree, get_kpi_ranking,
   get_revenue_reconciliation, get_receivables_overview, get_audit_log, get_salary_detail,
   get_salary_achievement_summary).
+- CHUA CO tinh nang DU BAO/DU PHONG cuoi thang (tool du bao da bi go 10/08 vi loi du lieu). Neu nguoi
+  dung hoi "du doan/du phong/uoc tinh doanh thu ca thang", NOI THANG la he thong chua ho tro du bao,
+  va chi cung cap so LUY KE DEN HIEN TAI (get_revenue_by_channel/get_employee_kpi) neu ho muon -
+  TUYET DOI KHONG tu suy ra con so du bao bang cach chia ty le hay ngoai suy tu du lieu da co.
   Day la cac truy van DA DUOC KIEM CHUNG khop voi du lieu goc, KHONG tu sinh SQL thay the.
 - Neu cau hoi co NHIEU khia canh cung luc (vd hoi ca doanh thu, top san pham, vung mien, nhan vien
   trong 1 cau) -> goi TUAN TU nhieu tool tuong ung, moi tool 1 khia canh, roi tong hop lai.
@@ -667,8 +695,15 @@ def _dynamic_context_note(question: str = "", session_id: str = "", scope_area_c
             f'binh thuong, ket qua tra ve DA duoc loc san. '
             # 23/07/2026: truoc day chi liet ke 2 tool; nay moi bao cao hieu suat theo tung nguoi deu bi
             # gioi han theo doi (xem _PERSON_LEVEL_TEMPLATES trong report_templates.py).
+            # 10/08/2026: bo get_kpi_forecast_model1 khoi danh sach nay. Cau tren khang dinh cac tool
+            # nay "deu CHI tra ve du lieu CUA CHINH DOI HO", nhung forecast_model1() nhan
+            # scope_area_code/scope_employee_code roi KHONG DUNG, va cung khong nam trong
+            # _PERSON_LEVEL_TEMPLATES/_EMPLOYEE_SCOPED_TEMPLATES nen tang code cung khong chan ho.
+            # Tuc la prompt dang hua mot dang, code lam mot neo. Tool da bi go hAn (xem ghi chu o
+            # TEMPLATE_TOOLS), nhung ke ca khi bat lai cung KHONG duoc dua vao day truoc khi that su
+            # co co che gioi han theo doi.
             f'MOI bao cao hieu suat theo tung nguoi (get_employee_kpi, get_employee_daily_kpi, '
-            f'get_revenue_tree, get_kpi_ranking, get_kpi_forecast_model1) deu CHI tra ve du lieu CUA CHINH DOI HO - khong thay '
+            f'get_revenue_tree, get_kpi_ranking) deu CHI tra ve du lieu CUA CHINH DOI HO - khong thay '
             f'ten/so lieu KPI ca nhan cua QLV khac hay TDV doi khac trong cung vung '
             f'{scope_area_code or ""} - day la du lieu hieu suat nhay cam cua dong nghiep, khac voi so '
             f'lieu doanh thu/ton kho tong hop thong thuong. '
@@ -721,10 +756,7 @@ def ask(question: str, session_id: str = "default", username: str = None, scope_
     (query_database/query_inventory_receivables) se bi LOAI HAN khoi danh sach tool kha dung - day la
     lop bao ve du lieu THAT (khong phu thuoc AI co lam dung huong dan hay khong).
     scope_employee_code: CHI danh cho tai khoan qlv - gioi han rieng cac bao cao lo hieu suat CA NHAN
-    dong nghiep (get_revenue_tree/get_kpi_ranking`
-    - `get_kpi_forecast_model1`: Dự báo tỷ lệ hoàn thành KPI và Doanh thu Tháng 8/2026 bằng Mô hình 1 (Trọng số Điểm rơi Phân bổ trong Tháng - Intra-Month Pattern). Dùng khi người dùng hỏi "dự đoán", "dự phóng", "dự kiến hoàn thành tháng 8", "ước tính doanh thu tháng 8".
-
-    - `get_kpi_ranking) chi con doi cua rieng ho, khong thay KPI ca nhan
+    dong nghiep (get_revenue_tree/get_kpi_ranking) chi con doi cua rieng ho, khong thay KPI ca nhan
     cua cac QLV khac trong cung vung (khac scope_area_code van cho xem so lieu TONG HOP ca vung o cac
     tool khac nhu doanh thu/ton kho - 2 co che tach biet, xem main.py).
     scope_channel: doc lap voi 2 co che tren - CHI gioi han theo kenh (vd 'OTC') khi tai khoan duoc gan
