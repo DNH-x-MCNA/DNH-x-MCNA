@@ -986,3 +986,226 @@ def ask(question: str, session_id: str = "default", username: str = None, scope_
     append_message(session_id, "user", question)
     append_message(session_id, "assistant", fallback)
     return {"answer": fallback, "sql_used": sql_used, "last_result": last_result}
+
+
+def ask_stream(question: str, session_id: str = "default", username: str = None, scope_area_code: str = None,
+                scope_employee_code: str = None, scope_channel: str = None, scope_role: str = None):
+    """11/08/2026: BAN STREAMING cua ask() - GIONG HET logic tool-calling/phan quyen/cache o tren,
+    CHI KHAC cach lay CAU TRA LOI CUOI CUNG: thay vi client.messages.create() cho xong het roi tra 1
+    cuc JSON, dung client.messages.stream() de yield TUNG DOAN TEXT ngay khi model sinh ra - giup
+    nguoi dung THAY chu xuat hien dan (giam cam giac "lag") thay vi man hinh trang cho toi khi xong.
+
+    QUAN TRONG: CHI vong CUOI CUNG (khi model KHONG con goi tool nua, dang sinh cau tra loi that) moi
+    stream - CAC VONG GIUA (goi tool: resolve_relative_date, get_revenue_by_channel...) VAN cho xong
+    binh thuong nhu ask() vi nguoi dung khong can thay qua trinh AI goi tool, chi can thay cau tra
+    loi cuoi cung xuat hien dan. Day la ham GENERATOR (dung yield) - goi ham nay tra ve 1 generator,
+    PHAI duyet qua (for chunk in ask_stream(...)) moi thuc su chay.
+
+    Ham nay la BAN SONG SONG voi ask() (KHONG sua ask() de tranh anh huong endpoint /chat dang chay
+    that cho 25 users) - dung cho endpoint /chat/stream moi. Neu can sua logic tool-calling/phan quyen
+    (vd them tool moi, sua cach EP scope), PHAI sua CA HAI ham nay (ask() va ask_stream()) - de tranh
+    2 ham lech nhau dan, cac phan GIONG HET giua 2 ham duoc chua thich "xem ask()" thay vi lap lai
+    toan bo comment giai thich.
+
+    yield: cac dict {"type": "text_delta", "text": str} cho tung doan chu, roi 1 dict cuoi cung
+    {"type": "done", "answer": str, "sql_used": [...], "last_result": {...}} voi KET QUA DAY DU
+    (giong het cau truc return cua ask()) de client biet ket thuc va co du lieu cho UI (bang/cot...).
+    """
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+    if not api_key or api_key == "mock-key-for-local-testing":
+        msg = ("⚠️ **Chưa cấu hình API Key Claude/Anthropic**: Vui lòng bổ sung biến "
+               "`ANTHROPIC_API_KEY=sk-ant-api03...` vào file `backend/.env` để khởi chạy tính năng "
+               "Phân tích Dữ liệu AI.")
+        yield {"type": "text_delta", "text": msg}
+        yield {"type": "done", "answer": msg, "sql_used": [], "last_result": None}
+        return
+
+    client = anthropic.Anthropic(api_key=api_key)
+    history = load_history(session_id, max_turns=MAX_HISTORY_TURNS)
+    messages = list(history) + [{"role": "user", "content": question}]
+    _last_msg_cache_block = None  # xem ghi chu day du o ask()
+
+    sql_used = []
+    last_result = None
+    last_tool_used = None
+    ran_adhoc_query = None
+
+    tools_for_request = ALL_TOOLS_CACHED
+    if scope_area_code or scope_channel:
+        scoped_tools = [t for t in ALL_TOOLS if t["name"] not in RAW_SQL_TOOLS]
+        tools_for_request = scoped_tools[:-1] + [{**scoped_tools[-1], "cache_control": {"type": "ephemeral", "ttl": "1h"}}]
+
+    system_blocks = [
+        {"type": "text", "text": _static_system_prompt(), "cache_control": {"type": "ephemeral", "ttl": "1h"}},
+        {"type": "text", "text": _dynamic_context_note(question, session_id, scope_area_code, scope_employee_code, scope_channel)},
+    ]
+
+    for round_i in range(MAX_TOOL_ROUNDS):
+        is_last_possible_round = round_i == MAX_TOOL_ROUNDS - 1
+        # Vong GIUA: co the con tool_use, KHONG stream (client khong can thay) - dung create() nhu
+        # ask() binh thuong, ro rang hon la stream() roi bo qua cac delta.
+        # Vong CO THE la CUOI (round_i == MAX_TOOL_ROUNDS-1): CHUA BIET truoc model co con goi tool
+        # hay khong (chi biet SAU khi nhan xong response) - nhung neu dung create() cho vong nay, khi
+        # model THAT SU tra loi (khong goi tool) thi lai mat streaming cho chinh vong quan trong nhat.
+        # Giai phap: LUON dung stream() tu vong DAU (khong chi vong cuoi) - phi stream cho vong co
+        # tool_use la KHONG DANG KE (chi vai token dau ra truoc phan tool_use, van phai doi ca cuc
+        # tool_use ve moi biet dc functon nao/tham so gi de goi that), doi lai dam bao vong tra loi
+        # that SU (bat ky la vong thu may) LUON duoc stream.
+        with client.messages.stream(
+            model=MODEL, max_tokens=MAX_TOKENS, system=system_blocks,
+            tools=tools_for_request, messages=messages, extra_headers=_CACHE_BETA_HEADERS,
+        ) as stream:
+            has_tool_use_so_far = False
+            for event in stream:
+                if event.type == "content_block_start" and event.content_block.type == "tool_use":
+                    has_tool_use_so_far = True
+                elif event.type == "text" and not has_tool_use_so_far:
+                    # event.type=="text" la text delta da ghep san (tien ich cua SDK) - CHI yield khi
+                    # CHUA thay tool_use nao trong response nay (tranh lo doan text "suy nghi truoc
+                    # khi goi tool" hiem gap ra nguoi dung, gay hieu lam la cau tra loi that).
+                    yield {"type": "text_delta", "text": event.text}
+            resp = stream.get_final_message()
+
+        compute_and_log_cost(resp.usage, MODEL, question, session_id, username)
+        messages.append({"role": "assistant", "content": resp.content})
+
+        tool_uses = [b for b in resp.content if b.type == "tool_use"]
+        if not tool_uses:
+            answer_text = "".join(b.text for b in resp.content if b.type == "text").strip()
+            if not answer_text:
+                # Xem ghi chu day du o ask() - truong hop hy huu het ngan sach thinking.
+                messages.append({"role": "user", "content": "Hay tra loi ngay bay gio, ngan gon truc tiep."})
+                with client.messages.stream(model=MODEL, max_tokens=MAX_TOKENS, system=system_blocks,
+                                             tools=tools_for_request, messages=messages,
+                                             extra_headers=_CACHE_BETA_HEADERS) as stream2:
+                    for event in stream2:
+                        if event.type == "text":
+                            yield {"type": "text_delta", "text": event.text}
+                    resp2 = stream2.get_final_message()
+                compute_and_log_cost(resp2.usage, MODEL, question, session_id, username)
+                answer_text = "".join(b.text for b in resp2.content if b.type == "text").strip()
+                if not answer_text:
+                    answer_text = ("Xin lỗi, dữ liệu trả về quá lớn để tổng hợp gọn trong 1 câu trả lời. "
+                                    "Bạn thử hỏi cụ thể/thu hẹp phạm vi hơn giúp mình nhé (vd theo vùng, theo thời gian ngắn hơn).")
+                    yield {"type": "text_delta", "text": answer_text}
+            append_message(session_id, "user", question)
+            append_message(session_id, "assistant", answer_text)
+            if last_tool_used:
+                set_query_state(session_id, last_tool_used[0], last_tool_used[1])
+            if ran_adhoc_query:
+                save_example(*ran_adhoc_query)
+            yield {"type": "done", "answer": answer_text, "sql_used": sql_used, "last_result": last_result}
+            return
+
+        # Tu day tro xuong: XU LY TOOL - COPY Y HET logic tu ask() (bao gom Tool Merger va cap
+        # executed_count<=3) - xem comment day du o ask(). Khong duoc lech nhau: neu sua cach xu ly
+        # tool o ask(), PHAI sua o day theo dung y het.
+        tool_results = []
+        original_tool_uses = [b for b in resp.content if b.type == "tool_use"]
+        bulk_tools_map = {
+            "get_salary_detail": "employee_code",
+            "get_customer_detail": "customer_code",
+            "get_employee_daily_kpi": "employee_code",
+        }
+
+        merged_sub_ids = set()
+        tool_by_name = defaultdict(list)
+        for tu in original_tool_uses:
+            tool_by_name[tu.name].append(tu)
+
+        for name, tu_list in tool_by_name.items():
+            if name in bulk_tools_map and len(tu_list) > 1:
+                primary = tu_list[0]
+                param_name = bulk_tools_map[name]
+                codes = []
+                for sc in tu_list:
+                    val = (sc.input.get(param_name) or "").strip()
+                    if val and val not in codes:
+                        codes.append(val)
+                if codes:
+                    merged_input = dict(primary.input)
+                    merged_input[param_name] = ",".join(codes)
+                    primary.input = merged_input
+                for sub in tu_list[1:]:
+                    merged_sub_ids.add(sub.id)
+
+        executed_count = 0
+        for tu in original_tool_uses:
+            if tu.id in merged_sub_ids:
+                tool_results.append({
+                    "type": "tool_result",
+                    "tool_use_id": tu.id,
+                    "content": json.dumps({"note": "Đã gộp kết quả tra cứu hàng loạt vào lượt gọi trước."}),
+                })
+                continue
+
+            if executed_count >= 3:
+                tool_results.append({
+                    "type": "tool_result",
+                    "tool_use_id": tu.id,
+                    "content": json.dumps({"note": "Đã đạt giới hạn số lượng gọi tool trong 1 lượt. Vui lòng tổng hợp kết quả từ các dữ liệu đã lấy."}),
+                })
+                continue
+
+            executed_count += 1
+            if tu.name in LOCAL_UTIL_TOOLS:
+                sql_used.append(f"[tien ich] {tu.name}({tu.input})")
+                if tu.name == "get_current_datetime":
+                    payload = get_current_datetime()
+                elif tu.name == "resolve_relative_date":
+                    payload = resolve_relative_date(tu.input.get("phrase", ""))
+                elif tu.name == "save_business_term":
+                    save_glossary_term(tu.input.get("term", ""), tu.input.get("definition", ""),
+                                        defined_by=username)
+                    payload = {"ok": True, "message": "Da luu dinh nghia."}
+                else:
+                    payload = {"error": f"Tool khong ro: {tu.name}"}
+            elif tu.name in RAW_SQL_TOOLS:
+                if scope_area_code or scope_channel:
+                    sql_used.append(f"[BI CHAN - tai khoan gioi han] {tu.name}")
+                    payload = {"error": "Tai khoan cua ban bi gioi han (vung/kenh), khong duoc dung truy van SQL tu do."}
+                else:
+                    db = RAW_SQL_TOOLS[tu.name]
+                    sql = tu.input.get("sql", "")
+                    sql_used.append(f"[{db}] {sql}")
+                    result = run_query(sql, question=question, db=db, username=username, session_id=session_id)
+                    last_result = result
+                    last_tool_used = (tu.name, str(tu.input))
+                    if db == "local" and result["ok"]:
+                        ran_adhoc_query = (question, sql)
+                    payload = ({"columns": result["columns"], "rows": result["rows"][:MAX_ROWS_TO_MODEL],
+                                "row_count": result["row_count"]} if result["ok"] else {"error": result["error"]})
+            else:
+                sql_used.append(f"[bao cao chuan] {tu.name}({tu.input})")
+                tresult = call_template(tu.name, tu.input, question=question, username=username, session_id=session_id,
+                                         scope_area_code=scope_area_code, scope_employee_code=scope_employee_code,
+                                         scope_channel=scope_channel, scope_role=scope_role)
+                last_result = tresult
+                last_tool_used = (tu.name, str(tu.input))
+                payload = tresult["result"] if tresult["ok"] else {"error": tresult["error"]}
+                if tresult.get("canh_bao"):
+                    payload = {"du_lieu": payload,
+                               "CANH_BAO_BAT_BUOC_NOI_VOI_NGUOI_DUNG": tresult["canh_bao"]}
+
+            payload_str = json.dumps(payload, ensure_ascii=False) if isinstance(payload, (dict, list)) else str(payload)
+            if len(payload_str) > MAX_PAYLOAD_CHARS:
+                payload_str = payload_str[:MAX_PAYLOAD_CHARS] + "\n...(du lieu bi cat bot vi qua dai, phan tren DA DU de tra loi - KHONG can query lai)"
+            tool_results.append({
+                "type": "tool_result",
+                "tool_use_id": tu.id,
+                "content": payload_str,
+            })
+
+        if tool_results:
+            if _last_msg_cache_block is not None:
+                _last_msg_cache_block.pop("cache_control", None)
+            tool_results[-1] = dict(tool_results[-1])
+            tool_results[-1]["cache_control"] = {"type": "ephemeral"}
+            _last_msg_cache_block = tool_results[-1]
+        messages.append({"role": "user", "content": tool_results})
+
+    fallback = "Xin loi, cau hoi qua phuc tap can nhieu buoc truy van, vui long hoi cu the hon."
+    append_message(session_id, "user", question)
+    append_message(session_id, "assistant", fallback)
+    yield {"type": "text_delta", "text": fallback}
+    yield {"type": "done", "answer": fallback, "sql_used": sql_used, "last_result": last_result}
