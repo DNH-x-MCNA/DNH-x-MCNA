@@ -1084,6 +1084,10 @@ def ask_stream(question: str, session_id: str = "default", username: str = None,
     (vd them tool moi, sua cach EP scope), PHAI sua CA HAI ham nay (ask() va ask_stream()) - de tranh
     2 ham lech nhau dan, cac phan GIONG HET giua 2 ham duoc chua thich "xem ask()" thay vi lap lai
     toan bo comment giai thich.
+    11/08/2026: RIENG phan GOP TOOL HANG LOAT (Tool Merger) da rut ra ham dung chung
+    _merge_bulk_tool_calls() thay vi chep tay - phat hien luc nay ban chep tay o duoi van con giu 2
+    loi da vas o ask() 1 ngay truoc (danh dau "da gop" gia, chi gop 1 tham so khoa lam vut het tham
+    so khac). Phan nay KHONG can sua 2 noi nua, chi can sua trong _merge_bulk_tool_calls().
 
     yield: cac dict {"type": "text_delta", "text": str} cho tung doan chu, roi 1 dict cuoi cung
     {"type": "done", "answer": str, "sql_used": [...], "last_result": {...}} voi KET QUA DAY DU
@@ -1175,37 +1179,14 @@ def ask_stream(question: str, session_id: str = "default", username: str = None,
             yield {"type": "done", "answer": answer_text, "sql_used": sql_used, "last_result": last_result}
             return
 
-        # Tu day tro xuong: XU LY TOOL - COPY Y HET logic tu ask() (bao gom Tool Merger va cap
-        # executed_count<=3) - xem comment day du o ask(). Khong duoc lech nhau: neu sua cach xu ly
-        # tool o ask(), PHAI sua o day theo dung y het.
+        # Tu day tro xuong: XU LY TOOL. Truoc 11/08/2026 cho nay COPY TAY logic gop tool tu ask() -
+        # dung cach do gia mao chinh 2 loi da vas o ask() ngay 10/08 (danh dau "da gop" ke ca khong
+        # gop duoc gi; chi gop 1 tham so khoa, am tham vut tham so khac - xem _merge_bulk_tool_calls
+        # o tren). Doi sang GOI CHUNG ham do thay vi giu 2 ban chep tay de khong bao gio lech nhau
+        # nua (dung y tinh than ghi chu cu: "PHAI sua o day theo dung y het").
         tool_results = []
         original_tool_uses = [b for b in resp.content if b.type == "tool_use"]
-        bulk_tools_map = {
-            "get_salary_detail": "employee_code",
-            "get_customer_detail": "customer_code",
-            "get_employee_daily_kpi": "employee_code",
-        }
-
-        merged_sub_ids = set()
-        tool_by_name = defaultdict(list)
-        for tu in original_tool_uses:
-            tool_by_name[tu.name].append(tu)
-
-        for name, tu_list in tool_by_name.items():
-            if name in bulk_tools_map and len(tu_list) > 1:
-                primary = tu_list[0]
-                param_name = bulk_tools_map[name]
-                codes = []
-                for sc in tu_list:
-                    val = (sc.input.get(param_name) or "").strip()
-                    if val and val not in codes:
-                        codes.append(val)
-                if codes:
-                    merged_input = dict(primary.input)
-                    merged_input[param_name] = ",".join(codes)
-                    primary.input = merged_input
-                for sub in tu_list[1:]:
-                    merged_sub_ids.add(sub.id)
+        merged_sub_ids = _merge_bulk_tool_calls(original_tool_uses)
 
         executed_count = 0
         for tu in original_tool_uses:
@@ -1217,11 +1198,11 @@ def ask_stream(question: str, session_id: str = "default", username: str = None,
                 })
                 continue
 
-            if executed_count >= 3:
+            if executed_count >= MAX_TOOLS_PER_ROUND:
                 tool_results.append({
                     "type": "tool_result",
                     "tool_use_id": tu.id,
-                    "content": json.dumps({"note": "Đã đạt giới hạn số lượng gọi tool trong 1 lượt. Vui lòng tổng hợp kết quả từ các dữ liệu đã lấy."}),
+                    "content": json.dumps({"note": f"Đã đạt giới hạn {MAX_TOOLS_PER_ROUND} lượt gọi tool trong 1 lượt. Hãy tổng hợp từ dữ liệu đã lấy, hoặc gọi các tool còn lại ở lượt kế tiếp."}),
                 })
                 continue
 
