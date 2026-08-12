@@ -67,11 +67,11 @@ export default function AuthScreens({ onLoginSuccess }: AuthScreensProps) {
   };
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-slate-100 px-4 py-8 text-slate-900 sm:px-6">
+    <div className="flex min-h-screen items-center justify-center bg-[#f5f8f5] px-4 py-8 text-slate-900 sm:px-6">
       <div className="w-full max-w-md">
         <div className="mb-6 flex items-center justify-between px-1">
           <div className="flex items-center gap-2.5">
-            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-white p-1.5 shadow-sm ring-1 ring-slate-200">
+            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-white p-1.5 shadow-sm ring-1 ring-emerald-100">
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img src="/namha-logo.png" alt="Nam Hà Pharma" className="h-full w-full object-contain" />
             </div>
@@ -85,9 +85,10 @@ export default function AuthScreens({ onLoginSuccess }: AuthScreensProps) {
           </div>
         </div>
 
-        <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xl shadow-slate-900/5">
+        <div className="overflow-hidden rounded-2xl border border-emerald-100 bg-white shadow-xl shadow-emerald-950/5">
+          <div className="h-1 bg-gradient-to-r from-emerald-800 via-emerald-600 to-orange-400" />
           <div className="border-b border-slate-200 px-6 py-6 sm:px-8">
-            <div className="mb-4 flex h-10 w-10 items-center justify-center rounded-xl bg-slate-900 text-white">
+            <div className="mb-4 flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-800 text-white shadow-sm shadow-emerald-900/15">
               {tab === "login" ? <IconLock className="h-5 w-5" /> : <IconUnlock className="h-5 w-5" />}
             </div>
             <h1 className="text-2xl font-semibold tracking-tight text-slate-950">{tab === "login" ? "Đăng nhập" : "Cấp lại mật khẩu"}</h1>
@@ -96,16 +97,16 @@ export default function AuthScreens({ onLoginSuccess }: AuthScreensProps) {
             </p>
           </div>
 
-          <div className="flex border-b border-slate-200 bg-slate-50">
+          <div className="flex border-b border-slate-200 bg-[#f8fbf8]">
             <button
               onClick={() => { setTab("login"); setMessage(null); }}
-              className={`flex-1 border-b-2 py-3.5 text-xs font-semibold transition ${tab === "login" ? "border-slate-900 bg-white text-slate-900" : "border-transparent text-slate-500 hover:text-slate-800"}`}
+              className={`flex-1 border-b-2 py-3.5 text-xs font-semibold transition ${tab === "login" ? "border-emerald-700 bg-white text-emerald-800" : "border-transparent text-slate-500 hover:text-emerald-800"}`}
             >
               <span className="inline-flex items-center gap-1.5"><IconKey className="h-3.5 w-3.5" /> Đăng nhập</span>
             </button>
             <button
               onClick={() => { setTab("forgot"); setMessage(null); }}
-              className={`flex-1 border-b-2 py-3.5 text-xs font-semibold transition ${tab === "forgot" ? "border-slate-900 bg-white text-slate-900" : "border-transparent text-slate-500 hover:text-slate-800"}`}
+              className={`flex-1 border-b-2 py-3.5 text-xs font-semibold transition ${tab === "forgot" ? "border-emerald-700 bg-white text-emerald-800" : "border-transparent text-slate-500 hover:text-emerald-800"}`}
             >
               <span className="inline-flex items-center gap-1.5"><IconUnlock className="h-3.5 w-3.5" /> Quên mật khẩu</span>
             </button>
