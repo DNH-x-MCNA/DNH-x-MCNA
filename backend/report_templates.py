@@ -12,6 +12,7 @@ import contextvars
 import datetime as dt
 import os
 import sqlite3
+from statistics import median
 from sqlalchemy import text
 from local_warehouse import get_conn, get_sync_meta
 from query_engine import _write_log, _get_engine
@@ -1064,6 +1065,268 @@ def revenue_forecast_month(year_month: str = None, scope_area_code: str = None,
         canh_bao.append(f"Khong du bao duoc cho kenh: {', '.join(thieu)} (thieu lich su cung thang).")
     result["canh_bao"] = canh_bao
     return result
+
+
+# ===================== DU BAO KPI THEO VAI TRO =====================
+# 12/08/2026. Forecast KPI khong duoc phep lay % hien tai chia cho so ngay da qua.
+# Dung cac snapshot KPI theo ngay de hoc ty le doanh so da chay duoc tai cung moc ngay cua
+# cac thang truoc, sau do forecast doanh so cuoi thang = doanh so hien tai / ty le trung vi.
+# Model nay dung duoc cho moi position_code co target, khong chi QLV.
+_KPI_FORECAST_CUTOFFS = (3, 5, 6, 8, 10, 12, 15, 18, 20, 22, 25)
+_KPI_FORECAST_MIN_SAMPLES = 8
+
+
+def _kpi_percentile(values: list, p: float):
+    if not values:
+        return None
+    xs = sorted(values)
+    pos = (len(xs) - 1) * p
+    lo, hi = int(pos), min(int(pos) + 1, len(xs) - 1)
+    if lo == hi:
+        return xs[lo]
+    return xs[lo] + (xs[hi] - xs[lo]) * (pos - lo)
+
+
+def _kpi_forecast_snapshot_rows(as_of_date: str) -> list:
+    """Gom 1 dong/nhan vien/snapshot, khong dem lap target theo tung khach hang."""
+    return _q(f"""
+        SELECT f.employee_code, f.save_date,
+               SUM(f.amount_ct) sales, MAX(f.month_sale_target) target,
+               COALESCE(nv.name, f.employee_code) name,
+               COALESCE(nv.position_code, 'UNKNOWN') position_code,
+               cv.description position_label, nv.area_code area_code
+        FROM fact_tonghopkhachhang f
+        LEFT JOIN dim_nhanvien nv ON nv.employee_code=f.employee_code
+        LEFT JOIN dim_chucvu cv ON cv.position_code=nv.position_code
+        WHERE f.save_date<=?
+        GROUP BY f.employee_code, f.save_date, nv.name, nv.position_code,
+                 cv.description, nv.area_code
+        HAVING MAX(f.month_sale_target)>0
+    """, (as_of_date,))
+
+
+def _kpi_forecast_ratio_samples(rows: list, before_year_month: str = None) -> list:
+    """Tao mau ty le luy ke/cuoi thang tu cac thang da tron ven truoc moc forecast."""
+    by_employee_month = {}
+    for r in rows:
+        ym = str(r["save_date"])[:7]
+        if before_year_month and ym >= before_year_month:
+            continue
+        key = (r["employee_code"], ym)
+        by_employee_month.setdefault(key, []).append(r)
+
+    samples = []
+    for (employee_code, ym), snapshots in by_employee_month.items():
+        ordered = sorted(snapshots, key=lambda x: x["save_date"])
+        final = ordered[-1]
+        if int(str(final["save_date"])[8:10]) < 25 or _f(final["sales"]) <= 0:
+            continue
+        for cutoff in _KPI_FORECAST_CUTOFFS:
+            cutoff_date = f"{ym}-{cutoff:02d}"
+            available = [x for x in ordered if x["save_date"] <= cutoff_date]
+            if not available:
+                continue
+            partial = available[-1]
+            partial_sales = _f(partial["sales"])
+            final_sales = _f(final["sales"])
+            ratio = partial_sales / final_sales if final_sales else 0
+            # Du lieu snapshot co the co dong dieu chinh; bo mau vo ly de khong keo trung vi.
+            if 0 < ratio <= 1.25:
+                samples.append({
+                    "employee_code": employee_code,
+                    "year_month": ym,
+                    "position_code": final["position_code"],
+                    "cutoff": cutoff,
+                    "ratio": ratio,
+                })
+    return samples
+
+
+def _kpi_pick_ratio(samples: list, position_code: str, cutoff: int):
+    """Uu tien cung vai tro/cung moc; fallback cung vai tro moc gan; cuoi cung toan he thong."""
+    def vals(items):
+        return [s["ratio"] for s in items]
+
+    exact = [s for s in samples if s["position_code"] == position_code and s["cutoff"] == cutoff]
+    if len(exact) >= _KPI_FORECAST_MIN_SAMPLES:
+        return median(vals(exact)), exact, "same_position_same_cutoff"
+
+    role_near = [s for s in samples if s["position_code"] == position_code and abs(s["cutoff"] - cutoff) <= 3]
+    if len(role_near) >= _KPI_FORECAST_MIN_SAMPLES:
+        return median(vals(role_near)), role_near, "same_position_near_cutoff"
+
+    global_near = [s for s in samples if abs(s["cutoff"] - cutoff) <= 3]
+    if len(global_near) >= _KPI_FORECAST_MIN_SAMPLES:
+        return median(vals(global_near)), global_near, "all_positions_near_cutoff"
+    return None, global_near, "insufficient_history"
+
+
+def _kpi_forecast_backtest(rows: list, position_code: str, cutoff: int) -> dict:
+    """Walk-forward MAPE cho 1 vai tro/moc, chi hoc tu cac thang truoc thang test."""
+    months = sorted({str(r["save_date"])[:7] for r in rows})
+    # Tao mau lich su 1 lan. Ban cu tinh lai toan bo samples trong moi thang test,
+    # vua ton CPU vua lam thoi gian tra loi tang theo so thang snapshot.
+    all_samples = sorted(_kpi_forecast_ratio_samples(rows), key=lambda x: x["year_month"])
+    samples_before = []
+    sample_idx = 0
+    role_months = {}
+    for r in rows:
+        if r["position_code"] != position_code:
+            continue
+        ym = str(r["save_date"])[:7]
+        role_months.setdefault(ym, {}).setdefault(r["employee_code"], []).append(r)
+
+    errors = []
+    for target_month in months:
+        while sample_idx < len(all_samples) and all_samples[sample_idx]["year_month"] < target_month:
+            samples_before.append(all_samples[sample_idx])
+            sample_idx += 1
+        past = samples_before
+        if not past:
+            continue
+        ratio, used, _ = _kpi_pick_ratio(past, position_code, cutoff)
+        if not ratio or not used:
+            continue
+        for snapshots in role_months.get(target_month, {}).values():
+            ordered = sorted(snapshots, key=lambda x: x["save_date"])
+            final = ordered[-1]
+            if int(str(final["save_date"])[8:10]) < 25 or _f(final["sales"]) <= 0:
+                continue
+            avail = [x for x in ordered if x["save_date"] <= f"{target_month}-{cutoff:02d}"]
+            if not avail:
+                continue
+            partial = avail[-1]
+            predicted = _f(partial["sales"]) / ratio
+            actual = _f(final["sales"])
+            if actual > 0:
+                errors.append(abs(predicted - actual) / actual * 100)
+    if len(errors) < 6:
+        return {"do_duoc": False, "so_mau": len(errors)}
+    return {"do_duoc": True, "so_mau": len(errors), "mape_pct": round(sum(errors) / len(errors), 1)}
+
+
+def kpi_forecast_month(year_month: str = None, as_of_date: str = None,
+                       position_code: str = None, limit: int = 100,
+                       scope_area_code: str = None, scope_employee_code: str = None) -> dict:
+    """Du bao % hoan thanh KPI cuoi thang cho moi chuc vu co target.
+
+    Khong ngoai suy theo so ngay. Model hoc ty le doanh so luy ke/cuoi thang tu snapshot lich su,
+    uu tien cung position_code va cung moc ngay. Neu warehouse khong co du snapshot lich su thi tra
+    ve ly_do_khong_du_bao thay vi bia so. Dung cho QLV, TDV, CTV, CS, TK va cac chuc vu khac co target.
+    """
+    if not as_of_date:
+        r = _q("SELECT MAX(save_date) d FROM fact_tonghopkhachhang")
+        as_of_date = r[0]["d"] if r and r[0]["d"] else dt.date.today().isoformat()
+    as_of_date = str(as_of_date)[:10]
+    if not year_month:
+        year_month = as_of_date[:7]
+    year_month = str(year_month)[:7]
+    if len(year_month) != 7 or year_month[4] != "-":
+        return {"error": f"Thang phai o dang YYYY-MM (nhan duoc: {year_month})."}
+    if year_month != as_of_date[:7]:
+        return {"error": "Tool nay chi du bao thang dang chay tu snapshot luy ke hien tai."}
+
+    rows = _kpi_forecast_snapshot_rows(as_of_date)
+    current = [r for r in rows if str(r["save_date"])[:7] == year_month]
+    if not current:
+        return {"thang_du_bao": year_month, "as_of": as_of_date,
+                "ly_do_khong_du_bao": "Khong co snapshot KPI cua thang dang chay trong warehouse."}
+
+    # Dung snapshot moi nhat cua tung nhan vien, nhung ghi ro ngay thuc te cua tung dong.
+    allowed = None
+    if scope_employee_code:
+        team = _team_of_qlv(scope_employee_code, max(str(r["save_date"]) for r in current))
+        allowed = {scope_employee_code, *(t["employee_code"] for t in team)}
+
+    current_map = {}
+    for r in current:
+        if scope_area_code and r["area_code"] != scope_area_code:
+            continue
+        if allowed is not None and r["employee_code"] not in allowed:
+            continue
+        if position_code and r["position_code"] != position_code:
+            continue
+        key = r["employee_code"]
+        if key not in current_map or r["save_date"] > current_map[key]["save_date"]:
+            current_map[key] = r
+
+    samples = _kpi_forecast_ratio_samples(rows, before_year_month=year_month)
+    if not samples:
+        return {"thang_du_bao": year_month, "as_of": as_of_date,
+                "ly_do_khong_du_bao": (
+                    "Warehouse chua co du snapshot KPI theo ngay cua cac thang da tron ven "
+                    "de hoc ty le luy ke/cuoi thang.")}
+
+    results = []
+    backtest_cache = {}
+    for r in current_map.values():
+        current_sales = _f(r["sales"])
+        target = _f(r["target"])
+        if target <= 0:
+            continue
+        cutoff = int(str(r["save_date"])[8:10])
+        ratio, used, method = _kpi_pick_ratio(samples, r["position_code"], cutoff)
+        current_pct = current_sales / target * 100
+        if not ratio:
+            results.append({
+                "employee_code": r["employee_code"], "name": r["name"],
+                "position_code": r["position_code"], "position_label": r["position_label"],
+                "current_pct": round(current_pct, 1), "forecast_pct": None,
+                "ly_do_khong_du_bao": "Thieu mau lich su phu hop cho vai tro va moc ngay nay.",
+            })
+            continue
+        forecast_pct = current_pct / ratio
+        q25 = _kpi_percentile([s["ratio"] for s in used], 0.25)
+        q75 = _kpi_percentile([s["ratio"] for s in used], 0.75)
+        item = {
+            "employee_code": r["employee_code"], "name": r["name"],
+            "position_code": r["position_code"], "position_label": r["position_label"],
+            "sales_current": current_sales, "target": target,
+            "current_pct": round(current_pct, 1), "forecast_pct": round(forecast_pct, 1),
+            "cutoff_day": cutoff, "ratio_luy_ke_trung_vi": round(ratio, 4),
+            "so_mau_lich_su": len(used), "phuong_phap": method,
+            "forecast_status": _kpi_status(forecast_pct, r["position_code"]),
+        }
+        if len(used) >= _KPI_FORECAST_MIN_SAMPLES and q25 and q75:
+            item["forecast_interval_pct"] = {
+                "thap": round(current_pct / q75, 1),
+                "cao": round(current_pct / q25, 1),
+            }
+        backtest_key = (r["position_code"], cutoff)
+        if backtest_key not in backtest_cache:
+            backtest_cache[backtest_key] = _kpi_forecast_backtest(rows, r["position_code"], cutoff)
+        item["backtest"] = backtest_cache[backtest_key]
+        results.append(item)
+
+    by_position = {}
+    for r in results:
+        p = r["position_code"]
+        bucket = by_position.setdefault(p, {"position_code": p, "position_label": r["position_label"], "rows": []})
+        bucket["rows"].append(r)
+    summary = []
+    for bucket in by_position.values():
+        forecasts = [r["forecast_pct"] for r in bucket["rows"] if r["forecast_pct"] is not None]
+        summary.append({
+            "position_code": bucket["position_code"], "position_label": bucket["position_label"],
+            "count": len(bucket["rows"]), "count_forecasted": len(forecasts),
+            "median_forecast_pct": round(median(forecasts), 1) if forecasts else None,
+            "count_meeting_kpi": sum(v >= KPI_ACHIEVED_THRESHOLD for v in forecasts),
+        })
+
+    results.sort(key=lambda x: (x["forecast_pct"] is None, -(x["forecast_pct"] or 0)))
+    return {
+        "thang_du_bao": year_month, "as_of": as_of_date,
+        "day_cutoff_max": max(int(str(r["save_date"])[8:10]) for r in current),
+        "model": "Trung vi ty le luy ke/cuoi thang theo position_code va moc ngay; khong chia theo so ngay.",
+        "kpi_threshold_pct": KPI_ACHIEVED_THRESHOLD,
+        "summary_by_position": sorted(summary, key=lambda x: x["position_code"]),
+        "total_rows": len(results), "rows": results[:max(1, min(int(limit or 100), 200))],
+        "canh_bao": [
+            "Day la uoc tinh, khong phai ket qua KPI thuc te.",
+            "Khoang uoc tinh chi hien khi co du mau lich su; moi chuc vu co the co do tin cay khac nhau.",
+            "Khong nen dung ket qua neu warehouse thieu snapshot theo ngay hoac snapshot thang bi ghi do dang.",
+        ],
+    }
 
 
 def _customer_receivable(customer_code: str, channel: str) -> dict:
@@ -2732,6 +2995,7 @@ TEMPLATES = {
     "get_top_customers": top_customers,
     "get_revenue_by_region": revenue_by_region,
     "get_employee_kpi": employee_kpi,
+    "get_kpi_forecast": kpi_forecast_month,
     "get_employee_daily_kpi": employee_daily_kpi,
     "compare_periods": compare_periods,
     "get_revenue_forecast": revenue_forecast_month,
@@ -2760,7 +3024,7 @@ _PERSON_LEVEL_TEMPLATES = {
     "get_revenue_tree", "get_kpi_ranking", "get_employee_kpi",
     "get_employee_daily_kpi", "check_order_timing",
     "get_revenue_by_channel", "get_revenue_by_region", "get_top_customers",
-    "get_top_products", "compare_periods", "get_revenue_forecast",
+    "get_top_products", "compare_periods", "get_revenue_forecast", "get_kpi_forecast",
     "get_inventory_by_region", "get_receivables_overview",
     "get_qlv_change_history", "get_revenue_reconciliation",
     "get_salary_detail", "get_salary_achievement_summary"
@@ -2769,7 +3033,7 @@ _PERSON_LEVEL_TEMPLATES = {
 _EMPLOYEE_SCOPED_TEMPLATES = {
     "get_revenue_tree", "get_kpi_ranking", "get_employee_kpi",
     "get_employee_daily_kpi", "get_revenue_by_channel", "get_top_customers",
-    "get_top_products", "get_revenue_by_region", "compare_periods", "get_revenue_forecast",
+    "get_top_products", "get_revenue_by_region", "compare_periods", "get_revenue_forecast", "get_kpi_forecast",
     "get_salary_detail", "get_salary_achievement_summary"
 }
 
