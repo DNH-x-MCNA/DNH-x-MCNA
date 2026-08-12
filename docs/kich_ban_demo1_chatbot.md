@@ -488,6 +488,9 @@ KPI, bỏ qua toàn bộ nhóm doanh thu/khách hàng/tồn kho. Cơ chế fail-
       để sót tiến trình cũ → gửi/ghi trùng, tổng gấp N lần dù đếm distinct vẫn đúng)
 - [ ] Kiểm tunnel còn sống + đăng nhập thử trên `dnh-bot.vercel.app` ngay trước giờ (xem sự cố 10-11/08:
       `Get-Process cloudflared`, `Get-Service DNH_Chatbot_Tunnel` phải `Running`)
+- [ ] **Vercel → Settings → Root Directory phải để TRỐNG.** Nếu ai đó đặt thành `frontend` thì lỗi
+      đăng nhập ngày 10/08 quay lại: bản trong `frontend/` thiếu `_proxy.ts` ở 17/17 route (xem
+      `frontend/_KHONG_DUNG_LAM_ROOT_DIRECTORY.md`). Repo có 2 bản app song song từ 12/08 (`47306dc`)
 
 ---
 
