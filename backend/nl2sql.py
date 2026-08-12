@@ -217,6 +217,28 @@ TEMPLATE_TOOLS = [
         },
     },
     {
+        "name": "get_kpi_forecast",
+        "description": "UOC TINH ty le hoan thanh KPI CUOI THANG cho tat ca nhan vien co target, "
+                        "khong chi QLV ma gom TDV/CTV/CS/TK va cac chuc vu khac. Mo hinh hoc ty le "
+                        "doanh so luy ke/cuoi thang tu cac snapshot lich su, uu tien cung chuc vu va "
+                        "cung moc ngay, KHONG chia tien do hien tai cho so ngay. Tra ve forecast_pct, "
+                        "khoang uoc tinh neu du mau, backtest theo chuc vu va summary_by_position. "
+                        "BAT BUOC noi ro day la UOC TINH, khong phai KPI thuc te; neu tool tra ve "
+                        "ly_do_khong_du_bao thi noi dung do, KHONG bia so. Dung khi nguoi dung hoi "
+                        "'du bao/du phong ty le KPI', 'cuoi thang se dat bao nhieu %', 'QLV/TDV nao "
+                        "co kha nang dat KPI'.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "year_month": {"type": "string", "description": "Thang dang chay dang YYYY-MM, bo trong de tu lay."},
+                "as_of_date": {"type": "string", "description": "Ngay snapshot dung lam moc hien tai, YYYY-MM-DD, bo trong de lay moi nhat."},
+                "position_code": {"type": "string", "description": "Loc chuc vu neu nguoi dung hoi rieng: QLV/TDV/CTV/CS/TK..."},
+                "limit": {"type": "integer", "description": "So dong chi tiet toi da, mac dinh 100."},
+            },
+            "required": [],
+        },
+    },
+    {
         "name": "get_customer_detail",
         "description": "Chi tiet 1 khach hang cu the (theo ma khach hang): gop doanh thu thuc te trong "
                         "1 khoang ngay + so don hang + gia tri TB/don, CUNG LUC voi du no cuoi ky/no qua han "
@@ -606,6 +628,7 @@ QUAN TRONG VE CHON TOOL:
   (get_revenue_by_channel, get_top_products, get_top_customers, get_revenue_by_region, get_employee_kpi,
   get_employee_daily_kpi, compare_periods, get_customer_detail, get_employee_directory, check_order_timing,
   get_inventory_by_region, get_qlv_change_history, get_revenue_tree, get_kpi_ranking,
+  get_kpi_forecast,
   get_revenue_reconciliation, get_receivables_overview, get_audit_log, get_salary_detail,
   get_salary_achievement_summary).
 - DU BAO DOANH THU CA THANG: dung get_revenue_forecast (khong phai tinh tay). Khi trinh bay ket qua
@@ -621,6 +644,12 @@ QUAN TRONG VE CHON TOOL:
   du lieu luy ke (vd lay luy ke chia so ngay roi nhan so ngay ca thang) - doanh thu DNH don ve cuoi
   thang nen cach do sai rat nang.
   Day la cac truy van DA DUOC KIEM CHUNG khop voi du lieu goc, KHONG tu sinh SQL thay the.
+- DU BAO TY LE KPI CUOI THANG: dung get_kpi_forecast khi nguoi dung hoi forecast KPI cua QLV, TDV,
+  CTV, CS, TK hoac nhieu chuc vu. Tool dung snapshot lich su de hoc ty le luy ke/cuoi thang theo
+  chuc vu va moc ngay, khong duoc tu lay % hien tai chia so ngay da qua. BAT BUOC noi ro DAY LA
+  UOC TINH, neu co thi neu khoang uoc tinh + MAPE backtest; neu tool tra ly_do_khong_du_bao thi
+  noi ro thieu snapshot lich su va khong bia so. Khi hoi tat ca chuc vu, doc summary_by_position
+  truoc roi moi liet ke rows; khong bo sot chuc vu chi vi dang xep theo QLV.
 - Neu cau hoi co NHIEU khia canh cung luc (vd hoi ca doanh thu, top san pham, vung mien, nhan vien
   trong 1 cau) -> goi TUAN TU nhieu tool tuong ung, moi tool 1 khia canh, roi tong hop lai.
 - CONG NO: cau hoi TONG HOP/nhieu khach (tong no qua han, top khach no, ty le qua han theo vung/kenh)
