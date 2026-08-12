@@ -228,6 +228,23 @@ def main():
                 print(f"  dau 2024 KHONG co du nam cung ky o qua khu, nhung LOOCV thi muon bao nhieu cung co")
                 print(f"  (lay tu tuong lai). So sanh 2 con so MAPE nay la KHONG cong bang, doc ky cot Can cu.")
 
+        # ---- MAPE cua TAT CA mo hinh tren ca khoang (walk-forward), de chot mo hinh cuoi cung ----
+        print(f"\n  {'-' * 74}")
+        print(f"  MAPE TAT CA MO HINH tu {START_MONTH} (walk-forward - con so dung de CHOT):")
+        allm = defaultdict(list)
+        for m in rng:
+            a = series[m]
+            if a <= 0:
+                continue
+            for name, p in predict(series, [x for x in months if x < m], m, use_bias).items():
+                allm[name].append(abs(p - a) / a * 100)
+        print(f"    {'Mo hinh':<34}{'So thang':>10}{'MAPE':>9}")
+        for name, e in sorted(allm.items(), key=lambda kv: sum(kv[1]) / len(kv[1])):
+            print(f"    {name:<34}{len(e):>10}{sum(e)/len(e):>8.1f}%")
+        if allm:
+            bn, be = min(allm.items(), key=lambda kv: sum(kv[1]) / len(kv[1]))
+            print(f"    -> Tot nhat tren {len(rng)} thang: '{bn}'  {sum(be)/len(be):.1f}%")
+
         # So sanh cong bang: chi tren cac thang CA HAI deu chay duoc
         both = []
         for m in rng:
