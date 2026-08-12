@@ -1,13 +1,14 @@
-# Kịch bản Demo #1 Chatbot — 09/08/2026
+# Kịch bản Demo #1 Chatbot — 13/08/2026
 
-*Soạn 23/07/2026. Đáp án đúng sinh bằng `python scripts/demo1_ground_truth.py` (đọc thẳng Bravo qua
-đúng các hàm của báo cáo định kỳ). **Chạy lại script sáng 09/08 để lấy số của ngày demo** — số trong
-file này là của 23/07 (một số mục đã cập nhật 27–28/07), chỉ dùng để tập dượt và dò lỗi trước.*
+*Soạn 23/07/2026, cập nhật 11/08/2026 (demo dời từ 09/08 → 13/08, gộp luôn báo cáo tiến độ 2 tuần).
+Đáp án đúng sinh bằng `python scripts/demo1_ground_truth.py` (đọc thẳng Bravo qua đúng các hàm của
+báo cáo định kỳ). **Chạy lại script sáng 13/08 để lấy số của ngày demo** — số trong file này là của
+23/07 (một số mục đã cập nhật 27–28/07, 11/08), chỉ dùng để tập dượt và dò lỗi trước.*
 
-> 🔴 **BẮT BUỘC ĐỌC TRƯỚC KHI CHẠY SÁNG 09/08.** Script mặc định tính "tháng này" = tháng đang chạy.
-> Sáng 09/08 nghĩa là **tháng 8 mới được 9 ngày** → C7 sẽ ra ~0/147 đạt chỉ tiêu và **không đối
-> chiếu được** với câu hỏi demo (R-A yêu cầu mọi câu KPI phải hỏi **tháng 7/2026**). Dùng cờ
-> `--as-of` để ghim kỳ:
+> 🔴 **BẮT BUỘC ĐỌC TRƯỚC KHI CHẠY SÁNG 13/08.** Script mặc định tính "tháng này" = tháng đang chạy.
+> Sáng 13/08 nghĩa là **tháng 8 mới được 13 ngày** (~42% thời gian tháng) → C7 sẽ ra số rất thấp,
+> gần như **không đối chiếu được** với câu hỏi demo (R-A yêu cầu mọi câu KPI phải hỏi **tháng
+> 7/2026**, tháng đã trọn). Dùng cờ `--as-of` để ghim kỳ:
 >
 > ```
 > set PYTHONIOENCODING=utf-8 && python scripts/demo1_ground_truth.py --as-of 2026-07-31
@@ -77,16 +78,17 @@ Kiểm chứng thực tế 23/07/2026 (`get_bravo_last_n_complete_months`):
 | Tháng 6/2026 (trọn tháng) | 25/150 | 52/150 *(ở mốc 80% cũ)* | 65,5% |
 | Tháng 7/2026 (mới 23/31 ngày) | **0/147** | **27/147** *(mốc 65% mới, thay 10/147 ở 80% cũ)* | 41,6% |
 
-**Demo 09/08 rơi vào ngày thứ 9 của tháng 8** → tỷ lệ ngày đã trôi qua chỉ ~29% → hỏi "ai đạt chỉ
-tiêu tháng này" gần như chắc chắn ra **0/147**. Khách sẽ hiểu là hệ thống hỏng, hoặc là cả đội bán
-hàng đang thảm hoạ — cả hai đều sai. **Nay hệ thống tự trả thêm số "tới mức thưởng nhóm hàng"** song
-song, đỡ hẳn cảm giác "tất cả đều = 0" — nhưng vẫn nên chủ động dẫn dắt như bên dưới.
+**Demo 13/08 rơi vào ngày thứ 13 của tháng 8** → tỷ lệ ngày đã trôi qua ~42% → hỏi "ai đạt chỉ
+tiêu tháng này" vẫn ra số rất thấp, không đối chiếu được. Khách sẽ hiểu là hệ thống hỏng, hoặc là cả
+đội bán hàng đang thảm hoạ — cả hai đều sai. **Nay hệ thống tự trả thêm số "tới mức thưởng nhóm hàng"**
+song song, đỡ hẳn cảm giác "tất cả đều = 0" — nhưng vẫn nên chủ động dẫn dắt như bên dưới.
 
 *(Cột "80% cũ" ở 3 tháng trước giữ nguyên để đối chiếu lịch sử — script `demo1_ground_truth.py`
-chưa chạy lại theo ngưỡng 65% mới cho các tháng này, chỉ tháng 7 đã có số mới.)*
+chưa chạy lại theo ngưỡng 65% mới cho các tháng này, chỉ tháng 7 đã có số mới. Số tháng 7 ở trên
+cũng là bản 23/07 — cần chạy lại sáng 13/08 để lấy số cuối kỳ thật, xem checklist mục 5.)*
 
-> **✅ Xử lý (bắt buộc)**: mọi câu hỏi KPI trong demo **phải hỏi tháng 7/2026** — tại thời điểm
-> 09/08 thì tháng 7 đã trọn vẹn, số liệu có ý nghĩa (~25/150 đạt 100%). Với chatbot, truyền
+> **✅ Xử lý (bắt buộc)**: mọi câu hỏi KPI trong demo **phải hỏi tháng 7/2026** — đây là tháng đã
+> trọn vẹn gần nhất, số liệu có ý nghĩa. Với chatbot, truyền
 > `as_of_date = 2026-07-31`; câu hỏi tự nhiên: *"KPI nhân viên tháng 7 thế nào?"*
 > **Tuyệt đối không hỏi "tháng này"/"hiện tại" cho bất kỳ câu KPI nào.**
 >
@@ -360,16 +362,20 @@ KPI, bỏ qua toàn bộ nhóm doanh thu/khách hàng/tồn kho. Cơ chế fail-
 
 | Nhóm | Tool | Trạng thái |
 |---|---|---|
-| **(a) Thu hẹp được, CHƯA làm** | `get_revenue_by_channel`, `get_revenue_by_region`, `get_top_customers`, `get_top_products`, `compare_periods` | 🔴 **Chặn tạm** — hoá đơn có `employee_code` nên lọc theo đội được, nhưng phải sửa SQL từng hàm + test lại với Bravo |
-| **(b) Không thể thu hẹp** | `get_inventory_by_region` (kho), `get_receivables_overview` (công nợ theo khách), `get_qlv_change_history`, `get_revenue_reconciliation` | 🔴 Chặn — dữ liệu không gắn với 1 nhân viên, cần **DNH chốt** ai được xem |
+| **(a) Thu hẹp được** | `get_revenue_by_channel`, `get_revenue_by_region`, `get_top_customers`, `get_top_products`, `compare_periods` | ✅ **Đã mở** (xác nhận qua code 11/08: cả 5 tool nằm trong `_EMPLOYEE_SCOPED_TEMPLATES`, `report_templates.py`) — nhưng **CHƯA kiểm chứng với Bravo thật** (D1, xem dưới) |
+| **(b) Không thể thu hẹp** | `get_inventory_by_region` (kho), `get_receivables_overview` (công nợ theo khách), `get_qlv_change_history`, `get_revenue_reconciliation` | 🔴 Vẫn chặn — dữ liệu không gắn với 1 nhân viên, cần **DNH chốt** ai được xem |
 | **(c) Vô hại, không chặn** | `get_employee_directory` (tra tên/mã/vùng — chính là câu Q3), `get_customer_detail` (đã ép scope vùng+kênh), `get_audit_log` (đã ép username) | ✅ Giữ nguyên |
 
-Kiểm chứng: `qlv` bị chặn đúng 10 tool; `c_level` và `regional_director` **không đổi hành vi** (chặn
-chỉ kích hoạt khi có `scope_employee_code`).
+Kiểm chứng cũ (28/07): `qlv` bị chặn đúng 10 tool; `c_level` và `regional_director` **không đổi
+hành vi** (chặn chỉ kích hoạt khi có `scope_employee_code`).
 
-> 🔴 **VIỆC CÒN NỢ — ảnh hưởng demo**: 5 tool nhóm (a) hiện `qlv` **không hỏi được**. Nếu demo có
-> đoạn đăng nhập vai QLV hỏi doanh thu thì phải thu hẹp SQL xong trước 09/08, hoặc tránh câu đó.
-> Câu **R2** (top khách hàng vùng) trong kịch bản dùng vai `regional_director` nên **không bị ảnh hưởng**.
+> 🔴 **D1 — VIỆC CÒN NỢ THẬT SỰ, ảnh hưởng demo**: nhóm (a) đã mở về mặt code nhưng **chưa từng đối
+> chiếu với dữ liệu Bravo thật** — chưa xác nhận "tổng cả đội QLV" == "cộng dồn từng TDV dưới quyền"
+> khớp tuyệt đối cho cả 5 tool. Đã viết sẵn script kiểm `scripts/verify_rh_a_tools.py` (11/08) — tự
+> tìm mọi QLV có đội TDV thật, so tổng đội vs cộng dồn từng người trên cả 5 tool, in PASS/FAIL rõ
+> ràng. **Cần chạy trên máy 24 (`cd C:\dnh_chatbot\backend && python D:\DNH\scripts\verify_rh_a_tools.py`,
+> hoặc copy file vào `backend/` nếu không thấy `D:\DNH`) trước khi tin nhóm (a) an toàn cho demo.**
+> Máy dev không có đường kết nối tới Bravo/kho dữ liệu thật nên không tự chạy được bước này.
 
 > ❓ **Cần DNH xác nhận**: nhóm (b) — QLV có được xem tồn kho / công nợ của vùng không, hay chỉ cấp
 > Trưởng phòng/Giám đốc vùng trở lên? Hiện chặn hết để an toàn.
@@ -466,11 +472,17 @@ chỉ kích hoạt khi có `scope_employee_code`).
 | 6 | **Phân quyền** | R1 → R5 | Điểm nhấn: đăng nhập vai vùng, hỏi vùng khác → bị chặn |
 | 7 | Vai QLV | Q1, Q3 | Cho thấy xuống tới từng nhân viên |
 
-**Chuẩn bị trước buổi demo:**
-- [ ] Chạy `python scripts/demo1_ground_truth.py` sáng 09/08, in ra để cầm tay đối chiếu
+**Chuẩn bị trước buổi demo (13/08):**
+- [ ] **D1** — chạy `scripts/verify_rh_a_tools.py` trên máy 24 (kiểm 5 tool R-H(a) với Bravo thật,
+      xem mục R-H ở trên) — bắt buộc trước khi cho ai đăng nhập vai QLV hỏi doanh thu
+- [ ] Chạy `set PYTHONIOENCODING=utf-8 && python scripts/demo1_ground_truth.py --as-of 2026-07-31`
+      sáng 13/08, in ra để cầm tay đối chiếu
 - [ ] Đăng nhập sẵn 3 tài khoản trên 3 tab riêng (đổi vai giữa buổi rất mất thời gian)
 - [ ] Hỏi thử toàn bộ 1 lượt trước giờ demo — chatbot giới hạn **10 câu/phút/người**, hỏi dồn dính lỗi 429
-- [ ] Kiểm tra tiến trình đồng bộ trên máy 24 còn chạy (dữ liệu cũ → số lệch báo cáo)
+- [ ] Kiểm tra tiến trình đồng bộ trên máy 24 — và **chỉ có một** tiến trình đang chạy (tiền lệ: restart
+      để sót tiến trình cũ → gửi/ghi trùng, tổng gấp N lần dù đếm distinct vẫn đúng)
+- [ ] Kiểm tunnel còn sống + đăng nhập thử trên `dnh-bot.vercel.app` ngay trước giờ (xem sự cố 10-11/08:
+      `Get-Process cloudflared`, `Get-Service DNH_Chatbot_Tunnel` phải `Running`)
 
 ---
 
