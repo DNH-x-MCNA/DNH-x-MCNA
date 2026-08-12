@@ -49,6 +49,10 @@ MIN_TRAIN_MONTHS = 24
 BIAS_LOOKBACK = 6
 BIAS_CORRECTION = {"OTC": True, "ETC": False}   # ket luan tu forecast_model_v1.py
 
+# Thang bat dau chay LOOCV tung thang (theo yeu cau 12/08/2026: "tat ca cac thang tu 2024").
+# Doi qua bien moi truong neu can: set FORECAST_START=2025-01
+START_MONTH = os.environ.get("FORECAST_START", "2024-01")
+
 
 def month_add(ym, k):
     y, m = int(ym[:4]), int(ym[5:7])
@@ -92,28 +96,48 @@ def seasonal_index_from(series, month_list):
     return idx
 
 
+def same_month_neighbours(series, A, target, k=3):
+    """Cac nam CUNG THANG voi target ma nam trong tap `allowed`, lay k nam GAN NHAT ve thoi gian.
+
+    DAY LA CHO KHAC BIET COT LOI giua LOOCV va walk-forward:
+      - walk-forward: `allowed` chi co thang TRUOC target -> chi lay duoc cac nam TRUOC.
+      - LOOCV       : `allowed` co ca thang SAU target    -> lay duoc ca nam SAU (nhin tuong lai).
+    Vi du du bao 01/2024: walk-forward chi co 01/2023; LOOCV co ca 01/2023, 01/2025, 01/2026.
+    Dung dinh nghia nay (thay vi ep dung 3 nam TRUOC) moi phan anh dung ban chat LOOCV, va cung la
+    ly do LOOCV chay duoc cho cac thang dau 2024 trong khi walk-forward thi khong."""
+    cands = []
+    for d in range(-48, 49, 12):
+        if d == 0:
+            continue
+        m = month_add(target, d)
+        if m in A and series.get(m, 0) > 0:
+            cands.append((abs(d), m))
+    cands.sort()
+    return [m for _, m in cands[:k]]
+
+
 def predict(series, allowed, target, use_bias):
     """Du bao `target` chi bang cac thang trong `allowed` (mot tap hop).
     Tra ve {ten_mo_hinh: du_bao}. `allowed` la cho khac biet duy nhat giua LOOCV va walk-forward."""
     out = {}
     A = set(allowed)
 
-    # M1: trung binh cung ky 3 nam - CHI dung 3 thang cu the, khong dung phan con lai cua tap train
-    ps = [month_add(target, -12), month_add(target, -24), month_add(target, -36)]
-    if all(p in A for p in ps):
-        base = sum(series[p] for p in ps) / 3
-        out["M1. trung binh cung ky 3 nam"] = base
+    # M1: trung binh cac nam CUNG THANG (toi da 3 nam gan nhat co trong `allowed`)
+    ns = same_month_neighbours(series, A, target, 3)
+    if ns:
+        base = sum(series[m] for m in ns) / len(ns)
+        out["M1. trung binh cung ky (<=3 nam)"] = base
 
         # M2: M1 + hieu chinh do lech (do tren cac thang TRUOC target va nam trong `allowed`)
         if use_bias:
             errs = []
             for k in range(1, BIAS_LOOKBACK + 1):
                 m = month_add(target, -k)
-                if m not in A:
+                if m not in A or series.get(m, 0) <= 0:
                     continue
-                qs = [month_add(m, -12), month_add(m, -24), month_add(m, -36)]
-                if all(q in A for q in qs) and series[m] > 0:
-                    b = sum(series[q] for q in qs) / 3
+                qs = same_month_neighbours(series, A - {m}, m, 3)
+                if qs:
+                    b = sum(series[q] for q in qs) / len(qs)
                     errs.append((b - series[m]) / series[m])
             if errs:
                 bias = sum(errs) / len(errs)
@@ -121,7 +145,7 @@ def predict(series, allowed, target, use_bias):
                     out["M2. M1 + hieu chinh do lech"] = base / (1 + bias)
 
     # M3: chi so mua vu x muc nen 3 thang truoc
-    #     -> DAY la mo hinh nhay cam voi LOOCV, vi chi so mua vu tinh tu CA TAP allowed.
+    #     -> nhay cam voi LOOCV vi chi so mua vu tinh tu CA TAP allowed.
     idx = seasonal_index_from(series, A)
     tm = int(target[5:7])
     prev3 = [month_add(target, -k) for k in (1, 2, 3)]
@@ -168,29 +192,62 @@ def main():
         print(f"     chi dung du lieu qua khu (M1/M2). Khac biet neu co la o M3 - mo hinh tinh chi so")
         print(f"     mua vu tu TOAN BO tap train, nen ban LOOCV duoc nhin ca thang sau {target}.")
 
-        # ---- Do muc "dep hon" cua LOOCV tren TOAN chuoi ----
+        # ---- LOOCV cho TUNG THANG tu START_MONTH, kem doi chung walk-forward ----
+        rng = [m for m in months if m >= START_MONTH]
         print(f"\n  {'-' * 74}")
-        print("  LOOCV tren TOAN CHUOI vs WALK-FORWARD (day moi la cho LOOCV gay hieu nham)")
-        errs_loo, errs_wf = defaultdict(list), defaultdict(list)
-        for i in range(MIN_TRAIN_MONTHS, len(months)):
-            m = months[i]
+        print(f"  LOOCV TUNG THANG tu {START_MONTH} ({len(rng)} thang) - mo hinh M1")
+        print(f"  {'Thang':<9}{'Thuc te':>10}{'LOOCV':>10}{'Lech':>9}   |{'Walk-fwd':>10}{'Lech':>9}   Can cu LOOCV")
+        el, ew = [], []
+        for m in rng:
             a = series[m]
             if a <= 0:
                 continue
-            for name, p in predict(series, [x for x in months if x != m], m, use_bias).items():
-                errs_loo[name].append(abs(p - a) / a * 100)
-            for name, p in predict(series, [x for x in months if x < m], m, use_bias).items():
-                errs_wf[name].append(abs(p - a) / a * 100)
+            A_loo = [x for x in months if x != m]
+            A_wf = [x for x in months if x < m]
+            p_loo = predict(series, A_loo, m, use_bias).get("M1. trung binh cung ky (<=3 nam)")
+            p_wf = predict(series, A_wf, m, use_bias).get("M1. trung binh cung ky (<=3 nam)")
+            ns = same_month_neighbours(series, set(A_loo), m, 3)
+            # danh dau nam NAO la tuong lai so voi thang dang du bao
+            canhbao = " ".join((n + "*") if n > m else n for n in ns)
+            s_loo = f"{p_loo/TY:>9.2f}" if p_loo else "        -"
+            e_loo = f"{(p_loo-a)/a*100:>+8.1f}%" if p_loo else "        -"
+            s_wf = f"{p_wf/TY:>9.2f}" if p_wf else "        -"
+            e_wf = f"{(p_wf-a)/a*100:>+8.1f}%" if p_wf else "        -"
+            print(f"  {m:<9}{a/TY:>9.2f}{s_loo}{e_loo}   |{s_wf}{e_wf}   {canhbao}")
+            if p_loo:
+                el.append(abs(p_loo - a) / a * 100)
+            if p_wf:
+                ew.append(abs(p_wf - a) / a * 100)
 
-        print(f"\n  {'Mo hinh':<32}{'LOOCV':>10}{'Walk-fwd':>12}{'Chenh':>10}")
-        for name in sorted(set(errs_loo) | set(errs_wf)):
-            el, ew = errs_loo.get(name, []), errs_wf.get(name, [])
-            if not el or not ew:
+        print(f"\n  (* = nam nam SAU thang can du bao - walk-forward KHONG duoc dung, LOOCV thi co)")
+        if el and ew:
+            print(f"\n  MAPE tu {START_MONTH}:   LOOCV {sum(el)/len(el):.1f}% ({len(el)} thang)"
+                  f"   |   Walk-forward {sum(ew)/len(ew):.1f}% ({len(ew)} thang)")
+            if len(el) != len(ew):
+                print(f"  LUU Y: LOOCV chay duoc {len(el)} thang con walk-forward chi {len(ew)} - vi cac thang")
+                print(f"  dau 2024 KHONG co du nam cung ky o qua khu, nhung LOOCV thi muon bao nhieu cung co")
+                print(f"  (lay tu tuong lai). So sanh 2 con so MAPE nay la KHONG cong bang, doc ky cot Can cu.")
+
+        # So sanh cong bang: chi tren cac thang CA HAI deu chay duoc
+        both = []
+        for m in rng:
+            a = series[m]
+            if a <= 0:
                 continue
-            ml, mw = sum(el) / len(el), sum(ew) / len(ew)
-            print(f"  {name:<32}{ml:>9.1f}%{mw:>11.1f}%{ml-mw:>9.1f}%")
-        print("\n  Cot 'Chenh' am nghia la LOOCV cho ket qua DEP HON thuc te - do la ro ri du lieu,")
-        print("  khong phai mo hinh tot hon. Con so dung de bao cao va de quyet dinh la cot Walk-fwd.")
+            p1 = predict(series, [x for x in months if x != m], m, use_bias).get("M1. trung binh cung ky (<=3 nam)")
+            p2 = predict(series, [x for x in months if x < m], m, use_bias).get("M1. trung binh cung ky (<=3 nam)")
+            if p1 and p2:
+                both.append((abs(p1 - a) / a * 100, abs(p2 - a) / a * 100))
+        if both:
+            ml = sum(x for x, _ in both) / len(both)
+            mw = sum(y for _, y in both) / len(both)
+            print(f"\n  SO SANH CONG BANG (chi {len(both)} thang ca hai deu chay duoc):")
+            print(f"     LOOCV {ml:.1f}%   |   Walk-forward {mw:.1f}%   |   chenh {ml-mw:+.1f} diem")
+            if ml < mw:
+                print("     -> LOOCV DEP HON, va do la RO RI DU LIEU chu khong phai mo hinh tot hon:")
+                print("        no duoc nhin cac nam SAU thang can du bao (cot Can cu, danh dau *).")
+            else:
+                print("     -> LOOCV khong dep hon o day (hiem) - xem lai cot Can cu de hieu vi sao.")
 
     conn.close()
     print(f"\n{'=' * 78}")
