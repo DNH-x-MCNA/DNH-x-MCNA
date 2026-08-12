@@ -267,23 +267,58 @@ def main():
                 print(f"  -> '{bn2}' tot hon nen {fb - fair[bn2]:.1f} diem tren {len(common)} thang")
             else:
                 print(f"  -> KHONG bien the nao vuot ro mo hinh nen tren {len(common)} thang. Giu nguyen.")
-            verdicts.append((tier_label, len(common), fb, bn2, fair[bn2]))
+
+            # --- DOI DAU TUNG THANG: chenh lech trung binh de bi MOT thang keo lech.
+            # Neu ung vien chi thang o vai thang thi do la MAY, khong phai mo hinh tot hon.
+            robust = None
+            if bn2 != BASE_NAME:
+                diffs = [(m, per_month[m][bn2] - per_month[m][BASE_NAME]) for m in common]
+                wins = [d for _, d in diffs if d < 0]
+                med = median([d for _, d in diffs])
+                top_m, top_d = min(diffs, key=lambda x: x[1])
+                total_gain = (fb - fair[bn2]) * len(common)
+                share = (-top_d) / total_gain * 100 if total_gain > 0 else 0
+                print(f"\n  Doi dau tung thang: '{bn2}' vs mo hinh nen")
+                print(f"    So thang doan sat hon: {len(wins)}/{len(common)}")
+                print(f"    Chenh lech TRUNG VI: {med:+.1f} diem  (trung binh {fair[bn2] - fb:+.1f})")
+                print(f"    Thang gop nhieu nhat: {top_m} ({top_d:+.1f} diem, "
+                      f"chiem {share:.0f}% toan bo loi the)")
+                robust = (len(wins) > len(common) * 0.6 and med < -0.3 and share < 50)
+                if robust:
+                    print("    => Loi the RAI DEU qua nhieu thang - dang tin.")
+                else:
+                    reasons = []
+                    if len(wins) <= len(common) * 0.6:
+                        reasons.append(f"chi thang {len(wins)}/{len(common)} thang")
+                    if med >= -0.3:
+                        reasons.append(f"trung vi chi {med:+.1f} diem")
+                    if share >= 50:
+                        reasons.append(f"{top_m} chiem {share:.0f}% loi the")
+                    print(f"    => LOI THE KHONG CHAC ({', '.join(reasons)}) - nhieu kha nang la may.")
+            verdicts.append((tier_label, len(common), fb, bn2, fair[bn2], robust))
 
         # --- CHOT: chi doc tu bang cong bang, KHONG doc tu bang dau (khac co mau) ---
         print(f"\n  === CHOT CHO KENH {channel} ===")
         if not verdicts:
             print("  Chua du du lieu de so sanh cong bang -> giu nguyen mo hinh nen.")
         else:
+            # Chi coi la thang khi VUA hon MAPE >0,3 diem VUA rai deu qua cac thang.
             winners = [v for v in verdicts if v[4] < v[2] - 0.3]
+            solid = [v for v in winners if v[5]]
             if not winners:
                 print(f"  GIU NGUYEN mo hinh nen ({BASE_NAME}).")
                 print("  Khong bien the nao vuot duoc tren co mau cong bang.")
+            elif not solid:
+                lbl, nm, fb, bn2, bv, _ = max(winners, key=lambda v: v[1])
+                print(f"  GIU NGUYEN mo hinh nen ({BASE_NAME}).")
+                print(f"  '{bn2}' co MAPE thap hon {fb - bv:.1f} diem nhung loi the KHONG rai deu")
+                print("  qua cac thang (xem phan 'Doi dau tung thang') -> chua du bang chung de doi.")
             else:
                 # uu tien ket luan tu tang co NHIEU thang nhat (do tin cay cao hon)
-                lbl, nm, fb, bn2, bv = max(winners, key=lambda v: v[1])
+                lbl, nm, fb, bn2, bv, _ = max(solid, key=lambda v: v[1])
                 print(f"  DOI SANG: {bn2}")
                 print(f"  Giam {fb - bv:.1f} diem ({(fb - bv) / fb * 100:.0f}%) tren {nm} thang "
-                      f"(tang {lbl.split('(')[0].strip()}).")
+                      f"(tang {lbl.split('(')[0].strip()}), loi the rai deu qua cac thang.")
                 if nm < 12:
                     print("  CANH BAO: co mau duoi 12 thang -> chua du chac. Nen theo doi them "
                           "vai thang truoc khi doi han.")
