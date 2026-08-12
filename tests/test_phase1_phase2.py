@@ -76,8 +76,18 @@ def test_quy_tac_hien_thi_canh_bao_toan_cong_ty():
     assert _company_wide_alert_visible_to("Miền Bắc", "nam") is False
     assert _company_wide_alert_visible_to("Miền Nam", None) is True
 
+@pytest.mark.integration
 def test_chay_dry_run_tat_ca_audiences():
-    """Kiểm tra chạy thử dry-run cho cả 3 loại báo cáo không phát sinh lỗi."""
+    """Kiểm tra chạy thử dry-run cho cả 3 loại báo cáo không phát sinh lỗi.
+
+    12/08/2026: đánh dấu `integration`. Dù là dry_run (không gửi đi đâu), 3 hàm này vẫn DỰNG
+    báo cáo thật nên phải truy vấn dữ liệu — máy không tới được DB sẽ treo ở timeout mạng chứ
+    không fail. Đây chính là lý do `pytest -q` từ gốc repo không bao giờ kết thúc: 28 test kia
+    xong trong ~3 giây, riêng test này treo vô hạn.
+
+    Mặc định bị loại (addopts trong pyproject.toml). Chạy trên máy CÓ dữ liệu (máy 24):
+        pytest -m integration
+    """
     res_daily = send_daily_digest(dry_run=True)
     assert res_daily is True
 
