@@ -44,6 +44,30 @@ và nhật ký sự cố ngày 10-11/08 — **các ô đánh dấu 🔄 cần ch
 
 ---
 
+## SLIDE 2b — BẢN ĐỒ KIỂM SOÁT DỮ LIỆU 4 LỚP *(cập nhật 12/08 — đã sửa số liệu lạc hậu)*
+
+> ⚠️ **Bản slide đang lưu hành có 3 chỗ sai/lạc hậu, sửa trước khi trình:**
+>
+> | Chỗ sai trên slide cũ | Số đúng (đếm từ code 12/08) |
+> |---|---|
+> | *"Đang tạm khóa **9** báo cáo"* | **5** — đã mở 5 tool nhóm (a) từ 03/08, khoá 9 là trạng thái 28/07 |
+> | *"**148** nhân viên"* (lớp 4) | Kịch bản demo đang dùng mẫu số **147** ở mọi câu KPI — phải thống nhất 1 số |
+> | *"Không có mã nào bị loại oan"* | Đúng **ở tầng báo cáo** (nhờ danh sách ngoại lệ), nhưng dữ liệu gốc vẫn sai — chính là mục **C1** đang chờ DNH, cộng **C3** (6 mã OTC ~484 triệu chưa giải thích được) |
+
+| Lớp | Phạm vi | Trạng thái thật |
+|---|---|---|
+| **Lớp 4 — Cá nhân (TDV)** | Doanh số & mã từng nhân viên | ✅ Đóng 24/07 — khớp 100% với hệ thống gốc. *Kèm chú thích: 2 nhân viên thật đang bị Bravo gắn nhầm cờ trùng lặp, MCNA vá tạm bằng danh sách ngoại lệ (mục C1)* |
+| **Lớp 3 — Quản lý vùng (21 QLV)** | Tổng đội từng QLV | 📍 Đang xử lý — đã sửa lỗi cộng chồng (QLV bị gấp đôi do cộng cả TDV lẫn QLV) và tách ngưỡng KPI theo vai trò (quản lý 70%, nhân viên 65%). **Còn khoá 5 tool** (kho, công nợ, lịch sử đổi QLV, đối chiếu doanh thu, kiểm đơn bất thường) — chờ DNH chốt QLV được xem tới đâu |
+| **Lớp 2 — Vùng (3 miền)** | Doanh thu & công nợ theo miền | ⏳ Chờ DNH soát — lệch 0đ **tại lần kiểm chứng 30/07** |
+| **Lớp 1 — Toàn công ty** | Doanh thu, công nợ, KPI, tồn kho | ⏳ Chờ DNH soát — lệch 0đ **tại lần kiểm chứng 30/07** |
+
+> 🔴 **Điểm phải nói thẳng nếu bị hỏi**: con số "lệch 0 đồng" ở Lớp 1 & 2 được kiểm chứng lần cuối
+> **30/07**. Từ đó tới nay có **91 commit**, nhiều commit đụng thẳng logic doanh thu/KPI/phân quyền.
+> **Chưa chạy lại kiểm chứng** (công cụ đã viết sẵn: `scripts/verify_rh_a_tools.py`, cần chạy trên
+> máy có dữ liệu thật). Trình "lệch 0đ" như trạng thái hôm nay là đang dựa vào số của 2 tuần trước.
+
+---
+
 ## SLIDE 3 — Nhật ký công việc (1/2): Sự cố production & độ tin cậy chatbot
 
 **Kỳ 30/07 – 13/08/2026**

@@ -357,17 +357,22 @@ KPI, bỏ qua toàn bộ nhóm doanh thu/khách hàng/tồn kho. Cơ chế fail-
 
 **Đã chốt với user 28/07**: QLV **chỉ được xem đội của riêng mình**, không phải cả miền.
 
-**Xử lý tạm (đã deploy)**: đưa 9 tool vào `_PERSON_LEVEL_TEMPLATES` → tài khoản `qlv` bị **chặn hẳn**
-(fail-closed) thay vì âm thầm trả dữ liệu cả vùng. Chia 3 nhóm:
+**Xử lý tạm (28/07, đã deploy)**: đưa 9 tool vào `_PERSON_LEVEL_TEMPLATES` → tài khoản `qlv` bị
+**chặn hẳn** (fail-closed) thay vì âm thầm trả dữ liệu cả vùng.
+
+> ⚠️ **SỐ LIỆU CẬP NHẬT 12/08/2026** — đếm trực tiếp từ `report_templates.py`, KHÔNG dùng lại con số
+> cũ: `_PERSON_LEVEL_TEMPLATES` có **16 tool**, `_EMPLOYEE_SCOPED_TEMPLATES` có **11 tool** →
+> **vai QLV hiện chỉ còn bị chặn 5 tool, dùng được 11 tool.** Con số "9 báo cáo đang khoá" là trạng
+> thái ngày 28/07, đã lạc hậu — đừng dùng lại trong slide/báo cáo.
 
 | Nhóm | Tool | Trạng thái |
 |---|---|---|
-| **(a) Thu hẹp được** | `get_revenue_by_channel`, `get_revenue_by_region`, `get_top_customers`, `get_top_products`, `compare_periods` | ✅ **Đã mở** (xác nhận qua code 11/08: cả 5 tool nằm trong `_EMPLOYEE_SCOPED_TEMPLATES`, `report_templates.py`) — nhưng **CHƯA kiểm chứng với Bravo thật** (D1, xem dưới) |
-| **(b) Không thể thu hẹp** | `get_inventory_by_region` (kho), `get_receivables_overview` (công nợ theo khách), `get_qlv_change_history`, `get_revenue_reconciliation` | 🔴 Vẫn chặn — dữ liệu không gắn với 1 nhân viên, cần **DNH chốt** ai được xem |
+| **(a) Thu hẹp được** | `get_revenue_by_channel`, `get_revenue_by_region`, `get_top_customers`, `get_top_products`, `compare_periods` | ✅ **Đã mở** từ 03/08 (commit `c79c5da`, `e8907b0`) — nhưng **CHƯA kiểm chứng với Bravo thật** (D1, xem dưới) |
+| **(b) Không thể thu hẹp — 5 tool** | `get_inventory_by_region` (kho), `get_receivables_overview` (công nợ theo khách), `get_qlv_change_history`, `get_revenue_reconciliation`, `check_order_timing` | 🔴 Vẫn chặn — dữ liệu không gắn với 1 nhân viên, cần **DNH chốt** ai được xem |
 | **(c) Vô hại, không chặn** | `get_employee_directory` (tra tên/mã/vùng — chính là câu Q3), `get_customer_detail` (đã ép scope vùng+kênh), `get_audit_log` (đã ép username) | ✅ Giữ nguyên |
 
-Kiểm chứng cũ (28/07): `qlv` bị chặn đúng 10 tool; `c_level` và `regional_director` **không đổi
-hành vi** (chặn chỉ kích hoạt khi có `scope_employee_code`).
+`c_level` và `regional_director` **không đổi hành vi** (chặn chỉ kích hoạt khi có
+`scope_employee_code`).
 
 > 🔴 **D1 — VIỆC CÒN NỢ THẬT SỰ, ảnh hưởng demo**: nhóm (a) đã mở về mặt code nhưng **chưa từng đối
 > chiếu với dữ liệu Bravo thật** — chưa xác nhận "tổng cả đội QLV" == "cộng dồn từng TDV dưới quyền"
