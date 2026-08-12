@@ -195,6 +195,28 @@ TEMPLATE_TOOLS = [
         },
     },
     {
+        "name": "get_revenue_forecast",
+        "description": "UOC TINH doanh thu CA THANG (OTC/ETC/tong) cho 1 thang - dung cho cau hoi "
+                        "'du bao/du phong/uoc tinh doanh thu thang X'. Mo hinh: trung binh doanh thu "
+                        "DUNG THANG DO cua toi da 3 nam gan nhat; da doi dau voi 20 mo hinh phuc tap "
+                        "hon (he so tang truong, trung vi, hybrid...) tren 49 thang du lieu that va "
+                        "thang tat ca. KHONG dung du lieu trong thang dang chay nen tra loi duoc ngay "
+                        "tu dau thang. Tool TU DO sai so cua chinh no tren dung pham vi dang hoi va "
+                        "tra ve 'khoang_uoc_tinh' + 'sai_so_trung_binh_pct'. "
+                        "BAT BUOC khi tra loi: noi ro day la UOC TINH, neu kem khoang uoc tinh va sai "
+                        "so, va (neu la thang dang chay) tach bach so luy ke THUC TE voi so uoc tinh. "
+                        "Neu tra ve 'ly_do_khong_du_bao' thi noi thang la khong du bao duoc, KHONG bia so.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "year_month": {"type": "string",
+                                "description": "Thang can du bao, dang YYYY-MM (vd '2026-08'). "
+                                               "Bo trong = thang hien tai."},
+            },
+            "required": [],
+        },
+    },
+    {
         "name": "get_customer_detail",
         "description": "Chi tiet 1 khach hang cu the (theo ma khach hang): gop doanh thu thuc te trong "
                         "1 khoang ngay + so don hang + gia tri TB/don, CUNG LUC voi du no cuoi ky/no qua han "
@@ -586,10 +608,18 @@ QUAN TRONG VE CHON TOOL:
   get_inventory_by_region, get_qlv_change_history, get_revenue_tree, get_kpi_ranking,
   get_revenue_reconciliation, get_receivables_overview, get_audit_log, get_salary_detail,
   get_salary_achievement_summary).
-- CHUA CO tinh nang DU BAO/DU PHONG cuoi thang (tool du bao da bi go 10/08 vi loi du lieu). Neu nguoi
-  dung hoi "du doan/du phong/uoc tinh doanh thu ca thang", NOI THANG la he thong chua ho tro du bao,
-  va chi cung cap so LUY KE DEN HIEN TAI (get_revenue_by_channel/get_employee_kpi) neu ho muon -
-  TUYET DOI KHONG tu suy ra con so du bao bang cach chia ty le hay ngoai suy tu du lieu da co.
+- DU BAO DOANH THU CA THANG: dung get_revenue_forecast (khong phai tinh tay). Khi trinh bay ket qua
+  BAT BUOC lam du 3 dieu, thieu 1 la sai:
+  (1) noi ro DAY LA UOC TINH, khong phai doanh thu thuc te;
+  (2) neu kem KHOANG uoc tinh + sai so trung binh ma tool tra ve, KHONG duoc rut gon thanh 1 con so;
+  (3) neu la thang dang chay, phan biet ro so LUY KE THUC TE den nay voi so UOC TINH ca thang.
+  Mo hinh chi dua tren mua vu lich su, KHONG biet su kien moi (mat khach lon, thau ETC, dut hang) -
+  neu nguoi dung nhac toi su kien nhu vay thi phai noi ro con so nay chua tinh den.
+  Neu tool tra ve "ly_do_khong_du_bao" (thieu lich su) thi NOI THANG la khong du bao duoc cho pham vi
+  do va noi ly do - TUYET DOI KHONG tu bia so thay the.
+  Ngoai tool nay ra, TUYET DOI KHONG tu suy ra con so du bao bang cach chia ty le hay ngoai suy tu
+  du lieu luy ke (vd lay luy ke chia so ngay roi nhan so ngay ca thang) - doanh thu DNH don ve cuoi
+  thang nen cach do sai rat nang.
   Day la cac truy van DA DUOC KIEM CHUNG khop voi du lieu goc, KHONG tu sinh SQL thay the.
 - Neu cau hoi co NHIEU khia canh cung luc (vd hoi ca doanh thu, top san pham, vung mien, nhan vien
   trong 1 cau) -> goi TUAN TU nhieu tool tuong ung, moi tool 1 khia canh, roi tong hop lai.
