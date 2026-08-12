@@ -244,40 +244,96 @@ def evaluate(channel, series, months):
     print(f"  Train: {months[0]} -> {months[n_train-1]}   |   "
           f"Test: {months[n_train]} -> {months[-1]}")
 
+    # ---- BUOC 1: tinh TRUOC du bao nen cho MOI thang co the du bao (walk-forward, 1 lan duy nhat).
+    # Truoc day moi to hop lai goi predict_all() long nhau -> cham va kho doc. Nay moi thu doc lai
+    # tu bang nay. Van dam bao khong nhin tuong lai: base[t] chi dung months[:t].
+    base = {}
+    for t in range(MIN_TRAIN_MONTHS, len(months)):
+        base[t] = predict_all(series, months[:t], months[t])
+
+    def signed_err(key, t):
+        """Sai so CO DAU cua mo hinh `key` tai thang t (None neu khong tinh duoc)."""
+        p = base.get(t, {}).get(key)
+        a = series[months[t]]
+        return (p - a) / a if (p and a > 0) else None
+
+    def recent_errs(key, t, k):
+        """Sai so cua `key` trong k thang TRUOC t (chi du lieu qua khu)."""
+        out = []
+        for j in range(max(MIN_TRAIN_MONTHS, t - k), t):
+            e = signed_err(key, j)
+            if e is not None:
+                out.append(e)
+        return out
+
+    COMP_A = ("A", REP_A)     # dai dien luong A
+    COMP_B = ("B", REP_B5)    # dai dien luong B (mo hinh tot nhat cua luong B tren du lieu that)
+
     errs = defaultdict(list)
     detail = defaultdict(dict)
     signed = defaultdict(dict)   # sai so CO DAU, de biet mo hinh doan CAO hay THAP
+
     for t in test_idx:
         target = months[t]
         actual = series[target]
         if actual <= 0:
             continue
-        preds = predict_all(series, months[:t], target)
+        preds = dict(base.get(t, {}))
 
         # ---------------- LUONG D: hieu chinh DO LECH HE THONG ----------------
         # Ly do (do tren du lieu that 12/08/2026): MOI mo hinh OTC deu doan CAO hon thuc te +5..+10%
         # mot cach HE THONG - vi doanh thu OTC dang giam 13-14% ma mo hinh thi neo vao qua khu.
-        # Lech MOT CHIEU thi sua duoc, khac han nhieu ngau nhien: do do lech cua chinh mo hinh trong
-        # vai thang gan nhat roi chia lai.
-        # KHONG ro ri du lieu: do lech chi do tren cac thang TRUOC target, va tung du bao trong vong
-        # do cung chi dung du lieu truoc thang do.
-        # CO Y de DU LIEU TU QUYET DINH theo tung kenh: da thu tay, hieu chinh giup OTC (12,9->10,3%)
-        # nhung KHONG giup ETC (17,1->17,6%) - do lech ETC khong phai xu huong deu ma do dung 1 thang
-        # bat thuong (01/2026 lech -58%). Neu bang ket qua cho thay D thua B thi DUNG dung D cho kenh do.
-        for lookback in (3, 6):
-            hist_errs = []
-            for k in range(max(MIN_TRAIN_MONTHS, t - lookback), t):
-                a_k = series[months[k]]
-                if a_k <= 0:
-                    continue
-                p_k = predict_all(series, months[:k], months[k]).get(("B", REP_B5))
-                if p_k:
-                    hist_errs.append((p_k - a_k) / a_k)
-            base = preds.get(("B", REP_B5))
-            if base and hist_errs:
-                bias = sum(hist_errs) / len(hist_errs)
+        # Lech MOT CHIEU thi sua duoc, khac han nhieu ngau nhien.
+        # KET QUA THAT: giup OTC (12,9 -> 11,7%) nhung LAM HONG ETC (17,1 -> 25,0%) vi do lech ETC
+        # khong phai xu huong deu ma do dung 1 thang bat thuong (01/2026 lech -58%).
+        for k in (3, 6):
+            he = recent_errs(COMP_B, t, k)
+            b = preds.get(COMP_B)
+            if b and he:
+                bias = sum(he) / len(he)
                 if bias > -0.9:
-                    preds[("D", f"D{lookback}. B5 + hieu_chinh_lech_{lookback}thang")] = base / (1 + bias)
+                    preds[("D", f"D{k}. B5 + hieu_chinh_lech_{k}thang")] = b / (1 + bias)
+
+        # ---------------- LUONG E: HYBRID 2 CHIEU (tinh hon luong C tron co dinh) ----------------
+        # Luong C truoc do tron CO DINH 50/50 va 30/70 -> thua ca A lan B o ca 2 kenh. Cau hoi con
+        # lai: neu trong so KHONG co dinh ma HOC tu qua khu thi co tot hon khong? Ba cach:
+        #   E1 - hoc trong so toi uu: thu w = 0; 0,1; ...; 1,0 tren 12 thang gan nhat, chon w cho sai
+        #        so nho nhat, roi ap cho thang dich. (Hoc tren QUA KHU, khong phai tren tap test.)
+        #   E2 - trong so nghich dao sai so: luong nao sai it hon gan day thi duoc trong so lon hon.
+        #   E3 - CHUYEN LUONG (chon, khong tron): dung han luong nao thang trong 6 thang gan nhat.
+        # Luu y ve ky vong: sai so 2 luong tuong quan r=+0,83 (OTC) / +0,71 (ETC) - cung sai mot kieu,
+        # nen ve ly thuyet moi to hop tuyen tinh deu kho cai thien nhieu. Van thu de co cau tra loi
+        # bang so thay vi bang suy doan.
+        pa, pb = preds.get(COMP_A), preds.get(COMP_B)
+        if pa and pb:
+            # Ghep sai so theo CUNG THANG (khong so do dai 2 danh sach - A2 thieu o vai thang dau
+            # vi can du lich su tinh chi so mua vu, lam 2 danh sach lech do dai).
+            def paired(k):
+                out = []
+                for j in range(max(MIN_TRAIN_MONTHS, t - k), t):
+                    x, y = signed_err(COMP_A, j), signed_err(COMP_B, j)
+                    if x is not None and y is not None:
+                        out.append((x, y))
+                return out
+
+            p12 = paired(12)
+            if len(p12) >= 4:
+                best_w, best_score = None, None
+                for i in range(11):
+                    w = i / 10
+                    score = sum(abs(w * x + (1 - w) * y) for x, y in p12)
+                    if best_score is None or score < best_score:
+                        best_score, best_w = score, w
+                preds[("E", "E1. hoc trong so toi uu tu qua khu")] = best_w * pa + (1 - best_w) * pb
+
+            p6 = paired(6)
+            if len(p6) >= 3:
+                ma = sum(abs(x) for x, _ in p6) / len(p6)
+                mb = sum(abs(y) for _, y in p6) / len(p6)
+                if ma > 0 and mb > 0:
+                    wa = (1 / ma) / ((1 / ma) + (1 / mb))
+                    preds[("E", "E2. trong so nghich dao sai so")] = wa * pa + (1 - wa) * pb
+                    preds[("E", "E3. chuyen luong (chon, khong tron)")] = pa if ma < mb else pb
 
         for key, pred in preds.items():
             errs[key].append(abs(pred - actual) / actual * 100)
@@ -293,9 +349,10 @@ def evaluate(channel, series, months):
         "B": "LUONG B - so voi CUNG KY NAM TRUOC (neo vao thang nam ngoai)",
         "C": "LUONG C - KET HOP hai luong",
         "D": "LUONG D - luong B + HIEU CHINH DO LECH HE THONG (bat da tang/giam)",
+        "E": "LUONG E - HYBRID 2 CHIEU, trong so HOC tu qua khu (khong co dinh nhu C)",
     }
     best_of = {}
-    for stream in ("A", "B", "C", "D"):
+    for stream in ("A", "B", "C", "D", "E"):
         items = [(k, v) for k, v in errs.items() if k[0] == stream]
         if not items:
             continue
@@ -312,7 +369,7 @@ def evaluate(channel, series, months):
 
     print(f"\n  {'-' * 74}")
     print("  SO TRUC DIEN GIUA CAC LUONG:")
-    for s in ("A", "B", "C", "D"):
+    for s in ("A", "B", "C", "D", "E"):
         if s in best_of:
             print(f"    Luong {s}: tot nhat '{best_of[s][0][1]}'  ->  MAPE {best_of[s][1]:.1f}%")
 
