@@ -243,11 +243,21 @@ def main():
             mw = sum(y for _, y in both) / len(both)
             print(f"\n  SO SANH CONG BANG (chi {len(both)} thang ca hai deu chay duoc):")
             print(f"     LOOCV {ml:.1f}%   |   Walk-forward {mw:.1f}%   |   chenh {ml-mw:+.1f} diem")
-            if ml < mw:
-                print("     -> LOOCV DEP HON, va do la RO RI DU LIEU chu khong phai mo hinh tot hon:")
+            if ml < mw - 0.3:
+                print("     -> LOOCV DEP HON: day la RO RI DU LIEU chu khong phai mo hinh tot hon,")
                 print("        no duoc nhin cac nam SAU thang can du bao (cot Can cu, danh dau *).")
+            elif ml > mw + 0.3:
+                print("     -> LOOCV TE HON walk-forward. Nghe nguoc doi nhung dung voi chuoi nay:")
+                print("        ly thuyet 'LOOCV thoi phong do chinh xac' dung voi chuoi ON DINH, khi du lieu")
+                print("        tuong lai giup uoc luong tham so ben vung hon. Chuoi nay co XU HUONG GIAM")
+                print("        MANH va nhieu THANG DI THUONG, nen nhin them tuong lai chi lam NHIEU:")
+                print("        vd du bao 02/2024 (that su chi 8,63 ty - cu sup bat thuong) ma lai lay")
+                print("        02/2025 va 02/2026 (23-28 ty) lam can cu thi cang keo len cao, sai nang hon.")
             else:
-                print("     -> LOOCV khong dep hon o day (hiem) - xem lai cot Can cu de hieu vi sao.")
+                print("     -> Hai cach ngang nhau tren chuoi nay.")
+            print("     Du ket qua the nao, VAN dung walk-forward de bao cao: khong phai vi LOOCV cho so")
+            print("     dep gia, ma vi LOOCV tra loi CAU HOI KHAC - 'neu biet truoc tuong lai thi doan qua")
+            print("     khu gioi co nao'. Cau hoi can tra loi la 'thang toi se the nao khi CHUA biet gi'.")
 
     conn.close()
     print(f"\n{'=' * 78}")
