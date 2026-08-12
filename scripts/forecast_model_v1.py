@@ -164,6 +164,7 @@ def fit_seasonal_index(series, months):
 # roi mang di tron thi la ro ri thong tin - chi so dep gia).
 REP_A = "A2. muc_nen_3thang x mua_vu"     # dai dien luong A
 REP_B = "B1. cung_ky_nam_truoc"           # dai dien luong B (cung la moc nen)
+REP_B5 = "B5. trung_binh_cung_ky_3_nam"   # mo hinh nen cho luong D (tot nhat tren du lieu that)
 
 
 def predict_all(series, hist_months, target):
@@ -223,7 +224,7 @@ def predict_all(series, hist_months, target):
         if p2 in hs:
             out[("B", "B4. trung_binh_cung_ky_2_nam")] = (series[p1] + series[p2]) / 2
             if p3 in hs:
-                out[("B", "B5. trung_binh_cung_ky_3_nam")] = (series[p1] + series[p2] + series[p3]) / 3
+                out[("B", REP_B5)] = (series[p1] + series[p2] + series[p3]) / 3
 
     # ---------------- LUONG C: ket hop 2 luong ----------------
     a, b = out.get(("A", REP_A)), out.get(("B", REP_B))
@@ -251,7 +252,34 @@ def evaluate(channel, series, months):
         actual = series[target]
         if actual <= 0:
             continue
-        for key, pred in predict_all(series, months[:t], target).items():
+        preds = predict_all(series, months[:t], target)
+
+        # ---------------- LUONG D: hieu chinh DO LECH HE THONG ----------------
+        # Ly do (do tren du lieu that 12/08/2026): MOI mo hinh OTC deu doan CAO hon thuc te +5..+10%
+        # mot cach HE THONG - vi doanh thu OTC dang giam 13-14% ma mo hinh thi neo vao qua khu.
+        # Lech MOT CHIEU thi sua duoc, khac han nhieu ngau nhien: do do lech cua chinh mo hinh trong
+        # vai thang gan nhat roi chia lai.
+        # KHONG ro ri du lieu: do lech chi do tren cac thang TRUOC target, va tung du bao trong vong
+        # do cung chi dung du lieu truoc thang do.
+        # CO Y de DU LIEU TU QUYET DINH theo tung kenh: da thu tay, hieu chinh giup OTC (12,9->10,3%)
+        # nhung KHONG giup ETC (17,1->17,6%) - do lech ETC khong phai xu huong deu ma do dung 1 thang
+        # bat thuong (01/2026 lech -58%). Neu bang ket qua cho thay D thua B thi DUNG dung D cho kenh do.
+        for lookback in (3, 6):
+            hist_errs = []
+            for k in range(max(MIN_TRAIN_MONTHS, t - lookback), t):
+                a_k = series[months[k]]
+                if a_k <= 0:
+                    continue
+                p_k = predict_all(series, months[:k], months[k]).get(("B", REP_B5))
+                if p_k:
+                    hist_errs.append((p_k - a_k) / a_k)
+            base = preds.get(("B", REP_B5))
+            if base and hist_errs:
+                bias = sum(hist_errs) / len(hist_errs)
+                if bias > -0.9:
+                    preds[("D", f"D{lookback}. B5 + hieu_chinh_lech_{lookback}thang")] = base / (1 + bias)
+
+        for key, pred in preds.items():
             errs[key].append(abs(pred - actual) / actual * 100)
             detail[key][target] = (pred, abs(pred - actual) / actual * 100)
             signed[key][target] = (pred - actual) / actual * 100
@@ -264,9 +292,10 @@ def evaluate(channel, series, months):
         "A": "LUONG A - so voi XU HUONG CAC THANG TRONG NAM (neo vao thang gan day)",
         "B": "LUONG B - so voi CUNG KY NAM TRUOC (neo vao thang nam ngoai)",
         "C": "LUONG C - KET HOP hai luong",
+        "D": "LUONG D - luong B + HIEU CHINH DO LECH HE THONG (bat da tang/giam)",
     }
     best_of = {}
-    for stream in ("A", "B", "C"):
+    for stream in ("A", "B", "C", "D"):
         items = [(k, v) for k, v in errs.items() if k[0] == stream]
         if not items:
             continue
@@ -282,10 +311,19 @@ def evaluate(channel, series, months):
         best_of[stream] = (bk, sum(be) / len(be))
 
     print(f"\n  {'-' * 74}")
-    print("  SO TRUC DIEN GIUA 2 LUONG:")
-    for s in ("A", "B", "C"):
+    print("  SO TRUC DIEN GIUA CAC LUONG:")
+    for s in ("A", "B", "C", "D"):
         if s in best_of:
             print(f"    Luong {s}: tot nhat '{best_of[s][0][1]}'  ->  MAPE {best_of[s][1]:.1f}%")
+
+    if "B" in best_of and "D" in best_of:
+        mb, md = best_of["B"][1], best_of["D"][1]
+        if md < mb:
+            print(f"    => Hieu chinh do lech CO ICH cho kenh nay: {mb:.1f}% -> {md:.1f}% "
+                  f"(tot hon {(mb-md)/mb*100:.0f}%). Do lech la XU HUONG DEU, sua duoc.")
+        else:
+            print(f"    => Hieu chinh do lech KHONG giup kenh nay ({mb:.1f}% -> {md:.1f}%). "
+                  f"Do lech do THANG BAT THUONG chu khong phai xu huong deu -> dung dung luong D.")
 
     if "A" in best_of and "B" in best_of:
         ma, mb = best_of["A"][1], best_of["B"][1]
