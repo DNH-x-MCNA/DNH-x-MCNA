@@ -1,3 +1,5 @@
+import { proxyFetch } from "../../../../_proxy";
+
 export async function POST(
   request: Request,
   { params }: { params: Promise<{ username: string }> }
@@ -12,18 +14,12 @@ export async function POST(
   const username = resolvedParams.username;
   const authHeader = request.headers.get("Authorization");
 
-  const res = await fetch(`${backendUrl}/admin/users/${encodeURIComponent(username)}/toggle-active`, {
+  return proxyFetch(`${backendUrl}/admin/users/${encodeURIComponent(username)}/toggle-active`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       ...(authHeader ? { "Authorization": authHeader } : {}),
       ...(apiKey ? { "X-API-Key": apiKey } : {}),
     },
-  });
-
-  const data = await res.text();
-  return new Response(data, {
-    status: res.status,
-    headers: { "Content-Type": "application/json" },
   });
 }

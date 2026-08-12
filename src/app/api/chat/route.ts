@@ -1,3 +1,5 @@
+import { proxyFetch } from "../_proxy";
+
 // Proxy server-side sang backend FastAPI - giu BACKEND_API_URL/BACKEND_API_KEY tren server, KHONG
 // bao gio gui ve trinh duyet (khac voi bien NEXT_PUBLIC_* se bi nhung vao JS bundle phia client).
 export async function POST(request: Request) {
@@ -9,7 +11,7 @@ export async function POST(request: Request) {
 
   const body = await request.text();
   const authHeader = request.headers.get("authorization");
-  const res = await fetch(`${backendUrl}/chat`, {
+  return proxyFetch(`${backendUrl}/chat`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -17,11 +19,5 @@ export async function POST(request: Request) {
       ...(authHeader ? { Authorization: authHeader } : {}),
     },
     body,
-  });
-
-  const data = await res.text();
-  return new Response(data, {
-    status: res.status,
-    headers: { "Content-Type": "application/json" },
   });
 }

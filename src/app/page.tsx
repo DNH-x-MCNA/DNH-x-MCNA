@@ -12,14 +12,6 @@ import {
 } from "./icons";
 import { useModal } from "./useModal";
 
-type ChatResponse = {
-  answer: string;
-  sql_used: string[];
-  columns: string[] | null;
-  rows: unknown[][] | null;
-  row_count: number | null;
-};
-
 // Tỷ giá USD -> VND cho các số chi phí AI hiển thị ở frontend. Phải khớp với
 // backend/pricing.py::USD_TO_VND_RATE — backend trả sẵn *_vnd cho phần lớn số liệu, riêng phần
 // "chưa quy được cho ai" đang quy đổi tại đây nên vẫn cần hằng số này.
@@ -797,6 +789,12 @@ export default function Home() {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, loading]);
 
+  // 11/08/2026: chuyen sang /chat/stream (SSE) de giam cam giac "lag" - Sonnet 5 tu bat extended
+  // thinking mac dinh nen MOI cau hoi (ke ca don gian) deu phai cho model suy luan xong het truoc
+  // khi /chat (JSON 1 cuc) tra ve gi ca. Voi stream, chu xuat hien DAN ngay khi model bat dau tra
+  // loi that (sau khi da goi xong tool) - khong giam TONG thoi gian xu ly nhung nguoi dung khong
+  // con thay man hinh trang. Doc thu cong ReadableStream (khong dung EventSource - API do CHI ho
+  // tro GET, khong gui duoc body/POST can cho cau hoi + session_id + Authorization header).
   async function sendQuestion(question: string) {
     if (!question.trim() || loading) return;
     setMessages((prev) => [...prev, { role: "user", text: question }]);
@@ -806,40 +804,113 @@ export default function Home() {
     const controller = new AbortController();
     abortControllerRef.current = controller;
 
+    // Bot message RONG dat truoc - cac text_delta se noi dan vao truong "text" cua CHINH dong nay
+    // (xac dinh qua index, vi push xong la dong CUOI CUNG cua mang tai thoi diem nay).
+    setMessages((prev) => [...prev, { role: "bot", text: "" }]);
+
     try {
-      const res = await fetch(`${API_URL}/chat`, {
+      const res = await fetch(`${API_URL}/chat/stream`, {
         method: "POST",
         headers: authHeaders(authToken),
         body: JSON.stringify({ question, session_id: sessionId }),
         signal: controller.signal,
       });
-      if (!res.ok) {
+      if (!res.ok || !res.body) {
         const err = await res.json().catch(() => ({ detail: "Lỗi không xác định" }));
         throw new Error(err.detail || `HTTP ${res.status}`);
       }
-      const data: ChatResponse = await res.json();
-      setMessages((prev) => [
-        ...prev,
-        {
-          role: "bot",
-          text: data.answer,
-          sqlUsed: data.sql_used,
-          columns: data.columns,
-          rows: data.rows,
-        },
-      ]);
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let doneReceived = false;
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+
+        // SSE: moi event la 1 dong "data: {...}" ket thuc bang 2 dau xuong dong "\n\n". Buffer co
+        // the chua 0, 1 hoac nhieu event chua hoan chinh trong 1 lan doc (chunk mang cua TCP khong
+        // can theo ranh gioi event) - tach het cac event DA DAY DU, giu lai phan con do cho lan sau.
+        const parts = buffer.split("\n\n");
+        buffer = parts.pop() || "";
+        for (const part of parts) {
+          const line = part.trim();
+          if (!line.startsWith("data:")) continue;
+          const jsonStr = line.slice(5).trim();
+          if (!jsonStr) continue;
+          let evt: { type: string; text?: string; message?: string; answer?: string;
+                     sql_used?: string[]; columns?: string[] | null; rows?: unknown[][] | null };
+          try {
+            evt = JSON.parse(jsonStr);
+          } catch {
+            continue;
+          }
+
+          if (evt.type === "text_delta" && evt.text) {
+            setMessages((prev) => {
+              const next = [...prev];
+              const last = next[next.length - 1];
+              if (last && last.role === "bot") {
+                next[next.length - 1] = { ...last, text: last.text + evt.text };
+              }
+              return next;
+            });
+          } else if (evt.type === "done") {
+            doneReceived = true;
+            setMessages((prev) => {
+              const next = [...prev];
+              const last = next[next.length - 1];
+              if (last && last.role === "bot") {
+                next[next.length - 1] = {
+                  ...last,
+                  text: evt.answer ?? last.text,
+                  sqlUsed: evt.sql_used,
+                  columns: evt.columns,
+                  rows: evt.rows,
+                };
+              }
+              return next;
+            });
+          } else if (evt.type === "error") {
+            throw new Error(evt.message || "Lỗi không xác định");
+          }
+        }
+      }
+
+      if (!doneReceived) {
+        // Stream ket thuc (backend dong ket noi) nhung chua thay event "done" - phong ho truong
+        // hop hy huu (tunnel dut giua chung sau khi da nhan mot vai text_delta).
+        throw new Error("Kết nối bị ngắt trước khi nhận được câu trả lời đầy đủ.");
+      }
       refreshSessions();
     } catch (e) {
       if ((e as Error).name === "AbortError") {
-        setMessages((prev) => [
-          ...prev,
-          { role: "bot", text: "⏹️ Đã dừng suy luận theo yêu cầu của bạn.", error: true },
-        ]);
+        setMessages((prev) => {
+          const next = [...prev];
+          const last = next[next.length - 1];
+          if (last && last.role === "bot" && !last.text) {
+            // Bot message rong (chua nhan text_delta nao) -> thay hang bang thong bao huy, giong
+            // hanh vi cu (them 1 dong moi) thay vi de lai 1 bong bong rong.
+            next[next.length - 1] = { role: "bot", text: "⏹️ Đã dừng suy luận theo yêu cầu của bạn.", error: true };
+          } else {
+            next.push({ role: "bot", text: "⏹️ Đã dừng suy luận theo yêu cầu của bạn.", error: true });
+          }
+          return next;
+        });
       } else {
-        setMessages((prev) => [
-          ...prev,
-          { role: "bot", text: `Xin lỗi, có lỗi xảy ra: ${(e as Error).message}`, error: true },
-        ]);
+        setMessages((prev) => {
+          const next = [...prev];
+          const last = next[next.length - 1];
+          const errText = `Xin lỗi, có lỗi xảy ra: ${(e as Error).message}`;
+          if (last && last.role === "bot" && !last.text) {
+            next[next.length - 1] = { role: "bot", text: errText, error: true };
+          } else {
+            next.push({ role: "bot", text: errText, error: true });
+          }
+          return next;
+        });
       }
     } finally {
       setLoading(false);
