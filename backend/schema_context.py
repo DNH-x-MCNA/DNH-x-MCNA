@@ -109,6 +109,15 @@ dim_nhanvien: employee_code, name, is_duplicate (=1 la ma bi trung/khong hop le 
   phan biet, KHONG tu chon 1 dong. KHONG loc is_duplicate khi tra cuu/hien thi ten (chi loc khi TINH
   TOAN KPI/tong hop) - da co vi du that (TM24060301) dong is_duplicate=0 la vi tri TRONG con dong
   is_duplicate=1 moi la ten nguoi that, nen is_duplicate=0 KHONG dong nghia la "dong dung".
+  !!! NGOAI LE BAT BUOC (11/08/2026): 2 ma MBKV12 (Nguyen Thi Thanh Thuy, QLV vung MB, chi tieu
+  ~5,28 ty) va TM25030101 (Lac Ngoc Sam) la NGUOI THAT dang lam viec binh thuong, bi Bravo gan NHAM
+  co is_duplicate=1 (da xac minh: khong co ngay nghi viec, van phat sinh doanh so deu moi thang). Moi
+  cau SQL loc COALESCE(is_duplicate,0)<>1 de TINH TOAN/XEP HANG deu PHAI them dieu kien giu lai 2 ma
+  nay, vi du: "AND (COALESCE(is_duplicate,0)<>1 OR employee_code IN ('MBKV12','TM25030101'))". Neu
+  quen dieu kien nay, ket qua se THIEU AM THAM 2 nguoi that ma khong co dong nao bao la da bo sot -
+  da xay ra that (11/08/2026: cau hoi ve 9 QLV MB thay vi 10, thieu dung MBKV12) khi tu viet SQL thay
+  vi dung tool bao cao chuan (get_revenue_tree/get_kpi_ranking/get_employee_kpi da tu dong xu ly dung
+  ngoai le nay san, UU TIEN dung cac tool do cho cau hoi KPI/xep hang nhan vien thay vi tu viet SQL).
 dim_chucvu: position_code, description (ten tieng Viet day du, vd TDV -> "Trinh duoc vien", QLV ->
   "Quan ly vung" - JOIN qua position_code de hien thi ten vai tro dep, DISTINCT san khi dong bo).
 fact_tonghopkhachhang: 1 dong = 1 (nhan vien, khach hang, ngay snapshot). Cot: employee_code,
@@ -194,7 +203,10 @@ inventory (snapshot ton kho MOI NHAT, khong theo ngay): "item_code", "item_name"
 2. Neu can "ngay gan nhat"/"hom nay" ma khong ro ngay cu the, dung MAX(doc_date) tu vhoadon_otc
    de tim ngay moi nhat CO DU LIEU trong kho local (co the tre vai chuc phut so voi Bravo that).
 3. Khi tinh Top san pham/khach hang, LUON loai hang khuyen mai (loc unit_price > 0 cho so luong).
-4. Khi JOIN dim_nhanvien, LUON loc COALESCE(is_duplicate,0)<>1 O MENH DE WHERE (khong phai ON).
+4. Khi JOIN dim_nhanvien de TINH TOAN/XEP HANG (KPI, doanh so theo nguoi...), LUON loc dieu kien
+   O MENH DE WHERE (khong phai ON) theo dung dang: "(COALESCE(is_duplicate,0)<>1 OR employee_code
+   IN ('MBKV12','TM25030101'))" - KHONG duoc viet gon thanh "COALESCE(is_duplicate,0)<>1" don thuan,
+   vi se bo sot 2 nguoi that (xem chi tiet ngoai le o phan dim_nhanvien ben tren).
 4b. BAT BUOC: neu cau SELECT co employee_code (vd tren vhoadon_otc/etc, dms_khachhang.emp_code...),
    LUON LEFT JOIN dim_nhanvien de lay them ten (nv.name) va vai tro (LEFT JOIN dim_chucvu de lay
    position_label) - TUYET DOI KHONG tra ve/hien thi ma nhan vien tran (vd "tungtx") ma khong kem ten,

@@ -60,3 +60,15 @@ __pycache__/
 # Ly do: script nay tao/dat lai mat khau tai khoan C-Level. Giu ngoai git de khong ai
 # vo tinh chay trong quy trinh deploy va doi mat khau tai khoan dang dung de demo.
 backend/create_admin.py
+
+# 12/08/2026 - file rac/backup tam tich luy qua nhieu lan deploy tay (khong phai code that)
+*.bak_*
+_old_debug_scripts/
+*.corrupted_*
+
+# Binary cong cu cai dat local (cloudflared.exe, node.exe...) - qua lon cho git, moi may tu cai
+tools/
+
+# State runtime (DB/JSON tu sinh khi chay, khong phai code) - tuong tu backend/*.db o tren
+data/
+backend/health_watchdog_state.json

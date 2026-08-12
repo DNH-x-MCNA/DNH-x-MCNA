@@ -4,6 +4,7 @@ import json
 import datetime as dt
 from collections import defaultdict
 from fastapi import FastAPI, HTTPException, Header, Depends, Query, Request
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
 
@@ -46,7 +47,7 @@ from conversation_memory import (
     delete_session as delete_conversation_session,
     get_session_history,
 )
-from nl2sql import ask
+from nl2sql import ask, ask_stream
 from query_engine import _write_log
 from pricing import USD_TO_VND_RATE
 
@@ -542,6 +543,58 @@ def chat(req: ChatRequest, user: dict = Depends(require_approved_user)):
         rows=lr.get("rows") if is_raw_sql else None,
         row_count=lr.get("row_count") if is_raw_sql else None,
     )
+
+
+# 11/08/2026: endpoint STREAMING moi, SONG SONG voi /chat cu (khong sua/xoa /chat - frontend hien
+# tai dang goi /chat, sua endpoint do se anh huong ngay 25 user dang dung that). Dung Server-Sent
+# Events (SSE, "data: {...}\n\n") - format don gian, browser/fetch doc duoc truc tiep khong can thu
+# vien them o frontend. Ly do lam streaming: Sonnet 5 tu bat "extended thinking" mac dinh (xem
+# nl2sql.py::ask_stream), khien MOI cau hoi (ke ca cau don gian) deu phai cho model suy luan xong het
+# roi moi thay chu - streaming KHONG giam tong thoi gian xu ly nhung nguoi dung THAY chu xuat hien
+# dan ngay khi model bat dau tra loi that (vong CUOI, sau khi da goi xong cac tool), giam cam giac
+# "lag" ro ret. Kiem tra QUYEN/rate-limit GIONG HET /chat (dung chung _check_rate_limit,
+# _require_session_write_access) - CHi khac cach tra ket qua ve client.
+@app.post("/chat/stream", dependencies=[Depends(require_api_key)])
+def chat_stream(req: ChatRequest, user: dict = Depends(require_approved_user)):
+    if user["role"] == "admin_ops":
+        raise HTTPException(403, "Tài khoản Admin Vận Hành (admin.dnh) chỉ dùng để quản trị hệ thống, không có quyền truy vấn dữ liệu kinh doanh qua Chatbot.")
+    if not req.question or not req.question.strip():
+        raise HTTPException(400, "Cau hoi khong duoc de trong")
+    _check_rate_limit(user["username"])
+    _require_session_write_access(req.session_id, user)
+
+    scope_area_code = user["scope_value"] if user["role"] in ("regional_director", "qlv") else None
+    scope_employee_code = user["employee_code"] if user["role"] == "qlv" else None
+    scope_channel = user.get("scope_channel")
+
+    def event_generator():
+        try:
+            for chunk in ask_stream(req.question, session_id=req.session_id, username=user["username"],
+                                     scope_area_code=scope_area_code, scope_employee_code=scope_employee_code,
+                                     scope_channel=scope_channel, scope_role=user["role"]):
+                if chunk["type"] == "done":
+                    register_session(req.session_id, user["username"], req.question)
+                    lr = chunk.get("last_result") or {}
+                    is_raw_sql = lr.get("ok") and "columns" in lr
+                    payload = {
+                        "type": "done",
+                        "answer": chunk["answer"],
+                        "sql_used": chunk["sql_used"],
+                        "columns": lr.get("columns") if is_raw_sql else None,
+                        "rows": lr.get("rows") if is_raw_sql else None,
+                        "row_count": lr.get("row_count") if is_raw_sql else None,
+                    }
+                else:
+                    payload = chunk
+                yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+        except Exception as e:
+            # Loi giua chung stream: KHONG the raise HTTPException nua (header da gui roi, client
+            # dang doc stream) - gui 1 event loi qua SSE de frontend tu xu ly hien thi, giong tinh
+            # than try/except cua endpoint /chat (tra ve "Loi he thong: ...").
+            err_payload = {"type": "error", "message": f"Loi he thong: {str(e)[:300]}"}
+            yield f"data: {json.dumps(err_payload, ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 
 @app.get("/audit-logs", dependencies=[Depends(require_api_key)])
