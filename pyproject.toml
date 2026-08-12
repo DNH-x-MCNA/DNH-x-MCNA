@@ -25,6 +25,14 @@ entrypoint = "backend.main:app"
 # API - may dev khong toi duoc Bravo nen treo o timeout mang, cong don qua 29 file.
 # Gioi han vao dung thu muc tests/ (29 test, thu thap 3,3 giay). Cac file test_*.py trong
 # scratch/ va bao-cao-canh-bao/ la script chay tay, khong phai test tu dong.
+#
+# Nguyen nhan thu HAI (doc lap voi tren): test_chay_dry_run_tat_ca_audiences goi send_daily_digest()
+# - du la dry_run, no van DUNG bao cao that nen phai truy van du lieu; may khong toi duoc DB thi TREO
+# o timeout mang chu khong fail. 28 test con lai xong trong ~3 giay, rieng test nay treo vo han.
+# -> danh dau `integration` va loai khoi lan chay mac dinh. Chay tren may CO du lieu (may 24):
+#        pytest -m integration
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 norecursedirs = ["scratch", "bao-cao-canh-bao", "node_modules", ".next", ".git", "frontend", "scripts"]
+markers = ["integration: can ket noi DB/mang that - loai khoi lan chay mac dinh"]
+addopts = "-m 'not integration'"
