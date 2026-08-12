@@ -117,6 +117,30 @@ def sync_freshness_note(stale_minutes: int = 60) -> str:
             "dá»¯ liá»‡u cÃ³ thá»ƒ CÅ¨ HÆ N BÃŒNH THÆ¯á»œNG, khÃ´ng chá»‰ nÃ³i ngÃ y dá»¯ liá»‡u nhÆ° bÃ¬nh thÆ°á»ng.")
 
 
+def data_freshness_note() -> str:
+    """12/08/2026: cau NGAN GON de AI dan vao CUOI moi cau tra loi co so lieu (theo yeu cau C-Level
+    can biet "du lieu ghi nhan/cap nhat luc nao" khi hoi doanh thu/KPI/cong no...) - khac
+    sync_freshness_note() (chi len tieng khi sync TREO, dung lam canh bao loi) va latest_data_date()
+    (chi tra NGAY chung tu moi nhat, khong co gio - dung lam moc suy luan "hom nay" noi bo cho AI,
+    khong danh de hien thi truc tiep cho nguoi dung).
+
+    Uu tien hien thi last_synced_at THAT (co gio:phut, tu sync_meta - moc HE THONG THAT SU dong bo
+    xong lan gan nhat) neu doc duoc; fallback ve latest_data_date() (chi ngay) neu sync_meta chua co
+    (vd DB moi khoi tao, bang sync_meta chua duoc tao)."""
+    try:
+        last_synced_at, _, _ = get_sync_meta("vhoadon_otc")
+    except Exception:
+        last_synced_at = None
+
+    if last_synced_at:
+        try:
+            last_dt = dt.datetime.fromisoformat(last_synced_at)
+            return f"Du lieu cap nhat den {last_dt.strftime('%H:%M %d/%m/%Y')}."
+        except ValueError:
+            pass
+
+    return f"Du lieu cap nhat den ngay {latest_data_date()}."
+
 # Hoa don CU HON 12 THANG duoc nen thanh KH x thang trong monthly_customer_summary (khong con
 # item_code/quantity/unit_price/created_at/stt tung dong) - xem sync_warehouse.py::DETAIL_WINDOW_MONTHS/
 # _detail_cutoff_date(). Cac ham chi can TONG doanh thu/so hoa don (revenue_by_channel, top_customers,
@@ -124,6 +148,7 @@ def sync_freshness_note(stale_minutes: int = 60) -> str:
 # duoc hoi vuot qua 12 thang gan nhat, de van ra dung so cho ca giai doan xa (vd "so voi cung ky nam
 # ngoai"). Cac ham can CHI TIET tung dong (top_products: item_code; check_order_timing: created_at)
 # KHONG the bu duoc bang nguon nen - xem canh bao rieng trong 2 ham do.
+
 def _detail_cutoff() -> str:
     today = dt.date.today()
     y, m = today.year, today.month - 12

@@ -20,7 +20,7 @@ from collections import defaultdict
 import anthropic
 from schema_context import SCHEMA_CONTEXT
 from query_engine import run_query
-from report_templates import call_template, latest_data_date, sync_freshness_note
+from report_templates import call_template, latest_data_date, sync_freshness_note, data_freshness_note
 from conversation_memory import load_history, append_message, get_query_state, set_query_state
 from realtime_context import REALTIME_TOOLS, REALTIME_TOOL_NAMES, get_current_datetime, resolve_relative_date
 from glossary_memory import save_glossary_term, retrieve_relevant_glossary
@@ -721,6 +721,18 @@ TIET KIEM TOKEN - QUAN TRONG:
   LOI/khong co du lieu can thu lai, hoac (b) cau hoi co NHIEU khia canh rieng biet can tool KHAC LOAI.
 - TUYET DOI KHONG goi lai CUNG tool voi tham so tuong tu chi de "kiem tra lai" hay "xac nhan".
 - Du lieu tra ve tu tool co the bi cat bot (neu qua dai) nhung DA DU de tra loi - khong can query lai.
+
+BAT BUOC GHI THOI DIEM DU LIEU (12/08/2026, yeu cau tu C-Level - can biet so lieu "cu" hay "moi"
+truoc khi ra quyet dinh, dac biet quan trong voi doanh thu/KPI/cong no thay doi hang ngay):
+- MOI cau tra loi co CHUA SO LIEU LAY TU TOOL (doanh thu, KPI, cong no, ton kho, thuong/luong...)
+  PHAI ket thuc bang 1 dong RIENG, in nghieng, dang: "_Du lieu cap nhat den [gio:phut ngay/thang/nam
+  hoac ngay/thang/nam]._" - LAY NGUYEN VAN cau nay tu phan "Thoi diem du lieu" trong ngu canh dong
+  ben duoi (KHONG tu tinh toan/doan gio, KHONG tu dien lai cau chu).
+- KHONG can ghi dong nay cho cau tra loi KHONG co so lieu (vd giai thich khai niem, tra cuu ma nhan
+  vien, huong dan cach hoi...) - chi ap dung khi cau tra loi THAT SU dua tren du lieu vua truy van.
+- Neu cau tra loi da co canh bao "sync co the da TREO/LOI" (xem phan CANH BAO DONG BO ben duoi neu
+  co), UU TIEN hien thi canh bao do TRUOC, dong "Du lieu cap nhat den..." van ghi THEM sau do (khong
+  thay the nhau) - nguoi dung can biet CA 2: du lieu cu bao nhieu VA co dang loi hay khong.
 """
 
 
@@ -819,6 +831,14 @@ def _dynamic_context_note(question: str = "", session_id: str = "", scope_area_c
     latest = latest_data_date()
     parts = [f'Ngay co du lieu moi nhat trong kho hien tai: {latest} (dung lam moc cho "hom nay"/'
              f'"gan day" neu nguoi dung khong noi ro ngay; kho local co the tre toi da ~15-30 phut so voi Bravo that).']
+
+    # 12/08/2026: Thoi diem du lieu - CAU IN SAN de AI copy nguyen van vao cuoi cau tra loi co so
+    # lieu (xem huong dan "BAT BUOC GHI THOI DIEM DU LIEU" trong _static_system_prompt()). Tach rieng
+    # khoi dong "Ngay co du lieu moi nhat" o tren (dong do la MOC SUY LUAN NOI BO cho AI vd hieu "hom
+    # nay", KHONG dinh de hien thi nguyen van cho nguoi dung - hai muc dich khac nhau du dung chung
+    # nguon latest_data_date()/data_freshness_note()).
+    parts.append(f'Thoi diem du lieu (COPY NGUYEN VAN cau nay vao cuoi cau tra loi neu co so lieu): '
+                 f'"_{data_freshness_note()}_"')
 
     # 10/08/2026: sync_freshness_note() da co san day du logic (report_templates.py) tu truoc nhung
     # CHUA TUNG duoc goi o dau ca - phat hien khi doi chieu mot ban "Technical Spec" voi code that.
