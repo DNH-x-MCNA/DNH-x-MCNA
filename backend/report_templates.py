@@ -947,6 +947,11 @@ def compare_periods(date_from_a: str, date_to_a: str, date_from_b: str, date_to_
 _FORECAST_YEARS = 3            # so nam lay cung thang de trung binh
 _FORECAST_MIN_YEARS = 2        # duoi muc nay thi TU CHOI, khong doan tu 1 nam duy nhat
 _FORECAST_BACKTEST_MONTHS = 24  # so thang gan nhat dung de do sai so that cua mo hinh
+# Tren nguong sai so nay thi con so du bao vo dung (khoang uoc tinh rong hon ca gia tri du bao)
+# -> danh dau "khong_dang_tin" de AI noi thang, thay vi trinh bay 1 con so nhu that.
+# Muc 50%: sai so THAT do duoc tren du lieu toan cong ty la 14% (OTC) / 17% (ETC), nen 50% da la
+# gap 3 lan muc binh thuong - chi xay ra o pham vi nho, bien dong manh (vd 1 doi QLV it khach).
+_FORECAST_MAX_ERROR_PCT = 50.0
 
 
 def _ym_add(ym: str, k: int) -> str:
@@ -1055,7 +1060,17 @@ def revenue_forecast_month(year_month: str = None, scope_area_code: str = None,
                 "so_thang_lich_su": len(series), "do_chinh_xac": acc}
         if acc.get("do_duoc"):
             e = acc["sai_so_trung_binh_pct"] / 100
-            item["khoang_uoc_tinh"] = {"thap": pred * (1 - e), "cao": pred * (1 + e)}
+            # Chan duoi o 0: doanh thu khong the am. Khi sai so do duoc > 100% thi pred*(1-e) am,
+            # in ra "khoang -0,8 den 18 ty" vua vo nghia vua lam nguoi doc tuong he thong hong.
+            item["khoang_uoc_tinh"] = {"thap": max(0.0, pred * (1 - e)), "cao": pred * (1 + e)}
+            if acc["sai_so_trung_binh_pct"] > _FORECAST_MAX_ERROR_PCT:
+                # Mo hinh KHONG dung duoc cho pham vi nay - noi thang thay vi dua ra con so ma
+                # khoang uoc tinh rong toi muc vo dung.
+                item["khong_dang_tin"] = (
+                    f"Sai so do duoc tren chinh pham vi nay la {acc['sai_so_trung_binh_pct']:.0f}% "
+                    f"(nguong chap nhan {_FORECAST_MAX_ERROR_PCT:.0f}%) - doanh thu o pham vi nay bien "
+                    f"dong qua manh de du bao theo mua vu. PHAI noi ro con so nay KHONG dang tin cay, "
+                    f"hoac tu choi dua ra con so.")
         out[ch] = item
         tong_du_bao += pred
 
@@ -1072,11 +1087,15 @@ def revenue_forecast_month(year_month: str = None, scope_area_code: str = None,
     # Thang dang chay: kem luy ke THUC TE den nay de nguoi doc phan biet duoc so THAT va so UOC.
     if year_month == dt.date.today().strftime("%Y-%m"):
         d_from = f"{year_month}-01"
-        d_to = latest_data_date()
-        if d_to >= d_from:
-            act = revenue_by_channel(d_from, d_to, scope_area_code, scope_channel, scope_employee_code)
+        # latest_data_date() tra MAX(doc_date) - la DAU THOI GIAN (vd '2026-08-12 09:00:00'), khong
+        # phai ngay tran. Dung thang lam d_to thi "BETWEEN ? AND ?" LOAI BO cac hoa don phat sinh
+        # muon hon trong dung ngay do (cung loi tung lam lech 6 ty, xem xu ly o call_template).
+        ngay_cuoi = str(latest_data_date())[:10]
+        if ngay_cuoi >= d_from:
+            act = revenue_by_channel(d_from, ngay_cuoi + " 23:59:59",
+                                     scope_area_code, scope_channel, scope_employee_code)
             result["luy_ke_thuc_te_den_nay"] = {
-                "den_ngay": d_to, "otc": act["otc"]["revenue"],
+                "den_ngay": ngay_cuoi, "otc": act["otc"]["revenue"],
                 "etc": act["etc"]["revenue"], "tong": act["total"]["revenue"]}
 
     canh_bao = [
