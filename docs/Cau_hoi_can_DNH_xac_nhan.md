@@ -64,6 +64,16 @@ Nhìn cấu trúc, bà giống **quản lý cấp vùng (ASM) tự ôm khách l�
 
 **❓ Cần xác nhận**: (1) Bà Thủy là quản lý cấp vùng hay tổ trưởng QLV? (2) Chỉ tiêu 5,28 tỷ là của riêng bà hay là chỉ tiêu gộp cả vùng? (3) Còn bao nhiêu trường hợp tương tự (quản lý ôm khách trực tiếp, không có tổ)?
 
+**Bổ sung 11/08/2026 — bằng chứng củng cố nghi vấn (1)/(2)**: kiểm tra trực tiếp `dim_nhanvien` phát
+hiện bà Thủy có **2 bản ghi riêng biệt trong cùng dữ liệu Bravo**: một ở mã `MB` với `position_code='TP'`
+(Trưởng phòng — đứng đầu cả vùng, quản lý toàn bộ 10 QLV miền Bắc), và một ở mã `MBKV12` với
+`position_code='QLV'` (0 TDV, chỉ tiêu 5,28 tỷ như đã nêu). Tức bà vừa là **sếp vùng vừa là "cấp
+dưới" của chính mình** trong cây tổ chức mà hệ thống dựng từ Bravo — càng củng cố giả thuyết bản ghi
+`MBKV12` là **trùng lặp của chính vị trí TP**, không phải một QLV tổ riêng biệt. Đã thêm cảnh báo tự
+động trong chatbot (khi hỏi về QLV này, hệ thống tự nói rõ nghi vấn trùng bản ghi thay vì trình bày
+như QLV bình thường) — nhưng đây chỉ là xử lý tạm ở tầng hiển thị, không thay được việc DNH xác nhận
+đúng bản chất của bản ghi.
+
 ## A5. Kênh ETC có chỉ tiêu theo từng nhân viên không?
 
 **Phát hiện 21/07/2026**: Cấu trúc KPI của 2 kênh **khác hẳn nhau**:
