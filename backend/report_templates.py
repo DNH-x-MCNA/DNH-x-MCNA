@@ -426,7 +426,13 @@ def revenue_by_region(date_from: str, date_to: str, scope_area_code: str = None,
         # Dung LAI revenue_by_channel() (da co san UNION nen du lieu >12 thang) thay vi tu SUM rieng,
         # tranh 2 noi tinh "tong khong loc vung" khac cong thuc nhau (nhat la sau khi them nen du lieu).
         # Voi channel='OTC'/'ETC', so sanh dung voi phan kenh tuong ung (khong phai total gop ca 2).
-        rbc = revenue_by_channel(date_from, date_to)
+        #
+        # 12/08/2026 SUA LOI: truoc day goi revenue_by_channel(date_from, date_to) KHONG kem scope.
+        # Voi tai khoan QLV (co scope_employee_code), `total` la doanh thu CUA DOI con `raw_total` la
+        # doanh thu TOAN CONG TY -> luon lech -> LUON bom canh bao "SO LIEU THEO VUNG CO THE THIEU"
+        # va dan AI "KHONG duoc trinh bay breakdown nay nhu so lieu chac chan", du so hoan toan dung.
+        # Phep doi chieu chi co nghia khi 2 ve CUNG mot pham vi, nen phai truyen y het bo scope.
+        rbc = revenue_by_channel(date_from, date_to, scope_area_code, scope_channel, scope_employee_code)
         raw_total = (rbc["otc"]["revenue"] if channel == "OTC"
                      else rbc["etc"]["revenue"] if channel == "ETC"
                      else rbc["total"]["revenue"])
@@ -893,6 +899,171 @@ def compare_periods(date_from_a: str, date_to_a: str, date_from_b: str, date_to_
     delta = a["total"]["revenue"] - b["total"]["revenue"]
     pct_change = (delta / b["total"]["revenue"] * 100) if b["total"]["revenue"] else None
     return {"period_a": a, "period_b": b, "delta": delta, "pct_change": pct_change}
+
+
+# ===================== DU BAO DOANH THU THEO THANG =====================
+# 12/08/2026. Thay cho get_kpi_forecast_model1 da GO ngay 10/08 (ham do crash 100% vi tham chieu
+# cot t.manager_code khong ton tai, va bia so o 4 cho). Mo hinh o day KHAC HAN: da duoc kiem chung
+# bang walk-forward tren 49 thang du lieu that (2022-07 -> 2026-07), doi dau voi 20 mo hinh khac
+# (xu huong trong nam, cung ky nam truoc, nhan he so da tang-giam 3/6/12 thang, hieu chinh do lech,
+# trung vi, trong so theo nam, giam chan, cac dang hybrid). Ket qua: mo hinh DON GIAN NHAT thang.
+#
+#   MO HINH: du bao thang X = TRUNG BINH doanh thu dung thang X cua toi da 3 nam gan nhat.
+#
+# KHONG dung he so tang truong: da do, moi moc (3/6/12 thang) deu lam SAI SO TANG, va cang cat bot
+# he so thi cang chinh xac - tuc tin hieu "da tang/giam" gan nhu toan nhieu.
+# KHONG dung du lieu trong thang dang chay: mo hinh khong can, nen tra loi duoc ngay tu ngay 1 va
+# khong dinh van de "doanh thu don ve cuoi thang".
+#
+# Sai so THAT do duoc tren du lieu toan cong ty: OTC ~14%, ETC ~17% (MAPE walk-forward 25 thang).
+# KHONG hardcode 2 so nay - moi lan goi deu TU DO LAI tren dung pham vi dang hoi (toan cong ty hay
+# 1 doi QLV), vi sai so cua 1 doi nho chac chan khac sai so toan cong ty.
+_FORECAST_YEARS = 3            # so nam lay cung thang de trung binh
+_FORECAST_MIN_YEARS = 2        # duoi muc nay thi TU CHOI, khong doan tu 1 nam duy nhat
+_FORECAST_BACKTEST_MONTHS = 24  # so thang gan nhat dung de do sai so that cua mo hinh
+
+
+def _ym_add(ym: str, k: int) -> str:
+    y, m = int(ym[:4]), int(ym[5:7])
+    t = y * 12 + (m - 1) + k
+    return f"{t // 12:04d}-{t % 12 + 1:02d}"
+
+
+def _monthly_series(channel: str, scope_area_code=None, scope_employee_code=None) -> dict:
+    """{year_month: doanh_thu} cua 1 kenh, gop CA 2 nguon giong revenue_by_channel:
+    vhoadon_otc/etc (chi tiet, chi con 12 thang gan nhat) + monthly_customer_summary (phan da nen).
+    Thang nao co ca 2 nguon thi lay ban CHI TIET (day du hon)."""
+    table = "vhoadon_otc" if channel == "OTC" else "vhoadon_etc"
+    join = (_otc_area_join("v", scope_area_code) if channel == "OTC"
+            else _etc_area_join("v", scope_area_code))
+    sql_scope, params = _scope_clause(scope_area_code)
+    emp_sql, emp_params = _employee_scope_clause(scope_employee_code, "v")
+    sql_scope += emp_sql
+    params += emp_params
+    det = {r["ym"]: _f(r["rev"]) for r in _q(
+        f"SELECT substr(v.doc_date,1,7) ym, SUM(v.amount9) rev FROM {table} v {join} "
+        f"WHERE v.doc_date IS NOT NULL{sql_scope} GROUP BY 1", params)}
+
+    msc, msc_params = _monthly_summary_scope_clause(scope_area_code, channel)
+    msc_emp_sql, msc_emp_params = _employee_scope_clause(scope_employee_code, "m")
+    msc += msc_emp_sql
+    msc_params += msc_emp_params
+    try:
+        comp = {r["ym"]: _f(r["rev"]) for r in _q(
+            f"SELECT m.year_month ym, SUM(m.revenue) rev FROM monthly_customer_summary m "
+            f"WHERE m.channel=?{msc} GROUP BY 1", (channel,) + msc_params)}
+    except sqlite3.OperationalError:
+        comp = {}
+
+    s = dict(comp)
+    s.update(det)  # ban chi tiet ghi de ban nen
+    # Bo thang dang chay (chua tron) va thang dau chuoi (co the la thang cut, chi co vai ngay cuoi).
+    cur = dt.date.today().strftime("%Y-%m")
+    months = sorted(k for k in s if s[k] > 0 and k != cur)
+    if len(months) > 1:
+        months = months[1:]
+    return {m: s[m] for m in months}
+
+
+def _forecast_one(series: dict, target: str):
+    """Du bao 1 thang tu chuoi thang. Tra ve (du_bao, cac_nam_can_cu) hoac (None, []) neu thieu."""
+    base = []
+    for i in range(1, _FORECAST_YEARS + 1):
+        m = _ym_add(target, -12 * i)
+        if series.get(m, 0) > 0:
+            base.append({"thang": m, "doanh_thu": series[m]})
+    if len(base) < _FORECAST_MIN_YEARS:
+        return None, base
+    return sum(b["doanh_thu"] for b in base) / len(base), base
+
+
+def _forecast_accuracy(series: dict) -> dict:
+    """Do sai so THAT cua chinh mo hinh nay, tren chinh pham vi dang hoi, bang walk-forward:
+    voi moi thang da qua, du bao no CHI bang cac thang truoc no roi so voi so thuc te."""
+    months = sorted(series)
+    errs = []
+    for m in months[-_FORECAST_BACKTEST_MONTHS:]:
+        past = {k: v for k, v in series.items() if k < m}
+        pred, _ = _forecast_one(past, m)
+        if pred and series[m] > 0:
+            errs.append(abs(pred - series[m]) / series[m] * 100)
+    if len(errs) < 6:
+        return {"do_duoc": False, "so_thang_kiem": len(errs)}
+    return {"do_duoc": True, "so_thang_kiem": len(errs),
+            "sai_so_trung_binh_pct": round(sum(errs) / len(errs), 1)}
+
+
+def revenue_forecast_month(year_month: str = None, scope_area_code: str = None,
+                            scope_channel: str = None, scope_employee_code: str = None) -> dict:
+    """UOC TINH doanh thu CA THANG (khong phai so thuc te) cho 1 thang, theo kenh OTC/ETC va tong.
+
+    Mo hinh: trung binh doanh thu DUNG THANG DO cua toi da 3 nam gan nhat. Da doi dau voi 20 mo hinh
+    phuc tap hon tren 49 thang du lieu that va thang tat ca (xem khoi ghi chu phia tren ham nay).
+    KHONG dung du lieu trong thang dang chay, nen tra loi duoc ngay ca khi thang moi bat dau.
+
+    Moi lan goi deu TU DO LAI sai so tren dung pham vi dang hoi (walk-forward) - khong dung so cung.
+    Neu chua du 2 nam lich su cho thang do thi TU CHOI du bao, khong doan tu 1 nam duy nhat."""
+    if not year_month:
+        year_month = dt.date.today().strftime("%Y-%m")
+    year_month = str(year_month)[:7]
+    if len(year_month) != 7 or year_month[4] != "-":
+        return {"error": f"Thang phai o dang YYYY-MM (nhan duoc: {year_month})."}
+
+    channels = ["OTC", "ETC"]
+    if scope_channel in ("OTC", "ETC"):
+        channels = [scope_channel]
+
+    out, tong_du_bao, thieu = {}, 0.0, []
+    for ch in channels:
+        series = _monthly_series(ch, scope_area_code, scope_employee_code)
+        pred, base = _forecast_one(series, year_month)
+        if pred is None:
+            thieu.append(ch)
+            out[ch] = {"du_bao": None, "can_cu": base, "so_thang_lich_su": len(series),
+                       "ly_do_khong_du_bao": (
+                           f"Chi co {len(base)} nam co du lieu thang {year_month[5:7]} trong pham vi "
+                           f"nay (can it nhat {_FORECAST_MIN_YEARS}). KHONG du bao tu 1 nam duy nhat.")}
+            continue
+        acc = _forecast_accuracy(series)
+        item = {"du_bao": pred, "can_cu": base, "so_nam_can_cu": len(base),
+                "so_thang_lich_su": len(series), "do_chinh_xac": acc}
+        if acc.get("do_duoc"):
+            e = acc["sai_so_trung_binh_pct"] / 100
+            item["khoang_uoc_tinh"] = {"thap": pred * (1 - e), "cao": pred * (1 + e)}
+        out[ch] = item
+        tong_du_bao += pred
+
+    result = {
+        "thang_du_bao": year_month,
+        "cac_kenh": out,
+        "mo_hinh": "Trung binh doanh thu cung thang cua toi da 3 nam gan nhat (khong nhan he so tang truong).",
+        "day_la_uoc_tinh": True,
+        "data_as_of": latest_data_date(),
+    }
+    if len(channels) > 1 and not thieu:
+        result["tong"] = {"du_bao": tong_du_bao}
+
+    # Thang dang chay: kem luy ke THUC TE den nay de nguoi doc phan biet duoc so THAT va so UOC.
+    if year_month == dt.date.today().strftime("%Y-%m"):
+        d_from = f"{year_month}-01"
+        d_to = latest_data_date()
+        if d_to >= d_from:
+            act = revenue_by_channel(d_from, d_to, scope_area_code, scope_channel, scope_employee_code)
+            result["luy_ke_thuc_te_den_nay"] = {
+                "den_ngay": d_to, "otc": act["otc"]["revenue"],
+                "etc": act["etc"]["revenue"], "tong": act["total"]["revenue"]}
+
+    canh_bao = [
+        "DAY LA SO UOC TINH, KHONG phai doanh thu thuc te. PHAI noi ro dieu nay voi nguoi dung.",
+        "Phai neu kem khoang uoc tinh va sai so trung binh, TUYET DOI khong trinh bay 1 con so don le "
+        "nhu the la con so chac chan.",
+        "Mo hinh chi dua tren mua vu lich su - KHONG biet cac su kien moi (mat/them khach lon, thay "
+        "doi chinh sach, dut hang, thau ETC). Neu nguoi dung biet co su kien nhu vay thi so nay sai.",
+    ]
+    if thieu:
+        canh_bao.append(f"Khong du bao duoc cho kenh: {', '.join(thieu)} (thieu lich su cung thang).")
+    result["canh_bao"] = canh_bao
+    return result
 
 
 def _customer_receivable(customer_code: str, channel: str) -> dict:
@@ -2563,6 +2734,7 @@ TEMPLATES = {
     "get_employee_kpi": employee_kpi,
     "get_employee_daily_kpi": employee_daily_kpi,
     "compare_periods": compare_periods,
+    "get_revenue_forecast": revenue_forecast_month,
     "get_customer_detail": customer_detail,
     "get_employee_directory": employee_directory,
     "check_order_timing": order_timing_check,
@@ -2588,7 +2760,7 @@ _PERSON_LEVEL_TEMPLATES = {
     "get_revenue_tree", "get_kpi_ranking", "get_employee_kpi",
     "get_employee_daily_kpi", "check_order_timing",
     "get_revenue_by_channel", "get_revenue_by_region", "get_top_customers",
-    "get_top_products", "compare_periods",
+    "get_top_products", "compare_periods", "get_revenue_forecast",
     "get_inventory_by_region", "get_receivables_overview",
     "get_qlv_change_history", "get_revenue_reconciliation",
     "get_salary_detail", "get_salary_achievement_summary"
@@ -2597,14 +2769,14 @@ _PERSON_LEVEL_TEMPLATES = {
 _EMPLOYEE_SCOPED_TEMPLATES = {
     "get_revenue_tree", "get_kpi_ranking", "get_employee_kpi",
     "get_employee_daily_kpi", "get_revenue_by_channel", "get_top_customers",
-    "get_top_products", "get_revenue_by_region", "compare_periods", "get_salary_detail",
-    "get_salary_achievement_summary"
+    "get_top_products", "get_revenue_by_region", "compare_periods", "get_revenue_forecast",
+    "get_salary_detail", "get_salary_achievement_summary"
 }
 
 _CHANNEL_SCOPED_TEMPLATES = {
     "get_revenue_by_channel", "get_top_products", "get_top_customers",
     "compare_periods", "get_customer_detail", "check_order_timing",
-    "get_revenue_by_region"
+    "get_revenue_by_region", "get_revenue_forecast"
 }
 
 
