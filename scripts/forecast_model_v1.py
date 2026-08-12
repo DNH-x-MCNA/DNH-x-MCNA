@@ -160,46 +160,76 @@ def fit_seasonal_index(series, months):
     return idx
 
 
+# Dai dien CO DINH cua moi luong, chon TRUOC khi nhin ket qua test (neu chon "cai tot nhat tren test"
+# roi mang di tron thi la ro ri thong tin - chi so dep gia).
+REP_A = "A2. muc_nen_3thang x mua_vu"     # dai dien luong A
+REP_B = "B1. cung_ky_nam_truoc"           # dai dien luong B (cung la moc nen)
+
+
 def predict_all(series, hist_months, target):
-    """Moi mo hinh CHI duoc dung hist_months (cac thang TRUOC target)."""
+    """Tra ve {(luong, ten): du_bao}. Moi mo hinh CHI duoc dung hist_months (cac thang TRUOC target).
+
+    CHIA 2 LUONG THEO DIEM NEO - do la khac biet ban chat:
+      LUONG A "xu huong trong nam": neo vao CAC THANG VUA QUA cua nam nay, roi keo tiep.
+              Tra loi cau hoi "may thang gan day dang di len hay xuong?"
+      LUONG B "cung ky nam truoc"  : neo vao THANG CUNG KY nam ngoai.
+              Tra loi cau hoi "thang nay so voi nam ngoai the nao?"
+    Hai luong dung 2 nguon thong tin KHAC NHAU nen sai so cua chung co the doc lap - neu doc lap that
+    thi trung binh 2 luong se tot hon ca hai (xem luong C).
+    """
     out = {}
     vals = [series[m] for m in hist_months]
     tm = int(target[5:7])
-    prev_year = month_add(target, -12)
+    hs = set(hist_months)
+    p1, p2, p3 = month_add(target, -12), month_add(target, -24), month_add(target, -36)
 
-    # 0. Moc nen dang thang: cung ky nam truoc
-    if prev_year in series and prev_year in set(hist_months):
-        out["[nen] cung_ky_nam_truoc"] = series[prev_year]
+    # ---------------- LUONG A: neo vao cac thang gan day trong nam ----------------
+    out[("A", "A0. thang_truoc")] = vals[-1]
+    if len(vals) >= 3:
+        out[("A", "A1. trung_binh_3_thang")] = sum(vals[-3:]) / 3
 
-    # 1. Cung ky nam truoc x da tang truong 12 THANG (thay vi 3 thang - 3 thang da chung minh la nhieu)
-    if prev_year in set(hist_months) and len(hist_months) >= 24:
-        last12 = sum(vals[-12:])
-        prev12 = sum(vals[-24:-12])
-        if prev12 > 0:
-            out["cung_ky x tang_truong_nam"] = series[prev_year] * (last12 / prev12)
-
-    # 2. Chi so mua vu x muc nen gan day (Holt-Winters rut gon, nhan tinh)
     idx = fit_seasonal_index(series, hist_months)
     if idx and tm in idx:
         des = [series[m] / idx.get(int(m[5:7]), 1.0) for m in hist_months]
         if len(des) >= 3:
-            level = sum(des[-3:]) / 3
-            out["mua_vu x muc_nen_3thang"] = level * idx[tm]
+            # Khu mua vu -> lay muc nen 3 thang gan nhat -> nhan lai mua vu thang dich.
+            out[("A", REP_A)] = (sum(des[-3:]) / 3) * idx[tm]
         if len(des) >= 6:
-            lvl = sum(des[-6:]) / 6
-            n = len(des[-6:])
+            seg = des[-6:]
+            n = len(seg)
+            lvl = sum(seg) / n
             xm = (n - 1) / 2
-            ym = lvl
-            num = sum((i - xm) * (des[-6:][i] - ym) for i in range(n))
+            num = sum((i - xm) * (seg[i] - lvl) for i in range(n))
             den = sum((i - xm) ** 2 for i in range(n))
             slope = num / den if den else 0
-            out["mua_vu x muc_nen + xu_huong"] = (lvl + slope * (n / 2 + 1)) * idx[tm]
+            out[("A", "A3. muc_nen + xu_huong x mua_vu")] = (lvl + slope * (n / 2 + 1)) * idx[tm]
 
-    # 3. Trung binh cung ky 2 nam gan nhat (giam nhieu cua 1 nam le)
-    p1, p2 = month_add(target, -12), month_add(target, -24)
-    hs = set(hist_months)
-    if p1 in hs and p2 in hs:
-        out["trung_binh_cung_ky_2_nam"] = (series[p1] + series[p2]) / 2
+    # ---------------- LUONG B: neo vao cung ky nam truoc ----------------
+    if p1 in hs:
+        out[("B", REP_B)] = series[p1]
+
+        # B2: cung ky x da tang truong CA NAM (12 thang gan nhat / 12 thang truoc do)
+        if len(hist_months) >= 24:
+            last12, prev12 = sum(vals[-12:]), sum(vals[-24:-12])
+            if prev12 > 0:
+                out[("B", "B2. cung_ky x tang_truong_12thang")] = series[p1] * (last12 / prev12)
+
+        # B3: cung ky x da tang truong 3 THANG gan nhat so cung ky (bat da giam nhanh hon B2)
+        recent_prev = [series.get(month_add(m, -12)) for m in hist_months[-3:]]
+        if all(v for v in recent_prev) and sum(recent_prev) > 0:
+            out[("B", "B3. cung_ky x tang_truong_3thang")] = series[p1] * (sum(vals[-3:]) / sum(recent_prev))
+
+        # B4/B5: trung binh cung ky nhieu nam (giam nhieu cua 1 nam le)
+        if p2 in hs:
+            out[("B", "B4. trung_binh_cung_ky_2_nam")] = (series[p1] + series[p2]) / 2
+            if p3 in hs:
+                out[("B", "B5. trung_binh_cung_ky_3_nam")] = (series[p1] + series[p2] + series[p3]) / 3
+
+    # ---------------- LUONG C: ket hop 2 luong ----------------
+    a, b = out.get(("A", REP_A)), out.get(("B", REP_B))
+    if a and b:
+        out[("C", "C1. trung binh A+B (50/50)")] = (a + b) / 2
+        out[("C", "C2. nghieng ve B (30/70)")] = 0.3 * a + 0.7 * b
     return out
 
 
@@ -215,39 +245,92 @@ def evaluate(channel, series, months):
 
     errs = defaultdict(list)
     detail = defaultdict(dict)
+    signed = defaultdict(dict)   # sai so CO DAU, de biet mo hinh doan CAO hay THAP
     for t in test_idx:
         target = months[t]
         actual = series[target]
-        for name, pred in predict_all(series, months[:t], target).items():
-            if actual > 0:
-                ape = abs(pred - actual) / actual * 100
-                errs[name].append(ape)
-                detail[name][target] = (pred, ape)
+        if actual <= 0:
+            continue
+        for key, pred in predict_all(series, months[:t], target).items():
+            errs[key].append(abs(pred - actual) / actual * 100)
+            detail[key][target] = (pred, abs(pred - actual) / actual * 100)
+            signed[key][target] = (pred - actual) / actual * 100
 
     if not errs:
         print("  Khong du du lieu.")
         return None
 
-    print(f"\n  {'Mo hinh':<32}{'So thang':>10}{'MAPE':>9}{'Sai so xau nhat':>18}")
-    ranked = sorted(errs.items(), key=lambda kv: sum(kv[1]) / len(kv[1]))
-    for name, e in ranked:
-        print(f"  {name:<32}{len(e):>10}{sum(e)/len(e):>8.1f}%{max(e):>17.1f}%")
+    LUONG = {
+        "A": "LUONG A - so voi XU HUONG CAC THANG TRONG NAM (neo vao thang gan day)",
+        "B": "LUONG B - so voi CUNG KY NAM TRUOC (neo vao thang nam ngoai)",
+        "C": "LUONG C - KET HOP hai luong",
+    }
+    best_of = {}
+    for stream in ("A", "B", "C"):
+        items = [(k, v) for k, v in errs.items() if k[0] == stream]
+        if not items:
+            continue
+        print(f"\n  {LUONG[stream]}")
+        print(f"    {'Mo hinh':<34}{'So thang':>10}{'MAPE':>9}{'Xau nhat':>11}{'Xu huong lech':>16}")
+        for (s, name), e in sorted(items, key=lambda kv: sum(kv[1]) / len(kv[1])):
+            mape = sum(e) / len(e)
+            sg = list(signed[(s, name)].values())
+            bias = sum(sg) / len(sg)
+            xu = "doan CAO hon" if bias > 3 else ("doan THAP hon" if bias < -3 else "can bang")
+            print(f"    {name:<34}{len(e):>10}{mape:>8.1f}%{max(e):>10.1f}%   {xu} {bias:+.0f}%")
+        bk, be = min(items, key=lambda kv: sum(kv[1]) / len(kv[1]))
+        best_of[stream] = (bk, sum(be) / len(be))
 
-    best, be = ranked[0]
-    base = next((sum(e)/len(e) for n, e in errs.items() if n.startswith("[nen]")), None)
-    print(f"\n  -> Tot nhat: '{best}'  MAPE {sum(be)/len(be):.1f}%")
-    if base is not None and not best.startswith("[nen]"):
-        imp = (base - sum(be)/len(be)) / base * 100
-        print(f"  -> Tot hon moc nen {imp:.0f}% (nen {base:.1f}% -> {sum(be)/len(be):.1f}%)")
-    elif base is not None:
-        print(f"  -> KHONG mo hinh nao danh bai duoc moc nen ({base:.1f}%). Giu moc nen, dung phuc tap hoa.")
+    print(f"\n  {'-' * 74}")
+    print("  SO TRUC DIEN GIUA 2 LUONG:")
+    for s in ("A", "B", "C"):
+        if s in best_of:
+            print(f"    Luong {s}: tot nhat '{best_of[s][0][1]}'  ->  MAPE {best_of[s][1]:.1f}%")
 
-    print(f"\n  Chi tiet tung thang cua mo hinh tot nhat ('{best}'):")
+    if "A" in best_of and "B" in best_of:
+        ma, mb = best_of["A"][1], best_of["B"][1]
+        thang = "B (cung ky nam truoc)" if mb < ma else "A (xu huong trong nam)"
+        print(f"    => Luong {thang} thang, cach nhau {abs(ma - mb):.1f} diem %")
+
+        # Sai so 2 luong co doc lap khong? Neu doc lap (tuong quan thap) thi ket hop moi co ich.
+        sa = signed.get(("A", REP_A), {})
+        sb = signed.get(("B", REP_B), {})
+        common = sorted(set(sa) & set(sb))
+        if len(common) >= 4:
+            xa = [sa[m] for m in common]
+            xb = [sb[m] for m in common]
+            n = len(common)
+            mxa, mxb = sum(xa) / n, sum(xb) / n
+            cov = sum((xa[i] - mxa) * (xb[i] - mxb) for i in range(n))
+            va = sum((v - mxa) ** 2 for v in xa) ** 0.5
+            vb = sum((v - mxb) ** 2 for v in xb) ** 0.5
+            r = cov / (va * vb) if va and vb else 0
+            print(f"    Tuong quan sai so 2 luong: r = {r:+.2f}", end="  ")
+            if r > 0.7:
+                print("(cung sai mot kieu -> ket hop khong giup gi nhieu)")
+            elif r < 0.3:
+                print("(sai so kha DOC LAP -> ket hop co the tot hon ca hai)")
+            else:
+                print("(doc lap mot phan)")
+
+    all_ranked = sorted(errs.items(), key=lambda kv: sum(kv[1]) / len(kv[1]))
+    bk, be = all_ranked[0]
+    base = next((sum(e) / len(e) for k, e in errs.items() if k == ("B", REP_B)), None)
+    print(f"\n  -> TOT NHAT TOAN CUOC: '{bk[1]}' (luong {bk[0]})  MAPE {sum(be)/len(be):.1f}%")
+    if base is not None:
+        if bk != ("B", REP_B):
+            print(f"  -> Tot hon moc nen '{REP_B}' {(base - sum(be)/len(be))/base*100:.0f}% "
+                  f"({base:.1f}% -> {sum(be)/len(be):.1f}%)")
+        else:
+            print(f"  -> KHONG mo hinh nao danh bai duoc moc nen. Giu moc nen, dung phuc tap hoa.")
+
+    print(f"\n  Chi tiet tung thang cua mo hinh tot nhat ('{bk[1]}'):")
     print(f"    {'Thang':<9}{'Thuc te':>11}{'Du bao':>11}{'Lech':>9}")
-    for m in sorted(detail[best]):
-        pred, ape = detail[best][m]
-        print(f"    {m:<9}{series[m]/TY:>10.2f}{pred/TY:>11.2f}{ape:>8.1f}%")
-    return best
+    for m in sorted(detail[bk]):
+        pred, ape = detail[bk][m]
+        dau = "+" if signed[bk][m] > 0 else ""
+        print(f"    {m:<9}{series[m]/TY:>10.2f}{pred/TY:>11.2f}   {dau}{signed[bk][m]:.1f}%")
+    return bk
 
 
 def main():
