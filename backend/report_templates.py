@@ -1117,6 +1117,7 @@ def _kpi_forecast_snapshot_rows(as_of_date: str) -> list:
     return _q(f"""
         SELECT f.employee_code, f.save_date,
                SUM(f.amount_ct) sales, MAX(f.month_sale_target) target,
+               MAX(f.manager_code) manager_code, MAX(f.emp_dms_code) emp_dms_code,
                COALESCE(nv.name, f.employee_code) name,
                COALESCE(nv.position_code, 'UNKNOWN') position_code,
                cv.description position_label, nv.area_code area_code
@@ -1165,6 +1166,138 @@ def _kpi_forecast_ratio_samples(rows: list, before_year_month: str = None) -> li
                     "ratio": ratio,
                 })
     return samples
+
+
+def _kpi_invoice_forecast_data(rows: list, as_of_date: str):
+    """Dung doanh thu hoa don theo ngay lam fallback khi Bravo khong luu KPI snapshot theo ngay.
+
+    FACT_TongHopKhachHang van duoc dung de lay target, vai tro va mapping manager_code tai snapshot
+    cuoi thang. Doanh thu partial/final lay cung nguon hoa don (vHoaDonTotal/vHoaDonETCTotal) de
+    tranh lay tu hai he quy chieu khac nhau. Với TDV, hoa don duoc tinh cho ca TDV va cong len QLV
+    truc tiep; cac vai tro khac giu mapping truc tiep theo EmpDMSCode.
+    """
+    invoice_rows = _q("""
+        SELECT substr(doc_date, 1, 10) doc_date, employee_code, SUM(amount9) sales
+        FROM (
+            SELECT doc_date, employee_code, amount9 FROM vhoadon_otc
+            WHERE substr(doc_date, 1, 10)<=? AND employee_code IS NOT NULL
+            UNION ALL
+            SELECT doc_date, employee_code, amount9 FROM vhoadon_etc
+            WHERE substr(doc_date, 1, 10)<=? AND employee_code IS NOT NULL
+        ) v
+        GROUP BY substr(doc_date, 1, 10), employee_code
+    """, (as_of_date, as_of_date))
+    if not invoice_rows:
+        return [], {}
+
+    # Chot 1 dong mapping/nhan vien/thang theo snapshot cuoi cung ma kho dang co.
+    final_by_month_emp = {}
+    for r in rows:
+        ym = str(r["save_date"])[:7]
+        key = (ym, r["employee_code"])
+        if key not in final_by_month_emp or r["save_date"] > final_by_month_emp[key]["save_date"]:
+            final_by_month_emp[key] = r
+
+    try:
+        dim_rows = _q("SELECT employee_code, dmsid, position_code FROM dim_nhanvien WHERE dmsid IS NOT NULL")
+    except sqlite3.OperationalError:
+        # Mot so warehouse dev cu chua co cot DMSId; fact snapshot van co the co emp_dms_code.
+        dim_rows = _q("SELECT employee_code, NULL AS dmsid, position_code FROM dim_nhanvien")
+    dim_by_employee = {r["employee_code"]: r for r in dim_rows}
+    month_dms_map = {}
+    for (ym, employee_code), r in final_by_month_emp.items():
+        dim = dim_by_employee.get(employee_code) or {}
+        keys = {r.get("emp_dms_code"), dim.get("dmsid"), employee_code}
+        keys.discard(None)
+        keys.discard("")
+        item = {
+            "employee_code": employee_code,
+            "position_code": r["position_code"],
+            "manager_code": r.get("manager_code"),
+        }
+        for key in keys:
+            month_dms_map.setdefault(ym, {}).setdefault(str(key), []).append(item)
+
+    # daily_sales[(year_month, target_employee)][day] = doanh thu hoa don cua target.
+    daily_sales = {}
+    for inv in invoice_rows:
+        ym = str(inv["doc_date"])[:7]
+        day = int(str(inv["doc_date"])[8:10])
+        candidates = month_dms_map.get(ym, {}).get(str(inv["employee_code"]), [])
+        target_codes = set()
+        for candidate in candidates:
+            target_codes.add(candidate["employee_code"])
+            if candidate["position_code"] == "TDV" and candidate.get("manager_code"):
+                target_codes.add(candidate["manager_code"])
+        for target_code in target_codes:
+            day_map = daily_sales.setdefault((ym, target_code), {})
+            day_map[day] = day_map.get(day, 0.0) + _f(inv["sales"])
+
+    cumulative_sales = {}
+    for key, day_map in daily_sales.items():
+        running = 0.0
+        cumulative = {}
+        for day in sorted(day_map):
+            running += day_map[day]
+            cumulative[day] = running
+        cumulative_sales[key] = cumulative
+
+    def total_until(ym, employee_code, cutoff):
+        cumulative = cumulative_sales.get((ym, employee_code), {})
+        eligible = [day for day in cumulative if day <= cutoff]
+        return cumulative[max(eligible)] if eligible else 0.0
+
+    samples = []
+    for (ym, employee_code), final_row in final_by_month_emp.items():
+        final_day = max(cumulative_sales.get((ym, employee_code), {}), default=0)
+        if final_day < 25:
+            continue
+        final_sales = total_until(ym, employee_code, final_day)
+        if final_sales <= 0:
+            continue
+        for cutoff in _KPI_FORECAST_CUTOFFS:
+            partial_sales = total_until(ym, employee_code, cutoff)
+            ratio = partial_sales / final_sales if final_sales else 0
+            if 0 < ratio <= 1.25:
+                samples.append({
+                    "employee_code": employee_code,
+                    "year_month": ym,
+                    "position_code": final_row["position_code"],
+                    "cutoff": cutoff,
+                    "ratio": ratio,
+                    "partial_sales": partial_sales,
+                    "final_sales": final_sales,
+                })
+
+    current_ym = str(as_of_date)[:7]
+    current_sales = {}
+    for r in rows:
+        if str(r["save_date"])[:7] != current_ym:
+            continue
+        employee_code = r["employee_code"]
+        current_sales[employee_code] = total_until(current_ym, employee_code,
+                                                   int(str(as_of_date)[8:10]))
+    return samples, current_sales
+
+
+def _kpi_forecast_backtest_samples(samples: list, position_code: str, cutoff: int) -> dict:
+    """Walk-forward MAPE cho samples tao tu hoa don ngay (fallback)."""
+    months = sorted({s["year_month"] for s in samples})
+    errors = []
+    role_samples = [s for s in samples if s["position_code"] == position_code and s["cutoff"] == cutoff]
+    for target_month in months:
+        past = [s for s in role_samples if s["year_month"] < target_month]
+        ratio, used, _ = _kpi_pick_ratio(past, position_code, cutoff)
+        if not ratio or not used:
+            continue
+        for sample in role_samples:
+            if sample["year_month"] != target_month or sample["final_sales"] <= 0:
+                continue
+            predicted = sample["partial_sales"] / ratio
+            errors.append(abs(predicted - sample["final_sales"]) / sample["final_sales"] * 100)
+    if len(errors) < 6:
+        return {"do_duoc": False, "so_mau": len(errors)}
+    return {"do_duoc": True, "so_mau": len(errors), "mape_pct": round(sum(errors) / len(errors), 1)}
 
 
 def _kpi_pick_ratio(samples: list, position_code: str, cutoff: int):
@@ -1276,16 +1409,30 @@ def kpi_forecast_month(year_month: str = None, as_of_date: str = None,
             current_map[key] = r
 
     samples = _kpi_forecast_ratio_samples(rows, before_year_month=year_month)
+    forecast_source = "kpi_snapshots"
+    invoice_current_sales = {}
+    if not samples:
+        # Bravo thuc te co hoa don theo ngay nhung khong co FACT KPI snapshot theo ngay. Dung cung
+        # nguon hoa don cho ca partial va final, chi dung FACT de lay target/role/manager mapping.
+        samples, invoice_current_sales = _kpi_invoice_forecast_data(rows, as_of_date)
+        samples = [s for s in samples if s["year_month"] < year_month]
+        forecast_source = "daily_invoices_fallback"
     if not samples:
         return {"thang_du_bao": year_month, "as_of": as_of_date,
                 "ly_do_khong_du_bao": (
-                    "Warehouse chua co du snapshot KPI theo ngay cua cac thang da tron ven "
-                    "de hoc ty le luy ke/cuoi thang.")}
+                    "Warehouse khong co du snapshot KPI theo ngay va cung khong co du doanh thu hoa don "
+                    "theo ngay de dung mo hinh fallback.")}
 
     results = []
     backtest_cache = {}
     for r in current_map.values():
         current_sales = _f(r["sales"])
+        if forecast_source == "daily_invoices_fallback" and r["employee_code"] in invoice_current_sales:
+            # Dung cung nguon hoa don voi cac mau lich su. Neu khong map duoc thi giu snapshot hien tai,
+            # tranh lam mat dong du lieu chi vi EmpDMSCode khong day du.
+            invoice_sales = _f(invoice_current_sales[r["employee_code"]])
+            if invoice_sales > 0:
+                current_sales = invoice_sales
         target = _f(r["target"])
         if target <= 0:
             continue
@@ -1319,7 +1466,11 @@ def kpi_forecast_month(year_month: str = None, as_of_date: str = None,
             }
         backtest_key = (r["position_code"], cutoff)
         if backtest_key not in backtest_cache:
-            backtest_cache[backtest_key] = _kpi_forecast_backtest(rows, r["position_code"], cutoff)
+            if forecast_source == "daily_invoices_fallback":
+                backtest_cache[backtest_key] = _kpi_forecast_backtest_samples(
+                    samples, r["position_code"], cutoff)
+            else:
+                backtest_cache[backtest_key] = _kpi_forecast_backtest(rows, r["position_code"], cutoff)
         item["backtest"] = backtest_cache[backtest_key]
         results.append(item)
 
@@ -1339,18 +1490,28 @@ def kpi_forecast_month(year_month: str = None, as_of_date: str = None,
         })
 
     results.sort(key=lambda x: (x["forecast_pct"] is None, -(x["forecast_pct"] or 0)))
+    warnings = [
+        "Day la uoc tinh, khong phai ket qua KPI thuc te.",
+        "Khoang uoc tinh chi hien khi co du mau lich su; moi chuc vu co the co do tin cay khac nhau.",
+    ]
+    if forecast_source == "kpi_snapshots":
+        warnings.append("Mo hinh uu tien snapshot KPI; khong nen dung neu snapshot thang bi ghi do dang.")
+    else:
+        warnings.extend([
+            "Khong co snapshot KPI theo ngay nen ket qua nay dung doanh thu hoa don theo ngay lam fallback.",
+            "Doanh thu hoa don co the khac Amount_CT do quy tac ghi nhan/tra hang; can xem day la uoc tinh tham khao.",
+        ])
     return {
         "thang_du_bao": year_month, "as_of": as_of_date,
         "day_cutoff_max": max(int(str(r["save_date"])[8:10]) for r in current),
-        "model": "Trung vi ty le luy ke/cuoi thang theo position_code va moc ngay; khong chia theo so ngay.",
+        "model": ("Trung vi ty le luy ke/cuoi thang theo position_code va moc ngay; khong chia theo so ngay."
+                  if forecast_source == "kpi_snapshots" else
+                  "Fallback: trung vi ty le doanh thu hoa don luy ke/cuoi thang theo position_code va moc ngay."),
+        "data_source": forecast_source,
         "kpi_threshold_pct": KPI_ACHIEVED_THRESHOLD,
         "summary_by_position": sorted(summary, key=lambda x: x["position_code"]),
         "total_rows": len(results), "rows": results[:max(1, min(int(limit or 100), 200))],
-        "canh_bao": [
-            "Day la uoc tinh, khong phai ket qua KPI thuc te.",
-            "Khoang uoc tinh chi hien khi co du mau lich su; moi chuc vu co the co do tin cay khac nhau.",
-            "Khong nen dung ket qua neu warehouse thieu snapshot theo ngay hoac snapshot thang bi ghi do dang.",
-        ],
+        "canh_bao": warnings,
     }
 
 
