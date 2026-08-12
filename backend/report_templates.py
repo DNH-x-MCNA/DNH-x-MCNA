@@ -1454,6 +1454,24 @@ def revenue_tree(as_of_date: str = None, area_code: str = None, scope_area_code:
                 qlv_entry["ghi_chu"] = (f"'{qlv['name']}' la NHOM/KENH ban hang (khong phai mot ca "
                                         "nhan/khong co doi TDV rieng) - khi tra loi phai goi dung la "
                                         "kenh/nhom, KHONG duoc noi nhu mot QLV thong thuong.")
+            # 10/08/2026: phat hien khi test cau "doanh so mien bac theo qlv" - MB co 1 QLV
+            # (MBKV12, ba Nguyen Thi Thanh Thuy, 0 TDV) TRUNG TEN voi chinh TP dang quan ly ca vung
+            # MB (cung la Nguyen Thi Thanh Thuy). Day la ca da duoc ghi nhan tu 21/07/2026 (muc A4,
+            # Cau_hoi_can_DNH_xac_nhan.md) - nghi Bravo co 2 ban ghi cho cung 1 nguoi (1 o cap TP quan
+            # ly ca vung, 1 o cap QLV rieng le), CHUA duoc DNH xac nhan la QLV that hay chi la ban ghi
+            # trung. Neu khong danh dau, model de bi cau hoi "doanh so theo QLV" cua vung nay lam roi
+            # (thay 1 nguoi vua la sep vung vua la "nhan vien" duoi quyen chinh minh) roi goi lai tool
+            # nhieu lan/di do SQL tho thay vi tra loi thang - xem ghi chu doi chieu voi hanh vi that
+            # trong nl2sql.py (session 20b6c3d5, 10/08, cau "doanh so mien bac theo qlv").
+            elif qlv["name"] and tp["name"] and qlv["name"].strip() == tp["name"].strip():
+                qlv_entry["ghi_chu"] = (
+                    f"CANH BAO DU LIEU: '{qlv['name']}' (ma QLV {qlv['employee_code']}) TRUNG TEN voi "
+                    f"chinh Truong phong dang phu trach ca vung {tp['area_code']} (ma {tp['employee_code']}) "
+                    "- rat co the la CUNG MOT NGUOI, Bravo dang luu 2 ban ghi rieng (1 cap TP, 1 cap QLV "
+                    "voi 0 TDV). Day la ca DANG CHO DNH XAC NHAN (xem muc A4 trong "
+                    "Cau_hoi_can_DNH_xac_nhan.md), CHUA RO day la QLV that hay ban ghi trung. KHI TRA "
+                    "LOI ve nguoi/ma nay: PHAI neu ro nghi van trung ban ghi voi Truong phong vung, "
+                    "KHONG duoc trinh bay nhu mot QLV thong thuong khac trong doi hinh.")
             qlv_list.append(qlv_entry)
         tree.append({"employee_code": tp["employee_code"], "name": tp["name"], "area_code": tp["area_code"],
                       **tp_kpi, "qlv_count": len(qlv_list), "qlv": qlv_list})
@@ -2149,7 +2167,40 @@ def salary_detail(employee_code: str = None, save_date: str = None,
     doi minh (xem call_template). scope_role='c_level' moi duoc bo qua gioi han nay.
 
     save_date: ngay snapshot can xem (mac dinh: gan nhat hien co, thuong la cuoi thang/dot chot gan
-    nhat - fact_thongketinhluong CHI co 1 snapshot/thang, khac fact_tonghopkhachhang nhieu dong/thang)."""
+    nhat - fact_thongketinhluong CHI co 1 snapshot/thang, khac fact_tonghopkhachhang nhieu dong/thang).
+
+    employee_code (nhieu ma, 04-07/08/2026): toi uu chi phi AI - phat hien qua cost_log.jsonl: cau
+    hoi "top 30 theo MB"/"V15/V22/V25/ASO top 30 nguoi" ton 7-8 VONG goi API/cau hoi, ~$0.6-1.2/cau
+    vi AI phai goi lai tool nay LAP LAI tung nguoi 1 (moi vong gui lai TOAN BO lich su hoi thoai tich
+    luy, khong cache duoc vi noi dung tool_result doi lien tuc) - xem ghi chu nl2sql.py. HO TRO nhieu
+    ma cach nhau BANG DAU PHAY trong CUNG 1 chuoi (vd 'MBKV1,MBKV2,MBKV3') de tra ve ca danh sach
+    trong 1 LAN GOI: tach chuoi, AP DUNG Y HET logic phan quyen/snapshot nhu duong 1-nguoi cho TUNG
+    ma (khong noi long fail-closed vi goi hang loat) - tra ve {"employees": [{...KET QUA hoac
+    "error", "requested_employee_code"}, ...]}. 1 nguoi loi (vd ngoai doi QLV) KHONG lam hong ca lo,
+    chi ghi error rieng dong do kem ma da yeu cau - giu dung tinh than "1 loi khong duoc dung ca cau
+    tra loi" da ghi trong mo ta tool, KHONG duoc im lang bo qua nguoi loi."""
+    if employee_code and "," in employee_code:
+        codes = [c.strip() for c in employee_code.split(",") if c.strip()]
+        results = []
+        for code in codes:
+            one = _salary_detail_one(employee_code=code, save_date=save_date,
+                                      scope_employee_code=scope_employee_code, scope_role=scope_role)
+            # Ghi de/them "requested_employee_code" (KHONG dung "employee_code" de tranh de len ten
+            # cot that tra ve khi thanh cong) de AI/nguoi doc luon biet dong nay ung voi ma nao da
+            # yeu cau - ham con (_salary_detail_one) khong biet no dang bi goi hang loat nen khong tu
+            # gan duoc. KHONG loc bo nguoi loi (khac ban truoc): AI/nguoi dung can biet AI bi thieu
+            # va vi sao, im lang bo qua se gay hieu nham la nguoi do khong co du lieu.
+            one["requested_employee_code"] = code
+            results.append(one)
+        return {"employees": results}
+    return _salary_detail_one(employee_code=employee_code, save_date=save_date,
+                               scope_employee_code=scope_employee_code, scope_role=scope_role)
+
+
+def _salary_detail_one(employee_code: str = None, save_date: str = None,
+                        scope_employee_code: str = None, scope_role: str = None) -> dict:
+    """Logic that cho DUNG 1 nhan vien - tach rieng tu salary_detail() de dung chung cho ca duong
+    don-nguoi va duong hang loat (employee_code voi nhieu ma cach nhau dau phay, xem salary_detail)."""
     # 03/08/2026 (phat hien qua kiem thu QLV Bui Khac Dung hoi V15/V22/V25/ASO cho 4 TDV cua minh):
     # TRUOC DAY chi C-Level moi duoc xem nguoi khac - QLV hoi ve CHINH DOI CUA MINH bi tu choi chung
     # chung, khien AI (dung docstring cu "C-Level/QLV xem doi minh" nhung code khong lam dieu do) bao
@@ -2158,22 +2209,6 @@ def salary_detail(employee_code: str = None, save_date: str = None,
     # kiem tra quan he quan ly - tranh QLV do doi nguoi ngoai doi).
     is_clevel = bool(scope_role and str(scope_role).lower() in ("c_level", "super_admin", "ceo", "cfo", "admin_ops", "admin"))
     is_manager_role = bool(scope_role and str(scope_role).lower() in ("qlv", "regional_director"))
-
-    # Bulk query support for comma-separated employee codes to avoid multi-round tool token explosion
-    if employee_code and "," in employee_code:
-        codes = [c.strip() for c in employee_code.split(",") if c.strip()]
-        results = []
-        for code in codes[:30]:
-            r_single = salary_detail(employee_code=code, save_date=save_date, scope_employee_code=scope_employee_code, scope_role=scope_role)
-            if r_single and "error" not in r_single:
-                results.append(r_single)
-        return {
-            "is_bulk": True,
-            "count": len(results),
-            "employees": results,
-            "warning": "CHUA GOM LUONG CO BAN (LCB): So lieu chi la Thuong kinh doanh + Phu cap."
-        }
-
     target_code = employee_code
     if not is_clevel:
         if not scope_employee_code:
@@ -2391,9 +2426,52 @@ def salary_ranking(year_month: str = None, area_code: str = None, position_code:
 
 
 
+# =============================================================================================
+# 10/08/2026 - HAM NAY DANG BI TAT. Tool "get_kpi_forecast_model1" da duoc GO khoi TEMPLATE_TOOLS
+# trong nl2sql.py nen model KHONG the goi. Giu lai ham de sua tiep sau demo 13/08.
+#
+# LOI CHET NGUOI (phai sua truoc tien):
+#   0. CRASH 100% so lan goi, tu ngay duoc viet (309d2f2, 06/08). Doan qlv_forecasts truy van
+#      "SELECT t.manager_code ... FROM dim_targetvungmien t" nhung bang do CHI CO 4 cot:
+#      area_code, channel_code, amount, doc_date (local_warehouse.py:52; dong bo tu Bravo cung chi
+#      keo 4 cot do - sync_warehouse.py::SMALL_TABLES). Cot manager_code CHUA TUNG ton tai.
+#      Chay thu tren may 24 ngay 10/08: "OperationalError: no such column: t.manager_code".
+#      => Chua tung co ai nhan duoc ket qua tu tool nay.
+#
+# SAU KHI HET CRASH, VAN CON 6 VAN DE - dung bat lai truoc khi xu ly het:
+#   1. Nhan "(VUOT TARGET)" dan cung vao chuoi etc_vs_national_target -> ETC dat 60% van in ra
+#      "60.0% (VUOT TARGET)". Phai tinh theo dieu kien.
+#   2. Truong "note" la chuoi CO DINH ("ETC du kien vuot chi tieu 104.1%. OTC dat ~85.0%") nen no
+#      MAU THUAN voi chinh cac so vua tinh trong cung mot phan hoi. Phai sinh tu gia tri that.
+#   3. BIA SO khi thieu du lieu - 4 cho: thieu OTC -> 4,66 ty; thieu ETC -> 6,22 ty; thieu target ->
+#      21.363.814.418; doi QLV khong co doanh so -> m_tgt*0.134/7.4 (bia doanh so TU CHI TIEU, khien
+#      QLV ban 0 dong van hien du bao dep). Du lieu thieu PHAI bao loi, khong duoc doan.
+#   4. BO QUA PHAN QUYEN: nhan scope_area_code/scope_employee_code nhung khong dung; qlv_forecasts
+#      liet ke toi 10 QLV moi mien. Lai khong nam trong _PERSON_LEVEL_TEMPLATES lan
+#      _EMPLOYEE_SCOPED_TEMPLATES nen tang code cung khong chan ho => tai khoan QLV se thay ten va
+#      % cua QLV khac. Khi bat lai PHAI them vao ca 2 tap do VA thuc su loc trong than ham.
+#   5. target_month la tham so TRANG TRI - moi cau SQL deu cung ngay '2026-08'. Hoi thang 9 tra so
+#      thang 8 dan nhan thang 9.
+#   6. (10/08 - DA XAC MINH, KHONG PHAI cau hoi cho DNH, la BUG THUAN) est_mb_target=19,5 ty va
+#      target_etc_national=42,5 ty tuong la "so uoc tinh" nhung thuc ra du lieu THAT da co san trong
+#      kho, code chi khong chiu doc:
+#        - fact_kehoachtongetc thang 8/2026 SUM = 42,5 ty - KHOP CHINH XAC hang so hardcode. Dev cu
+#          chup 1 lan roi dong cung, dung ra phai SELECT SUM(amount) FROM fact_kehoachtongetc WHERE
+#          doc_date LIKE '<thang>%'.
+#        - dim_targetvungmien da co dong area_code='MB' THAT (34,16 ty). Nghiem trong hon: cau SQL
+#          o r_tgt_otc KHONG loc area_code, nen no DA CONG CA MB THAT vao target_otc_current roi -
+#          the ma code van cong THEM est_mb_target=19,5 ty len tren => MB BI TINH TRUNG 2 LAN (1 lan
+#          that + 1 lan doan). Hang so fallback 21.363.814.418 khop khit tong MN+MT that (8,19+5,67+
+#          7,5=21,36 ty) - luc viet code MB chua co du lieu target nen dev doan tam, nay Bravo da co
+#          du roi ma khong ai go phan doan di. Sua dung: loc area_code ro rang cho tung vung, BO HAN
+#          est_mb_target.
+#   7. Docstring goc noi "Tu dong tinh ty trong phan bo 6 ngay dau thang theo lich su" - khong dung,
+#      thuc te la 2 hang so go tay (0.1341 / 0.1407).
+# =============================================================================================
 def forecast_model1(target_month: str = "2026-08", scope_area_code: str = None, scope_employee_code: str = None):
-    """Du bao ti le hoan thanh KPI va Doanh thu bang Mo Hinh 1 (Intra-Month Pattern - Trong so Diem Roi trong Thang).
-    Tu dong tinh ty trong phan bo 6 ngay dau thang theo lich su de du phong cho OTC va ETC."""
+    """DANG BI TAT - xem khoi ghi chu ngay tren. Du bao ty le hoan thanh KPI/doanh thu theo Mo Hinh 1
+    (Intra-Month Pattern). CANH BAO: ty trong 6 ngay dau thang la HANG SO GO TAY (0.1341/0.1407),
+    KHONG phai tu tinh tu lich su nhu ten goi gay hieu nham."""
     import datetime as dt
     
     # 1. Tỷ trọng lịch sử 6 ngày đầu
