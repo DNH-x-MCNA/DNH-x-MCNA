@@ -278,12 +278,17 @@ def main():
                 top_m, top_d = min(diffs, key=lambda x: x[1])
                 total_gain = (fb - fair[bn2]) * len(common)
                 share = (-top_d) / total_gain * 100 if total_gain > 0 else 0
+                # Bo han thang dong gop nhieu nhat roi tinh lai: loi the con lai bao nhieu?
+                # Day la phep do that su, chac hon nguong ty trong (mot thang chiem 49% van la qua nhieu).
+                gain_ex_top = (total_gain - (-top_d)) / (len(common) - 1) if len(common) > 1 else 0
                 print(f"\n  Doi dau tung thang: '{bn2}' vs mo hinh nen")
                 print(f"    So thang doan sat hon: {len(wins)}/{len(common)}")
                 print(f"    Chenh lech TRUNG VI: {med:+.1f} diem  (trung binh {fair[bn2] - fb:+.1f})")
                 print(f"    Thang gop nhieu nhat: {top_m} ({top_d:+.1f} diem, "
                       f"chiem {share:.0f}% toan bo loi the)")
-                robust = (len(wins) > len(common) * 0.6 and med < -0.3 and share < 50)
+                print(f"    Bo {top_m} ra, loi the con: {gain_ex_top:.1f} diem/thang "
+                      f"(dau la {fb - fair[bn2]:.1f})")
+                robust = (len(wins) > len(common) * 0.6 and med < -0.3 and gain_ex_top > 0.3)
                 if robust:
                     print("    => Loi the RAI DEU qua nhieu thang - dang tin.")
                 else:
@@ -292,30 +297,47 @@ def main():
                         reasons.append(f"chi thang {len(wins)}/{len(common)} thang")
                     if med >= -0.3:
                         reasons.append(f"trung vi chi {med:+.1f} diem")
-                    if share >= 50:
-                        reasons.append(f"{top_m} chiem {share:.0f}% loi the")
+                    if gain_ex_top <= 0.3:
+                        reasons.append(f"bo {top_m} ra thi loi the chi con {gain_ex_top:.1f} diem")
                     print(f"    => LOI THE KHONG CHAC ({', '.join(reasons)}) - nhieu kha nang la may.")
-            verdicts.append((tier_label, len(common), fb, bn2, fair[bn2], robust))
+            verdicts.append((tier_label, len(common), fb, bn2, fair[bn2], robust, fair))
 
         # --- CHOT: chi doc tu bang cong bang, KHONG doc tu bang dau (khac co mau) ---
         print(f"\n  === CHOT CHO KENH {channel} ===")
         if not verdicts:
             print("  Chua du du lieu de so sanh cong bang -> giu nguyen mo hinh nen.")
         else:
-            # Chi coi la thang khi VUA hon MAPE >0,3 diem VUA rai deu qua cac thang.
+            # Chi coi la thang khi HOI DU 3 dieu: hon MAPE >0,3 diem, loi the rai deu qua cac
+            # thang, VA khong thua mo hinh nen tren khoang dai hon. Dieu thu 3 la quan trong
+            # nhat: thang o 12 thang gan day ma thua o 25 thang nghia la chi hop voi giai doan
+            # hien tai, khong phai quy luat -> doi mo hinh la doi theo nhieu.
+            wide_fair = next((v[6] for v in verdicts if v[0].startswith("RONG")), None)
+
+            def loses_on_wide(name):
+                if not wide_fair or name not in wide_fair or BASE_NAME not in wide_fair:
+                    return False
+                return wide_fair[name] > wide_fair[BASE_NAME] - 0.3
+
             winners = [v for v in verdicts if v[4] < v[2] - 0.3]
-            solid = [v for v in winners if v[5]]
+            solid = [v for v in winners if v[5] and not loses_on_wide(v[3])]
             if not winners:
                 print(f"  GIU NGUYEN mo hinh nen ({BASE_NAME}).")
                 print("  Khong bien the nao vuot duoc tren co mau cong bang.")
             elif not solid:
-                lbl, nm, fb, bn2, bv, _ = max(winners, key=lambda v: v[1])
+                lbl, nm, fb, bn2, bv, rb, _ = max(winners, key=lambda v: v[1])
                 print(f"  GIU NGUYEN mo hinh nen ({BASE_NAME}).")
-                print(f"  '{bn2}' co MAPE thap hon {fb - bv:.1f} diem nhung loi the KHONG rai deu")
-                print("  qua cac thang (xem phan 'Doi dau tung thang') -> chua du bang chung de doi.")
+                if not rb:
+                    print(f"  '{bn2}' co MAPE thap hon {fb - bv:.1f} diem nhung loi the KHONG rai deu")
+                    print("  qua cac thang (xem phan 'Doi dau tung thang') -> chua du bang chung de doi.")
+                else:
+                    print(f"  '{bn2}' thap hon {fb - bv:.1f} diem tren {nm} thang gan day, NHUNG tren")
+                    print(f"  khoang dai hon no lai THUA nen ({wide_fair[bn2]:.1f}% so voi "
+                          f"{wide_fair[BASE_NAME]:.1f}%).")
+                    print("  => chi hop voi giai doan hien tai, khong phai quy luat. Theo doi them,")
+                    print("     do lai sau 3-6 thang; chua doi.")
             else:
                 # uu tien ket luan tu tang co NHIEU thang nhat (do tin cay cao hon)
-                lbl, nm, fb, bn2, bv, _ = max(solid, key=lambda v: v[1])
+                lbl, nm, fb, bn2, bv, _, _ = max(solid, key=lambda v: v[1])
                 print(f"  DOI SANG: {bn2}")
                 print(f"  Giam {fb - bv:.1f} diem ({(fb - bv) / fb * 100:.0f}%) tren {nm} thang "
                       f"(tang {lbl.split('(')[0].strip()}), loi the rai deu qua cac thang.")
