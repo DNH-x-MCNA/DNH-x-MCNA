@@ -209,26 +209,30 @@ def send_daily_digest(dry_run=False, audience_filter=None, webhook_override=None
                     "items": w_items
                 })
 
-            # GD2g: Operations section
+            # GD2g: Operations section - 11/08/2026: gate bang report_feature_flags.show_operational_quality
+            # (mac dinh false, dung tien le show_dead_stock/src/etl.py:1462). Truoc do khong co gio tat,
+            # gui thang cho ca 6 audience that trong report_recipients - phat hien luc ra soat truoc demo.
             ops_items = []
-            if channel != "ETC":
-                kpi_pace_data = get_daily_kpi_pace_snapshot(region=region)
-                if kpi_pace_data.get("target_day"):
-                    r_cnt = len(kpi_pace_data.get("reds", []))
-                    y_cnt = len(kpi_pace_data.get("yellows", []))
-                    g_cnt = len(kpi_pace_data.get("greens", []))
-                    tot = len(kpi_pace_data.get("all_rows", []))
-                    ops_items.append(f"• Nhịp KPI ngày ({kpi_pace_data['target_day'].strftime('%d/%m')}): Đỏ {r_cnt} · Vàng {y_cnt} · Xanh {g_cnt} (tổng {tot} TDV)")
+            show_ops_flag = config.get('report_feature_flags', {}).get('show_operational_quality', False)
+            if show_ops_flag:
+                if channel != "ETC":
+                    kpi_pace_data = get_daily_kpi_pace_snapshot(region=region)
+                    if kpi_pace_data.get("target_day"):
+                        r_cnt = len(kpi_pace_data.get("reds", []))
+                        y_cnt = len(kpi_pace_data.get("yellows", []))
+                        g_cnt = len(kpi_pace_data.get("greens", []))
+                        tot = len(kpi_pace_data.get("all_rows", []))
+                        ops_items.append(f"• Nhịp KPI ngày ({kpi_pace_data['target_day'].strftime('%d/%m')}): Đỏ {r_cnt} · Vàng {y_cnt} · Xanh {g_cnt} (tổng {tot} TDV)")
 
-                recon_data = get_kpi_revenue_reconciliation()
-                if recon_data:
-                    diff_str = f"{recon_data['diff_vnd']:,.0f}đ ({recon_data['diff_pct']*100:.2f}%)" if recon_data['diff_vnd'] > 0 else "0đ (Khớp tuyệt đối)"
-                    ops_items.append(f"• Đối chiếu KPI OTC: Lệch {diff_str}")
+                    recon_data = get_kpi_revenue_reconciliation()
+                    if recon_data:
+                        diff_str = f"{recon_data['diff_vnd']:,.0f}đ ({recon_data['diff_pct']*100:.2f}%)" if recon_data['diff_vnd'] > 0 else "0đ (Khớp tuyệt đối)"
+                        ops_items.append(f"• Đối chiếu KPI OTC: Lệch {diff_str}")
 
-            if channel != "OTC":
-                etc_ret_data = get_etc_return_rate()
-                if etc_ret_data:
-                    ops_items.append(f"• Tỷ lệ hàng trả về ETC: {etc_ret_data['return_rate']*100:.2f}% (Trả {format_vietnamese_money(etc_ret_data['etc_returns'])} / Doanh số {format_vietnamese_money(etc_ret_data['etc_sales'])})")
+                if channel != "OTC":
+                    etc_ret_data = get_etc_return_rate()
+                    if etc_ret_data:
+                        ops_items.append(f"• Tỷ lệ hàng trả về ETC: {etc_ret_data['return_rate']*100:.2f}% (Trả {format_vietnamese_money(etc_ret_data['etc_returns'])} / Doanh số {format_vietnamese_money(etc_ret_data['etc_sales'])})")
 
             if ops_items:
                 sections.append({
@@ -296,7 +300,15 @@ def _scope_label(region, channel):
     return " — ".join(parts) if parts else "Toàn quốc, tất cả kênh"
 
 def _send_periodic_email_report(get_metrics_fn, period_label, report_title, dry_run=False, audience_filter=None):
+    # 11/08/2026: gate cung report_feature_flags.show_operational_quality voi GD2g o send_daily_digest().
+    # LUU Y CO CHU DINH (khong phai loi): day la SNAPSHOT-CUOI-KY (dung y het du lieu Nhip KPI ngay/Doi
+    # chieu OTC/Tra hang ETC cua NGAY GAN NHAT), KHONG PHAI gop/trung binh ca tuan/thang - vi khong co
+    # cong thuc gop da duoc xac nhan cho "nhip KPI CA TUAN" (vd gop bao nhieu ngay do/vang/xanh thanh 1
+    # con so nghia la gi). Neu can gop that theo tuan/thang, phai hoi lai truoc khi bien che thanh cong
+    # thuc - o day CO Y chon phuong an it rui ro nhat (tai dung dung metric da co, ghi ro la "tai ngay
+    # X" trong email) thay vi tu bia cong thuc gop moi.
     config = load_config()
+    show_ops_flag = config.get('report_feature_flags', {}).get('show_operational_quality', False)
     recipients = config.get('report_recipients') or []
     if not recipients:
         print(f"[{datetime.now()}] Chưa cấu hình report_recipients — gửi {report_title} bản không lọc (hành vi cũ).")
@@ -317,6 +329,31 @@ def _send_periodic_email_report(get_metrics_fn, period_label, report_title, dry_
         print(f"[{datetime.now()}] Đang chuẩn bị {report_title} cho '{audience or 'mặc định'}'...")
         try:
             metrics = get_metrics_fn(region=region, channel=channel)
+
+            # GD2g cho email (11/08/2026) - xem ghi chu day du o dau ham: snapshot NGAY GAN NHAT,
+            # khong phai gop ca ky. Dung CHUNG logic voi send_daily_digest() de khong lech nhau.
+            if show_ops_flag:
+                from src.etl import get_daily_kpi_pace_snapshot, get_kpi_revenue_reconciliation, get_etc_return_rate
+                ops_items = []
+                if channel != "ETC":
+                    kpi_pace_data = get_daily_kpi_pace_snapshot(region=region)
+                    if kpi_pace_data.get("target_day"):
+                        r_cnt = len(kpi_pace_data.get("reds", []))
+                        y_cnt = len(kpi_pace_data.get("yellows", []))
+                        g_cnt = len(kpi_pace_data.get("greens", []))
+                        tot = len(kpi_pace_data.get("all_rows", []))
+                        ops_items.append(f"Nhịp KPI ngày {kpi_pace_data['target_day'].strftime('%d/%m')} (ngày gần nhất có dữ liệu): Đỏ {r_cnt} · Vàng {y_cnt} · Xanh {g_cnt} (tổng {tot} TDV)")
+                    recon_data = get_kpi_revenue_reconciliation()
+                    if recon_data:
+                        diff_str = f"{recon_data['diff_vnd']:,.0f}đ ({recon_data['diff_pct']*100:.2f}%)" if recon_data['diff_vnd'] > 0 else "0đ (Khớp tuyệt đối)"
+                        ops_items.append(f"Đối chiếu KPI OTC (tại thời điểm gửi báo cáo): Lệch {diff_str}")
+                if channel != "OTC":
+                    etc_ret_data = get_etc_return_rate()
+                    if etc_ret_data:
+                        ops_items.append(f"Tỷ lệ hàng trả về ETC (tại thời điểm gửi báo cáo): {etc_ret_data['return_rate']*100:.2f}% (Trả {format_vietnamese_money(etc_ret_data['etc_returns'])} / Doanh số {format_vietnamese_money(etc_ret_data['etc_sales'])})")
+                if ops_items:
+                    metrics['operational_quality_items'] = ops_items
+
             scope = _scope_label(region, channel)
             subject_suffix = f" ({audience})" if audience else ""
             subject = f"{report_title}{subject_suffix} — {metrics.get('period_range', metrics['date'])}"

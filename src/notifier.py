@@ -73,10 +73,16 @@ def _dnh_logo_data_uri():
     return DNH_LOGO_URL
 
 
-def _log_alert_severity(alert_name, severity, region=None, alert_key=None, issue=None, channel=None):
+def _log_alert_severity(alert_name, severity, region=None, issue=None, channel=None):
     """
-    Ghi lại (tên alert, mức độ, vùng, alert_key, issue, channel, thời điểm) vào data/alerts_state.db
-    mỗi khi 1 alert THỰC SỰ được gửi — phục vụ báo cáo Weekly/Monthly và Daily Digest.
+    Ghi lại (tên alert, mức độ, vùng, issue, channel, thời điểm) vào data/alerts_state.db mỗi khi
+    1 alert THỰC SỰ được gửi — phục vụ báo cáo Weekly/Monthly và Daily Digest.
+
+    11/08/2026: bỏ tham số `alert_key` (thêm ở 232ba42 cùng issue/channel, nhưng không giống 2 cột
+    kia, KHÔNG có nơi nào từng đọc lại — 0/24 call site của send_alert_to_all_channels() từng truyền
+    giá trị, và _get_period_warning_alerts() (src/etl.py) tự ghi rõ trong docstring "Nhóm theo
+    alert_name", không dùng alert_key). Giữ nguyên cột `alert_key` trong bảng SQLite (không xoá
+    schema của DB đang sống, không có gì cần dọn ở dữ liệu cũ) - chỉ bỏ đường code giả vờ đã nối dây.
     """
     try:
         os.makedirs(os.path.dirname(STATE_DB_PATH), exist_ok=True)
@@ -98,8 +104,8 @@ def _log_alert_severity(alert_name, severity, region=None, alert_key=None, issue
             if col not in existing_cols:
                 conn.execute(f"ALTER TABLE alert_severity_log ADD COLUMN {col} TEXT")
         conn.execute(
-            'INSERT INTO alert_severity_log (alert_name, severity, sent_at, region, alert_key, issue, channel) VALUES (?, ?, ?, ?, ?, ?, ?)',
-            (alert_name, severity, datetime.now(), region, alert_key, issue, channel)
+            'INSERT INTO alert_severity_log (alert_name, severity, sent_at, region, issue, channel) VALUES (?, ?, ?, ?, ?, ?)',
+            (alert_name, severity, datetime.now(), region, issue, channel)
         )
         conn.commit()
         conn.close()
@@ -272,6 +278,18 @@ DIGEST_EMAIL_TEMPLATE = """
             <ul style="margin: 0 0 20px 0; padding-left: 20px; font-size: 13px; color: #334155;">
                 {% for h in metrics.highlights %}
                 <li style="margin-bottom: 6px;"><strong>{{ h.label }}</strong> — {{ h.sent_at_display }} (giá trị: {{ h.value_display }})</li>
+                {% endfor %}
+            </ul>
+            {% endif %}
+
+            {% if metrics.operational_quality_items %}
+            <!-- 11/08/2026 (GD2g cho email) - sau co report_feature_flags.show_operational_quality,
+            xem ghi chu day du o main.py::_send_periodic_email_report. Cac dong nay la SNAPSHOT tai
+            ngay gan nhat/thoi diem gui, KHONG PHAI gop ca ky - da ghi ro trong tung cau. -->
+            <div class="section-title">Vận Hành &amp; Giám Sát Dữ Liệu</div>
+            <ul style="margin: 0 0 20px 0; padding-left: 20px; font-size: 13px; color: #334155;">
+                {% for item in metrics.operational_quality_items %}
+                <li style="margin-bottom: 6px;">{{ item }}</li>
                 {% endfor %}
             </ul>
             {% endif %}
@@ -1356,13 +1374,18 @@ def _build_teams_consolidated_card(alerts):
 
 def send_alert_to_all_channels(alert_name, severity, summary, table_headers=None, table_rows=None,
                                 channels=("email", "teams"), period=None, channel=None, region=None,
-                                issue=None, require_critical_for_teams=True, sections=None, *, alert_key=None):
+                                issue=None, require_critical_for_teams=True, sections=None):
     """
     Gửi cảnh báo qua các kênh được chỉ định trong `channels` (mặc định: Email, Teams).
-    Bổ sung `alert_key` (keyword-only) và `sections`.
+    Bổ sung `sections`.
+
+    11/08/2026: bỏ tham số `alert_key` (keyword-only) — KHÔNG liên quan đến `alert_key` của bảng
+    `sent_alerts` (src/alerts.py, cơ chế cooldown, đang sống, nuôi "Điểm Nổi Bật Trong Kỳ") dù trùng
+    tên. Đây là `alert_key` của bảng `alert_severity_log`, thêm ở 232ba42 nhưng chưa từng có call
+    site nào truyền giá trị (0/24) và không nơi nào đọc lại — xem _log_alert_severity().
     """
     print(f"\n--- BAT DAU GUI CANH BAO: {alert_name} [{severity}] (kenh: {', '.join(channels)}) ---")
-    _log_alert_severity(alert_name, severity, region=region, alert_key=alert_key, issue=issue, channel=channel)
+    _log_alert_severity(alert_name, severity, region=region, issue=issue, channel=channel)
     any_sent = False
 
     # 1. Gui qua Email
