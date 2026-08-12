@@ -117,3 +117,53 @@ table {
 .status-dot-live {
   animation: pulse-dot 1.8s ease-in-out infinite;
 }
+
+* {
+  scrollbar-width: thin;
+}
+
+::selection {
+  background: rgba(37, 99, 235, 0.18);
+  color: #0b1528;
+}
+
+button,
+input,
+select,
+textarea {
+  -webkit-tap-highlight-color: transparent;
+}
+
+.app-shell {
+  isolation: isolate;
+}
+
+.app-shell::before {
+  position: absolute;
+  inset: 0 0 auto;
+  z-index: -1;
+  height: 15rem;
+  pointer-events: none;
+  content: "";
+  background: radial-gradient(circle at 70% 0%, rgba(59, 130, 246, 0.09), transparent 55%);
+}
+
+.welcome-panel {
+  background-image: radial-gradient(circle at 100% 0%, rgba(59, 130, 246, 0.08), transparent 28rem);
+}
+
+.input-floating:focus-within {
+  border-color: rgba(79, 70, 229, 0.45);
+  box-shadow: 0 0 0 4px rgba(79, 70, 229, 0.08), 0 18px 40px rgba(15, 23, 42, 0.09);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

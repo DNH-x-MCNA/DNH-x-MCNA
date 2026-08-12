@@ -400,16 +400,16 @@ const MessageList = memo(function MessageList({
   bottomRef: RefObject<HTMLDivElement | null>;
 }) {
   return (
-    <div className="flex flex-col gap-4">
+    <div className="flex flex-col gap-5 py-1">
       {messages.map((m, i) => (
         <div key={i} className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}>
           <div
             className={`max-w-[85%] text-sm leading-relaxed ${
               m.role === "user"
-                ? "bg-gradient-to-r from-blue-700 to-indigo-800 text-white shadow-md rounded-2xl rounded-tr-none px-4 py-3 font-medium"
+                ? "bg-gradient-to-br from-blue-700 via-blue-700 to-indigo-800 text-white shadow-lg shadow-blue-900/10 rounded-2xl rounded-tr-md px-4 py-3.5 font-medium"
                 : m.error
-                ? "bg-amber-50 text-amber-900 border-l-4 border-amber-500 shadow-sm rounded-2xl rounded-tl-none p-4"
-                : "bg-white text-slate-800 border border-slate-200/80 shadow-sm rounded-2xl rounded-tl-none p-4"
+                ? "bg-amber-50 text-amber-900 border border-amber-200 shadow-sm rounded-2xl rounded-tl-md p-4"
+                : "bg-white text-slate-800 border border-slate-200/80 shadow-sm rounded-2xl rounded-tl-md p-4"
             }`}
           >
             {m.role === "bot" ? (
@@ -486,7 +486,7 @@ const MessageList = memo(function MessageList({
 
       {loading && (
         <div className="flex justify-start">
-          <div className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700 shadow-sm">
+          <div className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700 shadow-md shadow-slate-900/5">
             <span className="flex gap-1">
               <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-indigo-600 [animation-delay:-0.3s]" />
               <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-indigo-600 [animation-delay:-0.15s]" />
@@ -968,7 +968,7 @@ export default function Home() {
   const sessionGroups = groupSessionsByDate(visibleSessions);
 
   return (
-    <div className="flex h-screen bg-[var(--surface-soft)]">
+    <div className="app-shell relative flex h-screen overflow-hidden bg-[var(--surface-soft)]">
       {sidebarOpen && (
         <div
           onClick={() => setSidebarOpen(false)}
@@ -976,7 +976,7 @@ export default function Home() {
         />
       )}
       <aside
-        className={`${sidebarOpen ? "fixed inset-y-0 left-0 z-30 flex" : "hidden"} w-72 flex-shrink-0 flex-col border-r border-slate-200 bg-white md:static md:z-0 md:flex`}
+        className={`${sidebarOpen ? "fixed inset-y-0 left-0 z-30 flex" : "hidden"} w-72 flex-shrink-0 flex-col border-r border-slate-200/80 bg-[#f9fbfe] shadow-xl shadow-slate-900/5 md:static md:z-0 md:flex md:shadow-none`}
       >
         <div className="flex items-center justify-between border-b border-slate-200 px-4 py-4">
           <span className="text-sm font-semibold text-slate-700">Lịch sử trò chuyện</span>
@@ -986,7 +986,7 @@ export default function Home() {
         </div>
         <button
           onClick={startNewConversation}
-          className="mx-3 mt-3 flex items-center justify-center gap-1.5 rounded-lg px-3 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:-translate-y-0.5 hover:shadow-md"
+          className="mx-3 mt-3 flex items-center justify-center gap-2 rounded-xl px-3 py-3 text-sm font-semibold text-white shadow-lg shadow-blue-700/15 transition hover:-translate-y-0.5 hover:shadow-xl"
           style={{ background: "linear-gradient(135deg, #4F46E5, #2563EB)" }}
         >
           <IconPlus className="h-4 w-4" />
@@ -996,7 +996,7 @@ export default function Home() {
         {isCLevel && (
           <button
             onClick={openAuditDashboard}
-            className="mx-3 mt-2 flex items-center gap-2 rounded-lg bg-indigo-50 px-3 py-2 text-left text-sm font-semibold text-indigo-900 shadow-sm ring-1 ring-inset ring-indigo-200 transition hover:bg-indigo-100"
+            className="mx-3 mt-2 flex items-center gap-2 rounded-xl bg-indigo-50/80 px-3 py-2.5 text-left text-sm font-semibold text-indigo-900 ring-1 ring-inset ring-indigo-200 transition hover:bg-indigo-100"
           >
             <IconChart className="h-4 w-4 shrink-0 text-indigo-600" />
             <span className="flex-1">Audit Log & Chi phí AI</span>
@@ -1083,8 +1083,8 @@ export default function Home() {
       </aside>
 
       <div className="flex min-w-0 flex-1 flex-col">
-      <header className="relative z-10 border-b border-slate-800/80 bg-slate-900/95 backdrop-blur-md px-4 sm:px-8 py-3 text-white shadow-lg">
-        <div className="mx-auto flex w-full max-w-5xl items-center justify-between gap-4">
+      <header className="relative z-10 border-b border-slate-800/80 bg-[#0b1730]/95 px-4 py-3 text-white shadow-xl shadow-slate-900/10 backdrop-blur-md sm:px-8">
+        <div className="mx-auto flex w-full max-w-6xl items-center justify-between gap-4">
           {/* Left Title & Logo */}
           <div className="flex items-center gap-3.5">
             <button
@@ -1094,14 +1094,15 @@ export default function Home() {
             >
               <IconMenu className="h-5 w-5" />
             </button>
-            <div className="bg-white/95 p-1.5 rounded-xl shadow-md border border-white/20">
+            <div className="rounded-xl border border-white/20 bg-white p-1.5 shadow-md shadow-black/20">
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img src="/namha-logo.png" alt="NAMHA PHARMA" className="h-8 w-auto object-contain" />
             </div>
             <div>
               <div className="flex items-center gap-2">
-                <span className="text-[11px] font-extrabold tracking-wider uppercase text-emerald-400">DƯỢC NAM HÀ</span>
-                <span className="inline-flex items-center rounded-full bg-gradient-to-r from-blue-600 to-indigo-600 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-white shadow-sm">
+                <span className="text-[10px] font-extrabold tracking-[0.18em] uppercase text-teal-300">DƯỢC NAM HÀ</span>
+                <span className="inline-flex items-center gap-1.5 rounded-full border border-blue-400/25 bg-blue-500/15 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-blue-100 shadow-sm">
+                  <span className="h-1.5 w-1.5 rounded-full bg-teal-300" />
                   AI Analyst
                 </span>
               </div>
@@ -1132,7 +1133,7 @@ export default function Home() {
                 </button>
 
                 {/* User Info Badge */}
-                <div className="hidden sm:flex items-center gap-2.5 bg-slate-800/80 border border-slate-700/80 rounded-xl px-3 py-1.5">
+                <div className="hidden items-center gap-2.5 rounded-xl border border-white/10 bg-white/[0.07] px-3 py-1.5 sm:flex">
                   <div className="w-7 h-7 rounded-lg bg-gradient-to-tr from-blue-600 to-indigo-600 text-white font-bold text-xs flex items-center justify-center shadow">
                     {(userInfo.name || userInfo.username).charAt(0).toUpperCase()}
                   </div>
@@ -1177,10 +1178,22 @@ export default function Home() {
         </div>
       )}
 
-      <main className="mx-auto flex w-full max-w-5xl flex-1 flex-col overflow-hidden px-4">
+      <main className="mx-auto flex w-full max-w-6xl flex-1 flex-col overflow-hidden px-4 sm:px-6">
         <div className="flex-1 overflow-y-auto py-6">
           {historyLoaded && messages.length === 0 && (
-            <div className="mt-8">
+            <div className="welcome-panel mt-4 overflow-hidden rounded-[1.75rem] border border-slate-200/80 bg-white p-5 shadow-sm sm:mt-8 sm:p-8">
+              <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                <div>
+                  <div className="mb-2 inline-flex items-center gap-2 rounded-full bg-blue-50 px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.16em] text-blue-700 ring-1 ring-inset ring-blue-100">
+                    <span className="h-1.5 w-1.5 rounded-full bg-blue-600" /> Ready to analyze
+                  </div>
+                  <h2 className="text-2xl font-semibold tracking-[-0.04em] text-slate-950 sm:text-3xl">Bạn muốn khám phá điều gì hôm nay?</h2>
+                  <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-500">Đặt câu hỏi bằng ngôn ngữ tự nhiên. Trợ lý sẽ tìm dữ liệu phù hợp, giải thích ngắn gọn và giúp bạn đi đến hành động tiếp theo.</p>
+                </div>
+                <div className="hidden h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br from-blue-600 to-indigo-700 text-white shadow-lg shadow-blue-700/20 sm:flex">
+                  <IconChart className="h-6 w-6" />
+                </div>
+              </div>
               <p className="mb-3 text-sm text-slate-500">Thử hỏi một trong các câu sau:</p>
               <div className="flex flex-wrap gap-2">
                 {(isCLevel ? SAMPLE_QUESTIONS_CLEVEL : SAMPLE_QUESTIONS_COMMON).map((q) => (
@@ -1190,7 +1203,7 @@ export default function Home() {
                     className={`inline-flex items-center gap-1.5 rounded-full border px-4 py-2 text-sm shadow-sm transition ${
                       q.includes("chi phí AI")
                         ? "border-amber-300 bg-amber-50 text-amber-900 hover:border-amber-400 hover:bg-amber-100 font-medium"
-                        : "border-slate-300 bg-white text-slate-700 hover:border-indigo-400 hover:text-indigo-600"
+                        : "border-slate-200 bg-slate-50/80 text-slate-700 hover:border-indigo-400 hover:bg-white hover:text-indigo-600"
                     }`}
                   >
                     <span aria-hidden="true">{chipIcon(q)}</span>
@@ -1198,7 +1211,7 @@ export default function Home() {
                   </button>
                 ))}
               </div>
-              <p className="mt-4 text-xs text-slate-400">
+              <p className="mt-5 border-t border-slate-100 pt-4 text-xs text-slate-400">
                 Mẹo: bạn có thể hỏi tiếp câu liên quan (vd &quot;còn tháng trước thì sao?&quot;) mà
                 không cần nhắc lại — trợ lý sẽ nhớ ngữ cảnh trong cuộc trò chuyện này.
               </p>
@@ -1211,13 +1224,13 @@ export default function Home() {
         {/* Banner "Danh cho C-Level" da bo (29/07/2026): loi vao Dashboard Audit Log da co san o 2 cho
             (nut tren header + muc trong sidebar), banner thu 3 nam ngay tren o nhap chi lam chat khung
             chat va lap lai cung mot hanh dong. */}
-        <form onSubmit={handleSubmit} className="pb-4 pt-2">
-          <div className="input-floating flex items-center gap-2 rounded-full border border-slate-200 px-2 py-2 shadow-lg shadow-slate-900/5">
+        <form onSubmit={handleSubmit} className="pb-4 pt-2 sm:pb-6">
+          <div className="input-floating flex items-center gap-2 rounded-2xl border border-slate-200/90 px-2 py-2 shadow-xl shadow-slate-900/10 ring-1 ring-white sm:rounded-[1.25rem] sm:px-3">
             <input
               value={input}
               onChange={(e) => setInput(e.target.value)}
               placeholder="Hỏi về doanh thu, công nợ, KPI, tồn kho..."
-              className="flex-1 bg-transparent px-3 py-1.5 text-sm outline-none placeholder:text-slate-400"
+              className="flex-1 bg-transparent px-3 py-2 text-sm outline-none placeholder:text-slate-400"
               disabled={loading}
             />
             {loading ? (
