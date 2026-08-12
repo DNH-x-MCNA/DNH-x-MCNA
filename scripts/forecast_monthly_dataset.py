@@ -50,8 +50,16 @@ DB_PATH = os.path.join(BACKEND_DIR, "warehouse.db")
 OUT_DIR = os.path.join(BACKEND_DIR, "scratch", "forecast")
 
 CHANNELS = {"OTC": "vhoadon_otc", "ETC": "vhoadon_etc"}
-TEST_MONTHS = 6           # so thang cuoi dung de danh gia (walk-forward tren tung thang)
+
+# 80/20 (doi tu "6 thang cuoi" sang ty le, theo yeu cau 12/08/2026).
+# "20%" = 20% CUOI CHUOI, van cat theo THOI GIAN - khong phai lay ngau nhien 20% so thang.
+TEST_RATIO = 0.20
+MIN_TEST_MONTHS = 3
 MIN_MONTHS_REQUIRED = 12  # duoi muc nay thi moi ket luan deu khong dang tin
+
+
+def n_test_months(n_months):
+    return max(MIN_TEST_MONTHS, min(round(n_months * TEST_RATIO), max(MIN_TEST_MONTHS, n_months - 3)))
 
 
 def _q(conn, sql, params=()):
@@ -216,10 +224,13 @@ def main():
             if len(months) < 4:
                 continue
 
-        n_test = min(TEST_MONTHS, max(1, len(months) - 3))
-        test_idx = range(len(months) - n_test, len(months))
-        print(f"  Train: {months[0]} -> {months[len(months) - n_test - 1]}"
-              f"   |   Test: {months[len(months) - n_test]} -> {months[-1]}  ({n_test} thang)")
+        n_test = n_test_months(len(months))
+        n_train = len(months) - n_test
+        test_idx = range(n_train, len(months))
+        print(f"  Chia 80/20 theo thoi gian: TRAIN {n_train} thang ({n_train/len(months)*100:.0f}%)"
+              f"  |  TEST {n_test} thang ({n_test/len(months)*100:.0f}%)")
+        print(f"  Train: {months[0]} -> {months[n_train - 1]}"
+              f"   |   Test: {months[n_train]} -> {months[-1]}")
         if len(months) < 25:
             print("  Luu y: duoi 25 thang thi mo hinh 'cung ky nam truoc' hau nhu khong chay duoc")
             print("  (thieu du lieu nam truoc) - can >=24 thang moi hoc duoc mua vu.")

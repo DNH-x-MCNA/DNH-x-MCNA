@@ -43,8 +43,21 @@ BACKEND_DIR = os.environ.get("DNH_BACKEND_DIR", r"C:\dnh_chatbot\backend")
 DB_PATH = os.path.join(BACKEND_DIR, "warehouse.db")
 OUT_DIR = os.path.join(BACKEND_DIR, "scratch", "forecast")
 CHANNELS = {"OTC": "vhoadon_otc", "ETC": "vhoadon_etc"}
-TEST_MONTHS = 6
+
+# 80/20 (doi tu "6 thang cuoi" sang ty le, theo yeu cau 12/08/2026).
+# LUU Y: "20%" o day la 20% CUOI CHUOI, van cat theo THOI GIAN. TUYET DOI khong phai lay ngau nhien
+# 20% so thang - voi chuoi thoi gian, lay ngau nhien la cho model hoc thang SAU roi di du bao thang
+# TRUOC (nhin trom tuong lai), chi so dep gia ma ra that sai bet.
+TEST_RATIO = 0.20
+MIN_TEST_MONTHS = 3
+MIN_TRAIN_MONTHS = 24   # duoi 24 thang thi khong uoc luong duoc mua vu theo nam
 TY = 1_000_000_000
+
+
+def n_test_months(n_months):
+    """So thang dung lam TEST theo ty le 80/20, co chan de khong bop train xuong duoi 24 thang."""
+    n_test = max(MIN_TEST_MONTHS, round(n_months * TEST_RATIO))
+    return max(MIN_TEST_MONTHS, min(n_test, n_months - MIN_TRAIN_MONTHS))
 
 
 def month_add(ym, k):
@@ -192,10 +205,13 @@ def predict_all(series, hist_months, target):
 
 def evaluate(channel, series, months):
     print(f"\n{'=' * 78}\nSO SANH MO HINH - KENH {channel}  (walk-forward, cung tap test voi buoc truoc)\n{'=' * 78}")
-    n_test = min(TEST_MONTHS, max(1, len(months) - 24))
-    test_idx = range(len(months) - n_test, len(months))
-    print(f"  Train: {months[0]} -> {months[len(months)-n_test-1]}   |   "
-          f"Test: {months[len(months)-n_test]} -> {months[-1]}  ({n_test} thang)")
+    n_test = n_test_months(len(months))
+    n_train = len(months) - n_test
+    test_idx = range(n_train, len(months))
+    print(f"  Chia 80/20 theo thoi gian: TRAIN {n_train} thang ({n_train/len(months)*100:.0f}%)"
+          f"  |  TEST {n_test} thang ({n_test/len(months)*100:.0f}%)")
+    print(f"  Train: {months[0]} -> {months[n_train-1]}   |   "
+          f"Test: {months[n_train]} -> {months[-1]}")
 
     errs = defaultdict(list)
     detail = defaultdict(dict)
