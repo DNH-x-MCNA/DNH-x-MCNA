@@ -174,8 +174,21 @@ class KhongXacDinhDuocDoi(Exception):
     tra 0 dong - xem ghi chu trong _get_team_dms_ids()."""
 
 
-def _get_team_dms_ids(scope_employee_code: str) -> list:
-    """DMSId cua tat ca TDV thuoc quyen quan ly cua 1 QLV.
+def _fact_date_le(as_of_date: str = None) -> str:
+    """Ngay snapshot KPI gan nhat KHONG VUOT QUA as_of_date (rong = moi nhat co trong kho).
+
+    13/08/2026: tach ra thanh ham rieng de revenue_tree va bo loc pham vi doanh thu dung CHUNG
+    mot cach tinh. Truoc do moi ben tu tinh mot kieu: cay to chuc chot doi theo ky duoc hoi, con
+    bo loc doanh thu luon lay ky moi nhat -> hoi doanh thu thang 7 thi cay tra ve doi thang 7
+    nhung bo loc tra ve doi thang 8, lech 8/18 QLV khi nhan su co thay doi giua 2 thang."""
+    if not as_of_date:
+        return _fact_latest_date()
+    r = _q("SELECT MAX(save_date) d FROM fact_tonghopkhachhang WHERE save_date<=?", (str(as_of_date),))
+    return r[0]["d"] if r and r[0]["d"] else None
+
+
+def _get_team_dms_ids(scope_employee_code: str, fdate: str = None) -> list:
+    """DMSId cua tat ca TDV thuoc quyen quan ly cua 1 QLV tai thoi diem `fdate`.
 
     13/08/2026 DOI NGUON XAC DINH DOI - suy luan zone -> manager_code that tu Bravo.
 
@@ -196,8 +209,13 @@ def _get_team_dms_ids(scope_employee_code: str) -> list:
     se lam 2 duong lech tro lai, dung la thu vua di sua.
 
     Nem KhongXacDinhDuocDoi thay vi tra [] khi khong ra doi: [] se thanh " AND 1=0" -> moi tool tra
-    0 dong ma khong bao gi, nguoi dung tin la "doi minh khong ban duoc gi". Tha noi khong biet."""
-    team = _team_of_qlv(scope_employee_code)
+    0 dong ma khong bao gi, nguoi dung tin la "doi minh khong ban duoc gi". Tha noi khong biet.
+
+    `fdate`: ngay snapshot de chot doi. Rong = doi HIEN TAI. Cac tool doanh thu truyen ngay cuoi
+    ky duoc hoi vao day, de "doanh thu doi toi thang 7" tinh theo doi CUA THANG 7 - dung dinh nghia
+    ma cay to chuc, KPI va luong dang dung. Thieu tham so nay chinh la 8/18 ca lech con lai sau ban
+    va sang 13/08."""
+    team = _team_of_qlv(scope_employee_code, fdate)
     codes = [t["employee_code"] for t in team if t.get("employee_code")]
     if not codes:
         raise KhongXacDinhDuocDoi(
@@ -217,13 +235,17 @@ def _get_team_dms_ids(scope_employee_code: str) -> list:
     return dms_ids
 
 
-def _employee_scope_clause(scope_employee_code: str, alias: str) -> tuple:
+def _employee_scope_clause(scope_employee_code: str, alias: str, as_of: str = None) -> tuple:
     """13/08/2026: bo nhanh `return " AND 1=0"`. Nhanh do bien "khong biet doi gom ai" thanh
     "doi khong ban duoc dong nao" - cung mot cau tra loi cho hai su that hoan toan khac nhau.
-    _get_team_dms_ids() gio nem KhongXacDinhDuocDoi, call_template bat va tra loi ro ly do."""
+    _get_team_dms_ids() gio nem KhongXacDinhDuocDoi, call_template bat va tra loi ro ly do.
+
+    `as_of`: NGAY CUOI KY dang duoc hoi (thuong la date_to). Doi duoc chot theo snapshot gan nhat
+    khong vuot qua ngay do - giong het cach revenue_tree lam. Bo trong = doi hien tai, dung cho
+    cac cho khong gan voi mot ky cu the (vd chuoi lich su nhieu nam cua tool du bao)."""
     if not scope_employee_code:
         return "", ()
-    dms_ids = _get_team_dms_ids(scope_employee_code)
+    dms_ids = _get_team_dms_ids(scope_employee_code, _fact_date_le(as_of) if as_of else None)
     placeholders = ",".join(["?"] * len(dms_ids))
     return f" AND {alias}.employee_code IN ({placeholders})", tuple(dms_ids)
 
@@ -238,7 +260,7 @@ def revenue_by_channel(date_from: str, date_to: str, scope_area_code: str = None
     kem co "channel_scope" bao hieu day la du lieu bi gioi han kenh (khac scope_area_code, co che
     nay doc lap va ap dung duoc cho moi role)."""
     scope_sql, scope_params = _scope_clause(scope_area_code)
-    emp_sql, emp_params = _employee_scope_clause(scope_employee_code, "v")
+    emp_sql, emp_params = _employee_scope_clause(scope_employee_code, "v", as_of=date_to)
     scope_sql += emp_sql
     scope_params += emp_params
     join_o = _otc_area_join("v", scope_area_code)
@@ -260,7 +282,7 @@ def revenue_by_channel(date_from: str, date_to: str, scope_area_code: str = None
         summary_to = min(date_to, cutoff)
         ym_from, ym_to = date_from[:7], summary_to[:7]
         msc_o, msc_o_params = _monthly_summary_scope_clause(scope_area_code, "OTC")
-        msc_emp_sql, msc_emp_params = _employee_scope_clause(scope_employee_code, "m")
+        msc_emp_sql, msc_emp_params = _employee_scope_clause(scope_employee_code, "m", as_of=date_to)
         msc_o += msc_emp_sql
         msc_o_params += msc_emp_params
         so = _q(f"SELECT COALESCE(SUM(m.revenue),0) rev, COALESCE(SUM(m.invoice_count),0) hd "
@@ -269,7 +291,7 @@ def revenue_by_channel(date_from: str, date_to: str, scope_area_code: str = None
         otc_rev += _f(so["rev"]); otc_hd += int(so["hd"] or 0)
         if scope_channel != "OTC":
             msc_e, msc_e_params = _monthly_summary_scope_clause(scope_area_code, "ETC")
-            msc_emp_sql, msc_emp_params = _employee_scope_clause(scope_employee_code, "m")
+            msc_emp_sql, msc_emp_params = _employee_scope_clause(scope_employee_code, "m", as_of=date_to)
             msc_e += msc_emp_sql
             msc_e_params += msc_emp_params
             se = _q(f"SELECT COALESCE(SUM(m.revenue),0) rev, COALESCE(SUM(m.invoice_count),0) hd "
@@ -300,7 +322,7 @@ def top_products(date_from: str, date_to: str, limit: int = 10, channel: str = "
     if scope_channel:
         channel = scope_channel
     scope_sql, scope_params = _scope_clause(scope_area_code)
-    emp_sql, emp_params = _employee_scope_clause(scope_employee_code, "v")
+    emp_sql, emp_params = _employee_scope_clause(scope_employee_code, "v", as_of=date_to)
     scope_sql += emp_sql
     scope_params += emp_params
     parts, part_params = [], []
@@ -343,7 +365,7 @@ def top_customers(date_from: str, date_to: str, limit: int = 10, channel: str = 
     if scope_channel:
         channel = scope_channel
     scope_sql, scope_params = _scope_clause(scope_area_code)
-    emp_sql, emp_params = _employee_scope_clause(scope_employee_code, "v")
+    emp_sql, emp_params = _employee_scope_clause(scope_employee_code, "v", as_of=date_to)
     scope_sql += emp_sql
     scope_params += emp_params
     parts, part_params = [], []
@@ -366,7 +388,7 @@ def top_customers(date_from: str, date_to: str, limit: int = 10, channel: str = 
         ym_from, ym_to = date_from[:7], summary_to[:7]
         if channel in ("OTC", "ALL"):
             msc_sql, msc_params = _monthly_summary_scope_clause(scope_area_code, "OTC")
-            msc_emp_sql, msc_emp_params = _employee_scope_clause(scope_employee_code, "m")
+            msc_emp_sql, msc_emp_params = _employee_scope_clause(scope_employee_code, "m", as_of=date_to)
             msc_sql += msc_emp_sql
             msc_params += msc_emp_params
             parts.append(f"SELECT m.customer_code, m.revenue AS amount9 FROM monthly_customer_summary m "
@@ -374,7 +396,7 @@ def top_customers(date_from: str, date_to: str, limit: int = 10, channel: str = 
             part_params.append((ym_from, ym_to) + msc_params)
         if channel in ("ETC", "ALL"):
             msc_sql, msc_params = _monthly_summary_scope_clause(scope_area_code, "ETC")
-            msc_emp_sql, msc_emp_params = _employee_scope_clause(scope_employee_code, "m")
+            msc_emp_sql, msc_emp_params = _employee_scope_clause(scope_employee_code, "m", as_of=date_to)
             msc_sql += msc_emp_sql
             msc_params += msc_emp_params
             parts.append(f"SELECT m.customer_code, m.revenue AS amount9 FROM monthly_customer_summary m "
@@ -424,8 +446,8 @@ def revenue_by_region(date_from: str, date_to: str, scope_area_code: str = None,
     if scope_channel:
         channel = scope_channel
     
-    emp_sql_o, emp_params_o = _employee_scope_clause(scope_employee_code, "o")
-    emp_sql_e, emp_params_e = _employee_scope_clause(scope_employee_code, "e")
+    emp_sql_o, emp_params_o = _employee_scope_clause(scope_employee_code, "o", as_of=date_to)
+    emp_sql_e, emp_params_e = _employee_scope_clause(scope_employee_code, "e", as_of=date_to)
     
     parts = []
     part_params = []
@@ -452,7 +474,7 @@ def revenue_by_region(date_from: str, date_to: str, scope_area_code: str = None,
     if date_from < cutoff:
         summary_to = min(date_to, cutoff)
         ym_from, ym_to = date_from[:7], summary_to[:7]
-        emp_sql_m, emp_params_m = _employee_scope_clause(scope_employee_code, "m")
+        emp_sql_m, emp_params_m = _employee_scope_clause(scope_employee_code, "m", as_of=date_to)
         summary_parts = []
         summary_params = []
         if channel != "ETC":
@@ -2082,8 +2104,10 @@ def revenue_tree(as_of_date: str = None, area_code: str = None, scope_area_code:
         area_code = scope_area_code
     if as_of_date is None:
         as_of_date = str(dt.date.today())
-    fdate_r = _q("SELECT MAX(save_date) d FROM fact_tonghopkhachhang WHERE save_date<=?", (as_of_date,))
-    fdate = fdate_r[0]["d"] if fdate_r else None
+    # 13/08/2026: dung CHUNG _fact_date_le() voi bo loc pham vi doanh thu (_employee_scope_clause).
+    # Truoc do 2 ben tu tinh moc chot doi mot kieu nen lech nhau 8/18 QLV - viet 1 lan o 1 cho thi
+    # khong the lech tro lai.
+    fdate = _fact_date_le(as_of_date)
     if not fdate:
         return {"as_of": None, "tree": []}
 
