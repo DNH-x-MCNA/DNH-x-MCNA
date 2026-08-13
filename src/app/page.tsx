@@ -1568,7 +1568,7 @@ export default function Home() {
                             Tổng tiền toàn công ty vẫn đúng.
                           </div>
                         )}
-                        <div className="max-h-[420px] overflow-auto rounded-xl border border-slate-200 shadow-sm">
+                        <ExportableTable nhan="chi-phi-ai-theo-nguoi-dung" className="max-h-[420px] overflow-auto rounded-xl border border-slate-200 shadow-sm">
                           <table className="min-w-full text-xs tabular-nums">
                             <thead className="sticky top-0 z-10 bg-[#F1F5F9] text-slate-700 font-semibold shadow-[0_1px_0_0_theme(colors.slate.200)]">
                               <tr>
@@ -1622,7 +1622,7 @@ export default function Home() {
                               })}
                             </tbody>
                           </table>
-                        </div>
+                        </ExportableTable>
                       </div>
                     );
                   })()}
@@ -1824,7 +1824,7 @@ export default function Home() {
                       {/* Weekly User Breakdown Table */}
                       <div className="flex flex-col gap-2">
                         <h4 className="text-xs font-bold text-slate-700 flex items-center gap-1.5"><IconUsers className="w-3.5 h-3.5" /> Thống Kê Theo Tài Khoản Trong Tuần Này</h4>
-                        <div className="max-h-48 overflow-auto rounded-xl border border-slate-200 shadow-sm">
+                        <ExportableTable nhan="chi-phi-tuan-theo-tai-khoan" className="max-h-48 overflow-auto rounded-xl border border-slate-200 shadow-sm">
                           <table className="min-w-full text-xs tabular-nums">
                             <thead className="sticky top-0 bg-slate-100 text-slate-700 font-semibold shadow-[0_1px_0_0_theme(colors.slate.200)]">
                               <tr>
@@ -1854,7 +1854,7 @@ export default function Home() {
                               )}
                             </tbody>
                           </table>
-                        </div>
+                        </ExportableTable>
                       </div>
                     </div>
                   )}
@@ -1874,7 +1874,7 @@ export default function Home() {
                       <h3 className="text-sm font-bold text-slate-800">
                         📝 Nhật Ký Truy Vấn Chi Tiết ({queryOnlyLogs.length} dòng gần nhất)
                       </h3>
-                      <div className="max-h-[420px] overflow-auto rounded-xl border border-slate-200 shadow-sm">
+                      <ExportableTable nhan="nhat-ky-truy-van" className="max-h-[420px] overflow-auto rounded-xl border border-slate-200 shadow-sm">
                         <table className="min-w-full text-xs tabular-nums">
                           <thead className="sticky top-0 z-10 bg-[#F1F5F9] text-slate-700 font-semibold shadow-[0_1px_0_0_theme(colors.slate.200)]">
                             <tr>
@@ -1926,7 +1926,7 @@ export default function Home() {
                             ))}
                           </tbody>
                         </table>
-                      </div>
+                      </ExportableTable>
                     </div>
                     );
                   })()}
