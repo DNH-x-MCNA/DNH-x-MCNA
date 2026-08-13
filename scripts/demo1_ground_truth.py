@@ -274,13 +274,21 @@ def section_clevel(p):
     p_otc, p_etc, _, _ = _period_revenue(pm_start, pm_end)
     cur_total, prev_total = otc + etc, p_otc + p_etc
     growth = ((cur_total - prev_total) / prev_total * 100) if prev_total else None
+    # Lưu ý "tháng này mới chạy dở" CHỈ đúng khi kỳ đang xét là tháng đang chạy. Với --as-of trỏ về
+    # một tháng đã trọn (vd 31/07) thì hai vế đều trọn vẹn, in cảnh báo đó ra là dặn sai người trình
+    # bày — họ sẽ giải thích một hiện tượng không tồn tại trước mặt khách.
+    ky_da_tron = m_end.date() < datetime.now().date()
+    luu_y = ([
+        "LƯU Ý: cả hai kỳ đều TRỌN VẸN nên so sánh này là so ngang bằng, không cần trừ hao.",
+    ] if ky_da_tron else [
+        "LƯU Ý: tháng này mới chạy dở, so với tháng trước TRỌN VẸN nên tất nhiên thấp hơn —",
+        "       tại demo phải nói rõ điều này, đừng để khách hiểu là doanh thu đang sụt.",
+    ])
     answer("C2", f"So với tháng trước ({pm_lbl}) tăng/giảm bao nhiêu %?", [
         f"Tháng này:  {money(cur_total)}",
         f"Tháng trước: {money(prev_total)}",
         f"Chênh lệch: {'(không tính được)' if growth is None else f'{growth:+.1f}%'}",
-        "LƯU Ý: tháng này mới chạy dở, so với tháng trước TRỌN VẸN nên tất nhiên thấp hơn —",
-        "       tại demo phải nói rõ điều này, đừng để khách hiểu là doanh thu đang sụt.",
-    ])
+    ] + luu_y)
 
     # --- C3: doanh thu theo miền ---
     by_region = _revenue_by_region(m_start, m_end)
@@ -515,9 +523,21 @@ def section_receivables(p):
 def section_crosscheck(p):
     """Đối chiếu chéo: các con số trong file này phải khớp báo cáo định kỳ. Lệch = script sai."""
     print(f"\n{SEP}\nĐỐI CHIẾU CHÉO VỚI BÁO CÁO ĐỊNH KỲ (tự kiểm tra script này)\n{SEP}")
+    m_start, m_end, _ = p["thang_nay"]
+
+    # 13/08/2026 SỬA BÁO ĐỘNG GIẢ: get_monthly_digest_metrics() KHÔNG nhận as-of, nó luôn tính
+    # tháng ĐANG CHẠY. Khi dùng --as-of để lấy số của tháng đã qua, phép so này đem tháng 7 so với
+    # tháng 8 dở dang rồi kết luận "LỆCH — script sai". Sai ở phép so, không phải ở số liệu:
+    # lần chạy 13/08 báo lệch 48,5 tỷ trong khi cả hai vế đều đúng với kỳ của mình.
+    thang_hien_tai = datetime.now().strftime("%Y-%m")
+    if m_start.strftime("%Y-%m") != thang_hien_tai:
+        print(f"  BỎ QUA: đang dùng --as-of nên kỳ của script là {m_start.strftime('%m/%Y')}, còn báo")
+        print(f"          cáo định kỳ luôn tính tháng đang chạy ({thang_hien_tai}) — hai kỳ khác nhau,")
+        print("          so với nhau là vô nghĩa. Muốn đối chiếu thật thì chạy KHÔNG kèm --as-of.")
+        return True
+
     m = get_monthly_digest_metrics(region=None, channel=None)
     r = m["revenue"]
-    m_start, m_end, _ = p["thang_nay"]
     otc, etc, _, _ = _period_revenue(m_start, m_end)
 
     print(f"  Kỳ báo cáo tháng: {m['period_range']}")
