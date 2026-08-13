@@ -7,6 +7,7 @@ import {
   IconSettings, IconMail, IconSearch,
 } from "./icons";
 import { useModal } from "./useModal";
+import { ExportableTable } from "./TableExport";
 
 interface UserItem {
   id: number;
@@ -386,6 +387,7 @@ export default function AdminUsersPanel({ authToken, onClose }: AdminUsersPanelP
               ) : users.length === 0 ? (
                 <div className="py-12 text-center text-slate-400 text-sm">Không có tài khoản nào phù hợp với bộ lọc.</div>
               ) : (
+                <ExportableTable nhan="danh-sach-tai-khoan">
                 <table className="w-full text-left text-xs border-collapse">
                   <thead>
                     <tr className="border-b border-slate-200 text-slate-500 font-semibold bg-slate-50">
@@ -467,6 +469,7 @@ export default function AdminUsersPanel({ authToken, onClose }: AdminUsersPanelP
                     ))}
                   </tbody>
                 </table>
+                </ExportableTable>
               )}
             </div>
           </>
@@ -531,6 +534,7 @@ export default function AdminUsersPanel({ authToken, onClose }: AdminUsersPanelP
             ) : filteredSecurityLogs.length === 0 ? (
               <div className="py-12 text-center text-slate-400 text-sm">Không có sự kiện nào khớp với bộ lọc hiện tại.</div>
             ) : (
+              <ExportableTable nhan="nhat-ky-bao-mat">
               <table className="w-full text-left text-xs border-collapse">
                 <thead>
                   <tr className="border-b border-slate-200 text-slate-500 font-semibold bg-slate-50">
@@ -584,6 +588,7 @@ export default function AdminUsersPanel({ authToken, onClose }: AdminUsersPanelP
                   })}
                 </tbody>
               </table>
+              </ExportableTable>
             )}
           </div>
         )}
