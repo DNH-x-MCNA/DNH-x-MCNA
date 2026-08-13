@@ -57,6 +57,7 @@ def _build(path, thang_co_doanh_thu):
         CREATE TABLE dmssx_khachhang (code TEXT, city_id INTEGER);
         CREATE TABLE dim_tinhthanhpho (city_id INTEGER, area_code TEXT);
         CREATE TABLE brv_sanpham (code TEXT, name TEXT);
+        CREATE TABLE fact_tonghopkhachhang (employee_code TEXT, manager_code TEXT, save_date TEXT);
     """)
     # Cay to chuc: 1 ban ghi "bong" cua QLV mang manager_area_code cua to, + ban ghi QLV that
     # cung ten (day dung la co che suy luan cua org_hierarchy.zone_to_qlv_map).
@@ -68,9 +69,20 @@ def _build(path, thang_co_doanh_thu):
             (QLV_CODE, "Nguyen Van A", "QLV", "MB", None, "DQ1"),
             ("T01", "Tran Thi B", "TDV", "MB", ZONE, TDV_DMS[0]),
             ("T02", "Le Van C", "TDV", "MB", ZONE, TDV_DMS[1]),
+            # T03 la CA HAI DUONG BAT DONG - moi la thu phan biet duoc code cu voi code moi:
+            # mang manager_area_code cua to (suy luan zone se NHAN) nhung bao cao len QLV KHAC
+            # (manager_code that se LOAI). Tren du lieu that day chinh la 8/18 ca "lech doi hinh".
+            ("T03", "Vu Lech Doi Hinh", "TDV", "MB", ZONE, "D03"),
             # Nguoi NGOAI doi - doanh thu cua ho KHONG duoc lot vao pham vi cua QLV tren
             ("T99", "Pham Ngoai Doi", "TDV", "MN", "V09", "D99"),
         ])
+    # Nguon xac dinh doi THAT: manager_code tren FACT_TongHopKhachHang (cung nguon revenue_tree dung).
+    # T99 bao cao len 1 QLV KHAC - de chac chan bo loc khong vo tinh keo nguoi ngoai doi vao.
+    con.executemany("INSERT INTO fact_tonghopkhachhang (employee_code,manager_code,save_date) VALUES (?,?,?)",
+                    [("T01", QLV_CODE, "2026-08-31"),
+                     ("T02", QLV_CODE, "2026-08-31"),
+                     ("T03", "Q_KHAC", "2026-08-31"),
+                     ("T99", "Q_KHAC", "2026-08-31")])
     con.execute("INSERT INTO dms_khachhang VALUES ('KH001', 1)")
     con.execute("INSERT INTO dmssx_khachhang VALUES ('KH001', 1)")
     con.execute("INSERT INTO dim_tinhthanhpho VALUES (1, 'MB')")
@@ -153,6 +165,35 @@ def test_pham_vi_doi_chi_gom_doanh_thu_cua_doi(kho):
     ca_cong_ty = rt.revenue_by_channel(f"{thang}-01", f"{thang}-28 23:59:59")
     assert doi["otc"]["revenue"] == pytest.approx(1_000_000_000.0)
     assert ca_cong_ty["otc"]["revenue"] == pytest.approx(4_000_000_000.0)
+
+
+# ------------------------------------------- một định nghĩa "đội" duy nhất (sửa 13/08)
+
+def test_doi_xac_dinh_qua_manager_code_khong_phai_zone(kho):
+    """Bo loc doanh thu phai dem DUNG nhung nguoi ma revenue_tree/KPI coi la doi cua QLV.
+    Truoc 13/08 no dung org_hierarchy.qlv_zones() (suy luan qua ten) -> 2 duong lech nhau
+    o 8/18 QLV tren du lieu that."""
+    theo_cay = {t["employee_code"] for t in rt._team_of_qlv(QLV_CODE)}
+    assert theo_cay == {"T01", "T02"}, "revenue_tree/KPI phai chi thay T01+T02"
+    # T03 nam trong to (zone) nhung bao cao len QLV khac -> KHONG duoc lot vao pham vi.
+    # Code cu (zone-based) se tra ca D03 va lam test nay fail - do dung la muc dich cua no.
+    assert sorted(rt._get_team_dms_ids(QLV_CODE)) == sorted(TDV_DMS), (
+        "Bo loc doanh thu dang dem khac cay to chuc - hai dinh nghia 'doi' lai phan ky")
+
+
+def test_khong_xac_dinh_duoc_doi_thi_BAO_RO_chu_khong_tra_0d(kho):
+    """Loi nguy hiem nhat da sua: QLV khong suy ra duoc doi thi moi tool tra 0 dong ma khong
+    canh bao gi - nguoi dung tin la 'doi minh khong ban duoc gi'. Gio phai bao ro ly do."""
+    with pytest.raises(rt.KhongXacDinhDuocDoi):
+        rt._get_team_dms_ids("QLV_KHONG_TON_TAI")
+
+    p = rt.call_template("get_revenue_by_channel",
+                         {"date_from": "2026-07-01", "date_to": "2026-07-31"},
+                         scope_employee_code="QLV_KHONG_TON_TAI", scope_role="qlv")
+    assert p["ok"] is False, "Tra ve ok=True nghia la van dang am tham tra 0 dong"
+    assert "Khong xac dinh duoc doi" in p["error"]
+    # KHONG duoc boc them "Loi khi chay bao cao chuan" - day la thieu du lieu, khong phai su co
+    assert "Loi khi chay bao cao chuan" not in p["error"]
 
 
 # ---------------------------------------------------------------- tool dự báo

@@ -169,24 +169,61 @@ def _monthly_summary_scope_clause(scope_area_code: str, channel: str):
             f"WHERE kh.code=m.customer_code AND tp.area_code=?)", (scope_area_code,))
 
 
+class KhongXacDinhDuocDoi(Exception):
+    """Khong xac dinh duoc doi cua 1 QLV. PHAI bao ro ra ngoai, TUYET DOI khong duoc am tham
+    tra 0 dong - xem ghi chu trong _get_team_dms_ids()."""
+
+
 def _get_team_dms_ids(scope_employee_code: str) -> list:
-    """Tra ve danh sach DMSId cua tat ca TDV thuoc quyen quan ly cua 1 QLV."""
-    from org_hierarchy import qlv_zones
-    zones = qlv_zones(scope_employee_code)
-    if not zones:
-        return []
-    placeholders = ",".join(["?"] * len(zones))
-    # name NOT LIKE '%(QLV)%' de loai ban ghi bong, lay dung TDV ban hang
-    rows = _q(f"SELECT dmsid FROM dim_nhanvien WHERE manager_area_code IN ({placeholders}) "
-              f"AND end_date IS NULL AND COALESCE(is_resigned,0)<>1 AND name NOT LIKE '%(QLV)%'", tuple(zones))
-    return [r["dmsid"] for r in rows if r.get("dmsid")]
+    """DMSId cua tat ca TDV thuoc quyen quan ly cua 1 QLV.
+
+    13/08/2026 DOI NGUON XAC DINH DOI - suy luan zone -> manager_code that tu Bravo.
+
+    Truoc do ham nay dung org_hierarchy.qlv_zones() (suy luan qua quy uoc dat ten: tim ban ghi
+    "bong" ten co hau to "(QLV)" mang manager_area_code cua to, roi khop ten voi ban ghi QLV that).
+    Cach do sai ~30% - chinh docstring cua _team_of_qlv() da ghi ro va da THAY THE no "cho MOI cho
+    can biet doi cua 1 QLV", sau su co 23/07/2026: 5 QLV bi hieu la "khong co doi" trong khi 4/5 co
+    that 6-8 TDV, lam KPI Mien Trung cong trung 11,82 ty thay vi 6,79 ty that.
+    Nhung cuoc doi nguon do BO SOT ham nay - noi loc doanh thu cho 5 tool da mo cho vai QLV. Do do
+    trong kho code ton tai HAI dinh nghia "doi" song song, va kiem chung 13/08/2026 tren du lieu that
+    cho thay hau qua:
+      - 4/18 QLV bi tra 0 dong CAM LANG (zone khong suy ra duoc) - trong do 3 nguoi Mien Trung co
+        tai khoan that: Hoang Cong Thuong, Hoang Van Dung, Pham Van Thuan;
+      - 8/18 QLV lech doi hinh (cay to chuc dem 10 nguoi, bo loc doanh thu dem 9) theo CA HAI chieu.
+    Gio dung CHUNG _team_of_qlv() voi revenue_tree/KPI nen 2 con so luon khop theo dinh nghia.
+
+    KHONG them bat ky bo loc nao khac ngoai nhung gi _team_of_qlv() da loc - moi bo loc them vao day
+    se lam 2 duong lech tro lai, dung la thu vua di sua.
+
+    Nem KhongXacDinhDuocDoi thay vi tra [] khi khong ra doi: [] se thanh " AND 1=0" -> moi tool tra
+    0 dong ma khong bao gi, nguoi dung tin la "doi minh khong ban duoc gi". Tha noi khong biet."""
+    team = _team_of_qlv(scope_employee_code)
+    codes = [t["employee_code"] for t in team if t.get("employee_code")]
+    if not codes:
+        raise KhongXacDinhDuocDoi(
+            f"Khong xac dinh duoc doi cua quan ly vung '{scope_employee_code}': khong tim thay TDV "
+            f"nao bao cao len ma nay trong FACT_TongHopKhachHang. KHONG the tra so doanh thu theo "
+            f"doi. Bao voi nguoi dung rang du lieu phan cong doi cua ho chua co trong he thong, "
+            f"can DNH kiem tra lai ManagerCode tren Bravo.")
+    placeholders = ",".join(["?"] * len(codes))
+    rows = _q(f"SELECT dmsid FROM dim_nhanvien WHERE employee_code IN ({placeholders}) "
+              f"AND dmsid IS NOT NULL", tuple(codes))
+    dms_ids = [r["dmsid"] for r in rows if r.get("dmsid")]
+    if not dms_ids:
+        raise KhongXacDinhDuocDoi(
+            f"Doi cua quan ly vung '{scope_employee_code}' co {len(codes)} TDV nhung KHONG ai co "
+            f"DMSId trong dim_nhanvien - hoa don ghi theo DMSId nen khong loc duoc doanh thu. "
+            f"Bao voi nguoi dung day la thieu du lieu he thong, khong phai doi khong co doanh thu.")
+    return dms_ids
+
 
 def _employee_scope_clause(scope_employee_code: str, alias: str) -> tuple:
+    """13/08/2026: bo nhanh `return " AND 1=0"`. Nhanh do bien "khong biet doi gom ai" thanh
+    "doi khong ban duoc dong nao" - cung mot cau tra loi cho hai su that hoan toan khac nhau.
+    _get_team_dms_ids() gio nem KhongXacDinhDuocDoi, call_template bat va tra loi ro ly do."""
     if not scope_employee_code:
         return "", ()
     dms_ids = _get_team_dms_ids(scope_employee_code)
-    if not dms_ids:
-        return " AND 1=0", ()
     placeholders = ",".join(["?"] * len(dms_ids))
     return f" AND {alias}.employee_code IN ({placeholders})", tuple(dms_ids)
 
@@ -3319,6 +3356,12 @@ def call_template(name: str, args: dict, question: str = "", username: str = Non
         if warnings:
             payload["canh_bao"] = warnings
         return payload
+    except KhongXacDinhDuocDoi as e:
+        # KHONG boc them "Loi khi chay bao cao chuan" - day khong phai su co ky thuat ma la
+        # THIEU DU LIEU PHAN CONG DOI. Thong diep da viet san cho nguoi dung, giu nguyen van.
+        entry["status"] = "no_team"; entry["error"] = str(e)[:300]
+        _write_log(entry)
+        return {"ok": False, "error": str(e)}
     except Exception as e:
         entry["status"] = "error"; entry["error"] = str(e)[:300]
         _write_log(entry)
