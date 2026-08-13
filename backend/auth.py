@@ -397,7 +397,12 @@ def get_subordinate_usernames(director_user: dict) -> list[str] | None:
 
 
 def migrate_and_seed_users():
-    """Tudong migration: trieu.dang -> admin.dnh (giu nguyen mat khau hash), va khoi tao dnh (c_level)."""
+    """Chay cac migration mot lan va tao tai khoan he thong neu con thieu.
+
+    Ham nay duoc goi moi khi backend khoi dong, vi vay tuyet doi khong duoc gan lai role cua
+    tai khoan da ton tai. Role/pham vi sau khi admin cap nhat la du lieu nghiep vu va phai duoc
+    giu nguyen qua restart/deploy.
+    """
     conn = get_conn()
     try:
         # 1. Doi username trieu.dang -> admin.dnh neu co
@@ -416,10 +421,6 @@ def migrate_and_seed_users():
                 (pwd_hash, salt, dt.datetime.now().isoformat())
             )
             conn.commit()
-        else:
-            conn.execute("UPDATE users SET role='admin_ops' WHERE username='admin.dnh'")
-            conn.commit()
-
         # 2. Dam bao tai khoan dnh (C-Level duy nhat) ton tai
         row_dnh = conn.execute("SELECT id FROM users WHERE username='dnh'").fetchone()
         if not row_dnh:
@@ -431,18 +432,9 @@ def migrate_and_seed_users():
                 (pwd_hash, salt, dt.datetime.now().isoformat())
             )
             conn.commit()
-        else:
-            conn.execute("UPDATE users SET role='c_level' WHERE username='dnh'")
-            conn.commit()
-
-        # 3. Dam bao cac tai khoan Giam doc Mien / Kenh demo (manager_*) la regional_director
-        conn.execute("UPDATE users SET role='regional_director' WHERE username LIKE 'manager_%'")
-        # Phuc hoi role='qlv' cho tat ca tai khoan QLV nhan vien (nhu tungtx) bi set nham thanh regional_director
-        conn.execute(
-            "UPDATE users SET role='qlv' "
-            "WHERE username NOT IN ('dnh', 'admin.dnh') AND username NOT LIKE 'manager_%' AND (role='regional_director' OR role='c_level')"
-        )
-        conn.commit()
+        # Khong UPDATE role cua bat ky tai khoan da ton tai nao o day. Truoc 13/08/2026, khoi
+        # dong backend tu dong ep manager_* thanh regional_director va moi tai khoan con lai
+        # thanh qlv. Do do role Giam doc Mien/Kenh admin vua luu se bi mat sau lan restart ke tiep.
     finally:
         conn.close()
 
