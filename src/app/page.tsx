@@ -5,6 +5,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import AuthScreens from "./AuthScreens";
 import AdminUsersPanel from "./AdminUsersPanel";
+import { ExportableTable } from "./TableExport";
 import {
   IconChart, IconLogout, IconPlus, IconTrash, IconSend, IconSearch,
   IconUsers, IconCoin, IconMenu, IconClose, IconRefresh, IconSquare,
@@ -344,9 +345,13 @@ const markdownComponents = {
   ),
   hr: () => <hr className="my-3 border-slate-200" />,
   table: ({ children }: { children?: ReactNode }) => (
-    <div className="mb-2 mt-1 overflow-x-auto rounded-xl border border-slate-200 shadow-sm">
+    <ExportableTable
+      nhan="bang-tra-loi"
+      wrapperClassName="mb-2 mt-1"
+      className="overflow-x-auto rounded-xl border border-slate-200 shadow-sm"
+    >
       <table className="min-w-full text-xs tabular-nums">{children}</table>
-    </div>
+    </ExportableTable>
   ),
   thead: ({ children }: { children?: ReactNode }) => <thead className="bg-[#F1F5F9]">{children}</thead>,
   tbody: ({ children }: { children?: ReactNode }) => <tbody className="divide-y divide-slate-100 bg-white">{children}</tbody>,
@@ -425,7 +430,11 @@ const MessageList = memo(function MessageList({
             {m.rows && m.columns && m.rows.length > 0 && (() => {
               const numericCols = numericColumnFlags(m.rows, m.columns.length);
               return (
-                <div className="mt-3 overflow-x-auto rounded-xl border border-slate-200 shadow-sm">
+                <ExportableTable
+                  nhan="bang-du-lieu"
+                  wrapperClassName="mt-3"
+                  className="overflow-x-auto rounded-xl border border-slate-200 shadow-sm"
+                >
                   <table className="min-w-full text-xs tabular-nums">
                     <thead className="bg-[#F1F5F9]">
                       <tr>
@@ -464,7 +473,7 @@ const MessageList = memo(function MessageList({
                       ))}
                     </tbody>
                   </table>
-                </div>
+                </ExportableTable>
               );
             })()}
 
