@@ -5,11 +5,11 @@ Kien truc HYBRID de tang do chinh xac cho cac bao cao hay dung:
   - Cau hoi thuoc nhom bao cao CHUAN (doanh thu theo kenh, top san pham, top khach hang,
     vung mien, KPI nhan vien, so sanh 2 khoang thoi gian) -> goi truc tiep cac ham da kiem chung
     trong report_templates.py, AI KHONG tu sinh SQL cho nhom nay.
-  - Cau hoi AD-HOC ngoai cac mau tren -> fallback ve tool query_database (local SQLite) hoac
-    query_inventory_receivables (Supabase, chi cho ton kho/cong no).
+  - Cau hoi AD-HOC ngoai cac mau tren -> fallback ve query_database (local SQLite); neu warehouse
+    chua phu object/cot thi tim catalog dong va query SQL Server live bang tai khoan read-only.
 
-CA 2 nhom deu doc tu kho "local" (SQLite dong bo dinh ky tu Bravo) - KHONG con goi Bravo song
-truc tiep tu chatbot nua, giup tra loi nhanh (<=10s) va khong phu thuoc VPN on dinh moi luc.
+Bao cao chuan van doc kho "local" de nhanh/on dinh. SQL Server live chi la fallback cho tai khoan
+duoc phep va du lieu chua dong bo; moi query bi validate chi-doc, gioi han dong, timeout va audit.
 
 Ho tro NHO NGU CANH da luot (conversation_memory.py) - moi session (1 phien chat webapp) duoc
 nho lai vai cau hoi/tra loi gan nhat, de cau hoi tiep theo khong can nhac lai tu dau.
@@ -26,6 +26,12 @@ from realtime_context import REALTIME_TOOLS, REALTIME_TOOL_NAMES, get_current_da
 from glossary_memory import save_glossary_term, retrieve_relevant_glossary
 from longterm_memory import save_example, retrieve_similar_examples
 from cost_logger import compute_and_log_cost
+from feature_policy import (
+    DISABLED_FUTURE_TOOL_NAMES,
+    FUTURE_FORECAST_DISABLED_MESSAGE,
+    is_future_forecast_question,
+)
+from sql_schema_retriever import relevant_schema_context, search_sql_catalog
 
 MODEL = "claude-sonnet-5"
 MAX_TOOL_ROUNDS = 4  # 04/08/2026: giam tu 8 -> 4 (tiet kiem thoi gian + token). Tool Merger da gop
@@ -192,50 +198,6 @@ TEMPLATE_TOOLS = [
                 "date_to_b": {"type": "string", "description": "YYYY-MM-DD, cuoi ky doi chieu"},
             },
             "required": ["date_from_a", "date_to_a", "date_from_b", "date_to_b"],
-        },
-    },
-    {
-        "name": "get_revenue_forecast",
-        "description": "UOC TINH doanh thu CA THANG (OTC/ETC/tong) cho 1 thang - dung cho cau hoi "
-                        "'du bao/du phong/uoc tinh doanh thu thang X'. Mo hinh: trung binh doanh thu "
-                        "DUNG THANG DO cua toi da 3 nam gan nhat; da doi dau voi 20 mo hinh phuc tap "
-                        "hon (he so tang truong, trung vi, hybrid...) tren 49 thang du lieu that va "
-                        "thang tat ca. KHONG dung du lieu trong thang dang chay nen tra loi duoc ngay "
-                        "tu dau thang. Tool TU DO sai so cua chinh no tren dung pham vi dang hoi va "
-                        "tra ve 'khoang_uoc_tinh' + 'sai_so_trung_binh_pct'. "
-                        "BAT BUOC khi tra loi: noi ro day la UOC TINH, neu kem khoang uoc tinh va sai "
-                        "so, va (neu la thang dang chay) tach bach so luy ke THUC TE voi so uoc tinh. "
-                        "Neu tra ve 'ly_do_khong_du_bao' thi noi thang la khong du bao duoc, KHONG bia so.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "year_month": {"type": "string",
-                                "description": "Thang can du bao, dang YYYY-MM (vd '2026-08'). "
-                                               "Bo trong = thang hien tai."},
-            },
-            "required": [],
-        },
-    },
-    {
-        "name": "get_kpi_forecast",
-        "description": "UOC TINH ty le hoan thanh KPI CUOI THANG cho tat ca nhan vien co target, "
-                        "khong chi QLV ma gom TDV/CTV/CS/TK va cac chuc vu khac. Mo hinh hoc ty le "
-                        "doanh so luy ke/cuoi thang tu cac snapshot lich su, uu tien cung chuc vu va "
-                        "cung moc ngay, KHONG chia tien do hien tai cho so ngay. Tra ve forecast_pct, "
-                        "khoang uoc tinh neu du mau, backtest theo chuc vu va summary_by_position. "
-                        "BAT BUOC noi ro day la UOC TINH, khong phai KPI thuc te; neu tool tra ve "
-                        "ly_do_khong_du_bao thi noi dung do, KHONG bia so. Dung khi nguoi dung hoi "
-                        "'du bao/du phong ty le KPI', 'cuoi thang se dat bao nhieu %', 'QLV/TDV nao "
-                        "co kha nang dat KPI'.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "year_month": {"type": "string", "description": "Thang dang chay dang YYYY-MM, bo trong de tu lay."},
-                "as_of_date": {"type": "string", "description": "Ngay snapshot dung lam moc hien tai, YYYY-MM-DD, bo trong de lay moi nhat."},
-                "position_code": {"type": "string", "description": "Loc chuc vu neu nguoi dung hoi rieng: QLV/TDV/CTV/CS/TK..."},
-                "limit": {"type": "integer", "description": "So dong chi tiet toi da, mac dinh 100."},
-            },
-            "required": [],
         },
     },
     {
@@ -570,6 +532,46 @@ QUERY_SUPABASE_TOOL = {
     },
 }
 
+QUERY_SQL_SERVER_TOOL = {
+    "name": "query_sql_server",
+    "description": (
+        "FALLBACK CHI-DOC tren SQL Server Bravo LIVE cho du lieu/business object chua duoc dong bo vao "
+        "warehouse.db va khong co tool bao cao chuan. CHI dung sau khi da xem schema lien quan trong "
+        "context hoac goi search_sql_server_catalog. Dung T-SQL: TOP N, dbo.[TenObject], KHONG LIMIT, "
+        "KHONG SELECT *. Chi SELECT/WITH; cam EXEC stored procedure, ghi/sua/xoa, SELECT INTO va truy van "
+        "sang database khac. Du lieu live la nguon chinh de kiem tra do phu, nhung voi doanh thu/cong no/"
+        "KPI da co tool chuan thi van BAT BUOC dung tool chuan truoc. Tool live chi kha dung cho vai tro "
+        "C-Level/Admin do SQL tu do khong the ep phan quyen dong theo moi bang."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "sql": {"type": "string", "description": "Mot cau SELECT/WITH T-SQL chi-doc, nen co TOP N."},
+            "explanation": {"type": "string", "description": "Muc dich nghiep vu va object duoc dung."},
+        },
+        "required": ["sql"],
+    },
+}
+
+SEARCH_SQL_CATALOG_TOOL = {
+    "name": "search_sql_server_catalog",
+    "description": (
+        "Tim table/view/stored procedure va cot lien quan trong TOAN BO catalog SQL Server duoc cap quyen. "
+        "Dung khi cau hoi nhac toi du lieu chua co trong schema warehouse viet san, khi chua chac ten object/"
+        "cot, hoac can doc logic definition cua view/stored procedure. Tool chi doc metadata, khong doc dong "
+        "du lieu va khong EXEC procedure. Sau khi tim thay table/view, dung query_sql_server neu tai khoan co quyen."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "query": {"type": "string", "description": "Tu khoa nghiep vu hoac ten object/cot can tim."},
+            "limit": {"type": "integer", "description": "So object toi da, mac dinh 6, toi da 12."},
+            "include_definition": {"type": "boolean", "description": "Co lay definition view/SP neu quyen cho phep."},
+        },
+        "required": ["query"],
+    },
+}
+
 SAVE_GLOSSARY_TOOL = {
     "name": "save_business_term",
     "description": "Luu 1 thuat ngu nghiep vu ma NGUOI DUNG vua dinh nghia trong cau hoi hien tai (vd "
@@ -586,13 +588,82 @@ SAVE_GLOSSARY_TOOL = {
     },
 }
 
-RAW_SQL_TOOLS = {"query_database": "local", "query_inventory_receivables": "supabase"}
-LOCAL_UTIL_TOOLS = REALTIME_TOOL_NAMES | {"save_business_term"}
+RAW_SQL_TOOLS = {
+    "query_database": "local",
+    "query_inventory_receivables": "supabase",
+    "query_sql_server": "bravo",
+}
+LIVE_SQL_TOOL_NAMES = {"query_sql_server"}
+LIVE_SQL_ALLOWED_ROLES = {"c_level", "admin_ops"}
+LOCAL_UTIL_TOOLS = REALTIME_TOOL_NAMES | {"save_business_term", "search_sql_server_catalog"}
 
-ALL_TOOLS = TEMPLATE_TOOLS + [QUERY_TOOL, QUERY_SUPABASE_TOOL] + REALTIME_TOOLS + [SAVE_GLOSSARY_TOOL]
+# Chinh sach 14/08/2026: loc o tang code, khong chi dua vao prompt. Ke ca khi mot
+# tool du bao cu con sot lai trong danh sach khai bao phia tren, no cung khong bao
+# gio duoc gui cho model.
+TEMPLATE_TOOLS = [
+    tool for tool in TEMPLATE_TOOLS if tool["name"] not in DISABLED_FUTURE_TOOL_NAMES
+]
+ALL_TOOLS = (
+    TEMPLATE_TOOLS
+    + [QUERY_TOOL, QUERY_SUPABASE_TOOL, QUERY_SQL_SERVER_TOOL, SEARCH_SQL_CATALOG_TOOL]
+    + REALTIME_TOOLS
+    + [SAVE_GLOSSARY_TOOL]
+)
 # Tools KHONG bao gio doi trong 1 phien chay - danh cache_control tren tool CUOI CUNG de cache ca
 # mang tools (Anthropic cache theo kieu "prefix": danh dau 1 block = cache moi thu TINH DEN block do).
 ALL_TOOLS_CACHED = ALL_TOOLS[:-1] + [{**ALL_TOOLS[-1], "cache_control": {"type": "ephemeral", "ttl": "1h"}}]
+
+
+def _cache_tools(tools: list[dict]) -> list[dict]:
+    if not tools:
+        return []
+    return tools[:-1] + [{**tools[-1], "cache_control": {"type": "ephemeral", "ttl": "1h"}}]
+
+
+def _tools_for_request(scope_area_code: str = None, scope_channel: str = None,
+                       scope_role: str = None) -> list[dict]:
+    """Phan quyen tool o tang code, dung chung cho ask va ask_stream."""
+    tools = ALL_TOOLS
+    if scope_area_code or scope_channel:
+        tools = [tool for tool in tools if tool["name"] not in RAW_SQL_TOOLS]
+    elif scope_role not in LIVE_SQL_ALLOWED_ROLES:
+        tools = [tool for tool in tools if tool["name"] not in LIVE_SQL_TOOL_NAMES]
+    return ALL_TOOLS_CACHED if tools is ALL_TOOLS else _cache_tools(tools)
+
+
+_SCHEMA_COVERAGE_ERROR_MARKERS = (
+    "no such table",
+    "no such column",
+    "has no column named",
+    "invalid object name",
+    "invalid column name",
+)
+
+
+def _raw_query_payload(result: dict, db: str, question: str) -> dict:
+    if result.get("ok"):
+        return {
+            "columns": result["columns"],
+            "rows": result["rows"][:MAX_ROWS_TO_MODEL],
+            "row_count": result["row_count"],
+            "truncated": result.get("truncated", False),
+            "database": result.get("database", db),
+        }
+
+    payload = {"error": result.get("error", "Loi truy van khong xac dinh")}
+    error_lower = payload["error"].lower()
+    if db == "local" and any(marker in error_lower for marker in _SCHEMA_COVERAGE_ERROR_MARKERS):
+        try:
+            payload["sql_server_catalog_fallback"] = search_sql_catalog(
+                question, limit=8, include_definition=False
+            )
+            payload["next_action"] = (
+                "Warehouse khong phu schema nay. Dung object/cot trong catalog fallback de tao T-SQL "
+                "va goi query_sql_server neu tool kha dung; khong ket luan la khong truy cap duoc du lieu."
+            )
+        except Exception as exc:
+            payload["catalog_error"] = str(exc)[:180]
+    return payload
 
 # Beta header can thiet de dung TTL 1h (mac dinh cache_control chi song 5 phut neu khong co header nay).
 # Ap dung cho toan bo request (system + tools) - giup cache song qua nhieu cau hoi lien tiep trong gio
@@ -606,8 +677,9 @@ def _static_system_prompt() -> str:
     _dynamic_context_note() de khong lam vo cache moi 15-30 phut khi kho dong bo lai."""
     return f"""Ban la AI Analyst chuyen phan tich du lieu kinh doanh cho Duoc Nam Ha (DNH),
 mot doanh nghiep duoc pham. Nguoi dung se hoi bang tieng Viet ve doanh thu, cong no, KPI nhan vien,
-ton kho, vung mien... Ban dung cac tool duoc cung cap de truy van du lieu THAT tu Data Warehouse
-roi tra loi dua tren ket qua thuc te - KHONG duoc bia so lieu.
+ton kho, vung mien... Ban dung cac tool duoc cung cap de truy van du lieu THAT. Bao cao chuan uu tien
+warehouse.db da doi chieu; du lieu chua duoc warehouse phu thi tim trong catalog va doc SQL Server
+live neu tai khoan duoc phep. Tra loi dua tren ket qua da truy van - KHONG duoc bia so lieu.
 
 Neu cuoc hoi thoai co cac luot truoc do, HAY DUNG NGU CANH DO de hieu cau hoi hien tai (vd neu vua
 hoi "doanh thu thang 6" roi hoi tiep "con thang 5?", hieu la van hoi doanh thu theo kenh/tieu chi
@@ -628,37 +700,29 @@ QUAN TRONG VE CHON TOOL:
   (get_revenue_by_channel, get_top_products, get_top_customers, get_revenue_by_region, get_employee_kpi,
   get_employee_daily_kpi, compare_periods, get_customer_detail, get_employee_directory, check_order_timing,
   get_inventory_by_region, get_qlv_change_history, get_revenue_tree, get_kpi_ranking,
-  get_kpi_forecast,
   get_revenue_reconciliation, get_receivables_overview, get_audit_log, get_salary_detail,
   get_salary_achievement_summary).
-- DU BAO DOANH THU CA THANG: dung get_revenue_forecast (khong phai tinh tay). Khi trinh bay ket qua
-  BAT BUOC lam du 3 dieu, thieu 1 la sai:
-  (1) noi ro DAY LA UOC TINH, khong phai doanh thu thuc te;
-  (2) neu kem KHOANG uoc tinh + sai so trung binh ma tool tra ve, KHONG duoc rut gon thanh 1 con so;
-  (3) neu la thang dang chay, phan biet ro so LUY KE THUC TE den nay voi so UOC TINH ca thang.
-  Mo hinh chi dua tren mua vu lich su, KHONG biet su kien moi (mat khach lon, thau ETC, dut hang) -
-  neu nguoi dung nhac toi su kien nhu vay thi phai noi ro con so nay chua tinh den.
-  Neu tool tra ve "ly_do_khong_du_bao" (thieu lich su) thi NOI THANG la khong du bao duoc cho pham vi
-  do va noi ly do - TUYET DOI KHONG tu bia so thay the.
-  Ngoai tool nay ra, TUYET DOI KHONG tu suy ra con so du bao bang cach chia ty le hay ngoai suy tu
-  du lieu luy ke (vd lay luy ke chia so ngay roi nhan so ngay ca thang) - doanh thu DNH don ve cuoi
-  thang nen cach do sai rat nang.
-  Day la cac truy van DA DUOC KIEM CHUNG khop voi du lieu goc, KHONG tu sinh SQL thay the.
-- DU BAO TY LE KPI CUOI THANG: dung get_kpi_forecast khi nguoi dung hoi forecast KPI cua QLV, TDV,
-  CTV, CS, TK hoac nhieu chuc vu. Tool dung snapshot lich su de hoc ty le luy ke/cuoi thang theo
-  chuc vu va moc ngay, khong duoc tu lay % hien tai chia so ngay da qua. BAT BUOC noi ro DAY LA
-  UOC TINH, neu co thi neu khoang uoc tinh + MAPE backtest; neu tool tra ly_do_khong_du_bao thi
-  noi ro thieu snapshot lich su va khong bia so. Khi hoi tat ca chuc vu, doc summary_by_position
-  truoc roi moi liet ke rows; khong bo sot chuc vu chi vi dang xep theo QLV.
+- DU BAO TUONG LAI DA TAT: TUYET DOI KHONG du bao, du phong, uoc tinh, ngoai suy hoac tu tinh mot
+  gia tri tuong lai cho doanh thu, doanh so, KPI, cong no, ton kho, khach hang hay "kha nang dat".
+  Khong duoc dung SQL tu do de lach quy tac nay. Neu nguoi dung yeu cau du bao, noi ro tinh nang da
+  tat de uu tien do dung va goi y cac lua chon DU LIEU THAT: luy ke den ngay, so sanh ky lich su,
+  KPI thuc dat so voi chi tieu da nhap, va thoi diem cap nhat du lieu. Chi tieu/ke hoach cua ky tuong
+  lai da duoc con nguoi nhap san van la du lieu thuc te co the tra cuu; khong duoc bien no thanh du bao.
 - Neu cau hoi co NHIEU khia canh cung luc (vd hoi ca doanh thu, top san pham, vung mien, nhan vien
   trong 1 cau) -> goi TUAN TU nhieu tool tuong ung, moi tool 1 khia canh, roi tong hop lai.
 - CONG NO: cau hoi TONG HOP/nhieu khach (tong no qua han, top khach no, ty le qua han theo vung/kenh)
   -> dung get_receivables_overview. Cong no cua 1 khach cu the -> get_customer_detail. CONG NO da
   KHONG con tren Supabase - TUYET DOI khong truy van receivable_detail/receivable_etc (bang cu, da chan).
-- Voi phan cau hoi KHONG thuoc cac nhom tren: neu la ve TON KHO (inventory) -> dung
-  query_inventory_receivables (Supabase). Con lai (hoa don/doanh thu/san pham/khach hang/nhan vien/vung
-  mien ad-hoc, tra hang...) -> dung query_database (kho local SQLite). Neu can boc tach cong no ad-hoc
-  ngoai 2 tool cong no tren, dung query_database tren bang fact_congno_khachhang (LUON SUM theo khach).
+- Voi phan cau hoi KHONG thuoc cac nhom tren: thu query_database tren warehouse truoc neu schema da
+  mo ta. Neu warehouse KHONG CO object/cot can thiet, BAT BUOC dung search_sql_server_catalog de tim
+  trong TOAN BO SQL Server da duoc cap quyen, sau do dung query_sql_server (neu tool kha dung) de doc
+  live. TUYET DOI KHONG noi "khong truy cap/khong den duoc du lieu" chi vi schema viet tay khong liet
+  ke bang do; chi ket luan thieu sau khi da tim catalog va thu truy van, va phai noi ro loi that neu co.
+  query_sql_server dung T-SQL (TOP, dbo.[Object]), query_database dung SQLite (LIMIT).
+  Neu can boc tach cong no ad-hoc ngoai 2 tool cong no chuan, van uu tien fact_congno_khachhang trong
+  warehouse vi day la snapshot da chuan hoa tu SP goc; khong tu EXEC stored procedure bat ky.
+- TON KHO snapshot Supabase cu chi dung khi cau hoi dung pham vi bang inventory da xac nhan. Neu hoi
+  table/view ton kho khac tren Bravo, tim catalog SQL Server; khong tu suy dien months_to_sell.
 - Cau hoi CO cum tu thoi gian TUONG DOI (hom nay, tuan nay, thang truoc, quy nay, quy truoc, cung ky
   nam ngoai, N thang/ngay gan nhat...) -> BAT BUOC goi resolve_relative_date TRUOC de lay khoang ngay
   cu the, roi moi dung ket qua do lam date_from/date_to cho tool khac - TUYET DOI KHONG tu suy luan
@@ -924,11 +988,34 @@ def _dynamic_context_note(question: str = "", session_id: str = "", scope_area_c
         parts.append("Vi du cau hoi-SQL tuong tu tung chay thanh cong truoc do (chi de THAM KHAO cach "
                       "viet, KHONG copy may moc neu cau hoi hien tai khac ve dieu kien loc):\n" + ex_text)
 
+    try:
+        live_schema = relevant_schema_context(question)
+        if live_schema:
+            parts.append(live_schema)
+    except Exception as exc:
+        # Catalog dong la tang mo rong. Neu VPN/metadata tam loi, cac tool chuan va
+        # warehouse van phai hoat dong; model co the goi tool search de thu lai.
+        parts.append(f"Catalog SQL Server tam thoi chua nap duoc: {str(exc)[:180]}")
+
     return "\n\n".join(parts)
 
 
+def _blocked_future_forecast_response(question: str, session_id: str, query_id: str = None) -> dict:
+    """Tra loi fail-closed truoc khi tao client AI hay cham vao bat ky CSDL nao."""
+    append_message(session_id, "user", question, query_id=query_id)
+    append_message(session_id, "assistant", FUTURE_FORECAST_DISABLED_MESSAGE, query_id=query_id)
+    return {
+        "answer": FUTURE_FORECAST_DISABLED_MESSAGE,
+        "sql_used": [],
+        "last_result": None,
+        "query_id": query_id,
+        "feature_disabled": True,
+    }
+
+
 def ask(question: str, session_id: str = "default", username: str = None, scope_area_code: str = None,
-        scope_employee_code: str = None, scope_channel: str = None, scope_role: str = None) -> dict:
+        scope_employee_code: str = None, scope_channel: str = None, scope_role: str = None,
+        query_id: str = None) -> dict:
     """
     Nhan cau hoi tieng Viet + session_id (1 phien chat webapp) - tu dong nho lai vai cau hoi/tra loi
     gan nhat trong CUNG session de hieu ngu canh cau hoi tiep theo.
@@ -945,12 +1032,19 @@ def ask(question: str, session_id: str = "default", username: str = None, scope_
     o SQL tu do).
     Tra ve dict: {answer: str, sql_used: [list mo ta cac tool/SQL da chay], last_result: {...} hoac None}
     """
+    if is_future_forecast_question(question):
+        return _blocked_future_forecast_response(question, session_id, query_id)
+
     api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
     if not api_key or api_key == "mock-key-for-local-testing":
+        answer_text = "⚠️ **Chưa cấu hình API Key Claude/Anthropic**: Vui lòng bổ sung biến `ANTHROPIC_API_KEY=sk-ant-api03...` vào file `backend/.env` để khởi chạy tính năng Phân tích Dữ liệu AI."
+        append_message(session_id, "user", question, query_id=query_id)
+        append_message(session_id, "assistant", answer_text, query_id=query_id)
         return {
-            "answer": "⚠️ **Chưa cấu hình API Key Claude/Anthropic**: Vui lòng bổ sung biến `ANTHROPIC_API_KEY=sk-ant-api03...` vào file `backend/.env` để khởi chạy tính năng Phân tích Dữ liệu AI.",
+            "answer": answer_text,
             "sql_used": [],
-            "last_result": None
+            "last_result": None,
+            "query_id": query_id,
         }
 
     client = anthropic.Anthropic(api_key=api_key)
@@ -973,10 +1067,7 @@ def ask(question: str, session_id: str = "default", username: str = None, scope_
     # Tai khoan bi gioi han vung: loai han tool SQL tu do khoi danh sach gui cho AI (AI KHONG CO KHA
     # NANG goi, khong chi la "duoc dan dung goi") - chi con lai cac tool bao cao chuan da kiem soat
     # duoc filter vung o tang code.
-    tools_for_request = ALL_TOOLS_CACHED
-    if scope_area_code or scope_channel:
-        scoped_tools = [t for t in ALL_TOOLS if t["name"] not in RAW_SQL_TOOLS]
-        tools_for_request = scoped_tools[:-1] + [{**scoped_tools[-1], "cache_control": {"type": "ephemeral", "ttl": "1h"}}]
+    tools_for_request = _tools_for_request(scope_area_code, scope_channel, scope_role)
 
     # System tach 2 block: block TINH (rules+schema) danh cache_control TTL 1h - it doi nen cache-hit
     # cao, chi tinh ~10% gia input goc; block DONG (ngay du lieu, glossary, query-state, few-shot, scope)
@@ -1026,13 +1117,14 @@ def ask(question: str, session_id: str = "default", username: str = None, scope_
                 if not answer_text:
                     answer_text = ("Xin lỗi, dữ liệu trả về quá lớn để tổng hợp gọn trong 1 câu trả lời. "
                                     "Bạn thử hỏi cụ thể/thu hẹp phạm vi hơn giúp mình nhé (vd theo vùng, theo thời gian ngắn hơn).")
-            append_message(session_id, "user", question)
-            append_message(session_id, "assistant", answer_text)
+            append_message(session_id, "user", question, query_id=query_id)
+            append_message(session_id, "assistant", answer_text, query_id=query_id)
             if last_tool_used:
                 set_query_state(session_id, last_tool_used[0], last_tool_used[1])
             if ran_adhoc_query:
                 save_example(*ran_adhoc_query)
-            return {"answer": answer_text, "sql_used": sql_used, "last_result": last_result}
+            return {"answer": answer_text, "sql_used": sql_used, "last_result": last_result,
+                    "query_id": query_id}
 
         tool_results = []
         original_tool_uses = [b for b in resp.content if b.type == "tool_use"]
@@ -1073,6 +1165,12 @@ def ask(question: str, session_id: str = "default", username: str = None, scope_
                     save_glossary_term(tu.input.get("term", ""), tu.input.get("definition", ""),
                                         defined_by=username)
                     payload = {"ok": True, "message": "Da luu dinh nghia."}
+                elif tu.name == "search_sql_server_catalog":
+                    payload = search_sql_catalog(
+                        tu.input.get("query", question),
+                        limit=tu.input.get("limit", 6),
+                        include_definition=tu.input.get("include_definition", True),
+                    )
                 else:
                     payload = {"error": f"Tool khong ro: {tu.name}"}
             elif tu.name in RAW_SQL_TOOLS:
@@ -1081,6 +1179,9 @@ def ask(question: str, session_id: str = "default", username: str = None, scope_
                     # nhung neu vi ly do gi van xuat hien thi tu choi thang, KHONG thuc thi SQL.
                     sql_used.append(f"[BI CHAN - tai khoan gioi han] {tu.name}")
                     payload = {"error": "Tai khoan cua ban bi gioi han (vung/kenh), khong duoc dung truy van SQL tu do."}
+                elif tu.name in LIVE_SQL_TOOL_NAMES and scope_role not in LIVE_SQL_ALLOWED_ROLES:
+                    sql_used.append(f"[BI CHAN - vai tro khong duoc query SQL live] {tu.name}")
+                    payload = {"error": "Tai khoan khong duoc phep truy van SQL Server live tu do."}
                 else:
                     db = RAW_SQL_TOOLS[tu.name]
                     sql = tu.input.get("sql", "")
@@ -1090,8 +1191,7 @@ def ask(question: str, session_id: str = "default", username: str = None, scope_
                     last_tool_used = (tu.name, str(tu.input))
                     if db == "local" and result["ok"]:
                         ran_adhoc_query = (question, sql)
-                    payload = ({"columns": result["columns"], "rows": result["rows"][:MAX_ROWS_TO_MODEL],
-                                "row_count": result["row_count"]} if result["ok"] else {"error": result["error"]})
+                    payload = _raw_query_payload(result, db, question)
             else:
                 sql_used.append(f"[bao cao chuan] {tu.name}({tu.input})")
                 tresult = call_template(tu.name, tu.input, question=question, username=username, session_id=session_id,
@@ -1140,13 +1240,15 @@ def ask(question: str, session_id: str = "default", username: str = None, scope_
         messages.append({"role": "user", "content": tool_results})
 
     fallback = "Xin loi, cau hoi qua phuc tap can nhieu buoc truy van, vui long hoi cu the hon."
-    append_message(session_id, "user", question)
-    append_message(session_id, "assistant", fallback)
-    return {"answer": fallback, "sql_used": sql_used, "last_result": last_result}
+    append_message(session_id, "user", question, query_id=query_id)
+    append_message(session_id, "assistant", fallback, query_id=query_id)
+    return {"answer": fallback, "sql_used": sql_used, "last_result": last_result,
+            "query_id": query_id}
 
 
 def ask_stream(question: str, session_id: str = "default", username: str = None, scope_area_code: str = None,
-                scope_employee_code: str = None, scope_channel: str = None, scope_role: str = None):
+                scope_employee_code: str = None, scope_channel: str = None, scope_role: str = None,
+                query_id: str = None):
     """11/08/2026: BAN STREAMING cua ask() - GIONG HET logic tool-calling/phan quyen/cache o tren,
     CHI KHAC cach lay CAU TRA LOI CUOI CUNG: thay vi client.messages.create() cho xong het roi tra 1
     cuc JSON, dung client.messages.stream() de yield TUNG DOAN TEXT ngay khi model sinh ra - giup
@@ -1172,13 +1274,22 @@ def ask_stream(question: str, session_id: str = "default", username: str = None,
     {"type": "done", "answer": str, "sql_used": [...], "last_result": {...}} voi KET QUA DAY DU
     (giong het cau truc return cua ask()) de client biet ket thuc va co du lieu cho UI (bang/cot...).
     """
+    if is_future_forecast_question(question):
+        blocked = _blocked_future_forecast_response(question, session_id, query_id)
+        yield {"type": "text_delta", "text": blocked["answer"]}
+        yield {"type": "done", **blocked}
+        return
+
     api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
     if not api_key or api_key == "mock-key-for-local-testing":
         msg = ("⚠️ **Chưa cấu hình API Key Claude/Anthropic**: Vui lòng bổ sung biến "
                "`ANTHROPIC_API_KEY=sk-ant-api03...` vào file `backend/.env` để khởi chạy tính năng "
                "Phân tích Dữ liệu AI.")
+        append_message(session_id, "user", question, query_id=query_id)
+        append_message(session_id, "assistant", msg, query_id=query_id)
         yield {"type": "text_delta", "text": msg}
-        yield {"type": "done", "answer": msg, "sql_used": [], "last_result": None}
+        yield {"type": "done", "answer": msg, "sql_used": [], "last_result": None,
+               "query_id": query_id}
         return
 
     client = anthropic.Anthropic(api_key=api_key)
@@ -1191,10 +1302,7 @@ def ask_stream(question: str, session_id: str = "default", username: str = None,
     last_tool_used = None
     ran_adhoc_query = None
 
-    tools_for_request = ALL_TOOLS_CACHED
-    if scope_area_code or scope_channel:
-        scoped_tools = [t for t in ALL_TOOLS if t["name"] not in RAW_SQL_TOOLS]
-        tools_for_request = scoped_tools[:-1] + [{**scoped_tools[-1], "cache_control": {"type": "ephemeral", "ttl": "1h"}}]
+    tools_for_request = _tools_for_request(scope_area_code, scope_channel, scope_role)
 
     system_blocks = [
         {"type": "text", "text": _static_system_prompt(), "cache_control": {"type": "ephemeral", "ttl": "1h"}},
@@ -1249,13 +1357,14 @@ def ask_stream(question: str, session_id: str = "default", username: str = None,
                     answer_text = ("Xin lỗi, dữ liệu trả về quá lớn để tổng hợp gọn trong 1 câu trả lời. "
                                     "Bạn thử hỏi cụ thể/thu hẹp phạm vi hơn giúp mình nhé (vd theo vùng, theo thời gian ngắn hơn).")
                     yield {"type": "text_delta", "text": answer_text}
-            append_message(session_id, "user", question)
-            append_message(session_id, "assistant", answer_text)
+            append_message(session_id, "user", question, query_id=query_id)
+            append_message(session_id, "assistant", answer_text, query_id=query_id)
             if last_tool_used:
                 set_query_state(session_id, last_tool_used[0], last_tool_used[1])
             if ran_adhoc_query:
                 save_example(*ran_adhoc_query)
-            yield {"type": "done", "answer": answer_text, "sql_used": sql_used, "last_result": last_result}
+            yield {"type": "done", "answer": answer_text, "sql_used": sql_used,
+                   "last_result": last_result, "query_id": query_id}
             return
 
         # Tu day tro xuong: XU LY TOOL. Truoc 11/08/2026 cho nay COPY TAY logic gop tool tu ask() -
@@ -1296,12 +1405,21 @@ def ask_stream(question: str, session_id: str = "default", username: str = None,
                     save_glossary_term(tu.input.get("term", ""), tu.input.get("definition", ""),
                                         defined_by=username)
                     payload = {"ok": True, "message": "Da luu dinh nghia."}
+                elif tu.name == "search_sql_server_catalog":
+                    payload = search_sql_catalog(
+                        tu.input.get("query", question),
+                        limit=tu.input.get("limit", 6),
+                        include_definition=tu.input.get("include_definition", True),
+                    )
                 else:
                     payload = {"error": f"Tool khong ro: {tu.name}"}
             elif tu.name in RAW_SQL_TOOLS:
                 if scope_area_code or scope_channel:
                     sql_used.append(f"[BI CHAN - tai khoan gioi han] {tu.name}")
                     payload = {"error": "Tai khoan cua ban bi gioi han (vung/kenh), khong duoc dung truy van SQL tu do."}
+                elif tu.name in LIVE_SQL_TOOL_NAMES and scope_role not in LIVE_SQL_ALLOWED_ROLES:
+                    sql_used.append(f"[BI CHAN - vai tro khong duoc query SQL live] {tu.name}")
+                    payload = {"error": "Tai khoan khong duoc phep truy van SQL Server live tu do."}
                 else:
                     db = RAW_SQL_TOOLS[tu.name]
                     sql = tu.input.get("sql", "")
@@ -1311,8 +1429,7 @@ def ask_stream(question: str, session_id: str = "default", username: str = None,
                     last_tool_used = (tu.name, str(tu.input))
                     if db == "local" and result["ok"]:
                         ran_adhoc_query = (question, sql)
-                    payload = ({"columns": result["columns"], "rows": result["rows"][:MAX_ROWS_TO_MODEL],
-                                "row_count": result["row_count"]} if result["ok"] else {"error": result["error"]})
+                    payload = _raw_query_payload(result, db, question)
             else:
                 sql_used.append(f"[bao cao chuan] {tu.name}({tu.input})")
                 tresult = call_template(tu.name, tu.input, question=question, username=username, session_id=session_id,
@@ -1343,7 +1460,8 @@ def ask_stream(question: str, session_id: str = "default", username: str = None,
         messages.append({"role": "user", "content": tool_results})
 
     fallback = "Xin loi, cau hoi qua phuc tap can nhieu buoc truy van, vui long hoi cu the hon."
-    append_message(session_id, "user", question)
-    append_message(session_id, "assistant", fallback)
+    append_message(session_id, "user", question, query_id=query_id)
+    append_message(session_id, "assistant", fallback, query_id=query_id)
     yield {"type": "text_delta", "text": fallback}
-    yield {"type": "done", "answer": fallback, "sql_used": sql_used, "last_result": last_result}
+    yield {"type": "done", "answer": fallback, "sql_used": sql_used, "last_result": last_result,
+           "query_id": query_id}

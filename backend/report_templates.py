@@ -19,6 +19,11 @@ from query_engine import _write_log, _get_engine
 from region_map import region_from_customer_code, REGION_SQL_MARKERS, REGION_NAMES_VI
 import org_hierarchy as oh
 from pricing import USD_TO_VND_RATE
+from feature_policy import (
+    DISABLED_FUTURE_TOOL_NAMES,
+    FUTURE_FORECAST_DISABLED_MESSAGE,
+    disabled_future_result,
+)
 
 _LOGS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs")
 AUDIT_LOG_PATH = os.path.join(_LOGS_DIR, "audit_log.jsonl")
@@ -1093,6 +1098,10 @@ def revenue_forecast_month(year_month: str = None, scope_area_code: str = None,
 
     Moi lan goi deu TU DO LAI sai so tren dung pham vi dang hoi (walk-forward) - khong dung so cung.
     Neu chua du 2 nam lich su cho thang do thi TU CHOI du bao, khong doan tu 1 nam duy nhat."""
+    return disabled_future_result()
+
+    # Ma tinh cu duoc giu lai ben duoi de phuc vu audit, nhung khong the toi duoc
+    # tu runtime va cung khong con duoc dang ky trong TEMPLATES.
     if not year_month:
         year_month = dt.date.today().strftime("%Y-%m")
     year_month = str(year_month)[:7]
@@ -1450,6 +1459,9 @@ def kpi_forecast_month(year_month: str = None, as_of_date: str = None,
     uu tien cung position_code va cung moc ngay. Neu warehouse khong co du snapshot lich su thi tra
     ve ly_do_khong_du_bao thay vi bia so. Dung cho QLV, TDV, CTV, CS, TK va cac chuc vu khac co target.
     """
+    return disabled_future_result()
+
+    # Ma tinh cu chi con de audit; runtime dung tai chinh sach fail-closed o tren.
     if not as_of_date:
         r = _q("SELECT MAX(save_date) d FROM fact_tonghopkhachhang")
         as_of_date = r[0]["d"] if r and r[0]["d"] else dt.date.today().isoformat()
@@ -3172,6 +3184,9 @@ def forecast_model1(target_month: str = "2026-08", scope_area_code: str = None, 
     """DANG BI TAT - xem khoi ghi chu ngay tren. Du bao ty le hoan thanh KPI/doanh thu theo Mo Hinh 1
     (Intra-Month Pattern). CANH BAO: ty trong 6 ngay dau thang la HANG SO GO TAY (0.1341/0.1407),
     KHONG phai tu tinh tu lich su nhu ten goi gay hieu nham."""
+    return disabled_future_result()
+
+    # Ma tinh cu chi con de audit; runtime dung tai chinh sach fail-closed o tren.
     import datetime as dt
     
     # 1. Tỷ trọng lịch sử 6 ngày đầu
@@ -3255,16 +3270,13 @@ def forecast_model1(target_month: str = "2026-08", scope_area_code: str = None, 
 
 
 TEMPLATES = {
-    "get_kpi_forecast_model1": forecast_model1,
     "get_revenue_by_channel": revenue_by_channel,
     "get_top_products": top_products,
     "get_top_customers": top_customers,
     "get_revenue_by_region": revenue_by_region,
     "get_employee_kpi": employee_kpi,
-    "get_kpi_forecast": kpi_forecast_month,
     "get_employee_daily_kpi": employee_daily_kpi,
     "compare_periods": compare_periods,
-    "get_revenue_forecast": revenue_forecast_month,
     "get_customer_detail": customer_detail,
     "get_employee_directory": employee_directory,
     "check_order_timing": order_timing_check,
@@ -3290,7 +3302,7 @@ _PERSON_LEVEL_TEMPLATES = {
     "get_revenue_tree", "get_kpi_ranking", "get_employee_kpi",
     "get_employee_daily_kpi", "check_order_timing",
     "get_revenue_by_channel", "get_revenue_by_region", "get_top_customers",
-    "get_top_products", "compare_periods", "get_revenue_forecast", "get_kpi_forecast",
+    "get_top_products", "compare_periods",
     "get_inventory_by_region", "get_receivables_overview",
     "get_qlv_change_history", "get_revenue_reconciliation",
     "get_salary_detail", "get_salary_achievement_summary"
@@ -3299,14 +3311,14 @@ _PERSON_LEVEL_TEMPLATES = {
 _EMPLOYEE_SCOPED_TEMPLATES = {
     "get_revenue_tree", "get_kpi_ranking", "get_employee_kpi",
     "get_employee_daily_kpi", "get_revenue_by_channel", "get_top_customers",
-    "get_top_products", "get_revenue_by_region", "compare_periods", "get_revenue_forecast", "get_kpi_forecast",
+    "get_top_products", "get_revenue_by_region", "compare_periods",
     "get_salary_detail", "get_salary_achievement_summary"
 }
 
 _CHANNEL_SCOPED_TEMPLATES = {
     "get_revenue_by_channel", "get_top_products", "get_top_customers",
     "compare_periods", "get_customer_detail", "check_order_timing",
-    "get_revenue_by_region", "get_revenue_forecast"
+    "get_revenue_by_region"
 }
 
 
@@ -3329,6 +3341,16 @@ def call_template(name: str, args: dict, question: str = "", username: str = Non
     t0 = dt.datetime.now()
     entry = {"ts": t0.isoformat(), "username": username, "question": question,
              "sql": f"<template:{name}>({args})", "session_id": session_id}
+    if name in DISABLED_FUTURE_TOOL_NAMES:
+        entry["status"] = "disabled"
+        entry["error"] = FUTURE_FORECAST_DISABLED_MESSAGE
+        entry["duration_ms"] = 0
+        _write_log(entry)
+        return {
+            "ok": False,
+            "error": FUTURE_FORECAST_DISABLED_MESSAGE,
+            "feature_disabled": True,
+        }
     # 22/07/2026 (diem #5): mo "hop" canh bao rieng cho lan goi nay - tool goi _warn() trong luc chay
     # se duoc gom lai va dinh kem vao ket qua tra ve cho AI.
     token = _tool_warnings.set([])
