@@ -219,6 +219,10 @@ def baseline_and_eval(rows, train_months, test_months):
 
 
 def main():
+    print("DA TAT: khong chay nghien cuu/du bao tuong lai. He thong chi phuc vu du lieu thuc te va lich su.")
+    return 2
+
+    # Ma nghien cuu cu giu lai de audit; khong the chay qua entrypoint.
     print("=" * 78)
     print("DUNG BO DU LIEU TRAIN/TEST - DU BAO DOANH THU CUOI THANG TU GIUA THANG")
     print("=" * 78)

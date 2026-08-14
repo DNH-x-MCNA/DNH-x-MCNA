@@ -1,6 +1,8 @@
 import os
 import sys
 import json
+import time
+import uuid
 import datetime as dt
 from collections import defaultdict
 from fastapi import FastAPI, HTTPException, Header, Depends, Query, Request
@@ -14,13 +16,17 @@ from typing import Optional, List, Dict, Any
 # ngay khi nguoi dung hoi cau dau tien ("Loi he thong: 'ANTHROPIC_API_KEY'"). PHAI goi TRUOC khi
 # import auth/conversation_memory/nl2sql vi cac module do co the doc bien moi truong ngay luc import.
 def load_env():
-    env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
-    if os.path.exists(env_path):
-        for line in open(env_path, encoding="utf-8"):
-            line = line.strip()
-            if line and not line.startswith("#") and "=" in line:
-                k, v = line.split("=", 1)
-                os.environ.setdefault(k.strip(), v.strip())
+    backend_dir = os.path.dirname(os.path.abspath(__file__))
+    project_root = os.path.dirname(backend_dir)
+    for env_path in (os.path.join(backend_dir, ".env"), os.path.join(project_root, ".env")):
+        if not os.path.exists(env_path):
+            continue
+        with open(env_path, encoding="utf-8") as env_file:
+            for raw_line in env_file:
+                line = raw_line.strip()
+                if line and not line.startswith("#") and "=" in line:
+                    k, v = line.split("=", 1)
+                    os.environ.setdefault(k.strip(), v.strip())
 load_env()
 
 from auth import (
@@ -46,6 +52,11 @@ from conversation_memory import (
     list_sessions,
     delete_session as delete_conversation_session,
     get_session_history,
+    create_query_run,
+    complete_query_run,
+    fail_query_run,
+    get_query_run,
+    save_query_feedback,
 )
 from nl2sql import ask, ask_stream
 from query_engine import _write_log
@@ -205,6 +216,7 @@ class ChatRequest(BaseModel):
 
 
 class ChatResponse(BaseModel):
+    query_id: str
     answer: str
     sql_used: list[str]
     columns: Optional[list[str]] = None
@@ -222,8 +234,34 @@ class SessionSummary(BaseModel):
 
 
 class HistoryMessage(BaseModel):
+    id: int
     role: str
     content: str
+    query_id: Optional[str] = None
+    feedback_rating: Optional[int] = None
+    feedback_category: Optional[str] = None
+    feedback_comment: Optional[str] = None
+
+
+class FeedbackRequest(BaseModel):
+    rating: int
+    category: Optional[str] = None
+    comment: Optional[str] = None
+
+
+FEEDBACK_CATEGORIES = {
+    "wrong_number",
+    "missing_data",
+    "wrong_scope",
+    "not_understood",
+    "too_slow",
+    "unclear_answer",
+    "other",
+}
+
+
+def _elapsed_ms(started_at: float) -> int:
+    return max(0, round((time.monotonic() - started_at) * 1000))
 
 
 # --- ENDPOINTS ---
@@ -472,6 +510,38 @@ def get_history(session_id: str, user: dict = Depends(require_approved_user)):
     return get_session_history(session_id)
 
 
+@app.put("/queries/{query_id}/feedback", dependencies=[Depends(require_api_key)])
+def put_query_feedback(
+    query_id: str,
+    req: FeedbackRequest,
+    user: dict = Depends(require_approved_user),
+):
+    if req.rating not in (-1, 1):
+        raise HTTPException(400, "Đánh giá phải là hài lòng (1) hoặc không hài lòng (-1)")
+
+    category = (req.category or "").strip() or None
+    comment = (req.comment or "").strip() or None
+    if category and category not in FEEDBACK_CATEGORIES:
+        raise HTTPException(400, "Nhóm phản hồi không hợp lệ")
+    if req.rating == -1 and not category:
+        raise HTTPException(400, "Vui lòng chọn lý do khi không hài lòng")
+    if req.rating == 1:
+        category = None
+    if comment and len(comment) > 2000:
+        raise HTTPException(400, "Nhận xét không được dài quá 2.000 ký tự")
+
+    query_run = get_query_run(query_id)
+    if not query_run:
+        raise HTTPException(404, "Không tìm thấy truy vấn")
+    if query_run["username"] != user["username"]:
+        raise HTTPException(403, "Chỉ người đặt câu hỏi mới được đánh giá câu trả lời này")
+
+    saved = save_query_feedback(query_id, user["username"], req.rating, category, comment)
+    if not saved:
+        raise HTTPException(409, "Không thể lưu đánh giá; vui lòng tải lại lịch sử")
+    return {"ok": True, **saved}
+
+
 @app.get("/sessions", response_model=list[SessionSummary], dependencies=[Depends(require_api_key)])
 def get_sessions(user: dict = Depends(require_approved_user)):
     role = user["role"]
@@ -521,22 +591,35 @@ def chat(req: ChatRequest, user: dict = Depends(require_approved_user)):
         raise HTTPException(400, "Cau hoi khong duoc de trong")
     _check_rate_limit(user["username"])
     _require_session_write_access(req.session_id, user)
+    query_id = str(uuid.uuid4())
+    started_at = time.monotonic()
+    create_query_run(query_id, req.session_id, user["username"], req.question.strip())
     try:
         scope_area_code = user["scope_value"] if user["role"] in ("regional_director", "qlv") else None
         scope_employee_code = user["employee_code"] if user["role"] == "qlv" else None
         scope_channel = user.get("scope_channel")
         result = ask(req.question, session_id=req.session_id, username=user["username"],
                      scope_area_code=scope_area_code, scope_employee_code=scope_employee_code,
-                     scope_channel=scope_channel, scope_role=user["role"])
+                     scope_channel=scope_channel, scope_role=user["role"], query_id=query_id)
         register_session(req.session_id, user["username"], req.question)
+        lr = result.get("last_result") or {}
+        is_raw_sql = lr.get("ok") and "columns" in lr
+        complete_query_run(
+            query_id,
+            result["answer"],
+            sql_used=result.get("sql_used"),
+            row_count=lr.get("row_count") if is_raw_sql else None,
+            duration_ms=_elapsed_ms(started_at),
+        )
     except HTTPException:
+        fail_query_run(query_id, "HTTP error", duration_ms=_elapsed_ms(started_at))
         raise
     except Exception as e:
+        fail_query_run(query_id, str(e), duration_ms=_elapsed_ms(started_at))
         raise HTTPException(500, f"Loi he thong: {str(e)[:300]}")
 
-    lr = result.get("last_result") or {}
-    is_raw_sql = lr.get("ok") and "columns" in lr
     return ChatResponse(
+        query_id=query_id,
         answer=result["answer"],
         sql_used=result["sql_used"],
         columns=lr.get("columns") if is_raw_sql else None,
@@ -566,18 +649,29 @@ def chat_stream(req: ChatRequest, user: dict = Depends(require_approved_user)):
     scope_area_code = user["scope_value"] if user["role"] in ("regional_director", "qlv") else None
     scope_employee_code = user["employee_code"] if user["role"] == "qlv" else None
     scope_channel = user.get("scope_channel")
+    query_id = str(uuid.uuid4())
+    started_at = time.monotonic()
+    create_query_run(query_id, req.session_id, user["username"], req.question.strip())
 
     def event_generator():
         try:
             for chunk in ask_stream(req.question, session_id=req.session_id, username=user["username"],
                                      scope_area_code=scope_area_code, scope_employee_code=scope_employee_code,
-                                     scope_channel=scope_channel, scope_role=user["role"]):
+                                     scope_channel=scope_channel, scope_role=user["role"], query_id=query_id):
                 if chunk["type"] == "done":
                     register_session(req.session_id, user["username"], req.question)
                     lr = chunk.get("last_result") or {}
                     is_raw_sql = lr.get("ok") and "columns" in lr
+                    complete_query_run(
+                        query_id,
+                        chunk["answer"],
+                        sql_used=chunk.get("sql_used"),
+                        row_count=lr.get("row_count") if is_raw_sql else None,
+                        duration_ms=_elapsed_ms(started_at),
+                    )
                     payload = {
                         "type": "done",
+                        "query_id": query_id,
                         "answer": chunk["answer"],
                         "sql_used": chunk["sql_used"],
                         "columns": lr.get("columns") if is_raw_sql else None,
@@ -587,11 +681,17 @@ def chat_stream(req: ChatRequest, user: dict = Depends(require_approved_user)):
                 else:
                     payload = chunk
                 yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+        except GeneratorExit:
+            fail_query_run(query_id, "Client closed stream", duration_ms=_elapsed_ms(started_at),
+                           status="cancelled")
+            raise
         except Exception as e:
             # Loi giua chung stream: KHONG the raise HTTPException nua (header da gui roi, client
             # dang doc stream) - gui 1 event loi qua SSE de frontend tu xu ly hien thi, giong tinh
             # than try/except cua endpoint /chat (tra ve "Loi he thong: ...").
-            err_payload = {"type": "error", "message": f"Loi he thong: {str(e)[:300]}"}
+            fail_query_run(query_id, str(e), duration_ms=_elapsed_ms(started_at))
+            err_payload = {"type": "error", "query_id": query_id,
+                           "message": f"Loi he thong: {str(e)[:300]}"}
             yield f"data: {json.dumps(err_payload, ensure_ascii=False)}\n\n"
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")

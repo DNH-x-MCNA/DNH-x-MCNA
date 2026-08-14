@@ -7,7 +7,7 @@
      "SO LIEU THEO VUNG CO THE THIEU" va dan AI "KHONG duoc trinh bay breakdown nay nhu so lieu
      chac chan", DU SO HOAN TOAN DUNG.
 
-  2. revenue_forecast_month - mo hinh du bao moi (trung binh cung thang 3 nam gan nhat).
+  2. Moi duong goi du bao tuong lai phai bi khoa fail-closed.
 
 Kho gia dung dung schema that o cac cot cac ham nay doc toi. Khong cham vao warehouse.db that.
 """
@@ -31,6 +31,17 @@ import report_templates as rt  # noqa: E402
 QLV_CODE = "Q1"
 ZONE = "V01"
 TDV_DMS = ["D01", "D02"]
+
+
+def _f(x):
+    return float(x) if x is not None else 0.0
+
+
+def _rows(res, khoa):
+    """top_products có thể trả dict {'warning':…, 'products':[…]} thay vì list."""
+    if isinstance(res, dict):
+        return res.get(khoa) or []
+    return res or []
 
 
 def _ym_add(ym, k):
@@ -78,8 +89,15 @@ def _build(path, thang_co_doanh_thu):
         ])
     # Nguon xac dinh doi THAT: manager_code tren FACT_TongHopKhachHang (cung nguon revenue_tree dung).
     # T99 bao cao len 1 QLV KHAC - de chac chan bo loc khong vo tinh keo nguoi ngoai doi vao.
+    # HAI ky, doi CO DOI NGUOI giua 2 thang - dung tinh huong ngoai thuc te:
+    #   thang 7: doi gom T01 + T03        thang 8: doi gom T01 + T02 (T03 chuyen di, T02 chuyen den)
+    # Hoi doanh thu THANG 7 thi phai tinh theo doi CUA THANG 7, khong phai doi hien tai.
     con.executemany("INSERT INTO fact_tonghopkhachhang (employee_code,manager_code,save_date) VALUES (?,?,?)",
-                    [("T01", QLV_CODE, "2026-08-31"),
+                    [("T01", QLV_CODE, "2026-07-31"),
+                     ("T03", QLV_CODE, "2026-07-31"),
+                     ("T02", "Q_KHAC", "2026-07-31"),
+                     ("T99", "Q_KHAC", "2026-07-31"),
+                     ("T01", QLV_CODE, "2026-08-31"),
                      ("T02", QLV_CODE, "2026-08-31"),
                      ("T03", "Q_KHAC", "2026-08-31"),
                      ("T99", "Q_KHAC", "2026-08-31")])
@@ -181,6 +199,107 @@ def test_doi_xac_dinh_qua_manager_code_khong_phai_zone(kho):
         "Bo loc doanh thu dang dem khac cay to chuc - hai dinh nghia 'doi' lai phan ky")
 
 
+def test_chot_doi_theo_ky_duoc_hoi_khong_phai_doi_hien_tai(kho):
+    """Đội đổi người giữa tháng 7 và tháng 8. Hỏi doanh thu THÁNG 7 thì phải tính theo đội
+    của tháng 7 — đúng định nghĩa mà cây tổ chức, KPI và lương đang dùng.
+
+    Trước bản vá 13/08 (chiều), bộ lọc doanh thu luôn lấy đội MỚI NHẤT nên hỏi tháng nào cũng
+    ra đội tháng 8 → lệch 8/18 QLV trên dữ liệu thật."""
+    thang7 = rt._get_team_dms_ids(QLV_CODE, rt._fact_date_le("2026-07-31"))
+    thang8 = rt._get_team_dms_ids(QLV_CODE, rt._fact_date_le("2026-08-31"))
+    assert sorted(thang7) == ["D01", "D03"], f"đội tháng 7 sai: {thang7}"
+    assert sorted(thang8) == ["D01", "D02"], f"đội tháng 8 sai: {thang8}"
+
+
+def test_hai_duong_chot_doi_cung_mot_moc(kho):
+    """Cây tổ chức và bộ lọc doanh thu phải chốt đội tại CÙNG thời điểm — đây chính là
+    nguyên nhân 8/18 lệch còn lại sau bản vá buổi sáng."""
+    for as_of in ("2026-07-31", "2026-08-31"):
+        theo_cay = {t["employee_code"] for t in rt._team_of_qlv(QLV_CODE, rt._fact_date_le(as_of))}
+        sql, _ = rt._employee_scope_clause(QLV_CODE, "v", as_of=as_of)
+        so_nguoi_trong_bo_loc = sql.count("?")
+        assert len(theo_cay) == so_nguoi_trong_bo_loc, (
+            f"as_of={as_of}: cây tổ chức thấy {len(theo_cay)} người, "
+            f"bộ lọc doanh thu lọc {so_nguoi_trong_bo_loc} người")
+
+
+@pytest.fixture
+def kho_doi_doi_nguoi(tmp_path, monkeypatch):
+    """Kho tối giản, doanh thu tháng 7 tách bạch theo từng người để phân biệt được hai đội:
+
+        T01 (D01)  100 triệu   — ở đội cả tháng 7 lẫn tháng 8
+        T03 (D03)  200 triệu   — CHỈ ở đội tháng 7
+        T02 (D02)  900 triệu   — CHỈ ở đội tháng 8
+
+    Hỏi doanh thu tháng 7:  đúng = 300 triệu (D01+D03).  Sai = 1.000 triệu (D01+D02).
+    Hai con số cách nhau quá xa để nhầm lẫn hay trùng hợp.
+    """
+    db = str(tmp_path / "warehouse.db")
+    con = sqlite3.connect(db)
+    con.executescript("""
+        CREATE TABLE vhoadon_otc (stt INTEGER, doc_date TEXT, amount9 REAL, customer_code TEXT,
+                                  employee_code TEXT, item_code TEXT, quantity REAL,
+                                  unit_price REAL, channel_code TEXT);
+        CREATE TABLE vhoadon_etc (stt INTEGER, doc_date TEXT, amount9 REAL, customer_code TEXT,
+                                  employee_code TEXT, item_code TEXT, quantity REAL, unit_price REAL);
+        CREATE TABLE monthly_customer_summary (year_month TEXT, channel TEXT, customer_code TEXT,
+                                               employee_code TEXT, revenue REAL, invoice_count INTEGER);
+        CREATE TABLE dim_nhanvien (employee_code TEXT, name TEXT, position_code TEXT, area_code TEXT,
+                                   manager_area_code TEXT, dmsid TEXT, end_date TEXT,
+                                   is_resigned INTEGER, is_duplicate INTEGER);
+        CREATE TABLE dms_khachhang (code TEXT, city_id INTEGER);
+        CREATE TABLE dmssx_khachhang (code TEXT, city_id INTEGER);
+        CREATE TABLE dim_tinhthanhpho (city_id INTEGER, area_code TEXT);
+        CREATE TABLE brv_sanpham (code TEXT, name TEXT);
+        CREATE TABLE fact_tonghopkhachhang (employee_code TEXT, manager_code TEXT, save_date TEXT);
+    """)
+    con.executemany(
+        "INSERT INTO dim_nhanvien (employee_code,name,position_code,area_code,manager_area_code,"
+        "dmsid,end_date,is_resigned,is_duplicate) VALUES (?,?,?,?,?,?,NULL,0,0)",
+        [(f"T0{i}", f"Nhan vien {i}", "TDV", "MB", "V01", f"D0{i}") for i in (1, 2, 3)])
+    con.executemany("INSERT INTO fact_tonghopkhachhang VALUES (?,?,?)",
+                    [("T01", QLV_CODE, "2026-07-31"), ("T03", QLV_CODE, "2026-07-31"),
+                     ("T02", "Q_KHAC", "2026-07-31"),
+                     ("T01", QLV_CODE, "2026-08-31"), ("T02", QLV_CODE, "2026-08-31"),
+                     ("T03", "Q_KHAC", "2026-08-31")])
+    con.executemany(
+        "INSERT INTO vhoadon_otc (stt,doc_date,amount9,customer_code,employee_code,item_code,"
+        "quantity,unit_price) VALUES (?,?,?,?,?,?,?,?)",
+        [(1, "2026-07-15 09:00:00", 100e6, "KH1", "D01", "SP1", 1, 100),
+         (2, "2026-07-15 09:00:00", 200e6, "KH1", "D03", "SP1", 1, 100),
+         (3, "2026-07-15 09:00:00", 900e6, "KH1", "D02", "SP1", 1, 100)])
+    con.commit()
+    con.close()
+    monkeypatch.setattr(local_warehouse, "DB_PATH", db)
+    return db
+
+
+def test_TOOL_chot_doi_theo_ky_duoc_hoi(kho_doi_doi_nguoi):
+    """Phép kiểm quan trọng nhất của bản vá: gọi qua ĐÚNG đường production (call_template),
+    không gọi thẳng hàm nội bộ — vì lỗi nằm ở chỗ các tool KHÔNG truyền ngày xuống bộ lọc."""
+    p = rt.call_template("get_revenue_by_channel",
+                         {"date_from": "2026-07-01", "date_to": "2026-07-31"},
+                         scope_employee_code=QLV_CODE, scope_role="qlv")
+    assert p["ok"], p.get("error")
+    thuc = p["result"]["otc"]["revenue"]
+    assert thuc == pytest.approx(300e6), (
+        f"Ra {thuc:,.0f}đ. Đúng phải là 300.000.000đ (đội tháng 7 = D01+D03). "
+        f"Nếu ra 1.000.000.000đ nghĩa là đang dùng đội THÁNG 8 (D01+D02) cho câu hỏi tháng 7.")
+
+
+def test_TOOL_top_khach_va_theo_vung_cung_chot_mot_doi(kho_doi_doi_nguoi):
+    """Cả 4 tool doanh thu phải cùng chốt một đội, không phải chỉ tool đầu tiên được sửa."""
+    d = {"date_from": "2026-07-01", "date_to": "2026-07-31"}
+    for ten, khoa in (("get_top_customers", "customers"),
+                      ("get_top_products", "products"),
+                      ("get_revenue_by_region", "regions")):
+        p = rt.call_template(ten, dict(d, **({"limit": 999} if "top" in ten else {})),
+                             scope_employee_code=QLV_CODE, scope_role="qlv")
+        assert p["ok"], f"{ten}: {p.get('error')}"
+        tong = sum(_f(r.get("revenue")) for r in _rows(p["result"], khoa))
+        assert tong == pytest.approx(300e6), f"{ten} ra {tong:,.0f}đ, phải là 300.000.000đ"
+
+
 def test_khong_xac_dinh_duoc_doi_thi_BAO_RO_chu_khong_tra_0d(kho):
     """Loi nguy hiem nhat da sua: QLV khong suy ra duoc doi thi moi tool tra 0 dong ma khong
     canh bao gi - nguoi dung tin la 'doi minh khong ban duoc gi'. Gio phai bao ro ly do."""
@@ -196,60 +315,35 @@ def test_khong_xac_dinh_duoc_doi_thi_BAO_RO_chu_khong_tra_0d(kho):
     assert "Loi khi chay bao cao chuan" not in p["error"]
 
 
-# ---------------------------------------------------------------- tool dự báo
+# ---------------------------------------------------------------- du bao da tat
 
-def test_du_bao_bang_trung_binh_cung_thang_3_nam(kho):
-    """Mo hinh phai la trung binh dung 3 nam, khong phai gi khac."""
-    thang = _ym_add(dt.date.today().strftime("%Y-%m"), -1)
-    r = rt.revenue_forecast_month(thang, scope_employee_code=QLV_CODE)
-    otc = r["cac_kenh"]["OTC"]
-    assert otc["so_nam_can_cu"] == 3
-    assert [c["thang"] for c in otc["can_cu"]] == [_ym_add(thang, -12 * i) for i in (1, 2, 3)]
-    assert otc["du_bao"] == pytest.approx(1_000_000_000.0)
-
-
-def test_bo_qua_thang_dang_chay(kho):
-    """Thang hien tai chua tron - dua vao chuoi lich su la keo tut du bao xuong."""
-    chuoi = rt._monthly_series("OTC", scope_employee_code=QLV_CODE)
-    assert dt.date.today().strftime("%Y-%m") not in chuoi
+@pytest.mark.parametrize("fn,args", [
+    (rt.revenue_forecast_month, {"year_month": "2026-08"}),
+    (rt.kpi_forecast_month, {"year_month": "2026-08", "as_of_date": "2026-08-14"}),
+    (rt.forecast_model1, {"target_month": "2026-08"}),
+])
+def test_goi_truc_tiep_ham_du_bao_phai_bi_khoa(fn, args):
+    result = fn(**args)
+    assert result["feature_disabled"] is True
+    assert "đã được tắt" in result["error"]
 
 
-def test_tu_choi_khi_thieu_lich_su(kho):
-    """Chi co 1 nam cung thang -> KHONG duoc doan, phai noi ly do."""
-    xa = _ym_add(dt.date.today().strftime("%Y-%m"), -47)
-    r = rt.revenue_forecast_month(xa, scope_employee_code=QLV_CODE)
-    otc = r["cac_kenh"]["OTC"]
-    assert otc["du_bao"] is None
-    assert "ly_do_khong_du_bao" in otc
+@pytest.mark.parametrize("tool_name", [
+    "get_revenue_forecast",
+    "get_kpi_forecast",
+    "get_kpi_forecast_model1",
+])
+def test_call_template_cu_cung_phai_bi_khoa(tool_name, monkeypatch):
+    monkeypatch.setattr(rt, "_write_log", lambda entry: None)
+    result = rt.call_template(tool_name, {}, question="du bao")
+    assert result["ok"] is False
+    assert result["feature_disabled"] is True
+    assert "đã được tắt" in result["error"]
 
 
-def test_khoang_uoc_tinh_khong_bao_gio_am(kho, monkeypatch):
-    """Sai so >100% thi pred*(1-e) am. Doanh thu khong the am -> phai chan day o 0."""
-    monkeypatch.setattr(rt, "_forecast_accuracy",
-                        lambda s: {"do_duoc": True, "so_thang_kiem": 24,
-                                   "sai_so_trung_binh_pct": 140.0})
-    thang = _ym_add(dt.date.today().strftime("%Y-%m"), -1)
-    otc = rt.revenue_forecast_month(thang, scope_employee_code=QLV_CODE)["cac_kenh"]["OTC"]
-    assert otc["khoang_uoc_tinh"]["thap"] == 0.0
-    assert otc["khong_dang_tin"], "Sai so 140% ma khong danh dau khong dang tin"
-
-
-def test_sai_so_binh_thuong_thi_khong_danh_dau(kho):
-    """Nguoc lai: du lieu deu tam tap thi khong duoc gan nhan 'khong dang tin' vo co."""
-    thang = _ym_add(dt.date.today().strftime("%Y-%m"), -1)
-    otc = rt.revenue_forecast_month(thang, scope_employee_code=QLV_CODE)["cac_kenh"]["OTC"]
-    assert "khong_dang_tin" not in otc
-    assert otc["khoang_uoc_tinh"]["thap"] > 0
-
-
-def test_thang_sai_dinh_dang_bao_loi_ro_rang(kho):
-    assert "YYYY-MM" in rt.revenue_forecast_month("thang 8")["error"]
-
-
-def test_luon_kem_canh_bao_day_la_uoc_tinh(kho):
-    """Ba dieu bat buoc trong prompt phu thuoc vao cac truong nay - mat chung la AI trinh bay
-    so uoc tinh nhu so that."""
-    thang = _ym_add(dt.date.today().strftime("%Y-%m"), -1)
-    r = rt.revenue_forecast_month(thang, scope_employee_code=QLV_CODE)
-    assert r["day_la_uoc_tinh"] is True
-    assert any("UOC TINH" in c.upper() for c in r["canh_bao"])
+def test_ten_tool_du_bao_khong_con_dang_ky():
+    assert {
+        "get_revenue_forecast",
+        "get_kpi_forecast",
+        "get_kpi_forecast_model1",
+    }.isdisjoint(rt.TEMPLATES)

@@ -1,0 +1,107 @@
+{
+  "version": 1,
+  "owner": "backend/sync_warehouse.py",
+  "mappings": [
+    {
+      "source": "dbo.vHoaDonTotal",
+      "target": "vhoadon_otc",
+      "mode": "incremental_detail",
+      "notes": "Chi tiết OTC 12 tháng gần nhất; Amount9 giữ cả điều chỉnh/hoàn âm."
+    },
+    {
+      "source": "dbo.vHoaDonETCTotal",
+      "target": "vhoadon_etc",
+      "mode": "incremental_detail",
+      "notes": "Chi tiết ETC 12 tháng gần nhất; dùng Total view để không mất chứng từ HC."
+    },
+    {
+      "source": "dbo.vHoaDonTotal",
+      "target": "monthly_customer_summary",
+      "mode": "derived_monthly_compression",
+      "notes": "Lịch sử OTC cũ hơn cửa sổ chi tiết được nén theo tháng x khách hàng x nhân viên."
+    },
+    {
+      "source": "dbo.vHoaDonETCTotal",
+      "target": "monthly_customer_summary",
+      "mode": "derived_monthly_compression",
+      "notes": "Lịch sử ETC cũ hơn cửa sổ chi tiết được nén theo tháng x khách hàng x nhân viên."
+    },
+    {
+      "source": "dbo.DIM_TinhThanhPho",
+      "target": "dim_tinhthanhpho",
+      "mode": "full_reload"
+    },
+    {
+      "source": "dbo.DIM_TargetVungMien",
+      "target": "dim_targetvungmien",
+      "mode": "full_reload"
+    },
+    {
+      "source": "dbo.FACT_KeHoachTongETC",
+      "target": "fact_kehoachtongetc",
+      "mode": "full_reload"
+    },
+    {
+      "source": "dbo.DMSSX_KhachHang",
+      "target": "dmssx_khachhang",
+      "mode": "full_reload"
+    },
+    {
+      "source": "dbo.DMSSX_NhanVien",
+      "target": "dmssx_nhanvien",
+      "mode": "full_reload"
+    },
+    {
+      "source": "dbo.DMS_KhachHang",
+      "target": "dms_khachhang",
+      "mode": "full_reload"
+    },
+    {
+      "source": "dbo.DIM_NhanVien",
+      "target": "dim_nhanvien",
+      "mode": "full_reload"
+    },
+    {
+      "source": "dbo.DIM_ChucVu",
+      "target": "dim_chucvu",
+      "mode": "full_reload_distinct"
+    },
+    {
+      "source": "dbo.BRV_SanPham",
+      "target": "brv_sanpham",
+      "mode": "full_reload"
+    },
+    {
+      "source": "dbo.BRV_Kho",
+      "target": "brv_kho",
+      "mode": "full_reload"
+    },
+    {
+      "source": "dbo.BRV_TonKhoDK",
+      "target": "brv_tonkhodk",
+      "mode": "full_reload"
+    },
+    {
+      "source": "dbo.BRVSX_TraLai",
+      "target": "brvsx_tralai",
+      "mode": "full_reload"
+    },
+    {
+      "source": "dbo.FACT_TongHopKhachHang",
+      "target": "fact_tonghopkhachhang",
+      "mode": "rolling_90_day_snapshot"
+    },
+    {
+      "source": "dbo.FACT_ThongKeTinhLuong",
+      "target": "fact_thongketinhluong",
+      "mode": "rolling_90_day_snapshot",
+      "notes": "Bảng nhiều grain; không được SUM trực tiếp nếu chưa chốt khóa nghiệp vụ."
+    },
+    {
+      "source": "dbo.usp_DeptAccDueDate_GetData",
+      "target": "fact_congno_khachhang",
+      "mode": "stored_procedure_snapshot",
+      "notes": "Lấy result set có CustomerCode và OverDueAmount; rollback connection sau EXEC."
+    }
+  ]
+}

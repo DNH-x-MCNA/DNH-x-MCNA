@@ -10,8 +10,9 @@ NGUON DU LIEU (tu 2026-07-08):
 - Supabase CHI con dung cho inventory (bang do dong nghiep tu nhap) - dung tool
   query_inventory_receivables. CONG NO da chuyen HAN sang kho local (bang fact_congno_khachhang,
   snapshot tu SP goc DNH) tu 29/07/2026 - KHONG con doc receivable_detail/receivable_etc tren Supabase.
-- Bravo (SQL Server song, may chu that cua khach hang) KHONG con duoc chatbot goi truc tiep nua -
-  chi co job dong bo nen moi cham toi, giup chatbot khong phu thuoc VPN on dinh moi luc.
+- Bravo (SQL Server song, may chu that cua khach hang) la nguon fallback CHI-DOC cho object/cot chua
+  duoc warehouse phu. Chatbot tim schema dong tu catalog toan bo object duoc cap quyen, sau do moi
+  query live bang T-SQL. Bao cao chuan van uu tien warehouse/tool da kiem chung de nhanh va on dinh.
 !!! Du lieu "local" co the tre toi da ~15-30 phut so voi Bravo that - neu nguoi dung hoi so lieu
 "vua moi/ngay bay gio", noi ro day la so lieu tai lan dong bo gan nhat, khong phai tuc thoi 100%.
 """
@@ -189,10 +190,11 @@ fact_congno_khachhang: CONG NO theo khach hang, snapshot TUC THOI tu bao cao con
 
 inventory (snapshot ton kho MOI NHAT, khong theo ngay): "item_code", "item_name", "unit",
   "opening_qty", "inward_qty", "outward_qty", "closing_qty" (ton cuoi SL),
-  "closing_value" (ton cuoi tien), "months_to_sell" (so thang uoc tinh ban het ton hien tai -
-  CANG THAP ban cang nhanh, <=1 la sap can xu ly/ban rat cham), "warehouse" (CHU Y: cot nay 100%
+  "closing_value" (ton cuoi tien), "warehouse" (CHU Y: cot nay 100%
   NULL, KHONG dung duoc de loc/nhom theo vung - neu cau hoi co yeu to VUNG MIEN, chuyen sang dung
   query_database voi brv_tonkhodk/brv_kho/brv_sanpham o kho local thay vi bang nay).
+  CHI duoc bao cao cac so snapshot da phat sinh. KHONG tinh/tra ve so thang ban het, ngay ban het,
+  sap can kho hoac bat ky suy dien ton kho tuong lai nao.
 
 (CONG NO: KHONG con tren Supabase - da chuyen sang bang fact_congno_khachhang o kho local, hoi qua
  query_database. TUYET DOI KHONG truy van receivable_detail/receivable_etc - 2 bang do la du lieu

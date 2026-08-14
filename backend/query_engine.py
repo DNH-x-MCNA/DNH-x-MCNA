@@ -3,10 +3,9 @@
 Bravo (SQL Server song), hoac Supabase.
 
 "local" la kho SQLite dong bo dinh ky tu Bravo (xem sync_warehouse.py) - nhanh (<=10s), co day du
-lich su nhieu nam, dung cho HAU HET cau hoi (ca 5 tool bao cao chuan lan cau hoi tu do). Bravo song
-CHI con duoc cham toi boi job dong bo nen (KHONG boi chatbot truc tiep nua) - tru truong hop can so
-lieu "ngay tuc thi" chua kip dong bo. Supabase CHI dung cho inventory/receivable_* (bang cua dong
-nghiep tu nhap, khong co tren Bravo).
+lich su nhieu nam, dung cho HAU HET cau hoi (bao cao chuan va cau hoi tu do da duoc warehouse phu).
+Bravo song la fallback read-only cho object/cot chua dong bo va chi duoc mo cho vai tro du dieu kien;
+SQL bi validate, timeout, gioi han dong va audit. Supabase chi con dung cho snapshot inventory cu.
 """
 import os, re, ssl, time, json, datetime as dt, decimal, urllib.parse
 from sqlalchemy import create_engine, text
@@ -25,7 +24,8 @@ MAX_ROWS = 200
 STATEMENT_TIMEOUT_SEC = 30
 
 _FORBIDDEN = re.compile(
-    r"\b(INSERT|UPDATE|DELETE|DROP|ALTER|TRUNCATE|GRANT|REVOKE|CREATE|COPY|CALL|EXECUTE|MERGE|VACUUM|"
+    r"\b(INSERT|UPDATE|DELETE|DROP|ALTER|TRUNCATE|GRANT|REVOKE|CREATE|COPY|CALL|EXEC|EXECUTE|MERGE|"
+    r"VACUUM|INTO|WAITFOR|DBCC|BULK|OPENROWSET|OPENQUERY|OPENDATASOURCE|xp_cmdshell|"
     r"pg_sleep|pg_terminate_backend|pg_read_file)\b",
     re.IGNORECASE,
 )
@@ -35,8 +35,45 @@ _FORBIDDEN = re.compile(
 # 9,17 ty (that la 0,61 ty). Day la lop bao ve KHONG phu thuoc AI co doc dung prompt hay khong (bai
 # hoc tu ban va phan quyen: chan o tang thuc thi, khong chi o tang mo ta).
 _BLOCKED_TABLES = re.compile(r"\b(receivable_detail|receivable_etc)\b", re.IGNORECASE)
+_BLOCKED_SQL_SERVER_OBJECTS = re.compile(
+    r"(?:\b(?:dbo)\s*\.\s*)?\[?\s*DIM_Pass\s*\]?",
+    re.IGNORECASE,
+)
+_CROSS_DATABASE_REFERENCE = re.compile(
+    r"\b(?:FROM|JOIN)\s+(?:\[[^\]]+\]|[A-Za-z_][\w$#@]*)\s*\.\s*"
+    r"(?:\[[^\]]+\]|[A-Za-z_][\w$#@]*)\s*\.",
+    re.IGNORECASE,
+)
+_SELECT_ALL_COLUMNS = re.compile(
+    r"\bSELECT\s+(?:DISTINCT\s+)?(?:TOP\s*(?:\(\s*\d+\s*\)|\d+)\s+)?"
+    r"(?:\[[^\]]+\]|[A-Za-z_][\w$#@]*)?\s*\.?\s*\*",
+    re.IGNORECASE,
+)
 
 _engines = {}
+
+
+def _load_project_connection_env():
+    """Nap credential tu backend/.env truoc, root .env lam fallback; khong log gia tri."""
+    backend_dir = os.path.dirname(os.path.abspath(__file__))
+    project_root = os.path.dirname(backend_dir)
+    for env_path in (os.path.join(backend_dir, ".env"), os.path.join(project_root, ".env")):
+        if not os.path.exists(env_path):
+            continue
+        with open(env_path, encoding="utf-8") as env_file:
+            for raw_line in env_file:
+                line = raw_line.strip()
+                if line and not line.startswith("#") and "=" in line:
+                    key, value = line.split("=", 1)
+                    os.environ.setdefault(key.strip(), value.strip())
+
+
+def _required_env(*names: str) -> str:
+    for name in names:
+        value = os.environ.get(name, "").strip()
+        if value:
+            return value
+    raise RuntimeError(f"Thieu bien moi truong ket noi SQL Server: {' hoac '.join(names)}")
 
 
 def _get_engine(db: str = "local"):
@@ -45,6 +82,7 @@ def _get_engine(db: str = "local"):
             from local_warehouse import DB_PATH
             _engines[db] = create_engine(f"sqlite:///{DB_PATH}", connect_args={"check_same_thread": False})
         elif db == "bravo":
+            _load_project_connection_env()
             import pyodbc
             sd = [d for d in pyodbc.drivers() if "SQL Server" in d]
             if "ODBC Driver 18 for SQL Server" in sd:
@@ -53,8 +91,14 @@ def _get_engine(db: str = "local"):
                 drv = "ODBC Driver 17 for SQL Server"
             else:
                 drv = "SQL Server"
-            server = os.environ["BRAVO_SERVER"]; port = os.environ.get("BRAVO_PORT", "1433")
-            dbname = os.environ["BRAVO_DATABASE"]; user = os.environ["BRAVO_USER"]; pwd = os.environ["BRAVO_PASSWORD"]
+            # Ho tro ca bo ten cua backend (BRAVO_*) va bo ten ETL tai root repo (BRAVO_SQL_*).
+            # Truoc 14/08/2026 hai bo ten khong tuong thich lam script metadata/sync bao mat ket noi
+            # du account van dung; _required_env chi bao TEN bien thieu, khong bao gio in credential.
+            server = _required_env("BRAVO_SERVER", "BRAVO_SQL_SERVER")
+            port = os.environ.get("BRAVO_PORT") or os.environ.get("BRAVO_SQL_PORT") or "1433"
+            dbname = _required_env("BRAVO_DATABASE", "BRAVO_SQL_DATABASE")
+            user = _required_env("BRAVO_USER", "BRAVO_SQL_UID")
+            pwd = _required_env("BRAVO_PASSWORD", "BRAVO_SQL_PWD")
             # Connection Timeout ngan (15s) - mac dinh driver co the treo RAT LAU (vai phut) neu VPN
             # chua san sang (vd ngay sau khi may vua khoi dong) thay vi bao loi nhanh de retry som.
             s = f"DRIVER={{{drv}}};SERVER={server},{port};DATABASE={dbname};UID={user};PWD={pwd};Connection Timeout=15;"
@@ -87,6 +131,12 @@ def validate_sql(sql: str, db: str = "local") -> str:
     if _BLOCKED_TABLES.search(s):
         raise SqlRejected("Bang cong no receivable_detail/receivable_etc da ngung dung (du lieu cu "
                           "sai lech lon). Cong no hien lay tu bang fact_congno_khachhang o kho local.")
+    if db == "bravo" and _BLOCKED_SQL_SERVER_OBJECTS.search(s):
+        raise SqlRejected("Object chua thong tin dang nhap/credential va bi cam truy van tu chatbot.")
+    if db == "bravo" and _CROSS_DATABASE_REFERENCE.search(s):
+        raise SqlRejected("Chi duoc truy van object trong database SQL Server hien tai.")
+    if db == "bravo" and _SELECT_ALL_COLUMNS.search(s):
+        raise SqlRejected("SQL Server live khong cho phep SELECT *; phai liet ke dung cac cot can doc.")
     if db in ("supabase", "local") and not re.search(r"\bLIMIT\s+\d+\b", s, re.IGNORECASE):
         s = f"{s}\nLIMIT {MAX_ROWS}"
     # db == "bravo" (T-SQL): khong tu dong them TOP N (cu phap SELECT...LIMIT khong hop le voi SQL Server,
@@ -110,13 +160,24 @@ def run_query(sql: str, question: str = "", db: str = "local", username: str = N
         with eng.connect() as conn:
             if db == "supabase":
                 conn.execute(text(f"SET statement_timeout = {STATEMENT_TIMEOUT_SEC * 1000}"))
+            elif db == "bravo":
+                # Timeout o tang pyodbc ngan truy van live treo VPN/scan qua lau. LOCK_TIMEOUT
+                # chi gioi han cho khoa, khong doi isolation level va khong doc dirty data.
+                proxied = conn.connection
+                driver_connection = getattr(proxied, "driver_connection", proxied)
+                if hasattr(driver_connection, "timeout"):
+                    driver_connection.timeout = STATEMENT_TIMEOUT_SEC
+                conn.exec_driver_sql("SET LOCK_TIMEOUT 5000")
             result = conn.execute(text(safe_sql))
             cols = list(result.keys())
-            rows = [[_jsonable(v) for v in r] for r in result.fetchmany(MAX_ROWS)]
+            fetched = result.fetchmany(MAX_ROWS + 1)
+            truncated = len(fetched) > MAX_ROWS
+            rows = [[_jsonable(v) for v in r] for r in fetched[:MAX_ROWS]]
         duration_ms = int((time.time() - t0) * 1000)
         entry["status"] = "ok"; entry["row_count"] = len(rows); entry["duration_ms"] = duration_ms
         _write_log(entry)
-        return {"ok": True, "columns": cols, "rows": rows, "row_count": len(rows), "duration_ms": duration_ms}
+        return {"ok": True, "columns": cols, "rows": rows, "row_count": len(rows),
+                "duration_ms": duration_ms, "truncated": truncated, "database": db}
     except SqlRejected as e:
         entry["status"] = "rejected"; entry["error"] = str(e)
         _write_log(entry)

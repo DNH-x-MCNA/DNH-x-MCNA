@@ -48,6 +48,8 @@ next-env.d.ts
 # backend (Python) - khong commit du lieu/DB/log, chi commit code
 backend/__pycache__/
 backend/*.db
+backend/*.db-wal
+backend/*.db-shm
 backend/logs/
 backend/*.txt
 
@@ -72,3 +74,7 @@ tools/
 # State runtime (DB/JSON tu sinh khi chay, khong phai code) - tuong tu backend/*.db o tren
 data/
 backend/health_watchdog_state.json
+
+# Environment-specific SQL allowlist and sensitive-data classification supplied by DNH.
+# Commit only the redacted example, never the production policy.
+config/sql_catalog_policy.local.json
