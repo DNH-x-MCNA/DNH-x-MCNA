@@ -56,6 +56,7 @@ from conversation_memory import (
     complete_query_run,
     fail_query_run,
     get_query_run,
+    list_query_runs,
     save_query_feedback,
 )
 from nl2sql import ask, ask_stream
@@ -730,12 +731,27 @@ def get_audit_logs_dashboard(
     elif days:
         cutoff = dt.datetime.now() - dt.timedelta(days=days)
 
+    def _local_naive_timestamp(ts_str):
+        """Chuan hoa UTC timestamp cua query_runs ve gio local cua may chu."""
+        if not ts_str:
+            return None
+        try:
+            parsed = dt.datetime.fromisoformat(ts_str)
+        except Exception:
+            return None
+        if parsed.tzinfo is not None:
+            parsed = parsed.astimezone().replace(tzinfo=None)
+        return parsed
+
+    def _display_timestamp(ts_str):
+        parsed = _local_naive_timestamp(ts_str)
+        return parsed.isoformat() if parsed is not None else ts_str
+
     def _passes_time_filter(ts_str):
         if not ts_str:
             return True
-        try:
-            ts_dt = dt.datetime.fromisoformat(ts_str)
-        except Exception:
+        ts_dt = _local_naive_timestamp(ts_str)
+        if ts_dt is None:
             return True
         if target_date:
             return date_start <= ts_dt <= date_end
@@ -751,7 +767,10 @@ def get_audit_logs_dashboard(
                 if not line:
                     continue
                 try:
-                    audit_entries.append(json.loads(line))
+                    entry = json.loads(line)
+                    if isinstance(entry.get("sql"), list):
+                        entry["sql"] = "\n\n".join(str(item) for item in entry["sql"])
+                    audit_entries.append(entry)
                 except Exception:
                     continue
 
@@ -793,6 +812,49 @@ def get_audit_logs_dashboard(
                 })
     except Exception as ex:
         print("[AUDIT-LOG] Lỗi nạp lịch sử từ auth.db:", ex)
+
+    # query_runs la so cai chuan tu luc /chat nhan cau hoi den khi hoan tat/loi va feedback.
+    # audit JSONL van duoc giu de dem tung cau SQL va lam fallback cho lich su cu. Neu cung mot
+    # (session, question) da co query_run, chi hien query_run de co status/feedback va khong trung dong.
+    sql_count_source_entries = list(audit_entries)
+    query_run_entries = []
+    try:
+        for run in list_query_runs(limit=10000):
+            sql_used = run.get("sql_used") or []
+            query_run_entries.append({
+                "ts": _display_timestamp(run.get("created_at")),
+                "username": run.get("username"),
+                "question": run.get("question"),
+                "sql": "\n\n".join(str(item) for item in sql_used) if sql_used else None,
+                "status": run.get("status") or "unknown",
+                "duration_ms": run.get("duration_ms"),
+                "session_id": run.get("session_id"),
+                "query_id": run.get("query_id"),
+                "row_count": run.get("row_count"),
+                "error_message": run.get("error_message"),
+                "feedback_rating": run.get("feedback_rating"),
+                "feedback_category": run.get("feedback_category"),
+                "feedback_comment": run.get("feedback_comment"),
+                "feedback_by": run.get("feedback_by"),
+                "feedback_at": _display_timestamp(run.get("feedback_at")),
+            })
+    except Exception as ex:
+        print("[AUDIT-LOG] Loi nap query_runs:", ex)
+
+    canonical_query_keys = {
+        (entry.get("session_id") or "", (entry.get("question") or "")[:120])
+        for entry in query_run_entries
+    }
+    audit_entries = [
+        entry for entry in audit_entries
+        if (
+            isinstance(entry.get("sql"), str)
+            and entry["sql"].startswith(("<auth:", "<admin:"))
+        )
+        or (entry.get("session_id") or "", (entry.get("question") or "")[:120])
+        not in canonical_query_keys
+    ]
+    audit_entries.extend(query_run_entries)
 
     # Sắp xếp toàn bộ log theo thời gian mới nhất lên đầu
     audit_entries.sort(key=lambda x: x.get("ts") or "", reverse=True)
@@ -894,7 +956,7 @@ def get_audit_logs_dashboard(
 
     # 03/08/2026: Pre-compute so lenh SQL per question de hien thi
     _sql_count_by_q = defaultdict(int)
-    for _e in audit_entries:
+    for _e in sql_count_source_entries:
         _qk = (_e.get("session_id") or "", (_e.get("question") or "")[:120])
         _sql_count_by_q[_qk] += 1
 
@@ -965,6 +1027,14 @@ def get_audit_logs_dashboard(
             "status": e.get("status", "success"),
             "duration_ms": e.get("duration_ms"),
             "session_id": sid,
+            "query_id": e.get("query_id"),
+            "row_count": e.get("row_count"),
+            "error_message": e.get("error_message"),
+            "feedback_rating": e.get("feedback_rating"),
+            "feedback_category": e.get("feedback_category"),
+            "feedback_comment": e.get("feedback_comment"),
+            "feedback_by": e.get("feedback_by"),
+            "feedback_at": e.get("feedback_at"),
             # 03/08/2026: Per-question tokens/cost (khong con per-session)
             "input_tokens": c_it,
             "output_tokens": c_ot,
@@ -1009,6 +1079,14 @@ def get_audit_logs_dashboard(
             "status": "no_sql",
             "duration_ms": None,
             "session_id": _sid2,
+            "query_id": None,
+            "row_count": None,
+            "error_message": None,
+            "feedback_rating": None,
+            "feedback_category": None,
+            "feedback_comment": None,
+            "feedback_by": None,
+            "feedback_at": None,
             "input_tokens": _cpq2.get("input_tokens", 0),
             "output_tokens": _cpq2.get("output_tokens", 0),
             "cache_read_tokens": _cpq2.get("cache_read_tokens", 0),

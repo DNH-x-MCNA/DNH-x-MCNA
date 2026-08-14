@@ -292,6 +292,37 @@ def get_query_run(query_id: str):
         conn.close()
 
 
+def list_query_runs(limit: int = 5000):
+    """Nguon chuan cho dashboard lich su truy van; gioi han de khong nap vo han vao RAM."""
+    safe_limit = max(1, min(int(limit or 5000), 10000))
+    conn = _conn()
+    try:
+        rows = conn.execute(
+            "SELECT query_id, session_id, username, question, answer, status, sql_used_json, "
+            "row_count, duration_ms, error_message, feedback_rating, feedback_category, "
+            "feedback_comment, feedback_by, feedback_at, created_at, completed_at "
+            "FROM query_runs ORDER BY created_at DESC, rowid DESC LIMIT ?",
+            (safe_limit,),
+        ).fetchall()
+        keys = (
+            "query_id", "session_id", "username", "question", "answer", "status", "sql_used_json",
+            "row_count", "duration_ms", "error_message", "feedback_rating", "feedback_category",
+            "feedback_comment", "feedback_by", "feedback_at", "created_at", "completed_at",
+        )
+        result = []
+        for row in rows:
+            item = dict(zip(keys, row))
+            try:
+                item["sql_used"] = json.loads(item.pop("sql_used_json") or "[]")
+            except (TypeError, json.JSONDecodeError):
+                item["sql_used"] = []
+                item.pop("sql_used_json", None)
+            result.append(item)
+        return result
+    finally:
+        conn.close()
+
+
 def save_query_feedback(query_id: str, username: str, rating: int, category: str = None, comment: str = None):
     """Cap nhat current state va them event trong cung transaction; API kiem tra owner truoc khi goi."""
     now = _utc_now()
