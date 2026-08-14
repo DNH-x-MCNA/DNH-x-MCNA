@@ -57,6 +57,28 @@ def _q(sql, params=()):
         conn.close()
 
 
+def _q_bravo(sql: str, params: dict = None) -> list[dict]:
+    """Chay TRUY VAN CO DINH, chi-doc tren SQL Server cho bao cao chuan.
+
+    Khac tool SQL tu do: cau SQL o day nam san trong code, nguoi dung/AI chi truyen tham so bind.
+    Nho vay QLV/Manager van dung duoc bao cao da ep scope ma khong duoc quyen viet SQL tuy y.
+    """
+    normalized_params = {}
+    for key, value in (params or {}).items():
+        # Driver "SQL Server" cu tren may dev khong bind truc tiep datetime.date (HYC00).
+        normalized_params[key] = value.isoformat() if isinstance(value, (dt.date, dt.datetime)) else value
+    eng = _get_engine("bravo")
+    with eng.connect() as conn:
+        proxied = conn.connection
+        driver_connection = getattr(proxied, "driver_connection", proxied)
+        if hasattr(driver_connection, "timeout"):
+            driver_connection.timeout = 30
+        conn.exec_driver_sql("SET LOCK_TIMEOUT 5000")
+        result = conn.execute(text(sql), normalized_params)
+        cols = list(result.keys())
+        return [dict(zip(cols, row)) for row in result.fetchall()]
+
+
 def _f(v):
     return float(v) if v is not None else 0.0
 
@@ -2808,6 +2830,512 @@ def audit_log_summary(days: int = 7, limit: int = 30, username: str = None, targ
     }
 
 
+def _shift_month_start(value: dt.date, months: int) -> dt.date:
+    month_index = value.year * 12 + (value.month - 1) + months
+    return dt.date(month_index // 12, month_index % 12 + 1, 1)
+
+
+def customer_revenue_debt_risk(as_of_date: str = None, recent_months: int = 3,
+                               min_revenue: float = 100_000_000,
+                               min_overdue: float = 50_000_000, limit: int = 20,
+                               scope_area_code: str = None, scope_employee_code: str = None,
+                               scope_channel: str = None) -> dict:
+    """Khach doanh thu lon + no cao + doanh thu giam, trong MOT truy van warehouse da kiem soat."""
+    recent_months = min(max(int(recent_months or 3), 1), 12)
+    limit = min(max(int(limit or 20), 1), 100)
+    data_day = _parse_report_date(as_of_date or latest_data_date(), "as_of_date")
+    this_month = dt.date(data_day.year, data_day.month, 1)
+    recent_end = data_day if data_day == _month_end(data_day) else this_month - dt.timedelta(days=1)
+    recent_start = _shift_month_start(dt.date(recent_end.year, recent_end.month, 1), -(recent_months - 1))
+    prior_end = recent_start - dt.timedelta(days=1)
+    prior_start = _shift_month_start(dt.date(prior_end.year, prior_end.month, 1), -(recent_months - 1))
+
+    channel = str(scope_channel or "ALL").upper()
+    if channel not in {"ALL", "OTC", "ETC"}:
+        channel = "ALL"
+    dms_ids = _get_team_dms_ids(scope_employee_code, str(recent_end)) if scope_employee_code else []
+
+    sales_parts = []
+    sales_params = []
+    for table, label in (("vhoadon_otc", "OTC"), ("vhoadon_etc", "ETC")):
+        if channel != "ALL" and channel != label:
+            continue
+        employee_filter = ""
+        if dms_ids:
+            employee_filter = f" AND v.employee_code IN ({','.join(['?'] * len(dms_ids))})"
+        sales_parts.append(
+            f"SELECT v.customer_code, v.doc_date, v.amount9 FROM {table} v "
+            f"WHERE v.doc_date BETWEEN ? AND ?{employee_filter}"
+        )
+        sales_params.extend([str(prior_start), str(recent_end)])
+        sales_params.extend(dms_ids)
+    if not sales_parts:
+        return {"customers": [], "status": "no_data"}
+
+    debt_where = ["c.snapshot_date=(SELECT MAX(snapshot_date) FROM fact_congno_khachhang)"]
+    debt_params = []
+    if channel != "ALL":
+        debt_where.append("c.sales_channel=?")
+        debt_params.append(channel)
+    if scope_area_code:
+        region_key = next((key for key, markers in REGION_SQL_MARKERS.items()
+                           if scope_area_code in markers), None)
+        markers = REGION_SQL_MARKERS.get(region_key, [scope_area_code])
+        debt_where.append(f"c.area_code IN ({','.join(['?'] * len(markers))})")
+        debt_params.extend(markers)
+    if dms_ids:
+        debt_where.append(
+            "EXISTS (SELECT 1 FROM dms_khachhang kh WHERE kh.code=c.customer_code "
+            f"AND kh.emp_code IN ({','.join(['?'] * len(dms_ids))}))"
+        )
+        debt_params.extend(dms_ids)
+
+    sql = f"""
+        WITH all_sales AS (
+            {' UNION ALL '.join(sales_parts)}
+        ), revenue AS (
+            SELECT customer_code,
+                   SUM(CASE WHEN doc_date BETWEEN ? AND ? THEN amount9 ELSE 0 END) rev_recent,
+                   SUM(CASE WHEN doc_date BETWEEN ? AND ? THEN amount9 ELSE 0 END) rev_prior
+            FROM all_sales GROUP BY customer_code
+        ), debt AS (
+            SELECT c.customer_code, MAX(c.customer_name) customer_name,
+                   SUM(c.balance_end) balance_end, SUM(c.total_overdue) overdue,
+                   MAX(c.snapshot_at) snapshot_at
+            FROM fact_congno_khachhang c
+            WHERE {' AND '.join(debt_where)}
+            GROUP BY c.customer_code
+        )
+        SELECT r.customer_code, d.customer_name, r.rev_recent, r.rev_prior,
+               CASE WHEN r.rev_prior<>0 THEN (r.rev_recent-r.rev_prior)*100.0/r.rev_prior END pct_change,
+               d.balance_end, d.overdue, d.snapshot_at
+        FROM revenue r INNER JOIN debt d ON d.customer_code=r.customer_code
+        WHERE r.rev_recent>=? AND d.overdue>=? AND r.rev_recent<r.rev_prior
+        ORDER BY d.overdue DESC, r.rev_recent DESC
+        LIMIT ?
+    """
+    params = (sales_params
+              + [str(recent_start), str(recent_end), str(prior_start), str(prior_end)]
+              + debt_params + [float(min_revenue), float(min_overdue), limit])
+    rows = _q(sql, tuple(params))
+    customers = [{
+        "customer_code": row.get("customer_code"),
+        "customer_name": row.get("customer_name"),
+        "recent_revenue": _f(row.get("rev_recent")),
+        "prior_revenue": _f(row.get("rev_prior")),
+        "change_pct": round(_f(row.get("pct_change")), 1),
+        "balance_end": _f(row.get("balance_end")),
+        "overdue": _f(row.get("overdue")),
+    } for row in rows]
+    return {
+        "status": "ok",
+        "recent_period": {"from": str(recent_start), "to": str(recent_end)},
+        "prior_period": {"from": str(prior_start), "to": str(prior_end)},
+        "revenue_threshold": float(min_revenue),
+        "overdue_threshold": float(min_overdue),
+        "customer_count": len(customers),
+        "customers": customers,
+        "receivable_snapshot_at": rows[0].get("snapshot_at") if rows else None,
+        "note": "Danh sach chi gom khach dong thoi dat nguong doanh thu, no qua han va doanh thu giam.",
+    }
+
+
+def _parse_report_date(value, field_name: str) -> dt.date:
+    try:
+        return dt.date.fromisoformat(str(value)[:10])
+    except (TypeError, ValueError):
+        raise ValueError(f"{field_name} phai co dinh dang YYYY-MM-DD.")
+
+
+def _month_end(value: dt.date) -> dt.date:
+    next_month = (dt.date(value.year + 1, 1, 1) if value.month == 12
+                  else dt.date(value.year, value.month + 1, 1))
+    return next_month - dt.timedelta(days=1)
+
+
+def promotion_effectiveness(date_from: str = None, date_to: str = None, limit: int = 20,
+                            scope_area_code: str = None, scope_employee_code: str = None,
+                            scope_channel: str = None) -> dict:
+    """Hieu qua CTKM theo DON HANG THUC SU gan chuong trinh tren DMS.
+
+    Nguon dung la DMS_DonHangCTKM -> DMS_CTKM -> DMS_DonHangHdr, KHONG phai cot CTKM tu do tren
+    vHoaDonTotal (cot do co ca ghi chu/nguoi lien he va da gay ra bang sai tren production).
+
+    Doanh thu o day la doanh thu GAN VOI don hang co su dung CTKM. Mot don co the dung nhieu CTKM,
+    vi vay doanh thu cua cac chuong trinh KHONG cong ngang voi nhau de ra doanh thu cong ty va KHONG
+    duoc goi la ROI/uplift neu chua co chi phi va nhom doi chung.
+    """
+    limit = min(max(int(limit or 20), 1), 50)
+    if scope_channel and str(scope_channel).upper() not in ("OTC", "ALL"):
+        return {
+            "status": "not_applicable",
+            "programs": [],
+            "note": "Du lieu chuong trinh DMS nay thuoc kenh OTC; pham vi tai khoan khong co kenh OTC.",
+        }
+
+    coverage_rows = _q_bravo("""
+        SELECT TOP (1) h.DocDate AS CoverageDate, x.SyncAt AS LinkSyncedAt, x.Id AS LinkRowId
+        FROM dbo.DMS_DonHangCTKM x
+        LEFT JOIN dbo.DMS_DonHangHdr h ON h.Id=x.OrderId
+        ORDER BY x.Id DESC
+    """)
+    coverage_date = coverage_rows[0].get("CoverageDate") if coverage_rows else None
+    if not coverage_date:
+        return {
+            "status": "source_gap",
+            "programs": [],
+            "note": "Khong xac dinh duoc moc du lieu don hang gan chuong trinh khuyen mai.",
+        }
+    if not isinstance(coverage_date, dt.date):
+        coverage_date = _parse_report_date(coverage_date, "coverage_date")
+
+    used_default_period = not date_from and not date_to
+    if used_default_period:
+        # Chi dung THANG DAY DU gan nhat. Neu link moi nhat dang o giua thang thi lui ve thang truoc.
+        report_to = dt.date(coverage_date.year, coverage_date.month, 1) - dt.timedelta(days=1)
+        report_from = dt.date(report_to.year, report_to.month, 1)
+    else:
+        report_to = _parse_report_date(date_to or date_from, "date_to")
+        report_from = (_parse_report_date(date_from, "date_from") if date_from
+                       else dt.date(report_to.year, report_to.month, 1))
+    if report_from > report_to:
+        raise ValueError("date_from khong duoc lon hon date_to.")
+
+    requested_to = report_to
+    if report_from > coverage_date:
+        return {
+            "status": "source_gap",
+            "requested_period": {"from": str(report_from), "to": str(report_to)},
+            "promotion_link_coverage_to": str(coverage_date),
+            "programs": [],
+            "warning": (
+                "Bang lien ket don hang-chuong trinh khong co du lieu den ky duoc hoi. "
+                "Khong dung cot CTKM tren hoa don de thay the vi cot do la ghi chu tu do."
+            ),
+        }
+    report_to = min(report_to, coverage_date)
+    date_to_exclusive = report_to + dt.timedelta(days=1)
+
+    params = {
+        "date_from": report_from,
+        "date_to_exclusive": date_to_exclusive,
+    }
+    scope_joins = ""
+    scope_where = ""
+    if scope_area_code:
+        scope_joins += (" LEFT JOIN dbo.DMS_KhachHang kh ON kh.Code=h.CustomerCode "
+                        " LEFT JOIN dbo.DIM_TinhThanhPho tp ON tp.CityId=kh.CityId ")
+        scope_where += " AND tp.AreaCode=:scope_area_code"
+        params["scope_area_code"] = scope_area_code
+    if scope_employee_code:
+        dms_ids = _get_team_dms_ids(scope_employee_code, str(report_to))
+        emp_placeholders = []
+        for idx, dms_id in enumerate(dms_ids):
+            key = f"emp_{idx}"
+            params[key] = dms_id
+            emp_placeholders.append(f":{key}")
+        joined = ",".join(emp_placeholders)
+        scope_where += f" AND (h.DMSEmpId1 IN ({joined}) OR h.DMSEmpId2 IN ({joined}))"
+
+    rows = _q_bravo(f"""
+        WITH ProgramOrders AS (
+            SELECT x.ProgId, x.OrderId, MAX(h.CustomerCode) AS CustomerCode
+            FROM dbo.DMS_DonHangHdr h
+            INNER HASH JOIN dbo.DMS_DonHangCTKM x ON x.OrderId=h.Id
+            {scope_joins}
+            WHERE h.DocDate>=:date_from AND h.DocDate<:date_to_exclusive {scope_where}
+            GROUP BY x.ProgId, x.OrderId
+        ),
+        InvoiceByOrder AS (
+            SELECT TRY_CONVERT(int, DMSId) AS OrderId,
+                   SUM(Amount9) AS Revenue,
+                   COUNT(DISTINCT CASE WHEN UnitPrice>0 THEN ItemCode END) AS PaidProductCount
+            FROM dbo.vHoaDonTotal
+            WHERE DocDate>=:date_from AND DocDate<:date_to_exclusive
+              AND TRY_CONVERT(int, DMSId) IS NOT NULL
+            GROUP BY TRY_CONVERT(int, DMSId)
+        ),
+        GiftProducts AS (
+            SELECT po.ProgId, COUNT(DISTINCT NULLIF(x.ItemCode, '')) AS GiftProductCount
+            FROM ProgramOrders po
+            INNER JOIN dbo.DMS_DonHangCTKM x
+              ON x.ProgId=po.ProgId AND x.OrderId=po.OrderId
+            GROUP BY po.ProgId
+        ),
+        ConfiguredProducts AS (
+            SELECT t.ProgId, COUNT(DISTINCT NULLIF(d.ItemId, '')) AS ConfiguredProductCount
+            FROM dbo.DMS_CTKMOnTop1 t
+            INNER JOIN dbo.DMS_DKKMCt d ON d.CondId=t.CondId
+            GROUP BY t.ProgId
+        )
+        SELECT TOP ({limit})
+               p.Id AS ProgramId, p.Code AS ProgramCode, p.Name AS ProgramName,
+               COUNT_BIG(*) AS Orders,
+               COUNT(DISTINCT po.CustomerCode) AS Customers,
+               SUM(ISNULL(i.Revenue, 0)) AS AssociatedRevenue,
+               SUM(CASE WHEN i.OrderId IS NULL THEN 1 ELSE 0 END) AS OrdersWithoutInvoice,
+               SUM(ISNULL(i.PaidProductCount, 0)) AS PaidProductOccurrences,
+               MAX(ISNULL(g.GiftProductCount, 0)) AS GiftProductCount,
+               MAX(ISNULL(c.ConfiguredProductCount, 0)) AS ConfiguredProductCount
+        FROM ProgramOrders po
+        INNER JOIN dbo.DMS_CTKM p ON p.Id=po.ProgId
+        LEFT HASH JOIN InvoiceByOrder i ON i.OrderId=po.OrderId
+        LEFT JOIN GiftProducts g ON g.ProgId=po.ProgId
+        LEFT JOIN ConfiguredProducts c ON c.ProgId=po.ProgId
+        GROUP BY p.Id, p.Code, p.Name
+        ORDER BY AssociatedRevenue DESC
+        OPTION (HASH JOIN)
+    """, params)
+
+    programs = []
+    for row in rows:
+        orders = int(row.get("Orders") or 0)
+        invoiced_orders = max(orders - int(row.get("OrdersWithoutInvoice") or 0), 0)
+        revenue = _f(row.get("AssociatedRevenue"))
+        programs.append({
+            "program_id": row.get("ProgramId"),
+            "program_code": row.get("ProgramCode"),
+            "program_name": row.get("ProgramName"),
+            "associated_revenue": revenue,
+            "participating_customers": int(row.get("Customers") or 0),
+            "orders": orders,
+            "invoiced_orders": invoiced_orders,
+            "average_revenue_per_invoiced_order": revenue / invoiced_orders if invoiced_orders else 0.0,
+            "configured_product_count": int(row.get("ConfiguredProductCount") or 0),
+            "gift_product_count": int(row.get("GiftProductCount") or 0),
+            "paid_product_occurrences": int(row.get("PaidProductOccurrences") or 0),
+        })
+
+    warning = None
+    if requested_to > coverage_date:
+        warning = (f"Du lieu lien ket don hang-chuong trinh moi den {coverage_date}; "
+                   f"bao cao da cat tai moc nay thay vi suy dien den {requested_to}.")
+    elif used_default_period:
+        warning = (f"Khong co ky duoc chi dinh; dung thang day du gan nhat {report_from:%m/%Y}. "
+                   f"Lien ket don hang-chuong trinh moi nhat ghi nhan den {coverage_date}.")
+
+    return {
+        "status": "ok" if programs else "no_data",
+        "period": {"from": str(report_from), "to": str(report_to)},
+        "promotion_link_coverage_to": str(coverage_date),
+        "promotion_link_synced_at": str(coverage_rows[0].get("LinkSyncedAt") or ""),
+        "warning": warning,
+        "interpretation_note": (
+            "associated_revenue la doanh thu cua don hang co gan chuong trinh. Mot don co the dung "
+            "nhieu chuong trinh nen KHONG cong doanh thu cac dong voi nhau, va chua du co so ket luan "
+            "ROI/uplift neu thieu chi phi chuong trinh va nhom doi chung."
+        ),
+        "program_count_returned": len(programs),
+        "programs": programs,
+    }
+
+
+def salary_bonus_policy(bonus_type: str = "v25", as_of_date: str = None,
+                        area_code: str = None, position_code: str = None,
+                        scope_area_code: str = None, scope_employee_code: str = None,
+                        scope_role: str = None) -> dict:
+    """Quy tac + bac tien cua V15/V22/V25/ASO, doc tu DIM_BacThuong va doi chieu so da chot."""
+    bonus = str(bonus_type or "v25").strip().upper()
+    if bonus not in {"V15", "V22", "V25", "ASO"}:
+        raise ValueError("bonus_type chi nhan V15, V22, V25 hoac ASO.")
+    if scope_area_code:
+        area_code = scope_area_code
+
+    if as_of_date:
+        raw = str(as_of_date).strip()
+        if len(raw) == 7:
+            requested = _month_end(dt.date.fromisoformat(raw + "-01"))
+        else:
+            requested = _parse_report_date(raw, "as_of_date")
+    else:
+        requested = dt.date.today()
+
+    closed = _q(
+        "SELECT MAX(save_date) d FROM fact_thongketinhluong "
+        "WHERE save_date<=? AND save_date=date(save_date,'start of month','+1 month','-1 day')",
+        (str(requested),),
+    )
+    snapshot_date = closed[0]["d"] if closed and closed[0]["d"] else None
+    policy_date = _parse_report_date(snapshot_date, "snapshot_date") if snapshot_date else requested
+    month_start = dt.date(policy_date.year, policy_date.month, 1)
+    month_end = _month_end(policy_date)
+
+    params = {
+        "bonus_type": bonus,
+        "month_start": month_start,
+        "month_end": month_end,
+    }
+    where = ""
+    if area_code:
+        where += " AND AreaCode=:area_code"
+        params["area_code"] = area_code
+    if position_code:
+        where += " AND PositionCode=:position_code"
+        params["position_code"] = str(position_code).upper()
+
+    rule_rows = _q_bravo(f"""
+        SELECT CriterialCode, TypeCode, AreaCode, PositionCode, Description,
+               StartDate, EndDate, IsTargetPercent, IsEarnPercent,
+               FromValue, ToValue, Earn1, Earn2, EarnMax,
+               CheckASO, CheckTargetEmp, ASOCusCondType
+        FROM dbo.DIM_BacThuong
+        WHERE TypeCode=:bonus_type
+          AND StartDate<=:month_start
+          AND (EndDate IS NULL OR EndDate>=:month_end)
+          {where}
+        ORDER BY AreaCode, PositionCode, BuildInOrder
+    """, params)
+
+    grouped = {}
+    for row in rule_rows:
+        key = (row.get("AreaCode"), row.get("PositionCode"), row.get("Description"))
+        item = grouped.setdefault(key, {
+            "area_code": row.get("AreaCode"),
+            "position_code": row.get("PositionCode"),
+            "description": row.get("Description"),
+            "effective_from": str(row.get("StartDate") or ""),
+            "effective_to": str(row.get("EndDate") or ""),
+            "bands": [],
+        })
+        item["bands"].append({
+            "from_pct_or_quantity": _f(row.get("FromValue")) if row.get("FromValue") is not None else None,
+            "to_pct_or_quantity": _f(row.get("ToValue")) if row.get("ToValue") is not None else None,
+            "bonus_amount": _f(row.get("Earn1")),
+        })
+
+    mismatch_rows = []
+    procedure_loads_v25 = None
+    if bonus == "V25" and snapshot_date:
+        actual_params = {
+            "snapshot_date": _parse_report_date(snapshot_date, "snapshot_date"),
+            "month_start": month_start,
+            "month_end": month_end,
+        }
+        actual_where = ""
+        if area_code:
+            actual_where += " AND f.AreaCode=:actual_area_code"
+            actual_params["actual_area_code"] = area_code
+        if position_code:
+            actual_where += " AND f.PositionCode=:actual_position_code"
+            actual_params["actual_position_code"] = str(position_code).upper()
+        if scope_employee_code:
+            allowed_codes = [scope_employee_code]
+            allowed_codes += [x.get("employee_code") for x in _team_of_qlv(scope_employee_code, snapshot_date)
+                              if x.get("employee_code")]
+            placeholders = []
+            for idx, employee_code in enumerate(dict.fromkeys(allowed_codes)):
+                key = f"allowed_{idx}"
+                actual_params[key] = employee_code
+                placeholders.append(f":{key}")
+            actual_where += f" AND f.EmployeeCode IN ({','.join(placeholders)})"
+
+        mismatch_rows = _q_bravo(f"""
+            SELECT TOP (50) f.EmployeeCode, f.EmployeeName, f.AreaCode, f.PositionCode,
+                   f.SaveDate, f.V25Date, f.V25Amount, f.MonthSaleTarget,
+                   f.V25Percent_R, f.V25Bonus
+            FROM dbo.FACT_ThongKeTinhLuong f
+            WHERE f.SaveDate=:snapshot_date
+              AND f.V25Percent_R>0.7
+              AND ISNULL(f.V25Bonus, 0)=0
+              {actual_where}
+              AND EXISTS (
+                  SELECT 1 FROM dbo.DIM_BacThuong b
+                  WHERE b.TypeCode='V25'
+                    AND b.AreaCode=f.AreaCode AND b.PositionCode=f.PositionCode
+                    AND b.StartDate<=:month_start
+                    AND (b.EndDate IS NULL OR b.EndDate>=:month_end)
+                    AND ISNULL(b.Earn1, 0)>0
+                    AND f.V25Percent_R>=ISNULL(b.FromValue, 0)/100.0
+                    AND f.V25Percent_R<ISNULL(b.ToValue, 3000)/100.0
+              )
+            ORDER BY f.V25Percent_R DESC
+        """, actual_params)
+        mismatch_rows = [{
+            "employee_code": row.get("EmployeeCode"),
+            "employee_name": row.get("EmployeeName"),
+            "area_code": row.get("AreaCode"),
+            "position_code": row.get("PositionCode"),
+            "snapshot_date": str(row.get("SaveDate") or ""),
+            "v25_date": str(row.get("V25Date") or ""),
+            "v25_amount": _f(row.get("V25Amount")),
+            "month_target": _f(row.get("MonthSaleTarget")),
+            "v25_percent": round(_f(row.get("V25Percent_R")) * 100, 2),
+            "stored_v25_bonus": _f(row.get("V25Bonus")),
+        } for row in mismatch_rows]
+
+        try:
+            definition_rows = _q_bravo(
+                "SELECT OBJECT_DEFINITION(OBJECT_ID('dbo.usp_SaleSalary_Calculation_Ver2')) AS Definition"
+            )
+            definition = str(definition_rows[0].get("Definition") or "") if definition_rows else ""
+            upper = definition.upper()
+            start = upper.find("INTO #KPICT")
+            end = upper.find("#LONGKPICT", start + 1) if start >= 0 else -1
+            section = upper[start:end] if start >= 0 and end > start else ""
+            procedure_loads_v25 = "'V25'" in section
+        except Exception:
+            procedure_loads_v25 = None
+
+    formula = {
+        "V25": (
+            "Ty le V25 = doanh so luy ke den ngay chot V25 / chi tieu thang. "
+            "Thu tuc dang dung dieu kien ty le >70%, sau do tra muc tien theo vung, chuc danh va bac "
+            "FromValue-ToValue trong DIM_BacThuong. Ngay 25 neu roi vao cuoi tuan duoc dieu chinh "
+            "sang ngay lam viec theo logic trong thu tuc."
+        ),
+        "V15": "Tinh doanh so luy ke den moc V15, doi chieu dieu kien va bac tien V15 dang hieu luc.",
+        "V22": "Tinh doanh so luy ke den moc V22, doi chieu dieu kien va bac tien V22 dang hieu luc.",
+        "ASO": (
+            "ASO la thuong theo so luong/ty le khach hang hoat dong va cac cong dieu kien doanh so, "
+            "khong phai ten mot chuc danh nhan vien."
+        ),
+    }[bonus]
+
+    implementation_warning = None
+    if bonus == "V25" and procedure_loads_v25 is False:
+        implementation_warning = (
+            "Can DNH kiem tra usp_SaleSalary_Calculation_Ver2: khoi #KPICt hien khong nap TypeCode "
+            "V25 nhung buoc sau lai JOIN #KPICt de gan V25Bonus. Chatbot chi bao so da luu va "
+            "chenh lech, KHONG tu sua/tinh de len so chot cua SQL Server."
+        )
+    elif mismatch_rows:
+        implementation_warning = (
+            "Co truong hop ty le V25 nam trong bac co tien thuong nhung V25Bonus da luu bang 0; "
+            "can DNH/ke toan xac nhan truoc khi dung de chi tra."
+        )
+
+    return {
+        "bonus_type": bonus,
+        "policy_as_of": str(policy_date),
+        "actual_snapshot_date": snapshot_date,
+        "formula": formula,
+        "procedure_loads_v25_rules": procedure_loads_v25,
+        "implementation_warning": implementation_warning,
+        "rule_actual_mismatch_count": len(mismatch_rows),
+        "rule_actual_mismatches": mismatch_rows,
+        "terminology_note": (
+            "Trong du lieu tinh luong DNH, ASO la mot chi tieu/khoan thuong rieng; neu y nguoi hoi "
+            "la 'tung nhan vien' thi phai liet ke theo nhan vien, khong goi nhan vien la ASO."
+        ),
+        "rule_count": len(rule_rows),
+        "rules": list(grouped.values()),
+    }
+
+
+def _closed_salary_date_filter(alias: str, value: str = None) -> tuple[str, tuple]:
+    """Chi chon snapshot CUOI THANG; dong giua thang la tien do, khong phai luong da chot."""
+    prefix = f"{alias}." if alias else ""
+    clause = (f" AND {prefix}save_date="
+              f"date({prefix}save_date,'start of month','+1 month','-1 day')")
+    if not value:
+        return clause, ()
+    raw = str(value).strip()
+    if len(raw) == 7:
+        return clause + f" AND substr({prefix}save_date,1,7)=?", (raw,)
+    cutoff = str(_parse_report_date(raw, "save_date"))
+    return clause + f" AND {prefix}save_date<=?", (cutoff,)
+
+
 def salary_achievement_summary(save_date: str = None, scope_area_code: str = None,
                                scope_employee_code: str = None, scope_role: str = None) -> dict:
     """Tong hop so luong nhan vien dat cac moc thuong tien do (V15, V22, V25) va ASO.
@@ -2820,8 +3348,7 @@ def salary_achievement_summary(save_date: str = None, scope_area_code: str = Non
     cond_sql = emp_sql + area_sql
     cond_params = emp_params + area_params
     
-    date_cond = " AND f.save_date<=?" if save_date else ""
-    date_param = (save_date,) if save_date else ()
+    date_cond, date_param = _closed_salary_date_filter("f", save_date)
 
     fdate_r = _q(f"SELECT MAX(f.save_date) d FROM fact_thongketinhluong f WHERE 1=1 {cond_sql}{date_cond} AND f.v25_percent IS NOT NULL", cond_params + date_param)
     fdate = fdate_r[0]["d"] if fdate_r else None
@@ -2829,7 +3356,7 @@ def salary_achievement_summary(save_date: str = None, scope_area_code: str = Non
         fdate_r = _q(f"SELECT MAX(f.save_date) d FROM fact_thongketinhluong f WHERE 1=1 {cond_sql}{date_cond}", cond_params + date_param)
         fdate = fdate_r[0]["d"] if fdate_r else None
     if not fdate:
-        return {"error": "Chua co du lieu thuong/luong trong ky nay hoac trong pham vi cua ban."}
+        return {"error": "Chua co snapshot thuong/luong CUOI KY da chot trong ky nay hoac trong pham vi cua ban."}
         
     sql = f"""SELECT 
         COUNT(f.employee_code) as total_emp,
@@ -2848,6 +3375,7 @@ def salary_achievement_summary(save_date: str = None, scope_area_code: str = Non
     total = r["total_emp"]
     return {
         "save_date": fdate,
+        "snapshot_status": "closed_period",
         "total_employees": total,
         "v15_achieved_count": r["v15_achieved"],
         "v15_achieved_pct": round(r["v15_achieved"] / total * 100, 1) if total else 0,
@@ -2969,8 +3497,7 @@ def _salary_detail_one(employee_code: str = None, save_date: str = None,
     # tin hon total_point vi khong bi lam tron ve 0 nham).
     base_cond = "(employee_code=? OR employee_code=?)"
     base_params = (target_code, lookup_code)
-    date_cond = " AND save_date<=?" if save_date else ""
-    date_param = (save_date,) if save_date else ()
+    date_cond, date_param = _closed_salary_date_filter("", save_date)
 
     fdate_r = _q(f"SELECT MAX(save_date) d FROM fact_thongketinhluong WHERE {base_cond}{date_cond} "
                  f"AND v25_percent IS NOT NULL", base_params + date_param)
@@ -2980,8 +3507,8 @@ def _salary_detail_one(employee_code: str = None, save_date: str = None,
                      base_params + date_param)
         fdate = fdate_r[0]["d"] if fdate_r else None
     if not fdate:
-        return {"error": f"Chua co du lieu thuong/luong cho nhan vien '{target_code}' (co the ma sai, "
-                          "hoac du lieu chua duoc dong bo/chua phat sinh trong ky nay)."}
+        return {"error": f"Chua co snapshot thuong/luong CUOI KY da chot cho nhan vien '{target_code}' "
+                          "trong ky duoc hoi (hoac ma nhan vien khong dung)."}
 
     row = _q("SELECT * FROM fact_thongketinhluong WHERE (employee_code=? OR employee_code=?) "
              "AND save_date=? LIMIT 1", (target_code, lookup_code, fdate))
@@ -3002,6 +3529,7 @@ def _salary_detail_one(employee_code: str = None, save_date: str = None,
     return {
         "employee_code": r["employee_code"], "employee_name": r["employee_name"],
         "position_code": r["position_code"], "area_code": r["area_code"], "save_date": fdate,
+        "snapshot_status": "closed_period",
         "month_sale_amount": _f(r["month_sale_amount"]), "month_sale_target": _f(r["month_sale_target"]),
         "month_sale_percent": pct, "bonus_threshold_pct": threshold,
         "meets_bonus_threshold": pct >= threshold,
@@ -3047,21 +3575,17 @@ def salary_ranking(year_month: str = None, area_code: str = None, position_code:
 
     limit = min(max(int(limit or 30), 1), 100)
 
-    date_cond = ""
-    date_params = []
-    if year_month:
-        ym = str(year_month)[:7]
-        date_cond = " WHERE substr(save_date, 1, 7)=? "
-        date_params.append(ym)
+    date_cond, date_params = _closed_salary_date_filter("", year_month)
 
-    fdate_r = _q(f"SELECT MAX(save_date) d FROM fact_thongketinhluong {date_cond}"
-                 f"{'AND' if date_cond else 'WHERE'} v25_percent IS NOT NULL", date_params)
+    fdate_r = _q(f"SELECT MAX(save_date) d FROM fact_thongketinhluong WHERE 1=1 {date_cond} "
+                 f"AND v25_percent IS NOT NULL", date_params)
     fdate = fdate_r[0]["d"] if fdate_r else None
     if not fdate:
-        fdate_r = _q(f"SELECT MAX(save_date) d FROM fact_thongketinhluong {date_cond}", date_params)
+        fdate_r = _q(f"SELECT MAX(save_date) d FROM fact_thongketinhluong WHERE 1=1 {date_cond}",
+                     date_params)
         fdate = fdate_r[0]["d"] if fdate_r else None
     if not fdate:
-        return {"error": "Chua co du lieu thong ke tinh luong cho ky nay."}
+        return {"error": "Chua co snapshot thong ke tinh luong CUOI KY da chot cho ky nay."}
 
     order_col = "(COALESCE(dm_bonus,0) + COALESCE(v15_bonus,0) + COALESCE(v22_bonus,0) + COALESCE(v25_bonus,0) + COALESCE(aso_bonus,0))"
     btype = str(bonus_type or "total").lower()
@@ -3127,6 +3651,7 @@ def salary_ranking(year_month: str = None, area_code: str = None, position_code:
 
     return {
         "save_date": fdate,
+        "snapshot_status": "closed_period",
         "bonus_type": btype,
         "area_code": area_code or "Toàn công ty",
         "position_code": position_code or "Tất cả",
@@ -3286,7 +3811,10 @@ TEMPLATES = {
     "get_kpi_ranking": kpi_ranking,
     "get_revenue_reconciliation": revenue_reconciliation_check,
     "get_receivables_overview": receivables_overview,
+    "get_customer_revenue_debt_risk": customer_revenue_debt_risk,
     "get_audit_log": audit_log_summary,
+    "get_promotion_effectiveness": promotion_effectiveness,
+    "get_salary_bonus_policy": salary_bonus_policy,
     "get_salary_detail": salary_detail,
     "get_salary_achievement_summary": salary_achievement_summary,
     "get_salary_ranking": salary_ranking,
@@ -3294,9 +3822,15 @@ TEMPLATES = {
 
 _SELF_SCOPED_TEMPLATES = {"get_audit_log"}
 
-_ROLE_SCOPED_TEMPLATES = {"get_salary_detail", "get_salary_achievement_summary", "get_salary_ranking"}
+_ROLE_SCOPED_TEMPLATES = {
+    "get_salary_detail", "get_salary_achievement_summary", "get_salary_ranking",
+    "get_salary_bonus_policy",
+}
 
-_AREA_EXEMPT_TEMPLATES = {"get_audit_log", "get_salary_detail", "get_salary_achievement_summary", "get_salary_ranking"}
+_AREA_EXEMPT_TEMPLATES = {
+    "get_audit_log", "get_salary_detail", "get_salary_achievement_summary", "get_salary_ranking",
+    "get_salary_bonus_policy",
+}
 
 _PERSON_LEVEL_TEMPLATES = {
     "get_revenue_tree", "get_kpi_ranking", "get_employee_kpi",
@@ -3304,21 +3838,23 @@ _PERSON_LEVEL_TEMPLATES = {
     "get_revenue_by_channel", "get_revenue_by_region", "get_top_customers",
     "get_top_products", "compare_periods",
     "get_inventory_by_region", "get_receivables_overview",
-    "get_qlv_change_history", "get_revenue_reconciliation",
-    "get_salary_detail", "get_salary_achievement_summary"
+    "get_qlv_change_history", "get_revenue_reconciliation", "get_promotion_effectiveness",
+    "get_customer_revenue_debt_risk",
+    "get_salary_detail", "get_salary_achievement_summary", "get_salary_bonus_policy"
 }
 
 _EMPLOYEE_SCOPED_TEMPLATES = {
     "get_revenue_tree", "get_kpi_ranking", "get_employee_kpi",
     "get_employee_daily_kpi", "get_revenue_by_channel", "get_top_customers",
-    "get_top_products", "get_revenue_by_region", "compare_periods",
-    "get_salary_detail", "get_salary_achievement_summary"
+    "get_top_products", "get_revenue_by_region", "compare_periods", "get_promotion_effectiveness",
+    "get_customer_revenue_debt_risk",
+    "get_salary_detail", "get_salary_achievement_summary", "get_salary_bonus_policy"
 }
 
 _CHANNEL_SCOPED_TEMPLATES = {
     "get_revenue_by_channel", "get_top_products", "get_top_customers",
     "compare_periods", "get_customer_detail", "check_order_timing",
-    "get_revenue_by_region"
+    "get_revenue_by_region", "get_promotion_effectiveness", "get_customer_revenue_debt_risk"
 }
 
 
