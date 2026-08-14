@@ -83,3 +83,26 @@ def test_feedback_cannot_be_written_by_another_user(tmp_path, monkeypatch):
 
     assert memory.save_query_feedback("query-002", "bob", -1, "wrong_scope", "Sai mien") is None
     assert memory.get_query_run("query-002")["feedback_rating"] is None
+
+
+def test_list_query_runs_returns_feedback_and_sql_for_audit_dashboard(tmp_path, monkeypatch):
+    use_temp_database(tmp_path, monkeypatch)
+    memory.create_query_run("query-old", "session-1", "alice", "Cau cu")
+    memory.create_query_run("query-new", "session-1", "alice", "Cau moi")
+    memory.complete_query_run(
+        "query-new",
+        "Da tra loi",
+        sql_used=["[bravo] SELECT COUNT_BIG(*) FROM dbo.DMS_CTKM"],
+        row_count=1,
+        duration_ms=109,
+    )
+    memory.save_query_feedback("query-new", "alice", 1, None, "Da doi chieu")
+
+    runs = memory.list_query_runs(limit=1)
+
+    assert len(runs) == 1
+    assert runs[0]["query_id"] == "query-new"
+    assert runs[0]["status"] == "completed"
+    assert runs[0]["sql_used"] == ["[bravo] SELECT COUNT_BIG(*) FROM dbo.DMS_CTKM"]
+    assert runs[0]["feedback_rating"] == 1
+    assert runs[0]["feedback_comment"] == "Da doi chieu"

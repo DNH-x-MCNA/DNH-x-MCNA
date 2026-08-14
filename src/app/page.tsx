@@ -204,6 +204,8 @@ const FEEDBACK_CATEGORY_OPTIONS = [
   ["other", "Lý do khác"],
 ] as const;
 
+const FEEDBACK_CATEGORY_LABELS = Object.fromEntries(FEEDBACK_CATEGORY_OPTIONS) as Record<string, string>;
+
 const SAMPLE_QUESTIONS_COMMON = [
   "Doanh thu hôm nay bao nhiêu?",
   "Top 10 sản phẩm bán chạy nhất?",
@@ -337,6 +339,14 @@ type QueryLogItem = {
   status: string;
   duration_ms: number | null;
   session_id: string | null;
+  query_id?: string | null;
+  row_count?: number | null;
+  error_message?: string | null;
+  feedback_rating?: FeedbackRating | null;
+  feedback_category?: string | null;
+  feedback_comment?: string | null;
+  feedback_by?: string | null;
+  feedback_at?: string | null;
   session_input_tokens: number;
   session_output_tokens: number;
   session_total_tokens: number;
@@ -2114,6 +2124,9 @@ export default function Home() {
                               <th className="px-4 py-3 text-left">Thời Gian</th>
                               <th className="px-4 py-3 text-left">Người Dùng</th>
                               <th className="px-4 py-3 text-left">Nội Dung Câu Hỏi</th>
+                              <th className="px-4 py-3 text-center">Trạng Thái</th>
+                              <th className="px-4 py-3 text-left">Đánh Giá</th>
+                              <th className="px-4 py-3 text-left">Comment</th>
                               <th className="px-4 py-3 text-right">Input Tokens<div className="font-normal text-[10px] text-slate-400">(cả phiên)</div></th>
                               <th className="px-4 py-3 text-right">Output Tokens<div className="font-normal text-[10px] text-slate-400">(cả phiên)</div></th>
                               <th className="px-4 py-3 text-right">Chi Phí (VNĐ)<div className="font-normal text-[10px] text-slate-400">(cả phiên)</div></th>
@@ -2123,7 +2136,7 @@ export default function Home() {
                           </thead>
                           <tbody className="divide-y divide-slate-100 bg-white">
                             {queryOnlyLogs.map((log, idx) => (
-                              <tr key={idx} className="transition hover:bg-slate-50">
+                              <tr key={log.query_id ?? `${log.session_id}-${log.ts}-${idx}`} className="transition hover:bg-slate-50">
                                 <td className="px-4 py-3 text-slate-500 whitespace-nowrap">
                                   {log.ts ? log.ts.replace("T", " ").slice(0, 19) : "—"}
                                 </td>
@@ -2133,13 +2146,50 @@ export default function Home() {
                                 <td className="px-4 py-3 text-slate-800 font-normal max-w-xs truncate" title={log.question}>
                                   {log.question}
                                 </td>
+                                <td className="px-4 py-3 text-center whitespace-nowrap">
+                                  <span className={`inline-flex rounded-full px-2 py-1 text-[10px] font-semibold ${
+                                    log.status === "completed" || log.status === "success" || log.status === "ok"
+                                      ? "bg-emerald-50 text-emerald-700"
+                                      : log.status === "running"
+                                        ? "bg-blue-50 text-blue-700"
+                                        : "bg-rose-50 text-rose-700"
+                                  }`} title={log.error_message || undefined}>
+                                    {log.status === "completed" || log.status === "success" || log.status === "ok"
+                                      ? "Hoàn thành"
+                                      : log.status === "running"
+                                        ? "Đang chạy"
+                                        : "Lỗi"}
+                                  </span>
+                                </td>
+                                <td className="px-4 py-3 text-left whitespace-nowrap">
+                                  {log.feedback_rating === 1 ? (
+                                    <span className="font-medium text-emerald-700">👍 Hài lòng</span>
+                                  ) : log.feedback_rating === -1 ? (
+                                    <div>
+                                      <div className="font-medium text-rose-700">👎 Không hài lòng</div>
+                                      {log.feedback_category && (
+                                        <div className="mt-0.5 text-[10px] text-slate-500">
+                                          {FEEDBACK_CATEGORY_LABELS[log.feedback_category] || log.feedback_category}
+                                        </div>
+                                      )}
+                                    </div>
+                                  ) : (
+                                    <span className="text-slate-400">Chưa đánh giá</span>
+                                  )}
+                                </td>
+                                <td
+                                  className="max-w-xs truncate px-4 py-3 text-left text-slate-600"
+                                  title={log.feedback_comment || undefined}
+                                >
+                                  {log.feedback_comment || "—"}
+                                </td>
                                 <td className="px-4 py-3 text-right text-slate-600">{log.session_input_tokens.toLocaleString()}</td>
                                 <td className="px-4 py-3 text-right text-slate-600">{log.session_output_tokens.toLocaleString()}</td>
                                 <td className="px-4 py-3 text-right font-semibold text-amber-700">
                                   {log.session_cost_vnd.toLocaleString("vi-VN")} đ
                                 </td>
                                 <td className="px-4 py-3 text-center text-slate-500 whitespace-nowrap">
-                                  {log.duration_ms ? `${log.duration_ms} ms` : "—"}
+                                  {log.duration_ms != null ? `${log.duration_ms} ms` : "—"}
                                 </td>
                                 <td className="px-4 py-3 text-center">
                                   {log.sql ? (
