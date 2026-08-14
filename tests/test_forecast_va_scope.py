@@ -7,7 +7,7 @@
      "SO LIEU THEO VUNG CO THE THIEU" va dan AI "KHONG duoc trinh bay breakdown nay nhu so lieu
      chac chan", DU SO HOAN TOAN DUNG.
 
-  2. revenue_forecast_month - mo hinh du bao moi (trung binh cung thang 3 nam gan nhat).
+  2. Moi duong goi du bao tuong lai phai bi khoa fail-closed.
 
 Kho gia dung dung schema that o cac cot cac ham nay doc toi. Khong cham vao warehouse.db that.
 """
@@ -315,60 +315,35 @@ def test_khong_xac_dinh_duoc_doi_thi_BAO_RO_chu_khong_tra_0d(kho):
     assert "Loi khi chay bao cao chuan" not in p["error"]
 
 
-# ---------------------------------------------------------------- tool dự báo
+# ---------------------------------------------------------------- du bao da tat
 
-def test_du_bao_bang_trung_binh_cung_thang_3_nam(kho):
-    """Mo hinh phai la trung binh dung 3 nam, khong phai gi khac."""
-    thang = _ym_add(dt.date.today().strftime("%Y-%m"), -1)
-    r = rt.revenue_forecast_month(thang, scope_employee_code=QLV_CODE)
-    otc = r["cac_kenh"]["OTC"]
-    assert otc["so_nam_can_cu"] == 3
-    assert [c["thang"] for c in otc["can_cu"]] == [_ym_add(thang, -12 * i) for i in (1, 2, 3)]
-    assert otc["du_bao"] == pytest.approx(1_000_000_000.0)
-
-
-def test_bo_qua_thang_dang_chay(kho):
-    """Thang hien tai chua tron - dua vao chuoi lich su la keo tut du bao xuong."""
-    chuoi = rt._monthly_series("OTC", scope_employee_code=QLV_CODE)
-    assert dt.date.today().strftime("%Y-%m") not in chuoi
+@pytest.mark.parametrize("fn,args", [
+    (rt.revenue_forecast_month, {"year_month": "2026-08"}),
+    (rt.kpi_forecast_month, {"year_month": "2026-08", "as_of_date": "2026-08-14"}),
+    (rt.forecast_model1, {"target_month": "2026-08"}),
+])
+def test_goi_truc_tiep_ham_du_bao_phai_bi_khoa(fn, args):
+    result = fn(**args)
+    assert result["feature_disabled"] is True
+    assert "đã được tắt" in result["error"]
 
 
-def test_tu_choi_khi_thieu_lich_su(kho):
-    """Chi co 1 nam cung thang -> KHONG duoc doan, phai noi ly do."""
-    xa = _ym_add(dt.date.today().strftime("%Y-%m"), -47)
-    r = rt.revenue_forecast_month(xa, scope_employee_code=QLV_CODE)
-    otc = r["cac_kenh"]["OTC"]
-    assert otc["du_bao"] is None
-    assert "ly_do_khong_du_bao" in otc
+@pytest.mark.parametrize("tool_name", [
+    "get_revenue_forecast",
+    "get_kpi_forecast",
+    "get_kpi_forecast_model1",
+])
+def test_call_template_cu_cung_phai_bi_khoa(tool_name, monkeypatch):
+    monkeypatch.setattr(rt, "_write_log", lambda entry: None)
+    result = rt.call_template(tool_name, {}, question="du bao")
+    assert result["ok"] is False
+    assert result["feature_disabled"] is True
+    assert "đã được tắt" in result["error"]
 
 
-def test_khoang_uoc_tinh_khong_bao_gio_am(kho, monkeypatch):
-    """Sai so >100% thi pred*(1-e) am. Doanh thu khong the am -> phai chan day o 0."""
-    monkeypatch.setattr(rt, "_forecast_accuracy",
-                        lambda s: {"do_duoc": True, "so_thang_kiem": 24,
-                                   "sai_so_trung_binh_pct": 140.0})
-    thang = _ym_add(dt.date.today().strftime("%Y-%m"), -1)
-    otc = rt.revenue_forecast_month(thang, scope_employee_code=QLV_CODE)["cac_kenh"]["OTC"]
-    assert otc["khoang_uoc_tinh"]["thap"] == 0.0
-    assert otc["khong_dang_tin"], "Sai so 140% ma khong danh dau khong dang tin"
-
-
-def test_sai_so_binh_thuong_thi_khong_danh_dau(kho):
-    """Nguoc lai: du lieu deu tam tap thi khong duoc gan nhan 'khong dang tin' vo co."""
-    thang = _ym_add(dt.date.today().strftime("%Y-%m"), -1)
-    otc = rt.revenue_forecast_month(thang, scope_employee_code=QLV_CODE)["cac_kenh"]["OTC"]
-    assert "khong_dang_tin" not in otc
-    assert otc["khoang_uoc_tinh"]["thap"] > 0
-
-
-def test_thang_sai_dinh_dang_bao_loi_ro_rang(kho):
-    assert "YYYY-MM" in rt.revenue_forecast_month("thang 8")["error"]
-
-
-def test_luon_kem_canh_bao_day_la_uoc_tinh(kho):
-    """Ba dieu bat buoc trong prompt phu thuoc vao cac truong nay - mat chung la AI trinh bay
-    so uoc tinh nhu so that."""
-    thang = _ym_add(dt.date.today().strftime("%Y-%m"), -1)
-    r = rt.revenue_forecast_month(thang, scope_employee_code=QLV_CODE)
-    assert r["day_la_uoc_tinh"] is True
-    assert any("UOC TINH" in c.upper() for c in r["canh_bao"])
+def test_ten_tool_du_bao_khong_con_dang_ky():
+    assert {
+        "get_revenue_forecast",
+        "get_kpi_forecast",
+        "get_kpi_forecast_model1",
+    }.isdisjoint(rt.TEMPLATES)

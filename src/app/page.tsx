@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useEffect, useMemo, memo, FormEvent, ReactNode, RefObject } from "react";
+import { useState, useRef, useEffect, useMemo, useCallback, memo, FormEvent, ReactNode, RefObject } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import AuthScreens from "./AuthScreens";
@@ -18,7 +18,15 @@ import { useModal } from "./useModal";
 // "chưa quy được cho ai" đang quy đổi tại đây nên vẫn cần hằng số này.
 const USD_TO_VND_RATE = 26334.5;
 
-type HistoryMessage = { role: "user" | "assistant"; content: string };
+type HistoryMessage = {
+  id: number;
+  role: "user" | "assistant";
+  content: string;
+  query_id?: string | null;
+  feedback_rating?: 1 | -1 | null;
+  feedback_category?: string | null;
+  feedback_comment?: string | null;
+};
 
 type SessionSummary = {
   session_id: string;
@@ -164,13 +172,37 @@ function groupSessionsByDate(list: SessionSummary[]): SessionGroup[] {
 }
 
 type Message = {
+  id?: number;
   role: "user" | "bot";
   text: string;
+  queryId?: string | null;
   sqlUsed?: string[];
   columns?: string[] | null;
   rows?: unknown[][] | null;
   error?: boolean;
+  feedbackRating?: 1 | -1 | null;
+  feedbackCategory?: string | null;
+  feedbackComment?: string | null;
 };
+
+type FeedbackRating = 1 | -1;
+
+type SubmitFeedback = (
+  queryId: string,
+  rating: FeedbackRating,
+  category?: string,
+  comment?: string,
+) => Promise<void>;
+
+const FEEDBACK_CATEGORY_OPTIONS = [
+  ["wrong_number", "Số liệu không đúng"],
+  ["missing_data", "Thiếu dữ liệu"],
+  ["wrong_scope", "Sai phạm vi/kỳ báo cáo"],
+  ["not_understood", "Chưa hiểu đúng câu hỏi"],
+  ["too_slow", "Phản hồi quá chậm"],
+  ["unclear_answer", "Câu trả lời khó hiểu"],
+  ["other", "Lý do khác"],
+] as const;
 
 const SAMPLE_QUESTIONS_COMMON = [
   "Doanh thu hôm nay bao nhiêu?",
@@ -389,6 +421,162 @@ const markdownComponents = {
   },
 };
 
+function FeedbackControls({
+  queryId,
+  initialRating,
+  initialCategory,
+  initialComment,
+  onFeedback,
+}: {
+  queryId: string;
+  initialRating?: FeedbackRating | null;
+  initialCategory?: string | null;
+  initialComment?: string | null;
+  onFeedback: SubmitFeedback;
+}) {
+  const [selected, setSelected] = useState<FeedbackRating | null>(initialRating ?? null);
+  const [category, setCategory] = useState(initialCategory ?? "");
+  const [comment, setComment] = useState(initialComment ?? "");
+  const [expanded, setExpanded] = useState(Boolean(initialComment) || initialRating === -1);
+  const [saving, setSaving] = useState(false);
+  const [status, setStatus] = useState<"saved" | "error" | null>(null);
+  const [errorText, setErrorText] = useState("");
+
+  async function chooseSatisfied() {
+    if (selected === 1) {
+      setExpanded((value) => !value);
+      return;
+    }
+    setSaving(true);
+    setStatus(null);
+    setErrorText("");
+    try {
+      await onFeedback(queryId, 1, undefined, "");
+      setSelected(1);
+      setCategory("");
+      setComment("");
+      setExpanded(false);
+      setStatus("saved");
+    } catch (error) {
+      setStatus("error");
+      setErrorText((error as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  function chooseDissatisfied() {
+    setSelected(-1);
+    setExpanded(true);
+    setStatus(null);
+    setErrorText("");
+  }
+
+  async function saveDetails() {
+    if (!selected) return;
+    if (selected === -1 && !category) {
+      setStatus("error");
+      setErrorText("Vui lòng chọn lý do chưa hài lòng.");
+      return;
+    }
+    setSaving(true);
+    setStatus(null);
+    setErrorText("");
+    try {
+      await onFeedback(queryId, selected, selected === -1 ? category : undefined, comment);
+      setStatus("saved");
+    } catch (error) {
+      setStatus("error");
+      setErrorText((error as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="mt-3 border-t border-slate-100 pt-3 text-xs text-slate-500">
+      <div className="flex flex-wrap items-center gap-2">
+        <span>Câu trả lời này có hữu ích không?</span>
+        <button
+          type="button"
+          onClick={chooseSatisfied}
+          disabled={saving}
+          aria-label="Hài lòng"
+          aria-pressed={selected === 1}
+          className={`rounded-lg border px-2.5 py-1 transition ${
+            selected === 1
+              ? "border-emerald-300 bg-emerald-50 text-emerald-700"
+              : "border-slate-200 bg-white hover:border-emerald-300 hover:text-emerald-700"
+          }`}
+        >
+          👍 Hài lòng
+        </button>
+        <button
+          type="button"
+          onClick={chooseDissatisfied}
+          disabled={saving}
+          aria-label="Không hài lòng"
+          aria-pressed={selected === -1}
+          className={`rounded-lg border px-2.5 py-1 transition ${
+            selected === -1
+              ? "border-rose-300 bg-rose-50 text-rose-700"
+              : "border-slate-200 bg-white hover:border-rose-300 hover:text-rose-700"
+          }`}
+        >
+          👎 Không hài lòng
+        </button>
+        {selected === 1 && (
+          <button
+            type="button"
+            onClick={() => setExpanded((value) => !value)}
+            className="text-indigo-600 hover:text-indigo-800"
+          >
+            {expanded ? "Ẩn nhận xét" : initialComment ? "Sửa nhận xét" : "Thêm nhận xét"}
+          </button>
+        )}
+        {status === "saved" && <span className="font-medium text-emerald-600">Đã lưu</span>}
+      </div>
+
+      {expanded && selected && (
+        <div className="mt-3 space-y-2 rounded-xl bg-slate-50 p-3">
+          {selected === -1 && (
+            <select
+              value={category}
+              onChange={(event) => setCategory(event.target.value)}
+              className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-slate-700 outline-none focus:border-indigo-400"
+              aria-label="Lý do không hài lòng"
+            >
+              <option value="">Chọn lý do *</option>
+              {FEEDBACK_CATEGORY_OPTIONS.map(([value, label]) => (
+                <option key={value} value={value}>{label}</option>
+              ))}
+            </select>
+          )}
+          <textarea
+            value={comment}
+            onChange={(event) => setComment(event.target.value.slice(0, 2000))}
+            rows={3}
+            placeholder="Nhận xét thêm để đội dự án kiểm tra (không bắt buộc)"
+            className="w-full resize-y rounded-lg border border-slate-200 bg-white px-3 py-2 text-slate-700 outline-none focus:border-indigo-400"
+          />
+          <div className="flex items-center justify-between gap-3">
+            <span className="text-slate-400">{comment.length}/2000</span>
+            <button
+              type="button"
+              onClick={saveDetails}
+              disabled={saving}
+              className="rounded-lg bg-indigo-600 px-3 py-1.5 font-semibold text-white transition hover:bg-indigo-700 disabled:opacity-50"
+            >
+              {saving ? "Đang lưu..." : "Lưu đánh giá"}
+            </button>
+          </div>
+        </div>
+      )}
+      {status === "error" && <p className="mt-2 text-rose-600">{errorText || "Không lưu được đánh giá."}</p>}
+    </div>
+  );
+}
+
 // Tach rieng khoi Home() + boc React.memo: Home() co state `input` doi moi lan go phim, neu khung
 // tin nhan nam chung component se bi ve lai TOAN BO (ke ca parse lai markdown/bang cua moi tin nhan
 // cu) moi lan go 1 ky tu - cang nhieu tin nhan cang lag. Component rieng nay CHI ve lai khi `messages`
@@ -397,17 +585,19 @@ const MessageList = memo(function MessageList({
   messages,
   loading,
   onCancel,
+  onFeedback,
   bottomRef,
 }: {
   messages: Message[];
   loading: boolean;
   onCancel?: () => void;
+  onFeedback: SubmitFeedback;
   bottomRef: RefObject<HTMLDivElement | null>;
 }) {
   return (
     <div className="flex flex-col gap-5 py-1">
       {messages.map((m, i) => (
-        <div key={i} className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}>
+        <div key={m.id ?? m.queryId ?? i} className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}>
           <div
             className={`max-w-[85%] text-sm leading-relaxed ${
               m.role === "user"
@@ -488,6 +678,15 @@ const MessageList = memo(function MessageList({
                   </pre>
                 ))}
               </details>
+            )}
+            {m.role === "bot" && m.queryId && !m.error && (
+              <FeedbackControls
+                queryId={m.queryId}
+                initialRating={m.feedbackRating}
+                initialCategory={m.feedbackCategory}
+                initialComment={m.feedbackComment}
+                onFeedback={onFeedback}
+              />
             )}
           </div>
         </div>
@@ -729,8 +928,13 @@ export default function Home() {
       .then((history: HistoryMessage[]) => {
         setMessages(
           history.map((h) => ({
+            id: h.id,
             role: h.role === "user" ? "user" : "bot",
             text: h.content,
+            queryId: h.query_id,
+            feedbackRating: h.feedback_rating,
+            feedbackCategory: h.feedback_category,
+            feedbackComment: h.feedback_comment,
           }))
         );
       })
@@ -794,6 +998,28 @@ export default function Home() {
     setMessages([]);
   }
 
+  const submitFeedback = useCallback<SubmitFeedback>(async (queryId, rating, category, comment) => {
+    const response = await fetch(`${API_URL}/queries/${encodeURIComponent(queryId)}/feedback`, {
+      method: "PUT",
+      headers: authHeaders(authToken),
+      body: JSON.stringify({ rating, category, comment }),
+    });
+    const payload = await response.json().catch(() => ({ detail: "Máy chủ trả về dữ liệu không hợp lệ" }));
+    if (!response.ok) {
+      throw new Error(payload.detail || `Không lưu được đánh giá (HTTP ${response.status})`);
+    }
+    setMessages((current) => current.map((message) => (
+      message.role === "bot" && message.queryId === queryId
+        ? {
+            ...message,
+            feedbackRating: payload.rating,
+            feedbackCategory: payload.category,
+            feedbackComment: payload.comment,
+          }
+        : message
+    )));
+  }, [authToken]);
+
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, loading]);
@@ -849,7 +1075,7 @@ export default function Home() {
           if (!line.startsWith("data:")) continue;
           const jsonStr = line.slice(5).trim();
           if (!jsonStr) continue;
-          let evt: { type: string; text?: string; message?: string; answer?: string;
+          let evt: { type: string; query_id?: string; text?: string; message?: string; answer?: string;
                      sql_used?: string[]; columns?: string[] | null; rows?: unknown[][] | null };
           try {
             evt = JSON.parse(jsonStr);
@@ -874,6 +1100,7 @@ export default function Home() {
               if (last && last.role === "bot") {
                 next[next.length - 1] = {
                   ...last,
+                  queryId: evt.query_id,
                   text: evt.answer ?? last.text,
                   sqlUsed: evt.sql_used,
                   columns: evt.columns,
@@ -1227,7 +1454,13 @@ export default function Home() {
             </div>
           )}
 
-          <MessageList messages={messages} loading={loading} onCancel={handleCancelQuestion} bottomRef={bottomRef} />
+          <MessageList
+            messages={messages}
+            loading={loading}
+            onCancel={handleCancelQuestion}
+            onFeedback={submitFeedback}
+            bottomRef={bottomRef}
+          />
         </div>
 
         {/* Banner "Danh cho C-Level" da bo (29/07/2026): loi vao Dashboard Audit Log da co san o 2 cho
