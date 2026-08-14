@@ -596,9 +596,9 @@ def get_bravo_inventory_snapshot(force_refresh=False):
     scripts/sync_from_bravo_to_supabase.py::build_inventory_dataframe() để tránh trùng lặp/lệch
     công thức về sau (script đó giờ CHỈ còn là backup thủ công, không chạy tự động).
 
-    LƯU Ý: closing_value hiện luôn = 0 (chưa có nguồn giá trị tồn kho được DNH xác nhận) — mục
-    "tồn chết" (dead stock, lọc theo closing_value) vẫn sẽ luôn trống cho tới khi có nguồn đó; mục
-    "sắp hết hàng" (near-stockout, chỉ dựa vào months_to_sell) không bị ảnh hưởng.
+    LƯU Ý: closing_value hiện luôn = 0 (chưa có nguồn giá trị tồn kho được DNH xác nhận). Các trường
+    suy diễn months_to_sell còn được giữ trong cấu trúc legacy để audit, nhưng mọi cảnh báo/digest
+    dựa trên trường này đã bị khóa từ 14/08/2026 và không được hiển thị cho người dùng.
 
     Cache 30 phút (tồn kho không cần tươi từng phút như công nợ/doanh thu, và câu tính vận tốc bán
     6 tháng khá nặng — không nên chạy lại mỗi lần digest/alert gọi tới).
@@ -1094,9 +1094,16 @@ def run_smart_business_alerts():
         print("[ALERTS][smart_debt] Không có khách hàng nào nợ quá hạn vượt ngưỡng 10 triệu.")
 
     # 2. CẢNH BÁO CHÁY HÀNG TỒN KHO (Inventory Out-of-Stock Risk) — 20/07/2026: Bravo trực tiếp
+    from src.feature_policy import (
+        PREDICTIVE_INVENTORY_ALERTS_ENABLED,
+        PREDICTIVE_INVENTORY_DISABLED_LOG,
+    )
     inv_rows = []
     try:
-        inv_snapshot = get_bravo_inventory_snapshot()
+        inv_snapshot = (
+            get_bravo_inventory_snapshot()
+            if PREDICTIVE_INVENTORY_ALERTS_ENABLED else []
+        )
         inv_rows = sorted(
             [r for r in inv_snapshot if 0.0 < r.months_to_sell <= 1.0 and r.closing_qty > 0],
             key=lambda r: r.months_to_sell)[:5]
@@ -1143,7 +1150,10 @@ def run_smart_business_alerts():
             )
             record_alert_sent(alert_key, top_qty, region="Toàn quốc")
     else:
-        print("[ALERTS][smart_inventory] Không có mặt hàng nào sắp cạn (dưới 1 tháng bán).")
+        if PREDICTIVE_INVENTORY_ALERTS_ENABLED:
+            print("[ALERTS][smart_inventory] Không có mặt hàng nào sắp cạn (dưới 1 tháng bán).")
+        else:
+            print(f"[ALERTS][smart_inventory] {PREDICTIVE_INVENTORY_DISABLED_LOG}")
 
     # 3. CẢNH BÁO TIẾN ĐỘ KPI DOANH SỐ THẤP (Low sales target progress) — Bravo trước (TDV), Supabase dự phòng
     kpi_rows = []
@@ -1770,6 +1780,14 @@ def check_dead_stock_alert():
     này (lọc theo closing_value > ngưỡng) sẽ KHÔNG bao giờ bắn cho tới khi có nguồn đó. Đây là gap
     có từ trước, không phải lỗi phát sinh từ lần sửa này.
     """
+    from src.feature_policy import (
+        PREDICTIVE_INVENTORY_ALERTS_ENABLED,
+        PREDICTIVE_INVENTORY_DISABLED_LOG,
+    )
+    if not PREDICTIVE_INVENTORY_ALERTS_ENABLED:
+        print(f"[ALERTS][dead_stock] {PREDICTIVE_INVENTORY_DISABLED_LOG}")
+        return
+
     dead_months = float(_biz_threshold('dead_stock_months', 12.0))
     min_value = float(_biz_threshold('dead_stock_min_value', 50000000))
     try:

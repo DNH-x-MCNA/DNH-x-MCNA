@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "allowed_schemas": [
+    "dbo"
+  ],
+  "allowed_objects": [
+    "dbo.REPLACE_WITH_ALLOWED_TABLE_OR_VIEW",
+    "dbo.REPLACE_WITH_ALLOWED_STORED_PROCEDURE"
+  ],
+  "denied_objects": [],
+  "include_definitions": true,
+  "sensitive_columns": {
+    "dbo.REPLACE_WITH_OBJECT.Phone": "pii",
+    "dbo.REPLACE_WITH_OBJECT.Email": "pii",
+    "dbo.REPLACE_WITH_OBJECT.*Salary*": "confidential_compensation"
+  }
+}

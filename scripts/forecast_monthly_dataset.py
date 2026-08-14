@@ -141,6 +141,10 @@ def forecasts_for(series, months, t_idx):
 
 
 def main():
+    print("DA TAT: khong chay nghien cuu/du bao tuong lai. He thong chi phuc vu du lieu thuc te va lich su.")
+    return 2
+
+    # Ma nghien cuu cu giu lai de audit; khong the chay qua entrypoint.
     print("=" * 78)
     print("CHUOI DOANH THU THEO THANG + DANH GIA CAC MO HINH NEN")
     print("=" * 78)

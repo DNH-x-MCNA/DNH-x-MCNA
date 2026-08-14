@@ -579,6 +579,7 @@ DIGEST_EMAIL_TEMPLATE = """
             </div>
             {% endif %}
 
+            {% if metrics.inventory.dead_stock_available != False or metrics.inventory.near_stockout_available != False %}
             <!-- Tồn kho Section -->
             <div class="section-title">Tồn Kho</div>
             {% if metrics.inventory.dead_stock_available == False %}
@@ -600,6 +601,7 @@ DIGEST_EMAIL_TEMPLATE = """
                 </div>
                 <!--[if mso]></td><![endif]-->
                 {% endif %}
+                {% if metrics.inventory.near_stockout_available != False %}
                 <!--[if mso]><td width="50%" valign="top" style="padding: 8px;"><![endif]-->
                 <div class="col" style="width: 100%; max-width: {% if metrics.inventory.dead_stock_available == False %}580px{% else %}290px{% endif %}; padding: 8px;">
                     <div class="kpi-card failed">
@@ -608,6 +610,7 @@ DIGEST_EMAIL_TEMPLATE = """
                     </div>
                 </div>
                 <!--[if mso]></td><![endif]-->
+                {% endif %}
                 <!--[if mso]>
                 </tr></table>
                 <![endif]-->
@@ -626,6 +629,7 @@ DIGEST_EMAIL_TEMPLATE = """
                     {% endfor %}
                 </tbody>
             </table>
+            {% endif %}
             {% endif %}
 
             {% if chatbot_url %}
