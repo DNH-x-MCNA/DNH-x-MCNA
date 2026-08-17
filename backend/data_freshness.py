@@ -257,25 +257,35 @@ class FreshnessCollector:
         self._items: dict[str, SourceFreshness] = {}
 
     def _query_local_source(
-        self, spec: _SourceSpec
-    ) -> tuple[Optional[str], Optional[str], Optional[str], bool]:
+        self, spec: _SourceSpec, *, today: str
+    ) -> tuple[Optional[str], Optional[str], Optional[str], bool, Optional[str]]:
         business_date = None
         snapshot_date = None
         sync_completed = None
         table_specific_sync = False
+        future_business_date = None
         path = Path(self.warehouse_path)
         if path.exists():
             sync_completed = datetime.fromtimestamp(path.stat().st_mtime).astimezone().isoformat(timespec="seconds")
         if not path.exists() or not spec.table:
-            return business_date, snapshot_date, sync_completed, table_specific_sync
+            return business_date, snapshot_date, sync_completed, table_specific_sync, future_business_date
         try:
             conn = sqlite3.connect(str(path), timeout=5)
             try:
                 if spec.date_column:
-                    row = conn.execute(
+                    raw_row = conn.execute(
                         f'SELECT MAX("{spec.date_column}") FROM "{spec.table}"'
                     ).fetchone()
+                    row = conn.execute(
+                        f'SELECT MAX("{spec.date_column}") FROM "{spec.table}" '
+                        f'WHERE substr("{spec.date_column}",1,10)<=?',
+                        (today,),
+                    ).fetchone()
                     business_date = _iso(row[0]) if row and row[0] is not None else None
+                    raw_business_date = _iso(raw_row[0]) if raw_row and raw_row[0] is not None else None
+                    raw_dt = _parse_datetime(raw_business_date)
+                    if raw_dt and raw_dt.date().isoformat() > today:
+                        future_business_date = raw_business_date
                 if spec.snapshot_column:
                     row = conn.execute(
                         f'SELECT MAX("{spec.snapshot_column}") FROM "{spec.table}"'
@@ -297,7 +307,7 @@ class FreshnessCollector:
                 conn.close()
         except (OSError, sqlite3.Error):
             pass
-        return business_date, snapshot_date, sync_completed, table_specific_sync
+        return business_date, snapshot_date, sync_completed, table_specific_sync, future_business_date
 
     def _record_spec(self, spec: _SourceSpec, result: Any = None) -> None:
         if spec.key in self._items:
@@ -316,31 +326,39 @@ class FreshnessCollector:
         )
         sync_completed = _first_value(result, ("promotion_link_synced_at", "link_synced_at"))
         table_specific_sync = False
+        future_business_date = None
         if spec.source_type == "warehouse":
-            local_business, local_snapshot, local_sync, table_specific_sync = self._query_local_source(spec)
+            local_business, local_snapshot, local_sync, table_specific_sync, future_business_date = self._query_local_source(
+                spec, today=now.date().isoformat()
+            )
             # Moc bao phu phai doc RIENG tung bang. Khong de data_as_of chung cua tool doanh thu
             # (hien duoc tinh tu OTC) vo tinh gan sang ETC.
             business_date = local_business or business_date
             snapshot_date = snapshot_date or local_snapshot
             sync_completed = sync_completed or local_sync
 
-        warning = None
+        warnings = []
+        if future_business_date:
+            warnings.append(
+                f"{spec.name}: phát hiện chứng từ ngày tương lai {_format_date(future_business_date)}; "
+                "không dùng ngày đó làm mốc độ mới."
+            )
         is_stale = False
         if not spec.live:
             sync_dt = _parse_datetime(sync_completed)
             if sync_dt is None:
                 is_stale = True
-                warning = f"{spec.name}: chưa xác định được thời điểm đồng bộ gần nhất."
+                warnings.append(f"{spec.name}: chưa xác định được thời điểm đồng bộ gần nhất.")
             else:
                 age_minutes = max(0, (now - sync_dt).total_seconds() / 60)
                 if age_minutes > self.stale_minutes:
                     is_stale = True
-                    warning = (
+                    warnings.append(
                         f"{spec.name}: lần đồng bộ gần nhất đã cách {age_minutes:.0f} phút "
                         f"(ngưỡng tạm thời {self.stale_minutes} phút)."
                     )
                 elif spec.table and not table_specific_sync:
-                    warning = (
+                    warnings.append(
                         f"{spec.name}: chưa có mốc đồng bộ riêng cho bảng; giờ hiển thị là "
                         "thời điểm cập nhật file warehouse."
                     )
@@ -355,7 +373,7 @@ class FreshnessCollector:
             query_executed_at=query_at,
             is_live=spec.live,
             is_stale=is_stale,
-            warning=warning,
+            warning=" ".join(warnings) or None,
         )
 
     @staticmethod

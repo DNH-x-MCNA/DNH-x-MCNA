@@ -147,6 +147,24 @@ def test_stale_threshold_is_configurable_and_warning_is_deterministic(tmp_path):
     assert "ngưỡng tạm thời 90 phút" in collector.finalize_answer("Kết quả.")
 
 
+def test_future_dated_rows_are_not_shown_as_data_freshness(tmp_path):
+    path = make_warehouse(tmp_path)
+    conn = sqlite3.connect(path)
+    conn.execute("INSERT INTO vhoadon_otc VALUES ('2026-08-31')")
+    conn.commit()
+    conn.close()
+
+    collector = collector_for(path)
+    collector.record_template("get_revenue_by_channel", {"total": {"revenue": 1}})
+
+    otc = collector.records()[0]
+    assert otc.business_data_date == "2026-08-16"
+    assert "ngày tương lai 31/08/2026" in otc.warning
+    footer = collector.finalize_answer("Kết quả.")
+    assert "dữ liệu đến 16/08/2026" in footer
+    assert "dữ liệu đến 31/08/2026" not in footer
+
+
 def test_collectors_are_isolated_between_concurrent_requests(tmp_path):
     path = make_warehouse(tmp_path)
     revenue_request = collector_for(path)
