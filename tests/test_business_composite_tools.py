@@ -179,6 +179,9 @@ def test_repeated_tool_call_is_not_reexecuted_and_forces_final_answer(monkeypatc
     fake_messages = FakeMessages()
     fake_client = SimpleNamespace(messages=fake_messages)
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    # This test uses the default Anthropic-shaped mock.  Keep it isolated from
+    # the machine's optional provider configuration restored by the previous test.
+    monkeypatch.setattr(nl2sql, "LLM_BASE_URL", "")
     monkeypatch.setattr(nl2sql.anthropic, "Anthropic", lambda api_key: fake_client)
     monkeypatch.setattr(nl2sql, "load_history", lambda *args, **kwargs: [])
     monkeypatch.setattr(nl2sql, "append_message", lambda *args, **kwargs: None)
