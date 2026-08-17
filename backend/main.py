@@ -220,6 +220,7 @@ class ChatResponse(BaseModel):
     query_id: str
     answer: str
     sql_used: list[str]
+    freshness: Optional[list[dict[str, Any]]] = None
     columns: Optional[list[str]] = None
     rows: Optional[list[list[Any]]] = None
     row_count: Optional[int] = None
@@ -609,6 +610,7 @@ def chat(req: ChatRequest, user: dict = Depends(require_approved_user)):
             query_id,
             result["answer"],
             sql_used=result.get("sql_used"),
+            freshness=result.get("freshness"),
             row_count=lr.get("row_count") if is_raw_sql else None,
             duration_ms=_elapsed_ms(started_at),
         )
@@ -623,6 +625,7 @@ def chat(req: ChatRequest, user: dict = Depends(require_approved_user)):
         query_id=query_id,
         answer=result["answer"],
         sql_used=result["sql_used"],
+        freshness=result.get("freshness"),
         columns=lr.get("columns") if is_raw_sql else None,
         rows=lr.get("rows") if is_raw_sql else None,
         row_count=lr.get("row_count") if is_raw_sql else None,
@@ -632,11 +635,9 @@ def chat(req: ChatRequest, user: dict = Depends(require_approved_user)):
 # 11/08/2026: endpoint STREAMING moi, SONG SONG voi /chat cu (khong sua/xoa /chat - frontend hien
 # tai dang goi /chat, sua endpoint do se anh huong ngay 25 user dang dung that). Dung Server-Sent
 # Events (SSE, "data: {...}\n\n") - format don gian, browser/fetch doc duoc truc tiep khong can thu
-# vien them o frontend. Ly do lam streaming: Sonnet 5 tu bat "extended thinking" mac dinh (xem
-# nl2sql.py::ask_stream), khien MOI cau hoi (ke ca cau don gian) deu phai cho model suy luan xong het
-# roi moi thay chu - streaming KHONG giam tong thoi gian xu ly nhung nguoi dung THAY chu xuat hien
-# dan ngay khi model bat dau tra loi that (vong CUOI, sau khi da goi xong cac tool), giam cam giac
-# "lag" ro ret. Kiem tra QUYEN/rate-limit GIONG HET /chat (dung chung _check_rate_limit,
+# vien them o frontend. 17/08/2026: backend chi phat text sau khi da loai timestamp model tu sinh va
+# gan metadata nguon, de noi dung UI trung khop noi dung luu lich su. Kiem tra QUYEN/rate-limit
+# GIONG HET /chat (dung chung _check_rate_limit,
 # _require_session_write_access) - CHi khac cach tra ket qua ve client.
 @app.post("/chat/stream", dependencies=[Depends(require_api_key)])
 def chat_stream(req: ChatRequest, user: dict = Depends(require_approved_user)):
@@ -667,6 +668,7 @@ def chat_stream(req: ChatRequest, user: dict = Depends(require_approved_user)):
                         query_id,
                         chunk["answer"],
                         sql_used=chunk.get("sql_used"),
+                        freshness=chunk.get("freshness"),
                         row_count=lr.get("row_count") if is_raw_sql else None,
                         duration_ms=_elapsed_ms(started_at),
                     )
@@ -675,6 +677,7 @@ def chat_stream(req: ChatRequest, user: dict = Depends(require_approved_user)):
                         "query_id": query_id,
                         "answer": chunk["answer"],
                         "sql_used": chunk["sql_used"],
+                        "freshness": chunk.get("freshness", []),
                         "columns": lr.get("columns") if is_raw_sql else None,
                         "rows": lr.get("rows") if is_raw_sql else None,
                         "row_count": lr.get("row_count") if is_raw_sql else None,
@@ -837,6 +840,7 @@ def get_audit_logs_dashboard(
                 "feedback_comment": run.get("feedback_comment"),
                 "feedback_by": run.get("feedback_by"),
                 "feedback_at": _display_timestamp(run.get("feedback_at")),
+                "freshness": run.get("freshness") or [],
             })
     except Exception as ex:
         print("[AUDIT-LOG] Loi nap query_runs:", ex)
