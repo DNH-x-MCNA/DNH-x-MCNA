@@ -61,7 +61,7 @@ from conversation_memory import (
 )
 from nl2sql import ask, ask_stream
 from query_engine import _write_log
-from pricing import USD_TO_VND_RATE
+from pricing import USD_TO_VND_RATE, api_provider_for_model
 
 init_auth_schema()
 
@@ -885,7 +885,7 @@ def get_audit_logs_dashboard(
     # 03/08/2026: Per-question cost - nhom theo (session_id, question_preview) de hien chi phi TUNG CAU
     cost_per_question = defaultdict(lambda: {"cost_usd": 0.0, "input_tokens": 0, "output_tokens": 0,
         "cache_read_tokens": 0, "cache_write_tokens": 0, "total_tokens": 0, "api_calls": 0,
-        "username": "", "first_ts": None})
+        "username": "", "first_ts": None, "models": set()})
     # Cac phien da duoc quy chi phi TRUC TIEP cho nguoi dung (log co username). Vong duyet audit ben
     # duoi phai BO QUA chung khi cong vao user_stats, neu khong se cong hai lan -> chi phi gap doi.
     sessions_attributed_directly = set()
@@ -943,6 +943,8 @@ def get_audit_logs_dashboard(
                     _cpq["cache_write_tokens"] += cw
                     _cpq["total_tokens"] += it + ot + cr + cw
                     _cpq["api_calls"] += 1
+                    if c.get("model"):
+                        _cpq["models"].add(str(c["model"]).strip())
                     if not _cpq["username"]:
                         _cpq["username"] = uname_direct
                     if not _cpq["first_ts"]:
@@ -1004,6 +1006,9 @@ def get_audit_logs_dashboard(
         c_cr = cpq.get("cache_read_tokens", 0)
         c_cw = cpq.get("cache_write_tokens", 0)
         c_tt = cpq.get("total_tokens", c_it + c_ot + c_cr + c_cw)
+        c_models = sorted(cpq.get("models", set()))
+        c_api_provider = ", ".join(sorted({api_provider_for_model(m) for m in c_models})) or None
+        c_api_model = ", ".join(c_models) or None
 
         display_name = get_name_by_username(uname) or uname
 
@@ -1048,6 +1053,8 @@ def get_audit_logs_dashboard(
             "cost_usd": round(c_usd, 6),
             "cost_vnd": round(c_usd * USD_TO_VND_RATE, 2),
             "api_calls": cpq.get("api_calls", 0),
+            "api_provider": c_api_provider,
+            "api_model": c_api_model,
             "sql_count": _sql_count_by_q.get(q_key, 0),
             # Backward compat: giu ten cu de frontend khong bi vo
             "session_input_tokens": c_it,
@@ -1074,6 +1081,7 @@ def get_audit_logs_dashboard(
         if not user_stats[_uname2].get("display_name"):
             user_stats[_uname2]["display_name"] = _dn2
         _c2 = _cpq2.get("cost_usd", 0.0)
+        _models2 = sorted(_cpq2.get("models", set()))
         filtered_logs.append({
             "ts": _cpq2.get("first_ts"),
             "username": _uname2,
@@ -1093,6 +1101,8 @@ def get_audit_logs_dashboard(
             "feedback_at": None,
             "input_tokens": _cpq2.get("input_tokens", 0),
             "output_tokens": _cpq2.get("output_tokens", 0),
+            "api_provider": ", ".join(sorted({api_provider_for_model(m) for m in _models2})) or None,
+            "api_model": ", ".join(_models2) or None,
             "cache_read_tokens": _cpq2.get("cache_read_tokens", 0),
             "cache_write_tokens": _cpq2.get("cache_write_tokens", 0),
             "total_tokens": _cpq2.get("total_tokens", 0),
