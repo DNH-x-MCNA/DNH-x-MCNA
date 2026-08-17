@@ -33,7 +33,20 @@ from feature_policy import (
 )
 from sql_schema_retriever import relevant_schema_context, search_sql_catalog
 
-MODEL = "claude-sonnet-5"
+# 13/08/2026: cho phep tro sang nha cung cap khac de THU NGHIEM, mac dinh KHONG doi gi.
+# DeepSeek V4 co endpoint dinh dang Anthropic (https://api.deepseek.com/anthropic) nen dung duoc
+# nguyen SDK anthropic va nguyen dinh dang tool_use/tool_result - khong phai viet lai vong goi tool.
+# Bat bang bien moi truong, vi du trong backend/.env:
+#     LLM_BASE_URL=https://api.deepseek.com/anthropic
+#     LLM_MODEL=deepseek-v4-pro
+#     LLM_API_KEY=sk-...
+# Bo trong ca 3 -> chay Claude y het truoc day.
+MODEL = os.environ.get("LLM_MODEL", "").strip() or "claude-sonnet-5"
+LLM_BASE_URL = os.environ.get("LLM_BASE_URL", "").strip()
+
+# Cac tinh nang CHI Anthropic co. Tro sang nha cung cap khac thi phai tat, neu khong API se tu choi
+# hoac lang le bo qua - ca hai deu kho phat hien.
+IS_ANTHROPIC = not LLM_BASE_URL or "anthropic.com" in LLM_BASE_URL
 MAX_TOOL_ROUNDS = 4  # 04/08/2026: giam tu 8 -> 4 (tiet kiem thoi gian + token). Tool Merger da gop
                       # nhieu tool call thanh 1, nen 4 vong la du cho moi tinh huong thuc te.
                       # 10/08/2026: GIU NGUYEN 4. Ca 2 ca "cau hoi qua phuc tap" truy duoc nguyen nhan
@@ -668,7 +681,21 @@ def _raw_query_payload(result: dict, db: str, question: str) -> dict:
 # Beta header can thiet de dung TTL 1h (mac dinh cache_control chi song 5 phut neu khong co header nay).
 # Ap dung cho toan bo request (system + tools) - giup cache song qua nhieu cau hoi lien tiep trong gio
 # hanh chinh thay vi het han sau vai phut, tang ty le cache-hit (chi ~10% gia input goc khi hit).
-_CACHE_BETA_HEADERS = {"anthropic-beta": "extended-cache-ttl-2025-04-11"}
+_CACHE_BETA_HEADERS = ({"anthropic-beta": "extended-cache-ttl-2025-04-11"} if IS_ANTHROPIC else {})
+
+
+def _llm_client():
+    """Client goi model. Doc key theo thu tu LLM_API_KEY -> ANTHROPIC_API_KEY de doi nha cung cap
+    ma khong phai xoa key cu (doi lai chi can bo LLM_* la ve Claude ngay)."""
+    key = (os.environ.get("LLM_API_KEY", "").strip()
+           or os.environ.get("ANTHROPIC_API_KEY", "").strip())
+    # CHI truyen base_url khi thuc su doi nha cung cap. Truyen base_url=None cung la them mot doi so,
+    # va cac test dang gia lap anthropic.Anthropic bang lambda chi nhan api_key se vo ngay
+    # (da dinh: test_repeated_tool_call_is_not_reexecuted_and_forces_final_answer). Giu duong mac dinh
+    # goi y het truoc day thi khong the lam hong thu gi dang chay.
+    if LLM_BASE_URL:
+        return anthropic.Anthropic(api_key=key, base_url=LLM_BASE_URL)
+    return anthropic.Anthropic(api_key=key)
 
 
 def _static_system_prompt() -> str:
@@ -1035,7 +1062,8 @@ def ask(question: str, session_id: str = "default", username: str = None, scope_
     if is_future_forecast_question(question):
         return _blocked_future_forecast_response(question, session_id, query_id)
 
-    api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+    api_key = (os.environ.get("LLM_API_KEY", "").strip()
+               or os.environ.get("ANTHROPIC_API_KEY", "").strip())
     if not api_key or api_key == "mock-key-for-local-testing":
         answer_text = "⚠️ **Chưa cấu hình API Key Claude/Anthropic**: Vui lòng bổ sung biến `ANTHROPIC_API_KEY=sk-ant-api03...` vào file `backend/.env` để khởi chạy tính năng Phân tích Dữ liệu AI."
         append_message(session_id, "user", question, query_id=query_id)
@@ -1047,7 +1075,7 @@ def ask(question: str, session_id: str = "default", username: str = None, scope_
             "query_id": query_id,
         }
 
-    client = anthropic.Anthropic(api_key=api_key)
+    client = _llm_client()
     history = load_history(session_id, max_turns=MAX_HISTORY_TURNS)
     messages = list(history) + [{"role": "user", "content": question}]
     # Breakpoint cache thu 3 (ngoai tools + system tinh) - danh dau cuoi khoi tool_result MOI NHAT
@@ -1280,7 +1308,8 @@ def ask_stream(question: str, session_id: str = "default", username: str = None,
         yield {"type": "done", **blocked}
         return
 
-    api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+    api_key = (os.environ.get("LLM_API_KEY", "").strip()
+               or os.environ.get("ANTHROPIC_API_KEY", "").strip())
     if not api_key or api_key == "mock-key-for-local-testing":
         msg = ("⚠️ **Chưa cấu hình API Key Claude/Anthropic**: Vui lòng bổ sung biến "
                "`ANTHROPIC_API_KEY=sk-ant-api03...` vào file `backend/.env` để khởi chạy tính năng "
@@ -1292,7 +1321,7 @@ def ask_stream(question: str, session_id: str = "default", username: str = None,
                "query_id": query_id}
         return
 
-    client = anthropic.Anthropic(api_key=api_key)
+    client = _llm_client()
     history = load_history(session_id, max_turns=MAX_HISTORY_TURNS)
     messages = list(history) + [{"role": "user", "content": question}]
     _last_msg_cache_block = None  # xem ghi chu day du o ask()

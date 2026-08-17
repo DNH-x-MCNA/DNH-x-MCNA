@@ -38,6 +38,27 @@ MODEL_PRICING = {
         "cache_read": 0.50,
         "cache_write": 6.25,
     },
+
+    # 13/08/2026 - DeepSeek V4, dung de THU NGHIEM doi nha cung cap (xem LLM_BASE_URL trong nl2sql.py).
+    # DeepSeek tinh gia theo GIO: gia cao diem gap doi gia thap diem. Bang nay chi co MOT don gia nen
+    # co y lay GIA CAO DIEM - bao cao chi phi se cao hon thuc te thay vi thap hon. Chon huong nay vi
+    # 05/08/2026 da dinh mot lan bao THIEU 37% chi phi cache-write, va bao thieu thi nguy hiem hon
+    # bao thua (tuong con re, dung thoai mai, den cuoi thang moi vo le).
+    #
+    # DeepSeek KHONG tinh tien rieng cho viec ghi cache - gia "cache miss" da bao gom. Nen cache_write
+    # de 0, KHONG phai vi chua biet gia ma vi that su khong co khoan nay.
+    "deepseek-v4-pro": {
+        "input": 1.32,        # cache miss, cao diem (thap diem 0.66)
+        "output": 3.96,       # cao diem (thap diem 1.98)
+        "cache_read": 0.044,  # cache hit, cao diem (thap diem 0.022)
+        "cache_write": 0.0,
+    },
+    "deepseek-v4-flash": {
+        "input": 0.44,        # cache miss, cao diem (thap diem 0.22)
+        "output": 1.32,       # cao diem (thap diem 0.66)
+        "cache_read": 0.014,  # cache hit, cao diem (thap diem 0.007)
+        "cache_write": 0.0,
+    },
 }
 
 # Ty gia quy doi USD -> VND hien thi tren dashboard va bao cao. NGUON DUY NHAT - truoc day so 25400
@@ -56,6 +77,13 @@ def compute_cost_usd(model: str, input_tokens: int, output_tokens: int,
                       cache_read_tokens: int = 0, cache_write_tokens: int = 0) -> float:
     p = MODEL_PRICING.get(model)
     if not p:
+        # 13/08/2026: truoc day lang le tra 0.0 - doi model ma quen them gia thi MOI bao cao chi phi
+        # deu ra 0d, trong y het "dung it tien", khong ai nghi la thieu bang gia. Gio ghi canh bao
+        # ra log de con biet. Van tra 0.0 chu KHONG nem loi: chi phi sai khong duoc lam vo cau tra loi.
+        import logging
+        logging.getLogger(__name__).warning(
+            "Khong co bang gia cho model %r - moi chi phi cua model nay se ghi 0d. "
+            "Them vao MODEL_PRICING (backend/pricing.py) truoc khi tin bao cao chi phi.", model)
         return 0.0
     return (
         (input_tokens or 0) / 1_000_000 * p["input"]
