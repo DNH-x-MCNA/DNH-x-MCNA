@@ -106,7 +106,11 @@ def _etc_area_join(alias: str = "v", scope_area_code: str = None) -> str:
 def latest_data_date() -> str:
     """Ngay gan nhat CO DU LIEU trong kho local (Bravo co the tre vai ngay, va kho local co the
     tre them toi da 1 chu ky dong bo nua so voi Bravo)."""
-    r = _q("SELECT MAX(doc_date) d FROM vhoadon_otc")
+    # Khong bao gio de chung tu mang ngay TUONG LAI dinh nghia "hom nay". Du lieu future-dated
+    # co the xuat hien khi dong bo nham ky/chung tu du kien; neu lay MAX() khong rang buoc, model se
+    # doi ngay he thong thanh ngay do va tra doanh thu tuong lai nhu da phat hien 17/08/2026.
+    today = str(dt.date.today())
+    r = _q("SELECT MAX(doc_date) d FROM vhoadon_otc WHERE substr(doc_date,1,10)<=?", (today,))
     d = r[0]["d"] if r else None
     return d if d else str(dt.date.today())
 
@@ -3858,6 +3862,49 @@ _CHANNEL_SCOPED_TEMPLATES = {
 }
 
 
+_SINGLE_PERIOD_TEMPLATES = {
+    "get_revenue_by_channel", "get_revenue_by_region", "get_top_products",
+    "get_top_customers", "check_order_timing", "get_customer_detail",
+}
+
+
+def _is_today_only_question(question: str) -> bool:
+    """Nhan dien ca hoi chi hoi rieng "hom nay", khong ghi de cac ca so sanh/luy ke."""
+    q = " ".join((question or "").lower().split())
+    if "hôm nay" not in q and "hom nay" not in q:
+        return False
+    return not any(marker in q for marker in (
+        "đến hôm nay", "den hom nay", "so sánh", "so sanh", "hôm qua", "hom qua",
+        "tuần", "tuan", "tháng", "thang", "quý", "quy", "năm", "nam ", "từ ", "tu ",
+    ))
+
+
+def _enforce_non_future_dates(name: str, call_args: dict, question: str) -> None:
+    """Backend, khong phai model, la nguon su that cho moc ngay truy van du lieu."""
+    today = dt.date.today()
+    today_text = today.isoformat()
+
+    # Cac cau kieu "Doanh thu hom nay bao nhieu?" phai dung ngay he thong ngay ca khi model bo qua
+    # resolve_relative_date hoac tu suy luan nham ngay ke tiep.
+    if name in _SINGLE_PERIOD_TEMPLATES and _is_today_only_question(question):
+        call_args["date_from"] = today_text
+        call_args["date_to"] = today_text
+
+    for key in ("date_from", "date_to", "date_from_a", "date_to_a", "date_from_b", "date_to_b", "as_of_date"):
+        value = call_args.get(key)
+        if not isinstance(value, str) or len(value) < 10:
+            continue
+        try:
+            requested = dt.date.fromisoformat(value[:10])
+        except ValueError:
+            continue
+        if requested > today:
+            raise ValueError(
+                f"{key}={requested.isoformat()} nam sau ngay he thong {today_text}; "
+                "chatbot khong duoc truy van du lieu tuong lai."
+            )
+
+
 
 def call_template(name: str, args: dict, question: str = "", username: str = None,
                    scope_area_code: str = None, scope_employee_code: str = None,
@@ -3903,6 +3950,8 @@ def call_template(name: str, args: dict, question: str = "", username: str = Non
             # Giong _SELF_SCOPED_TEMPLATES nhung KHONG ep 'username' (tool dung employee_code, xem
             # ghi chu o _ROLE_SCOPED_TEMPLATES) - chi ep scope_role de xac dinh co phai C-Level khong.
             call_args["scope_role"] = scope_role
+
+        _enforce_non_future_dates(name, call_args, question)
         
         # 28/07/2026: Tu dong append " 23:59:59" vao bat ky tham so nao la date_to/date_to_a/date_to_b
         # (YYYY-MM-DD) truoc khi truyen cho SQL. Neu khong co phan nay, "BETWEEN date_from AND date_to"
