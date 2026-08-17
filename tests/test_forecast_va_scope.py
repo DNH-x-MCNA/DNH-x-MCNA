@@ -50,6 +50,27 @@ def _ym_add(ym, k):
     return f"{t // 12:04d}-{t % 12 + 1:02d}"
 
 
+def test_today_revenue_is_forced_to_server_date_even_when_model_sends_tomorrow(monkeypatch):
+    seen = {}
+
+    def fake_revenue(**kwargs):
+        seen.update(kwargs)
+        return {"total": {"revenue": 0}}
+
+    monkeypatch.setitem(rt.TEMPLATES, "get_revenue_by_channel", fake_revenue)
+    monkeypatch.setattr(rt, "_write_log", lambda entry: None)
+
+    result = rt.call_template(
+        "get_revenue_by_channel",
+        {"date_from": "2099-01-01", "date_to": "2099-01-01"},
+        question="Doanh thu hôm nay bao nhiêu?",
+    )
+
+    assert result["ok"] is True
+    assert seen["date_from"] == dt.date.today().isoformat()
+    assert seen["date_to"] == dt.date.today().isoformat() + " 23:59:59"
+
+
 def _build(path, thang_co_doanh_thu):
     """thang_co_doanh_thu: {(year_month, channel): tong_doanh_thu_cua_doi}."""
     con = sqlite3.connect(path)
