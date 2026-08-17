@@ -41,13 +41,26 @@ Mỗi request có một collector riêng, không dùng state toàn cục, nên n
 
 ```text
 python -m pytest -q
-105 passed, 1 deselected
+110 passed, 1 deselected
 
 python scripts/business_stress_suite.py --validate
-VALID: 90 cases, 57 read-only SQL checkers
+VALID: 90 cases, 62 checkers (50 SQL Server SELECT, 12 SQL Server SP-result SELECT)
 ```
 
 11 test mới bao phủ: nguồn local đơn, snapshot công nợ, nhiều nguồn và chống trùng, SQL Server live, loại footer cũ, stale cấu hình được, cô lập request đồng thời, lưu metadata lịch sử, migration database cũ, non-stream và SSE.
+
+## Bổ sung ground truth công nợ
+
+Q037–Q048 đã được tách thành 12 checker riêng. Ground truth công nợ gọi trực tiếp
+`dbo.usp_DeptAccDueDate_GetData` trên SQL Server bằng lệnh hard-code, rollback connection, rồi
+materialize result set trong RAM để chạy SELECT. Không checker nào còn dùng `local` làm ground truth.
+
+Khi chạy nhóm công nợ, source-gate tự so SP live với `warehouse.db`; warehouse trống, khác ngày
+snapshot, thiếu/thừa khóa hoặc lệch bất kỳ giá trị nào quá 1 đồng đều làm lượt test fail. Q041 lấy
+cả doanh thu trực tiếp từ hai view Total trên SQL Server; Q042 bắt buộc có `--scope-area`.
+
+Smoke live trên máy dev ngày 17/08/2026: cả 12/12 checker SP-result chạy thành công; source-gate trả
+`warehouse_empty` đúng thực trạng warehouse dev, vì vậy tiến trình vẫn trả exit code lỗi thay vì PASS giả.
 
 ## Điểm đang chờ DNH
 

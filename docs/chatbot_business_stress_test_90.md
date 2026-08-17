@@ -1,8 +1,9 @@
 # Bộ 90 câu hỏi stress test nghiệp vụ chatbot DNH
 
 > Kỳ kiểm chứng chính: 07/2026 (đã chốt). CTKM: 12/2025 vì liên kết DMS hiện mới phủ đến 09/01/2026.
-> Công nợ đọc `warehouse.db/fact_congno_khachhang`, là snapshot chuẩn hóa từ SP gốc DNH.
+> Công nợ đọc trực tiếp result set `dbo.usp_DeptAccDueDate_GetData` trên SQL Server; warehouse chỉ là đối tượng của source-gate đối chiếu.
 > Chạy SQL bằng `python scripts/business_stress_suite.py --execute --case Q001`.
+> Chạy nhóm công nợ bằng `python scripts/business_stress_suite.py --execute --group "Công nợ" --scope-area MN`; source-gate khác `ok` làm tiến trình trả exit code 1.
 
 ## Doanh thu
 
@@ -61,13 +62,13 @@
 | Q039 | manager | Top 30 khách hàng nợ quá hạn lớn nhất hiện tại? | `DEBT_TOP` | Gộp mọi dòng/kênh theo customer_code trước khi xếp hạng. |
 | Q040 | c_level | Cơ cấu nợ quá hạn 1-15, 16-30, 31-45 và trên 45 ngày theo từng kênh? | `DEBT_AGING` | Tổng bốn bucket khớp total_overdue. |
 | Q041 | manager | Tìm khách đồng thời doanh thu lớn, nợ quá hạn cao và sức mua giảm. | `DEBT_RISK` | Một truy vấn tổng hợp; kỳ 05-07 so 02-04, ngưỡng 100m/50m. |
-| Q042 | qlv | Khách nợ quá hạn trong phạm vi của tôi đang nằm chủ yếu ở nhóm tuổi nào? | `DEBT_DETAIL` | Khi test bằng tài khoản QLV phải bị ép phạm vi đội/vùng. |
-| Q043 | manager | Khách nào có tỷ lệ nợ quá hạn trên dư nợ cao nhất? | `DEBT_TOP` | Không chia cho 0; phân biệt số tuyệt đối với tỷ lệ. |
-| Q044 | c_level | Có bao nhiêu khách vừa bán OTC vừa ETC và tổng nợ của họ thế nào? | `DEBT_DETAIL` | Gộp theo mã khách nhưng vẫn nêu breakdown kênh. |
-| Q045 | manager | Snapshot công nợ được cập nhật lúc nào; có dấu hiệu cũ hoặc lệch thời gian giữa các dòng không? | `DEBT_QUALITY` | min/max snapshot phải nhất quán, cảnh báo nếu quá cũ. |
-| Q046 | manager | Có dòng công nợ nào tổng bốn nhóm tuổi không bằng tổng quá hạn không? | `DEBT_QUALITY` | broken_aging_sum phải bằng 0. |
-| Q047 | manager | Có bao nhiêu dòng công nợ thiếu mã khách hoặc thiếu vùng? | `DEBT_QUALITY` | Nêu số thiếu, không âm thầm bỏ dòng. |
-| Q048 | c_level | Nếu tổng nợ quá hạn cao nhưng tập trung ở vài khách, top 10 chiếm bao nhiêu? | `DEBT_TOP` | Tính top 10 sau khi gộp khách và so với DEBT_SUMMARY. |
+| Q042 | qlv | Khách nợ quá hạn trong phạm vi của tôi đang nằm chủ yếu ở nhóm tuổi nào? | `DEBT_SCOPE_AGING` | Khi test phải truyền --scope-area đúng scope_value của tài khoản QLV; thiếu scope thì fail-closed. |
+| Q043 | manager | Khách nào có tỷ lệ nợ quá hạn trên dư nợ cao nhất? | `DEBT_RATIO_TOP` | Không chia cho 0; phân biệt số tuyệt đối với tỷ lệ. |
+| Q044 | c_level | Có bao nhiêu khách đang có dư nợ ở cả OTC và ETC; tổng nợ của họ thế nào? | `DEBT_DUAL_CHANNEL` | Gộp theo mã khách và trả riêng dư nợ/quá hạn OTC, ETC. |
+| Q045 | manager | Snapshot công nợ được cập nhật lúc nào; có dấu hiệu cũ hoặc lệch thời gian giữa các dòng không? | `DEBT_SNAPSHOT_QUALITY` | Mốc nguồn là thời điểm SP được thực thi; mọi dòng phải cùng một mốc. |
+| Q046 | manager | Có dòng công nợ nào tổng bốn nhóm tuổi không bằng tổng quá hạn không? | `DEBT_AGING_QUALITY` | Đối chiếu cả tổng bốn bucket và OverDueAmount do SP trả về. |
+| Q047 | manager | Có bao nhiêu dòng công nợ thiếu mã khách hoặc thiếu vùng? | `DEBT_MISSING_DIMENSIONS` | Nêu số thiếu và ClassCode lạ, không âm thầm bỏ dòng. |
+| Q048 | c_level | Nếu tổng nợ quá hạn cao nhưng tập trung ở vài khách, top 10 chiếm bao nhiêu? | `DEBT_CONCENTRATION` | Tính top 10 sau khi gộp khách và chia cho tổng nợ quá hạn toàn nguồn. |
 ## KPI
 
 | ID | Vai trò | Câu hỏi | Checker | Tiêu chí chính |
@@ -696,7 +697,17 @@ GROUP BY PositionCode ORDER BY PositionCode
 
 ### DEBT_SUMMARY — Tổng công nợ theo kênh
 
-Nguồn: `local` · Case: Q037
+Nguồn: `bravo_sp` · Case: Q037
+
+Lưu ý: Dữ liệu bảng tạm được nạp trực tiếp từ dbo.usp_DeptAccDueDate_GetData trong cùng lần chạy.
+
+Stored procedure nguồn chạy trực tiếp trên SQL Server:
+
+```sql
+EXEC dbo.usp_DeptAccDueDate_GetData @_DocDate1=<dau_nam>, @_DocDate2=<as_of>, @_Period1=7, @_Period2=15, @_RepType=1, @_IsPrepaymentInclude=1;
+```
+
+SELECT dưới đây chạy trên result set vừa materialize trong RAM:
 
 ```sql
 SELECT sales_channel, SUM(balance_end) balance_end, SUM(total_overdue) total_overdue,
@@ -707,7 +718,15 @@ FROM fact_congno_khachhang GROUP BY sales_channel ORDER BY sales_channel
 
 ### DEBT_AREA — Công nợ theo vùng
 
-Nguồn: `local` · Case: Q038
+Nguồn: `bravo_sp` · Case: Q038
+
+Stored procedure nguồn chạy trực tiếp trên SQL Server:
+
+```sql
+EXEC dbo.usp_DeptAccDueDate_GetData @_DocDate1=<dau_nam>, @_DocDate2=<as_of>, @_Period1=7, @_Period2=15, @_RepType=1, @_IsPrepaymentInclude=1;
+```
+
+SELECT dưới đây chạy trên result set vừa materialize trong RAM:
 
 ```sql
 SELECT area_code, SUM(balance_end) balance_end, SUM(total_overdue) total_overdue,
@@ -715,9 +734,17 @@ SELECT area_code, SUM(balance_end) balance_end, SUM(total_overdue) total_overdue
 FROM fact_congno_khachhang GROUP BY area_code ORDER BY total_overdue DESC
 ```
 
-### DEBT_TOP — Top khách hàng nợ quá hạn
+### DEBT_TOP — Top 30 khách hàng nợ quá hạn
 
-Nguồn: `local` · Case: Q039, Q043, Q048
+Nguồn: `bravo_sp` · Case: Q039
+
+Stored procedure nguồn chạy trực tiếp trên SQL Server:
+
+```sql
+EXEC dbo.usp_DeptAccDueDate_GetData @_DocDate1=<dau_nam>, @_DocDate2=<as_of>, @_Period1=7, @_Period2=15, @_RepType=1, @_IsPrepaymentInclude=1;
+```
+
+SELECT dưới đây chạy trên result set vừa materialize trong RAM:
 
 ```sql
 SELECT customer_code, MAX(customer_name) customer_name, SUM(balance_end) balance_end,
@@ -727,9 +754,17 @@ FROM fact_congno_khachhang GROUP BY customer_code
 HAVING SUM(total_overdue)>0 ORDER BY total_overdue DESC LIMIT 30
 ```
 
-### DEBT_AGING — Cơ cấu tuổi nợ
+### DEBT_AGING — Cơ cấu tuổi nợ theo kênh
 
-Nguồn: `local` · Case: Q040
+Nguồn: `bravo_sp` · Case: Q040
+
+Stored procedure nguồn chạy trực tiếp trên SQL Server:
+
+```sql
+EXEC dbo.usp_DeptAccDueDate_GetData @_DocDate1=<dau_nam>, @_DocDate2=<as_of>, @_Period1=7, @_Period2=15, @_RepType=1, @_IsPrepaymentInclude=1;
+```
+
+SELECT dưới đây chạy trên result set vừa materialize trong RAM:
 
 ```sql
 SELECT sales_channel, SUM(overdue_1_15) overdue_1_15,
@@ -741,56 +776,194 @@ FROM fact_congno_khachhang GROUP BY sales_channel ORDER BY sales_channel
 
 ### DEBT_RISK — Khách doanh thu lớn, nợ cao và sức mua giảm
 
-Nguồn: `local` · Case: Q041
+Nguồn: `bravo_sp` · Case: Q041
+
+Lưu ý: Doanh thu trong sales_customer_period cũng được tổng hợp trực tiếp từ hai view Total trên SQL Server.
+
+Stored procedure nguồn chạy trực tiếp trên SQL Server:
 
 ```sql
-WITH sales AS (
- SELECT customer_code, doc_date, amount9 FROM vhoadon_otc
- WHERE doc_date BETWEEN '2026-02-01' AND '2026-07-31'
- UNION ALL
- SELECT customer_code, doc_date, amount9 FROM vhoadon_etc
- WHERE doc_date BETWEEN '2026-02-01' AND '2026-07-31'
-), revenue AS (
- SELECT customer_code,
-  SUM(CASE WHEN doc_date BETWEEN '2026-05-01' AND '2026-07-31' THEN amount9 ELSE 0 END) recent_revenue,
-  SUM(CASE WHEN doc_date BETWEEN '2026-02-01' AND '2026-04-30' THEN amount9 ELSE 0 END) prior_revenue
- FROM sales GROUP BY customer_code
-), debt AS (
+EXEC dbo.usp_DeptAccDueDate_GetData @_DocDate1=<dau_nam>, @_DocDate2=<as_of>, @_Period1=7, @_Period2=15, @_RepType=1, @_IsPrepaymentInclude=1;
+```
+
+SELECT dưới đây chạy trên result set vừa materialize trong RAM:
+
+```sql
+WITH debt AS (
  SELECT customer_code, MAX(customer_name) customer_name, SUM(balance_end) balance_end,
         SUM(total_overdue) overdue, MAX(snapshot_at) snapshot_at
  FROM fact_congno_khachhang GROUP BY customer_code
 )
-SELECT r.customer_code,d.customer_name,r.recent_revenue,r.prior_revenue,
-       ROUND(100.0*(r.recent_revenue-r.prior_revenue)/NULLIF(r.prior_revenue,0),1) change_pct,
+SELECT r.customer_code,d.customer_name,r.recent_revenue,r.prior_revenue,r.change_pct,
        d.balance_end,d.overdue,d.snapshot_at
-FROM revenue r JOIN debt d ON d.customer_code=r.customer_code
+FROM sales_customer_period r JOIN debt d ON d.customer_code=r.customer_code
 WHERE r.recent_revenue>=100000000 AND d.overdue>=50000000 AND r.recent_revenue<r.prior_revenue
 ORDER BY d.overdue DESC,r.recent_revenue DESC LIMIT 30
 ```
 
-### DEBT_DETAIL — Chi tiết công nợ theo khách và kênh
+### DEBT_SCOPE_AGING — Tuổi nợ trong phạm vi vùng tài khoản
 
-Nguồn: `local` · Case: Q042, Q044
+Nguồn: `bravo_sp` · Case: Q042
+
+Lưu ý: Bắt buộc truyền --scope-area giống scope_value của tài khoản QLV; thiếu scope thì runner fail-closed.
+
+Stored procedure nguồn chạy trực tiếp trên SQL Server:
 
 ```sql
-SELECT customer_code,customer_name,sales_channel,area_code,balance_end,total_overdue,
-       overdue_1_15,overdue_15_30,overdue_30_45,overdue_gt_45,snapshot_at
-FROM fact_congno_khachhang
-WHERE total_overdue>0 ORDER BY total_overdue DESC LIMIT 50
+EXEC dbo.usp_DeptAccDueDate_GetData @_DocDate1=<dau_nam>, @_DocDate2=<as_of>, @_Period1=7, @_Period2=15, @_RepType=1, @_IsPrepaymentInclude=1;
 ```
 
-### DEBT_QUALITY — Kiểm tra chất lượng snapshot công nợ
-
-Nguồn: `local` · Case: Q045, Q046, Q047
+SELECT dưới đây chạy trên result set vừa materialize trong RAM:
 
 ```sql
-SELECT COUNT(*) row_count, COUNT(DISTINCT customer_code) customer_count,
-       SUM(CASE WHEN customer_code IS NULL OR customer_code='' THEN 1 ELSE 0 END) missing_customer,
-       SUM(CASE WHEN area_code IS NULL OR area_code='' THEN 1 ELSE 0 END) missing_area,
+SELECT area_code,
+       SUM(overdue_1_15) overdue_1_15,
+       SUM(overdue_15_30) overdue_16_30,
+       SUM(overdue_30_45) overdue_31_45,
+       SUM(overdue_gt_45) overdue_gt_45,
+       SUM(total_overdue) total_overdue
+FROM fact_congno_khachhang
+WHERE area_code=(SELECT area_code FROM test_scope LIMIT 1)
+GROUP BY area_code
+```
+
+### DEBT_RATIO_TOP — Khách có tỷ lệ quá hạn trên dư nợ cao nhất
+
+Nguồn: `bravo_sp` · Case: Q043
+
+Stored procedure nguồn chạy trực tiếp trên SQL Server:
+
+```sql
+EXEC dbo.usp_DeptAccDueDate_GetData @_DocDate1=<dau_nam>, @_DocDate2=<as_of>, @_Period1=7, @_Period2=15, @_RepType=1, @_IsPrepaymentInclude=1;
+```
+
+SELECT dưới đây chạy trên result set vừa materialize trong RAM:
+
+```sql
+SELECT customer_code,MAX(customer_name) customer_name,
+       SUM(balance_end) balance_end,SUM(total_overdue) total_overdue,
+       ROUND(100.0*SUM(total_overdue)/NULLIF(SUM(balance_end),0),2) overdue_pct
+FROM fact_congno_khachhang
+GROUP BY customer_code
+HAVING SUM(balance_end)>0 AND SUM(total_overdue)>0
+ORDER BY overdue_pct DESC,total_overdue DESC LIMIT 30
+```
+
+### DEBT_DUAL_CHANNEL — Khách phát sinh công nợ ở cả OTC và ETC
+
+Nguồn: `bravo_sp` · Case: Q044
+
+Stored procedure nguồn chạy trực tiếp trên SQL Server:
+
+```sql
+EXEC dbo.usp_DeptAccDueDate_GetData @_DocDate1=<dau_nam>, @_DocDate2=<as_of>, @_Period1=7, @_Period2=15, @_RepType=1, @_IsPrepaymentInclude=1;
+```
+
+SELECT dưới đây chạy trên result set vừa materialize trong RAM:
+
+```sql
+WITH customer_channel AS (
+ SELECT customer_code,MAX(customer_name) customer_name,
+        COUNT(DISTINCT sales_channel) channel_count,
+        SUM(CASE WHEN sales_channel='OTC' THEN balance_end ELSE 0 END) otc_balance,
+        SUM(CASE WHEN sales_channel='ETC' THEN balance_end ELSE 0 END) etc_balance,
+        SUM(CASE WHEN sales_channel='OTC' THEN total_overdue ELSE 0 END) otc_overdue,
+        SUM(CASE WHEN sales_channel='ETC' THEN total_overdue ELSE 0 END) etc_overdue
+ FROM fact_congno_khachhang GROUP BY customer_code
+)
+SELECT COUNT(*) customer_count,SUM(otc_balance) otc_balance,SUM(etc_balance) etc_balance,
+       SUM(otc_overdue) otc_overdue,SUM(etc_overdue) etc_overdue,
+       SUM(otc_balance+etc_balance) total_balance,SUM(otc_overdue+etc_overdue) total_overdue
+FROM customer_channel WHERE channel_count=2
+```
+
+### DEBT_SNAPSHOT_QUALITY — Thời điểm và tính nhất quán snapshot nguồn
+
+Nguồn: `bravo_sp` · Case: Q045
+
+Lưu ý: snapshot_at là giờ runner thực thi trực tiếp SP, không phải timestamp lấy từ warehouse.
+
+Stored procedure nguồn chạy trực tiếp trên SQL Server:
+
+```sql
+EXEC dbo.usp_DeptAccDueDate_GetData @_DocDate1=<dau_nam>, @_DocDate2=<as_of>, @_Period1=7, @_Period2=15, @_RepType=1, @_IsPrepaymentInclude=1;
+```
+
+SELECT dưới đây chạy trên result set vừa materialize trong RAM:
+
+```sql
+SELECT COUNT(*) row_count,MIN(snapshot_at) min_snapshot_at,MAX(snapshot_at) max_snapshot_at,
+       COUNT(DISTINCT snapshot_at) distinct_snapshot_times
+FROM fact_congno_khachhang
+```
+
+### DEBT_AGING_QUALITY — Đối chiếu tổng nhóm tuổi với số quá hạn nguồn
+
+Nguồn: `bravo_sp` · Case: Q046
+
+Stored procedure nguồn chạy trực tiếp trên SQL Server:
+
+```sql
+EXEC dbo.usp_DeptAccDueDate_GetData @_DocDate1=<dau_nam>, @_DocDate2=<as_of>, @_Period1=7, @_Period2=15, @_RepType=1, @_IsPrepaymentInclude=1;
+```
+
+SELECT dưới đây chạy trên result set vừa materialize trong RAM:
+
+```sql
+SELECT COUNT(*) row_count,
        SUM(CASE WHEN ABS(total_overdue-(overdue_1_15+overdue_15_30+overdue_30_45+overdue_gt_45))>1
                 THEN 1 ELSE 0 END) broken_aging_sum,
-       MIN(snapshot_at) min_snapshot_at,MAX(snapshot_at) max_snapshot_at
+       SUM(CASE WHEN ABS(total_overdue-source_overdue_amount)>1 THEN 1 ELSE 0 END) source_mismatch_rows,
+       SUM(total_overdue) bucket_total,SUM(source_overdue_amount) source_overdue_total
 FROM fact_congno_khachhang
+```
+
+### DEBT_MISSING_DIMENSIONS — Dòng công nợ thiếu mã khách/vùng hoặc class lạ
+
+Nguồn: `bravo_sp` · Case: Q047
+
+Stored procedure nguồn chạy trực tiếp trên SQL Server:
+
+```sql
+EXEC dbo.usp_DeptAccDueDate_GetData @_DocDate1=<dau_nam>, @_DocDate2=<as_of>, @_Period1=7, @_Period2=15, @_RepType=1, @_IsPrepaymentInclude=1;
+```
+
+SELECT dưới đây chạy trên result set vừa materialize trong RAM:
+
+```sql
+SELECT COUNT(*) row_count,
+       SUM(CASE WHEN customer_code IS NULL OR customer_code='' THEN 1 ELSE 0 END) missing_customer,
+       SUM(CASE WHEN area_code IS NULL OR area_code='' THEN 1 ELSE 0 END) missing_area,
+       SUM(CASE WHEN source_class_code NOT IN ('TM','SX') THEN 1 ELSE 0 END) unknown_class
+FROM fact_congno_khachhang
+```
+
+### DEBT_CONCENTRATION — Tỷ trọng nợ quá hạn tập trung ở top 10 khách
+
+Nguồn: `bravo_sp` · Case: Q048
+
+Stored procedure nguồn chạy trực tiếp trên SQL Server:
+
+```sql
+EXEC dbo.usp_DeptAccDueDate_GetData @_DocDate1=<dau_nam>, @_DocDate2=<as_of>, @_Period1=7, @_Period2=15, @_RepType=1, @_IsPrepaymentInclude=1;
+```
+
+SELECT dưới đây chạy trên result set vừa materialize trong RAM:
+
+```sql
+WITH customer_debt AS (
+ SELECT customer_code,SUM(total_overdue) total_overdue
+ FROM fact_congno_khachhang GROUP BY customer_code
+), ranked AS (
+ SELECT customer_code,total_overdue,
+        ROW_NUMBER() OVER (ORDER BY total_overdue DESC) rank_no
+ FROM customer_debt WHERE total_overdue>0
+)
+SELECT SUM(total_overdue) company_overdue,
+       SUM(CASE WHEN rank_no<=10 THEN total_overdue ELSE 0 END) top10_overdue,
+       ROUND(100.0*SUM(CASE WHEN rank_no<=10 THEN total_overdue ELSE 0 END)
+             /NULLIF(SUM(total_overdue),0),2) top10_share_pct
+FROM ranked
 ```
 
 ### SALARY_DETAIL — Chi tiết thưởng và phụ cấp theo nhân viên

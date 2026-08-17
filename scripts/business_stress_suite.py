@@ -8,16 +8,18 @@ Mục tiêu:
 
 Nguồn:
   - bravo: SQL Server NH_Report_TM, đọc trực tiếp dữ liệu thật.
-  - local: warehouse.db, chỉ dùng cho công nợ vì đây là snapshot chuẩn hóa từ
-    usp_DeptAccDueDate_GetData mà chatbot thực tế đang đọc.
+  - bravo_sp: result set đọc trực tiếp từ stored procedure công nợ gốc DNH; runner
+    materialize tạm trong RAM để chạy SELECT kiểm chứng, không dùng warehouse làm ground truth.
 
-An toàn: runner chỉ chấp nhận một câu SELECT/WITH và không thực thi lệnh ghi dữ liệu.
+An toàn: SQL checker chỉ chấp nhận SELECT/WITH. Ngoại lệ duy nhất là runner nội bộ hard-code đúng
+dbo.usp_DeptAccDueDate_GetData, đọc result set rồi rollback; model/người dùng không truyền được EXEC.
 
 Ví dụ:
   python scripts/business_stress_suite.py --validate
   python scripts/business_stress_suite.py --list
   python scripts/business_stress_suite.py --show-sql Q061
   python scripts/business_stress_suite.py --execute --case Q061
+  python scripts/business_stress_suite.py --execute --group "Công nợ" --scope-area MN
   python scripts/business_stress_suite.py --execute --smoke
   python scripts/business_stress_suite.py --execute --all --output results/stress-ground-truth.json
   python scripts/business_stress_suite.py --export-doc docs/chatbot_business_stress_test_90.md
@@ -29,6 +31,7 @@ import datetime as dt
 import json
 import os
 import re
+import sqlite3
 import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -65,6 +68,12 @@ def _sql(value: str) -> str:
 
 
 CHECKERS: dict[str, Checker] = {}
+
+DEBT_SP_DISPLAY = (
+    "EXEC dbo.usp_DeptAccDueDate_GetData "
+    "@_DocDate1=<dau_nam>, @_DocDate2=<as_of>, @_Period1=7, @_Period2=15, "
+    "@_RepType=1, @_IsPrepaymentInclude=1"
+)
 
 
 def _checker(checker_id: str, database: str, title: str, sql: str, notes: str = "") -> None:
@@ -520,22 +529,22 @@ GROUP BY PositionCode ORDER BY PositionCode
 """, "Các tầng TP/QLV/TDV đều có roll-up; tuyệt đối không cộng toàn bảng để ra doanh thu công ty.")
 
 # ---------------------------------------------------------------------------
-# Công nợ: warehouse.db là snapshot đúng mà chatbot đọc, nguồn từ SP gốc DNH
+# Công nợ: ground truth doc TRUC TIEP result set SP goc DNH, khong doc warehouse.db
 # ---------------------------------------------------------------------------
-_checker("DEBT_SUMMARY", "local", "Tổng công nợ theo kênh", """
+_checker("DEBT_SUMMARY", "bravo_sp", "Tổng công nợ theo kênh", """
 SELECT sales_channel, SUM(balance_end) balance_end, SUM(total_overdue) total_overdue,
        ROUND(100.0*SUM(total_overdue)/NULLIF(SUM(balance_end),0),1) overdue_pct,
        MAX(snapshot_at) snapshot_at
 FROM fact_congno_khachhang GROUP BY sales_channel ORDER BY sales_channel
-""")
+""", "Dữ liệu bảng tạm được nạp trực tiếp từ dbo.usp_DeptAccDueDate_GetData trong cùng lần chạy.")
 
-_checker("DEBT_AREA", "local", "Công nợ theo vùng", """
+_checker("DEBT_AREA", "bravo_sp", "Công nợ theo vùng", """
 SELECT area_code, SUM(balance_end) balance_end, SUM(total_overdue) total_overdue,
        ROUND(100.0*SUM(total_overdue)/NULLIF(SUM(balance_end),0),1) overdue_pct
 FROM fact_congno_khachhang GROUP BY area_code ORDER BY total_overdue DESC
 """)
 
-_checker("DEBT_TOP", "local", "Top khách hàng nợ quá hạn", """
+_checker("DEBT_TOP", "bravo_sp", "Top 30 khách hàng nợ quá hạn", """
 SELECT customer_code, MAX(customer_name) customer_name, SUM(balance_end) balance_end,
        SUM(total_overdue) total_overdue,
        ROUND(100.0*SUM(total_overdue)/NULLIF(SUM(balance_end),0),1) overdue_pct
@@ -543,7 +552,7 @@ FROM fact_congno_khachhang GROUP BY customer_code
 HAVING SUM(total_overdue)>0 ORDER BY total_overdue DESC LIMIT 30
 """)
 
-_checker("DEBT_AGING", "local", "Cơ cấu tuổi nợ", """
+_checker("DEBT_AGING", "bravo_sp", "Cơ cấu tuổi nợ theo kênh", """
 SELECT sales_channel, SUM(overdue_1_15) overdue_1_15,
        SUM(overdue_15_30) overdue_16_30, SUM(overdue_30_45) overdue_31_45,
        SUM(overdue_gt_45) overdue_gt_45,
@@ -551,46 +560,94 @@ SELECT sales_channel, SUM(overdue_1_15) overdue_1_15,
 FROM fact_congno_khachhang GROUP BY sales_channel ORDER BY sales_channel
 """)
 
-_checker("DEBT_RISK", "local", "Khách doanh thu lớn, nợ cao và sức mua giảm", """
-WITH sales AS (
- SELECT customer_code, doc_date, amount9 FROM vhoadon_otc
- WHERE doc_date BETWEEN '2026-02-01' AND '2026-07-31'
- UNION ALL
- SELECT customer_code, doc_date, amount9 FROM vhoadon_etc
- WHERE doc_date BETWEEN '2026-02-01' AND '2026-07-31'
-), revenue AS (
- SELECT customer_code,
-  SUM(CASE WHEN doc_date BETWEEN '2026-05-01' AND '2026-07-31' THEN amount9 ELSE 0 END) recent_revenue,
-  SUM(CASE WHEN doc_date BETWEEN '2026-02-01' AND '2026-04-30' THEN amount9 ELSE 0 END) prior_revenue
- FROM sales GROUP BY customer_code
-), debt AS (
+_checker("DEBT_RISK", "bravo_sp", "Khách doanh thu lớn, nợ cao và sức mua giảm", """
+WITH debt AS (
  SELECT customer_code, MAX(customer_name) customer_name, SUM(balance_end) balance_end,
         SUM(total_overdue) overdue, MAX(snapshot_at) snapshot_at
  FROM fact_congno_khachhang GROUP BY customer_code
 )
-SELECT r.customer_code,d.customer_name,r.recent_revenue,r.prior_revenue,
-       ROUND(100.0*(r.recent_revenue-r.prior_revenue)/NULLIF(r.prior_revenue,0),1) change_pct,
+SELECT r.customer_code,d.customer_name,r.recent_revenue,r.prior_revenue,r.change_pct,
        d.balance_end,d.overdue,d.snapshot_at
-FROM revenue r JOIN debt d ON d.customer_code=r.customer_code
+FROM sales_customer_period r JOIN debt d ON d.customer_code=r.customer_code
 WHERE r.recent_revenue>=100000000 AND d.overdue>=50000000 AND r.recent_revenue<r.prior_revenue
 ORDER BY d.overdue DESC,r.recent_revenue DESC LIMIT 30
-""")
+""", "Doanh thu trong sales_customer_period cũng được tổng hợp trực tiếp từ hai view Total trên SQL Server.")
 
-_checker("DEBT_DETAIL", "local", "Chi tiết công nợ theo khách và kênh", """
-SELECT customer_code,customer_name,sales_channel,area_code,balance_end,total_overdue,
-       overdue_1_15,overdue_15_30,overdue_30_45,overdue_gt_45,snapshot_at
+_checker("DEBT_SCOPE_AGING", "bravo_sp", "Tuổi nợ trong phạm vi vùng tài khoản", """
+SELECT area_code,
+       SUM(overdue_1_15) overdue_1_15,
+       SUM(overdue_15_30) overdue_16_30,
+       SUM(overdue_30_45) overdue_31_45,
+       SUM(overdue_gt_45) overdue_gt_45,
+       SUM(total_overdue) total_overdue
 FROM fact_congno_khachhang
-WHERE total_overdue>0 ORDER BY total_overdue DESC LIMIT 50
+WHERE area_code=(SELECT area_code FROM test_scope LIMIT 1)
+GROUP BY area_code
+""", "Bắt buộc truyền --scope-area giống scope_value của tài khoản QLV; thiếu scope thì runner fail-closed.")
+
+_checker("DEBT_RATIO_TOP", "bravo_sp", "Khách có tỷ lệ quá hạn trên dư nợ cao nhất", """
+SELECT customer_code,MAX(customer_name) customer_name,
+       SUM(balance_end) balance_end,SUM(total_overdue) total_overdue,
+       ROUND(100.0*SUM(total_overdue)/NULLIF(SUM(balance_end),0),2) overdue_pct
+FROM fact_congno_khachhang
+GROUP BY customer_code
+HAVING SUM(balance_end)>0 AND SUM(total_overdue)>0
+ORDER BY overdue_pct DESC,total_overdue DESC LIMIT 30
 """)
 
-_checker("DEBT_QUALITY", "local", "Kiểm tra chất lượng snapshot công nợ", """
-SELECT COUNT(*) row_count, COUNT(DISTINCT customer_code) customer_count,
-       SUM(CASE WHEN customer_code IS NULL OR customer_code='' THEN 1 ELSE 0 END) missing_customer,
-       SUM(CASE WHEN area_code IS NULL OR area_code='' THEN 1 ELSE 0 END) missing_area,
+_checker("DEBT_DUAL_CHANNEL", "bravo_sp", "Khách phát sinh công nợ ở cả OTC và ETC", """
+WITH customer_channel AS (
+ SELECT customer_code,MAX(customer_name) customer_name,
+        COUNT(DISTINCT sales_channel) channel_count,
+        SUM(CASE WHEN sales_channel='OTC' THEN balance_end ELSE 0 END) otc_balance,
+        SUM(CASE WHEN sales_channel='ETC' THEN balance_end ELSE 0 END) etc_balance,
+        SUM(CASE WHEN sales_channel='OTC' THEN total_overdue ELSE 0 END) otc_overdue,
+        SUM(CASE WHEN sales_channel='ETC' THEN total_overdue ELSE 0 END) etc_overdue
+ FROM fact_congno_khachhang GROUP BY customer_code
+)
+SELECT COUNT(*) customer_count,SUM(otc_balance) otc_balance,SUM(etc_balance) etc_balance,
+       SUM(otc_overdue) otc_overdue,SUM(etc_overdue) etc_overdue,
+       SUM(otc_balance+etc_balance) total_balance,SUM(otc_overdue+etc_overdue) total_overdue
+FROM customer_channel WHERE channel_count=2
+""")
+
+_checker("DEBT_SNAPSHOT_QUALITY", "bravo_sp", "Thời điểm và tính nhất quán snapshot nguồn", """
+SELECT COUNT(*) row_count,MIN(snapshot_at) min_snapshot_at,MAX(snapshot_at) max_snapshot_at,
+       COUNT(DISTINCT snapshot_at) distinct_snapshot_times
+FROM fact_congno_khachhang
+""", "snapshot_at là giờ runner thực thi trực tiếp SP, không phải timestamp lấy từ warehouse.")
+
+_checker("DEBT_AGING_QUALITY", "bravo_sp", "Đối chiếu tổng nhóm tuổi với số quá hạn nguồn", """
+SELECT COUNT(*) row_count,
        SUM(CASE WHEN ABS(total_overdue-(overdue_1_15+overdue_15_30+overdue_30_45+overdue_gt_45))>1
                 THEN 1 ELSE 0 END) broken_aging_sum,
-       MIN(snapshot_at) min_snapshot_at,MAX(snapshot_at) max_snapshot_at
+       SUM(CASE WHEN ABS(total_overdue-source_overdue_amount)>1 THEN 1 ELSE 0 END) source_mismatch_rows,
+       SUM(total_overdue) bucket_total,SUM(source_overdue_amount) source_overdue_total
 FROM fact_congno_khachhang
+""")
+
+_checker("DEBT_MISSING_DIMENSIONS", "bravo_sp", "Dòng công nợ thiếu mã khách/vùng hoặc class lạ", """
+SELECT COUNT(*) row_count,
+       SUM(CASE WHEN customer_code IS NULL OR customer_code='' THEN 1 ELSE 0 END) missing_customer,
+       SUM(CASE WHEN area_code IS NULL OR area_code='' THEN 1 ELSE 0 END) missing_area,
+       SUM(CASE WHEN source_class_code NOT IN ('TM','SX') THEN 1 ELSE 0 END) unknown_class
+FROM fact_congno_khachhang
+""")
+
+_checker("DEBT_CONCENTRATION", "bravo_sp", "Tỷ trọng nợ quá hạn tập trung ở top 10 khách", """
+WITH customer_debt AS (
+ SELECT customer_code,SUM(total_overdue) total_overdue
+ FROM fact_congno_khachhang GROUP BY customer_code
+), ranked AS (
+ SELECT customer_code,total_overdue,
+        ROW_NUMBER() OVER (ORDER BY total_overdue DESC) rank_no
+ FROM customer_debt WHERE total_overdue>0
+)
+SELECT SUM(total_overdue) company_overdue,
+       SUM(CASE WHEN rank_no<=10 THEN total_overdue ELSE 0 END) top10_overdue,
+       ROUND(100.0*SUM(CASE WHEN rank_no<=10 THEN total_overdue ELSE 0 END)
+             /NULLIF(SUM(total_overdue),0),2) top10_share_pct
+FROM ranked
 """)
 
 # ---------------------------------------------------------------------------
@@ -864,13 +921,13 @@ CASES = [
     _case(39,"Công nợ","manager","Top 30 khách hàng nợ quá hạn lớn nhất hiện tại?","DEBT_TOP","Gộp mọi dòng/kênh theo customer_code trước khi xếp hạng."),
     _case(40,"Công nợ","c_level","Cơ cấu nợ quá hạn 1-15, 16-30, 31-45 và trên 45 ngày theo từng kênh?","DEBT_AGING","Tổng bốn bucket khớp total_overdue."),
     _case(41,"Công nợ","manager","Tìm khách đồng thời doanh thu lớn, nợ quá hạn cao và sức mua giảm.","DEBT_RISK","Một truy vấn tổng hợp; kỳ 05-07 so 02-04, ngưỡng 100m/50m."),
-    _case(42,"Công nợ","qlv","Khách nợ quá hạn trong phạm vi của tôi đang nằm chủ yếu ở nhóm tuổi nào?","DEBT_DETAIL","Khi test bằng tài khoản QLV phải bị ép phạm vi đội/vùng."),
-    _case(43,"Công nợ","manager","Khách nào có tỷ lệ nợ quá hạn trên dư nợ cao nhất?","DEBT_TOP","Không chia cho 0; phân biệt số tuyệt đối với tỷ lệ."),
-    _case(44,"Công nợ","c_level","Có bao nhiêu khách vừa bán OTC vừa ETC và tổng nợ của họ thế nào?","DEBT_DETAIL","Gộp theo mã khách nhưng vẫn nêu breakdown kênh."),
-    _case(45,"Công nợ","manager","Snapshot công nợ được cập nhật lúc nào; có dấu hiệu cũ hoặc lệch thời gian giữa các dòng không?","DEBT_QUALITY","min/max snapshot phải nhất quán, cảnh báo nếu quá cũ."),
-    _case(46,"Công nợ","manager","Có dòng công nợ nào tổng bốn nhóm tuổi không bằng tổng quá hạn không?","DEBT_QUALITY","broken_aging_sum phải bằng 0."),
-    _case(47,"Công nợ","manager","Có bao nhiêu dòng công nợ thiếu mã khách hoặc thiếu vùng?","DEBT_QUALITY","Nêu số thiếu, không âm thầm bỏ dòng."),
-    _case(48,"Công nợ","c_level","Nếu tổng nợ quá hạn cao nhưng tập trung ở vài khách, top 10 chiếm bao nhiêu?","DEBT_TOP","Tính top 10 sau khi gộp khách và so với DEBT_SUMMARY."),
+    _case(42,"Công nợ","qlv","Khách nợ quá hạn trong phạm vi của tôi đang nằm chủ yếu ở nhóm tuổi nào?","DEBT_SCOPE_AGING","Khi test phải truyền --scope-area đúng scope_value của tài khoản QLV; thiếu scope thì fail-closed."),
+    _case(43,"Công nợ","manager","Khách nào có tỷ lệ nợ quá hạn trên dư nợ cao nhất?","DEBT_RATIO_TOP","Không chia cho 0; phân biệt số tuyệt đối với tỷ lệ."),
+    _case(44,"Công nợ","c_level","Có bao nhiêu khách đang có dư nợ ở cả OTC và ETC; tổng nợ của họ thế nào?","DEBT_DUAL_CHANNEL","Gộp theo mã khách và trả riêng dư nợ/quá hạn OTC, ETC."),
+    _case(45,"Công nợ","manager","Snapshot công nợ được cập nhật lúc nào; có dấu hiệu cũ hoặc lệch thời gian giữa các dòng không?","DEBT_SNAPSHOT_QUALITY","Mốc nguồn là thời điểm SP được thực thi; mọi dòng phải cùng một mốc."),
+    _case(46,"Công nợ","manager","Có dòng công nợ nào tổng bốn nhóm tuổi không bằng tổng quá hạn không?","DEBT_AGING_QUALITY","Đối chiếu cả tổng bốn bucket và OverDueAmount do SP trả về."),
+    _case(47,"Công nợ","manager","Có bao nhiêu dòng công nợ thiếu mã khách hoặc thiếu vùng?","DEBT_MISSING_DIMENSIONS","Nêu số thiếu và ClassCode lạ, không âm thầm bỏ dòng."),
+    _case(48,"Công nợ","c_level","Nếu tổng nợ quá hạn cao nhưng tập trung ở vài khách, top 10 chiếm bao nhiêu?","DEBT_CONCENTRATION","Tính top 10 sau khi gộp khách và chia cho tổng nợ quá hạn toàn nguồn."),
 
     # 49-62: KPI
     _case(49,"KPI","c_level","Toàn công ty tháng 7 có bao nhiêu người đạt đủ 100% chỉ tiêu?","KPI_THRESHOLDS","Dùng mốc 100%, không gọi 65/70 hoặc 80 là đạt chỉ tiêu."),
@@ -950,7 +1007,7 @@ def validate_catalog() -> list[str]:
             errors.append(f"{case.id}: câu hỏi quá ngắn.")
     for checker in CHECKERS.values():
         sql = checker.sql.strip()
-        if checker.database not in {"bravo", "local"}:
+        if checker.database not in {"bravo", "bravo_sp"}:
             errors.append(f"{checker.id}: database không hợp lệ.")
         if not re.match(r"^(SELECT|WITH)\b", sql, re.IGNORECASE):
             errors.append(f"{checker.id}: SQL không bắt đầu bằng SELECT/WITH.")
@@ -970,8 +1027,11 @@ def render_markdown() -> str:
         "# Bộ 90 câu hỏi stress test nghiệp vụ chatbot DNH",
         "",
         "> Kỳ kiểm chứng chính: 07/2026 (đã chốt). CTKM: 12/2025 vì liên kết DMS hiện mới phủ đến 09/01/2026.",
-        "> Công nợ đọc `warehouse.db/fact_congno_khachhang`, là snapshot chuẩn hóa từ SP gốc DNH.",
+        "> Công nợ đọc trực tiếp result set `dbo.usp_DeptAccDueDate_GetData` trên SQL Server; "
+        "warehouse chỉ là đối tượng của source-gate đối chiếu.",
         "> Chạy SQL bằng `python scripts/business_stress_suite.py --execute --case Q001`.",
+        "> Chạy nhóm công nợ bằng `python scripts/business_stress_suite.py --execute --group "
+        "\"Công nợ\" --scope-area MN`; source-gate khác `ok` làm tiến trình trả exit code 1.",
         "",
     ]
     current_group = None
@@ -991,11 +1051,261 @@ def render_markdown() -> str:
         ])
         if checker.notes:
             lines.extend([f"Lưu ý: {checker.notes}", ""])
+        if checker.database == "bravo_sp":
+            lines.extend([
+                "Stored procedure nguồn chạy trực tiếp trên SQL Server:", "",
+                "```sql", DEBT_SP_DISPLAY + ";", "```", "",
+                "SELECT dưới đây chạy trên result set vừa materialize trong RAM:", "",
+            ])
         lines.extend(["```sql", checker.sql, "```", ""])
     return "\n".join(lines).rstrip() + "\n"
 
 
-def _execute_checker(checker: Checker) -> dict[str, Any]:
+_DEBT_SNAPSHOT_CACHE: dict[str, Any] = {}
+_SALES_PERIOD_CACHE: list[dict[str, Any]] | None = None
+
+
+def _debt_snapshot(as_of_date: str | None = None):
+    from debt_source import fetch_debt_snapshot
+
+    cache_key = as_of_date or str(dt.date.today())
+    if cache_key not in _DEBT_SNAPSHOT_CACHE:
+        _DEBT_SNAPSHOT_CACHE[cache_key] = fetch_debt_snapshot(as_of_date)
+    return _DEBT_SNAPSHOT_CACHE[cache_key]
+
+
+def _sales_customer_period() -> list[dict[str, Any]]:
+    """Doanh thu Q041 doc truc tiep hai view Total tren SQL Server, khong lay warehouse."""
+    global _SALES_PERIOD_CACHE
+    if _SALES_PERIOD_CACHE is not None:
+        return _SALES_PERIOD_CACHE
+    from sqlalchemy import text
+    from query_engine import _get_engine
+
+    sql = text("""
+        WITH Sales AS (
+            SELECT CustomerCode,DocDate,Amount9 FROM dbo.vHoaDonTotal
+            WHERE DocDate>='2026-02-01' AND DocDate<'2026-08-01'
+            UNION ALL
+            SELECT CustomerCode,DocDate,Amount9 FROM dbo.vHoaDonETCTotal
+            WHERE DocDate>='2026-02-01' AND DocDate<'2026-08-01'
+        )
+        SELECT CustomerCode,
+               SUM(CASE WHEN DocDate>='2026-05-01' THEN Amount9 ELSE 0 END) RecentRevenue,
+               SUM(CASE WHEN DocDate<'2026-05-01' THEN Amount9 ELSE 0 END) PriorRevenue,
+               100.0*(SUM(CASE WHEN DocDate>='2026-05-01' THEN Amount9 ELSE 0 END)
+                    - SUM(CASE WHEN DocDate<'2026-05-01' THEN Amount9 ELSE 0 END))
+                    / NULLIF(SUM(CASE WHEN DocDate<'2026-05-01' THEN Amount9 ELSE 0 END),0) ChangePct
+        FROM Sales GROUP BY CustomerCode
+    """)
+    engine = _get_engine("bravo")
+    with engine.connect() as connection:
+        proxied = connection.connection
+        raw = getattr(proxied, "driver_connection", proxied)
+        if hasattr(raw, "timeout"):
+            raw.timeout = 60
+        connection.exec_driver_sql("SET LOCK_TIMEOUT 5000")
+        rows = connection.execute(sql).fetchall()
+    _SALES_PERIOD_CACHE = [{
+        "customer_code": row[0],
+        "recent_revenue": float(row[1] or 0),
+        "prior_revenue": float(row[2] or 0),
+        "change_pct": float(row[3]) if row[3] is not None else None,
+    } for row in rows]
+    return _SALES_PERIOD_CACHE
+
+
+def _execute_debt_checker(
+    checker: Checker,
+    *,
+    as_of_date: str | None = None,
+    scope_area: str | None = None,
+) -> dict[str, Any]:
+    started = dt.datetime.now()
+    if checker.id == "DEBT_SCOPE_AGING" and not scope_area:
+        raise RuntimeError("DEBT_SCOPE_AGING bat buoc co --scope-area MB/MB2/MT/MN.")
+    snapshot = _debt_snapshot(as_of_date)
+    connection = sqlite3.connect(":memory:")
+    try:
+        connection.executescript("""
+            CREATE TABLE fact_congno_khachhang (
+                snapshot_date TEXT, snapshot_at TEXT, customer_code TEXT, customer_name TEXT,
+                source_class_code TEXT, sales_channel TEXT, area_code TEXT,
+                balance_end REAL, overdue_1_15 REAL, overdue_15_30 REAL,
+                overdue_30_45 REAL, overdue_gt_45 REAL, total_overdue REAL,
+                source_overdue_amount REAL
+            );
+            CREATE TABLE test_scope (area_code TEXT);
+        """)
+        columns = (
+            "snapshot_date", "snapshot_at", "customer_code", "customer_name",
+            "source_class_code", "sales_channel", "area_code", "balance_end",
+            "overdue_1_15", "overdue_15_30", "overdue_30_45", "overdue_gt_45",
+            "total_overdue", "source_overdue_amount",
+        )
+        connection.executemany(
+            f"INSERT INTO fact_congno_khachhang VALUES ({','.join(['?'] * len(columns))})",
+            [tuple(row.get(column) for column in columns) for row in snapshot.rows],
+        )
+        connection.execute("INSERT INTO test_scope VALUES (?)", (scope_area,))
+        if checker.id == "DEBT_RISK":
+            connection.execute("""
+                CREATE TABLE sales_customer_period (
+                    customer_code TEXT, recent_revenue REAL, prior_revenue REAL, change_pct REAL
+                )
+            """)
+            connection.executemany(
+                "INSERT INTO sales_customer_period VALUES (?,?,?,?)",
+                [(
+                    row["customer_code"], row["recent_revenue"], row["prior_revenue"],
+                    row["change_pct"],
+                ) for row in _sales_customer_period()],
+            )
+        cursor = connection.execute(checker.sql)
+        result_columns = [description[0] for description in cursor.description]
+        rows = [list(row) for row in cursor.fetchmany(201)]
+    finally:
+        connection.close()
+    truncated = len(rows) > 200
+    rows = rows[:200]
+    return {
+        "checker_id": checker.id,
+        "database": checker.database,
+        "status": "ok" if rows else "empty",
+        "columns": result_columns,
+        "rows": rows,
+        "row_count_returned": len(rows),
+        "truncated": truncated,
+        "duration_ms": int((dt.datetime.now() - started).total_seconds() * 1000),
+        "mapped_cases": _mapped_case_ids(checker.id),
+        "source": {
+            "procedure": snapshot.procedure,
+            "parameters": snapshot.parameters,
+            "as_of_date": snapshot.as_of_date,
+            "executed_at": snapshot.executed_at,
+            "source_row_count": len(snapshot.rows),
+        },
+    }
+
+
+def _canonical_debt(rows: list[dict[str, Any]]) -> dict[tuple[str, str], list[float]]:
+    result: dict[tuple[str, str], list[float]] = {}
+    numeric = (
+        "balance_end", "overdue_1_15", "overdue_15_30", "overdue_30_45",
+        "overdue_gt_45", "total_overdue",
+    )
+    for row in rows:
+        key = (str(row.get("customer_code") or ""), str(row.get("sales_channel") or ""))
+        totals = result.setdefault(key, [0.0] * len(numeric))
+        for index, column in enumerate(numeric):
+            totals[index] += float(row.get(column) or 0)
+    return result
+
+
+def _reconcile_debt_source_with_warehouse(snapshot) -> dict[str, Any]:
+    """Cổng nghiệm thu: SP live là chuẩn; warehouse chỉ PASS khi khớp snapshot nguồn."""
+    from local_warehouse import DB_PATH
+
+    path = Path(DB_PATH)
+    if not path.exists():
+        return {"status": "warehouse_unavailable", "path": str(path)}
+    connection = sqlite3.connect(str(path))
+    connection.row_factory = sqlite3.Row
+    try:
+        exists = connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='fact_congno_khachhang'"
+        ).fetchone()
+        if not exists:
+            return {"status": "warehouse_unavailable", "path": str(path)}
+        local_rows = [dict(row) for row in connection.execute(
+            "SELECT snapshot_date,snapshot_at,customer_code,sales_channel,area_code,balance_end,"
+            "overdue_1_15,overdue_15_30,overdue_30_45,overdue_gt_45,total_overdue "
+            "FROM fact_congno_khachhang"
+        ).fetchall()]
+    finally:
+        connection.close()
+    if not local_rows:
+        return {"status": "warehouse_empty", "path": str(path)}
+
+    source = _canonical_debt(snapshot.rows)
+    local = _canonical_debt(local_rows)
+    missing_keys = sorted(set(source) - set(local))
+    extra_keys = sorted(set(local) - set(source))
+    common = set(source) & set(local)
+    max_abs_delta = max(
+        (abs(source[key][i] - local[key][i]) for key in common for i in range(6)),
+        default=0.0,
+    )
+    local_dates = sorted({str(row.get("snapshot_date") or "") for row in local_rows})
+    source_areas = {
+        (str(row.get("customer_code") or ""), str(row.get("sales_channel") or "")):
+        str(row.get("area_code") or "")
+        for row in snapshot.rows
+    }
+    local_areas = {
+        (str(row.get("customer_code") or ""), str(row.get("sales_channel") or "")):
+        str(row.get("area_code") or "")
+        for row in local_rows
+    }
+    area_mismatch_keys = sorted(
+        key for key in common if source_areas.get(key) != local_areas.get(key)
+    )
+    local_snapshot_at = max(str(row.get("snapshot_at") or "") for row in local_rows)
+    snapshot_lag_seconds = None
+    try:
+        source_time = dt.datetime.fromisoformat(snapshot.executed_at)
+        local_time = dt.datetime.fromisoformat(local_snapshot_at)
+        if source_time.tzinfo is not None and local_time.tzinfo is None:
+            local_time = local_time.astimezone()
+        elif source_time.tzinfo is None and local_time.tzinfo is not None:
+            source_time = source_time.astimezone()
+        snapshot_lag_seconds = max(0, int((source_time - local_time).total_seconds()))
+    except (TypeError, ValueError):
+        pass
+    try:
+        stale_seconds = max(60, int(os.getenv("CHAT_FRESHNESS_STALE_MINUTES", "90")) * 60)
+    except ValueError:
+        stale_seconds = 90 * 60
+    status = "ok"
+    if local_dates != [snapshot.as_of_date]:
+        status = "snapshot_date_mismatch"
+    elif missing_keys or extra_keys or max_abs_delta > 1:
+        status = "data_mismatch"
+    elif area_mismatch_keys:
+        status = "dimension_mismatch"
+    elif snapshot_lag_seconds is None or snapshot_lag_seconds > stale_seconds:
+        status = "warehouse_stale"
+    return {
+        "status": status,
+        "source_procedure": snapshot.procedure,
+        "source_as_of_date": snapshot.as_of_date,
+        "source_executed_at": snapshot.executed_at,
+        "warehouse_snapshot_dates": local_dates,
+        "warehouse_snapshot_at": local_snapshot_at,
+        "snapshot_lag_seconds": snapshot_lag_seconds,
+        "stale_threshold_seconds": stale_seconds,
+        "source_key_count": len(source),
+        "warehouse_key_count": len(local),
+        "missing_key_count": len(missing_keys),
+        "extra_key_count": len(extra_keys),
+        "max_abs_value_delta": max_abs_delta,
+        "area_mismatch_count": len(area_mismatch_keys),
+        "missing_key_sample": missing_keys[:10],
+        "extra_key_sample": extra_keys[:10],
+        "area_mismatch_sample": area_mismatch_keys[:10],
+    }
+
+
+def _execute_checker(
+    checker: Checker,
+    *,
+    as_of_date: str | None = None,
+    scope_area: str | None = None,
+) -> dict[str, Any]:
+    if checker.database == "bravo_sp":
+        return _execute_debt_checker(
+            checker, as_of_date=as_of_date, scope_area=scope_area
+        )
     from sqlalchemy import text
     from query_engine import _get_engine
 
@@ -1049,7 +1359,7 @@ def main() -> int:
             reconfigure(encoding="utf-8", errors="replace")
 
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--validate", action="store_true", help="Kiểm tra đủ 90 case, mapping và SQL read-only.")
+    parser.add_argument("--validate", action="store_true", help="Kiểm tra đủ 90 case và mapping ground truth SQL Server.")
     parser.add_argument("--list", action="store_true", help="In danh sách 90 câu hỏi.")
     parser.add_argument("--show-sql", metavar="CASE_ID", help="In SQL ground truth của một case.")
     parser.add_argument("--export-doc", metavar="PATH", help="Xuất tài liệu Markdown đầy đủ.")
@@ -1058,8 +1368,20 @@ def main() -> int:
     parser.add_argument("--group", help="Chạy một nhóm nghiệp vụ.")
     parser.add_argument("--smoke", action="store_true", help="Chạy 10 checker đại diện.")
     parser.add_argument("--all", action="store_true", help="Chạy toàn bộ checker (mỗi checker chỉ chạy một lần).")
+    parser.add_argument("--as-of", help="Ngày chốt SP công nợ YYYY-MM-DD; mặc định hôm nay.")
+    parser.add_argument("--scope-area", help="Phạm vi MB/MB2/MT/MN, bắt buộc cho Q042.")
     parser.add_argument("--output", help="Ghi kết quả JSON; mặc định chỉ in tóm tắt.")
     args = parser.parse_args()
+
+    if args.as_of:
+        try:
+            dt.date.fromisoformat(args.as_of)
+        except ValueError:
+            print("[ERROR] --as-of phải có định dạng YYYY-MM-DD.")
+            return 2
+    if args.scope_area and args.scope_area.upper() not in {"MB", "MB2", "MT", "MN"}:
+        print("[ERROR] --scope-area chỉ nhận MB, MB2, MT hoặc MN.")
+        return 2
 
     errors = validate_catalog()
     if errors:
@@ -1067,7 +1389,12 @@ def main() -> int:
             print(f"[ERROR] {error}")
         return 2
     if args.validate:
-        print(f"VALID: {len(CASES)} cases, {len(CHECKERS)} read-only SQL checkers")
+        direct_count = sum(checker.database == "bravo" for checker in CHECKERS.values())
+        sp_count = sum(checker.database == "bravo_sp" for checker in CHECKERS.values())
+        print(
+            f"VALID: {len(CASES)} cases, {len(CHECKERS)} checkers "
+            f"({direct_count} SQL Server SELECT, {sp_count} SQL Server SP-result SELECT)"
+        )
 
     if args.list:
         for case in CASES:
@@ -1083,6 +1410,9 @@ def main() -> int:
         print(f"-- database={checker.database}; checker={checker.id}; {checker.title}")
         if checker.notes:
             print(f"-- {checker.notes}")
+        if checker.database == "bravo_sp":
+            print(f"-- SQL Server source (hard-coded, rollback):\n{DEBT_SP_DISPLAY};")
+            print("-- SELECT below runs on the SP result set materialized in RAM:")
         print(checker.sql)
 
     if args.export_doc:
@@ -1106,11 +1436,35 @@ def main() -> int:
             "results": [],
         }
         failed = False
+        debt_checker_ids = [
+            checker_id for checker_id in checker_ids
+            if CHECKERS[checker_id].database == "bravo_sp"
+        ]
+        if debt_checker_ids:
+            try:
+                debt_snapshot = _debt_snapshot(args.as_of)
+                reconciliation = _reconcile_debt_source_with_warehouse(debt_snapshot)
+                output["debt_source_reconciliation"] = reconciliation
+                recon_status = reconciliation.get("status")
+                print(f"[SOURCE-GATE] debt SP -> warehouse: {recon_status}")
+                if recon_status != "ok":
+                    failed = True
+            except Exception as exc:
+                failed = True
+                output["debt_source_reconciliation"] = {
+                    "status": "error",
+                    "error": str(exc),
+                }
+                print(f"[SOURCE-GATE] debt SP -> warehouse: FAIL {exc}")
         for index, checker_id in enumerate(checker_ids, 1):
             checker = CHECKERS[checker_id]
             print(f"[{index}/{len(checker_ids)}] {checker_id} ({checker.database}) ...", end="", flush=True)
             try:
-                result = _execute_checker(checker)
+                result = _execute_checker(
+                    checker,
+                    as_of_date=args.as_of,
+                    scope_area=(args.scope_area or "").upper() or None,
+                )
                 output["results"].append(result)
                 state = "OK" if result["status"] == "ok" else "EMPTY"
                 print(f" {state} {result['row_count_returned']} rows / {result['duration_ms']} ms")
