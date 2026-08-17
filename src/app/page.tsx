@@ -352,6 +352,8 @@ type QueryLogItem = {
   session_total_tokens: number;
   session_cost_usd: number;
   session_cost_vnd: number;
+  api_provider?: string | null;
+  api_model?: string | null;
 };
 
 type AuditDashboardData = {
@@ -2123,6 +2125,7 @@ export default function Home() {
                             <tr>
                               <th className="px-4 py-3 text-left">Thời Gian</th>
                               <th className="px-4 py-3 text-left">Người Dùng</th>
+                              <th className="px-4 py-3 text-left">API sử dụng</th>
                               <th className="px-4 py-3 text-left">Nội Dung Câu Hỏi</th>
                               <th className="px-4 py-3 text-center">Trạng Thái</th>
                               <th className="px-4 py-3 text-left">Đánh Giá</th>
@@ -2142,6 +2145,18 @@ export default function Home() {
                                 </td>
                                 <td className="px-4 py-3 font-medium text-slate-900 whitespace-nowrap">
                                   {log.user_name}
+                                </td>
+                                <td className="px-4 py-3 whitespace-nowrap">
+                                  {log.api_provider ? (
+                                    <div>
+                                      <div className="font-medium text-indigo-700">{log.api_provider}</div>
+                                      {log.api_model && (
+                                        <div className="text-[10px] text-slate-400">{log.api_model}</div>
+                                      )}
+                                    </div>
+                                  ) : (
+                                    <span className="text-slate-400">—</span>
+                                  )}
                                 </td>
                                 <td className="px-4 py-3 text-slate-800 font-normal max-w-xs truncate" title={log.question}>
                                   {log.question}
@@ -2228,7 +2243,7 @@ export default function Home() {
                 {auditData && auditData.summary.total_cost_usd > 0
                   ? Math.round(auditData.summary.total_cost_vnd / auditData.summary.total_cost_usd).toLocaleString("vi-VN")
                   : USD_TO_VND_RATE.toLocaleString("vi-VN")}{" "}
-                đ/USD và bảng giá Anthropic API chính thức. Tổng lấy thẳng từ sổ chi phí nên luôn đúng
+                đ/USD. Nhà cung cấp và model lấy từ log API thực tế của từng lượt; tổng lấy thẳng từ sổ chi phí nên luôn đúng
                 kể cả khi chưa quy được từng lượt về người dùng cụ thể.
               </span>
               <button

@@ -73,6 +73,20 @@ MONTHLY_BUDGET_USD = 50.00        # tran ngan sach thang nguoi dung dat (24/07/2
 MONTHLY_WARN_RATIO = 0.8          # canh bao SOM khi da dung 80% ngan sach ($40)
 
 
+def api_provider_for_model(model: str) -> str:
+    """Tra ten nha cung cap de hien thi; chi suy ra tu model da ghi trong cost log."""
+    normalized = (model or "").strip().lower()
+    if normalized.startswith("deepseek-"):
+        return "DeepSeek"
+    if normalized.startswith("claude-"):
+        return "Anthropic"
+    if normalized.startswith("gemini-"):
+        return "Google Gemini"
+    if normalized.startswith(("gpt-", "o1", "o3", "o4")):
+        return "OpenAI"
+    return "Không xác định" if not normalized else normalized
+
+
 def compute_cost_usd(model: str, input_tokens: int, output_tokens: int,
                       cache_read_tokens: int = 0, cache_write_tokens: int = 0) -> float:
     p = MODEL_PRICING.get(model)
