@@ -301,6 +301,19 @@ type WeeklyDailyItem = {
   total_tokens: number;
   cost_usd: number;
   cost_vnd: number;
+  providers: ProviderCostItem[];
+};
+
+// 17/08/2026: mot ngay co the dung NHIEU nha cung cap / nhieu key (dang chay thu DeepSeek song song
+// Claude). Gop chung mot cot thi khong biet tien cua ben nao, cung khong so duoc ben nao re hon.
+type ProviderCostItem = {
+  provider: string;
+  api_key_id: string;
+  model: string;
+  query_count: number;
+  cost_usd: number;
+  cost_vnd: number;
+  total_tokens?: number;
 };
 
 type WeeklyUserItem = {
@@ -324,6 +337,7 @@ type WeeklyAuditData = {
   total_cost_vnd: number;
   daily_breakdown: WeeklyDailyItem[];
   user_breakdown: WeeklyUserItem[];
+  provider_breakdown: ProviderCostItem[];
 };
 
 // Cac truong session_* la so cua CA PHIEN chat, khong phai cua rieng luot hoi tren dong do:
@@ -2065,6 +2079,120 @@ export default function Home() {
                           </div>
                         )}
                       </div>
+
+                      {/* 17/08/2026: Chi phí tách theo NHÀ CUNG CẤP / API KEY.
+                          Một ngày có thể dùng nhiều nguồn (đang chạy thử DeepSeek song song Claude);
+                          gộp chung một con số thì không biết tiền của bên nào, cũng không so được
+                          bên nào rẻ hơn. Ngày có từ 2 nguồn trở lên được đánh dấu để nhìn ra ngay. */}
+                      {(weeklyData?.provider_breakdown?.length ?? 0) > 0 && (
+                        <div className="flex flex-col gap-2">
+                          <h4 className="text-xs font-bold text-slate-700 flex items-center gap-1.5">
+                            <IconCoin className="w-3.5 h-3.5" /> Chi Phí Theo Nhà Cung Cấp / API Key
+                          </h4>
+
+                          <div className="flex flex-wrap gap-2">
+                            {weeklyData?.provider_breakdown.map((p) => (
+                              <div
+                                key={`${p.provider}-${p.api_key_id}-${p.model}`}
+                                className="flex-1 min-w-[13rem] rounded-xl border border-slate-200 bg-white p-3 shadow-sm"
+                              >
+                                <div className="flex items-center justify-between gap-2">
+                                  <span
+                                    className={`inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-bold ${
+                                      p.provider === "DeepSeek"
+                                        ? "bg-violet-50 text-violet-700"
+                                        : p.provider === "Anthropic"
+                                        ? "bg-amber-50 text-amber-700"
+                                        : "bg-slate-100 text-slate-600"
+                                    }`}
+                                  >
+                                    {p.provider}
+                                  </span>
+                                  <span className="font-mono text-[10px] text-slate-400">{p.api_key_id}</span>
+                                </div>
+                                <div className="mt-1.5 text-[11px] text-slate-500">{p.model}</div>
+                                <div className="mt-1 flex items-baseline justify-between tabular-nums">
+                                  <span className="text-xs text-slate-600">{p.query_count.toLocaleString()} lượt</span>
+                                  <span className="text-sm font-bold text-slate-800">
+                                    {Math.round(p.cost_vnd).toLocaleString()}đ
+                                  </span>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+
+                          <ExportableTable
+                            nhan="chi-phi-theo-nha-cung-cap"
+                            className="max-h-64 overflow-auto rounded-xl border border-slate-200 shadow-sm"
+                          >
+                            <table className="min-w-full text-xs tabular-nums">
+                              <thead className="sticky top-0 z-10 bg-[#F1F5F9] text-slate-700 font-semibold shadow-[0_1px_0_0_theme(colors.slate.200)]">
+                                <tr>
+                                  <th className="px-3 py-2 text-left">Ngày</th>
+                                  <th className="px-3 py-2 text-left">Nhà cung cấp</th>
+                                  <th className="px-3 py-2 text-left">API key</th>
+                                  <th className="px-3 py-2 text-left">Model</th>
+                                  <th className="px-3 py-2 text-right">Lượt</th>
+                                  <th className="px-3 py-2 text-right">Chi phí</th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-slate-100 bg-white">
+                                {weeklyData?.daily_breakdown
+                                  .filter((d) => d.providers && d.providers.length > 0)
+                                  .flatMap((d) =>
+                                    d.providers.map((p, pi) => (
+                                      <tr
+                                        key={`${d.date_str}-${p.provider}-${p.api_key_id}-${p.model}`}
+                                        className="hover:bg-slate-50"
+                                      >
+                                        <td className="px-3 py-2 text-slate-700">
+                                          {pi === 0 ? (
+                                            <span className="font-semibold">
+                                              {d.day_name} {d.display_date}
+                                              {d.providers.length > 1 && (
+                                                <span className="ml-1.5 rounded bg-rose-50 px-1.5 py-0.5 text-[10px] font-bold text-rose-700">
+                                                  {d.providers.length} nguồn
+                                                </span>
+                                              )}
+                                            </span>
+                                          ) : (
+                                            <span className="text-slate-300">↳</span>
+                                          )}
+                                        </td>
+                                        <td className="px-3 py-2">
+                                          <span
+                                            className={`inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-semibold ${
+                                              p.provider === "DeepSeek"
+                                                ? "bg-violet-50 text-violet-700"
+                                                : p.provider === "Anthropic"
+                                                ? "bg-amber-50 text-amber-700"
+                                                : "bg-slate-100 text-slate-600"
+                                            }`}
+                                          >
+                                            {p.provider}
+                                          </span>
+                                        </td>
+                                        <td className="px-3 py-2 font-mono text-[11px] text-slate-500">{p.api_key_id}</td>
+                                        <td className="px-3 py-2 text-slate-600">{p.model}</td>
+                                        <td className="px-3 py-2 text-right text-slate-700">
+                                          {p.query_count.toLocaleString()}
+                                        </td>
+                                        <td className="px-3 py-2 text-right font-semibold text-slate-800">
+                                          {Math.round(p.cost_vnd).toLocaleString()}đ
+                                        </td>
+                                      </tr>
+                                    ))
+                                  )}
+                              </tbody>
+                            </table>
+                          </ExportableTable>
+                          <p className="text-[11px] leading-relaxed text-slate-400">
+                            Nhãn API key chỉ để phân biệt các key với nhau (4 ký tự cuối kèm mã băm), không khôi phục
+                            được key. Bản ghi trước 17/08 chưa lưu nhãn key nên hiện “(không ghi)”, nhà cung cấp được
+                            suy từ tên model.
+                          </p>
+                        </div>
+                      )}
 
                       {/* Weekly User Breakdown Table */}
                       <div className="flex flex-col gap-2">
