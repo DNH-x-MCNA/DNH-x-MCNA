@@ -61,7 +61,7 @@ from conversation_memory import (
 )
 from nl2sql import ask, ask_stream
 from query_engine import _write_log
-from pricing import USD_TO_VND_RATE
+from pricing import USD_TO_VND_RATE, api_provider_for_model
 
 init_auth_schema()
 
@@ -220,6 +220,7 @@ class ChatResponse(BaseModel):
     query_id: str
     answer: str
     sql_used: list[str]
+    freshness: Optional[list[dict[str, Any]]] = None
     columns: Optional[list[str]] = None
     rows: Optional[list[list[Any]]] = None
     row_count: Optional[int] = None
@@ -609,6 +610,7 @@ def chat(req: ChatRequest, user: dict = Depends(require_approved_user)):
             query_id,
             result["answer"],
             sql_used=result.get("sql_used"),
+            freshness=result.get("freshness"),
             row_count=lr.get("row_count") if is_raw_sql else None,
             duration_ms=_elapsed_ms(started_at),
         )
@@ -623,6 +625,7 @@ def chat(req: ChatRequest, user: dict = Depends(require_approved_user)):
         query_id=query_id,
         answer=result["answer"],
         sql_used=result["sql_used"],
+        freshness=result.get("freshness"),
         columns=lr.get("columns") if is_raw_sql else None,
         rows=lr.get("rows") if is_raw_sql else None,
         row_count=lr.get("row_count") if is_raw_sql else None,
@@ -632,11 +635,9 @@ def chat(req: ChatRequest, user: dict = Depends(require_approved_user)):
 # 11/08/2026: endpoint STREAMING moi, SONG SONG voi /chat cu (khong sua/xoa /chat - frontend hien
 # tai dang goi /chat, sua endpoint do se anh huong ngay 25 user dang dung that). Dung Server-Sent
 # Events (SSE, "data: {...}\n\n") - format don gian, browser/fetch doc duoc truc tiep khong can thu
-# vien them o frontend. Ly do lam streaming: Sonnet 5 tu bat "extended thinking" mac dinh (xem
-# nl2sql.py::ask_stream), khien MOI cau hoi (ke ca cau don gian) deu phai cho model suy luan xong het
-# roi moi thay chu - streaming KHONG giam tong thoi gian xu ly nhung nguoi dung THAY chu xuat hien
-# dan ngay khi model bat dau tra loi that (vong CUOI, sau khi da goi xong cac tool), giam cam giac
-# "lag" ro ret. Kiem tra QUYEN/rate-limit GIONG HET /chat (dung chung _check_rate_limit,
+# vien them o frontend. 17/08/2026: backend chi phat text sau khi da loai timestamp model tu sinh va
+# gan metadata nguon, de noi dung UI trung khop noi dung luu lich su. Kiem tra QUYEN/rate-limit
+# GIONG HET /chat (dung chung _check_rate_limit,
 # _require_session_write_access) - CHi khac cach tra ket qua ve client.
 @app.post("/chat/stream", dependencies=[Depends(require_api_key)])
 def chat_stream(req: ChatRequest, user: dict = Depends(require_approved_user)):
@@ -667,6 +668,7 @@ def chat_stream(req: ChatRequest, user: dict = Depends(require_approved_user)):
                         query_id,
                         chunk["answer"],
                         sql_used=chunk.get("sql_used"),
+                        freshness=chunk.get("freshness"),
                         row_count=lr.get("row_count") if is_raw_sql else None,
                         duration_ms=_elapsed_ms(started_at),
                     )
@@ -675,6 +677,7 @@ def chat_stream(req: ChatRequest, user: dict = Depends(require_approved_user)):
                         "query_id": query_id,
                         "answer": chunk["answer"],
                         "sql_used": chunk["sql_used"],
+                        "freshness": chunk.get("freshness", []),
                         "columns": lr.get("columns") if is_raw_sql else None,
                         "rows": lr.get("rows") if is_raw_sql else None,
                         "row_count": lr.get("row_count") if is_raw_sql else None,
@@ -837,6 +840,7 @@ def get_audit_logs_dashboard(
                 "feedback_comment": run.get("feedback_comment"),
                 "feedback_by": run.get("feedback_by"),
                 "feedback_at": _display_timestamp(run.get("feedback_at")),
+                "freshness": run.get("freshness") or [],
             })
     except Exception as ex:
         print("[AUDIT-LOG] Loi nap query_runs:", ex)
@@ -881,7 +885,7 @@ def get_audit_logs_dashboard(
     # 03/08/2026: Per-question cost - nhom theo (session_id, question_preview) de hien chi phi TUNG CAU
     cost_per_question = defaultdict(lambda: {"cost_usd": 0.0, "input_tokens": 0, "output_tokens": 0,
         "cache_read_tokens": 0, "cache_write_tokens": 0, "total_tokens": 0, "api_calls": 0,
-        "username": "", "first_ts": None})
+        "username": "", "first_ts": None, "models": set()})
     # Cac phien da duoc quy chi phi TRUC TIEP cho nguoi dung (log co username). Vong duyet audit ben
     # duoi phai BO QUA chung khi cong vao user_stats, neu khong se cong hai lan -> chi phi gap doi.
     sessions_attributed_directly = set()
@@ -939,6 +943,8 @@ def get_audit_logs_dashboard(
                     _cpq["cache_write_tokens"] += cw
                     _cpq["total_tokens"] += it + ot + cr + cw
                     _cpq["api_calls"] += 1
+                    if c.get("model"):
+                        _cpq["models"].add(str(c["model"]).strip())
                     if not _cpq["username"]:
                         _cpq["username"] = uname_direct
                     if not _cpq["first_ts"]:
@@ -1000,6 +1006,9 @@ def get_audit_logs_dashboard(
         c_cr = cpq.get("cache_read_tokens", 0)
         c_cw = cpq.get("cache_write_tokens", 0)
         c_tt = cpq.get("total_tokens", c_it + c_ot + c_cr + c_cw)
+        c_models = sorted(cpq.get("models", set()))
+        c_api_provider = ", ".join(sorted({api_provider_for_model(m) for m in c_models})) or None
+        c_api_model = ", ".join(c_models) or None
 
         display_name = get_name_by_username(uname) or uname
 
@@ -1044,6 +1053,8 @@ def get_audit_logs_dashboard(
             "cost_usd": round(c_usd, 6),
             "cost_vnd": round(c_usd * USD_TO_VND_RATE, 2),
             "api_calls": cpq.get("api_calls", 0),
+            "api_provider": c_api_provider,
+            "api_model": c_api_model,
             "sql_count": _sql_count_by_q.get(q_key, 0),
             # Backward compat: giu ten cu de frontend khong bi vo
             "session_input_tokens": c_it,
@@ -1070,6 +1081,7 @@ def get_audit_logs_dashboard(
         if not user_stats[_uname2].get("display_name"):
             user_stats[_uname2]["display_name"] = _dn2
         _c2 = _cpq2.get("cost_usd", 0.0)
+        _models2 = sorted(_cpq2.get("models", set()))
         filtered_logs.append({
             "ts": _cpq2.get("first_ts"),
             "username": _uname2,
@@ -1089,6 +1101,8 @@ def get_audit_logs_dashboard(
             "feedback_at": None,
             "input_tokens": _cpq2.get("input_tokens", 0),
             "output_tokens": _cpq2.get("output_tokens", 0),
+            "api_provider": ", ".join(sorted({api_provider_for_model(m) for m in _models2})) or None,
+            "api_model": ", ".join(_models2) or None,
             "cache_read_tokens": _cpq2.get("cache_read_tokens", 0),
             "cache_write_tokens": _cpq2.get("cache_write_tokens", 0),
             "total_tokens": _cpq2.get("total_tokens", 0),
