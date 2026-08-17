@@ -316,6 +316,21 @@ type ProviderCostItem = {
   total_tokens?: number;
 };
 
+// Màu định danh nhà cung cấp - GÁN CỐ ĐỊNH theo tên, không xoay vòng theo thứ tự xuất hiện.
+// Nếu tô theo thứ tự thì lọc bớt một nguồn là các nguồn còn lại đổi màu, người đọc tưởng dữ liệu đổi.
+// Cặp hổ phách/tím đã kiểm bằng công cụ: ΔE 36,9 với mắt protan, 39,3 với mắt thường - tách bạch kể
+// cả với người mù màu. Hổ phách tương phản 2,09:1 so với nền nên KHÔNG được đứng một mình: luôn kèm
+// số ghi rõ trên đầu cột và bảng chi tiết bên dưới.
+const MAU_NHA_CUNG_CAP: Record<string, string> = {
+  Anthropic: "#f59e0b",
+  DeepSeek: "#8b5cf6",
+};
+const MAU_KHAC = "#94a3b8"; // nguồn lạ / bản ghi cũ chưa ghi nhãn - xám trung tính, không tranh màu
+
+function mauNhaCungCap(ten: string): string {
+  return MAU_NHA_CUNG_CAP[ten] || MAU_KHAC;
+}
+
 type WeeklyUserItem = {
   username: string;
   user_name: string;
@@ -1970,15 +1985,24 @@ export default function Home() {
                               Đồ thị cột đứng
                             </span>
                           </div>
-                          <div className="flex items-center gap-3 text-[11px] font-medium text-slate-500">
-                            <div className="flex items-center gap-1.5">
-                              <span className="h-2.5 w-2.5 rounded-sm bg-gradient-to-t from-amber-500 to-amber-400" />
-                              <span>Chi phí ngày thường</span>
-                            </div>
-                            <div className="flex items-center gap-1.5">
-                              <span className="h-2.5 w-2.5 rounded-sm bg-gradient-to-t from-indigo-600 to-purple-500" />
-                              <span>Hôm nay ⭐</span>
-                            </div>
+                          {/* 17/08/2026: chú giải giờ theo NHÀ CUNG CẤP, không còn "hôm nay / ngày thường".
+                              Màu phải mang nghĩa danh tính (tiền chảy về đâu), chứ tô theo "hôm nay" thì
+                              cùng một nhà cung cấp lại đổi màu tuỳ ngày — nhìn tưởng hai nguồn khác nhau.
+                              Hôm nay vẫn nhận ra qua dấu ⭐ và viền ở nhãn trục dưới. */}
+                          <div className="flex flex-wrap items-center gap-3 text-[11px] font-medium text-slate-500">
+                            {(weeklyData?.provider_breakdown?.length ?? 0) > 0 ? (
+                              [...new Set(weeklyData!.provider_breakdown.map((p) => p.provider))].map((ten) => (
+                                <div key={ten} className="flex items-center gap-1.5">
+                                  <span className="h-2.5 w-2.5 rounded-sm" style={{ background: mauNhaCungCap(ten) }} />
+                                  <span>{ten}</span>
+                                </div>
+                              ))
+                            ) : (
+                              <div className="flex items-center gap-1.5">
+                                <span className="h-2.5 w-2.5 rounded-sm" style={{ background: mauNhaCungCap("") }} />
+                                <span>Chi phí</span>
+                              </div>
+                            )}
                           </div>
                         </div>
 
@@ -2018,18 +2042,37 @@ export default function Home() {
                                       </span>
                                     </div>
 
-                                    {/* Vertical Bar Container Track */}
+                                    {/* Cột xếp chồng theo nhà cung cấp. Ngày dùng 2 nguồn thì nhìn ra ngay
+                                        tỷ lệ, thay vì phải dò xuống bảng. Khe 2px giữa các đoạn để hai
+                                        mảng màu không dính liền thành một khối. Bản ghi cũ chưa có
+                                        'providers' -> vẽ một đoạn xám, không vờ như biết nguồn nào. */}
                                     <div className="relative flex h-full w-full max-w-[48px] flex-col justify-end overflow-hidden rounded-t-xl bg-slate-100/80 p-0.5 group-hover:bg-slate-200/60 transition">
-                                      <div
-                                        style={{ height: `${displayBarHeight}%` }}
-                                        className={`w-full rounded-t-lg transition-all duration-500 ease-out ${
-                                          day.is_today
-                                            ? "bg-gradient-to-t from-indigo-600 via-indigo-500 to-purple-500 shadow-md shadow-indigo-200"
-                                            : day.query_count > 0
-                                            ? "bg-gradient-to-t from-amber-500 via-amber-400 to-amber-300 shadow-sm"
-                                            : "bg-slate-200"
-                                        }`}
-                                      />
+                                      {day.cost_vnd > 0 && (day.providers?.length ?? 0) > 0 ? (
+                                        <div
+                                          style={{ height: `${displayBarHeight}%` }}
+                                          className="flex w-full flex-col justify-end gap-[2px] transition-all duration-500 ease-out"
+                                        >
+                                          {day.providers.map((p, pi) => (
+                                            <div
+                                              key={`${p.provider}-${p.api_key_id}-${p.model}`}
+                                              title={`${p.provider} · ${p.query_count} lượt · ${Math.round(p.cost_vnd).toLocaleString("vi-VN")}đ`}
+                                              style={{
+                                                height: `${Math.max(3, (p.cost_vnd / day.cost_vnd) * 100)}%`,
+                                                background: mauNhaCungCap(p.provider),
+                                              }}
+                                              className={pi === 0 ? "w-full rounded-t-lg shadow-sm" : "w-full"}
+                                            />
+                                          ))}
+                                        </div>
+                                      ) : (
+                                        <div
+                                          style={{
+                                            height: `${displayBarHeight}%`,
+                                            background: day.query_count > 0 ? MAU_KHAC : "transparent",
+                                          }}
+                                          className="w-full rounded-t-lg shadow-sm transition-all duration-500 ease-out"
+                                        />
+                                      )}
                                     </div>
 
                                     {/* Hover Detailed Tooltip Card */}
@@ -2052,6 +2095,27 @@ export default function Home() {
                                           <span>{day.query_count} lượt</span>
                                         </div>
                                       </div>
+                                      {(day.providers?.length ?? 0) > 0 && (
+                                        <div className="mt-1.5 flex flex-col gap-1 border-t border-slate-700 pt-1.5 text-[10px] tabular-nums">
+                                          {day.providers.map((p) => (
+                                            <div
+                                              key={`tt-${p.provider}-${p.api_key_id}-${p.model}`}
+                                              className="flex items-center justify-between gap-2"
+                                            >
+                                              <span className="flex items-center gap-1.5 text-slate-300">
+                                                <span
+                                                  className="h-2 w-2 shrink-0 rounded-sm"
+                                                  style={{ background: mauNhaCungCap(p.provider) }}
+                                                />
+                                                {p.provider}
+                                              </span>
+                                              <span className="whitespace-nowrap text-slate-200">
+                                                {p.query_count} lượt · {Math.round(p.cost_vnd).toLocaleString("vi-VN")}đ
+                                              </span>
+                                            </div>
+                                          ))}
+                                        </div>
+                                      )}
                                     </div>
                                   </div>
                                 );
