@@ -151,7 +151,9 @@ def test_provider_configuration_survives_multi_step_merge(monkeypatch):
         "api_key": "provider-test-key",
         "base_url": "https://provider.example/anthropic",
     }
-    assert nl2sql.MAX_TOOL_ROUNDS == 8
+    # Day bay chong doi so vong goi tool AM THAM (so nay anh huong truc tiep toi chi phi va thoi gian
+    # tra loi). Doi gia tri o day la viec CO Y - doc khoi ghi chu lich su trong nl2sql.py truoc da.
+    assert nl2sql.MAX_TOOL_ROUNDS == 6
 
 
 def test_repeated_tool_call_is_not_reexecuted_and_forces_final_answer(monkeypatch):
