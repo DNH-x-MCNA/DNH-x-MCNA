@@ -132,6 +132,28 @@ def test_composite_business_tools_are_exposed_to_model():
     } <= names
 
 
+def test_provider_configuration_survives_multi_step_merge(monkeypatch):
+    captured = {}
+
+    def fake_client(**kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace()
+
+    monkeypatch.setenv("LLM_API_KEY", "provider-test-key")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "anthropic-fallback-key")
+    monkeypatch.setattr(nl2sql, "LLM_BASE_URL", "https://provider.example/anthropic")
+    monkeypatch.setattr(nl2sql.anthropic, "Anthropic", fake_client)
+
+    client = nl2sql._llm_client()
+
+    assert isinstance(client, SimpleNamespace)
+    assert captured == {
+        "api_key": "provider-test-key",
+        "base_url": "https://provider.example/anthropic",
+    }
+    assert nl2sql.MAX_TOOL_ROUNDS == 8
+
+
 def test_repeated_tool_call_is_not_reexecuted_and_forces_final_answer(monkeypatch):
     tool_runs = []
 
