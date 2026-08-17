@@ -192,7 +192,9 @@ def test_repeated_tool_call_is_not_reexecuted_and_forces_final_answer(monkeypatc
     monkeypatch.setattr(nl2sql, "call_template", fake_template)
     result = nl2sql.ask("Danh gia hieu qua khuyen mai", session_id="s-test", query_id="q-test")
 
-    assert result["answer"] == "Da tong hop tu du lieu da truy van."
+    assert result["answer"].startswith("Da tong hop tu du lieu da truy van.")
+    assert "Dữ liệu trực tiếp:" in result["answer"]
+    assert result["freshness"][0]["source_key"] == "promotion_live"
     assert "qua phuc tap" not in result["answer"].lower()
     assert len(tool_runs) == 1
     assert fake_messages.calls == 3

@@ -76,6 +76,7 @@ def init():
         answer TEXT,
         status TEXT NOT NULL DEFAULT 'running',
         sql_used_json TEXT,
+        freshness_json TEXT,
         row_count INTEGER,
         duration_ms INTEGER,
         error_message TEXT,
@@ -87,6 +88,7 @@ def init():
         created_at TEXT NOT NULL,
         completed_at TEXT
     )""")
+    _ensure_column(conn, "query_runs", "freshness_json", "TEXT")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_query_runs_session ON query_runs(session_id, created_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_query_runs_user ON query_runs(username, created_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_query_runs_feedback ON query_runs(feedback_rating, feedback_at)")
@@ -229,17 +231,19 @@ def complete_query_run(
     query_id: str,
     answer: str,
     sql_used=None,
+    freshness=None,
     row_count: int = None,
     duration_ms: int = None,
 ):
     conn = _conn()
     try:
         conn.execute(
-            "UPDATE query_runs SET answer=?, status='completed', sql_used_json=?, row_count=?, "
+            "UPDATE query_runs SET answer=?, status='completed', sql_used_json=?, freshness_json=?, row_count=?, "
             "duration_ms=?, error_message=NULL, completed_at=? WHERE query_id=?",
             (
                 answer,
                 json.dumps(sql_used or [], ensure_ascii=False),
+                json.dumps(freshness or [], ensure_ascii=False),
                 row_count,
                 duration_ms,
                 _utc_now(),
@@ -268,7 +272,7 @@ def get_query_run(query_id: str):
     conn = _conn()
     try:
         row = conn.execute(
-            "SELECT query_id, session_id, username, question, answer, status, sql_used_json, "
+            "SELECT query_id, session_id, username, question, answer, status, sql_used_json, freshness_json, "
             "row_count, duration_ms, error_message, feedback_rating, feedback_category, "
             "feedback_comment, feedback_by, feedback_at, created_at, completed_at "
             "FROM query_runs WHERE query_id=?",
@@ -277,7 +281,7 @@ def get_query_run(query_id: str):
         if not row:
             return None
         keys = (
-            "query_id", "session_id", "username", "question", "answer", "status", "sql_used_json",
+            "query_id", "session_id", "username", "question", "answer", "status", "sql_used_json", "freshness_json",
             "row_count", "duration_ms", "error_message", "feedback_rating", "feedback_category",
             "feedback_comment", "feedback_by", "feedback_at", "created_at", "completed_at",
         )
@@ -287,6 +291,11 @@ def get_query_run(query_id: str):
         except (TypeError, json.JSONDecodeError):
             result["sql_used"] = []
             result.pop("sql_used_json", None)
+        try:
+            result["freshness"] = json.loads(result.pop("freshness_json") or "[]")
+        except (TypeError, json.JSONDecodeError):
+            result["freshness"] = []
+            result.pop("freshness_json", None)
         return result
     finally:
         conn.close()
@@ -298,14 +307,14 @@ def list_query_runs(limit: int = 5000):
     conn = _conn()
     try:
         rows = conn.execute(
-            "SELECT query_id, session_id, username, question, answer, status, sql_used_json, "
+            "SELECT query_id, session_id, username, question, answer, status, sql_used_json, freshness_json, "
             "row_count, duration_ms, error_message, feedback_rating, feedback_category, "
             "feedback_comment, feedback_by, feedback_at, created_at, completed_at "
             "FROM query_runs ORDER BY created_at DESC, rowid DESC LIMIT ?",
             (safe_limit,),
         ).fetchall()
         keys = (
-            "query_id", "session_id", "username", "question", "answer", "status", "sql_used_json",
+            "query_id", "session_id", "username", "question", "answer", "status", "sql_used_json", "freshness_json",
             "row_count", "duration_ms", "error_message", "feedback_rating", "feedback_category",
             "feedback_comment", "feedback_by", "feedback_at", "created_at", "completed_at",
         )
@@ -317,6 +326,11 @@ def list_query_runs(limit: int = 5000):
             except (TypeError, json.JSONDecodeError):
                 item["sql_used"] = []
                 item.pop("sql_used_json", None)
+            try:
+                item["freshness"] = json.loads(item.pop("freshness_json") or "[]")
+            except (TypeError, json.JSONDecodeError):
+                item["freshness"] = []
+                item.pop("freshness_json", None)
             result.append(item)
         return result
     finally:
