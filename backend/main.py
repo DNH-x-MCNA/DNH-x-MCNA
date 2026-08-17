@@ -1227,6 +1227,11 @@ def get_weekly_audit_dashboard(
     }
 
     user_weekly_cost = defaultdict(lambda: {"query_count": 0, "total_tokens": 0, "cost_usd": 0.0})
+    # 17/08/2026: tach chi phi theo NHA CUNG CAP + KEY. Dang chay thu DeepSeek song song Claude nen
+    # trong cung mot ngay co the co nhieu nguon; gop chung mot cot thi khong biet tien cua ben nao,
+    # cung khong so duoc ben nao re hon. Khoa = (nha cung cap, nhan key, ten model).
+    provider_daily = defaultdict(lambda: defaultdict(lambda: {"query_count": 0, "cost_usd": 0.0}))
+    provider_weekly = defaultdict(lambda: {"query_count": 0, "total_tokens": 0, "cost_usd": 0.0})
 
     if os.path.exists(COST_LOG_PATH):
         with open(COST_LOG_PATH, encoding="utf-8") as f:
@@ -1258,6 +1263,21 @@ def get_weekly_audit_dashboard(
                             d["cost_usd"] += cost
                             d["cost_vnd"] += cost * USD_TO_VND_RATE
 
+                            # Ban ghi cu (truoc 17/08) khong co 2 truong nay - suy nguoc tu ten model
+                            # de lich su van doc duoc, thay vi hien "khong ro" cho toan bo qua khu.
+                            mdl = (c.get("model") or "").strip() or "khong ro"
+                            prov = (c.get("provider") or "").strip()
+                            if not prov:
+                                prov = ("Anthropic" if mdl.startswith("claude")
+                                        else "DeepSeek" if mdl.startswith("deepseek") else "Khong ro")
+                            kid = (c.get("api_key_id") or "").strip() or "(khong ghi)"
+                            pkey = f"{prov}|{kid}|{mdl}"
+                            provider_daily[day_idx][pkey]["query_count"] += 1
+                            provider_daily[day_idx][pkey]["cost_usd"] += cost
+                            provider_weekly[pkey]["query_count"] += 1
+                            provider_weekly[pkey]["total_tokens"] += it + ot + cr + cw
+                            provider_weekly[pkey]["cost_usd"] += cost
+
                             u = (c.get("username") or "unknown").strip()
                             user_weekly_cost[u]["query_count"] += 1
                             user_weekly_cost[u]["total_tokens"] += it + ot + cr + cw
@@ -1271,8 +1291,18 @@ def get_weekly_audit_dashboard(
     total_week_tokens = 0
     total_week_queries = 0
 
+    def _tach_khoa(pkey, stats):
+        prov, kid, mdl = pkey.split("|", 2)
+        return {"provider": prov, "api_key_id": kid, "model": mdl,
+                "query_count": stats["query_count"],
+                "cost_usd": round(stats["cost_usd"], 6),
+                "cost_vnd": round(stats["cost_usd"] * USD_TO_VND_RATE, 2)}
+
     for i in range(7):
         item = daily_data[i]
+        item["providers"] = sorted(
+            (_tach_khoa(k, v) for k, v in provider_daily[i].items()),
+            key=lambda x: x["cost_usd"], reverse=True)
         item["cost_usd"] = round(item["cost_usd"], 6)
         item["cost_vnd"] = round(item["cost_vnd"], 2)
         total_week_cost_usd += item["cost_usd"]
@@ -1305,6 +1335,10 @@ def get_weekly_audit_dashboard(
         "total_cost_vnd": round(total_week_cost_vnd, 2),
         "daily_breakdown": daily_list,
         "user_breakdown": user_breakdown,
+        "provider_breakdown": sorted(
+            (dict(_tach_khoa(k, v), total_tokens=v["total_tokens"])
+             for k, v in provider_weekly.items()),
+            key=lambda x: x["cost_usd"], reverse=True),
     }
 
 

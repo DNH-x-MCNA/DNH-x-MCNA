@@ -750,8 +750,8 @@ _CACHE_BETA_HEADERS = ({"anthropic-beta": "extended-cache-ttl-2025-04-11"} if IS
 def _llm_client():
     """Client goi model. Doc key theo thu tu LLM_API_KEY -> ANTHROPIC_API_KEY de doi nha cung cap
     ma khong phai xoa key cu (doi lai chi can bo LLM_* la ve Claude ngay)."""
-    key = (os.environ.get("LLM_API_KEY", "").strip()
-           or os.environ.get("ANTHROPIC_API_KEY", "").strip())
+    from llm_provider import resolve_api_key
+    key = resolve_api_key()   # thu tu uu tien dinh nghia MOT cho, xem llm_provider.py
     # CHI truyen base_url khi thuc su doi nha cung cap. Truyen base_url=None cung la them mot doi so,
     # va cac test dang gia lap anthropic.Anthropic bang lambda chi nhan api_key se vo ngay
     # (da dinh: test_repeated_tool_call_is_not_reexecuted_and_forces_final_answer). Giu duong mac dinh
