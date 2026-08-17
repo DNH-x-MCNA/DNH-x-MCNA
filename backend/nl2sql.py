@@ -48,8 +48,20 @@ LLM_BASE_URL = os.environ.get("LLM_BASE_URL", "").strip()
 # Cac tinh nang CHI Anthropic co. Tro sang nha cung cap khac thi phai tat, neu khong API se tu choi
 # hoac lang le bo qua - ca hai deu kho phat hien.
 IS_ANTHROPIC = not LLM_BASE_URL or "anthropic.com" in LLM_BASE_URL
-MAX_TOOL_ROUNDS = 8  # Cau hoi dieu hanh co the can nhieu buoc that. Moi intent pho bien duoc gom vao
-                     # composite tool; 8 chi la luoi an toan cho ad-hoc, khong phai muc tieu mac dinh.
+MAX_TOOL_ROUNDS = 6  # 17/08/2026: chot 6 - muc dung giua sau khi con so nay bi keo qua lai 3 lan.
+                     # Lich su, giu lai ca hai phia de nguoi sau khong lap lai tranh luan:
+                     #   8  (ban dau)  - cau hoi dieu hanh co the can nhieu buoc that; moi intent pho
+                     #                   bien da duoc gom vao composite tool nen 8 chi la luoi an toan
+                     #                   cho ad-hoc, khong phai muc tieu.
+                     #   4  (04/08)    - do duoc: ha 8->4 rut ngan 5-8 giay moi cau tra loi. 10/08 giu
+                     #                   nguyen 4 vi CA 2 ca "cau hoi qua phuc tap" truy duoc nguyen
+                     #                   nhan deu do MO TA TOOL chua ro khien model goi lap, sua cau
+                     #                   chu la het - KHONG phai do thieu vong.
+                     #   8  (c9883d5)  - nang lai khi them cac bao cao nhieu buoc da kiem chung.
+                     # 6 la muc nguoi dung chot: du cho bao cao nhieu buoc, van cat bot phan duoi cua
+                     # 8 vong von chi cham vao khi model di lac. Neu lai thay "cau hoi qua phuc tap",
+                     # kiem MO TA TOOL truoc khi nghi den viec nang so nay - tien le 10/08 cho thay
+                     # nguyen nhan nam o cau chu, khong nam o so vong.
 MAX_TOOLS_PER_ROUND = 5  # 10/08/2026: truoc day so 3 nam hardcode giua ham ask(). Nang 3 -> 5 vi sau
                           # khi va loi Tool Merger (xem _merge_bulk_tool_calls), cac lenh goi KHAC
                           # tham so nay chay THAT thay vi bi bo am tham, nen can them cho.
