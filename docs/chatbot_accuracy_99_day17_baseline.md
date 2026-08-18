@@ -1,5 +1,18 @@
 # Chatbot Accuracy 99% — Day 17 Baseline
 
+> **Đính chính 18/08/2026 (không sửa nội dung gốc bên dưới — đây là ghi chú bổ sung):**
+> 1. `MAX_TOOL_ROUNDS` ghi trong baseline này là **8**, đúng tại thời điểm viết. Sau đó cùng
+>    ngày 17/08 giá trị được chốt lại thành **6** (commit `21166a9`, lý do đầy đủ nằm trong
+>    ghi chú cạnh hằng số ở `backend/nl2sql.py`) và giữ nguyên tới nay. Baseline này KHÔNG
+>    còn phản ánh cấu hình đang chạy cho mục đó — đọc code, đừng đọc số 8 ở dưới.
+> 2. Dòng "pytest: 94 passed" chỉ đúng tại thời điểm viết. Việc thêm
+>    `scripts/evaluate_model_canary.py` ngay sau đó (commit `5bef172`) đã LÀM VỠ hoàn toàn
+>    việc thu thập test khi chạy `pytest` từ gốc repo (script tự `sys.path.insert(0, backend)`,
+>    che mất `main.py` gốc — cùng lớp lỗi đã vá 3 lần trước, xem `tests/test_tool_merger.py`).
+>    Đã vá lại ở commit `90d1a57`; xác nhận **134 passed** sau khi thêm bộ 90-case runner của
+>    Day 19. Ai đọc baseline này để biết "test có xanh không" phải tự chạy `pytest -q`, không
+>    dùng con số 94 ở đây làm bằng chứng cho trạng thái hiện tại.
+
 Ngày chốt: 17/08/2026
 Phạm vi: chatbot và độ đúng dữ liệu. Alert, notifier và báo cáo định kỳ được hoãn sau 25/08.
 
