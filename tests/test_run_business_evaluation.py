@@ -10,6 +10,7 @@ import decimal
 import importlib.util
 import io
 import json
+import os
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -305,6 +306,42 @@ def test_dump_results_khong_bao_gio_mat_du_lieu_du_json_safe_bo_sot_kieu(tmp_pat
     assert out.exists()
     restored = json.loads(out.read_text(encoding="utf-8"))
     assert "kieu-la" in restored["results"][0]["gia_tri"]
+
+
+# ---------------------------------------------------------------- nap .env (tai hien loi that 18/08)
+
+def test_load_env_nap_duoc_key_truoc_cau_dau_tien(tmp_path, monkeypatch):
+    """Tai hien DUNG loi that: chay nhu script doc lap (khong qua backend/main.py) thi
+    ANTHROPIC_API_KEY khong tu co trong os.environ - cau DAU TIEN se dinh '⚠️ Chua cau hinh API
+    Key' oan uong, du key that su co san trong file .env, chi la chua duoc nap vao tien trinh."""
+    for k in ("ANTHROPIC_API_KEY", "LLM_API_KEY"):
+        monkeypatch.delenv(k, raising=False)
+    fake_backend = tmp_path / "backend"
+    fake_backend.mkdir()
+    (fake_backend / ".env").write_text("ANTHROPIC_API_KEY=sk-ant-test-tu-file-env\n", encoding="utf-8")
+    monkeypatch.setattr(runner, "BACKEND", fake_backend)
+    monkeypatch.setattr(runner, "ROOT", tmp_path)
+
+    assert os.environ.get("ANTHROPIC_API_KEY") is None  # dung nhu tien trinh moi khoi dong
+
+    runner._load_env_before_first_call()
+
+    assert os.environ.get("ANTHROPIC_API_KEY") == "sk-ant-test-tu-file-env"
+
+
+def test_load_env_khong_ghi_de_key_da_co_san(tmp_path, monkeypatch):
+    """setdefault, khong phai gan thang: neu tien trinh DA co key that (vd dat qua $env: truoc
+    khi chay script), file .env khong duoc phep ghi de len."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "key-da-dat-tu-truoc")
+    fake_backend = tmp_path / "backend"
+    fake_backend.mkdir()
+    (fake_backend / ".env").write_text("ANTHROPIC_API_KEY=key-trong-file\n", encoding="utf-8")
+    monkeypatch.setattr(runner, "BACKEND", fake_backend)
+    monkeypatch.setattr(runner, "ROOT", tmp_path)
+
+    runner._load_env_before_first_call()
+
+    assert os.environ.get("ANTHROPIC_API_KEY") == "key-da-dat-tu-truoc"
 
 
 def test_dry_run_khong_goi_ask_khong_ghi_log(tmp_path, monkeypatch, capsys):
