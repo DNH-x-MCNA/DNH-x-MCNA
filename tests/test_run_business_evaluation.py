@@ -233,6 +233,29 @@ def test_evaluate_dau_cuoi_voi_gia_lap(tmp_path, monkeypatch, fake_answers):
     assert "Tổng số câu: 2" in md
 
 
+def test_bang_3_nhom_khong_bao_gio_vuot_tong_so_cau():
+    """Tai hien dung tinh huong tren may 24 18/08/2026: 31 'dat tu dong' + 65 'can doi chieu
+    tay' in rieng cong lai ra 96 tren 90 cau - gay hieu nham vi 2 co nay DOC LAP, mot cau 'top N'
+    khong dinh loi gi khac se dong thoi dung o CA HAI. Bang 3 nhom loai tru lan nhau phai LUON
+    cong dung tong, du du lieu that nhieu bao nhieu cau."""
+    gt_top_n = {"status": "ok", "rows": [[f"KH{i}", 1_000_000 * i] for i in range(1, 6)]}
+    gt_gon_dung = {"status": "ok", "rows": [[39_327_016_119]]}
+    gt_gon_sai = {"status": "ok", "rows": [[39_327_016_119]]}
+
+    def _row(case_id, answer, gt):
+        return {"case": {"id": case_id, "group": "G", "audience": "c_level", "question": "q"},
+               "tools_called": ["t"], "error": None, "duration_seconds": 1.0, "cost_usd": 0.001,
+               "grade": runner.grade_case(BASE_CASE, answer, None, ["t"], gt)}
+
+    results = [
+        _row("A", "39.327.016.119", gt_gon_dung),
+        _row("B", "khong co so nao dung", gt_gon_sai),
+        _row("C", "Top khach KH5...", gt_top_n),
+    ]
+    md = runner.render_markdown(results, "test")
+    assert "| **Tổng** | **3** |" in md  # phai khop dung so cau, khong duoc la 4 hay hon
+
+
 def test_selected_cases_loc_theo_nhom_va_gioi_han():
     args = SimpleNamespace(case=None, group="khách", audience=None, limit=None)
     selected = runner._selected_cases(_FakeSuite(), args)
