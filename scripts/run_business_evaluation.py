@@ -337,6 +337,14 @@ def render_markdown(results: list[dict], label: str) -> str:
     total = len(results)
     auto_pass = sum(1 for r in results if r["grade"]["passed_auto"])
     needs_review = sum(1 for r in results if r["grade"]["needs_human_review"])
+    # "dat tu dong" va "can doi chieu tay" la 2 CO DOC LAP (1 cau "top N" khong dinh P0 nao khac
+    # se dong thoi True o ca hai) - cong truc tiep 2 dong tren se RA QUA TONG SO CAU, tung gay
+    # hieu nham that tren may 24 (31 + 65 = 96 != 90). Them 3 nhom LOAI TRU LAN NHAU de doc dung.
+    sach_hoan_toan = sum(1 for r in results
+                         if r["grade"]["passed_auto"] and not r["grade"]["needs_human_review"])
+    can_doi_chieu = sum(1 for r in results
+                        if r["grade"]["passed_auto"] and r["grade"]["needs_human_review"])
+    that_bai = total - auto_pass
     by_group: dict[str, list[dict]] = {}
     for r in results:
         by_group.setdefault(r["case"]["group"], []).append(r)
@@ -349,11 +357,21 @@ def render_markdown(results: list[dict], label: str) -> str:
         "**Đọc bảng này đúng cách**: `Đạt (tự động)` chỉ xác nhận KHÔNG có lỗi hệ thống, từ "
         "chối, lộ dự báo, thiếu tool, hay sai số ở các checker gọn. Dòng `cần đối chiếu tay` "
         "là 'top N' - máy KHÔNG tự phán đúng/sai, phải mở `ground_truth` trong file JSON kèm "
-        "theo và so bằng mắt, đúng tinh thần gốc của `business_stress_suite.py`.",
+        "theo và so bằng mắt, đúng tinh thần gốc của `business_stress_suite.py`. Hai cờ này ĐỘC "
+        "LẬP — một câu 'top N' không dính lỗi nào khác vẫn đạt tự động VÀ vẫn cần đối chiếu tay "
+        "cùng lúc, nên đừng cộng thẳng 2 dòng dưới đây (sẽ ra quá tổng số câu); dùng bảng 3 nhóm "
+        "loại trừ lẫn nhau ngay sau đây để biết chính xác việc còn phải làm.",
         "",
         f"- Tổng số câu: {total}",
         f"- Đạt tự động (0 vấn đề P0): {auto_pass}/{total}",
         f"- Cần đối chiếu tay (checker dạng danh sách): {needs_review}",
+        "",
+        "| | Số câu | Việc cần làm |",
+        "|---|---:|---|",
+        f"| Sạch hoàn toàn | {sach_hoan_toan} | Không cần làm gì thêm |",
+        f"| Cần đối chiếu tay | {can_doi_chieu} | Mở `ground_truth` trong JSON, so bằng mắt — KHÔNG phải lỗi |",
+        f"| Thất bại thật sự | {that_bai} | Xem mục 'Câu chưa đạt tự động' bên dưới — cần sửa |",
+        f"| **Tổng** | **{sach_hoan_toan + can_doi_chieu + that_bai}** | (phải khớp {total}) |",
         "",
         "## Theo nhóm nghiệp vụ",
         "",
@@ -464,11 +482,24 @@ def main() -> int:
         print(f"  CANH BAO: sinh Markdown loi ({type(exc).__name__}: {exc}) - "
               f"nhung JSON o tren van du du lieu, khong mat gi.")
 
-    print(f"\nKET QUA: {auto_pass}/{len(results)} dat tu dong.")
-    needs_review = sum(1 for r in results if r["grade"]["needs_human_review"])
-    if needs_review:
-        print(f"  {needs_review} cau dang 'top N' can nguoi doi chieu tay - xem ground_truth trong JSON.")
-    return 0 if auto_pass == len(results) else 1
+    # 18/08/2026: "dat tu dong" va "can doi chieu tay" la 2 CO DOC LAP - 1 cau "top N" khong
+    # dinh loi P0 nao khac se dong thoi True o CA HAI, nen in rieng roi cong lai se ra > tong so
+    # cau (dung xay ra tren may 24: 31 + 65 = 96 != 90, gay hieu nham). Chia lai thanh 3 nhom
+    # LOAI TRU LAN NHAU, cong dung bang tong.
+    sach_hoan_toan = sum(1 for r in results
+                         if r["grade"]["passed_auto"] and not r["grade"]["needs_human_review"])
+    can_doi_chieu = sum(1 for r in results
+                        if r["grade"]["passed_auto"] and r["grade"]["needs_human_review"])
+    that_bai = sum(1 for r in results if not r["grade"]["passed_auto"])
+    assert sach_hoan_toan + can_doi_chieu + that_bai == len(results)  # 3 nhom PHAI khop tong
+
+    print(f"\nKET QUA ({len(results)} cau):")
+    print(f"  Sach hoan toan (khong can lam gi them) : {sach_hoan_toan}")
+    print(f"  Can nguoi doi chieu tay ('top N')       : {can_doi_chieu}  (KHONG phai loi - "
+          f"xem ground_truth trong JSON)")
+    print(f"  That bai that su (co P0)                : {that_bai}  <-- xem muc 'Cau chua dat "
+          f"tu dong' trong file .md")
+    return 0 if that_bai == 0 else 1
 
 
 if __name__ == "__main__":
