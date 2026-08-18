@@ -44,6 +44,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import decimal
 import importlib.util
 import io
 import json
@@ -82,6 +83,37 @@ FORECAST_LEAK_MARKERS = ("dự báo", "du bao", "ước tính", "uoc tinh", "for
 COMPACT_MAX_ROWS = 3
 COMPACT_MAX_NUMERIC_CELLS = 12
 MIN_DIGIT_RUN = 5  # duoi muc nay de tranh khop nham so trang/phan tram/thu tu dong
+
+
+def _json_safe(value: Any) -> Any:
+    """default= cho json.dumps: ket qua checker SQL Server tra ve nguyen kieu driver
+    (decimal.Decimal cho cot tien, datetime.date/datetime cho cot ngay) - json chuan KHONG
+    biet serialize 2 kieu nay va se nem TypeError.
+
+    18/08/2026 (thuc te, khong phai gia dinh): chay that 90 cau tren may 24, TON TIEN VA THOI
+    GIAN GOI CHATBOT THAT XONG CA 90 CAU, roi vo ngay o dong ghi file CUOI CUNG vi dung ground
+    truth co cot decimal - mat trang toan bo ket qua da tra tien, phai chay lai tu dau. Chuyen
+    Decimal thanh str() (giu nguyen chinh xac, khong quy tron qua float) thay vi so nguyen/thuc,
+    vi day la file bang chung de nguoi kiem doi chieu, khong phai so dung de tinh toan tiep."""
+    if isinstance(value, decimal.Decimal):
+        return str(value)
+    if isinstance(value, (dt.date, dt.datetime)):
+        return value.isoformat()
+    if isinstance(value, (bytes, bytearray)):
+        return value.decode("utf-8", errors="replace")
+    return str(value)
+
+
+def _dump_results_or_die_trying(payload: dict, json_path: Path) -> None:
+    """Ghi JSON voi bo chuyen doi kieu biet truoc (_json_safe). Neu VAN con kieu la chua tung
+    thay (tuong lai checker moi tra ve kieu khac), rong bien ca xuong default=str (chuyen MOI
+    thu thanh chuoi, khong the that bai voi bat ky doi tuong Python nao) - tha co file xau con
+    hon lai mat trang mot lan chay da ton tien nhu 18/08/2026."""
+    try:
+        text = json.dumps(payload, ensure_ascii=False, indent=2, default=_json_safe)
+    except TypeError:
+        text = json.dumps(payload, ensure_ascii=False, indent=2, default=str)
+    json_path.write_text(text, encoding="utf-8")
 
 
 def _load_module(name: str, path: Path):
@@ -419,12 +451,20 @@ def main() -> int:
     auto_pass = sum(1 for r in results if r["grade"]["passed_auto"])
     payload = {"label": args.label, "run_at": dt.datetime.now().isoformat(),
               "total": len(results), "passed_auto": auto_pass, "results": results}
-    json_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-    md_path.write_text(render_markdown(results, args.label), encoding="utf-8")
+
+    # Ghi JSON TRUOC, tach rieng khoi Markdown: da hoi that 90 cau (ton tien + thoi gian that)
+    # truoc khi toi diem nay, nen tu day tro di TUYET DOI khong duoc de 1 loi ren tiep (vd
+    # render_markdown lam vo mot cach khac) lam mat ket qua da co trong tay.
+    _dump_results_or_die_trying(payload, json_path)
+    print(f"  JSON: {json_path}")
+    try:
+        md_path.write_text(render_markdown(results, args.label), encoding="utf-8")
+        print(f"  Markdown: {md_path}")
+    except Exception as exc:
+        print(f"  CANH BAO: sinh Markdown loi ({type(exc).__name__}: {exc}) - "
+              f"nhung JSON o tren van du du lieu, khong mat gi.")
 
     print(f"\nKET QUA: {auto_pass}/{len(results)} dat tu dong.")
-    print(f"  JSON: {json_path}")
-    print(f"  Markdown: {md_path}")
     needs_review = sum(1 for r in results if r["grade"]["needs_human_review"])
     if needs_review:
         print(f"  {needs_review} cau dang 'top N' can nguoi doi chieu tay - xem ground_truth trong JSON.")
