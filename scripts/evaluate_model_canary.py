@@ -25,7 +25,12 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 BACKEND = Path(os.environ.get("DNH_BACKEND_DIR", ROOT / "backend"))
-sys.path.insert(0, str(BACKEND))
+# APPEND, khong insert(0): script nay cung duoc tests/test_model_canary.py nap dong bang importlib
+# trong CUNG mot tien trinh pytest. insert(0) day backend/ len dau sys.path, che mat main.py o goc
+# repo va lam tests/test_phase1_phase2.py vo ngay luc thu thap ("cannot import name send_daily_digest
+# from main"). Da dinh dung loi nay 3 lan o cac file test khac (12-17/08/2026) - day la nguon con sot.
+if str(BACKEND) not in sys.path:
+    sys.path.append(str(BACKEND))
 try:
     sys.stdout.reconfigure(encoding="utf-8")
 except Exception:
