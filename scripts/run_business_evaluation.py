@@ -69,6 +69,33 @@ try:
 except Exception:
     pass
 
+
+def _load_env_before_first_call() -> None:
+    """Nap backend/.env vao os.environ TRUOC KHI goi nl2sql.ask() lan dau.
+
+    18/08/2026 (thuc te, khong phai gia dinh): chay that 90 cau, CAU DAU TIEN (Q001) tra ve
+    '⚠️ Chua cau hinh API Key' - KHONG PHAI vi thieu key that, ma vi kich ban nay chay nhu SCRIPT
+    DOC LAP (khong qua backend/main.py, noi duy nhat tu goi load_env() khi khoi dong service that).
+    ANTHROPIC_API_KEY chi vo tinh xuat hien trong os.environ SAU KHI mot tool nao do cham toi SQL
+    Server song lan dau (query_engine._get_engine("bravo") tu goi _load_project_connection_env(),
+    nap CA FILE .env nhu mot tac dung phu) - nen CAC CAU DAU, truoc khi co tool nao cham Bravo,
+    deu dinh loi nay va bi cham diem oan la "khong goi tool" (tu bia du lieu), trong khi that ra
+    la ha tang chua san sang, khong lien quan gi toi chat luong tra loi.
+    Sua bang cach tu nap .env O DAY, giong het main.py::load_env() - dam bao moi cau, ke ca cau
+    dau tien, chay trong cung mot dieu kien nhu production that."""
+    for env_path in (BACKEND / ".env", ROOT / ".env"):
+        if not env_path.exists():
+            continue
+        with io.open(env_path, encoding="utf-8") as f:
+            for raw in f:
+                line = raw.strip()
+                if line and not line.startswith("#") and "=" in line:
+                    k, v = line.split("=", 1)
+                    os.environ.setdefault(k.strip(), v.strip())
+
+
+_load_env_before_first_call()
+
 AUDIT_LOG = BACKEND / "logs" / "audit_log.jsonl"
 COST_LOG = BACKEND / "logs" / "cost_log.jsonl"
 RESULTS_DIR = ROOT / "results"
