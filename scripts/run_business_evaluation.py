@@ -185,6 +185,29 @@ def _digits_of(value: Any) -> str:
 _FORMATTED_NUMBER = re.compile(r"\d{1,3}(?:[.,]\d{3})+|\d+")
 
 
+# 18/08/2026 (thuc te): Q003 tren du lieu that tra loi "Cao nhat: 27/07 voi 6,54 ty dong" - KHONG
+# kem so nguyen day du nhu quy uoc thay o cac tool bao cao chuan (report_templates.py::money()).
+# Day la cach tra loi HOP LY cho cau hoi dang "ngay nao cao nhat" (khong ai muon doc so le 11 chu
+# so cho moi ngay) - quy uoc so nguyen day du chi dang tin cho tool CO DINH, khong phai cho SQL
+# TU DO/prose tu do cua model. Neu khong xu ly rieng, MOI cau kieu nay bi bao "sai_so_lieu" oan.
+# Vi VN dung dau PHAY lam dau THAP PHAN o day (khac dau CHAM ngan nghin trong so nguyen day du).
+_ROUNDED_UNIT = re.compile(r"(\d+(?:[.,]\d+)?)\s*(tỷ|ty|triệu|trieu|nghìn|nghin|ngàn|ngan)\b",
+                          re.IGNORECASE)
+_UNIT_SCALE = {"tỷ": 1e9, "ty": 1e9, "triệu": 1e6, "trieu": 1e6,
+              "nghìn": 1e3, "nghin": 1e3, "ngàn": 1e3, "ngan": 1e3}
+_ROUNDING_TOLERANCE = 0.01  # 1% - du rong cho lam tron 2 chu so thap phan o thang ty, du chat
+
+
+def _rounded_numbers_in_text(text: str) -> list[float]:
+    out = []
+    for num_str, unit in _ROUNDED_UNIT.findall(text or ""):
+        try:
+            out.append(float(num_str.replace(",", ".")) * _UNIT_SCALE[unit.lower()])
+        except (ValueError, KeyError):
+            continue
+    return out
+
+
 def _significant_digit_runs(text: str, min_len: int = MIN_DIGIT_RUN) -> set[str]:
     runs = set()
     for match in _FORMATTED_NUMBER.findall(text or ""):
@@ -216,6 +239,21 @@ def _is_compact(ground_truth: dict) -> bool:
 
 
 def _audit_by_session(session_ids: set[str]) -> dict[str, set[str]]:
+    """Tool nao da chay cho tung session, doc tu audit_log.jsonl.
+
+    18/08/2026 (thuc te, khong phai gia dinh): chay that 90 cau, 48 cau bi cham "khong_goi_tool"
+    OAN - doc lai answer thi toan la cau tra loi CO SO LIEU THAT, chi tiet, bang bieu (vd "10.384
+    dong cong no", "642 khach hang", "2.257.428 ban ghi lien ket CTKM"). Nguyen nhan: regex cu chi
+    nhan dien <template:TEN>(...) - dung dinh dang cua call_template() (report_templates.py). Cau
+    hoi phuc tap khong co template co dinh (tim nhan vien trung ma, khach vua doanh thu lon vua no
+    qua han, cap san pham hay mua cung...) duoc tra loi qua run_query() (query_engine.py) - SQL TU
+    DO, ghi log voi "sql": <chuoi SQL tho>, KHONG co tag <template:>. Day van la mot TOOL THAT,
+    chay tren du lieu that (co validate read-only, co audit, co gioi han dong) - chi la khong
+    mang ten co dinh. Bo sot no la nguyen nhan chinh cua 48/49 ca "khong_goi_tool" sai.
+
+    Phan biet 2 dang bang su co mat cua khoa "db": call_template() KHONG bao gio ghi khoa nay
+    (xem report_templates.py::call_template, entry chi co ts/username/question/sql/session_id),
+    con run_query() LUON ghi (entry["db"] = db) - dang tin cay hon la doan qua hinh dang chuoi sql."""
     found: dict[str, set[str]] = {sid: set() for sid in session_ids}
     if not AUDIT_LOG.is_file():
         return found
@@ -231,6 +269,8 @@ def _audit_by_session(session_ids: set[str]) -> dict[str, set[str]]:
             match = re.search(r"<template:([a-zA-Z_]+)>", str(item.get("sql") or ""))
             if match:
                 found[sid].add(match.group(1))
+            elif "db" in item and item.get("status") == "ok":
+                found[sid].add(f"sql_tu_do:{item['db']}")
     return found
 
 
@@ -292,12 +332,27 @@ def grade_case(case, answer: str, error: Optional[str], tools_called: list[str],
         if _is_compact(ground_truth):
             gt_numbers = _ground_truth_numbers(ground_truth)
             ans_numbers = _significant_digit_runs(answer)
-            missing = gt_numbers - ans_numbers
-            if gt_numbers and missing:
+            missing_exact = gt_numbers - ans_numbers
+            # Truoc khi ket luan la sai, thu khop voi so DA LAM TRON trong cau tra loi ("6,54 ty")
+            # - hop le cho cau hoi dang tuong thuat (vd "ngay nao cao nhat"), khac han voi bao cao
+            # co dinh luon in so nguyen day du. Chi thu khi CO thieu, tranh tinh toan thua.
+            still_missing = missing_exact
+            if missing_exact:
+                rounded_vals = _rounded_numbers_in_text(answer)
+                still_missing = {m for m in missing_exact
+                                 if not (int(m) > 0 and any(
+                                     abs(rv - int(m)) / int(m) < _ROUNDING_TOLERANCE
+                                     for rv in rounded_vals))}
+            if gt_numbers and still_missing:
                 problems.append({"severity": "P0", "code": "sai_so_lieu",
-                                 "detail": f"Thieu {len(missing)} so tu SQL Server trong cau "
-                                           f"tra loi: {sorted(missing)[:5]}"})
+                                 "detail": f"Thieu {len(still_missing)} so tu SQL Server (da thu "
+                                           f"ca dang lam tron nhu '6,54 ty'): "
+                                           f"{sorted(still_missing)[:5]}"})
                 ground_truth_check = "fail"
+            elif gt_numbers and missing_exact:
+                # Khop nho khop LAM TRON, khong phai so nguyen day du - ghi ro de khong ai tuong
+                # day la khop tuyet doi giong cac checker khac.
+                ground_truth_check = "pass_khop_so_lam_tron"
             elif gt_numbers:
                 ground_truth_check = "pass"
             else:
