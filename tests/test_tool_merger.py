@@ -21,7 +21,13 @@ Hoac:  python tests/test_tool_merger.py
 import os
 import sys
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "backend"))
+# APPEND, khong insert(0): backend/ co main.py rieng, day len dau se che mat main.py o goc repo
+# va lam tests/test_phase1_phase2.py vo ngay luc thu thap ("cannot import name send_daily_digest
+# from main"). Da dinh dung loi nay 1 lan (test_forecast_va_scope.py, 12/08/2026) - day la ban
+# goc tu 11/08, truoc khi quy uoc append duoc lap.
+_BACKEND = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "backend")
+if _BACKEND not in sys.path:
+    sys.path.append(_BACKEND)
 
 from nl2sql import _merge_bulk_tool_calls, BULK_TOOLS_MAP
 

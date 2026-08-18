@@ -8,8 +8,11 @@ import pytest
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BACKEND = os.path.join(ROOT, "backend")
+# APPEND, khong insert(0): backend/ co main.py rieng, day len dau se che mat main.py o goc repo
+# va lam tests/test_phase1_phase2.py vo ngay luc thu thap ("cannot import name send_daily_digest
+# from main"). Da dinh dung loi nay 1 lan (test_forecast_va_scope.py, 12/08/2026).
 if BACKEND not in sys.path:
-    sys.path.insert(0, BACKEND)
+    sys.path.append(BACKEND)
 
 import nl2sql  # noqa: E402
 import query_engine  # noqa: E402
