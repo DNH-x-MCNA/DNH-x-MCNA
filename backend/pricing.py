@@ -39,27 +39,47 @@ MODEL_PRICING = {
         "cache_write": 6.25,
     },
 
-    # 13/08/2026 - DeepSeek V4, dung de THU NGHIEM doi nha cung cap (xem LLM_BASE_URL trong nl2sql.py).
-    # DeepSeek tinh gia theo GIO: gia cao diem gap doi gia thap diem. Bang nay chi co MOT don gia nen
-    # co y lay GIA CAO DIEM - bao cao chi phi se cao hon thuc te thay vi thap hon. Chon huong nay vi
-    # 05/08/2026 da dinh mot lan bao THIEU 37% chi phi cache-write, va bao thieu thi nguy hiem hon
-    # bao thua (tuong con re, dung thoai mai, den cuoi thang moi vo le).
-    #
-    # DeepSeek KHONG tinh tien rieng cho viec ghi cache - gia "cache miss" da bao gom. Nen cache_write
-    # de 0, KHONG phai vi chua biet gia ma vi that su khong co khoan nay.
+    # DeepSeek V4 - bang gia cong bo chinh thuc, kiem tra 18/08/2026 (USD / 1M token).
+    # Khong dung bang gia "cao diem" cu: no cao hon gia cong bo 3-12 lan, lam dashboard va so sanh
+    # nha cung cap bi sai. DeepSeek khong tinh rieng cache write; cache miss da bao gom khoan nay.
     "deepseek-v4-pro": {
-        "input": 1.32,        # cache miss, cao diem (thap diem 0.66)
-        "output": 3.96,       # cao diem (thap diem 1.98)
-        "cache_read": 0.044,  # cache hit, cao diem (thap diem 0.022)
+        "input": 0.435,       # cache miss
+        "output": 0.870,
+        "cache_read": 0.003625,  # cache hit
         "cache_write": 0.0,
     },
     "deepseek-v4-flash": {
-        "input": 0.44,        # cache miss, cao diem (thap diem 0.22)
-        "output": 1.32,       # cao diem (thap diem 0.66)
-        "cache_read": 0.014,  # cache hit, cao diem (thap diem 0.007)
+        "input": 0.140,       # cache miss
+        "output": 0.280,
+        "cache_read": 0.0028, # cache hit
         "cache_write": 0.0,
     },
 }
+
+# Ghi version vao tung dong cost log de co the biet CHINH XAC dong nao tinh theo bang gia nao.
+# Lich su DeepSeek truoc 18/08 phai duoc tinh lai bang scripts/reprice_cost_log.py; khong duoc
+# tu y coi cost_usd cu la "chi phi thuc te" sau khi bang gia nguon da duoc sua.
+PRICING_VERSION_BY_PREFIX = {
+    "claude-": "anthropic-intro-2026-08-31",
+    "deepseek-": "deepseek-official-2026-08-18",
+}
+
+
+def pricing_version_for_model(model: str) -> str:
+    normalized = (model or "").strip().lower()
+    for prefix, version in PRICING_VERSION_BY_PREFIX.items():
+        if normalized.startswith(prefix):
+            return version
+    return "unpriced"
+
+
+def pricing_source_for_model(model: str) -> str:
+    normalized = (model or "").strip().lower()
+    if normalized.startswith("deepseek-"):
+        return "DeepSeek official pricing checked 2026-08-18"
+    if normalized.startswith("claude-"):
+        return "Anthropic pricing (introductory Sonnet 5 where applicable)"
+    return "No configured price"
 
 # Ty gia quy doi USD -> VND hien thi tren dashboard va bao cao. NGUON DUY NHAT - truoc day so 25400
 # bi chep cung o 8 cho trong 4 file (main.py x4, report_templates.py, audit_cost.py, page.tsx), sua
