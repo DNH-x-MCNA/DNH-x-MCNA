@@ -130,6 +130,27 @@ def test_checker_gon_du_so_thi_dat():
     assert r["needs_human_review"] is False
 
 
+def test_khop_so_lam_tron_kieu_viet_nam_nhu_Q003_that():
+    """Dung nguyen van cau tra loi that cua Q003 tren may 24 18/08/2026: '6,54 ty dong' - khong
+    kem so nguyen day du. Truoc ban va bi cham 'sai_so_lieu' oan vi khong co digit-run nao khop."""
+    gt = {"status": "ok", "rows": [[6_540_000_000]]}
+    answer = ("Trong tháng 7/2026 (27 ngày có phát sinh):\n\n- **Cao nhất:** 27/07 với "
+             "6,54 tỷ đồng\n- **Thấp nhất:** 04/07 với 0,39 tỷ đồng (387,6 triệu)")
+    r = runner.grade_case(BASE_CASE, answer, None, ["get_revenue_by_channel"], gt)
+    assert r["passed_auto"] is True
+    assert r["ground_truth_check"] == "pass_khop_so_lam_tron"
+
+
+def test_so_lam_tron_qua_xa_van_bi_bao_sai():
+    """Khoan dung KHONG duoc thanh lo hong: '7 ty' lech 7% so voi 6,54 ty phai VAN bi bao sai,
+    khong duoc lam tron cuu no."""
+    gt = {"status": "ok", "rows": [[6_540_000_000]]}
+    answer = "Cao nhất khoảng 7 tỷ đồng."
+    r = runner.grade_case(BASE_CASE, answer, None, ["get_revenue_by_channel"], gt)
+    assert r["passed_auto"] is False
+    assert r["ground_truth_check"] == "fail"
+
+
 def test_checker_gon_thieu_so_thi_sai_so_lieu():
     gt = {"status": "ok", "rows": [[39_327_016_119, 35_508_451_204]]}
     answer = "OTC: 39.327.016.119 đ, ETC: khoảng 35 tỷ"  # thieu so ETC chinh xac
@@ -306,6 +327,36 @@ def test_dump_results_khong_bao_gio_mat_du_lieu_du_json_safe_bo_sot_kieu(tmp_pat
     assert out.exists()
     restored = json.loads(out.read_text(encoding="utf-8"))
     assert "kieu-la" in restored["results"][0]["gia_tri"]
+
+
+# ------------------------------------------- SQL tu do cung phai duoc tinh la tool (tai hien 18/08)
+
+def test_audit_by_session_nhan_dien_ca_sql_tu_do_khong_chi_template(tmp_path, monkeypatch):
+    """Tai hien DUNG hinh dang dong log that cua Q003 (run_query, khong co <template:>) va Q037
+    (call_template, co <template:>) - ca hai deu phai duoc tinh la 'co goi tool'. Truoc ban va,
+    48/49 cau dung SQL tu do bi cham oan 'khong_goi_tool' vi regex cu chi nhan <template:>."""
+    log = tmp_path / "audit_log.jsonl"
+    dong = [
+        # Dung dinh dang that cua run_query() (query_engine.py) - SQL tho, co khoa "db"
+        {"session_id": "s-adhoc", "sql": "WITH otc AS (SELECT doc_date, SUM(amount9) AS rev "
+                                         "FROM vhoadon_otc WHERE doc_date...", "db": "local",
+         "status": "ok"},
+        # Dung dinh dang that cua call_template() (report_templates.py) - co tag <template:>
+        {"session_id": "s-template", "sql": "<template:get_receivables_overview>({})",
+         "status": "ok"},
+        # SQL tu do nhung THAT BAI (bi tu choi/loi) - KHONG duoc tinh la da co tool chay
+        {"session_id": "s-adhoc-loi", "sql": "SELECT * FROM x", "db": "local", "status": "rejected"},
+    ]
+    with io.open(log, "w", encoding="utf-8") as f:
+        for d in dong:
+            f.write(json.dumps(d) + "\n")
+    monkeypatch.setattr(runner, "AUDIT_LOG", log)
+
+    found = runner._audit_by_session({"s-adhoc", "s-template", "s-adhoc-loi"})
+
+    assert found["s-adhoc"] == {"sql_tu_do:local"}
+    assert found["s-template"] == {"get_receivables_overview"}
+    assert found["s-adhoc-loi"] == set()  # that bai thi khong tinh
 
 
 # ---------------------------------------------------------------- nap .env (tai hien loi that 18/08)
