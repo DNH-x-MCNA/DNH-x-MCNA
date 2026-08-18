@@ -5,6 +5,8 @@ không gọi model thật, không cần SQL Server. Chạy được trên bất 
 Trọng tâm: chứng minh máy chỉ tự tin PHÁN khi thật sự chắc (checker gọn, đủ số), và biết
 NHẬN RA khi nó không chắc (checker dạng danh sách -> cần_đối_chiếu_tay, không âm thầm PASS).
 """
+import datetime as _dt
+import decimal
 import importlib.util
 import io
 import json
@@ -239,6 +241,47 @@ def test_selected_cases_loc_theo_nhom_va_gioi_han():
     args2 = SimpleNamespace(case=None, group=None, audience=None, limit=1)
     selected2 = runner._selected_cases(_FakeSuite(), args2)
     assert len(selected2) == 1
+
+
+# ---------------------------------------------------------------- ghi JSON (tai hien loi that 18/08)
+
+def test_ghi_json_khong_vo_voi_decimal_va_date_tu_sql_server():
+    """Tai hien DUNG loi that xay ra tren may 24 18/08/2026: chay that 90 cau, TON TIEN GOI
+    CHATBOT THAT, roi vo o buoc ghi file cuoi cung vi ground_truth co decimal.Decimal (cot tien
+    SQL Server) va datetime.date (cot ngay) - 2 kieu json chuan khong biet serialize. Phai KHONG
+    duoc nem loi, va phai giu nguyen gia tri (khong quy tron sai) trong file ghi ra."""
+    payload = {
+        "label": "test", "total": 1,
+        "results": [{
+            "case": {"id": "Q037"}, "answer": "...",
+            "ground_truth": {
+                "status": "ok",
+                "rows": [[decimal.Decimal("39327016119.00"), _dt.date(2026, 7, 31),
+                         _dt.datetime(2026, 7, 31, 14, 9, 0)]],
+            },
+        }],
+    }
+    text = json.dumps(payload, ensure_ascii=False, indent=2, default=runner._json_safe)
+    restored = json.loads(text)
+    row = restored["results"][0]["ground_truth"]["rows"][0]
+    assert row[0] == "39327016119.00"  # giu nguyen chinh xac, KHONG quy tron thanh float
+    assert row[1] == "2026-07-31"
+    assert row[2] == "2026-07-31T14:09:00"
+
+
+def test_dump_results_khong_bao_gio_mat_du_lieu_du_json_safe_bo_sot_kieu(tmp_path):
+    """Neu trong tuong lai co checker tra ve mot kieu MOI ma _json_safe chua tung nghi toi,
+    van khong duoc phep mat trang ca lan chay - phai co phuong an du phong."""
+    class KieuLa:
+        def __str__(self):
+            return "kieu-la-nhung-van-doc-duoc"
+
+    payload = {"label": "test", "results": [{"gia_tri": KieuLa()}]}
+    out = tmp_path / "ket-qua.json"
+    runner._dump_results_or_die_trying(payload, out)
+    assert out.exists()
+    restored = json.loads(out.read_text(encoding="utf-8"))
+    assert "kieu-la" in restored["results"][0]["gia_tri"]
 
 
 def test_dry_run_khong_goi_ask_khong_ghi_log(tmp_path, monkeypatch, capsys):
