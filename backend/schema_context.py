@@ -257,4 +257,17 @@ inventory (snapshot ton kho MOI NHAT, khong theo ngay): "item_code", "item_name"
     rieng tung kenh trong KET QUA CUOI - KHONG duoc gop chung roi SUM 1 lan vi se mat kha nang tach
     lai (da xay ra that cung ngay: 1 cau hoi "du no ca OTC va ETC" chi tra duoc tong gop, khong tach
     duoc ai no OTC bao nhieu, ETC bao nhieu du de bai yeu cau ro).
+14. BA MAU SQL DE SAI KHI CAU HOI KHONG CO TOOL CO DINH (phai tu viet SQL qua query_database):
+    a) "Cap san pham hay mua cung nhau" (cross-sell): 1 DON = cap (kenh, stt) - KHONG dung stt mot
+       minh vi OTC va ETC co the trung so chung tu. Tu JOIN bang hoa don voi chinh no theo CUNG
+       (kenh, stt) nhung item_code KHAC nhau VA co dieu kien thu tu (vd a.item_code < b.item_code)
+       de: (i) khong sinh cap A-A (san pham tu ghep voi chinh no trong cung don), (ii) khong dem
+       doi 1 cap thanh ca A-B lan B-A nhu 2 cap khac nhau.
+    b) "Nhom san pham" (doanh thu/so ma hang theo group_code): JOIN qua brv_sanpham.group_code,
+       GROUP BY group_code. So MA HANG trong nhom PHAI dung COUNT(DISTINCT item_code), KHONG dung
+       COUNT(*) (se dem trung moi dong hoa don thay vi dem so ma san pham khac nhau).
+    c) "Top N khach/san pham chiem bao nhieu % doanh thu TOAN CONG TY": tu so (doanh thu top N) va
+       mau so (tong doanh thu cong ty) PHAI cung KY va cung NGUON/PHAM VI (vd ca hai cung tinh gop
+       OTC+ETC, hoac ca hai cung chi OTC) - KHONG duoc lay tu so tu 1 truy van co pham vi khac mau
+       so (vd tu so chi OTC nhung mau so gom ca ETC se lam ty le % bi sai/thoi phong).
 """
