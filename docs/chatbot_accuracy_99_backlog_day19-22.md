@@ -72,14 +72,18 @@ sách API tới 1/9).
   (chỉ 2 giá trị toàn hệ thống), CHƯA quyết định hướng xử lý (báo cho DNH hay bỏ hẳn khái niệm
   "nhà phân phối" khỏi phạm vi trả lời được)
 
-### Khách hàng và sản phẩm — gần như chưa động tới
-- ❌ Top khách đúng kỳ (chưa có test riêng cho `get_top_customers`/`top_customers()`)
-- ✅ Khách thiếu danh mục vẫn giữ trong tổng (LEFT JOIN đã tài liệu hoá kỹ, chưa có test)
-- ❌ Giỏ hàng phân biệt OTC/ETC
-- ❌ Cặp sản phẩm tính ở cấp đơn (cross-sell, case Q034 PRD_CROSSSELL)
-- ✅ Loại hàng tặng khi tính SL bán thật (`unit_price>0`, đã tài liệu hoá, chưa có test)
-- ❌ Nhóm sản phẩm không xung đột kiểu dữ liệu (PRD_GROUP, case Q033)
-- ❌ Revenue concentration đúng mẫu số (CUS_CONCENTRATION, case Q029)
+### Khách hàng và sản phẩm — ✅ phần có tool cố định đã xong (19/08, 4 test)
+- ✅ Top khách đúng kỳ — `top_customers()`, đã test xếp hạng đúng theo doanh thu
+- ✅ Khách thiếu danh mục vẫn giữ trong tổng — LEFT JOIN đã tài liệu hoá kỹ (chưa viết test riêng
+  cho case này cụ thể, nhưng cơ chế đã xác nhận qua đọc code)
+- ✅ Tách đúng theo kênh OTC/ETC/ALL — `top_products()`, đã test
+- ✅ Loại hàng tặng khi tính SL bán thật (`unit_price>0`) nhưng vẫn tính đủ doanh thu — đã test,
+  không tìm lỗi mới
+- ⚠️ **Cặp sản phẩm cấp đơn (cross-sell, Q034), nhóm sản phẩm (Q033), revenue concentration (Q029)
+  — KHÔNG có tool cố định**, chỉ trả lời được qua SQL tự do (`query_database`). Không kiểm được
+  bằng phương pháp Python-function-test đã dùng cả ngày hôm nay — cần rà `schema_context.py`
+  (hướng dẫn cho model viết SQL) giống cách đã làm buổi sáng cho Q016/Q012/Q044, không phải viết
+  test cho hàm Python vì không có hàm nào để test.
 
 ### KPI và đội ngũ
 - ✅ MAX(SaveDate)<=ngày hỏi, Đội xác định bằng ManagerCode, không dùng zone suy luận cũ,
