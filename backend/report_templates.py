@@ -143,9 +143,9 @@ def sync_freshness_note(stale_minutes: int = 60) -> str:
             warnings.append(f"{table}: láº§n Ä‘á»“ng bá»™ gáº§n nháº¥t cÃ¡ch Ä‘Ã¢y {age_min:.0f} phÃºt ({last_synced_at})")
     if not warnings:
         return ""
-    return ("Cáº¢NH BÃO Äá»’NG Bá»˜: cÃ³ thá»ƒ tiáº¿n trÃ¬nh sync Ä‘Ã£ TREO/Lá»–I â€” " + "; ".join(warnings) +
-            " (chu ká»³ bÃ¬nh thÆ°á»ng 15-30 phÃºt). PHáº¢I cáº£nh bÃ¡o rÃµ ngÆ°á»i dÃ¹ng trong cÃ¢u tráº£ lá»i ráº±ng "
-            "dá»¯ liá»‡u cÃ³ thá»ƒ CÅ¨ HÆ N BÃŒNH THÆ¯á»œNG, khÃ´ng chá»‰ nÃ³i ngÃ y dá»¯ liá»‡u nhÆ° bÃ¬nh thÆ°á»ng.")
+    return ("CẢNH BÁO ĐỒNG BỘ: có thể tiến trình sync đã TREO/LỖI — " + "; ".join(warnings) +
+            " (chu kỳ bình thường 15-30 phút). PHẢI cảnh báo rõ người dùng trong câu trả lời rằng "
+            "dữ liệu có thể CŨ HƠN BÌNH THƯỜNG, không chỉ nói ngày dữ liệu như bình thường.")
 
 
 def data_freshness_note() -> str:
