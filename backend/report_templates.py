@@ -3344,8 +3344,21 @@ def salary_achievement_summary(save_date: str = None, scope_area_code: str = Non
                                scope_employee_code: str = None, scope_role: str = None) -> dict:
     """Tong hop so luong nhan vien dat cac moc thuong tien do (V15, V22, V25) va ASO.
     Tra ve so luong dat dieu kien va ty le % tren tong so nhan vien thuoc pham vi.
-    Phan quyen: scope_employee_code gioi han ve doi cua QLV."""
-    emp_sql, emp_params = _employee_scope_clause(scope_employee_code, "f")
+    Phan quyen: scope_employee_code gioi han ve doi cua QLV.
+
+    19/08/2026: SUA loi dinh dang ma - truoc day dung _employee_scope_clause() (qua
+    _get_team_dms_ids(), tra ve DMSId dung de loc BANG HOA DON vhoadon_otc/etc), nhung
+    fact_thongketinhluong.employee_code duoc dong bo tu CHINH EmployeeCode tho cua Bravo (xem
+    sync_warehouse.py::sync_fact_thongketinhluong - SELECT EmployeeCode, khong phai EmpDMSCode),
+    KHAC dinh dang voi DMSId (vd EmployeeCode='DNH00832' nhung DMSId='HYE_02' - da tai lieu hoa o
+    employee_daily_kpi()). Loc DMSId len cot EmployeeCode khien QLV LUON nhan 'khong co du lieu'
+    du doi minh co du lieu that. Loc TRUC TIEP tren manager_code cua CHINH bang nay - cung dinh
+    dang voi employee_code trong CUNG 1 bang, khong con nguy co lech nguon/dinh dang."""
+    if scope_employee_code:
+        emp_sql = " AND (f.employee_code=? OR f.manager_code=?)"
+        emp_params = (scope_employee_code, scope_employee_code)
+    else:
+        emp_sql, emp_params = "", ()
     area_sql = " AND f.area_code=?" if scope_area_code else ""
     area_params = (scope_area_code,) if scope_area_code else ()
     

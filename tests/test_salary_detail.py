@@ -293,3 +293,43 @@ def test_meets_bonus_threshold_khac_nhau_theo_vai_tro(tmp_path, monkeypatch):
 
     assert tdv["bonus_threshold_pct"] == 65 and tdv["meets_bonus_threshold"] is True
     assert qlv["bonus_threshold_pct"] == 70 and qlv["meets_bonus_threshold"] is False
+
+
+def test_salary_achievement_summary_qlv_scope_khop_dung_du_lieu_that(tmp_path, monkeypatch):
+    """19/08/2026 (thuc te): salary_achievement_summary() dung _employee_scope_clause() ->
+    _get_team_dms_ids() - ham nay tra ve DMSId (dung de loc BANG HOA DON vhoadon_otc/etc). Nhung
+    sync_warehouse.py::sync_fact_thongketinhluong() dong bo fact_thongketinhluong.employee_code tu
+    CHINH EmployeeCode tho cua Bravo (khong phai EmpDMSCode) - vd EmployeeCode='DNH00832' nhung
+    DMSId='HYE_02' (da tai lieu hoa trong employee_daily_kpi()). Neu loc nham DMSId len bang luong,
+    QLV se KHONG BAO GIO thay duoc du lieu that cua doi minh."""
+    db_path = tmp_path / "warehouse.db"
+    conn = sqlite3.connect(db_path)
+    conn.executescript(
+        f"""
+        CREATE TABLE fact_thongketinhluong ({', '.join(c + ' TEXT' if c in
+            ('employee_code','employee_name','position_code','area_code','area_code2','manager_code','save_date')
+            else c + ' REAL' for c in FTL_COLUMNS)});
+        CREATE TABLE dim_nhanvien (employee_code TEXT, name TEXT, is_duplicate INTEGER,
+            position_code TEXT, area_code TEXT, dmsid TEXT);
+        CREATE TABLE dmssx_nhanvien (id_code INTEGER, name TEXT, dmscode TEXT, code TEXT, is_active TEXT);
+        CREATE TABLE fact_tonghopkhachhang (employee_code TEXT, customer_code TEXT, amount_ct REAL,
+            month_sale_target REAL, save_date TEXT, is_nc INTEGER, manager_code TEXT);
+        """
+    )
+    # employee_code THAT ('DNH00832') KHAC dmsid ('HYE_02') - dung dinh dang da tai lieu hoa.
+    conn.execute("INSERT INTO dim_nhanvien VALUES ('DNH00832','Nhan vien That',0,'TDV','MB','HYE_02')")
+    # fact_tonghopkhachhang: xac lap "DNH00832 bao cao len QLV01" de _team_of_qlv tim ra doi.
+    conn.execute("INSERT INTO fact_tonghopkhachhang VALUES "
+                "('DNH00832','KH01',1000000,2000000,'2026-07-15',0,'QLV01')")
+    _insert(conn, employee_code="DNH00832", employee_name="Nhan vien That", position_code="TDV",
+            manager_code="QLV01", save_date="2026-07-31", v25_percent=0.9,
+            v15_bonus=100_000, v22_bonus=0, v25_bonus=0, aso_bonus=0)
+    conn.commit()
+    conn.close()
+    monkeypatch.setattr(local_warehouse, "DB_PATH", str(db_path))
+
+    result = rt.salary_achievement_summary(save_date="2026-07-31", scope_employee_code="QLV01")
+
+    assert "error" not in result, f"QLV khong thay duoc doi minh: {result}"
+    assert result["total_employees"] == 1
+    assert result["v15_achieved_count"] == 1
