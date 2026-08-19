@@ -4,7 +4,7 @@ Cac truy van BAO CAO CHUAN - doc tu KHO LOCAL (SQLite, warehouse.db), duoc dong 
 qua sync_warehouse.py (xem file do). Doc local giup tra loi nhanh (<=10s) va co du lich su nhieu nam
 de so sanh, thay vi phai goi Bravo qua VPN cho moi cau hoi (cham + phu thuoc VPN on dinh).
 
-Du lieu co the tre toi da ~15-30 phut (chu ky dong bo) so voi Bravo that - chap nhan duoc cho háº§u het
+Du lieu co the tre toi da ~15-30 phut (chu ky dong bo) so voi Bravo that - chap nhan duoc cho hầu het
 cau hoi phan tich/bao cao. Neu can so lieu "ngay tuc thi", noi ro voi nguoi dung day la so lieu tai
 lan dong bo gan nhat.
 """
@@ -140,7 +140,7 @@ def sync_freshness_note(stale_minutes: int = 60) -> str:
             continue
         age_min = (dt.datetime.now() - last_dt).total_seconds() / 60
         if age_min > stale_minutes:
-            warnings.append(f"{table}: láº§n Ä‘á»“ng bá»™ gáº§n nháº¥t cÃ¡ch Ä‘Ã¢y {age_min:.0f} phÃºt ({last_synced_at})")
+            warnings.append(f"{table}: lần đồng bộ gần nhất cách đây {age_min:.0f} phút ({last_synced_at})")
     if not warnings:
         return ""
     return ("CẢNH BÁO ĐỒNG BỘ: có thể tiến trình sync đã TREO/LỖI — " + "; ".join(warnings) +
@@ -444,11 +444,11 @@ def top_customers(date_from: str, date_to: str, limit: int = 10, channel: str = 
 
 def _channel_sub_buckets():
     """Cac ban ghi 'kenh ao' trong dim_nhanvien (QLV gia dung de gan doanh thu kenh dac biet, vd
-    Modern Trade/Long Chau - Name bat dau bang 'KÃªnh', IsDuplicate=1) - KHONG phai QLV that, chi la
+    Modern Trade/Long Chau - Name bat dau bang 'Kênh', IsDuplicate=1) - KHONG phai QLV that, chi la
     cho gan doanh thu theo kenh ban hang. dmsid cua ban ghi nay khop voi vhoadon_otc.channel_code
     (tu EmpDMSCode2 tren Bravo, xem sync_warehouse.py) - CHI co o OTC, ETC khong co co che nay."""
     return _q("SELECT dmsid, name, area_code FROM dim_nhanvien "
-              "WHERE position_code='QLV' AND is_duplicate=1 AND name LIKE 'KÃªnh%' AND dmsid IS NOT NULL")
+              "WHERE position_code='QLV' AND is_duplicate=1 AND name LIKE 'Kênh%' AND dmsid IS NOT NULL")
 
 
 def revenue_by_region(date_from: str, date_to: str, scope_area_code: str = None, channel: str = "ALL",
@@ -2024,8 +2024,8 @@ def receivables_overview(top_n: int = 10, scope_area_code: str = None) -> dict:
 # do lon. Cac thang da dong (31/05, 30/06...) chi co 1 snapshot tron ven nen loi chi lo GIUA THANG.
 #
 # Cach gop: trong THANG cua fdate, moi nhan vien lay save_date moi nhat cua CHINH ho. Kiem chung
-# 29/07/2026 tren Bravo: tong chi tieu ra dung 50.967.586.921d (MB 30.781.764.408 Â· MN 13.185.822.513
-# Â· MT 7.000.000.000) - khop tung dong voi gia tri da verify, va khoi phuc du ca 3 mien.
+# 29/07/2026 tren Bravo: tong chi tieu ra dung 50.967.586.921d (MB 30.781.764.408 · MN 13.185.822.513
+# · MT 7.000.000.000) - khop tung dong voi gia tri da verify, va khoi phuc du ca 3 mien.
 # LUON truyen tham so theo thu tu (fdate, fdate).
 _MONTH_LATEST_SUBQ = """(SELECT employee_code, MAX(save_date) d FROM fact_tonghopkhachhang
                           WHERE save_date<=? AND substr(save_date,1,7)=substr(?,1,7)
@@ -2132,12 +2132,12 @@ def revenue_tree(as_of_date: str = None, area_code: str = None, scope_area_code:
     (hoac dung get_revenue_by_region cho doanh thu hoa don thuc te, khac voi so KPI o day).
 
     27/07/2026 - DONG BO voi kpi_ranking()/_rollup_tier_codes(): truoc day danh sach "QLV" duoi moi TP
-    loc truc tiep position_code='QLV' AND is_duplicate<>1, BO SOT cac NHOM/KENH nhu 'KÃªnh MT'/'Chá»£ sá»‰'
+    loc truc tiep position_code='QLV' AND is_duplicate<>1, BO SOT cac NHOM/KENH nhu 'Kênh MT'/'Chợ sỹ'
     (Mien Nam - IsDuplicate=1 vi Bravo gan trung ma, khong phai QLV that bi trung). Hau qua THUC TE: cay
     QLV/TDV cua Mien Nam ra 3,50 ty trong khi tong vung (get_revenue_by_region) la 6,25 ty - nguoi dung
     phai HOI LAI "con thieu gi" moi duoc bao thieu Kenh MT (2,73 ty) + Cho si (0,15 ty). Gio dung CHUNG
     _rollup_tier_codes(fdate) (theo manager_code THAT) lam nguon danh sach QLV, giong het kpi_ranking -
-    2 tool nay LUON phai ra cung tong 1 vung, khong con truong hop tong khop nhung bÃ³c tach le."""
+    2 tool nay LUON phai ra cung tong 1 vung, khong con truong hop tong khop nhung bóc tach le."""
     if scope_area_code:
         area_code = scope_area_code
     if as_of_date is None:
