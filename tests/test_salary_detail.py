@@ -197,6 +197,84 @@ def test_goi_hang_loat_nhieu_ma_1_loi_khong_lam_hong_ca_lo(tmp_path, monkeypatch
     assert "error" in bad
 
 
+def test_get_salary_ranking_da_dang_ky_trong_employee_scoped_templates():
+    """19/08/2026 (thuc te): truoc khi sua, 'get_salary_ranking' nam trong _PERSON_LEVEL_TEMPLATES
+    nhung KHONG nam trong _EMPLOYEE_SCOPED_TEMPLATES nhu 3 tool anh em cung domain (get_salary_detail/
+    get_salary_achievement_summary/get_salary_bonus_policy) - khien call_template() FAIL-CLOSED tu
+    choi MOI lan tai khoan QLV goi tool nay, ke ca hoi ve chinh doi minh. Day bay chong tai dien."""
+    assert "get_salary_ranking" in rt._EMPLOYEE_SCOPED_TEMPLATES
+    assert "get_salary_ranking" in rt._PERSON_LEVEL_TEMPLATES
+
+
+def test_salary_ranking_qlv_scope_chi_thay_doi_minh_va_chinh_minh(tmp_path, monkeypatch):
+    db_path = tmp_path / "warehouse.db"
+    _make_db(db_path)
+    conn = sqlite3.connect(db_path)
+    _insert(conn, employee_code="QLV01", employee_name="Quan ly A", position_code="QLV",
+            save_date="2026-07-31", v25_percent=0.9, dm_bonus=1_000_000)
+    _insert(conn, employee_code="TDV01", employee_name="Nhan vien doi A", position_code="TDV",
+            manager_code="QLV01", save_date="2026-07-31", v25_percent=0.9, dm_bonus=500_000)
+    _insert(conn, employee_code="TDV_KHAC", employee_name="Nhan vien doi khac", position_code="TDV",
+            manager_code="QLV_KHAC", save_date="2026-07-31", v25_percent=0.9, dm_bonus=9_999_999)
+    conn.commit()
+    conn.close()
+    monkeypatch.setattr(local_warehouse, "DB_PATH", str(db_path))
+
+    scoped = rt.salary_ranking(scope_employee_code="QLV01")
+    codes = {r["employee_code"] for r in scoped["ranking"]}
+
+    assert codes == {"QLV01", "TDV01"}
+    assert "TDV_KHAC" not in codes
+
+
+def test_call_template_ep_dung_scope_cho_qlv_khong_con_lo_hay_bi_chan(tmp_path, monkeypatch):
+    """Kiem qua DUNG duong san xuat that (call_template(), noi nl2sql.py goi vao) thay vi goi thang
+    salary_ranking() - xac nhan ca 2 nhanh loi cu deu da het: (1) khong con lo du lieu doi khac cho
+    QLV (truoc: scope_employee_code khong bao gio duoc ep vi thieu _PERSON_LEVEL_TEMPLATES), (2)
+    khong con bi tu choi (truoc: neu THEM vao _PERSON_LEVEL_TEMPLATES ma QUEN _EMPLOYEE_SCOPED_
+    TEMPLATES thi se fail-closed chan hoan toan)."""
+    db_path = tmp_path / "warehouse.db"
+    _make_db(db_path)
+    conn = sqlite3.connect(db_path)
+    _insert(conn, employee_code="QLV01", employee_name="A", position_code="QLV",
+            save_date="2026-07-31", v25_percent=0.9, dm_bonus=1_000_000)
+    _insert(conn, employee_code="TDV01", employee_name="B", position_code="TDV",
+            manager_code="QLV01", save_date="2026-07-31", v25_percent=0.9, dm_bonus=500_000)
+    _insert(conn, employee_code="TDV_KHAC", employee_name="C", position_code="TDV",
+            manager_code="QLV_KHAC", save_date="2026-07-31", v25_percent=0.9, dm_bonus=9_999_999)
+    conn.commit()
+    conn.close()
+    monkeypatch.setattr(local_warehouse, "DB_PATH", str(db_path))
+
+    result = rt.call_template("get_salary_ranking", {}, scope_role="qlv",
+                              scope_employee_code="QLV01", scope_area_code="MB")
+
+    assert result.get("ok") is True, f"khong duoc bi chan: {result}"
+    codes = {r["employee_code"] for r in result["result"]["ranking"]}
+    assert codes == {"QLV01", "TDV01"}
+    assert "TDV_KHAC" not in codes
+
+
+def test_salary_ranking_khong_co_scope_thi_thay_het(tmp_path, monkeypatch):
+    """Xac nhan them scope_employee_code KHONG lam vo hanh vi cu (c_level/khong truyen scope van
+    thay toan bo, dung nhu truoc khi sua)."""
+    db_path = tmp_path / "warehouse.db"
+    _make_db(db_path)
+    conn = sqlite3.connect(db_path)
+    _insert(conn, employee_code="QLV01", employee_name="A", position_code="QLV",
+            save_date="2026-07-31", v25_percent=0.9, dm_bonus=1_000_000)
+    _insert(conn, employee_code="TDV_KHAC", employee_name="B", position_code="TDV",
+            manager_code="QLV_KHAC", save_date="2026-07-31", v25_percent=0.9, dm_bonus=9_999_999)
+    conn.commit()
+    conn.close()
+    monkeypatch.setattr(local_warehouse, "DB_PATH", str(db_path))
+
+    result = rt.salary_ranking()
+    codes = {r["employee_code"] for r in result["ranking"]}
+
+    assert codes == {"QLV01", "TDV_KHAC"}
+
+
 def test_meets_bonus_threshold_khac_nhau_theo_vai_tro(tmp_path, monkeypatch):
     """TDV nguong 65%, QLV nguong 70% - cung 1 ty le 67% phai ra ket qua KHAC nhau tuy vai tro."""
     db_path = tmp_path / "warehouse.db"

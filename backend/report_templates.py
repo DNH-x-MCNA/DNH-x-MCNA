@@ -3563,7 +3563,8 @@ def _salary_detail_one(employee_code: str = None, save_date: str = None,
 
 def salary_ranking(year_month: str = None, area_code: str = None, position_code: str = None,
                    bonus_type: str = "total", limit: int = 30,
-                   scope_area_code: str = None, scope_role: str = None) -> dict:
+                   scope_area_code: str = None, scope_role: str = None,
+                   scope_employee_code: str = None) -> dict:
     """Xep hang TOP N nhan vien co THUONG CAO NHAT (hoac thuong V15, V22, V25, ASO, Thuong danh muc DM)
     trong ky/thang.
 
@@ -3573,6 +3574,15 @@ def salary_ranking(year_month: str = None, area_code: str = None, position_code:
     bonus_type: 'total' (Tong thuong KD), 'v15', 'v22', 'v25', 'aso', 'dm' (Thuong danh muc DM1+DM2+DM3).
     limit: So luong nhan vien tra ve trong bang xep hang (mac dinh 30, toi da 100).
     scope_area_code: Ep gioi han vung theo phan quyen tai khoan.
+
+    19/08/2026: THEM scope_employee_code - truoc do ham nay khong nhan tham so nay nen KHONG nam
+    trong _EMPLOYEE_SCOPED_TEMPLATES, khien call_template() FAIL-CLOSED tu choi MOI lan tai khoan
+    QLV goi ham nay (xem ghi chu "Fail-closed" trong call_template), ke ca khi hoi ve chinh doi
+    minh - trong khi salary_detail()/employee_kpi() (cung domain, cung nguy co lo hieu suat ca nhan
+    dong nghiep) da ho tro dung. Loc TRUC TIEP tren manager_code cua CHINH fact_thongketinhluong
+    (KHONG dung _team_of_qlv() - ham do truy van fact_tonghopkhachhang, KHAC bang/snapshot voi bang
+    luong nay, co the lech doi neu 2 nguon dong bo lech nhau) - giu QLV + cac TDV bao cao truc tiep
+    len ho TAI DUNG snapshot dang xep hang.
     """
     if scope_area_code:
         area_code = scope_area_code
@@ -3614,6 +3624,10 @@ def salary_ranking(year_month: str = None, area_code: str = None, position_code:
     if position_code:
         where_clauses.append("position_code = ?")
         params.append(position_code)
+
+    if scope_employee_code:
+        where_clauses.append("(employee_code = ? OR manager_code = ?)")
+        params.extend([scope_employee_code, scope_employee_code])
 
     where_sql = " WHERE " + " AND ".join(where_clauses)
     query_sql = f"""
@@ -3844,7 +3858,14 @@ _PERSON_LEVEL_TEMPLATES = {
     "get_inventory_by_region", "get_receivables_overview",
     "get_qlv_change_history", "get_revenue_reconciliation", "get_promotion_effectiveness",
     "get_customer_revenue_debt_risk",
-    "get_salary_detail", "get_salary_achievement_summary", "get_salary_bonus_policy"
+    # 19/08/2026: THEM get_salary_ranking - truoc do CHI 3 tool luong kia o day, ham nay dung
+    # chung _ROLE_SCOPED_TEMPLATES/_AREA_EXEMPT_TEMPLATES voi 3 tool do (deu bo qua scope_area_code
+    # de nhuong cho co che theo doi tinh hon), nhung thieu mat o day khien nhanh ep
+    # scope_employee_code (hoac fail-closed neu chua ho tro) KHONG BAO GIO duoc kich hoat - QLV goi
+    # duoc ham nay VA thay xep hang thuong ca nhan CUA CA CONG TY, khong bi chan o dau ca. Xem sua
+    # cung dot: salary_ranking() them tham so scope_employee_code + loc that tren manager_code.
+    "get_salary_detail", "get_salary_achievement_summary", "get_salary_bonus_policy",
+    "get_salary_ranking",
 }
 
 _EMPLOYEE_SCOPED_TEMPLATES = {
@@ -3852,7 +3873,8 @@ _EMPLOYEE_SCOPED_TEMPLATES = {
     "get_employee_daily_kpi", "get_revenue_by_channel", "get_top_customers",
     "get_top_products", "get_revenue_by_region", "compare_periods", "get_promotion_effectiveness",
     "get_customer_revenue_debt_risk",
-    "get_salary_detail", "get_salary_achievement_summary", "get_salary_bonus_policy"
+    "get_salary_detail", "get_salary_achievement_summary", "get_salary_bonus_policy",
+    "get_salary_ranking",
 }
 
 _CHANNEL_SCOPED_TEMPLATES = {
