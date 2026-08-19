@@ -20,7 +20,7 @@ from collections import defaultdict
 import anthropic
 from schema_context import SCHEMA_CONTEXT
 from query_engine import run_query
-from report_templates import call_template, latest_data_date
+from report_templates import call_template, latest_data_date, sync_freshness_note
 from conversation_memory import load_history, append_message, get_query_state, set_query_state
 from data_freshness import FreshnessCollector
 from realtime_context import REALTIME_TOOLS, REALTIME_TOOL_NAMES, get_current_datetime, resolve_relative_date
@@ -1019,6 +1019,15 @@ def _dynamic_context_note(question: str = "", session_id: str = "", scope_area_c
     latest = latest_data_date()
     parts = [f'Ngay co du lieu moi nhat trong kho hien tai: {latest} (dung lam moc cho "hom nay"/'
              f'"gan day" neu nguoi dung khong noi ro ngay; kho local co the tre toi da ~15-30 phut so voi Bravo that).']
+
+    # 19/08/2026: sync_freshness_note() da ton tai tu 20/07/2026 (kiem tra tien trinh sync co TREO
+    # khong, khac latest_data_date() chi biet NGAY du lieu moi nhat chu khong biet sync con song hay
+    # khong) nhung CHUA TUNG duoc noi vao day - phat hien lai qua ke hoach 11-08/2026, van con nguyen
+    # sau hon 1 tuan. Ham tu tra chuoi RONG khi binh thuong (khong lam vo cau tra loi/cache khi sync
+    # on dinh), chi len tieng khi qua han - an toan de goi vo dieu kien o day.
+    freshness_warning = sync_freshness_note()
+    if freshness_warning:
+        parts.append(freshness_warning)
 
     parts.append(
         "Backend tu gan footer do moi theo dung nguon da truy van. Model KHONG duoc lap lai timestamp "
