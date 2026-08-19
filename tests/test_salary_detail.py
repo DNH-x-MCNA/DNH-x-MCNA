@@ -333,3 +333,66 @@ def test_salary_achievement_summary_qlv_scope_khop_dung_du_lieu_that(tmp_path, m
     assert "error" not in result, f"QLV khong thay duoc doi minh: {result}"
     assert result["total_employees"] == 1
     assert result["v15_achieved_count"] == 1
+
+
+# ---------------------------------------------------------------- salary_bonus_policy (Bravo live)
+
+def test_salary_bonus_policy_bonus_type_khong_hop_le_bi_tu_choi():
+    try:
+        rt.salary_bonus_policy(bonus_type="v99")
+        assert False, "phai raise ValueError"
+    except ValueError:
+        pass
+
+
+def test_salary_bonus_policy_gom_dung_bac_va_bao_dung_ca_mismatch(tmp_path, monkeypatch):
+    """salary_bonus_policy() tron 2 nguon: _q() (local SQLite, chi de tim NGAY snapshot da chot)
+    va _q_bravo() (SQL Server live that, DIM_BacThuong + FACT_ThongKeTinhLuong). Gia lap _q_bravo
+    theo NOI DUNG SQL de tra dung loai du lieu cho tung truy van."""
+    db_path = tmp_path / "warehouse.db"
+    _make_db(db_path)
+    conn = sqlite3.connect(db_path)
+    _insert(conn, employee_code="TDV01", save_date="2026-07-31", v25_percent=0.9)
+    conn.commit()
+    conn.close()
+    monkeypatch.setattr(local_warehouse, "DB_PATH", str(db_path))
+
+    def fake_q_bravo(sql, params=None):
+        if "FROM dbo.FACT_ThongKeTinhLuong" in sql:
+            # 1 nguoi dat bac (V25Percent_R=0.8 >= 75%) nhung V25Bonus da luu = 0 - dung ca "mismatch".
+            # Kiem tra TRUOC nhanh DIM_BacThuong ben duoi: cau SQL nay CUNG chua chu "DIM_BacThuong"
+            # (trong menh de EXISTS con) nen phai khop FROM chinh truoc, khong duoc chi tim chuoi con.
+            return [{"EmployeeCode": "TDV01", "EmployeeName": "A", "AreaCode": "MB",
+                     "PositionCode": "TDV", "SaveDate": "2026-07-31", "V25Date": "2026-07-25",
+                     "V25Amount": 8_000_000, "MonthSaleTarget": 10_000_000,
+                     "V25Percent_R": 0.8, "V25Bonus": 0}]
+        if "DIM_BacThuong" in sql and "OBJECT_DEFINITION" not in sql:
+            # 2 bac (65-75%, 75%+) cho CUNG 1 nhom (MB, TDV, "Thuong nhom hang")
+            return [
+                {"CriterialCode": "C1", "TypeCode": "V25", "AreaCode": "MB", "PositionCode": "TDV",
+                 "Description": "Thuong nhom hang", "StartDate": "2026-07-01", "EndDate": None,
+                 "IsTargetPercent": 1, "IsEarnPercent": 0, "FromValue": 65, "ToValue": 75,
+                 "Earn1": 500_000, "Earn2": None, "EarnMax": None,
+                 "CheckASO": 0, "CheckTargetEmp": 0, "ASOCusCondType": None},
+                {"CriterialCode": "C2", "TypeCode": "V25", "AreaCode": "MB", "PositionCode": "TDV",
+                 "Description": "Thuong nhom hang", "StartDate": "2026-07-01", "EndDate": None,
+                 "IsTargetPercent": 1, "IsEarnPercent": 0, "FromValue": 75, "ToValue": 3000,
+                 "Earn1": 1_000_000, "Earn2": None, "EarnMax": None,
+                 "CheckASO": 0, "CheckTargetEmp": 0, "ASOCusCondType": None},
+            ]
+        if "OBJECT_DEFINITION" in sql:
+            return [{"Definition": "...INTO #KPICt... 'V25' ...#LONGKPICT..."}]
+        return []
+
+    monkeypatch.setattr(rt, "_q_bravo", fake_q_bravo)
+
+    result = rt.salary_bonus_policy(bonus_type="v25", as_of_date="2026-07-31", area_code="MB", position_code="TDV")
+
+    assert result["bonus_type"] == "V25"
+    assert len(result["rules"]) == 1  # 1 nhom (MB, TDV, "Thuong nhom hang")
+    assert len(result["rules"][0]["bands"]) == 2  # 2 bac trong nhom do
+    assert result["procedure_loads_v25_rules"] is True
+    assert result["rule_actual_mismatch_count"] == 1
+    assert result["rule_actual_mismatches"][0]["employee_code"] == "TDV01"
+    assert result["rule_actual_mismatches"][0]["stored_v25_bonus"] == 0
+    assert "V25Bonus da luu bang 0" in result["implementation_warning"]
