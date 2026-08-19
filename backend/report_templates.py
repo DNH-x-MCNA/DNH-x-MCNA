@@ -1807,15 +1807,26 @@ def customer_detail(customer_code: str, date_from: str, date_to: str, scope_area
 
 
 def order_timing_check(date_from: str, date_to: str, threshold_days: int = 2, limit: int = 20,
-                        scope_area_code: str = None, scope_channel: str = None) -> dict:
+                        scope_area_code: str = None, scope_channel: str = None,
+                        scope_employee_code: str = None) -> dict:
     """Phat hien dau hieu 'chay don don KPI': hoa don co created_at (thoi diem BAN GHI THUC SU duoc
     tao trong Bravo) lech qua xa so voi doc_date (ngay chung tu tren hoa don, co the bi chon tay).
     Vd: doc_date la cuoi thang truoc nhung created_at lai la dau thang sau -> dau hieu tao/sua don
     backdate de kip chi tieu KPI thang truoc. threshold_days: so ngay lech toi thieu de bi liet ke
     (mac dinh 2). Tra ve ca TOM TAT theo tung nhan vien (ai co nhieu don bat thuong nhat) LAN danh
     sach chi tiet top nhung don lech nhieu nhat. scope_area_code: ep loc theo vung khi bi gioi han.
-    scope_channel: NEU co (vd 'OTC'), BO HAN kenh con lai khoi truy van (khong chi redact ket qua)."""
+    scope_channel: NEU co (vd 'OTC'), BO HAN kenh con lai khoi truy van (khong chi redact ket qua).
+
+    19/08/2026: THEM scope_employee_code - ham nay tra ve TOM TAT THEO TUNG NHAN VIEN (nghi van
+    "chay don don KPI"), du lieu nhay cam/gan nhu to cao ca nhan nen truoc day bi fail-closed chan
+    HOAN TOAN voi tai khoan QLV (dung, vi chua ho tro gioi han theo doi). Dung
+    _employee_scope_clause() (alias "v" - dung DMSId, KHOP dinh dang employee_code THAT tren
+    vhoadon_otc/etc, KHAC voi loi dinh dang tung xay ra o salary_achievement_summary vi do la bang
+    HOA DON, khong phai bang luong)."""
     scope_sql, scope_params = _scope_clause(scope_area_code)
+    emp_sql, emp_params = _employee_scope_clause(scope_employee_code, "v", as_of=date_to)
+    scope_sql += emp_sql
+    scope_params += emp_params
     join_o = _otc_area_join("v", scope_area_code)
     parts = [f"""SELECT v.doc_date, v.created_at, v.customer_code, v.employee_code, v.amount9, v.stt
             FROM vhoadon_otc v {join_o} WHERE v.doc_date BETWEEN ? AND ? AND v.created_at IS NOT NULL{scope_sql}"""]
@@ -3898,6 +3909,11 @@ _EMPLOYEE_SCOPED_TEMPLATES = {
     "get_customer_revenue_debt_risk",
     "get_salary_detail", "get_salary_achievement_summary", "get_salary_bonus_policy",
     "get_salary_ranking",
+    # 19/08/2026: THEM check_order_timing - tra ve tom tat theo tung nhan vien (nghi van "chay don
+    # don KPI"), truoc day KHONG nam trong tap nay nen QLV bi fail-closed chan hoan toan (dung y
+    # dinh, vi tool nay THAT SU nhay cam theo ca nhan) - gio da them scope_employee_code + loc dung
+    # qua _employee_scope_clause() nen mo duoc, QLV chi thay tom tat cua doi minh.
+    "check_order_timing",
 }
 
 _CHANNEL_SCOPED_TEMPLATES = {
