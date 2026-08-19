@@ -48,20 +48,32 @@ LLM_BASE_URL = os.environ.get("LLM_BASE_URL", "").strip()
 # Cac tinh nang CHI Anthropic co. Tro sang nha cung cap khac thi phai tat, neu khong API se tu choi
 # hoac lang le bo qua - ca hai deu kho phat hien.
 IS_ANTHROPIC = not LLM_BASE_URL or "anthropic.com" in LLM_BASE_URL
-MAX_TOOL_ROUNDS = 6  # 17/08/2026: chot 6 - muc dung giua sau khi con so nay bi keo qua lai 3 lan.
-                     # Lich su, giu lai ca hai phia de nguoi sau khong lap lai tranh luan:
-                     #   8  (ban dau)  - cau hoi dieu hanh co the can nhieu buoc that; moi intent pho
-                     #                   bien da duoc gom vao composite tool nen 8 chi la luoi an toan
-                     #                   cho ad-hoc, khong phai muc tieu.
-                     #   4  (04/08)    - do duoc: ha 8->4 rut ngan 5-8 giay moi cau tra loi. 10/08 giu
-                     #                   nguyen 4 vi CA 2 ca "cau hoi qua phuc tap" truy duoc nguyen
-                     #                   nhan deu do MO TA TOOL chua ro khien model goi lap, sua cau
-                     #                   chu la het - KHONG phai do thieu vong.
-                     #   8  (c9883d5)  - nang lai khi them cac bao cao nhieu buoc da kiem chung.
-                     # 6 la muc nguoi dung chot: du cho bao cao nhieu buoc, van cat bot phan duoi cua
-                     # 8 vong von chi cham vao khi model di lac. Neu lai thay "cau hoi qua phuc tap",
-                     # kiem MO TA TOOL truoc khi nghi den viec nang so nay - tien le 10/08 cho thay
-                     # nguyen nhan nam o cau chu, khong nam o so vong.
+# 17/08/2026: chot hang so PHANG = 6 - muc dung giua sau khi con so nay bi keo qua lai 3 lan.
+# Lich su, giu lai ca hai phia de nguoi sau khong lap lai tranh luan:
+#   8  (ban dau)  - cau hoi dieu hanh co the can nhieu buoc that; moi intent pho bien da duoc gom
+#                   vao composite tool nen 8 chi la luoi an toan cho ad-hoc, khong phai muc tieu.
+#   4  (04/08)    - do duoc: ha 8->4 rut ngan 5-8 giay moi cau tra loi. 10/08 giu nguyen 4 vi CA 2
+#                   ca "cau hoi qua phuc tap" truy duoc nguyen nhan deu do MO TA TOOL chua ro khien
+#                   model goi lap, sua cau chu la het - KHONG phai do thieu vong.
+#   8  (c9883d5)  - nang lai khi them cac bao cao nhieu buoc da kiem chung.
+#   6  (17/08)    - muc nguoi dung chot lam hang so PHANG cho MOI vai tro.
+# 19/08/2026: DOI TU HANG SO PHANG SANG THEO CAP VAI TRO - qlv chi hoi trong pham vi doi minh
+# (~5-10 nguoi, kem ca "Truong kenh" MT cung cap nay), regional_director (TP = Giam doc Mien =
+# Giam doc Kenh) quan ly rong hon nen cau hoi de da nguon/nhieu buoc hon, c_level/admin_ops hoi
+# toan cong ty nen can nhieu vong nhat. Neu lai thay "cau hoi qua phuc tap" o 1 cap vai tro cu
+# the, kiem MO TA TOOL truoc khi nghi den viec nang so cho cap do - tien le 10/08 cho thay nguyen
+# nhan thuong nam o cau chu, khong nam o so vong.
+MAX_TOOL_ROUNDS_BY_ROLE = {
+    "qlv": 5,
+    "regional_director": 8,
+    "c_level": 10,
+    "admin_ops": 10,
+}
+DEFAULT_MAX_TOOL_ROUNDS = 6  # vai tro None/khong nhan dien duoc - giu nguyen muc 6 da chot 17/08
+
+
+def _max_tool_rounds(scope_role: str = None) -> int:
+    return MAX_TOOL_ROUNDS_BY_ROLE.get(scope_role, DEFAULT_MAX_TOOL_ROUNDS)
 MAX_TOOLS_PER_ROUND = 5  # 10/08/2026: truoc day so 3 nam hardcode giua ham ask(). Nang 3 -> 5 vi sau
                           # khi va loi Tool Merger (xem _merge_bulk_tool_calls), cac lenh goi KHAC
                           # tham so nay chay THAT thay vi bi bo am tham, nen can them cho.
@@ -1213,7 +1225,7 @@ def ask(question: str, session_id: str = "default", username: str = None, scope_
     # Doi lai, effort chi tiet kiem ~0,005 USD/cau (output 1.473 -> 990 token) trong khi breakpoint
     # cache o duoi tiet kiem ~0,025 USD/cau (input 14.734 -> 1.791) - bo effort chi mat ~10% khoan
     # tiet kiem nhung lay lai 27% so cau tra loi duoc. Cac toi uu khac GIU NGUYEN.
-    for _ in range(MAX_TOOL_ROUNDS):
+    for _ in range(_max_tool_rounds(scope_role)):
         resp = client.messages.create(
             model=MODEL,
             max_tokens=MAX_TOKENS,
@@ -1489,11 +1501,12 @@ def ask_stream(question: str, session_id: str = "default", username: str = None,
         {"type": "text", "text": _dynamic_context_note(question, session_id, scope_area_code, scope_employee_code, scope_channel)},
     ]
 
-    for round_i in range(MAX_TOOL_ROUNDS):
-        is_last_possible_round = round_i == MAX_TOOL_ROUNDS - 1
+    max_rounds = _max_tool_rounds(scope_role)
+    for round_i in range(max_rounds):
+        is_last_possible_round = round_i == max_rounds - 1
         # Vong GIUA: co the con tool_use, KHONG stream (client khong can thay) - dung create() nhu
         # ask() binh thuong, ro rang hon la stream() roi bo qua cac delta.
-        # Vong CO THE la CUOI (round_i == MAX_TOOL_ROUNDS-1): CHUA BIET truoc model co con goi tool
+        # Vong CO THE la CUOI (round_i == max_rounds-1): CHUA BIET truoc model co con goi tool
         # hay khong (chi biet SAU khi nhan xong response) - nhung neu dung create() cho vong nay, khi
         # model THAT SU tra loi (khong goi tool) thi lai mat streaming cho chinh vong quan trong nhat.
         # Giai phap: LUON dung stream() tu vong DAU (khong chi vong cuoi) - phi stream cho vong co
