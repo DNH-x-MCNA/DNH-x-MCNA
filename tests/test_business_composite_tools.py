@@ -153,7 +153,60 @@ def test_provider_configuration_survives_multi_step_merge(monkeypatch):
     }
     # Day bay chong doi so vong goi tool AM THAM (so nay anh huong truc tiep toi chi phi va thoi gian
     # tra loi). Doi gia tri o day la viec CO Y - doc khoi ghi chu lich su trong nl2sql.py truoc da.
-    assert nl2sql.MAX_TOOL_ROUNDS == 6
+    # 19/08/2026: doi tu hang so phang sang theo cap vai tro - bay ca 2 phia (mac dinh + tung vai tro).
+    assert nl2sql.DEFAULT_MAX_TOOL_ROUNDS == 6
+    assert nl2sql.MAX_TOOL_ROUNDS_BY_ROLE == {
+        "qlv": 5, "regional_director": 8, "c_level": 10, "admin_ops": 10,
+    }
+
+
+def _run_ask_until_rounds_exhausted(monkeypatch, scope_role):
+    """Model LUON tra ve tool_use voi tham so KHAC nhau moi vong (tranh co che chong lap lai bat
+    som) - buoc vong lap chay het so vong cho phep cua vai tro, roi bi ep tra loi cuoi cung."""
+    class FakeMessages:
+        def __init__(self):
+            self.calls = 0
+
+        def create(self, **kwargs):
+            self.calls += 1
+            if "tools" not in kwargs:
+                return SimpleNamespace(
+                    content=[SimpleNamespace(type="text", text="Tong hop cuoi cung.")],
+                    usage=SimpleNamespace(),
+                )
+            return SimpleNamespace(
+                content=[SimpleNamespace(
+                    type="tool_use", id=f"tool-{self.calls}",
+                    name="get_promotion_effectiveness", input={"limit": self.calls},
+                )],
+                usage=SimpleNamespace(),
+            )
+
+    fake_messages = FakeMessages()
+    fake_client = SimpleNamespace(messages=fake_messages)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setattr(nl2sql, "LLM_BASE_URL", "")
+    monkeypatch.setattr(nl2sql.anthropic, "Anthropic", lambda api_key: fake_client)
+    monkeypatch.setattr(nl2sql, "load_history", lambda *args, **kwargs: [])
+    monkeypatch.setattr(nl2sql, "append_message", lambda *args, **kwargs: None)
+    monkeypatch.setattr(nl2sql, "set_query_state", lambda *args, **kwargs: None)
+    monkeypatch.setattr(nl2sql, "compute_and_log_cost", lambda *args, **kwargs: None)
+    monkeypatch.setattr(nl2sql, "call_template",
+                        lambda name, args, **kw: {"ok": True, "result": {"programs": []}})
+
+    nl2sql.ask("Danh gia hieu qua khuyen mai", session_id="s-test", query_id="q-test",
+              scope_role=scope_role)
+    return fake_messages.calls
+
+
+def test_gioi_han_vong_tool_theo_cap_vai_tro(monkeypatch):
+    """19/08/2026: gioi han vong tool THEO CAP VAI TRO thay vi hang so phang - qlv=5 (it nhat, cau
+    hoi trong pham vi 1 doi nho, kem 'Truong kenh' MT cung cap), regional_director=8 (TP = Giam doc
+    Mien = Giam doc Kenh, quan ly rong hon), c_level/admin_ops=10 (nhieu nhat, hoi toan cong ty).
+    Tong so lan goi model = so vong + 1 (lan cuoi bi ep tong hop, khong con 'tools' trong kwargs)."""
+    for role, expected_rounds in (("qlv", 5), ("regional_director", 8), ("c_level", 10), ("admin_ops", 10)):
+        calls = _run_ask_until_rounds_exhausted(monkeypatch, role)
+        assert calls == expected_rounds + 1, f"vai tro {role}: ky vong {expected_rounds + 1} lan goi, thuc te {calls}"
 
 
 def test_repeated_tool_call_is_not_reexecuted_and_forces_final_answer(monkeypatch):
