@@ -3868,9 +3868,19 @@ _PERSON_LEVEL_TEMPLATES = {
     "get_employee_daily_kpi", "check_order_timing",
     "get_revenue_by_channel", "get_revenue_by_region", "get_top_customers",
     "get_top_products", "compare_periods",
-    "get_inventory_by_region", "get_receivables_overview",
-    "get_qlv_change_history", "get_revenue_reconciliation", "get_promotion_effectiveness",
+    "get_promotion_effectiveness",
     "get_customer_revenue_debt_risk",
+    # 19/08/2026: BO get_inventory_by_region/get_receivables_overview/get_qlv_change_history/
+    # get_revenue_reconciliation KHOI day - phan loai SAI tu truoc: ca 4 tool nay KHONG co cot nao
+    # gan voi TUNG NHAN VIEN ca nhan (ton kho theo vung/san pham, cong no theo khach hang/vung, lich
+    # su QLV theo to/vung, doi soat doanh thu toan vung) - khong co du lieu hieu suat ca nhan nao can
+    # bao ve giua cac dong nghiep. scope_area_code (da co san, dung dan) la CO CHE GIOI HAN DU cho ca
+    # 4 tool. Nam trong day khien nhanh "scope_employee_code and name in _PERSON_LEVEL_TEMPLATES" tai
+    # call_template() FAIL-CLOSED chan HOAN TOAN moi tai khoan QLV goi 4 tool nay (QLV luon co ca
+    # scope_area_code LAN scope_employee_code cung luc, xem main.py) - vi ca 4 ham KHONG nhan tham so
+    # scope_employee_code nen KHONG THE nam trong _EMPLOYEE_SCOPED_TEMPLATES, chi con duong fail-closed.
+    # Xac nhan bang test: goi qua call_template() truoc sua bi chan, sau sua thanh cong VA
+    # scope_area_code van duoc ap dung dung (khong mo khoa vung).
     # 19/08/2026: THEM get_salary_ranking - truoc do CHI 3 tool luong kia o day, ham nay dung
     # chung _ROLE_SCOPED_TEMPLATES/_AREA_EXEMPT_TEMPLATES voi 3 tool do (deu bo qua scope_area_code
     # de nhuong cho co che theo doi tinh hon), nhung thieu mat o day khien nhanh ep
