@@ -59,15 +59,15 @@ def main():
         print(f"\n--- checker_id={checker_id!r} | so thieu: {nums} | {len(rs)} case ---")
         for r in rs:
             print(f"  {r['case']['id']} ({r['case']['audience']}) - {r['case']['question']}")
-        # In chi tiet CASE DAU TIEN trong nhom de xem cau tra loi that
-        r0 = rs[0]
-        print(f"\n  [Nguyen van cau tra loi cua {r0['case']['id']}]:")
-        print(f"  {r0['answer']!r}")
-        gt = r0.get("ground_truth", {})
+        # In chi tiet TUNG case trong nhom (khong chi case dau) - cung 1 ground truth nhung
+        # cau hoi khac nhau co the dan toi cau tra loi dung/sai khac nhau.
+        gt = rs[0].get("ground_truth", {})
         print(f"\n  [Ground truth rows cua checker nay] (columns={gt.get('columns')}):")
         for row in gt.get("rows", [])[:10]:
             print(f"    {row}")
-        print(f"  [tools_called]: {r0.get('tools_called')}")
+        for r0 in rs:
+            print(f"\n  [Nguyen van cau tra loi cua {r0['case']['id']}] (tools_called={r0.get('tools_called')}):")
+            print(f"  {r0['answer']!r}")
 
     print(f"\n\n=== Case KHONG chung nhom (moi case 1 checker/1 tap so rieng) ===")
     print(f"So case: {len(solo)}")
