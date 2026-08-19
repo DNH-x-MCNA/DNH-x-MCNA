@@ -44,8 +44,8 @@ billing thực hiện.
   mới.
 
 **Kết luận:** luật chấm điểm "0 tool = tự bịa" trong `grade_case()` (`run_business_evaluation.py`)
-quá cứng cho 2 loại câu này. Đây là hạn chế của máy chấm, **chưa vá trong code** — mọi lần chạy
-sau vẫn sẽ báo sai y hệt cho các câu dạng hỏi-lại/giải-thích-quy-tắc.
+quá cứng cho 2 loại câu này. Đây là hạn chế của máy chấm — **đã vá**, xem mục "Vá máy chấm" bên
+dưới (commit `5d47b9d`).
 
 ## Nhóm `sai_so_lieu` (10 câu) — soi bằng SQL thật, không đoán
 
@@ -72,13 +72,26 @@ không đổi `query_engine.py` hay cơ chế thực thi SQL). Đã push `origin
   toàn hệ thống (`'OTC1'`, `'ETC'`) — không mang thông tin nhà phân phối thật. Chatbot tự chuyển
   sang trả lời theo khách hàng (`get_top_customers`) — hợp lý hơn hẳn so với khớp đúng nghĩa đen 2
   dòng vô nghĩa của checker.
-- **Q040**: chatbot làm tròn "3,1 tỷ" cho 3.052.479.909 (tròn 1 chữ số thập phân, hợp lệ), lệch
-  ~1,55% vượt ngưỡng dung sai 1% của checker trong gang tấc.
 - **Q046**: kết luận định tính đúng ("khớp 100%") nhưng không trích số liệu cụ thể để chứng minh —
-  ranh giới, có thể cải thiện tính minh bạch nhưng không sai nội dung.
+  ranh giới, có thể cải thiện tính minh bạch nhưng không sai nội dung. **Cố tình không vá** — sẽ
+  phải đoán "câu này có bắt buộc trích số hay không", đúng kiểu đoán bừa triết lý file cấm.
 
-**Chưa vá trong code** — đây là ghi nhận cho lần sửa `run_business_evaluation.py` sau, không phải
-việc của Day 20.
+### Vá máy chấm — chỉ những điểm có cơ sở cơ học rõ ràng, không đoán
+
+Đã vá trong `scripts/run_business_evaluation.py` (commit `5d47b9d`, 4 test mới, 146/146 test hiện
+có vẫn qua):
+
+1. **`khong_goi_tool` → tách `hoi_lai_hoac_giai_thich` (P2)** khi câu trả lời không chứa bất kỳ con
+   số nghiệp vụ nào (không dãy số dài ≥5 chữ số, không số dạng "X tỷ/triệu") — đúng cho cả 8/8 câu
+   hỏi-lại/giải-thích ở trên. Câu nêu số cụ thể mà không gọi tool (vd "khoảng 39 tỷ") vẫn giữ P0.
+2. **Q040 (dung sai làm tròn)**: thêm dung sai tuyệt đối = nửa bước làm tròn của chữ số thập phân
+   cuối hiển thị, CHỈ áp dụng khi câu trả lời hiện ≥1 chữ số thập phân ("3,1 tỷ") — số tròn không
+   thập phân (vd "7 tỷ") vẫn chỉ dùng dung sai tương đối cũ, không mở lỗ hổng (test khoá sẵn
+   `test_so_lam_tron_qua_xa_van_bi_bao_sai` vẫn qua nguyên).
+
+**Cố tình KHÔNG vá Q007/Q009/Q011** — muốn "bỏ cột không được hỏi" phải đoán cột nào trong ground
+truth "đáng lẽ được hỏi", không có cơ sở cơ học nào để làm việc đó mà không đoán bừa. Ghi nhận để
+mở sau nếu cần, không ép vá cho đủ số.
 
 ## Đã làm
 
@@ -99,10 +112,9 @@ việc của Day 20.
 - **24/90 câu (Q067–Q090) chưa từng được test** — bị cắt ngang giữa chừng bởi cùng sự cố ngân sách.
   Sau khi ngân sách được khôi phục, phải chạy lại riêng nhóm này (lương thưởng + khuyến mãi + tồn
   kho + độ mới dữ liệu) trước khi coi 90 câu là đã kiểm đủ.
-- **Máy chấm (`run_business_evaluation.py::grade_case`) vẫn còn 2 nguồn báo sai oan**, chưa vá:
-  luật "0 tool = tự bịa" quá cứng cho câu hỏi-lại/giải-thích-quy-tắc (8 câu); checker "sai_so_lieu"
-  không phân biệt cột được hỏi với cột phụ trợ, và dung sai làm tròn 1% quá chặt cho số 1 chữ số
-  thập phân ở thang tỷ (Q007, Q009, Q011, Q040, Q046).
+- **Máy chấm vẫn còn 1 nguồn báo sai oan cố tình chưa vá**: checker "sai_so_lieu" không phân biệt
+  cột được hỏi với cột phụ trợ (Q007, Q011) và cột dữ liệu tự nó vô nghĩa (Q009) — không có cách
+  vá an toàn mà không đoán bừa "câu hỏi có ý hỏi cột này không".
 - **P0/P1/P2 theo đúng mức độ nghiệp vụ** vẫn chưa có — gap này Day 19 đã ghi, chưa đụng tới hôm
   nay.
 - **Gọi qua HTTP API thật** (đăng nhập, streaming) vẫn chưa làm — cùng gap Day 19.
@@ -118,7 +130,7 @@ việc của Day 20.
 | Vá lỗi chatbot thật, có bằng chứng SQL | ✅ 3/3 (Q016, Q012, Q044), commit `7f39182` |
 | Xác minh fix trên dữ liệu thật | ❌ chặn bởi sự cố ngân sách API |
 | Test đủ 24 câu còn thiếu (Q067–Q090) | ❌ chặn bởi cùng sự cố |
-| Vá máy chấm (2 nguồn báo sai oan) | ❌ chưa làm, ghi nhận để làm sau |
+| Vá máy chấm (điểm có cơ sở cơ học, không đoán) | ✅ 2/2, commit `5d47b9d` — Q007/Q009/Q011 cố tình để lại vì phải đoán mới vá được |
 | Sự cố ngân sách API | ⚠️ đã chẩn đoán + đưa hướng xử lý, chờ người quản lý billing thao tác |
 
 **Kết luận thẳng:** Day 20 chứng minh được điều quan trọng nhất — sau khi tách đúng bản chất, tỷ
