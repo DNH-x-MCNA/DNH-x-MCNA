@@ -56,6 +56,14 @@ def test_daily_kpi_status_tra_dung_emoji_va_chu_tieng_viet():
     assert report_templates._daily_kpi_status(5.0) == "\U0001F7E2 Xanh"
 
 
+def test_kpi_status_tra_dung_nhan_tieng_viet():
+    """_kpi_status() (dung trong employee_kpi()::truong 'status', nguong 80/50 - khac han
+    _daily_kpi_status() nguong 2,5/3,5) cung bi mojibake tim thay cung dot (19/08/2026)."""
+    assert report_templates._kpi_status(90) == "\U0001F7E2 Tốt"
+    assert report_templates._kpi_status(60) == "\U0001F7E1 Trung b\xecnh"
+    assert report_templates._kpi_status(20) == "\U0001F534 Nguy hiểm"
+
+
 def test_employee_daily_kpi_dem_dung_so_ngay_do_vang_xanh(tmp_path, monkeypatch):
     """19/08/2026 (thuc te): truoc khi sua, count_red/count_yellow LUON BANG 0 du co ngay do/vang
     that trong du lieu, vi dong so sanh trong employee_daily_kpi() dung chuoi emoji hong. Test nay
