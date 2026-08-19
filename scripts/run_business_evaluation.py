@@ -198,13 +198,29 @@ _UNIT_SCALE = {"tỷ": 1e9, "ty": 1e9, "triệu": 1e6, "trieu": 1e6,
 _ROUNDING_TOLERANCE = 0.01  # 1% - du rong cho lam tron 2 chu so thap phan o thang ty, du chat
 
 
-def _rounded_numbers_in_text(text: str) -> list[float]:
-    out = []
+def _rounded_numbers_in_text(text: str) -> list[tuple[float, Optional[float]]]:
+    """Tra ve (gia_tri, dung_sai_tuyet_doi_hoac_None) cho moi so da lam tron kieu "X ty/trieu...".
+
+    19/08/2026 (thuc te, khong phai gia dinh): chay that 90 cau, Q040 tra loi dung "3,1 ty" cho
+    so that 3.052.479.909 (lam tron 1 chu so thap phan - hop le) nhung lech ~1,55%, VUOT nguong
+    tuong doi 1% trong gang tac -> bi bao sai oan. Them dung sai TUYET DOI = nua buoc lam tron cua
+    CHU SO THAP PHAN CUOI CUNG hien thi (vd "3,1 ty" hien 1 chu so thap phan -> buoc lam tron 0,1
+    ty -> dung sai toi da +-0,05 ty = 50 trieu dong) - danh CHO cach lam tron co chu y nay.
+    CHI tinh dung sai tuyet doi khi co IT NHAT 1 chu so thap phan hien thi - so tron KHONG thap
+    phan (vd "7 ty") tra ve None cho phan tu do, BAT BUOC noi goi van chi dung dung sai tuong doi
+    (_ROUNDING_TOLERANCE) - day co the la doan so mo ho chu khong phai lam tron co chu y (da co
+    test khoa san dieu nay: test_so_lam_tron_qua_xa_van_bi_bao_sai, "7 ty" cho so that 6,54 ty
+    PHAI van bi bao sai, khong duoc dung sai tuyet doi cuu no)."""
+    out: list[tuple[float, Optional[float]]] = []
     for num_str, unit in _ROUNDED_UNIT.findall(text or ""):
         try:
-            out.append(float(num_str.replace(",", ".")) * _UNIT_SCALE[unit.lower()])
+            scale = _UNIT_SCALE[unit.lower()]
+            value = float(num_str.replace(",", ".")) * scale
         except (ValueError, KeyError):
             continue
+        parts = re.split(r"[.,]", num_str)
+        abs_tolerance = 0.5 * (10 ** -len(parts[1])) * scale if len(parts) > 1 else None
+        out.append((value, abs_tolerance))
     return out
 
 
@@ -322,9 +338,28 @@ def grade_case(case, answer: str, error: Optional[str], tools_called: list[str],
                          "detail": f"Cau tra loi chua tu ngu du bao bi cam: {leaked}"})
 
     if not error and not tools_called:
-        problems.append({"severity": "P0", "code": "khong_goi_tool",
-                         "detail": "Tra loi so lieu nghiep vu ma khong tool nao duoc goi - "
-                                   "dau hieu truc tiep cua tu bia du lieu."})
+        # 19/08/2026 (thuc te, khong phai gia dinh): chay that 90 cau, ca 8/8 case dinh
+        # "khong_goi_tool" deu KHONG phai loi that - 5 cau hoi lai hop le (vd "doi toi" nhung
+        # evaluator luon chay duoi vai c_level, khong gan QLV cu the nao nen chatbot dung khi hoi
+        # nguoc lai thay vi doan bua) va 3 cau giai thich quy tac co san (vd "vi sao khong cong
+        # don...") tra loi dung tu kien thuc nghiep vu, khong can tra so moi. Diem chung: CA 8 cau
+        # deu KHONG chua bat ky con so nghiep vu nao (khong day chu so dai, khong so dang "X ty/
+        # trieu") trong cau tra loi - tuc khong co gi bi "bia" ca. Dung dung tin hieu nay de tach:
+        # neu cau tra loi KHONG neu con so nghiep vu nao, ha xuong P2 va doi ma - van ghi nhan de
+        # nguoi kiem doc duoc, nhung KHONG tinh la that bai tu dong. Neu VAN co con so (vd "khoang
+        # 39 ty" - xem test_khong_goi_tool_nao_la_P0) ma khong tool nao chay, GIU NGUYEN P0 - do
+        # moi dung la dau hieu tu bia so lieu that, khong duoc lam long boi quy tac nay.
+        neu_con_so = bool(_significant_digit_runs(answer)) or bool(_rounded_numbers_in_text(answer))
+        if neu_con_so:
+            problems.append({"severity": "P0", "code": "khong_goi_tool",
+                             "detail": "Tra loi so lieu nghiep vu ma khong tool nao duoc goi - "
+                                       "dau hieu truc tiep cua tu bia du lieu."})
+        else:
+            problems.append({"severity": "P2", "code": "hoi_lai_hoac_giai_thich",
+                             "detail": "Khong goi tool, nhung cau tra loi khong neu con so nghiep "
+                                       "vu nao (hoi lai nguoi dung hoac giai thich quy tac co san) "
+                                       "- khong phai dau hieu tu bia, KHONG tinh la that bai tu "
+                                       "dong."})
 
     gt_status = ground_truth.get("status")
     ground_truth_check = "khong_ap_dung"
@@ -338,11 +373,12 @@ def grade_case(case, answer: str, error: Optional[str], tools_called: list[str],
             # co dinh luon in so nguyen day du. Chi thu khi CO thieu, tranh tinh toan thua.
             still_missing = missing_exact
             if missing_exact:
-                rounded_vals = _rounded_numbers_in_text(answer)
+                rounded = _rounded_numbers_in_text(answer)
                 still_missing = {m for m in missing_exact
                                  if not (int(m) > 0 and any(
                                      abs(rv - int(m)) / int(m) < _ROUNDING_TOLERANCE
-                                     for rv in rounded_vals))}
+                                     or (tol is not None and abs(rv - int(m)) <= tol)
+                                     for rv, tol in rounded))}
             if gt_numbers and still_missing:
                 problems.append({"severity": "P0", "code": "sai_so_lieu",
                                  "detail": f"Thieu {len(still_missing)} so tu SQL Server (da thu "

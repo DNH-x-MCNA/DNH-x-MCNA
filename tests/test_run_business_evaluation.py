@@ -121,6 +121,36 @@ def test_khong_goi_tool_nao_la_P0():
     assert any(p["code"] == "khong_goi_tool" for p in r["problems"])
 
 
+def test_khong_goi_tool_voi_day_chu_so_dai_van_la_P0():
+    """Con so day du (khong kem don vi ty/trieu) cung phai bi bat, khong chi rieng dang "X ty"."""
+    r = runner.grade_case(BASE_CASE, "Doanh thu tháng 7 là 39327016119 đồng.", None, [],
+                          {"status": "bo_qua"})
+    assert r["passed_auto"] is False
+    assert any(p["code"] == "khong_goi_tool" for p in r["problems"])
+
+
+def test_hoi_lai_khong_goi_tool_khong_bi_tinh_la_that_bai():
+    """19/08/2026 (thuc te): Q018/Q023/Q055/Q032/Q033 - chatbot hoi lai "doi nao"/"ky nao" thay
+    vi doan bua vi evaluator khong gan QLV/ky cu the. Cau tra loi KHONG neu con so nghiep vu nao
+    - khong co gi de "bia" - nen KHONG duoc tinh la that bai tu dong nhu tu bia du lieu that."""
+    r = runner.grade_case(BASE_CASE, "Anh muốn hỏi về đội của quản lý vùng nào ạ?", None, [],
+                          {"status": "bo_qua"})
+    assert r["passed_auto"] is True
+    assert any(p["code"] == "hoi_lai_hoac_giai_thich" for p in r["problems"])
+    assert not any(p["code"] == "khong_goi_tool" for p in r["problems"])
+
+
+def test_giai_thich_quy_tac_khong_goi_tool_cung_khong_bi_tinh_la_that_bai():
+    """19/08/2026 (thuc te): Q021/Q060/Q061 - giai thich quy tac/nguong da biet (65%/80%/100%),
+    khong tra so lieu moi nen khong can tool. Nguong % qua ngan de vuot MIN_DIGIT_RUN va khong
+    phai don vi tien (ty/trieu) nen khong bi coi la con so nghiep vu can tool xac nhan."""
+    answer = ("Ngưỡng đạt KPI là 80%, ngưỡng đạt chỉ tiêu là 100%, ngưỡng thưởng nhóm hàng TDV là "
+             "65%. Ba mốc này độc lập, không được gộp làm một.")
+    r = runner.grade_case(BASE_CASE, answer, None, [], {"status": "bo_qua"})
+    assert r["passed_auto"] is True
+    assert any(p["code"] == "hoi_lai_hoac_giai_thich" for p in r["problems"])
+
+
 def test_checker_gon_du_so_thi_dat():
     gt = {"status": "ok", "rows": [[39_327_016_119, 35_508_451_204]]}
     answer = "OTC: 39.327.016.119 đ, ETC: 35.508.451.204 đ"
@@ -149,6 +179,18 @@ def test_so_lam_tron_qua_xa_van_bi_bao_sai():
     r = runner.grade_case(BASE_CASE, answer, None, ["get_revenue_by_channel"], gt)
     assert r["passed_auto"] is False
     assert r["ground_truth_check"] == "fail"
+
+
+def test_lam_tron_1_chu_so_thap_phan_gan_bien_1_phan_tram_van_dat():
+    """19/08/2026 (thuc te): Q040 tra loi "3,1 ty" cho so that 3.052.479.909 - lam tron 1 chu so
+    thap phan hop le, nhung lech ~1,55% vuot nguong tuong doi 1% trong gang tac, bi bao sai oan.
+    Dung sai tuyet doi (nua buoc lam tron cua 1 chu so thap phan o thang ty = 50 trieu) phai cuu
+    duoc ca nay ma KHONG lam long nguong cho so tron khong thap phan (xem test ben duoi)."""
+    gt = {"status": "ok", "rows": [[3_052_479_909]]}
+    answer = "Nợ quá hạn 16-30 ngày kênh OTC là 3,1 tỷ đồng."
+    r = runner.grade_case(BASE_CASE, answer, None, ["get_revenue_by_channel"], gt)
+    assert r["passed_auto"] is True
+    assert r["ground_truth_check"] == "pass_khop_so_lam_tron"
 
 
 def test_checker_gon_thieu_so_thi_sai_so_lieu():
