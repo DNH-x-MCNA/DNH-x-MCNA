@@ -1,5 +1,22 @@
 # Backlog chi tiết — Ngày 19-22 (đối chiếu với kế hoạch gốc, 19/08/2026)
 
+## 🔴 Việc phát sinh ngoài checklist — kiểm toàn bộ 4 tập phân quyền tool (đáng lẽ Ngày 23)
+
+Từ lỗ hổng `get_salary_ranking` (xem mục Lương thưởng), đối chiếu chữ ký hàm thật của cả 22 tool
+với 4 tập phân quyền (`_PERSON_LEVEL_TEMPLATES`, `_EMPLOYEE_SCOPED_TEMPLATES`, `_ROLE_SCOPED_TEMPLATES`,
+`_AREA_EXEMPT_TEMPLATES`) — tìm thêm **5 tool bị chặn nhầm hoàn toàn cho MỌI tài khoản QLV**:
+
+- 4 tool phân loại sai (không có dữ liệu cá nhân, `scope_area_code` đã đủ): `get_inventory_by_region`,
+  `get_receivables_overview`, `get_qlv_change_history`, `get_revenue_reconciliation` — đã gỡ khỏi
+  `_PERSON_LEVEL_TEMPLATES` (commit `afc8c65`).
+- 1 tool đúng là nhạy cảm cá nhân nhưng thiếu code hỗ trợ: `check_order_timing` (tóm tắt "nghi vấn
+  chạy đơn dồn KPI" theo từng người) — đã thêm `scope_employee_code` (commit `e3ba10c`).
+
+Cả 6 lỗi (5 tool trên + `get_salary_ranking`) đều xác nhận bằng git-stash: FAIL trên code cũ (bị
+chặn hoặc rò rỉ), PASS trên code mới. Đây là phần việc của Ngày 23 ("Test QLV... 0 rò rỉ") làm sớm
+vì ảnh hưởng trực tiếp tới người dùng thật ngay bây giờ, không đợi được tới lịch.
+
+
 Băm nhỏ từng bullet trong kế hoạch "Hoàn thiện chatbot trước 25/08/2026" thành việc cụ thể, đánh
 dấu trạng thái thật (không tô hồng). ✅ = đã xác nhận bằng test/code thật. ⚠️ = một phần/chưa kiểm
 chứng đủ. ❌ = chưa động tới. 🔒 = cần API AI thật mới làm/kiểm được (đang bị chặn bởi sự cố ngân
