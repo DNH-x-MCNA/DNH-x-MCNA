@@ -596,14 +596,14 @@ def revenue_by_region(date_from: str, date_to: str, scope_area_code: str = None,
 # Giong nhau ca 3 mien MB/MT/MN. Con so 80 truoc day la MCNA tu dat, khong co can cu nghiep vu.
 # Repo bao cao D:\DNH (src/etl.py) doi cung ngay, cung gia tri - 2 he thong PHAI giong nhau.
 #
-# âš ï¸ 23/07/2026 (chieu) - PHAN BIET 2 KHAI NIEM BI GOP NHAM SUOT TU DAU:
+# ⚠️ 23/07/2026 (chieu) - PHAN BIET 2 KHAI NIEM BI GOP NHAM SUOT TU DAU:
 #   "DAT CHI TIEU"              = lam duoc >= 100% chi tieu thang. Giua thang gan nhu luon ~0 nguoi,
 #                                 vi doanh so moi luy ke toi hom nay con chi tieu la CA THANG.
 #   "DAT MUC THUONG NHOM HANG"  = >= nguong bat dau duoc tinh THUONG NHOM HANG (TDV 65%, quan ly 70%).
 # Hai cau hoi KHAC NHAU, ra 2 con so khac nhau. Nhan cu "Dat Chi Tieu (>=65%)" tu no da mau thuan:
 # dat chi tieu ma moi lam duoc 65% chi tieu. Tra ve CA HAI, va noi ro dang tra loi cai nao.
 #
-# âš ï¸âš ï¸ VA DUNG GOI 65%/70% LA "NGUONG HUONG THUONG" CHUNG CHUNG. Do CHI la cong cua THUONG NHOM HANG
+# ⚠️⚠️ VA DUNG GOI 65%/70% LA "NGUONG HUONG THUONG" CHUNG CHUNG. Do CHI la cong cua THUONG NHOM HANG
 # (DS.DM1/DM2/DM3). Trong dbo.DIM_BacThuong con it nhat 5 ho thuong khac, moc khac nhau va TRA THEO
 # CHI SO KHAC NHAU:
 #   V15  - dat 25% doanh so thang vao ngay 15        (moc giua ky, KHONG phai % ca thang)
@@ -615,7 +615,7 @@ def revenue_by_region(date_from: str, date_to: str, scope_area_code: str = None,
 # => Nguoi duoi 65% VAN CO THE duoc V15/ASO va VAN huong du luong co ban. TUYET DOI khong dien dat
 # thanh "khong duoc thuong" / "khong dat KPI" - do la noi sai ve tien luong cua nguoi that.
 #
-# âš ï¸âš ï¸âš ï¸ 27/07/2026 - XAC NHAN VOI DNH: co BA MOC KHAC NHAU, TUYET DOI KHONG GOP:
+# ⚠️⚠️⚠️ 27/07/2026 - XAC NHAN VOI DNH: co BA MOC KHAC NHAU, TUYET DOI KHONG GOP:
 #   >= 100%  DAT CHI TIEU        - lam du chi tieu thang duoc giao (nghia den).
 #   >=  80%  DAT KPI             - moc danh gia HIEU QUA CONG VIEC. AP DUNG CHO MOI VAI TRO
 #                                  (khong chia theo TDV/quan ly). Day la moc de cham ðŸŸ¢/ðŸŸ¡/ðŸ”´.
@@ -694,7 +694,7 @@ def employee_kpi(as_of_date: str, limit: int = 10, order_by: str = "sales", filt
     position_code: loc theo vai tro (vd 'TDV','QLV') - LUON dung tham so nay khi cau hoi chi dinh ro
     vai tro (vd "top TDV"), KHONG tu loc thu cong tu ket qua day du vi de sot/thieu chinh xac.
 
-    âš ï¸ PHAN BIET BA MOC, TUYET DOI KHONG GOP:
+    ⚠️ PHAN BIET BA MOC, TUYET DOI KHONG GOP:
       - "DAT CHI TIEU" = >=100% chi tieu thang -> dung "count_full_target" (va co "meets_full_target"
         tren tung dong). Giua thang con so nay gan nhu luon ~0 va DO LA DUNG: doanh so moi luy ke toi
         hom nay, con chi tieu la ca thang.
@@ -704,10 +704,10 @@ def employee_kpi(as_of_date: str, limit: int = 10, order_by: str = "sales", filt
         QLV va cac cap quan ly 70% theo QD 0429/.25) -> dung "count_above_target"/"count_below_target".
     Hoi "ai chua dat chi tieu" -> moc 100%; hoi "ai dat KPI" -> moc 80%; hoi "ai toi muc thuong nhom
     hang" -> "threshold". Neu cau hoi mo ho thi dua CA BA con so va noi ro tung cai la gi.
-    âš ï¸ TUYET DOI khong goi 65%/70% la "dat KPI" - do chi la cong THUONG. Nguoi dat 67% la "da toi muc
+    ⚠️ TUYET DOI khong goi 65%/70% la "dat KPI" - do chi la cong THUONG. Nguoi dat 67% la "da toi muc
     thuong nhom hang nhung CHUA dat KPI (80%)".
 
-    âš ï¸ 65%/70% CHI la cong cua THUONG NHOM HANG (DM1/DM2/DM3), KHONG phai "nguong huong thuong" noi
+    ⚠️ 65%/70% CHI la cong cua THUONG NHOM HANG (DM1/DM2/DM3), KHONG phai "nguong huong thuong" noi
     chung. Con V15 (25% doanh so vao ngay 15), V22, V25, ASO (theo SO LUONG khach hang: MB 40/MT 35/
     MN 25, khong phai %), thuong quy, thuong nam - moc khac va tra theo chi so khac. Luong co ban tu
     60% tro len van huong 100%. Nguoi duoi 65% VAN CO THE duoc cac khoan kia va VAN co luong co ban,
@@ -809,10 +809,10 @@ DAILY_KPI_YELLOW_MAX = 3.5   # 2.5% - 3.5%: vang; tren 3.5%: xanh
 
 def _daily_kpi_status(pct: float) -> str:
     if pct < DAILY_KPI_RED:
-        return "ðŸ”´ Äá»"
+        return "🔴 Đỏ"
     if pct <= DAILY_KPI_YELLOW_MAX:
-        return "ðŸŸ¡ VÃ ng"
-    return "ðŸŸ¢ Xanh"
+        return "🟡 Vàng"
+    return "🟢 Xanh"
 
 
 def employee_daily_kpi(employee_code: str, year_month: str, scope_area_code: str = None,
@@ -914,8 +914,8 @@ def employee_daily_kpi(employee_code: str, year_month: str, scope_area_code: str
                 pct = (rev / target * 100) if target else 0.0
                 status = _daily_kpi_status(pct)
                 days.append({"date": str(d), "revenue": rev, "pct_of_target": pct, "status": status})
-                if status.startswith("ðŸ”´"): count_red += 1
-                elif status.startswith("ðŸŸ¡"): count_yellow += 1
+                if status.startswith("🔴"): count_red += 1
+                elif status.startswith("🟡"): count_yellow += 1
                 else: count_green += 1
             d += dt.timedelta(days=1)
 
@@ -1880,8 +1880,8 @@ def order_timing_check(date_from: str, date_to: str, threshold_days: int = 2, li
 
 
 _AREA_TO_BRANCH = {"MB": "B02", "MT": "B03", "MN": "B04"}
-_BRANCH_LABEL = {"B01": "Sáº£n xuáº¥t", "B02": "Kinh doanh Miá»n Báº¯c",
-                 "B03": "Kinh doanh Miá»n Trung", "B04": "Kinh doanh Miá»n Nam"}
+_BRANCH_LABEL = {"B01": "Sản xuất", "B02": "Kinh doanh Miền Bắc",
+                 "B03": "Kinh doanh Miền Trung", "B04": "Kinh doanh Miền Nam"}
 
 
 def inventory_by_region(area_code: str = None, scope_area_code: str = None) -> list:
@@ -2724,23 +2724,23 @@ def audit_log_summary(days: int = 7, limit: int = 30, username: str = None, targ
         status = e.get("status")
         if sql.startswith("<template:"):
             tool_name = sql.split(":", 1)[1].split(">", 1)[0]
-            action = f"Cháº¡y bÃ¡o cÃ¡o '{tool_name}'"
+            action = f"Chạy báo cáo '{tool_name}'"
         elif sql:
-            action = "Cháº¡y truy váº¥n dá»¯ liá»‡u tá»± do (query_database)"
+            action = "Chạy truy vấn dữ liệu tự do (query_database)"
         else:
-            action = "Thá»±c hiá»‡n thao tÃ¡c"
+            action = "Thực hiện thao tác"
         if status == "ok":
             rc = e.get("row_count")
-            detail = f" â€” {rc} dÃ²ng káº¿t quáº£" if rc is not None else ""
+            detail = f" — {rc} dòng kết quả" if rc is not None else ""
             dur = e.get("duration_ms")
             detail += f", {dur} ms" if dur is not None else ""
             line = f"{action}{detail}"
         elif status == "rejected":
-            line = f"{action} â€” Bá»Š Tá»ª CHá»I ({str(e.get('error', ''))[:80]})"
+            line = f"{action} — BỊ TỪ CHỐI ({str(e.get('error', ''))[:80]})"
         elif status == "blocked":
-            line = f"{action} â€” Bá»Š CHáº¶N (khÃ´ng Ä‘á»§ quyá»n)"
+            line = f"{action} — BỊ CHẶN (không đủ quyền)"
         elif status == "error":
-            line = f"{action} â€” Lá»–I ({str(e.get('error', ''))[:80]})"
+            line = f"{action} — LỖI ({str(e.get('error', ''))[:80]})"
         else:
             line = action
         if is_clevel_admin and not effective_target and e.get("username"):
