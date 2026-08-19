@@ -618,7 +618,7 @@ def revenue_by_region(date_from: str, date_to: str, scope_area_code: str = None,
 # ⚠️⚠️⚠️ 27/07/2026 - XAC NHAN VOI DNH: co BA MOC KHAC NHAU, TUYET DOI KHONG GOP:
 #   >= 100%  DAT CHI TIEU        - lam du chi tieu thang duoc giao (nghia den).
 #   >=  80%  DAT KPI             - moc danh gia HIEU QUA CONG VIEC. AP DUNG CHO MOI VAI TRO
-#                                  (khong chia theo TDV/quan ly). Day la moc de cham ðŸŸ¢/ðŸŸ¡/ðŸ”´.
+#                                  (khong chia theo TDV/quan ly). Day la moc de cham 🟢/🟡/🔴.
 #   >=65/70% TOI MUC THUONG      - CONG bat dau duoc tinh THUONG NHOM HANG (DM1/DM2/DM3), theo
 #                                  DIM_BacThuong: TDV 65%, quan ly 70%. KHONG PHAI "dat KPI".
 #
@@ -655,7 +655,7 @@ def _not_duplicate_sql(alias: str = "nv") -> str:
 
 # 23/07/2026 - VA LOI "nguong quan ly khai bao nhung khong dung": KPI_ACHIEVED_THRESHOLD_MGR ton tai
 # tu ban va 65% buoi sang nhung KHONG duoc goi o BAT KY dau - moi vai tro deu bi cham o 65%. Hau qua
-# that: 1 QLV dat 67% duoc gan nhan "ðŸŸ¢ Tot"/"da dat", trong khi QD 0429/QD-HDQT.25 (van hieu luc voi
+# that: 1 QLV dat 67% duoc gan nhan "🟢 Tot"/"da dat", trong khi QD 0429/QD-HDQT.25 (van hieu luc voi
 # cap QLV) quy dinh duoi 70% huong 0% thuong danh muc - tuc la BAO SAI theo huong co loi.
 # Nguon: QD 0429-1 (MB) phu luc 02 bang 01, QD 0429-2 (MN), QD 0429-3 (MT) - deu co chu ky, deu chan
 # duoi o 70%. Rieng TDV da chuyen sang QD 0107/2026 (hieu luc 01/07/2026) nen chan duoi 65%.
@@ -674,14 +674,14 @@ def _bonus_threshold(position_code: str = None) -> int:
 def _kpi_status(pct: float, position_code: str = None) -> str:
     """Phan loai mau theo moc DAT KPI = 80% (KPI_ACHIEVED_THRESHOLD), CHUNG cho moi vai tro - xac
     nhan voi DNH 27/07/2026. CO Y khong cham theo 65/70: do la cong THUONG, khong phai thuoc do hieu
-    qua cong viec; cham theo 65/70 tung lam nguoi dat 67% duoc gan nhan "ðŸŸ¢ Tot"/"dat KPI" sai.
+    qua cong viec; cham theo 65/70 tung lam nguoi dat 67% duoc gan nhan "🟢 Tot"/"dat KPI" sai.
     >=80 Tot (xanh), 50..79 Trung binh (vang), <50 Nguy hiem (do).
     position_code giu lai cho tuong thich chu ky ham (khong con dung) - moc nay khong theo vai tro."""
     if pct >= KPI_ACHIEVED_THRESHOLD:
-        return "ðŸŸ¢ Tá»‘t"
+        return "🟢 Tốt"
     if pct >= KPI_WARN_THRESHOLD:
-        return "ðŸŸ¡ Trung bÃ¬nh"
-    return "ðŸ”´ Nguy hiá»ƒm"
+        return "🟡 Trung bình"
+    return "🔴 Nguy hiểm"
 
 
 def employee_kpi(as_of_date: str, limit: int = 10, order_by: str = "sales", filter: str = "all",
@@ -699,7 +699,7 @@ def employee_kpi(as_of_date: str, limit: int = 10, order_by: str = "sales", filt
         tren tung dong). Giua thang con so nay gan nhu luon ~0 va DO LA DUNG: doanh so moi luy ke toi
         hom nay, con chi tieu la ca thang.
       - "DAT KPI" = >=80% ("kpi_threshold_pct", CHUNG cho moi vai tro) -> dung "count_kpi_achieved";
-        day cung la moc quyet dinh mau ðŸŸ¢/ðŸŸ¡/ðŸ”´ o truong "status".
+        day cung la moc quyet dinh mau 🟢/🟡/🔴 o truong "status".
       - "TOI MUC THUONG NHOM HANG" = >= "threshold" cua tung dong (TDV 65% theo QD 0107/2026,
         QLV va cac cap quan ly 70% theo QD 0429/.25) -> dung "count_above_target"/"count_below_target".
     Hoi "ai chua dat chi tieu" -> moc 100%; hoi "ai dat KPI" -> moc 80%; hoi "ai toi muc thuong nhom
@@ -827,7 +827,7 @@ def employee_daily_kpi(employee_code: str, year_month: str, scope_area_code: str
         return {"is_bulk": True, "count": len(results), "employees": results}
     """KPI THEO NGAY cho 1 nhan vien CA NHAN (co ma truc tiep tren hoa don, vd EmpDMSCode nhu
     'tungtx') trong 1 thang (YYYY-MM). Target 1 ngay = 4% MonthSaleTarget cua nhan vien (tuong duong
-    100% cua ngay). Phan loai tung ngay: ðŸ”´ Do (<2.5%), ðŸŸ¡ Vang (2.5%-3.5%), ðŸŸ¢ Xanh (>3.5%). CHI tinh
+    100% cua ngay). Phan loai tung ngay: 🔴 Do (<2.5%), 🟡 Vang (2.5%-3.5%), 🟢 Xanh (>3.5%). CHI tinh
     T2-T6 (bo qua T7/CN). Rieng "month_pct_of_target" la % TONG thang (thuc te/target*100, cach tinh
     CU khong lien quan 4%/ngay, KHONG co mau/nguong - chi la con so tham khao cuoi thang.
     KHONG dung cho ma khu vuc/quan ly vung (MBKV*, ASM*...) - cac ma nay khong xuat hien tren hoa don,
@@ -2013,7 +2013,7 @@ def receivables_overview(top_n: int = 10, scope_area_code: str = None) -> dict:
     return result
 
 
-# 29/07/2026 â€” GOP THEO THANG, khong ghim MOT save_date.
+# 29/07/2026 - GOP THEO THANG, khong ghim MOT save_date.
 #
 # Vi sao: DNH KHONG ghi snapshot thang thanh mot lan. Xac nhan tren Bravo 29/07/2026 - thang 7 co 2
 # snapshot, moi cai chua mot phan vung:
