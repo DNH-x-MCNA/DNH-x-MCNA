@@ -102,26 +102,34 @@ sách API tới 1/9).
   này (case Q047 DEBT_MISSING_DIMENSIONS có checker riêng nhưng là cho SQL tự do, không phải tool
   cố định)
 
-### Lương thưởng — hoàn toàn chưa động tới
-- ❌ Chỉ dùng kỳ lương đã chốt
-- ❌ V15 (25% doanh số ngày 15) từ fact + policy
-- ❌ V22 (55% doanh số + tỷ lệ target 75/80%) từ fact + policy
-- ❌ V25 (≥70% ngày 25) từ fact + `DIM_BacThuong`
-- ❌ ASO đọc đủ điều kiện pass/fail (số lượng khách hoạt động MB40/MT35/MN25)
-- ❌ Ca "V25 đạt bậc nhưng V25Bonus lưu = 0" (case Q072 SALARY_V25_MISMATCH có checker, chưa xác
-  nhận tool cố định xử lý đúng)
-- ❌ Phân biệt thưởng và phụ cấp (ăn ca/xăng xe/điện thoại)
-- ❌ Không kết luận tổng thu nhập khi thiếu lương cơ bản (case Q075 SALARY_LCB_SCHEMA)
-- ❌ Bắt buộc gọi policy tool khi hỏi cách tính (không tự bịa công thức từ prompt)
+### Lương thưởng — ✅ XONG (19/08, 14 test, 2 lỗi thật tìm được và vá)
+- ✅ Chỉ dùng kỳ lương đã chốt (`_closed_salary_date_filter`, đã có từ trước + test)
+- ✅ V15/V22/V25 từ fact + policy (`salary_detail`, `salary_bonus_policy`) — đọc kỹ, không thấy lỗi,
+  code đã qua nhiều lần vá thật (03/08 phân quyền QLV, 28/07 dòng khởi tạo đầu tháng)
+- ✅ ASO đọc đủ điều kiện pass/fail — có trong `salary_bonus_policy`, đã test
+- ✅ Ca "V25 đạt bậc nhưng V25Bonus lưu = 0" — có sẵn trong `salary_bonus_policy`, đã test khớp
+  đúng case Q072 SALARY_V25_MISMATCH
+- ✅ Phân biệt thưởng và phụ cấp — `total_bonus` không gộp `allowance`, đã test
+- ✅ Không kết luận tổng thu nhập khi thiếu lương cơ bản — cảnh báo LCB có sẵn, đã test
+- ✅ Bắt buộc gọi policy tool khi hỏi cách tính — nằm ở tầng prompt (mô tả tool), không kiểm ở đây
+- 🔴 **2 lỗi thật tìm được và vá**:
+  1. **Rò rỉ bảo mật**: `get_salary_ranking` thiếu đăng ký trong `_PERSON_LEVEL_TEMPLATES`, khiến
+     QLV thấy thưởng cá nhân TOÀN CÔNG TY, không giới hạn theo đội. Xác nhận bằng git-stash (commit
+     `795e7b8`).
+  2. **Lỗi định dạng mã**: `salary_achievement_summary` lọc nhầm DMSId lên cột EmployeeCode của
+     bảng lương → QLV luôn nhận "không có dữ liệu" dù đội có dữ liệu thật (commit `7d2427b`).
 
-### Khuyến mãi (CTKM) — hoàn toàn chưa động tới
-- ❌ Chuỗi DMS_CTKM → DMS_DonHangCTKM → DMS_DonHangHdr → hóa đơn qua DMSId
-- ❌ Distinct đơn, distinct khách
-- ❌ Phân biệt sản phẩm điều kiện và quà tặng
-- ❌ Đơn dùng nhiều CTKM không được cộng ngang revenue
-- ❌ Nêu đơn chưa tìm thấy hóa đơn tương ứng
-- ❌ Nêu ngày coverage cuối cùng của chuỗi liên kết
-- ❌ Không gọi doanh thu gắn với chương trình là "ROI"
+### Khuyến mãi (CTKM) — ✅ XONG (19/08, 6 test, không tìm lỗi mới)
+- ✅ Chuỗi DMS_CTKM → DMS_DonHangCTKM → DMS_DonHangHdr → hóa đơn qua DMSId — đúng theo code
+- ✅ Distinct đơn, distinct khách — đúng theo code
+- ✅ Phân biệt sản phẩm điều kiện và quà tặng — 2 CTE riêng biệt, đã test
+- ✅ Đơn dùng nhiều CTKM không được cộng ngang revenue — cảnh báo có sẵn trong `interpretation_note`
+- ✅ Nêu đơn chưa tìm thấy hóa đơn tương ứng — trường `orders_without_invoice`, đã test
+- ✅ Nêu ngày coverage cuối cùng của chuỗi liên kết — `promotion_link_coverage_to`, đã test kỹ 2
+  tình huống (hỏi vượt tương lai so với coverage → `source_gap`; không chỉ định kỳ → tự chọn tháng
+  đầy đủ gần nhất)
+- ✅ Không gọi doanh thu gắn với chương trình là "ROI" — xác nhận bằng test, chỉ có đúng 1 câu cảnh
+  báo "chưa đủ cơ sở kết luận ROI"
 
 ---
 
