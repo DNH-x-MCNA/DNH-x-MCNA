@@ -3145,6 +3145,76 @@ def promotion_effectiveness(date_from: str = None, date_to: str = None, limit: i
     }
 
 
+def promotion_data_quality(scope_area_code: str = None, scope_employee_code: str = None,
+                           scope_channel: str = None) -> dict:
+    """Do phu va chat luong chuoi DMS_DonHangCTKM -> don hang -> chuong trinh trong 1 query.
+
+    Day la duong nhanh, co dinh cho cac cau hoi ve moc du lieu/missing link. Truoc day model phai
+    search catalog + query SQL live qua nhieu vong, gay P95 hon 100 giay cho Q083/Q084.
+    """
+    if scope_channel and str(scope_channel).upper() not in ("OTC", "ALL"):
+        return {
+            "status": "not_applicable",
+            "note": "Du lieu lien ket chuong trinh DMS thuoc kenh OTC; tai khoan khong co kenh OTC.",
+        }
+
+    joins = ""
+    where = ""
+    params = {}
+    if scope_area_code:
+        joins += (
+            " LEFT JOIN dbo.DMS_KhachHang kh ON kh.Code=h.CustomerCode "
+            " LEFT JOIN dbo.DIM_TinhThanhPho tp ON tp.CityId=kh.CityId "
+        )
+        where += " AND tp.AreaCode=:scope_area_code"
+        params["scope_area_code"] = scope_area_code
+    if scope_employee_code:
+        dms_ids = _get_team_dms_ids(scope_employee_code)
+        placeholders = []
+        for index, dms_id in enumerate(dms_ids):
+            key = f"employee_{index}"
+            params[key] = dms_id
+            placeholders.append(f":{key}")
+        joined = ",".join(placeholders)
+        where += f" AND (h.DMSEmpId1 IN ({joined}) OR h.DMSEmpId2 IN ({joined}))"
+
+    rows = _q_bravo(f"""
+        SELECT MIN(h.DocDate) AS FirstLinkedOrderDate,
+               MAX(h.DocDate) AS LastLinkedOrderDate,
+               COUNT_BIG(*) AS LinkRows,
+               COUNT(DISTINCT x.OrderId) AS LinkedOrders,
+               COUNT(DISTINCT x.ProgId) AS Programs,
+               SUM(CASE WHEN h.Id IS NULL THEN 1 ELSE 0 END) AS MissingOrder,
+               SUM(CASE WHEN p.Id IS NULL THEN 1 ELSE 0 END) AS MissingProgram,
+               SUM(CASE WHEN h.Id IS NOT NULL AND p.Id IS NOT NULL THEN 1 ELSE 0 END) AS ValidLinks,
+               MAX(x.SyncAt) AS LastLinkSyncAt
+        FROM dbo.DMS_DonHangCTKM x
+        LEFT JOIN dbo.DMS_DonHangHdr h ON h.Id=x.OrderId
+        LEFT JOIN dbo.DMS_CTKM p ON p.Id=x.ProgId
+        {joins}
+        WHERE 1=1 {where}
+    """, params)
+    if not rows:
+        return {"status": "source_gap", "note": "Khong doc duoc chuoi lien ket CTKM."}
+    row = rows[0]
+    return {
+        "status": "ok",
+        "first_linked_order_date": str(row.get("FirstLinkedOrderDate") or ""),
+        "last_linked_order_date": str(row.get("LastLinkedOrderDate") or ""),
+        "last_link_sync_at": str(row.get("LastLinkSyncAt") or ""),
+        "link_rows": int(row.get("LinkRows") or 0),
+        "linked_orders": int(row.get("LinkedOrders") or 0),
+        "programs": int(row.get("Programs") or 0),
+        "missing_order": int(row.get("MissingOrder") or 0),
+        "missing_program": int(row.get("MissingProgram") or 0),
+        "valid_links": int(row.get("ValidLinks") or 0),
+        "scope_note": (
+            "Ket qua da gioi han theo pham vi tai khoan; lien ket mat don hang khong the quy vung/doi."
+            if scope_area_code or scope_employee_code else None
+        ),
+    }
+
+
 def salary_bonus_policy(bonus_type: str = "v25", as_of_date: str = None,
                         area_code: str = None, position_code: str = None,
                         scope_area_code: str = None, scope_employee_code: str = None,
@@ -3334,6 +3404,116 @@ def salary_bonus_policy(bonus_type: str = "v25", as_of_date: str = None,
         ),
         "rule_count": len(rule_rows),
         "rules": list(grouped.values()),
+    }
+
+
+def salary_data_quality(check_type: str, year_month: str = None,
+                        scope_employee_code: str = None, scope_role: str = None) -> dict:
+    """Doi chieu DM bonus, schema luong co ban, hoac chat luong snapshot bang luong.
+
+    Gom cac cau hoi audit luong thanh mot tool co dinh de model khong phai do catalog/SQL qua nhieu
+    vong. Nhanh dm_reconciliation chi doc snapshot da dong bo va fail-closed theo doi QLV.
+    """
+    check = str(check_type or "").strip().lower()
+    if check not in {"dm_reconciliation", "base_salary_schema", "snapshot_quality"}:
+        raise ValueError(
+            "check_type chi nhan dm_reconciliation, base_salary_schema hoac snapshot_quality."
+        )
+
+    if check == "base_salary_schema":
+        columns = _q_bravo("""
+            SELECT c.name AS ColumnName, t.name AS DataType
+            FROM sys.columns c
+            JOIN sys.types t ON t.user_type_id=c.user_type_id
+            WHERE c.object_id=OBJECT_ID('dbo.FACT_ThongKeTinhLuong')
+              AND (c.name LIKE '%Luong%' OR c.name LIKE '%Salary%'
+                   OR c.name LIKE '%Level%' OR c.name LIKE '%LCB%')
+            ORDER BY c.column_id
+        """)
+        normalized = {
+            "".join(ch for ch in str(row.get("ColumnName") or "").lower() if ch.isalnum())
+            for row in columns
+        }
+        base_salary_names = {"lcb", "luongcoban", "basesalary", "basicsalary"}
+        has_base_salary = bool(normalized & base_salary_names)
+        return {
+            "status": "ok",
+            "table": "dbo.FACT_ThongKeTinhLuong",
+            "has_base_salary_amount": has_base_salary,
+            "has_level_to_base_salary_mapping": False,
+            "candidate_columns": columns,
+            "conclusion": (
+                "Du du lieu luong co ban de tinh tong thu nhap."
+                if has_base_salary else
+                "Chua co cot so tien luong co ban va chua co mapping Level -> LCB; khong du co so "
+                "goi thuong + phu cap la tong luong/tong thu nhap."
+            ),
+        }
+
+    date_cond, date_params = _closed_salary_date_filter("", year_month)
+    date_rows = _q(
+        f"SELECT MAX(save_date) d FROM fact_thongketinhluong WHERE 1=1 {date_cond} "
+        "AND v25_percent IS NOT NULL",
+        date_params,
+    )
+    snapshot_date = date_rows[0]["d"] if date_rows and date_rows[0].get("d") else None
+    if not snapshot_date:
+        return {"status": "no_data", "note": "Chua co snapshot luong cuoi ky da chot."}
+
+    scope_sql = ""
+    scope_params: list = []
+    if scope_employee_code:
+        scope_sql = " AND (employee_code=? OR manager_code=?)"
+        scope_params.extend([scope_employee_code, scope_employee_code])
+
+    if check == "snapshot_quality":
+        rows = _q(
+            "SELECT save_date,COUNT(*) employees,"
+            "SUM(CASE WHEN v25_percent IS NULL THEN 1 ELSE 0 END) missing_v25_percent,"
+            "SUM(CASE WHEN month_sale_target IS NULL OR month_sale_target<=0 THEN 1 ELSE 0 END) "
+            "missing_target FROM fact_thongketinhluong WHERE save_date>=date(?,'-2 months')"
+            f"{scope_sql} GROUP BY save_date ORDER BY save_date",
+            tuple([snapshot_date] + scope_params),
+        )
+        return {
+            "status": "ok", "latest_closed_snapshot": snapshot_date, "snapshots": rows,
+            "note": "Chi snapshot cuoi thang moi duoc coi la ky luong da chot.",
+        }
+
+    formula = (
+        "expected_dm_bonus = (DM1Amount*DM1Percent + DM2Amount*DM2Percent + "
+        "DM3Amount*DM3Percent) * TotalPoint"
+    )
+    expression = (
+        "(COALESCE(dm1_amount,0)*COALESCE(dm1_percent,0)+"
+        "COALESCE(dm2_amount,0)*COALESCE(dm2_percent,0)+"
+        "COALESCE(dm3_amount,0)*COALESCE(dm3_percent,0))*COALESCE(total_point,0)"
+    )
+    summary = _q(
+        "SELECT COUNT(*) employees,"
+        "SUM(CASE WHEN dm_bonus>0 THEN 1 ELSE 0 END) employees_with_dm_bonus,"
+        f"SUM(CASE WHEN ABS(COALESCE(dm_bonus,0)-{expression})>1 THEN 1 ELSE 0 END) mismatches,"
+        f"MAX(ABS(COALESCE(dm_bonus,0)-{expression})) max_abs_delta "
+        "FROM fact_thongketinhluong WHERE save_date=?" + scope_sql,
+        tuple([snapshot_date] + scope_params),
+    )[0]
+    mismatches = _q(
+        "SELECT employee_code,employee_name,area_code,position_code,dm_bonus,total_point,"
+        f"{expression} expected_dm_bonus FROM fact_thongketinhluong "
+        f"WHERE save_date=?{scope_sql} AND ABS(COALESCE(dm_bonus,0)-{expression})>1 "
+        "ORDER BY ABS(COALESCE(dm_bonus,0)-" + expression + ") DESC LIMIT 50",
+        tuple([snapshot_date] + scope_params),
+    )
+    return {
+        "status": "ok",
+        "snapshot_date": snapshot_date,
+        "formula": formula,
+        "tolerance_vnd": 1,
+        "employees": int(summary.get("employees") or 0),
+        "employees_with_dm_bonus": int(summary.get("employees_with_dm_bonus") or 0),
+        "mismatch_count": int(summary.get("mismatches") or 0),
+        "max_abs_delta": _f(summary.get("max_abs_delta")),
+        "mismatches": mismatches,
     }
 
 
@@ -3856,7 +4036,9 @@ TEMPLATES = {
     "get_customer_revenue_debt_risk": customer_revenue_debt_risk,
     "get_audit_log": audit_log_summary,
     "get_promotion_effectiveness": promotion_effectiveness,
+    "get_promotion_data_quality": promotion_data_quality,
     "get_salary_bonus_policy": salary_bonus_policy,
+    "get_salary_data_quality": salary_data_quality,
     "get_salary_detail": salary_detail,
     "get_salary_achievement_summary": salary_achievement_summary,
     "get_salary_ranking": salary_ranking,
@@ -3866,12 +4048,12 @@ _SELF_SCOPED_TEMPLATES = {"get_audit_log"}
 
 _ROLE_SCOPED_TEMPLATES = {
     "get_salary_detail", "get_salary_achievement_summary", "get_salary_ranking",
-    "get_salary_bonus_policy",
+    "get_salary_bonus_policy", "get_salary_data_quality",
 }
 
 _AREA_EXEMPT_TEMPLATES = {
     "get_audit_log", "get_salary_detail", "get_salary_achievement_summary", "get_salary_ranking",
-    "get_salary_bonus_policy",
+    "get_salary_bonus_policy", "get_salary_data_quality",
 }
 
 _PERSON_LEVEL_TEMPLATES = {
@@ -3880,6 +4062,7 @@ _PERSON_LEVEL_TEMPLATES = {
     "get_revenue_by_channel", "get_revenue_by_region", "get_top_customers",
     "get_top_products", "compare_periods",
     "get_promotion_effectiveness",
+    "get_promotion_data_quality",
     "get_customer_revenue_debt_risk",
     # 19/08/2026: BO get_inventory_by_region/get_receivables_overview/get_qlv_change_history/
     # get_revenue_reconciliation KHOI day - phan loai SAI tu truoc: ca 4 tool nay KHONG co cot nao
@@ -3899,6 +4082,7 @@ _PERSON_LEVEL_TEMPLATES = {
     # duoc ham nay VA thay xep hang thuong ca nhan CUA CA CONG TY, khong bi chan o dau ca. Xem sua
     # cung dot: salary_ranking() them tham so scope_employee_code + loc that tren manager_code.
     "get_salary_detail", "get_salary_achievement_summary", "get_salary_bonus_policy",
+    "get_salary_data_quality",
     "get_salary_ranking",
 }
 
@@ -3906,8 +4090,10 @@ _EMPLOYEE_SCOPED_TEMPLATES = {
     "get_revenue_tree", "get_kpi_ranking", "get_employee_kpi",
     "get_employee_daily_kpi", "get_revenue_by_channel", "get_top_customers",
     "get_top_products", "get_revenue_by_region", "compare_periods", "get_promotion_effectiveness",
+    "get_promotion_data_quality",
     "get_customer_revenue_debt_risk",
     "get_salary_detail", "get_salary_achievement_summary", "get_salary_bonus_policy",
+    "get_salary_data_quality",
     "get_salary_ranking",
     # 19/08/2026: THEM check_order_timing - tra ve tom tat theo tung nhan vien (nghi van "chay don
     # don KPI"), truoc day KHONG nam trong tap nay nen QLV bi fail-closed chan hoan toan (dung y
@@ -3919,7 +4105,8 @@ _EMPLOYEE_SCOPED_TEMPLATES = {
 _CHANNEL_SCOPED_TEMPLATES = {
     "get_revenue_by_channel", "get_top_products", "get_top_customers",
     "compare_periods", "get_customer_detail", "check_order_timing",
-    "get_revenue_by_region", "get_promotion_effectiveness", "get_customer_revenue_debt_risk"
+    "get_revenue_by_region", "get_promotion_effectiveness", "get_promotion_data_quality",
+    "get_customer_revenue_debt_risk"
 }
 
 

@@ -114,6 +114,22 @@ def test_lo_du_bao_trong_cau_tra_loi_la_P0():
     assert any(p["code"] == "lo_du_bao" for p in r["problems"])
 
 
+def test_canh_bao_khong_uoc_tinh_khong_bi_cham_lo_du_bao():
+    answer = "Đây là số đã chốt từ bảng quy tắc, không dùng ước tính hay dự báo tương lai."
+    r = runner.grade_case(BASE_CASE, answer, None, ["get_salary_bonus_policy"],
+                          {"status": "bo_qua"})
+    assert r["passed_auto"] is True
+    assert not any(p["code"] == "lo_du_bao" for p in r["problems"])
+
+
+def test_phu_dinh_o_cau_truoc_khong_che_du_bao_that_o_cau_sau():
+    answer = "Không dùng ước tính cũ. Dự báo tháng 8 sẽ đạt 50 tỷ."
+    r = runner.grade_case(BASE_CASE, answer, None, ["get_salary_bonus_policy"],
+                          {"status": "bo_qua"})
+    assert r["passed_auto"] is False
+    assert any(p["code"] == "lo_du_bao" for p in r["problems"])
+
+
 def test_khong_goi_tool_nao_la_P0():
     r = runner.grade_case(BASE_CASE, "Doanh thu tháng 7 khoảng 39 tỷ.", None, [],
                           {"status": "bo_qua"})
@@ -200,6 +216,50 @@ def test_checker_gon_thieu_so_thi_sai_so_lieu():
     assert r["passed_auto"] is False
     assert r["ground_truth_check"] == "fail"
     assert any(p["code"] == "sai_so_lieu" for p in r["problems"])
+
+
+def test_answer_columns_khong_bat_so_phu_khong_duoc_hoi_Q083():
+    case = _Case(
+        "Q083", "Khuyến mãi", "manager",
+        "Chuỗi liên kết đơn hàng–khuyến mãi hiện có dữ liệu đến ngày nào?",
+        "PROMO_COVERAGE",
+    )
+    object.__setattr__(case, "answer_columns", ("LastLinkedOrderDate",))
+    gt = {
+        "status": "ok",
+        "columns": ["FirstLinkedOrderDate", "LastLinkedOrderDate", "LinkRows", "LinkedOrders"],
+        "rows": [["2025-01-01", "2026-01-09", 2_257_428, 495_199]],
+    }
+    r = runner.grade_case(case, "Dữ liệu liên kết hiện đến ngày 09/01/2026.", None,
+                          ["get_promotion_data_quality"], gt)
+    assert r["passed_auto"] is True
+    assert r["ground_truth_check"] == "pass"
+
+
+def test_answer_columns_Q084_chi_bat_hai_loai_lien_ket_loi():
+    case = _Case(
+        "Q084", "Khuyến mãi", "c_level",
+        "Có bao nhiêu liên kết khuyến mãi mất đơn hàng hoặc mất mã chương trình?",
+        "PROMO_QUALITY",
+    )
+    object.__setattr__(case, "answer_columns", ("MissingOrder", "MissingProgram"))
+    gt = {
+        "status": "ok",
+        "columns": ["LinkRows", "MissingOrder", "MissingProgram", "ValidLinks"],
+        "rows": [[2_257_428, 12, 22, 2_257_394]],
+    }
+    r = runner.grade_case(case, "Thiếu đơn hàng: 12; thiếu mã chương trình: 22.", None,
+                          ["get_promotion_data_quality"], gt)
+    assert r["passed_auto"] is True
+    assert r["ground_truth_check"] == "pass"
+
+
+def test_answer_columns_sai_ten_cot_fail_closed():
+    case = _Case("QX", "G", "c_level", "q", "X")
+    object.__setattr__(case, "answer_columns", ("CotKhongTonTai",))
+    gt = {"status": "ok", "columns": ["Dung"], "rows": [[123]]}
+    r = runner.grade_case(case, "123", None, ["t"], gt)
+    assert "chua_doi_chieu_duoc" in r["ground_truth_check"]
 
 
 def test_checker_dang_top_n_KHONG_duoc_tu_phan_dung_sai():
