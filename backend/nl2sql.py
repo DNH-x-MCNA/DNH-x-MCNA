@@ -88,6 +88,33 @@ MAX_PAYLOAD_CHARS = 6000  # Gioi han ky tu payload gui cho AI (~1500 tokens). Te
                           # chars, gay phình context 7K->49K tokens khi AI goi nhieu tool lien tiep. last_result
                           # (cho UI) VAN giu nguyen day du, chi phan gui cho AI bi cat.
 
+
+def _required_tool_for_question(question: str) -> str | None:
+    """Ep tool cho cac intent co mot duong du lieu duy nhat, tranh do catalog nhieu vong."""
+    q = " ".join((question or "").lower().split())
+    is_promo = any(word in q for word in ("khuyến mãi", "khuyen mai", "ctkm"))
+    if is_promo and any(marker in q for marker in (
+        "đến ngày nào", "den ngay nao", "mất đơn", "mat don", "mất mã chương trình",
+        "mat ma chuong trinh", "mốc liên kết", "moc lien ket", "độ phủ", "do phu",
+    )):
+        return "get_promotion_data_quality"
+
+    is_salary = any(word in q for word in (
+        "lương", "luong", "thưởng", "thuong", "v25", "totalpoint", "dmbonus",
+    ))
+    if is_salary:
+        if (("totalpoint" in q and any(dm in q for dm in ("dm1", "dm2", "dm3", "dmbonus")))
+                or any(marker in q for marker in (
+                    "lương cơ bản", "luong co ban", " lcb", "snapshot nào", "snapshot nao",
+                    "dòng đầu", "dong dau", "giữa tháng rỗng", "giua thang rong",
+                ))):
+            return "get_salary_data_quality"
+        if "v25" in q and any(marker in q for marker in (
+            "bậc", "bac", "v25bonus", "bằng 0", "bang 0", "công thức", "cong thuc",
+        )):
+            return "get_salary_bonus_policy"
+    return None
+
 TEMPLATE_TOOLS = [
     {
         "name": "get_revenue_by_channel",
@@ -492,6 +519,16 @@ TEMPLATE_TOOLS = [
         },
     },
     {
+        "name": "get_promotion_data_quality",
+        "description": "Do phu va CHAT LUONG chuoi lien ket CTKM: ngay don dau/cuoi, thoi diem sync, "
+                       "tong link, so link MAT DON HANG, MAT MA CHUONG TRINH va so link hop le. BAT "
+                       "BUOC dung DUNG 1 LAN khi hoi 'du lieu khuyen mai den ngay nao', 'moc lien ket "
+                       "CTKM', 'bao nhieu lien ket mat don/mat chuong trinh'. KHONG search catalog, "
+                       "KHONG query SQL thu cong, KHONG goi get_promotion_effectiveness cho cau hoi "
+                       "chat luong nguon don thuan.",
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
         "name": "get_salary_bonus_policy",
         "description": "Tra QUY TAC/CACH TINH/BAC TIEN cua V15, V22, V25 hoac ASO tu DIM_BacThuong, "
                        "dong thoi doi chieu voi so thuong da chot trong FACT_ThongKeTinhLuong. BAT BUOC "
@@ -511,6 +548,26 @@ TEMPLATE_TOOLS = [
                 "position_code": {"type": "string", "description": "Loc TDV/QLV/TP/PP/TBP/CS/TK/CTV neu nguoi dung neu ro."},
             },
             "required": ["bonus_type"],
+        },
+    },
+    {
+        "name": "get_salary_data_quality",
+        "description": "Kiem tra CHAT LUONG DU LIEU LUONG bang 1 lan goi co dinh. Dung "
+                       "dm_reconciliation khi hoi DM1/DM2/DM3, DMBonus va TotalPoint co khop cong "
+                       "thuc khong; dung base_salary_schema khi hoi bang da co luong co ban/LCB hay "
+                       "du de ket luan tong thu nhap chua; dung snapshot_quality khi hoi ky nao da "
+                       "chot/dong dau-thang rong. BAT BUOC dung tool nay, KHONG search catalog/query "
+                       "SQL thu cong va KHONG tra so lieu tu prompt.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "check_type": {
+                    "type": "string",
+                    "enum": ["dm_reconciliation", "base_salary_schema", "snapshot_quality"],
+                },
+                "year_month": {"type": "string", "description": "YYYY-MM; bo trong lay ky da chot gan nhat."},
+            },
+            "required": ["check_type"],
         },
     },
     {
@@ -816,15 +873,21 @@ QUAN TRONG VE CHON TOOL:
   get_employee_daily_kpi, compare_periods, get_customer_detail, get_employee_directory, check_order_timing,
   get_inventory_by_region, get_qlv_change_history, get_revenue_tree, get_kpi_ranking,
   get_revenue_reconciliation, get_receivables_overview, get_customer_revenue_debt_risk,
-  get_audit_log, get_promotion_effectiveness,
-  get_salary_bonus_policy, get_salary_detail, get_salary_achievement_summary).
+  get_audit_log, get_promotion_effectiveness, get_promotion_data_quality,
+  get_salary_bonus_policy, get_salary_data_quality, get_salary_detail,
+  get_salary_achievement_summary).
 - HIEU QUA CTKM: BAT BUOC goi get_promotion_effectiveness DUNG 1 LAN. KHONG duoc GROUP BY cot CTKM
   tren vHoaDon/vHoaDonTotal: cot do la ghi chu tu do, co the chua ten nguoi va so dien thoai. Doanh
   thu chuong trinh phai noi qua DMS_DonHangCTKM -> DMS_CTKM. Neu tool bao nguon lien ket chi den mot
   moc cu, noi ro moc do; KHONG lay ghi chu hoa don thay the va KHONG suy dien phan thieu.
+- CHAT LUONG/DO PHU CTKM (moc du lieu, link mat don/mat ma chuong trinh): BAT BUOC goi
+  get_promotion_data_quality DUNG 1 LAN; KHONG search catalog/query SQL thu cong.
 - CACH TINH/BAC TIEN V15/V22/V25/ASO: BAT BUOC goi get_salary_bonus_policy DUNG 1 LAN. Neu tool phat
   hien bang quy tac, stored procedure va so da chot khong khop, PHAI neu ro chenh lech va van phan
   biet 'so SQL Server da chot' voi 'so theo bang quy tac'; KHONG tu sua so thay ke toan/DNH.
+- DOI CHIEU DM1/DM2/DM3-TOTALPOINT, KIEM TRA LCB, CHAT LUONG SNAPSHOT LUONG: BAT BUOC goi
+  get_salary_data_quality DUNG 1 LAN voi check_type tuong ung; KHONG tu doc prompt roi ket luan va
+  KHONG search catalog/query SQL thu cong.
 - Cau hoi ket hop KHACH DOANH THU LON + CONG NO CAO + XU HUONG MUA GIAM: goi
   get_customer_revenue_debt_risk DUNG 1 LAN. Tool da noi hai ky doanh thu voi snapshot cong no;
   KHONG tach thanh nhieu tool/query lap lai.
@@ -1225,15 +1288,19 @@ def ask(question: str, session_id: str = "default", username: str = None, scope_
     # Doi lai, effort chi tiet kiem ~0,005 USD/cau (output 1.473 -> 990 token) trong khi breakpoint
     # cache o duoi tiet kiem ~0,025 USD/cau (input 14.734 -> 1.791) - bo effort chi mat ~10% khoan
     # tiet kiem nhung lay lai 27% so cau tra loi duoc. Cac toi uu khac GIU NGUYEN.
-    for _ in range(_max_tool_rounds(scope_role)):
-        resp = client.messages.create(
-            model=MODEL,
-            max_tokens=MAX_TOKENS,
-            system=system_blocks,
-            tools=tools_for_request,
-            messages=messages,
-            extra_headers=_CACHE_BETA_HEADERS,
-        )
+    required_tool = _required_tool_for_question(question)
+    for round_index in range(_max_tool_rounds(scope_role)):
+        request_kwargs = {
+            "model": MODEL,
+            "max_tokens": MAX_TOKENS,
+            "system": system_blocks,
+            "tools": tools_for_request,
+            "messages": messages,
+            "extra_headers": _CACHE_BETA_HEADERS,
+        }
+        if round_index == 0 and required_tool:
+            request_kwargs["tool_choice"] = {"type": "tool", "name": required_tool}
+        resp = client.messages.create(**request_kwargs)
         compute_and_log_cost(resp.usage, MODEL, question, session_id, username)
         messages.append({"role": "assistant", "content": resp.content})
 
@@ -1502,6 +1569,7 @@ def ask_stream(question: str, session_id: str = "default", username: str = None,
     ]
 
     max_rounds = _max_tool_rounds(scope_role)
+    required_tool = _required_tool_for_question(question)
     for round_i in range(max_rounds):
         is_last_possible_round = round_i == max_rounds - 1
         # Vong GIUA: co the con tool_use, KHONG stream (client khong can thay) - dung create() nhu
@@ -1513,10 +1581,14 @@ def ask_stream(question: str, session_id: str = "default", username: str = None,
         # tool_use la KHONG DANG KE (chi vai token dau ra truoc phan tool_use, van phai doi ca cuc
         # tool_use ve moi biet dc functon nao/tham so gi de goi that), doi lai dam bao vong tra loi
         # that SU (bat ky la vong thu may) LUON duoc stream.
-        with client.messages.stream(
-            model=MODEL, max_tokens=MAX_TOKENS, system=system_blocks,
-            tools=tools_for_request, messages=messages, extra_headers=_CACHE_BETA_HEADERS,
-        ) as stream:
+        request_kwargs = {
+            "model": MODEL, "max_tokens": MAX_TOKENS, "system": system_blocks,
+            "tools": tools_for_request, "messages": messages,
+            "extra_headers": _CACHE_BETA_HEADERS,
+        }
+        if round_i == 0 and required_tool:
+            request_kwargs["tool_choice"] = {"type": "tool", "name": required_tool}
+        with client.messages.stream(**request_kwargs) as stream:
             for _event in stream:
                 # Khong day text ra UI truoc khi biet response co tool_use hay khong. Backend can
                 # loai footer timestamp model tu sinh va gan dung metadata nguon truoc khi cong bo.

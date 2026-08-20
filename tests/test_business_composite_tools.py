@@ -127,9 +127,176 @@ def test_composite_business_tools_are_exposed_to_model():
     names = {tool["name"] for tool in nl2sql.TEMPLATE_TOOLS}
     assert {
         "get_promotion_effectiveness",
+        "get_promotion_data_quality",
         "get_salary_bonus_policy",
+        "get_salary_data_quality",
         "get_customer_revenue_debt_risk",
     } <= names
+
+
+def test_promotion_data_quality_is_one_scoped_query(monkeypatch):
+    captured = []
+
+    def fake_bravo(sql, params=None):
+        captured.append((sql, params or {}))
+        return [{
+            "FirstLinkedOrderDate": "2025-01-01",
+            "LastLinkedOrderDate": "2026-01-09",
+            "LinkRows": 2_257_428,
+            "LinkedOrders": 495_199,
+            "Programs": 91,
+            "MissingOrder": 12,
+            "MissingProgram": 22,
+            "ValidLinks": 2_257_394,
+            "LastLinkSyncAt": "2026-01-09T10:00:00",
+        }]
+
+    monkeypatch.setattr(rt, "_q_bravo", fake_bravo)
+    result = rt.promotion_data_quality(scope_area_code="MN")
+
+    assert result["last_linked_order_date"] == "2026-01-09"
+    assert result["missing_order"] == 12
+    assert result["missing_program"] == 22
+    assert len(captured) == 1
+    assert "tp.AreaCode=:scope_area_code" in captured[0][0]
+    assert captured[0][1]["scope_area_code"] == "MN"
+
+
+def test_salary_data_quality_reconciles_dm_in_fixed_queries(monkeypatch):
+    calls = []
+
+    def fake_q(sql, params=()):
+        calls.append((sql, tuple(params)))
+        if "SELECT MAX(save_date)" in sql:
+            return [{"d": "2026-07-31"}]
+        if "SELECT COUNT(*) employees" in sql:
+            return [{
+                "employees": 206, "employees_with_dm_bonus": 115,
+                "mismatches": 0, "max_abs_delta": 0.005,
+            }]
+        if "expected_dm_bonus" in sql:
+            return []
+        raise AssertionError(sql)
+
+    monkeypatch.setattr(rt, "_q", fake_q)
+    result = rt.salary_data_quality("dm_reconciliation", "2026-07")
+
+    assert result["snapshot_date"] == "2026-07-31"
+    assert result["employees"] == 206
+    assert result["mismatch_count"] == 0
+    assert "TotalPoint" in result["formula"]
+    assert len(calls) == 3
+
+
+def test_salary_data_quality_base_salary_uses_live_schema(monkeypatch):
+    monkeypatch.setattr(rt, "_q_bravo", lambda sql, params=None: [
+        {"ColumnName": "SalaryLevel", "DataType": "varchar"},
+    ])
+    result = rt.salary_data_quality("base_salary_schema")
+    assert result["has_base_salary_amount"] is False
+    assert result["has_level_to_base_salary_mapping"] is False
+    assert "chua co" in result["conclusion"].lower()
+
+
+def test_high_risk_intents_force_their_single_verified_tool():
+    assert nl2sql._required_tool_for_question(
+        "Chuỗi liên kết đơn hàng–khuyến mãi hiện có dữ liệu đến ngày nào?"
+    ) == "get_promotion_data_quality"
+    assert nl2sql._required_tool_for_question(
+        "Có bao nhiêu liên kết khuyến mãi mất đơn hàng hoặc mất mã chương trình?"
+    ) == "get_promotion_data_quality"
+    assert nl2sql._required_tool_for_question(
+        "Thưởng DM1/DM2/DM3 và TotalPoint của từng người khớp nhau thế nào?"
+    ) == "get_salary_data_quality"
+    assert nl2sql._required_tool_for_question(
+        "Bảng hiện có đủ dữ liệu để kết luận tổng thu nhập đã gồm lương cơ bản chưa?"
+    ) == "get_salary_data_quality"
+    assert nl2sql._required_tool_for_question(
+        "Có ai V25Bonus đã lưu bằng 0 dù nằm trong bậc thưởng không?"
+    ) == "get_salary_bonus_policy"
+
+
+def test_ask_sends_forced_tool_choice_only_on_first_round(monkeypatch):
+    seen = []
+
+    class FakeMessages:
+        def create(self, **kwargs):
+            seen.append(kwargs)
+            if len(seen) == 1:
+                return SimpleNamespace(
+                    content=[SimpleNamespace(
+                        type="tool_use", id="quality-1",
+                        name="get_promotion_data_quality", input={},
+                    )],
+                    usage=SimpleNamespace(),
+                )
+            return SimpleNamespace(
+                content=[SimpleNamespace(type="text", text="Dữ liệu liên kết đến 09/01/2026.")],
+                usage=SimpleNamespace(),
+            )
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setattr(nl2sql, "LLM_BASE_URL", "")
+    monkeypatch.setattr(
+        nl2sql.anthropic, "Anthropic",
+        lambda api_key: SimpleNamespace(messages=FakeMessages()),
+    )
+    monkeypatch.setattr(nl2sql, "load_history", lambda *args, **kwargs: [])
+    monkeypatch.setattr(nl2sql, "append_message", lambda *args, **kwargs: None)
+    monkeypatch.setattr(nl2sql, "set_query_state", lambda *args, **kwargs: None)
+    monkeypatch.setattr(nl2sql, "compute_and_log_cost", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        nl2sql, "call_template",
+        lambda *args, **kwargs: {"ok": True, "result": {
+            "status": "ok", "last_linked_order_date": "2026-01-09",
+            "missing_order": 34, "missing_program": 0,
+        }},
+    )
+
+    result = nl2sql.ask(
+        "Chuỗi liên kết đơn hàng–khuyến mãi hiện có dữ liệu đến ngày nào?",
+        session_id="forced-quality", scope_role="c_level",
+    )
+
+    assert result["answer"].startswith("Dữ liệu liên kết đến")
+    assert seen[0]["tool_choice"] == {
+        "type": "tool", "name": "get_promotion_data_quality",
+    }
+    assert "tool_choice" not in seen[1]
+
+
+def test_new_quality_tools_keep_qlv_scope_fail_closed(monkeypatch):
+    seen = {}
+
+    def fake_promo(**kwargs):
+        seen["promo"] = kwargs
+        return {"status": "ok"}
+
+    def fake_salary(**kwargs):
+        seen["salary"] = kwargs
+        return {"status": "ok"}
+
+    monkeypatch.setitem(rt.TEMPLATES, "get_promotion_data_quality", fake_promo)
+    monkeypatch.setitem(rt.TEMPLATES, "get_salary_data_quality", fake_salary)
+    monkeypatch.setattr(rt, "_write_log", lambda entry: None)
+
+    promo = rt.call_template(
+        "get_promotion_data_quality", {}, scope_area_code="MN",
+        scope_employee_code="QLV01", scope_channel="OTC", scope_role="qlv",
+    )
+    salary = rt.call_template(
+        "get_salary_data_quality", {"check_type": "dm_reconciliation"},
+        scope_area_code="MN", scope_employee_code="QLV01", scope_role="qlv",
+    )
+
+    assert promo["ok"] is True and salary["ok"] is True
+    assert seen["promo"] == {
+        "scope_area_code": "MN", "scope_employee_code": "QLV01", "scope_channel": "OTC",
+    }
+    assert seen["salary"] == {
+        "check_type": "dm_reconciliation", "scope_role": "qlv",
+        "scope_employee_code": "QLV01",
+    }
 
 
 def test_provider_configuration_survives_multi_step_merge(monkeypatch):

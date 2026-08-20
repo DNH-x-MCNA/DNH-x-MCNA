@@ -61,6 +61,10 @@ class BusinessCase:
     question: str
     checker_id: str
     pass_rule: str
+    # Chi cham nhung cot cau hoi THAT SU yeu cau. Rong = giu cach cham cu (toan bo checker).
+    # Metadata nay ngan checker dung chung/kiem tra chat luong bat model lap lai cac so phu
+    # khong lien quan, vi du Q083 chi hoi LastLinkedOrderDate chu khong hoi LinkRows.
+    answer_columns: tuple[str, ...] = ()
 
 
 def _sql(value: str) -> str:
@@ -868,8 +872,11 @@ FROM dbo.DMS_DonHangCTKM x LEFT JOIN dbo.DMS_DonHangHdr h ON h.Id=x.OrderId
 
 
 def _case(number: int, group: str, audience: str, question: str,
-          checker_id: str, pass_rule: str) -> BusinessCase:
-    return BusinessCase(f"Q{number:03d}", group, audience, question, checker_id, pass_rule)
+          checker_id: str, pass_rule: str,
+          answer_columns: tuple[str, ...] = ()) -> BusinessCase:
+    return BusinessCase(
+        f"Q{number:03d}", group, audience, question, checker_id, pass_rule, answer_columns
+    )
 
 
 CASES = [
@@ -880,11 +887,11 @@ CASES = [
     _case(4,"Doanh thu","tp","Tuần nào trong tháng 7 đóng góp doanh thu lớn nhất và chiếm bao nhiêu phần trăm tháng?","REV_WEEK","Tổng các tuần khớp doanh thu tháng, nêu rõ tuần cắt qua đầu/cuối tháng."),
     _case(5,"Doanh thu","c_level","Cơ cấu doanh thu tháng 7 theo ba miền và theo OTC/ETC thế nào?","REV_REGION","Không làm mất khách chưa xác định vùng; tổng vùng khớp tổng công ty."),
     _case(6,"Doanh thu","manager","Miền nào phụ thuộc ETC nhiều nhất trong tháng 7?","REV_REGION","Tỷ trọng ETC/tổng miền tính từ cùng một kỳ."),
-    _case(7,"Doanh thu","c_level","Giá trị hóa đơn bình quân và hóa đơn lớn nhất tháng 7 của từng kênh là bao nhiêu?","REV_INVOICE_STATS","Tính ở cấp hóa đơn, không lấy trung bình dòng hàng."),
+    _case(7,"Doanh thu","c_level","Giá trị hóa đơn bình quân và hóa đơn lớn nhất tháng 7 của từng kênh là bao nhiêu?","REV_INVOICE_STATS","Tính ở cấp hóa đơn, không lấy trung bình dòng hàng.",("Channel","AverageInvoiceValue","LargestInvoiceValue")),
     _case(8,"Doanh thu","manager","Các hóa đơn điều chỉnh hoặc hoàn trong tháng 7 làm giảm doanh thu từng kênh bao nhiêu?","REV_RETURNS","Bao gồm Amount9 âm/DocCode HC; không dùng view bỏ mất điều chỉnh."),
     _case(9,"Doanh thu","tp","Top 20 nhà phân phối theo doanh thu tháng 7, tách theo kênh?","REV_DISTRIBUTOR","Thứ hạng và doanh thu khớp SQL."),
     _case(10,"Doanh thu","c_level","Doanh thu tháng 7 theo từng chi nhánh và kênh; chi nhánh nào lớn nhất?","REV_BRANCH","Không nhầm chi nhánh với vùng khách hàng."),
-    _case(11,"Doanh thu","manager","Dữ liệu hóa đơn OTC và ETC mới nhất đang đến ngày nào, đồng bộ lúc nào?","REV_FRESHNESS","Phải nêu riêng business date và sync time."),
+    _case(11,"Doanh thu","manager","Dữ liệu hóa đơn OTC và ETC mới nhất đang đến ngày nào, đồng bộ lúc nào?","REV_FRESHNESS","Phải nêu riêng business date và sync time.",("Channel","MaxDocDate","MaxSyncAt")),
     _case(12,"Doanh thu","c_level","Đối soát doanh thu tháng 7 giữa view tổng và view thường: lệch bao nhiêu và nên tin nguồn nào?","REV_RECONCILE","Chọn view Total làm nguồn chuẩn và giải thích dòng HC/điều chỉnh."),
 
     # 13-24: vùng/đội/cây tổ chức
@@ -899,7 +906,7 @@ CASES = [
     _case(21,"Đội ngũ","c_level","Vì sao không được cộng doanh số tất cả dòng TP, QLV, TDV trong bảng lương để ra doanh thu công ty?","KPI_LAYER_RECON","Chỉ ra các tầng roll-up chồng nhau bằng số thật."),
     _case(22,"Đội ngũ","tp","Tổng target và doanh số của các đội dưới quyền tháng 7 là bao nhiêu, đội nào dưới 80%?","KPI_MANAGER","Target đội không bị nhân theo số khách."),
     _case(23,"Đội ngũ","qlv","Trong đội tôi ai có nhiều khách phụ trách nhưng tỷ lệ hoàn thành thấp nhất?","KPI_EMPLOYEE","So sánh đồng thời customer count và achievement."),
-    _case(24,"Đội ngũ","manager","Có trường hợp một nhân viên vừa thiếu target vừa thiếu quản lý không?","KPI_QUALITY","Trả đúng danh sách giao của hai điều kiện."),
+    _case(24,"Đội ngũ","manager","Có trường hợp một nhân viên vừa thiếu target vừa thiếu quản lý không?","KPI_QUALITY","Trả đúng danh sách giao của hai điều kiện.",("EmployeeCode","ManagerCode","Target")),
 
     # 25-36: khách hàng/sản phẩm
     _case(25,"Khách hàng & sản phẩm","manager","Top 20 khách hàng doanh thu lớn nhất tháng 7 là ai?","CUS_TOP","Khớp mã, tên và doanh thu; OTC+ETC chỉ cộng một lần."),
@@ -925,7 +932,7 @@ CASES = [
     _case(43,"Công nợ","manager","Khách nào có tỷ lệ nợ quá hạn trên dư nợ cao nhất?","DEBT_RATIO_TOP","Không chia cho 0; phân biệt số tuyệt đối với tỷ lệ."),
     _case(44,"Công nợ","c_level","Có bao nhiêu khách đang có dư nợ ở cả OTC và ETC; tổng nợ của họ thế nào?","DEBT_DUAL_CHANNEL","Gộp theo mã khách và trả riêng dư nợ/quá hạn OTC, ETC."),
     _case(45,"Công nợ","manager","Snapshot công nợ được cập nhật lúc nào; có dấu hiệu cũ hoặc lệch thời gian giữa các dòng không?","DEBT_SNAPSHOT_QUALITY","Mốc nguồn là thời điểm SP được thực thi; mọi dòng phải cùng một mốc."),
-    _case(46,"Công nợ","manager","Có dòng công nợ nào tổng bốn nhóm tuổi không bằng tổng quá hạn không?","DEBT_AGING_QUALITY","Đối chiếu cả tổng bốn bucket và OverDueAmount do SP trả về."),
+    _case(46,"Công nợ","manager","Có dòng công nợ nào tổng bốn nhóm tuổi không bằng tổng quá hạn không?","DEBT_AGING_QUALITY","Đối chiếu cả tổng bốn bucket và OverDueAmount do SP trả về.",("broken_aging_sum","source_mismatch_rows")),
     _case(47,"Công nợ","manager","Có bao nhiêu dòng công nợ thiếu mã khách hoặc thiếu vùng?","DEBT_MISSING_DIMENSIONS","Nêu số thiếu và ClassCode lạ, không âm thầm bỏ dòng."),
     _case(48,"Công nợ","c_level","Nếu tổng nợ quá hạn cao nhưng tập trung ở vài khách, top 10 chiếm bao nhiêu?","DEBT_CONCENTRATION","Tính top 10 sau khi gộp khách và chia cho tổng nợ quá hạn toàn nguồn."),
 
@@ -943,7 +950,7 @@ CASES = [
     _case(59,"KPI","manager","Có nhân viên trùng mã nào làm nguy cơ đếm KPI hai lần không?","KPI_DUPLICATE","Đối chiếu cờ duplicate/resigned."),
     _case(60,"KPI","qlv","Nếu một TDV đạt 67%, phải mô tả trạng thái thưởng nhóm hàng, KPI và chỉ tiêu thế nào?","KPI_THRESHOLDS","Đúng: qua 65%, chưa KPI 80%, chưa chỉ tiêu 100%."),
     _case(61,"KPI","manager","Nếu một QLV đạt 67%, họ đã qua cổng thưởng nhóm hàng chưa?","KPI_THRESHOLDS","Đúng: chưa qua cổng 70%; không nói đạt KPI."),
-    _case(62,"KPI","c_level","Nhân viên nào thiếu quan hệ quản lý khiến chatbot không thể xác định đúng đội?","KPI_QUALITY","Phải báo thiếu dữ liệu tổ chức, không trả đội doanh thu 0."),
+    _case(62,"KPI","c_level","Nhân viên nào thiếu quan hệ quản lý khiến chatbot không thể xác định đúng đội?","KPI_QUALITY","Phải báo thiếu dữ liệu tổ chức, không trả đội doanh thu 0.",("EmployeeCode","ManagerCode")),
 
     # 63-76: lương thưởng
     _case(63,"Lương thưởng","manager","Chi tiết thưởng kinh doanh và phụ cấp tháng 7 của từng nhân viên gồm những khoản nào?","SALARY_DETAIL","Không gọi đây là tổng lương/tổng thu nhập vì thiếu LCB."),
@@ -955,7 +962,7 @@ CASES = [
     _case(69,"Lương thưởng","c_level","Tỷ lệ nhân viên có phát sinh V15, V22, V25 và ASO theo vùng/chức danh?","SALARY_ACHIEVEMENT","Mẫu số là số nhân viên cùng snapshot."),
     _case(70,"Lương thưởng","manager","Các bậc tiền thưởng V25 tháng 7 theo vùng và chức danh là gì?","SALARY_RULES","Đọc DIM_BacThuong đúng hiệu lực."),
     _case(71,"Lương thưởng","manager","Công thức V25 dùng doanh số nào, target nào và ngày chốt nào?","SALARY_PROGRESS","Dùng V25Amount/MonthSaleTarget và V25Date thực tế."),
-    _case(72,"Lương thưởng","c_level","Có ai tỷ lệ V25 nằm trong bậc có thưởng nhưng V25Bonus đã lưu bằng 0 không?","SALARY_V25_MISMATCH","Phải báo chênh lệch, không tự ghi đè số lương."),
+    _case(72,"Lương thưởng","c_level","Có ai tỷ lệ V25 nằm trong bậc có thưởng nhưng V25Bonus đã lưu bằng 0 không?","SALARY_V25_MISMATCH","Phải báo chênh lệch, không tự ghi đè số lương.",("EmployeeCode",)),
     _case(73,"Lương thưởng","manager","Thưởng danh mục DM1/DM2/DM3 và TotalPoint của từng người khớp nhau thế nào?","SALARY_DETAIL","Đối chiếu DMBonus với các Amount*Percent và TotalPoint."),
     _case(74,"Lương thưởng","manager","Phụ cấp ăn ca, xăng xe, điện thoại tháng 7 của từng người và tổng phụ cấp?","SALARY_DETAIL","Chỉ cộng ba khoản phụ cấp, không nhập vào tiền thưởng."),
     _case(75,"Lương thưởng","c_level","Bảng hiện có đủ dữ liệu để kết luận tổng thu nhập đã gồm lương cơ bản chưa?","SALARY_LCB_SCHEMA","Nếu thiếu mapping LCB phải nói rõ chưa đủ."),
@@ -968,8 +975,8 @@ CASES = [
     _case(80,"Khuyến mãi","manager","Mỗi chương trình có những khách nào tham gia nhiều đơn nhất?","PROMO_CUSTOMERS","Gộp distinct OrderId theo chương trình và khách."),
     _case(81,"Khuyến mãi","manager","Số sản phẩm điều kiện, sản phẩm tặng và tổng lượt tặng của từng chương trình?","PROMO_PRODUCTS","Phân biệt configured product và gift product."),
     _case(82,"Khuyến mãi","c_level","Có bao nhiêu đơn dùng đồng thời nhiều chương trình; điều đó ảnh hưởng cách cộng doanh thu ra sao?","PROMO_OVERLAP","Không cộng ngang associated revenue các CTKM."),
-    _case(83,"Khuyến mãi","manager","Chuỗi liên kết đơn hàng–khuyến mãi hiện có dữ liệu đến ngày nào?","PROMO_COVERAGE","Phải công khai LastLinkedOrderDate."),
-    _case(84,"Khuyến mãi","c_level","Có bao nhiêu liên kết khuyến mãi mất đơn hàng hoặc mất mã chương trình?","PROMO_QUALITY","MissingOrder/MissingProgram phải được nêu rõ."),
+    _case(83,"Khuyến mãi","manager","Chuỗi liên kết đơn hàng–khuyến mãi hiện có dữ liệu đến ngày nào?","PROMO_COVERAGE","Phải công khai LastLinkedOrderDate.",("LastLinkedOrderDate",)),
+    _case(84,"Khuyến mãi","c_level","Có bao nhiêu liên kết khuyến mãi mất đơn hàng hoặc mất mã chương trình?","PROMO_QUALITY","MissingOrder/MissingProgram phải được nêu rõ.",("MissingOrder","MissingProgram")),
 
     # 85-90: tồn kho/đơn hàng/chất lượng dữ liệu
     _case(85,"Vận hành dữ liệu","manager","Giá trị và số lượng tồn kho theo chi nhánh hiện tại; chi nhánh nào lớn nhất?","INV_SUMMARY","Không gộp B01 sản xuất vào vùng kinh doanh."),
