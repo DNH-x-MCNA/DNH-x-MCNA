@@ -28,15 +28,15 @@
 | Q013 | tp | Xếp hạng toàn bộ nhân viên theo tỷ lệ hoàn thành chỉ tiêu tháng 7, kèm doanh số, target và số khách phụ trách. | `KPI_EMPLOYEE` | Không cộng trùng target theo khách hàng. |
 | Q014 | tp | Đội của quản lý nào có tỷ lệ hoàn thành tháng 7 cao nhất? | `KPI_MANAGER` | Gộp đúng nhân viên theo ManagerCode. |
 | Q015 | qlv | Trong đội tôi, ai đạt 100% chỉ tiêu, ai đạt KPI 80%, ai mới chỉ qua cổng thưởng nhóm hàng? | `KPI_THRESHOLDS` | Phân biệt rõ ba mốc 100/80/65-70. |
-| Q016 | manager | Bao nhiêu TDV chưa có quản lý trực tiếp trong dữ liệu tháng 7? | `KPI_QUALITY` | Không trả doanh thu 0 thay cho lỗi thiếu ManagerCode. |
-| Q017 | manager | Những nhân viên nào có doanh số nhưng không có chỉ tiêu tháng 7? | `KPI_QUALITY` | Liệt kê target rỗng/0 và doanh số thực tế. |
+| Q016 | manager | Bao nhiêu TDV chưa có quản lý trực tiếp trong dữ liệu tháng 7? | `KPI_MISSING_MANAGER` | Đếm đúng ManagerCode rỗng ở TDV; không dùng manager_area_code. |
+| Q017 | manager | Những nhân viên nào có doanh số nhưng không có chỉ tiêu tháng 7? | `KPI_MISSING_TARGET` | Liệt kê target rỗng/0 và doanh số thực tế. |
 | Q018 | qlv | Top 10 ngày bán hàng tốt nhất của đội trong tháng 7 là những ngày nào? | `KPI_TEAM_DAILY` | Gộp đúng nhân viên vào ManagerCode qua DMSId rồi mới xếp hạng theo ngày. |
 | Q019 | tp | So sánh số khách mới, khách mua lại và khách hoạt động của từng nhân viên cuối tháng 7. | `KPI_CUSTOMER_FLAGS` | Dùng trực tiếp IsNC/IsRO/IsAC, không suy diễn. |
 | Q020 | manager | Nhân viên nào đang xuất hiện trùng hoặc là bản ghi bóng trong danh mục nhân sự? | `KPI_DUPLICATE` | Nêu IsDuplicate/IsResigned, không đưa bản ghi bóng vào xếp hạng. |
 | Q021 | c_level | Vì sao không được cộng doanh số tất cả dòng TP, QLV, TDV trong bảng lương để ra doanh thu công ty? | `KPI_LAYER_RECON` | Chỉ ra các tầng roll-up chồng nhau bằng số thật. |
 | Q022 | tp | Tổng target và doanh số của các đội dưới quyền tháng 7 là bao nhiêu, đội nào dưới 80%? | `KPI_MANAGER` | Target đội không bị nhân theo số khách. |
 | Q023 | qlv | Trong đội tôi ai có nhiều khách phụ trách nhưng tỷ lệ hoàn thành thấp nhất? | `KPI_EMPLOYEE` | So sánh đồng thời customer count và achievement. |
-| Q024 | manager | Có trường hợp một nhân viên vừa thiếu target vừa thiếu quản lý không? | `KPI_QUALITY` | Trả đúng danh sách giao của hai điều kiện. |
+| Q024 | manager | Có trường hợp một nhân viên vừa thiếu target vừa thiếu quản lý không? | `KPI_MISSING_TARGET_MANAGER` | Trả đúng số lượng và mã nhân viên thuộc giao của hai điều kiện. |
 ## Khách hàng & sản phẩm
 
 | ID | Vai trò | Câu hỏi | Checker | Tiêu chí chính |
@@ -86,7 +86,7 @@
 | Q059 | manager | Có nhân viên trùng mã nào làm nguy cơ đếm KPI hai lần không? | `KPI_DUPLICATE` | Đối chiếu cờ duplicate/resigned. |
 | Q060 | qlv | Nếu một TDV đạt 67%, phải mô tả trạng thái thưởng nhóm hàng, KPI và chỉ tiêu thế nào? | `KPI_THRESHOLDS` | Đúng: qua 65%, chưa KPI 80%, chưa chỉ tiêu 100%. |
 | Q061 | manager | Nếu một QLV đạt 67%, họ đã qua cổng thưởng nhóm hàng chưa? | `KPI_THRESHOLDS` | Đúng: chưa qua cổng 70%; không nói đạt KPI. |
-| Q062 | c_level | Nhân viên nào thiếu quan hệ quản lý khiến chatbot không thể xác định đúng đội? | `KPI_QUALITY` | Phải báo thiếu dữ liệu tổ chức, không trả đội doanh thu 0. |
+| Q062 | c_level | Nhân viên nào thiếu quan hệ quản lý khiến chatbot không thể xác định đúng đội? | `KPI_MISSING_MANAGER` | Phải báo số lượng và mã nhân viên thiếu ManagerCode, không trả đội doanh thu 0. |
 ## Lương thưởng
 
 | ID | Vai trò | Câu hỏi | Checker | Tiêu chí chính |
@@ -288,20 +288,31 @@ SELECT Channel, COUNT(DISTINCT Stt) AffectedInvoices, SUM(Amount9) NegativeReven
 FROM Sales WHERE Amount9 < 0 OR DocCode='HC' GROUP BY Channel
 ```
 
-### REV_DISTRIBUTOR — Doanh thu theo nhà phân phối
+### REV_DISTRIBUTOR — Top nhà phân phối theo từng kênh
 
 Nguồn: `bravo` · Case: Q009
 
+Lưu ý: Trong dữ liệu bán hàng, nhà phân phối được nhận diện bằng CustomerCode; DistributorCode chỉ là mã nguồn OTC/ETC tổng và không thể tạo top 20.
+
 ```sql
 WITH Sales AS (
-    SELECT 'OTC' Channel, DistributorCode, Amount9 FROM dbo.vHoaDonTotal
+    SELECT 'OTC' Channel, CustomerCode DistributorCode, Amount9 FROM dbo.vHoaDonTotal
     WHERE DocDate >= '2026-07-01' AND DocDate < '2026-08-01'
     UNION ALL
-    SELECT 'ETC', DistributorCode, Amount9 FROM dbo.vHoaDonETCTotal
+    SELECT 'ETC', CustomerCode, Amount9 FROM dbo.vHoaDonETCTotal
     WHERE DocDate >= '2026-07-01' AND DocDate < '2026-08-01'
+), DistributorRevenue AS (
+    SELECT Channel, DistributorCode, SUM(Amount9) Revenue
+    FROM Sales
+    GROUP BY Channel, DistributorCode
+), Ranked AS (
+    SELECT Channel, DistributorCode, Revenue,
+           ROW_NUMBER() OVER (PARTITION BY Channel ORDER BY Revenue DESC, DistributorCode) RankInChannel
+    FROM DistributorRevenue
 )
-SELECT TOP (20) DistributorCode, Channel, SUM(Amount9) Revenue
-FROM Sales GROUP BY DistributorCode, Channel ORDER BY SUM(Amount9) DESC
+SELECT DistributorCode, Channel, Revenue, RankInChannel
+FROM Ranked WHERE RankInChannel<=20
+ORDER BY Channel, RankInChannel
 ```
 
 ### REV_BRANCH — Doanh thu theo chi nhánh
@@ -636,9 +647,11 @@ SELECT ManagerCode,DocDate,Revenue,RankInTeam
 FROM Ranked WHERE RankInTeam<=10 ORDER BY ManagerCode,RankInTeam
 ```
 
-### KPI_QUALITY — Nhân viên thiếu target hoặc thiếu quản lý
+### KPI_MISSING_MANAGER — TDV thiếu quan hệ quản lý trực tiếp
 
-Nguồn: `bravo` · Case: Q016, Q017, Q024, Q062
+Nguồn: `bravo` · Case: Q016, Q062
+
+Lưu ý: Luôn trả ít nhất một dòng tổng; khi count=0 các cột nhân viên là NULL.
 
 ```sql
 WITH Snap AS (SELECT MAX(SaveDate) d FROM dbo.FACT_TongHopKhachHang WHERE SaveDate<='2026-07-31'),
@@ -646,11 +659,66 @@ Emp AS (
  SELECT EmployeeCode, MAX(ManagerCode) ManagerCode, MAX(MonthSaleTarget) Target,
         SUM(Amount_CT) Actual, COUNT(DISTINCT CustomerCode) Customers
  FROM dbo.FACT_TongHopKhachHang WHERE SaveDate=(SELECT d FROM Snap) GROUP BY EmployeeCode
+), DimEmp AS (
+ SELECT EmployeeCode,MAX(Name) Name,MAX(PositionCode) PositionCode
+ FROM dbo.DIM_NhanVien GROUP BY EmployeeCode
+), Missing AS (
+ SELECT e.EmployeeCode,n.Name,n.PositionCode,e.ManagerCode,e.Target,e.Actual,e.Customers
+ FROM Emp e LEFT JOIN DimEmp n ON n.EmployeeCode=e.EmployeeCode
+ WHERE n.PositionCode='TDV' AND NULLIF(e.ManagerCode,'') IS NULL
+), Stats AS (
+ SELECT COUNT_BIG(*) MissingManagerCount FROM Missing
+)
+SELECT s.MissingManagerCount,m.EmployeeCode,m.Name,m.PositionCode,m.ManagerCode,m.Target,m.Actual,m.Customers
+FROM Stats s LEFT JOIN Missing m ON 1=1
+ORDER BY m.EmployeeCode
+```
+
+### KPI_MISSING_TARGET — Nhân viên có doanh số nhưng thiếu target
+
+Nguồn: `bravo` · Case: Q017
+
+```sql
+WITH Snap AS (SELECT MAX(SaveDate) d FROM dbo.FACT_TongHopKhachHang WHERE SaveDate<='2026-07-31'),
+Emp AS (
+ SELECT EmployeeCode, MAX(ManagerCode) ManagerCode, MAX(MonthSaleTarget) Target,
+        SUM(Amount_CT) Actual, COUNT(DISTINCT CustomerCode) Customers
+ FROM dbo.FACT_TongHopKhachHang WHERE SaveDate=(SELECT d FROM Snap) GROUP BY EmployeeCode
+), DimEmp AS (
+ SELECT EmployeeCode,MAX(Name) Name,MAX(PositionCode) PositionCode
+ FROM dbo.DIM_NhanVien GROUP BY EmployeeCode
 )
 SELECT e.EmployeeCode,n.Name,n.PositionCode,e.ManagerCode,e.Target,e.Actual,e.Customers
-FROM Emp e LEFT JOIN dbo.DIM_NhanVien n ON n.EmployeeCode=e.EmployeeCode
-WHERE ISNULL(e.Target,0)<=0 OR (n.PositionCode='TDV' AND NULLIF(e.ManagerCode,'') IS NULL)
+FROM Emp e LEFT JOIN DimEmp n ON n.EmployeeCode=e.EmployeeCode
+WHERE ISNULL(e.Target,0)<=0 AND e.Actual>0
 ORDER BY n.PositionCode,e.EmployeeCode
+```
+
+### KPI_MISSING_TARGET_MANAGER — Nhân viên đồng thời thiếu target và quản lý
+
+Nguồn: `bravo` · Case: Q024
+
+Lưu ý: Luôn trả ít nhất một dòng tổng; khi count=0 các cột nhân viên là NULL.
+
+```sql
+WITH Snap AS (SELECT MAX(SaveDate) d FROM dbo.FACT_TongHopKhachHang WHERE SaveDate<='2026-07-31'),
+Emp AS (
+ SELECT EmployeeCode, MAX(ManagerCode) ManagerCode, MAX(MonthSaleTarget) Target,
+        SUM(Amount_CT) Actual, COUNT(DISTINCT CustomerCode) Customers
+ FROM dbo.FACT_TongHopKhachHang WHERE SaveDate=(SELECT d FROM Snap) GROUP BY EmployeeCode
+), DimEmp AS (
+ SELECT EmployeeCode,MAX(Name) Name,MAX(PositionCode) PositionCode
+ FROM dbo.DIM_NhanVien GROUP BY EmployeeCode
+), Matching AS (
+ SELECT e.EmployeeCode,n.Name,n.PositionCode,e.ManagerCode,e.Target,e.Actual,e.Customers
+ FROM Emp e LEFT JOIN DimEmp n ON n.EmployeeCode=e.EmployeeCode
+ WHERE ISNULL(e.Target,0)<=0 AND n.PositionCode='TDV' AND NULLIF(e.ManagerCode,'') IS NULL
+), Stats AS (
+ SELECT COUNT_BIG(*) MatchingEmployees FROM Matching
+)
+SELECT s.MatchingEmployees,m.EmployeeCode,m.Name,m.PositionCode,m.ManagerCode,m.Target,m.Actual,m.Customers
+FROM Stats s LEFT JOIN Matching m ON 1=1
+ORDER BY m.EmployeeCode
 ```
 
 ### KPI_DUPLICATE — Nhân viên trùng/bóng và trùng snapshot

@@ -262,6 +262,40 @@ def test_answer_columns_sai_ten_cot_fail_closed():
     assert "chua_doi_chieu_duoc" in r["ground_truth_check"]
 
 
+def test_answer_column_count_0_chap_nhan_cau_phu_dinh_tu_nhien():
+    case = _Case("Q016", "Đội ngũ", "manager", "Có TDV thiếu quản lý không?", "KPI_MISSING_MANAGER")
+    object.__setattr__(case, "answer_columns", ("MissingManagerCount",))
+    gt = {
+        "status": "ok",
+        "columns": ["MissingManagerCount", "EmployeeCode"],
+        "rows": [[0, None]],
+    }
+    r = runner.grade_case(
+        case,
+        "Không phát hiện TDV nào thiếu quản lý trực tiếp trong snapshot tháng 7.",
+        None,
+        ["sql_tu_do:bravo"],
+        gt,
+    )
+    assert r["passed_auto"] is True
+    assert r["ground_truth_check"] == "pass"
+
+
+def test_answer_column_count_khac_0_van_bat_buoc_co_so():
+    case = _Case("Q016", "Đội ngũ", "manager", "Có TDV thiếu quản lý không?", "KPI_MISSING_MANAGER")
+    object.__setattr__(case, "answer_columns", ("MissingManagerCount",))
+    gt = {"status": "ok", "columns": ["MissingManagerCount"], "rows": [[3]]}
+    r = runner.grade_case(
+        case,
+        "Có một số TDV thiếu quản lý trực tiếp.",
+        None,
+        ["sql_tu_do:bravo"],
+        gt,
+    )
+    assert r["passed_auto"] is False
+    assert r["ground_truth_check"] == "fail"
+
+
 def test_checker_dang_top_n_KHONG_duoc_tu_phan_dung_sai():
     """Diem quan trong nhat: 'top N' phai di thang vao can nguoi kiem, KHONG duoc coi la
     dat chi vi khong bat duoc loi nao khac. day la ranh gioi giua tu tin that va bia do tin cay."""

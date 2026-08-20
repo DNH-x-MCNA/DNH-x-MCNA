@@ -37,6 +37,31 @@ def test_required_high_risk_scenarios_are_covered():
     assert "nguồn nào hiện chưa đủ độ phủ" in questions
 
 
+def test_day20_distributor_checker_ranks_customers_inside_each_channel():
+    checker = suite.CHECKERS["REV_DISTRIBUTOR"]
+    assert "CustomerCode DistributorCode" in checker.sql
+    assert "PARTITION BY Channel" in checker.sql
+    assert "RankInChannel<=20" in checker.sql
+    # DistributorCode gốc chỉ là mã nguồn tổng OTC/ETC, không phải thực thể để xếp top 20.
+    assert "SELECT 'OTC' Channel, DistributorCode" not in checker.sql
+
+
+def test_day20_kpi_quality_cases_use_semantically_separate_checkers():
+    cases = {case.id: case for case in suite.CASES}
+    assert cases["Q016"].checker_id == "KPI_MISSING_MANAGER"
+    assert cases["Q016"].answer_columns == ("MissingManagerCount",)
+    assert cases["Q017"].checker_id == "KPI_MISSING_TARGET"
+    assert cases["Q024"].checker_id == "KPI_MISSING_TARGET_MANAGER"
+    assert cases["Q024"].answer_columns == ("MatchingEmployees", "EmployeeCode")
+    assert cases["Q062"].checker_id == "KPI_MISSING_MANAGER"
+    assert cases["Q062"].answer_columns == ("MissingManagerCount", "EmployeeCode")
+
+    manager_sql = suite.CHECKERS["KPI_MISSING_MANAGER"].sql
+    intersection_sql = suite.CHECKERS["KPI_MISSING_TARGET_MANAGER"].sql
+    assert "PositionCode='TDV' AND NULLIF(e.ManagerCode,'') IS NULL" in manager_sql
+    assert "ISNULL(e.Target,0)<=0 AND n.PositionCode='TDV'" in intersection_sql
+
+
 def test_markdown_contains_questions_and_direct_sql():
     rendered = suite.render_markdown()
     assert "Q001" in rendered and "Q090" in rendered

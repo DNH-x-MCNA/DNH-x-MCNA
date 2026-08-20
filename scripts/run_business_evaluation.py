@@ -342,6 +342,13 @@ def _explicit_value_missing(value: Any, answer: str) -> bool:
         numeric = float(value)
     except (TypeError, ValueError):
         return False
+    if numeric == 0 and re.search(
+        r"\b(không\s+(?:có|phát hiện|ghi nhận)|chưa\s+phát hiện)\b",
+        (answer or "").casefold(),
+    ):
+        # Với checker count được khai báo tường minh, "không có trường hợp nào" mang đúng
+        # nghĩa số lượng bằng 0; không ép câu trả lời tự nhiên phải in thêm chữ số 0.
+        return False
     integer = str(int(round(numeric)))
     answer_numbers = _significant_digit_runs(answer, min_len=1)
     if integer in answer_numbers:
