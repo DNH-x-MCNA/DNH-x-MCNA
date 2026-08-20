@@ -122,6 +122,18 @@ def test_canh_bao_khong_uoc_tinh_khong_bi_cham_lo_du_bao():
     assert not any(p["code"] == "lo_du_bao" for p in r["problems"])
 
 
+def test_buoc_tinh_khong_bi_nham_thanh_uoc_tinh():
+    """20/08/2026 (thuc te, Q067): '"bước tính" (buoc trong quy trinh tinh luong) CHUA dung
+    chuoi con "ước tính" (b + "ước tính") - so khop chuoi con tho tung bao P0 oan cho cau tra loi
+    dung, giai thich dung loi thu tuc tinh luong that (procedure_loads_v25_rules=False)."""
+    answer = ("Đây là lỗi triển khai thủ tục tính lương: bước tính không nạp đúng loại thưởng "
+              "V25 trước khi gán, không phải do nhân viên không đạt điều kiện.")
+    r = runner.grade_case(BASE_CASE, answer, None, ["get_salary_bonus_policy"],
+                          {"status": "bo_qua"})
+    assert r["passed_auto"] is True
+    assert not any(p["code"] == "lo_du_bao" for p in r["problems"])
+
+
 def test_phu_dinh_o_cau_truoc_khong_che_du_bao_that_o_cau_sau():
     answer = "Không dùng ước tính cũ. Dự báo tháng 8 sẽ đạt 50 tỷ."
     r = runner.grade_case(BASE_CASE, answer, None, ["get_salary_bonus_policy"],

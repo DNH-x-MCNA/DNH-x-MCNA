@@ -282,15 +282,22 @@ def _forecast_leaks(answer: str) -> list[str]:
 
     `khong dung uoc tinh` la cau tu choi du bao dung quy tac, khong phai lo du bao. Regex cu chi
     tim tu khoa nen phat P0 oan cho nhung cau nhu vay.
-    """
+
+    20/08/2026 (thuc te, phat hien qua chay that Q067): `lower.find(marker, ...)` la SO KHOP CHUOI
+    CON THO, khong xet ranh gioi tu - "bươc tính" (buoc trong QUY TRINH tinh luong, hoan toan vo
+    hai) CHUA dung chuoi con "ước tính" (b+"uoc tinh") nen bi bao oan la lo du bao. Doi sang regex
+    co \\b (Python \\w tinh ca ky tu Unicode co dau nhu ư/ớ la ky tu tu, nen \\b dung truoc "ước"
+    trong "bước" - khong co ranh gioi giua b va ư - dung truoc "ước tính" dung 1 tu rieng)."""
     lower = (answer or "").lower()
     leaked: list[str] = []
     for marker in FORECAST_LEAK_MARKERS:
+        pattern = re.compile(r"\b" + re.escape(marker) + r"\b")
         start = 0
         while True:
-            index = lower.find(marker, start)
-            if index < 0:
+            match = pattern.search(lower, start)
+            if not match:
                 break
+            index = match.start()
             prefix = lower[max(0, index - 40):index]
             # Chi xet menh de hien tai (sau dau cau/xuong dong gan nhat), tranh mot "khong" o
             # cau truoc vo tinh mien tru cho mot du bao that o cau sau.
