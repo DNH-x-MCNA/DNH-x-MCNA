@@ -327,6 +327,13 @@ def test_provider_configuration_survives_multi_step_merge(monkeypatch):
     }
 
 
+def test_timeout_env_is_bounded_and_invalid_value_falls_back(monkeypatch):
+    monkeypatch.setenv("TEST_CHAT_TIMEOUT", "300")
+    assert nl2sql._timeout_env("TEST_CHAT_TIMEOUT", 110, 120) == 120
+    monkeypatch.setenv("TEST_CHAT_TIMEOUT", "khong-phai-so")
+    assert nl2sql._timeout_env("TEST_CHAT_TIMEOUT", 110, 120) == 110
+
+
 def _run_ask_until_rounds_exhausted(monkeypatch, scope_role):
     """Model LUON tra ve tool_use voi tham so KHAC nhau moi vong (tranh co che chong lap lai bat
     som) - buoc vong lap chay het so vong cho phep cua vai tro, roi bi ep tra loi cuoi cung."""
@@ -425,6 +432,9 @@ def test_repeated_tool_call_is_not_reexecuted_and_forces_final_answer(monkeypatc
     assert fake_messages.calls == 3
     assert result["last_result"] is None
     assert result["partial_results_hidden"] is True
+    assert result["query_plan"]["plan_id"] == "plan-q-test"
+    assert result["query_plan"]["status"] == "completed"
+    assert result["query_plan"]["steps"][0]["tool_name"] == "get_promotion_effectiveness"
 
 
 def test_tool_call_key_is_order_independent():

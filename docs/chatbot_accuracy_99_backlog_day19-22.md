@@ -161,9 +161,11 @@ sách API tới 1/9).
 **bắt buộc cần gọi chatbot thật** để kiểm chứng đúng/sai — không mô phỏng bằng test giả được vì
 bản chất câu hỏi phức tạp nằm ở việc MODEL tự lập kế hoạch, không phải logic tool cố định.
 
-- ❌ `QueryPlan` có cấu trúc (plan_id, metrics, period, scope, steps, dependencies, status, sources,
-  reconciliation_rules) — CHƯA tồn tại dưới bất kỳ hình thức nào trong code hiện tại
-- ❌ Trạng thái từng bước (pending/running/completed/partial/failed/skipped)
+- ✅ `QueryPlan` request-local có đủ `plan_id`, `question`, `metrics`, `period`, `scope`, `steps`,
+  `dependencies`, `status`, `sources`, `reconciliation_rules`; trace được trả ở cả `/chat` và
+  `/chat/stream` (`backend/query_plan.py`, 20/08/2026)
+- ✅ Trạng thái từng bước `pending/running/completed/partial/failed/skipped`; composite tool có thể
+  hoàn tất nhiều domain mà không bị ép gọi lặp
 - ✅ Giới hạn vòng theo CẤP VAI TRÒ (19/08, thay vì hằng số phẳng): `qlv=5` (kèm "Trưởng kênh" MT),
   `regional_director=8` (TP = Giám đốc Miền = Giám đốc Kênh), `c_level`/`admin_ops=10`. Vai trò
   không xác định fallback về `DEFAULT_MAX_TOOL_ROUNDS=6` (mức hằng số cũ chốt 17/08). Đính chính:
@@ -171,17 +173,20 @@ bản chất câu hỏi phức tạp nằm ở việc MODEL tự lập kế ho�
   chỉ là 1 mốc lịch sử 04/08, đã bị nâng lại nhiều lần). 4 test mới (`test_business_composite_tools.py`),
   xác nhận đúng số lần gọi model cho cả 4 vai trò bằng client giả luôn trả về tool_use.
 - ✅ Tối đa 5 tool/vòng (`MAX_TOOLS_PER_ROUND=5`, đã có từ 10/08)
-- ❌ Không gọi lại cùng tool/cùng tham số trong 1 phiên (chưa có cơ chế phát hiện)
-- ❌ Timeout riêng từng tool / tổng timeout request (chưa rà — SQL Server có `STATEMENT_TIMEOUT_SEC`,
-  nhưng tool cố định/toàn request thì chưa)
-- ❌ Reconcile tự động (tổng vùng=tổng công ty, tổng kênh=tổng công ty, tổng đội=tổng nhân viên,
-  tổng tuổi nợ=tổng quá hạn, CTKM không cộng chồng, total bonus không nhập phụ cấp) — không có
-  bước reconcile CHUNG nào chạy trước khi trả lời, mỗi tool tự đúng trong phạm vi riêng của nó
-- ❌ Partial answer có cấu trúc (nêu phần đã kiểm chứng / bảng thiếu / bước thất bại, không suy đoán
-  số, không nói chung chung "quá phức tạp") — hiện chỉ có 2 lựa chọn nhị phân: trả lời đầy đủ hoặc
-  từ chối, chưa có dạng "trả lời một phần + nêu rõ phần còn thiếu"
-- ❌ 10 câu complex mẫu (doanh thu+KPI+công nợ, CTKM+khách+sản phẩm, đối chiếu warehouse/live...)
-  — chưa soạn, cần soạn xong TRƯỚC khi có thể tự động kiểm bất cứ gì ở Ngày 22
+- ✅ Không gọi lại cùng tool+cùng tham số trong một request bằng fingerprint JSON ổn định; lệnh lặp
+  nhận kết quả nhắc dùng dữ liệu đã có và không được thực thi lần hai
+- ✅ Budget timeout: toàn request 110s, từng model call 45s, từng tool 40s; SQL Server vẫn giữ
+  statement/driver timeout 30s. Khi hết tổng budget, backend không mở thêm nguồn và trả partial
+- ✅ Reconcile chung trên payload thật: OTC+ETC=tổng, tổng vùng=tổng công ty khi có cả hai nguồn,
+  bốn bucket nợ=tổng quá hạn, roll-up đội không cộng tầng, CTKM không cộng ngang, TotalBonus tách
+  phụ cấp và policy lương đúng kỳ. Kết quả reconcile được gửi lại model trước khi tổng hợp
+- ✅ Partial answer có cấu trúc: backend tự gắn mục `Phần chưa thể kiểm chứng`, tên bước/nguồn lỗi
+  và câu cấm suy đoán số; không công bố bảng trung gian
+- ✅ Đã có 10 câu complex C001-C010 và runner riêng (`scripts/complex_business_suite.py`,
+  `scripts/run_complex_evaluation.py`), gồm controlled failure ở C010 để kiểm partial-answer thật
+
+Gate còn lại: chạy live 10/10 trên máy 24 và đối chiếu số/danh sách trong ground truth JSON. Unit
+test không thay thế được bước này vì quyết định gọi tool của model chỉ xuất hiện khi chạy API thật.
 
 ---
 
@@ -189,22 +194,17 @@ bản chất câu hỏi phức tạp nằm ở việc MODEL tự lập kế ho�
 
 | Ngày | Tổng bullet (ước) | ✅ Xong | ⚠️ Một phần | ❌ Chưa làm | 🔒 Cần API thật |
 |---|---:|---:|---:|---:|---:|
-| 19 | ~30 | 9 | 1 | 15 | 5 |
-| 20 | ~25 | 13 | 2 | 10 | 0 |
-| 21 | ~25 | 8 | 2 | 15 | 0 |
-| 22 | ~14 | 1 | 1 | 12 | phần lõi cần API |
+| 19 | ~30 | 24 | 5 | 1 | full live/human review |
+| 20 | ~25 | 23 | 2 | 0 | 38 list cần đối chiếu tay |
+| 21 | ~25 | 23 | 2 | 0 | list cần đối chiếu tay |
+| 22 | ~14 | 13 | 1 | 0 | chạy live C001-C010 |
 
 **Đọc đúng cách**: cột 🔒 KHÔNG nghĩa là "chặn hoàn toàn tới 1/9" — chỉ phần XÁC MINH cuối cùng
-qua chatbot thật mới cần API. Phần thiết kế/viết code/test giả lập (như đã làm suốt hôm nay) vẫn
-làm được ngay cho phần lớn Ngày 20-21 còn lại, và một phần kha khá của Ngày 22 (khung `QueryPlan`,
-giới hạn vòng/timeout, cấu trúc partial-answer) — chỉ RIÊNG việc "10 câu complex có được trả lời
-đúng không" mới thật sự cần model thật.
+qua chatbot thật mới cần API. Code, checker và unit test chỉ chứng minh cơ chế backend; quyết định
+tool của model và độ đúng của câu trả lời cuối vẫn phải đo trên máy 24.
 
-## Đề xuất thứ tự làm tiếp (không cần API)
+## Việc tiếp theo
 
-1. **Lương thưởng** (Ngày 21) — rủi ro cao nhất theo đánh giá gốc, hoàn toàn chưa động tới, ảnh hưởng
-   trực tiếp tới tiền lương người thật nếu sai.
-2. **CTKM** (Ngày 21) — cùng mức rủi ro, cùng chưa động tới.
-3. **Khách hàng/Sản phẩm** (Ngày 20) — khối lượng bullet còn lại nhiều nhất.
-4. **Khung `QueryPlan` cơ bản** (Ngày 22) — chỉ phần cấu trúc/giới hạn, để sẵn sàng cắm API vào
-   ngay khi ngân sách phục hồi, không phải đợi rồi mới bắt đầu thiết kế.
+1. Chạy live C001-C010 trên máy 24, sửa mọi P0 thành regression test.
+2. Đối chiếu tay các case top/list còn lại của gate ngày 20-21.
+3. Sau khi 10/10 complex đạt mới chuyển sang scope/security/performance ngày 23.

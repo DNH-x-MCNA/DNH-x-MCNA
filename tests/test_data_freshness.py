@@ -309,3 +309,5 @@ def test_ask_stream_emits_exactly_the_final_persisted_answer(monkeypatch):
     assert "13/08/2026" not in done["answer"]
     assert done["answer"].count("Dữ liệu trực tiếp:") == 1
     assert done["freshness"][0]["source_key"] == "promotion_live"
+    assert done["query_plan"]["plan_id"] == "plan-q"
+    assert done["query_plan"]["status"] == "completed"

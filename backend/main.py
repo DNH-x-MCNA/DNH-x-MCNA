@@ -224,6 +224,7 @@ class ChatResponse(BaseModel):
     columns: Optional[list[str]] = None
     rows: Optional[list[list[Any]]] = None
     row_count: Optional[int] = None
+    query_plan: Optional[dict[str, Any]] = None
 
 
 class SessionSummary(BaseModel):
@@ -629,6 +630,7 @@ def chat(req: ChatRequest, user: dict = Depends(require_approved_user)):
         columns=lr.get("columns") if is_raw_sql else None,
         rows=lr.get("rows") if is_raw_sql else None,
         row_count=lr.get("row_count") if is_raw_sql else None,
+        query_plan=result.get("query_plan"),
     )
 
 
@@ -681,6 +683,7 @@ def chat_stream(req: ChatRequest, user: dict = Depends(require_approved_user)):
                         "columns": lr.get("columns") if is_raw_sql else None,
                         "rows": lr.get("rows") if is_raw_sql else None,
                         "row_count": lr.get("row_count") if is_raw_sql else None,
+                        "query_plan": chunk.get("query_plan"),
                     }
                 else:
                     payload = chunk

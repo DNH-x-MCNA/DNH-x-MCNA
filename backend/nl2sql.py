@@ -16,6 +16,7 @@ nho lai vai cau hoi/tra loi gan nhat, de cau hoi tiep theo khong can nhac lai tu
 """
 import os
 import json
+import time
 from collections import defaultdict
 import anthropic
 from schema_context import SCHEMA_CONTEXT
@@ -33,6 +34,7 @@ from feature_policy import (
     is_future_forecast_question,
 )
 from sql_schema_retriever import relevant_schema_context, search_sql_catalog
+from query_plan import build_query_plan
 
 # 13/08/2026: cho phep tro sang nha cung cap khac de THU NGHIEM, mac dinh KHONG doi gi.
 # DeepSeek V4 co endpoint dinh dang Anthropic (https://api.deepseek.com/anthropic) nen dung duoc
@@ -87,6 +89,20 @@ MAX_PAYLOAD_CHARS = 6000  # Gioi han ky tu payload gui cho AI (~1500 tokens). Te
                           # revenue_tree...) tra JSON KHONG gioi han kich thuoc, truoc day co the len 20K-50K
                           # chars, gay phình context 7K->49K tokens khi AI goi nhieu tool lien tiep. last_result
                           # (cho UI) VAN giu nguyen day du, chi phan gui cho AI bi cat.
+
+
+def _timeout_env(name: str, default: float, ceiling: float) -> float:
+    try:
+        value = float(os.environ.get(name, str(default)))
+    except (TypeError, ValueError):
+        value = default
+    return min(max(value, 1.0), ceiling)
+
+
+# Gate production cam request >120s: ke ca .env go nham 300, code van kep tran 120.
+REQUEST_TIMEOUT_SECONDS = _timeout_env("CHAT_REQUEST_TIMEOUT_SECONDS", 110, 120)
+TOOL_TIMEOUT_SECONDS = _timeout_env("CHAT_TOOL_TIMEOUT_SECONDS", 40, REQUEST_TIMEOUT_SECONDS)
+LLM_CALL_TIMEOUT_SECONDS = _timeout_env("CHAT_LLM_TIMEOUT_SECONDS", 45, REQUEST_TIMEOUT_SECONDS)
 
 
 def _required_tool_for_question(question: str) -> str | None:
@@ -1270,13 +1286,28 @@ def ask(question: str, session_id: str = "default", username: str = None, scope_
     # NANG goi, khong chi la "duoc dan dung goi") - chi con lai cac tool bao cao chuan da kiem soat
     # duoc filter vung o tang code.
     tools_for_request = _tools_for_request(scope_area_code, scope_channel, scope_role)
+    max_rounds = _max_tool_rounds(scope_role)
+    query_plan = build_query_plan(
+        question,
+        query_id=query_id,
+        scope_role=scope_role,
+        scope_area_code=scope_area_code,
+        scope_employee_code=scope_employee_code,
+        scope_channel=scope_channel,
+        max_rounds=max_rounds,
+        max_tools_per_round=MAX_TOOLS_PER_ROUND,
+        max_unique_tools=MAX_UNIQUE_TOOL_CALLS,
+        request_timeout_seconds=REQUEST_TIMEOUT_SECONDS,
+    )
 
     # System tach 2 block: block TINH (rules+schema) danh cache_control TTL 1h - it doi nen cache-hit
     # cao, chi tinh ~10% gia input goc; block DONG (ngay du lieu, glossary, query-state, few-shot, scope)
     # KHONG cache vi doi theo tung cau hoi/tai khoan.
     system_blocks = [
         {"type": "text", "text": _static_system_prompt(), "cache_control": {"type": "ephemeral", "ttl": "1h"}},
-        {"type": "text", "text": _dynamic_context_note(question, session_id, scope_area_code, scope_employee_code, scope_channel)},
+        {"type": "text", "text": (_dynamic_context_note(
+            question, session_id, scope_area_code, scope_employee_code, scope_channel
+        ) + "\n\n" + query_plan.prompt_note())},
     ]
 
     # 06/08/2026: GO BO output_config={"effort": "medium"} (them 05/08) sau khi do tren du lieu that.
@@ -1289,7 +1320,9 @@ def ask(question: str, session_id: str = "default", username: str = None, scope_
     # cache o duoi tiet kiem ~0,025 USD/cau (input 14.734 -> 1.791) - bo effort chi mat ~10% khoan
     # tiet kiem nhung lay lai 27% so cau tra loi duoc. Cac toi uu khac GIU NGUYEN.
     required_tool = _required_tool_for_question(question)
-    for round_index in range(_max_tool_rounds(scope_role)):
+    for round_index in range(max_rounds):
+        if query_plan.expired():
+            break
         request_kwargs = {
             "model": MODEL,
             "max_tokens": MAX_TOKENS,
@@ -1297,6 +1330,7 @@ def ask(question: str, session_id: str = "default", username: str = None, scope_
             "tools": tools_for_request,
             "messages": messages,
             "extra_headers": _CACHE_BETA_HEADERS,
+            "timeout": max(1.0, min(LLM_CALL_TIMEOUT_SECONDS, query_plan.remaining_seconds())),
         }
         if round_index == 0 and required_tool:
             request_kwargs["tool_choice"] = {"type": "tool", "name": required_tool}
@@ -1317,12 +1351,18 @@ def ask(question: str, session_id: str = "default", username: str = None, scope_
                 messages.append({"role": "user", "content": "Hay tra loi ngay bay gio, ngan gon truc tiep."})
                 resp2 = client.messages.create(model=MODEL, max_tokens=MAX_TOKENS, system=system_blocks,
                                                 tools=tools_for_request, messages=messages,
-                                                extra_headers=_CACHE_BETA_HEADERS)
+                                                extra_headers=_CACHE_BETA_HEADERS,
+                                                timeout=max(1.0, min(
+                                                    LLM_CALL_TIMEOUT_SECONDS,
+                                                    query_plan.remaining_seconds(),
+                                                )))
                 compute_and_log_cost(resp2.usage, MODEL, question, session_id, username)
                 answer_text = "".join(b.text for b in resp2.content if b.type == "text").strip()
                 if not answer_text:
                     answer_text = ("Xin lỗi, dữ liệu trả về quá lớn để tổng hợp gọn trong 1 câu trả lời. "
                                     "Bạn thử hỏi cụ thể/thu hẹp phạm vi hơn giúp mình nhé (vd theo vùng, theo thời gian ngắn hơn).")
+            query_plan.finalize()
+            answer_text = query_plan.finalize_answer(answer_text)
             answer_text = freshness.finalize_answer(answer_text)
             append_message(session_id, "user", question, query_id=query_id)
             append_message(session_id, "assistant", answer_text, query_id=query_id)
@@ -1332,6 +1372,7 @@ def ask(question: str, session_id: str = "default", username: str = None, scope_
                 save_example(*ran_adhoc_query)
             return {"answer": answer_text, "sql_used": sql_used, "last_result": last_result,
                     "freshness": freshness.as_dicts(),
+                    "query_plan": query_plan.as_dict(),
                     "query_id": query_id}
 
         tool_results = []
@@ -1354,6 +1395,10 @@ def ask(question: str, session_id: str = "default", username: str = None, scope_
 
             if executed_count >= MAX_TOOLS_PER_ROUND:
                 # Capped execution -> return notice to satisfy Anthropic API contract
+                query_plan.skip_tool(
+                    tu.name, tu.input,
+                    f"Đã đạt giới hạn {MAX_TOOLS_PER_ROUND} tool trong một vòng.",
+                )
                 tool_results.append({
                     "type": "tool_result",
                     "tool_use_id": tu.id,
@@ -1363,6 +1408,7 @@ def ask(question: str, session_id: str = "default", username: str = None, scope_
 
             tool_key = _tool_call_key(tu.name, tu.input)
             if tool_key in seen_tool_calls:
+                query_plan.skip_tool(tu.name, tu.input, "Lệnh đã chạy với đúng tham số.")
                 tool_results.append({
                     "type": "tool_result",
                     "tool_use_id": tu.id,
@@ -1372,6 +1418,10 @@ def ask(question: str, session_id: str = "default", username: str = None, scope_
                 })
                 continue
             if unique_tool_calls >= MAX_UNIQUE_TOOL_CALLS:
+                query_plan.skip_tool(
+                    tu.name, tu.input,
+                    f"Đã đạt giới hạn {MAX_UNIQUE_TOOL_CALLS} tool khác nhau.",
+                )
                 tool_results.append({
                     "type": "tool_result",
                     "tool_use_id": tu.id,
@@ -1381,10 +1431,25 @@ def ask(question: str, session_id: str = "default", username: str = None, scope_
                 })
                 continue
 
+            if query_plan.expired():
+                query_plan.skip_tool(tu.name, tu.input, "Đã hết tổng ngân sách thời gian request.")
+                tool_results.append({
+                    "type": "tool_result",
+                    "tool_use_id": tu.id,
+                    "content": json.dumps({
+                        "error": "Đã hết tổng ngân sách thời gian request; không chạy thêm nguồn."
+                    }, ensure_ascii=False),
+                })
+                continue
+
             seen_tool_calls.add(tool_key)
             unique_tool_calls += 1
             new_tools_this_round += 1
             executed_count += 1
+            query_plan.start_tool(tu.name, tu.input, tool_key)
+            tool_started = time.monotonic()
+            tool_ok = True
+            tool_source = f"template:{tu.name}"
             if tu.name in LOCAL_UTIL_TOOLS:
                 # Tool "tien ich" chay bang code thuan, khong cham DB - xu ly ngay tai cho, khong qua
                 # run_query/call_template (khong can audit log SQL vi khong co SQL nao ca).
@@ -1405,17 +1470,22 @@ def ask(question: str, session_id: str = "default", username: str = None, scope_
                     )
                 else:
                     payload = {"error": f"Tool khong ro: {tu.name}"}
+                tool_ok = not (isinstance(payload, dict) and payload.get("error"))
+                tool_source = f"utility:{tu.name}"
             elif tu.name in RAW_SQL_TOOLS:
                 if scope_area_code or scope_channel:
                     # Phong ho: tool nay khong con trong tools_for_request nen AI khong the goi duoc,
                     # nhung neu vi ly do gi van xuat hien thi tu choi thang, KHONG thuc thi SQL.
                     sql_used.append(f"[BI CHAN - tai khoan gioi han] {tu.name}")
                     payload = {"error": "Tai khoan cua ban bi gioi han (vung/kenh), khong duoc dung truy van SQL tu do."}
+                    tool_ok = False
                 elif tu.name in LIVE_SQL_TOOL_NAMES and scope_role not in LIVE_SQL_ALLOWED_ROLES:
                     sql_used.append(f"[BI CHAN - vai tro khong duoc query SQL live] {tu.name}")
                     payload = {"error": "Tai khoan khong duoc phep truy van SQL Server live tu do."}
+                    tool_ok = False
                 else:
                     db = RAW_SQL_TOOLS[tu.name]
+                    tool_source = db
                     sql = tu.input.get("sql", "")
                     sql_used.append(f"[{db}] {sql}")
                     result = run_query(sql, question=question, db=db, username=username, session_id=session_id)
@@ -1426,6 +1496,7 @@ def ask(question: str, session_id: str = "default", username: str = None, scope_
                     if db == "local" and result["ok"]:
                         ran_adhoc_query = (question, sql)
                     payload = _raw_query_payload(result, db, question)
+                    tool_ok = bool(result.get("ok"))
             else:
                 sql_used.append(f"[bao cao chuan] {tu.name}({tu.input})")
                 tresult = call_template(tu.name, tu.input, question=question, username=username, session_id=session_id,
@@ -1438,12 +1509,22 @@ def ask(question: str, session_id: str = "default", username: str = None, scope_
                         tu.name, tresult["result"], args=tu.input, scope_channel=scope_channel
                     )
                 payload = tresult["result"] if tresult["ok"] else {"error": tresult["error"]}
+                tool_ok = bool(tresult.get("ok"))
                 # 22/07/2026 (diem #5): tool co the kem canh bao tu-doi-chieu (vd tong theo vung lech
                 # tong tho). TRUOC DAY chi lay ["result"] nen canh bao BI ROI MAT truoc khi toi model
                 # -> nguoi dung van nhan so lieu sai ma khong he biet. Chi boc them khi CO canh bao.
                 if tresult.get("canh_bao"):
                     payload = {"du_lieu": payload,
                                "CANH_BAO_BAT_BUOC_NOI_VOI_NGUOI_DUNG": tresult["canh_bao"]}
+
+            query_plan.finish_tool(
+                tool_key,
+                ok=tool_ok,
+                payload=payload,
+                source=tool_source,
+                duration_ms=int((time.monotonic() - tool_started) * 1000),
+                timeout_seconds=TOOL_TIMEOUT_SECONDS,
+            )
 
             # Gioi han kich thuoc payload gui cho AI de tranh context phinh to khi goi nhieu tool
             # lien tiep (truoc day template tools tra JSON 20K-50K chars, cong don qua cac vong lam
@@ -1452,6 +1533,7 @@ def ask(question: str, session_id: str = "default", username: str = None, scope_
             payload_str = json.dumps(payload, ensure_ascii=False) if isinstance(payload, (dict, list)) else str(payload)
             if len(payload_str) > MAX_PAYLOAD_CHARS:
                 payload_str = payload_str[:MAX_PAYLOAD_CHARS] + "\n...(du lieu bi cat bot vi qua dai, phan tren DA DU de tra loi - KHONG can query lai)"
+            payload_str += "\n" + query_plan.model_note()
             tool_results.append({
                 "type": "tool_result",
                 "tool_use_id": tu.id,
@@ -1485,20 +1567,29 @@ def ask(question: str, session_id: str = "default", username: str = None, scope_
         messages[-1]["content"].append({"type": "text", "text": _FORCE_FINAL_ANSWER})
     else:
         messages.append({"role": "user", "content": _FORCE_FINAL_ANSWER})
-    final_resp = client.messages.create(
-        model=MODEL, max_tokens=MAX_TOKENS, system=system_blocks,
-        messages=messages, extra_headers=_CACHE_BETA_HEADERS,
-    )
-    compute_and_log_cost(final_resp.usage, MODEL, question, session_id, username)
-    fallback = _response_text(final_resp) or (
-        "Toi da doi chieu cac nguon du lieu nhung chua du bang chung de ket luan chinh xac. "
-        "Ket qua trung gian da duoc an de tranh hieu nham la bao cao cuoi."
-    )
+    query_plan.finalize(limit_reached=True)
+    if messages and messages[-1].get("role") == "user" and isinstance(messages[-1].get("content"), list):
+        messages[-1]["content"].append({"type": "text", "text": query_plan.model_note()})
+    if query_plan.expired():
+        fallback = query_plan.timeout_answer()
+    else:
+        final_resp = client.messages.create(
+            model=MODEL, max_tokens=MAX_TOKENS, system=system_blocks,
+            messages=messages, extra_headers=_CACHE_BETA_HEADERS,
+            timeout=max(1.0, min(LLM_CALL_TIMEOUT_SECONDS, query_plan.remaining_seconds())),
+        )
+        compute_and_log_cost(final_resp.usage, MODEL, question, session_id, username)
+        fallback = _response_text(final_resp) or (
+            "Toi da doi chieu cac nguon du lieu nhung chua du bang chung de ket luan chinh xac. "
+            "Ket qua trung gian da duoc an de tranh hieu nham la bao cao cuoi."
+        )
+        fallback = query_plan.finalize_answer(fallback)
     fallback = freshness.finalize_answer(fallback)
     append_message(session_id, "user", question, query_id=query_id)
     append_message(session_id, "assistant", fallback, query_id=query_id)
     return {"answer": fallback, "sql_used": sql_used, "last_result": None,
             "freshness": freshness.as_dicts(),
+            "query_plan": query_plan.as_dict(),
             "partial_results_hidden": True, "query_id": query_id}
 
 
@@ -1563,15 +1654,31 @@ def ask_stream(question: str, session_id: str = "default", username: str = None,
 
     tools_for_request = _tools_for_request(scope_area_code, scope_channel, scope_role)
 
+    max_rounds = _max_tool_rounds(scope_role)
+    query_plan = build_query_plan(
+        question,
+        query_id=query_id,
+        scope_role=scope_role,
+        scope_area_code=scope_area_code,
+        scope_employee_code=scope_employee_code,
+        scope_channel=scope_channel,
+        max_rounds=max_rounds,
+        max_tools_per_round=MAX_TOOLS_PER_ROUND,
+        max_unique_tools=MAX_UNIQUE_TOOL_CALLS,
+        request_timeout_seconds=REQUEST_TIMEOUT_SECONDS,
+    )
+
     system_blocks = [
         {"type": "text", "text": _static_system_prompt(), "cache_control": {"type": "ephemeral", "ttl": "1h"}},
-        {"type": "text", "text": _dynamic_context_note(question, session_id, scope_area_code, scope_employee_code, scope_channel)},
+        {"type": "text", "text": (_dynamic_context_note(
+            question, session_id, scope_area_code, scope_employee_code, scope_channel
+        ) + "\n\n" + query_plan.prompt_note())},
     ]
 
-    max_rounds = _max_tool_rounds(scope_role)
     required_tool = _required_tool_for_question(question)
     for round_i in range(max_rounds):
-        is_last_possible_round = round_i == max_rounds - 1
+        if query_plan.expired():
+            break
         # Vong GIUA: co the con tool_use, KHONG stream (client khong can thay) - dung create() nhu
         # ask() binh thuong, ro rang hon la stream() roi bo qua cac delta.
         # Vong CO THE la CUOI (round_i == max_rounds-1): CHUA BIET truoc model co con goi tool
@@ -1585,6 +1692,7 @@ def ask_stream(question: str, session_id: str = "default", username: str = None,
             "model": MODEL, "max_tokens": MAX_TOKENS, "system": system_blocks,
             "tools": tools_for_request, "messages": messages,
             "extra_headers": _CACHE_BETA_HEADERS,
+            "timeout": max(1.0, min(LLM_CALL_TIMEOUT_SECONDS, query_plan.remaining_seconds())),
         }
         if round_i == 0 and required_tool:
             request_kwargs["tool_choice"] = {"type": "tool", "name": required_tool}
@@ -1606,7 +1714,11 @@ def ask_stream(question: str, session_id: str = "default", username: str = None,
                 messages.append({"role": "user", "content": "Hay tra loi ngay bay gio, ngan gon truc tiep."})
                 with client.messages.stream(model=MODEL, max_tokens=MAX_TOKENS, system=system_blocks,
                                              tools=tools_for_request, messages=messages,
-                                             extra_headers=_CACHE_BETA_HEADERS) as stream2:
+                                             extra_headers=_CACHE_BETA_HEADERS,
+                                             timeout=max(1.0, min(
+                                                 LLM_CALL_TIMEOUT_SECONDS,
+                                                 query_plan.remaining_seconds(),
+                                             ))) as stream2:
                     for _event in stream2:
                         pass
                     resp2 = stream2.get_final_message()
@@ -1615,6 +1727,8 @@ def ask_stream(question: str, session_id: str = "default", username: str = None,
                 if not answer_text:
                     answer_text = ("Xin lỗi, dữ liệu trả về quá lớn để tổng hợp gọn trong 1 câu trả lời. "
                                     "Bạn thử hỏi cụ thể/thu hẹp phạm vi hơn giúp mình nhé (vd theo vùng, theo thời gian ngắn hơn).")
+            query_plan.finalize()
+            answer_text = query_plan.finalize_answer(answer_text)
             answer_text = freshness.finalize_answer(answer_text)
             yield {"type": "text_delta", "text": answer_text}
             append_message(session_id, "user", question, query_id=query_id)
@@ -1625,6 +1739,7 @@ def ask_stream(question: str, session_id: str = "default", username: str = None,
                 save_example(*ran_adhoc_query)
             yield {"type": "done", "answer": answer_text, "sql_used": sql_used,
                    "last_result": last_result, "freshness": freshness.as_dicts(),
+                   "query_plan": query_plan.as_dict(),
                    "query_id": query_id}
             return
 
@@ -1649,6 +1764,10 @@ def ask_stream(question: str, session_id: str = "default", username: str = None,
                 continue
 
             if executed_count >= MAX_TOOLS_PER_ROUND:
+                query_plan.skip_tool(
+                    tu.name, tu.input,
+                    f"Đã đạt giới hạn {MAX_TOOLS_PER_ROUND} tool trong một vòng.",
+                )
                 tool_results.append({
                     "type": "tool_result",
                     "tool_use_id": tu.id,
@@ -1658,6 +1777,7 @@ def ask_stream(question: str, session_id: str = "default", username: str = None,
 
             tool_key = _tool_call_key(tu.name, tu.input)
             if tool_key in seen_tool_calls:
+                query_plan.skip_tool(tu.name, tu.input, "Lệnh đã chạy với đúng tham số.")
                 tool_results.append({
                     "type": "tool_result",
                     "tool_use_id": tu.id,
@@ -1667,6 +1787,10 @@ def ask_stream(question: str, session_id: str = "default", username: str = None,
                 })
                 continue
             if unique_tool_calls >= MAX_UNIQUE_TOOL_CALLS:
+                query_plan.skip_tool(
+                    tu.name, tu.input,
+                    f"Đã đạt giới hạn {MAX_UNIQUE_TOOL_CALLS} tool khác nhau.",
+                )
                 tool_results.append({
                     "type": "tool_result",
                     "tool_use_id": tu.id,
@@ -1676,10 +1800,25 @@ def ask_stream(question: str, session_id: str = "default", username: str = None,
                 })
                 continue
 
+            if query_plan.expired():
+                query_plan.skip_tool(tu.name, tu.input, "Đã hết tổng ngân sách thời gian request.")
+                tool_results.append({
+                    "type": "tool_result",
+                    "tool_use_id": tu.id,
+                    "content": json.dumps({
+                        "error": "Đã hết tổng ngân sách thời gian request; không chạy thêm nguồn."
+                    }, ensure_ascii=False),
+                })
+                continue
+
             seen_tool_calls.add(tool_key)
             unique_tool_calls += 1
             new_tools_this_round += 1
             executed_count += 1
+            query_plan.start_tool(tu.name, tu.input, tool_key)
+            tool_started = time.monotonic()
+            tool_ok = True
+            tool_source = f"template:{tu.name}"
             if tu.name in LOCAL_UTIL_TOOLS:
                 sql_used.append(f"[tien ich] {tu.name}({tu.input})")
                 if tu.name == "get_current_datetime":
@@ -1698,15 +1837,20 @@ def ask_stream(question: str, session_id: str = "default", username: str = None,
                     )
                 else:
                     payload = {"error": f"Tool khong ro: {tu.name}"}
+                tool_ok = not (isinstance(payload, dict) and payload.get("error"))
+                tool_source = f"utility:{tu.name}"
             elif tu.name in RAW_SQL_TOOLS:
                 if scope_area_code or scope_channel:
                     sql_used.append(f"[BI CHAN - tai khoan gioi han] {tu.name}")
                     payload = {"error": "Tai khoan cua ban bi gioi han (vung/kenh), khong duoc dung truy van SQL tu do."}
+                    tool_ok = False
                 elif tu.name in LIVE_SQL_TOOL_NAMES and scope_role not in LIVE_SQL_ALLOWED_ROLES:
                     sql_used.append(f"[BI CHAN - vai tro khong duoc query SQL live] {tu.name}")
                     payload = {"error": "Tai khoan khong duoc phep truy van SQL Server live tu do."}
+                    tool_ok = False
                 else:
                     db = RAW_SQL_TOOLS[tu.name]
+                    tool_source = db
                     sql = tu.input.get("sql", "")
                     sql_used.append(f"[{db}] {sql}")
                     result = run_query(sql, question=question, db=db, username=username, session_id=session_id)
@@ -1717,6 +1861,7 @@ def ask_stream(question: str, session_id: str = "default", username: str = None,
                     if db == "local" and result["ok"]:
                         ran_adhoc_query = (question, sql)
                     payload = _raw_query_payload(result, db, question)
+                    tool_ok = bool(result.get("ok"))
             else:
                 sql_used.append(f"[bao cao chuan] {tu.name}({tu.input})")
                 tresult = call_template(tu.name, tu.input, question=question, username=username, session_id=session_id,
@@ -1729,13 +1874,24 @@ def ask_stream(question: str, session_id: str = "default", username: str = None,
                         tu.name, tresult["result"], args=tu.input, scope_channel=scope_channel
                     )
                 payload = tresult["result"] if tresult["ok"] else {"error": tresult["error"]}
+                tool_ok = bool(tresult.get("ok"))
                 if tresult.get("canh_bao"):
                     payload = {"du_lieu": payload,
                                "CANH_BAO_BAT_BUOC_NOI_VOI_NGUOI_DUNG": tresult["canh_bao"]}
 
+            query_plan.finish_tool(
+                tool_key,
+                ok=tool_ok,
+                payload=payload,
+                source=tool_source,
+                duration_ms=int((time.monotonic() - tool_started) * 1000),
+                timeout_seconds=TOOL_TIMEOUT_SECONDS,
+            )
+
             payload_str = json.dumps(payload, ensure_ascii=False) if isinstance(payload, (dict, list)) else str(payload)
             if len(payload_str) > MAX_PAYLOAD_CHARS:
                 payload_str = payload_str[:MAX_PAYLOAD_CHARS] + "\n...(du lieu bi cat bot vi qua dai, phan tren DA DU de tra loi - KHONG can query lai)"
+            payload_str += "\n" + query_plan.model_note()
             tool_results.append({
                 "type": "tool_result",
                 "tool_use_id": tu.id,
@@ -1756,22 +1912,31 @@ def ask_stream(question: str, session_id: str = "default", username: str = None,
         messages[-1]["content"].append({"type": "text", "text": _FORCE_FINAL_ANSWER})
     else:
         messages.append({"role": "user", "content": _FORCE_FINAL_ANSWER})
-    with client.messages.stream(
-        model=MODEL, max_tokens=MAX_TOKENS, system=system_blocks,
-        messages=messages, extra_headers=_CACHE_BETA_HEADERS,
-    ) as final_stream:
-        for _event in final_stream:
-            pass
-        final_resp = final_stream.get_final_message()
-    compute_and_log_cost(final_resp.usage, MODEL, question, session_id, username)
-    fallback = _response_text(final_resp) or (
-        "Toi da doi chieu cac nguon du lieu nhung chua du bang chung de ket luan chinh xac. "
-        "Ket qua trung gian da duoc an de tranh hieu nham la bao cao cuoi."
-    )
+    query_plan.finalize(limit_reached=True)
+    if messages and messages[-1].get("role") == "user" and isinstance(messages[-1].get("content"), list):
+        messages[-1]["content"].append({"type": "text", "text": query_plan.model_note()})
+    if query_plan.expired():
+        fallback = query_plan.timeout_answer()
+    else:
+        with client.messages.stream(
+            model=MODEL, max_tokens=MAX_TOKENS, system=system_blocks,
+            messages=messages, extra_headers=_CACHE_BETA_HEADERS,
+            timeout=max(1.0, min(LLM_CALL_TIMEOUT_SECONDS, query_plan.remaining_seconds())),
+        ) as final_stream:
+            for _event in final_stream:
+                pass
+            final_resp = final_stream.get_final_message()
+        compute_and_log_cost(final_resp.usage, MODEL, question, session_id, username)
+        fallback = _response_text(final_resp) or (
+            "Toi da doi chieu cac nguon du lieu nhung chua du bang chung de ket luan chinh xac. "
+            "Ket qua trung gian da duoc an de tranh hieu nham la bao cao cuoi."
+        )
+        fallback = query_plan.finalize_answer(fallback)
     fallback = freshness.finalize_answer(fallback)
     yield {"type": "text_delta", "text": fallback}
     append_message(session_id, "user", question, query_id=query_id)
     append_message(session_id, "assistant", fallback, query_id=query_id)
     yield {"type": "done", "answer": fallback, "sql_used": sql_used, "last_result": None,
            "freshness": freshness.as_dicts(),
+           "query_plan": query_plan.as_dict(),
            "partial_results_hidden": True, "query_id": query_id}
