@@ -156,22 +156,37 @@ def main():
             results.append({"tag": f"SEC-3-{name}", "ok": r3.get("ok"), "error": r3.get("error")})
 
     # --- Uu tien 2-5: qua chatbot that (dung cau hoi tu nhien, session moi) ---
+    # scope_role="c_level": bo 90 cau golden von duoc cham o vai C-Level (xem
+    # run_business_evaluation.py::evaluate - scope_role="c_level"). 20/08/2026: lan chay dau KHONG
+    # truyen tham so nay nen Q012 that bai OAN - tai khoan khong ro vai tro bi loai khoi
+    # LIVE_SQL_ALLOWED_ROLES nen KHONG duoc dung query_sql_server, khong the doc view thuong de doi
+    # soat. Day la loi cua SCRIPT kiem chung, khong phai loi chatbot.
+    CLEVEL = {"scope_role": "c_level"}
     nl_cases = [
-        ("DATA-1-Q016", "Bao nhiêu TDV chưa có quản lý trực tiếp trong dữ liệu tháng 7?", {}),
-        ("DATA-2-Q012", "Đối soát doanh thu tháng 7 giữa view tổng và view thường: lệch bao nhiêu và nên tin nguồn nào?", {}),
-        ("DATA-3-Q044", "Có bao nhiêu khách đang có dư nợ ở cả OTC và ETC; tổng nợ của họ thế nào?", {}),
-        ("UX-1-freshness", "Doanh thu tháng 7 theo kênh là bao nhiêu?", {}),
-        ("UX-2-daily-kpi", "Doanh số từng ngày của tôi tháng 7, ngày nào đỏ ngày nào vàng?", {}),
-        ("UX-3-kpi-status", "Xếp hạng KPI tháng 7 top 10 nhân viên", {}),
-        ("UX-4-branch-label", "Tồn kho theo chi nhánh hiện nay thế nào?", {}),
-        ("PROMPT-1-crosssell", "Những cặp sản phẩm nào thường được mua cùng một đơn nhất trong tháng 7?", {}),
-        ("PROMPT-2-group", "Nhóm sản phẩm nào đóng góp doanh thu lớn nhất và có bao nhiêu mã hàng bán ra tháng 7?", {}),
-        ("PROMPT-3-concentration", "Top 10 khách hàng chiếm bao nhiêu phần trăm doanh thu toàn công ty tháng 7?", {}),
+        ("DATA-1-Q016", "Bao nhiêu TDV chưa có quản lý trực tiếp trong dữ liệu tháng 7?", CLEVEL),
+        ("DATA-2-Q012", "Đối soát doanh thu tháng 7 giữa view tổng và view thường: lệch bao nhiêu và nên tin nguồn nào?", CLEVEL),
+        ("DATA-3-Q044", "Có bao nhiêu khách đang có dư nợ ở cả OTC và ETC; tổng nợ của họ thế nào?", CLEVEL),
+        ("UX-1-freshness", "Doanh thu tháng 7 theo kênh là bao nhiêu?", CLEVEL),
+        ("UX-3-kpi-status", "Xếp hạng KPI tháng 7 top 10 nhân viên", CLEVEL),
+        ("UX-4-branch-label", "Tồn kho theo chi nhánh hiện nay thế nào?", CLEVEL),
+        ("PROMPT-1-crosssell", "Những cặp sản phẩm nào thường được mua cùng một đơn nhất trong tháng 7?", CLEVEL),
+        ("PROMPT-2-group", "Nhóm sản phẩm nào đóng góp doanh thu lớn nhất và có bao nhiêu mã hàng bán ra tháng 7?", CLEVEL),
+        ("PROMPT-3-concentration", "Top 10 khách hàng chiếm bao nhiêu phần trăm doanh thu toàn công ty tháng 7?", CLEVEL),
     ]
     if qlv_code and team_size >= 1:
         nl_cases.append(("DATA-4-salary-achievement",
                          "Trong đội tôi có bao nhiêu người đạt V15/V22/V25/ASO tháng 7?",
                          {"scope_role": "qlv", "scope_employee_code": qlv_code}))
+        # UX-2 (nhan Do/Vang/Xanh theo NGAY): PHAI hoi dich danh 1 TDV that. Lan chay 20/08 hoi
+        # "cua toi" voi scope rong -> chatbot hoi lai ma nhan vien (dung hanh vi, nhung KHONG kiem
+        # duoc nhan mau vi khong tool nao chay).
+        team_members = [t["employee_code"] for t in rt._team_of_qlv(qlv_code)
+                        if t.get("employee_code") and t["employee_code"] != qlv_code]
+        if team_members:
+            nl_cases.append(("UX-2-daily-kpi",
+                             f"Doanh số từng ngày tháng 7 của nhân viên {team_members[0]}, "
+                             f"ngày nào đỏ ngày nào vàng?",
+                             {"scope_role": "qlv", "scope_employee_code": qlv_code}))
 
     nl_results = [_ask(nl2sql, q, tag, **scope) for tag, q, scope in nl_cases]
     audit = _audit_for_sessions({r["session_id"] for r in nl_results})
