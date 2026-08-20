@@ -15,14 +15,16 @@ nguyên tắc đó, KHÔNG cố tự động hoá phần không thể tự độ
   TỰ ĐỘNG CHẤM ĐƯỢC (áp dụng cho cả 90 câu, không có ngoại lệ - nếu sai là sai thật):
     - Có lỗi hệ thống khi hỏi không.
     - Có bị từ chối "câu hỏi quá phức tạp" không (chatbot có dữ liệu, không được từ chối).
-    - Có TỪ NGỮ DỰ BÁO/ƯỚC TÍNH lọt vào câu trả lời không - dự báo bị khoá tuyệt đối, không
-      có ngoại lệ theo câu hỏi nên kiểm tra được trên toàn bộ 90 câu.
+    - Có KHẲNG ĐỊNH DỰ BÁO/ƯỚC TÍNH lọt vào câu trả lời không - vẫn bắt trên toàn bộ 90 câu,
+      nhưng không phạt câu phủ định đúng chính sách như "không dùng ước tính".
     - Có gọi tool nào không - hỏi số liệu nghiệp vụ mà 0 tool nào chạy là dấu hiệu trực tiếp
       của việc tự bịa, bất kể tool cụ thể nào "đáng lẽ" phải gọi (không đoán tool đúng, chỉ
       bắt trường hợp KHÔNG tool nào).
 
-  ĐỐI CHIẾU SỐ VỚI SQL SERVER - CHỈ khi kết quả checker "gọn" (<=3 dòng, <=12 ô số): mọi số
-  gốc phải xuất hiện nguyên vẹn (theo dãy chữ số, bỏ hết dấu phân cách) trong câu trả lời.
+  ĐỐI CHIẾU SỐ VỚI SQL SERVER - CHỈ khi kết quả checker "gọn" (<=3 dòng, <=12 ô số): các case
+  có answer_columns chỉ bắt đúng trường câu hỏi yêu cầu; case cũ chưa khai báo metadata giữ cách
+  chấm toàn checker. Số phải xuất hiện nguyên vẹn (theo dãy chữ số, bỏ hết dấu phân cách) hoặc
+  khớp quy tắc làm tròn đã kiểm thử.
   Loại checker dạng "top N" (vd top 20 khách hàng) KHÔNG được tự chấm theo cách này - đối
   chiếu 1-trong-20 dòng nào đúng cần hiểu ý câu hỏi, không phải việc máy nên tự quyết. Ground
   truth vẫn được đính kèm nguyên trong báo cáo để người kiểm đối chiếu nhanh, đúng tinh thần
@@ -105,6 +107,10 @@ REFUSAL_MARKERS = ("qua phuc tap", "quá phức tạp", "vui long hoi cu the", "
 # tu ngu cua CASE luc dinh nghia. O day bat dung luc model TU SINH ra tu du bao trong luc tra
 # loi, du cau hoi hoan toan khong nhac toi.
 FORECAST_LEAK_MARKERS = ("dự báo", "du bao", "ước tính", "uoc tinh", "forecast")
+FORECAST_NEGATIONS = (
+    "không", "khong", "chưa", "chua", "không phải", "khong phai", "không dùng",
+    "khong dung", "không có", "khong co", "không tự", "khong tu",
+)
 
 # "gon" = du nho de doi chieu CHAC CHAN bang may, khong doan y nguoi hoi.
 COMPACT_MAX_ROWS = 3
@@ -243,6 +249,111 @@ def _ground_truth_numbers(ground_truth: dict) -> set[str]:
     return runs
 
 
+def _project_ground_truth(case, ground_truth: dict) -> dict:
+    """Thu gon checker ve dung cac cot ma cau hoi yeu cau truoc khi cham.
+
+    Checker SQL duoc phep tra them cot de audit/chan doan, nhung cac cot phu khong duoc bien thanh
+    nghia vu bat model lap lai. Neu metadata sai ten cot thi fail-closed thanh loi evaluator thay vi
+    am tham PASS.
+    """
+    wanted = tuple(getattr(case, "answer_columns", ()) or ())
+    if not wanted or ground_truth.get("status") != "ok":
+        return ground_truth
+    columns = list(ground_truth.get("columns") or [])
+    by_name = {str(name).casefold(): index for index, name in enumerate(columns)}
+    missing = [name for name in wanted if name.casefold() not in by_name]
+    if missing:
+        return {
+            "status": "loi",
+            "reason": f"answer_columns khong ton tai trong checker: {missing}",
+        }
+    indexes = [by_name[name.casefold()] for name in wanted]
+    projected = dict(ground_truth)
+    projected["columns"] = list(wanted)
+    projected["rows"] = [
+        [row[index] for index in indexes]
+        for row in ground_truth.get("rows", [])
+    ]
+    return projected
+
+
+def _forecast_leaks(answer: str) -> list[str]:
+    """Bat khang dinh du bao, bo qua cau phu dinh/canh bao ve chinh sach.
+
+    `khong dung uoc tinh` la cau tu choi du bao dung quy tac, khong phai lo du bao. Regex cu chi
+    tim tu khoa nen phat P0 oan cho nhung cau nhu vay.
+    """
+    lower = (answer or "").lower()
+    leaked: list[str] = []
+    for marker in FORECAST_LEAK_MARKERS:
+        start = 0
+        while True:
+            index = lower.find(marker, start)
+            if index < 0:
+                break
+            prefix = lower[max(0, index - 40):index]
+            # Chi xet menh de hien tai (sau dau cau/xuong dong gan nhat), tranh mot "khong" o
+            # cau truoc vo tinh mien tru cho mot du bao that o cau sau.
+            prefix = re.split(r"[.!?;\n]", prefix)[-1]
+            if not any(negation in prefix for negation in FORECAST_NEGATIONS):
+                leaked.append(marker)
+                break
+            start = index + len(marker)
+    return leaked
+
+
+def _date_or_datetime_in_answer(value: Any, answer: str) -> bool:
+    if isinstance(value, (dt.date, dt.datetime)):
+        raw = value.isoformat()
+    elif isinstance(value, str) and re.match(r"^\d{4}-\d{2}-\d{2}", value.strip()):
+        raw = value.strip()
+    else:
+        return False
+    date_part = raw[:10]
+    try:
+        parsed = dt.date.fromisoformat(date_part)
+    except ValueError:
+        return False
+    variants = {
+        date_part,
+        f"{parsed.day:02d}/{parsed.month:02d}/{parsed.year}",
+        f"{parsed.day}/{parsed.month}/{parsed.year}",
+    }
+    if not any(variant in (answer or "") for variant in variants):
+        return False
+    time_match = re.search(r"[T ](\d{2}:\d{2})", raw)
+    return not time_match or time_match.group(1) in (answer or "")
+
+
+def _explicit_value_missing(value: Any, answer: str) -> bool:
+    """So khop gia tri o cot duoc khai bao ro, ke ca count ngan va ngay gio."""
+    if value is None:
+        return False
+    if _date_or_datetime_in_answer(value, answer):
+        return False
+    if isinstance(value, str):
+        raw = value.strip()
+        if not raw:
+            return False
+        return raw.casefold() not in (answer or "").casefold()
+    if isinstance(value, bool):
+        return False
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return False
+    integer = str(int(round(numeric)))
+    answer_numbers = _significant_digit_runs(answer, min_len=1)
+    if integer in answer_numbers:
+        return False
+    if numeric > 0:
+        for rounded_value, tolerance in _rounded_numbers_in_text(answer):
+            if (abs(rounded_value - numeric) / numeric < _ROUNDING_TOLERANCE
+                    or (tolerance is not None and abs(rounded_value - numeric) <= tolerance)):
+                return False
+    return True
+
+
 def _is_compact(ground_truth: dict) -> bool:
     rows = ground_truth.get("rows", [])
     if len(rows) > COMPACT_MAX_ROWS:
@@ -332,7 +443,7 @@ def grade_case(case, answer: str, error: Optional[str], tools_called: list[str],
                          "detail": "Chatbot tu choi voi ly do 'qua phuc tap' - vi pham gate "
                                    "'0 tu choi voi cau co du dieu ho tro'."})
 
-    leaked = [m for m in FORECAST_LEAK_MARKERS if m in lower]
+    leaked = _forecast_leaks(answer)
     if leaked:
         problems.append({"severity": "P0", "code": "lo_du_bao",
                          "detail": f"Cau tra loi chua tu ngu du bao bi cam: {leaked}"})
@@ -361,11 +472,31 @@ def grade_case(case, answer: str, error: Optional[str], tools_called: list[str],
                                        "- khong phai dau hieu tu bia, KHONG tinh la that bai tu "
                                        "dong."})
 
+    ground_truth = _project_ground_truth(case, ground_truth)
     gt_status = ground_truth.get("status")
     ground_truth_check = "khong_ap_dung"
     if gt_status == "ok" and not error:
         if _is_compact(ground_truth):
-            gt_numbers = _ground_truth_numbers(ground_truth)
+            explicit_columns = tuple(getattr(case, "answer_columns", ()) or ())
+            if explicit_columns:
+                missing_values = []
+                for row in ground_truth.get("rows", []):
+                    for value in row:
+                        if _explicit_value_missing(value, answer):
+                            missing_values.append(str(value))
+                if missing_values:
+                    problems.append({
+                        "severity": "P0", "code": "sai_so_lieu",
+                        "detail": "Thieu gia tri bat buoc theo answer_columns: "
+                                  f"{missing_values[:5]}",
+                    })
+                    ground_truth_check = "fail"
+                else:
+                    ground_truth_check = "pass"
+                # Khong chay lai nhanh so-khop-toan-checker o duoi.
+                gt_numbers = set()
+            else:
+                gt_numbers = _ground_truth_numbers(ground_truth)
             ans_numbers = _significant_digit_runs(answer)
             missing_exact = gt_numbers - ans_numbers
             # Truoc khi ket luan la sai, thu khop voi so DA LAM TRON trong cau tra loi ("6,54 ty")
@@ -391,7 +522,7 @@ def grade_case(case, answer: str, error: Optional[str], tools_called: list[str],
                 ground_truth_check = "pass_khop_so_lam_tron"
             elif gt_numbers:
                 ground_truth_check = "pass"
-            else:
+            elif not explicit_columns:
                 ground_truth_check = "khong_co_so_de_doi_chieu"
         else:
             ground_truth_check = "can_doi_chieu_tay"  # checker "top N" - danh cho nguoi kiem
