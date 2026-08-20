@@ -196,6 +196,15 @@ fact_congno_khachhang: CONG NO theo khach hang, snapshot TUC THOI tu bao cao con
   overdue_gt_45 (4 muc tuoi no theo ngay), total_overdue (=tong 4 muc, da tinh san). Ty le qua han =
   SUM(total_overdue)/SUM(balance_end). Loc vung: WHERE area_code='MB'/'MN'/'MT' (dung REGION_SQL_MARKERS,
   MB gom MB va MB2). Top khach no qua han: ORDER BY SUM(total_overdue) DESC.
+  !!! CAU HOI NHAC TOI CA HAI KENH (vd "khach co du no o CA OTC VA ETC", "no theo tung kenh") - BAT
+  BUOC tra ve so RIENG cua tung kenh, KHONG duoc chi tra tong gop. Trong CUNG cau SELECT, them:
+      SUM(CASE WHEN sales_channel='OTC' THEN balance_end ELSE 0 END) AS otc_balance,
+      SUM(CASE WHEN sales_channel='ETC' THEN balance_end ELSE 0 END) AS etc_balance,
+      SUM(CASE WHEN sales_channel='OTC' THEN total_overdue ELSE 0 END) AS otc_overdue,
+      SUM(CASE WHEN sales_channel='ETC' THEN total_overdue ELSE 0 END) AS etc_overdue
+  (va van giu tong gop neu can). DA XAY RA THAT 2 LAN (18/08 va 20/08/2026): cau "co bao nhieu khach
+  co du no o ca OTC va ETC, tong no ho the nao" chi tra duoc TONG GOP, nguoi hoi khong biet ai no OTC
+  bao nhieu / ETC bao nhieu - dung y cau hoi. Gop truoc roi SUM 1 lan la MAT HAN kha nang tach lai.
 
 === SUPABASE (PostgreSQL) - CHI dung voi tool query_inventory_receivables ===
 (Ten cot phan biet hoa/thuong, PHAI dat trong dau ngoac kep "...", dung LIMIT N)
