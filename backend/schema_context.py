@@ -167,8 +167,18 @@ fact_tonghopkhachhang: 1 dong = 1 (nhan vien, khach hang, ngay snapshot). Cot: e
   theo vung.
   NGUONG: DAT CHI TIEU = >=100%. DAT KPI = >=80%. MUC THUONG = >=65% TDV, >=70% QLV. KHONG gop cac moc nay vao nhau.
 
-brv_sanpham: code, name, group_code (nhom SP), unit (don vi tinh), id_code (khoa noi bo - dung de
+brv_sanpham: code, name, group_code, unit (don vi tinh), id_code (khoa noi bo - dung de
   JOIN voi brv_tonkhodk.item_id, KHAC code la ma san pham dang text).
+  !!! group_code RONG 100% (402/402 dong) - DA KIEM CHUNG 20/08/2026 rang CHINH NGUON Bravo
+  (dbo.BRV_SanPham.GroupCode) cung rong 402/402, KHONG phai loi dong bo cua minh. TUYET DOI KHONG
+  dung cot nay de tra loi "nhom san pham nao...", va KHONG bao nguoi dung la "loi dong bo".
+  NHOM SAN PHAM THAT nam tren CHINH BANG HOA DON ben Bravo (query_sql_server), KHAC NHAU theo kenh
+  va KHONG duoc gop chung 2 kenh vao 1 bang:
+    - OTC: dbo.vHoaDonTotal.GroupCode -> bo ma DANH MUC THUONG 'DM1'/'DM2'/'DM3' (thang 7/2026:
+      DM2 chiem ~94% doanh thu OTC). Day la nhom theo chinh sach thuong, KHONG phai nhom duoc ly.
+    - ETC: dbo.vHoaDonETCTotal.GroupCode -> bo MA SO rieng ('0','1','3','4'...), hien CHUA co bang
+      ten mo ta -> phai noi ro voi nguoi dung la chua dien giai duoc ten nhom, khong tu dat ten.
+  Hai bo ma nay KHAC HE QUY CHIEU nhau nen chi duoc trinh bay TACH RIENG tung kenh.
 
 brvsx_tralai: tra hang (CHI co kenh ETC, OTC chua co nguon). Cot: doc_date, amount9 (gia tri tra),
   is_active (=1 la hop le), stt (ma chung tu), customer_code.
