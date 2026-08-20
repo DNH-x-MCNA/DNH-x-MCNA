@@ -1,5 +1,43 @@
 # Danh sách cần xác minh qua chatbot thật khi ngân sách API phục hồi
 
+## ✅ ĐÃ XÁC MINH XONG — 20/08/2026, 11/11 mục PASS trên dữ liệu thật
+
+Chạy `scripts/verify_fixes_20260819.py` trên máy 24 sau khi deploy (QLV thật: `tungtx`, đội 12 TDV,
+vùng MB). Kết quả:
+
+| Mục | Kết quả |
+|---|---|
+| SEC-1 `salary_ranking` | ✅ `leaked_outside_team: []` — trước deploy lộ 22 mã ngoài đội (gồm cả `MB`/`MN` cấp vùng) |
+| SEC-2 `check_order_timing` | ✅ chạy được, không rò rỉ |
+| SEC-3 (4 tool bị chặn nhầm) | ✅ cả 4 `ok: True` |
+| DATA-1 Q016 | ✅ "0/149 TDV", SQL dùng đúng `manager_code` |
+| DATA-2 Q012 | ✅ **khớp chính xác từng đồng với ground truth**: OTC 39.327.016.119/39.355.378.024, ETC 35.508.451.204/35.559.565.756 |
+| DATA-3 Q044 | ✅ tách đúng OTC 4,60 tỷ / ETC 0,48 tỷ (quá hạn 3,13 / 0,29) |
+| DATA-4 `salary_achievement_summary` | ✅ trả 12 người = đúng đội thật (trước deploy trả 3) |
+| UX-2 nhãn Đỏ/Vàng theo ngày | ✅ 🔴 13 ngày, 🟡 4 ngày, 🟢 6 ngày — **bằng chứng trực tiếp** fix mojibake đã ăn (trước đây `count_red`/`count_yellow` LUÔN = 0) |
+| UX-3 nhãn KPI | ✅ 🟢 Tốt hiển thị đúng |
+| UX-4 nhãn chi nhánh | ✅ "Sản xuất/Kinh doanh Miền Bắc/Trung/Nam" chữ Việt sạch |
+| PROMPT-1 cross-sell | ✅ model dùng `'OTC-'||stt` đúng hướng dẫn ghép theo (kênh, stt) |
+| PROMPT-3 concentration | ✅ tử 17,2 tỷ / mẫu 74,84 tỷ, cùng phạm vi OTC+ETC |
+
+**2 lần chạy mới ra kết quả này**: lần 1 (trước deploy) toàn bộ phần bảo mật FAIL vì máy 24 còn
+chạy code cũ — bài học: push `origin/master` KHÔNG phải là deploy.
+
+### Phát hiện phụ trong lúc kiểm chứng
+
+- **`brv_sanpham.group_code` rỗng 100%** — đã kiểm chứng CHÍNH NGUỒN Bravo (`dbo.BRV_SanPham`) cũng
+  rỗng 402/402, không phải lỗi đồng bộ. Nhóm sản phẩm thật nằm trên **bảng hóa đơn**:
+  `vHoaDonTotal.GroupCode` (OTC → DM1/DM2/DM3) và `vHoaDonETCTotal.GroupCode` (ETC → mã số riêng).
+  Chatbot tự dò ra được nhưng tốn 7 lượt gọi tool → đã ghi vào `schema_context.py` để lần sau đi
+  thẳng, không phải dò lại.
+- **2 lỗi trong chính script kiểm chứng** (không phải lỗi chatbot): thiếu `scope_role="c_level"`
+  khiến Q012 bị loại khỏi quyền đọc SQL live; UX-2 hỏi "của tôi" với scope rỗng nên chatbot hỏi lại
+  (đúng hành vi) nhưng không kiểm được nhãn màu.
+
+---
+
+## (Nội dung gốc 19/08 — giữ lại để đối chiếu)
+
 Tổng hợp TOÀN BỘ thay đổi từ 18-19/08/2026 (16 commit code + 9 commit test/docs) — mọi thứ dưới
 đây đã qua test giả lập (SQLite fixture, `_q_bravo` giả lập, git-stash xác nhận fail→pass), nhưng
 **chưa có gì được xác minh bằng chatbot thật**. Không được coi các mục này là "đã xong" cho tới khi
