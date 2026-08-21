@@ -310,7 +310,12 @@ TEMPLATE_TOOLS = [
                         "thu bao nhieu, ai phu trach, con no khong'). "
                         "LUU Y: kenh ETC KHONG co NV phu trach truc tiep gan tren khach hang (chi OTC co) - "
                         "voi khach ETC thuan tuy, cac truong employee_code/employee_name/position_label se rong, "
-                        "KHONG phai loi.",
+                        "KHONG phai loi. "
+                        "Neu ket qua co breakdown qua han theo bucket (overdue_1_15/15_30/30_45/gt_45) kem "
+                        "truong 'aging_bucket_note' - PHAI doc va nhac lai noi dung ghi chu do khi tra loi: "
+                        "khung nay (1-15/15-30/30-45/>45 ngay) LAY THANG tu he thong goc, co the KHAC voi moc "
+                        "trong bao cao Excel noi bo DNH hay dung (vd 1-7/8-14/15-21/>21 ngay) - khong duoc "
+                        "quy doi ngam hay coi 2 khung la mot.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -407,7 +412,12 @@ TEMPLATE_TOOLS = [
                         "ky vao kho local. BAT BUOC dung tool nay cho cau hoi cong no TONG HOP/NHIEU KHACH "
                         "(vd 'tong no qua han', 'top khach no', 'ty le qua han theo vung') - KHONG tu sinh "
                         "SQL va KHONG dung bang receivable_detail/receivable_etc cu (da ngung). Cong no cua "
-                        "MOT khach cu the -> dung get_customer_detail.",
+                        "MOT khach cu the -> dung get_customer_detail. "
+                        "Ket qua co breakdown qua han theo bucket (overdue_1_15/15_30/30_45/gt_45) kem "
+                        "truong 'aging_bucket_note' - PHAI doc va nhac lai noi dung ghi chu do khi tra loi: "
+                        "khung nay (1-15/15-30/30-45/>45 ngay) LAY THANG tu he thong goc, co the KHAC voi moc "
+                        "trong bao cao Excel noi bo DNH hay dung (vd 1-7/8-14/15-21/>21 ngay) - khong duoc "
+                        "quy doi ngam hay coi 2 khung la mot.",
         "input_schema": {
             "type": "object",
             "properties": {

@@ -1702,6 +1702,21 @@ def kpi_forecast_month(year_month: str = None, as_of_date: str = None,
     }
 
 
+# 21/08/2026: khung tuoi no CHATBOT dang dung (1-15/15-30/30-45/>45 ngay) lay THANG tu SP goc Bravo
+# usp_DeptAccDueDate_GetData - xac nhan qua doi chieu voi file Excel "Bao cao cong no phai thu" DNH
+# tu cung cap: file do chia theo mac khac han (1-7/8-14/15-21/>21 ngay). HAI khung nay CUNG TON TAI
+# that trong nghiep vu DNH (SP he thong dung 1 kieu, bao cao thu cong Excel dung kieu khac) - KHONG
+# phai loi du lieu/code, nhung neu tra loi ma khong noi ro se de bi hieu nham la chatbot tinh sai so
+# voi bao cao Excel quen thuoc. Chua co xac nhan tu DNH kieu nao la "chuan chinh thuc" nen KHONG tu
+# doi bucket - chi gan canh bao ro rang de AI PHAI nhac lai voi nguoi dung khi tra ve breakdown nay.
+_AGING_BUCKET_NOTE = (
+    "Khung qua han duoi day (1-15 / 15-30 / 30-45 / >45 ngay) lay THANG tu he thong cong no goc cua "
+    "DNH (SP usp_DeptAccDueDate_GetData). Neu ban dang doi chieu voi bao cao Excel noi bo (mot so ban "
+    "dung moc 1-7 / 8-14 / 15-21 / >21 ngay), 2 khung nay KHAC NHAU va KHONG the quy doi truc tiep tuong "
+    "ung tung khoang - can hoi lai bo phan ke toan/DNH de xac nhan khung nao dang duoc dung lam chuan."
+)
+
+
 def _customer_receivable(customer_code: str, channel: str) -> dict:
     """Tra du no/qua han cua 1 khach tu KHO LOCAL fact_congno_khachhang - snapshot tuc thoi tu SP goc
     DNH usp_DeptAccDueDate_GetData (xem sync_warehouse.py::sync_fact_congno). Truoc 29/07/2026 doc tu
@@ -1714,7 +1729,8 @@ def _customer_receivable(customer_code: str, channel: str) -> dict:
 
     Giu 5 khoa cu (balance_end, total_overdue, overdue_pct, receivable_status, receivable_warning) de
     KHONG phai sua nl2sql.py; them khoa moi khong pha tuong thich: receivable_as_of, receivable_source,
-    va 4 bucket overdue_1_15/15_30/30_45/gt_45 (de tra loi "qua han bao lau").
+    va 4 bucket overdue_1_15/15_30/30_45/gt_45 (de tra loi "qua han bao lau") kem "aging_bucket_note"
+    (xem _AGING_BUCKET_NOTE) - PHAI co mat cung breakdown de AI biet ma khung nay khac Excel noi bo.
 
     4 trang thai (receivable_status):
       - "unavailable": bang CHUA co du lieu (chua dong bo/SP loi) -> canh bao BAT BUOC "chua tra cuu
@@ -1775,7 +1791,8 @@ def _customer_receivable(customer_code: str, channel: str) -> dict:
               "receivable_status": "ok",
               "receivable_source": "bao cao cong no goc DNH (SP)", "receivable_as_of": snapshot_at,
               "overdue_1_15": _f(r["b1"]), "overdue_15_30": _f(r["b2"]),
-              "overdue_30_45": _f(r["b3"]), "overdue_gt_45": _f(r["b4"])}
+              "overdue_30_45": _f(r["b3"]), "overdue_gt_45": _f(r["b4"]),
+              "aging_bucket_note": _AGING_BUCKET_NOTE}
     if stale:
         result["receivable_warning"] = (
             f"So cong no lay tu snapshot luc {snapshot_at} (da cu hon 6 gio) - nen luu y moc thoi gian "
@@ -2141,6 +2158,9 @@ def receivables_overview(top_n: int = 10, scope_area_code: str = None) -> dict:
     MOT DONG = (khach x kenh) nen luon SUM. scope_area_code: EP LOC theo vung khi tai khoan bi gioi
     han (regional_director/qlv) - dung REGION_SQL_MARKERS de gom ca MB va MB2 cho mien Bac.
 
+    Ket qua LUON kem "aging_bucket_note" (xem _AGING_BUCKET_NOTE) canh bao 4 bucket overdue_1_15/
+    15_30/30_45/gt_45 lay THANG tu SP goc, co the khac moc Excel noi bo DNH hay dung.
+
     4 trang thai giong _customer_receivable:
       - unavailable: bang chua co du lieu -> canh bao BAT BUOC, khong ket luan "khong co no".
       - ok + canh bao moc thoi gian: snapshot cu > 6 gio.
@@ -2212,6 +2232,7 @@ def receivables_overview(top_n: int = 10, scope_area_code: str = None) -> dict:
         "overdue_pct": (total_overdue / total_balance * 100) if total_balance else 0.0,
         "overdue_1_15": _f(tot["b1"]), "overdue_15_30": _f(tot["b2"]),
         "overdue_30_45": _f(tot["b3"]), "overdue_gt_45": _f(tot["b4"]),
+        "aging_bucket_note": _AGING_BUCKET_NOTE,
         "by_channel": channels,
         "by_region": regions,
         "top_overdue_customers": top_customers,
