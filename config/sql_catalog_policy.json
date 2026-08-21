@@ -1,0 +1,24 @@
+{
+  "version": 1,
+  "allowed_schemas": [
+    "dbo"
+  ],
+  "allowed_objects": [],
+  "denied_objects": [
+    "dbo.DIM_Pass"
+  ],
+  "include_definitions": true,
+  "sensitive_columns": {
+    "dbo.*.*Password*": "credential",
+    "dbo.*.*Pass*": "credential",
+    "dbo.*.*Pwd*": "credential",
+    "dbo.*.*Secret*": "credential",
+    "dbo.*.*Token*": "credential",
+    "dbo.*.*Phone*": "pii",
+    "dbo.*.*Mobile*": "pii",
+    "dbo.*.*Email*": "pii",
+    "dbo.*.*Address*": "pii",
+    "dbo.*.*Luong*": "confidential_compensation",
+    "dbo.*.*Salary*": "confidential_compensation"
+  }
+}

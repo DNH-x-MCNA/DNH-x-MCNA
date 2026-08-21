@@ -151,7 +151,8 @@ def _digest_table(metrics):
     if metrics.get('inventory', {}).get('dead_stock_available') != False:
         rows.append(["Mặt hàng tồn chết", str(metrics['inventory']['dead_stock_count'])])
         
-    rows.append(["Mặt hàng sắp hết hàng", str(metrics['inventory']['near_stockout_count'])])
+    if metrics.get('inventory', {}).get('near_stockout_available') != False:
+        rows.append(["Mặt hàng sắp hết hàng", str(metrics['inventory']['near_stockout_count'])])
     for h in metrics.get('highlights', []):
         rows.append([f"Cảnh báo: {h['label']}", f"{h['value_display']} (lúc {h['sent_at_display']})"])
 

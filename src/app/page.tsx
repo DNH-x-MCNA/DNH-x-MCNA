@@ -1,10 +1,11 @@
 "use client";
 
-import { useState, useRef, useEffect, useMemo, memo, FormEvent, ReactNode, RefObject } from "react";
+import { useState, useRef, useEffect, useMemo, useCallback, memo, FormEvent, ReactNode, RefObject } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import AuthScreens from "./AuthScreens";
 import AdminUsersPanel from "./AdminUsersPanel";
+import { ExportableTable } from "./TableExport";
 import {
   IconChart, IconLogout, IconPlus, IconTrash, IconSend, IconSearch,
   IconUsers, IconCoin, IconMenu, IconClose, IconRefresh, IconSquare,
@@ -17,7 +18,15 @@ import { useModal } from "./useModal";
 // "chưa quy được cho ai" đang quy đổi tại đây nên vẫn cần hằng số này.
 const USD_TO_VND_RATE = 26334.5;
 
-type HistoryMessage = { role: "user" | "assistant"; content: string };
+type HistoryMessage = {
+  id: number;
+  role: "user" | "assistant";
+  content: string;
+  query_id?: string | null;
+  feedback_rating?: 1 | -1 | null;
+  feedback_category?: string | null;
+  feedback_comment?: string | null;
+};
 
 type SessionSummary = {
   session_id: string;
@@ -163,13 +172,39 @@ function groupSessionsByDate(list: SessionSummary[]): SessionGroup[] {
 }
 
 type Message = {
+  id?: number;
   role: "user" | "bot";
   text: string;
+  queryId?: string | null;
   sqlUsed?: string[];
   columns?: string[] | null;
   rows?: unknown[][] | null;
   error?: boolean;
+  feedbackRating?: 1 | -1 | null;
+  feedbackCategory?: string | null;
+  feedbackComment?: string | null;
 };
+
+type FeedbackRating = 1 | -1;
+
+type SubmitFeedback = (
+  queryId: string,
+  rating: FeedbackRating,
+  category?: string,
+  comment?: string,
+) => Promise<void>;
+
+const FEEDBACK_CATEGORY_OPTIONS = [
+  ["wrong_number", "Số liệu không đúng"],
+  ["missing_data", "Thiếu dữ liệu"],
+  ["wrong_scope", "Sai phạm vi/kỳ báo cáo"],
+  ["not_understood", "Chưa hiểu đúng câu hỏi"],
+  ["too_slow", "Phản hồi quá chậm"],
+  ["unclear_answer", "Câu trả lời khó hiểu"],
+  ["other", "Lý do khác"],
+] as const;
+
+const FEEDBACK_CATEGORY_LABELS = Object.fromEntries(FEEDBACK_CATEGORY_OPTIONS) as Record<string, string>;
 
 const SAMPLE_QUESTIONS_COMMON = [
   "Doanh thu hôm nay bao nhiêu?",
@@ -266,7 +301,35 @@ type WeeklyDailyItem = {
   total_tokens: number;
   cost_usd: number;
   cost_vnd: number;
+  providers: ProviderCostItem[];
 };
+
+// 17/08/2026: mot ngay co the dung NHIEU nha cung cap / nhieu key (dang chay thu DeepSeek song song
+// Claude). Gop chung mot cot thi khong biet tien cua ben nao, cung khong so duoc ben nao re hon.
+type ProviderCostItem = {
+  provider: string;
+  api_key_id: string;
+  model: string;
+  query_count: number;
+  cost_usd: number;
+  cost_vnd: number;
+  total_tokens?: number;
+};
+
+// Màu định danh nhà cung cấp - GÁN CỐ ĐỊNH theo tên, không xoay vòng theo thứ tự xuất hiện.
+// Nếu tô theo thứ tự thì lọc bớt một nguồn là các nguồn còn lại đổi màu, người đọc tưởng dữ liệu đổi.
+// Cặp hổ phách/tím đã kiểm bằng công cụ: ΔE 36,9 với mắt protan, 39,3 với mắt thường - tách bạch kể
+// cả với người mù màu. Hổ phách tương phản 2,09:1 so với nền nên KHÔNG được đứng một mình: luôn kèm
+// số ghi rõ trên đầu cột và bảng chi tiết bên dưới.
+const MAU_NHA_CUNG_CAP: Record<string, string> = {
+  Anthropic: "#f59e0b",
+  DeepSeek: "#8b5cf6",
+};
+const MAU_KHAC = "#94a3b8"; // nguồn lạ / bản ghi cũ chưa ghi nhãn - xám trung tính, không tranh màu
+
+function mauNhaCungCap(ten: string): string {
+  return MAU_NHA_CUNG_CAP[ten] || MAU_KHAC;
+}
 
 type WeeklyUserItem = {
   username: string;
@@ -289,6 +352,7 @@ type WeeklyAuditData = {
   total_cost_vnd: number;
   daily_breakdown: WeeklyDailyItem[];
   user_breakdown: WeeklyUserItem[];
+  provider_breakdown: ProviderCostItem[];
 };
 
 // Cac truong session_* la so cua CA PHIEN chat, khong phai cua rieng luot hoi tren dong do:
@@ -304,11 +368,21 @@ type QueryLogItem = {
   status: string;
   duration_ms: number | null;
   session_id: string | null;
+  query_id?: string | null;
+  row_count?: number | null;
+  error_message?: string | null;
+  feedback_rating?: FeedbackRating | null;
+  feedback_category?: string | null;
+  feedback_comment?: string | null;
+  feedback_by?: string | null;
+  feedback_at?: string | null;
   session_input_tokens: number;
   session_output_tokens: number;
   session_total_tokens: number;
   session_cost_usd: number;
   session_cost_vnd: number;
+  api_provider?: string | null;
+  api_model?: string | null;
 };
 
 type AuditDashboardData = {
@@ -344,9 +418,13 @@ const markdownComponents = {
   ),
   hr: () => <hr className="my-3 border-slate-200" />,
   table: ({ children }: { children?: ReactNode }) => (
-    <div className="mb-2 mt-1 overflow-x-auto rounded-xl border border-slate-200 shadow-sm">
+    <ExportableTable
+      nhan="bang-tra-loi"
+      wrapperClassName="mb-2 mt-1"
+      className="overflow-x-auto rounded-xl border border-slate-200 shadow-sm"
+    >
       <table className="min-w-full text-xs tabular-nums">{children}</table>
-    </div>
+    </ExportableTable>
   ),
   thead: ({ children }: { children?: ReactNode }) => <thead className="bg-[#F1F5F9]">{children}</thead>,
   tbody: ({ children }: { children?: ReactNode }) => <tbody className="divide-y divide-slate-100 bg-white">{children}</tbody>,
@@ -384,6 +462,162 @@ const markdownComponents = {
   },
 };
 
+function FeedbackControls({
+  queryId,
+  initialRating,
+  initialCategory,
+  initialComment,
+  onFeedback,
+}: {
+  queryId: string;
+  initialRating?: FeedbackRating | null;
+  initialCategory?: string | null;
+  initialComment?: string | null;
+  onFeedback: SubmitFeedback;
+}) {
+  const [selected, setSelected] = useState<FeedbackRating | null>(initialRating ?? null);
+  const [category, setCategory] = useState(initialCategory ?? "");
+  const [comment, setComment] = useState(initialComment ?? "");
+  const [expanded, setExpanded] = useState(Boolean(initialComment) || initialRating === -1);
+  const [saving, setSaving] = useState(false);
+  const [status, setStatus] = useState<"saved" | "error" | null>(null);
+  const [errorText, setErrorText] = useState("");
+
+  async function chooseSatisfied() {
+    if (selected === 1) {
+      setExpanded((value) => !value);
+      return;
+    }
+    setSaving(true);
+    setStatus(null);
+    setErrorText("");
+    try {
+      await onFeedback(queryId, 1, undefined, "");
+      setSelected(1);
+      setCategory("");
+      setComment("");
+      setExpanded(false);
+      setStatus("saved");
+    } catch (error) {
+      setStatus("error");
+      setErrorText((error as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  function chooseDissatisfied() {
+    setSelected(-1);
+    setExpanded(true);
+    setStatus(null);
+    setErrorText("");
+  }
+
+  async function saveDetails() {
+    if (!selected) return;
+    if (selected === -1 && !category) {
+      setStatus("error");
+      setErrorText("Vui lòng chọn lý do chưa hài lòng.");
+      return;
+    }
+    setSaving(true);
+    setStatus(null);
+    setErrorText("");
+    try {
+      await onFeedback(queryId, selected, selected === -1 ? category : undefined, comment);
+      setStatus("saved");
+    } catch (error) {
+      setStatus("error");
+      setErrorText((error as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="mt-3 border-t border-slate-100 pt-3 text-xs text-slate-500">
+      <div className="flex flex-wrap items-center gap-2">
+        <span>Câu trả lời này có hữu ích không?</span>
+        <button
+          type="button"
+          onClick={chooseSatisfied}
+          disabled={saving}
+          aria-label="Hài lòng"
+          aria-pressed={selected === 1}
+          className={`rounded-lg border px-2.5 py-1 transition ${
+            selected === 1
+              ? "border-emerald-300 bg-emerald-50 text-emerald-700"
+              : "border-slate-200 bg-white hover:border-emerald-300 hover:text-emerald-700"
+          }`}
+        >
+          👍 Hài lòng
+        </button>
+        <button
+          type="button"
+          onClick={chooseDissatisfied}
+          disabled={saving}
+          aria-label="Không hài lòng"
+          aria-pressed={selected === -1}
+          className={`rounded-lg border px-2.5 py-1 transition ${
+            selected === -1
+              ? "border-rose-300 bg-rose-50 text-rose-700"
+              : "border-slate-200 bg-white hover:border-rose-300 hover:text-rose-700"
+          }`}
+        >
+          👎 Không hài lòng
+        </button>
+        {selected === 1 && (
+          <button
+            type="button"
+            onClick={() => setExpanded((value) => !value)}
+            className="text-indigo-600 hover:text-indigo-800"
+          >
+            {expanded ? "Ẩn nhận xét" : initialComment ? "Sửa nhận xét" : "Thêm nhận xét"}
+          </button>
+        )}
+        {status === "saved" && <span className="font-medium text-emerald-600">Đã lưu</span>}
+      </div>
+
+      {expanded && selected && (
+        <div className="mt-3 space-y-2 rounded-xl bg-slate-50 p-3">
+          {selected === -1 && (
+            <select
+              value={category}
+              onChange={(event) => setCategory(event.target.value)}
+              className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-slate-700 outline-none focus:border-indigo-400"
+              aria-label="Lý do không hài lòng"
+            >
+              <option value="">Chọn lý do *</option>
+              {FEEDBACK_CATEGORY_OPTIONS.map(([value, label]) => (
+                <option key={value} value={value}>{label}</option>
+              ))}
+            </select>
+          )}
+          <textarea
+            value={comment}
+            onChange={(event) => setComment(event.target.value.slice(0, 2000))}
+            rows={3}
+            placeholder="Nhận xét thêm để đội dự án kiểm tra (không bắt buộc)"
+            className="w-full resize-y rounded-lg border border-slate-200 bg-white px-3 py-2 text-slate-700 outline-none focus:border-indigo-400"
+          />
+          <div className="flex items-center justify-between gap-3">
+            <span className="text-slate-400">{comment.length}/2000</span>
+            <button
+              type="button"
+              onClick={saveDetails}
+              disabled={saving}
+              className="rounded-lg bg-indigo-600 px-3 py-1.5 font-semibold text-white transition hover:bg-indigo-700 disabled:opacity-50"
+            >
+              {saving ? "Đang lưu..." : "Lưu đánh giá"}
+            </button>
+          </div>
+        </div>
+      )}
+      {status === "error" && <p className="mt-2 text-rose-600">{errorText || "Không lưu được đánh giá."}</p>}
+    </div>
+  );
+}
+
 // Tach rieng khoi Home() + boc React.memo: Home() co state `input` doi moi lan go phim, neu khung
 // tin nhan nam chung component se bi ve lai TOAN BO (ke ca parse lai markdown/bang cua moi tin nhan
 // cu) moi lan go 1 ky tu - cang nhieu tin nhan cang lag. Component rieng nay CHI ve lai khi `messages`
@@ -392,17 +626,19 @@ const MessageList = memo(function MessageList({
   messages,
   loading,
   onCancel,
+  onFeedback,
   bottomRef,
 }: {
   messages: Message[];
   loading: boolean;
   onCancel?: () => void;
+  onFeedback: SubmitFeedback;
   bottomRef: RefObject<HTMLDivElement | null>;
 }) {
   return (
     <div className="flex flex-col gap-5 py-1">
       {messages.map((m, i) => (
-        <div key={i} className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}>
+        <div key={m.id ?? m.queryId ?? i} className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}>
           <div
             className={`max-w-[85%] text-sm leading-relaxed ${
               m.role === "user"
@@ -425,7 +661,11 @@ const MessageList = memo(function MessageList({
             {m.rows && m.columns && m.rows.length > 0 && (() => {
               const numericCols = numericColumnFlags(m.rows, m.columns.length);
               return (
-                <div className="mt-3 overflow-x-auto rounded-xl border border-slate-200 shadow-sm">
+                <ExportableTable
+                  nhan="bang-du-lieu"
+                  wrapperClassName="mt-3"
+                  className="overflow-x-auto rounded-xl border border-slate-200 shadow-sm"
+                >
                   <table className="min-w-full text-xs tabular-nums">
                     <thead className="bg-[#F1F5F9]">
                       <tr>
@@ -464,7 +704,7 @@ const MessageList = memo(function MessageList({
                       ))}
                     </tbody>
                   </table>
-                </div>
+                </ExportableTable>
               );
             })()}
 
@@ -479,6 +719,15 @@ const MessageList = memo(function MessageList({
                   </pre>
                 ))}
               </details>
+            )}
+            {m.role === "bot" && m.queryId && !m.error && (
+              <FeedbackControls
+                queryId={m.queryId}
+                initialRating={m.feedbackRating}
+                initialCategory={m.feedbackCategory}
+                initialComment={m.feedbackComment}
+                onFeedback={onFeedback}
+              />
             )}
           </div>
         </div>
@@ -720,8 +969,13 @@ export default function Home() {
       .then((history: HistoryMessage[]) => {
         setMessages(
           history.map((h) => ({
+            id: h.id,
             role: h.role === "user" ? "user" : "bot",
             text: h.content,
+            queryId: h.query_id,
+            feedbackRating: h.feedback_rating,
+            feedbackCategory: h.feedback_category,
+            feedbackComment: h.feedback_comment,
           }))
         );
       })
@@ -785,6 +1039,28 @@ export default function Home() {
     setMessages([]);
   }
 
+  const submitFeedback = useCallback<SubmitFeedback>(async (queryId, rating, category, comment) => {
+    const response = await fetch(`${API_URL}/queries/${encodeURIComponent(queryId)}/feedback`, {
+      method: "PUT",
+      headers: authHeaders(authToken),
+      body: JSON.stringify({ rating, category, comment }),
+    });
+    const payload = await response.json().catch(() => ({ detail: "Máy chủ trả về dữ liệu không hợp lệ" }));
+    if (!response.ok) {
+      throw new Error(payload.detail || `Không lưu được đánh giá (HTTP ${response.status})`);
+    }
+    setMessages((current) => current.map((message) => (
+      message.role === "bot" && message.queryId === queryId
+        ? {
+            ...message,
+            feedbackRating: payload.rating,
+            feedbackCategory: payload.category,
+            feedbackComment: payload.comment,
+          }
+        : message
+    )));
+  }, [authToken]);
+
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, loading]);
@@ -840,7 +1116,7 @@ export default function Home() {
           if (!line.startsWith("data:")) continue;
           const jsonStr = line.slice(5).trim();
           if (!jsonStr) continue;
-          let evt: { type: string; text?: string; message?: string; answer?: string;
+          let evt: { type: string; query_id?: string; text?: string; message?: string; answer?: string;
                      sql_used?: string[]; columns?: string[] | null; rows?: unknown[][] | null };
           try {
             evt = JSON.parse(jsonStr);
@@ -865,6 +1141,7 @@ export default function Home() {
               if (last && last.role === "bot") {
                 next[next.length - 1] = {
                   ...last,
+                  queryId: evt.query_id,
                   text: evt.answer ?? last.text,
                   sqlUsed: evt.sql_used,
                   columns: evt.columns,
@@ -1218,7 +1495,13 @@ export default function Home() {
             </div>
           )}
 
-          <MessageList messages={messages} loading={loading} onCancel={handleCancelQuestion} bottomRef={bottomRef} />
+          <MessageList
+            messages={messages}
+            loading={loading}
+            onCancel={handleCancelQuestion}
+            onFeedback={submitFeedback}
+            bottomRef={bottomRef}
+          />
         </div>
 
         {/* Banner "Danh cho C-Level" da bo (29/07/2026): loi vao Dashboard Audit Log da co san o 2 cho
@@ -1559,7 +1842,7 @@ export default function Home() {
                             Tổng tiền toàn công ty vẫn đúng.
                           </div>
                         )}
-                        <div className="max-h-[420px] overflow-auto rounded-xl border border-slate-200 shadow-sm">
+                        <ExportableTable nhan="chi-phi-ai-theo-nguoi-dung" className="max-h-[420px] overflow-auto rounded-xl border border-slate-200 shadow-sm">
                           <table className="min-w-full text-xs tabular-nums">
                             <thead className="sticky top-0 z-10 bg-[#F1F5F9] text-slate-700 font-semibold shadow-[0_1px_0_0_theme(colors.slate.200)]">
                               <tr>
@@ -1613,7 +1896,7 @@ export default function Home() {
                               })}
                             </tbody>
                           </table>
-                        </div>
+                        </ExportableTable>
                       </div>
                     );
                   })()}
@@ -1702,15 +1985,24 @@ export default function Home() {
                               Đồ thị cột đứng
                             </span>
                           </div>
-                          <div className="flex items-center gap-3 text-[11px] font-medium text-slate-500">
-                            <div className="flex items-center gap-1.5">
-                              <span className="h-2.5 w-2.5 rounded-sm bg-gradient-to-t from-amber-500 to-amber-400" />
-                              <span>Chi phí ngày thường</span>
-                            </div>
-                            <div className="flex items-center gap-1.5">
-                              <span className="h-2.5 w-2.5 rounded-sm bg-gradient-to-t from-indigo-600 to-purple-500" />
-                              <span>Hôm nay ⭐</span>
-                            </div>
+                          {/* 17/08/2026: chú giải giờ theo NHÀ CUNG CẤP, không còn "hôm nay / ngày thường".
+                              Màu phải mang nghĩa danh tính (tiền chảy về đâu), chứ tô theo "hôm nay" thì
+                              cùng một nhà cung cấp lại đổi màu tuỳ ngày — nhìn tưởng hai nguồn khác nhau.
+                              Hôm nay vẫn nhận ra qua dấu ⭐ và viền ở nhãn trục dưới. */}
+                          <div className="flex flex-wrap items-center gap-3 text-[11px] font-medium text-slate-500">
+                            {(weeklyData?.provider_breakdown?.length ?? 0) > 0 ? (
+                              [...new Set(weeklyData!.provider_breakdown.map((p) => p.provider))].map((ten) => (
+                                <div key={ten} className="flex items-center gap-1.5">
+                                  <span className="h-2.5 w-2.5 rounded-sm" style={{ background: mauNhaCungCap(ten) }} />
+                                  <span>{ten}</span>
+                                </div>
+                              ))
+                            ) : (
+                              <div className="flex items-center gap-1.5">
+                                <span className="h-2.5 w-2.5 rounded-sm" style={{ background: mauNhaCungCap("") }} />
+                                <span>Chi phí</span>
+                              </div>
+                            )}
                           </div>
                         </div>
 
@@ -1750,18 +2042,37 @@ export default function Home() {
                                       </span>
                                     </div>
 
-                                    {/* Vertical Bar Container Track */}
+                                    {/* Cột xếp chồng theo nhà cung cấp. Ngày dùng 2 nguồn thì nhìn ra ngay
+                                        tỷ lệ, thay vì phải dò xuống bảng. Khe 2px giữa các đoạn để hai
+                                        mảng màu không dính liền thành một khối. Bản ghi cũ chưa có
+                                        'providers' -> vẽ một đoạn xám, không vờ như biết nguồn nào. */}
                                     <div className="relative flex h-full w-full max-w-[48px] flex-col justify-end overflow-hidden rounded-t-xl bg-slate-100/80 p-0.5 group-hover:bg-slate-200/60 transition">
-                                      <div
-                                        style={{ height: `${displayBarHeight}%` }}
-                                        className={`w-full rounded-t-lg transition-all duration-500 ease-out ${
-                                          day.is_today
-                                            ? "bg-gradient-to-t from-indigo-600 via-indigo-500 to-purple-500 shadow-md shadow-indigo-200"
-                                            : day.query_count > 0
-                                            ? "bg-gradient-to-t from-amber-500 via-amber-400 to-amber-300 shadow-sm"
-                                            : "bg-slate-200"
-                                        }`}
-                                      />
+                                      {day.cost_vnd > 0 && (day.providers?.length ?? 0) > 0 ? (
+                                        <div
+                                          style={{ height: `${displayBarHeight}%` }}
+                                          className="flex w-full flex-col justify-end gap-[2px] transition-all duration-500 ease-out"
+                                        >
+                                          {day.providers.map((p, pi) => (
+                                            <div
+                                              key={`${p.provider}-${p.api_key_id}-${p.model}`}
+                                              title={`${p.provider} · ${p.query_count} lượt · ${Math.round(p.cost_vnd).toLocaleString("vi-VN")}đ`}
+                                              style={{
+                                                height: `${Math.max(3, (p.cost_vnd / day.cost_vnd) * 100)}%`,
+                                                background: mauNhaCungCap(p.provider),
+                                              }}
+                                              className={pi === 0 ? "w-full rounded-t-lg shadow-sm" : "w-full"}
+                                            />
+                                          ))}
+                                        </div>
+                                      ) : (
+                                        <div
+                                          style={{
+                                            height: `${displayBarHeight}%`,
+                                            background: day.query_count > 0 ? MAU_KHAC : "transparent",
+                                          }}
+                                          className="w-full rounded-t-lg shadow-sm transition-all duration-500 ease-out"
+                                        />
+                                      )}
                                     </div>
 
                                     {/* Hover Detailed Tooltip Card */}
@@ -1784,6 +2095,27 @@ export default function Home() {
                                           <span>{day.query_count} lượt</span>
                                         </div>
                                       </div>
+                                      {(day.providers?.length ?? 0) > 0 && (
+                                        <div className="mt-1.5 flex flex-col gap-1 border-t border-slate-700 pt-1.5 text-[10px] tabular-nums">
+                                          {day.providers.map((p) => (
+                                            <div
+                                              key={`tt-${p.provider}-${p.api_key_id}-${p.model}`}
+                                              className="flex items-center justify-between gap-2"
+                                            >
+                                              <span className="flex items-center gap-1.5 text-slate-300">
+                                                <span
+                                                  className="h-2 w-2 shrink-0 rounded-sm"
+                                                  style={{ background: mauNhaCungCap(p.provider) }}
+                                                />
+                                                {p.provider}
+                                              </span>
+                                              <span className="whitespace-nowrap text-slate-200">
+                                                {p.query_count} lượt · {Math.round(p.cost_vnd).toLocaleString("vi-VN")}đ
+                                              </span>
+                                            </div>
+                                          ))}
+                                        </div>
+                                      )}
                                     </div>
                                   </div>
                                 );
@@ -1812,10 +2144,124 @@ export default function Home() {
                         )}
                       </div>
 
+                      {/* 17/08/2026: Chi phí tách theo NHÀ CUNG CẤP / API KEY.
+                          Một ngày có thể dùng nhiều nguồn (đang chạy thử DeepSeek song song Claude);
+                          gộp chung một con số thì không biết tiền của bên nào, cũng không so được
+                          bên nào rẻ hơn. Ngày có từ 2 nguồn trở lên được đánh dấu để nhìn ra ngay. */}
+                      {(weeklyData?.provider_breakdown?.length ?? 0) > 0 && (
+                        <div className="flex flex-col gap-2">
+                          <h4 className="text-xs font-bold text-slate-700 flex items-center gap-1.5">
+                            <IconCoin className="w-3.5 h-3.5" /> Chi Phí Theo Nhà Cung Cấp / API Key
+                          </h4>
+
+                          <div className="flex flex-wrap gap-2">
+                            {weeklyData?.provider_breakdown.map((p) => (
+                              <div
+                                key={`${p.provider}-${p.api_key_id}-${p.model}`}
+                                className="flex-1 min-w-[13rem] rounded-xl border border-slate-200 bg-white p-3 shadow-sm"
+                              >
+                                <div className="flex items-center justify-between gap-2">
+                                  <span
+                                    className={`inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-bold ${
+                                      p.provider === "DeepSeek"
+                                        ? "bg-violet-50 text-violet-700"
+                                        : p.provider === "Anthropic"
+                                        ? "bg-amber-50 text-amber-700"
+                                        : "bg-slate-100 text-slate-600"
+                                    }`}
+                                  >
+                                    {p.provider}
+                                  </span>
+                                  <span className="font-mono text-[10px] text-slate-400">{p.api_key_id}</span>
+                                </div>
+                                <div className="mt-1.5 text-[11px] text-slate-500">{p.model}</div>
+                                <div className="mt-1 flex items-baseline justify-between tabular-nums">
+                                  <span className="text-xs text-slate-600">{p.query_count.toLocaleString()} lượt</span>
+                                  <span className="text-sm font-bold text-slate-800">
+                                    {Math.round(p.cost_vnd).toLocaleString()}đ
+                                  </span>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+
+                          <ExportableTable
+                            nhan="chi-phi-theo-nha-cung-cap"
+                            className="max-h-64 overflow-auto rounded-xl border border-slate-200 shadow-sm"
+                          >
+                            <table className="min-w-full text-xs tabular-nums">
+                              <thead className="sticky top-0 z-10 bg-[#F1F5F9] text-slate-700 font-semibold shadow-[0_1px_0_0_theme(colors.slate.200)]">
+                                <tr>
+                                  <th className="px-3 py-2 text-left">Ngày</th>
+                                  <th className="px-3 py-2 text-left">Nhà cung cấp</th>
+                                  <th className="px-3 py-2 text-left">API key</th>
+                                  <th className="px-3 py-2 text-left">Model</th>
+                                  <th className="px-3 py-2 text-right">Lượt</th>
+                                  <th className="px-3 py-2 text-right">Chi phí</th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-slate-100 bg-white">
+                                {weeklyData?.daily_breakdown
+                                  .filter((d) => d.providers && d.providers.length > 0)
+                                  .flatMap((d) =>
+                                    d.providers.map((p, pi) => (
+                                      <tr
+                                        key={`${d.date_str}-${p.provider}-${p.api_key_id}-${p.model}`}
+                                        className="hover:bg-slate-50"
+                                      >
+                                        <td className="px-3 py-2 text-slate-700">
+                                          {pi === 0 ? (
+                                            <span className="font-semibold">
+                                              {d.day_name} {d.display_date}
+                                              {d.providers.length > 1 && (
+                                                <span className="ml-1.5 rounded bg-rose-50 px-1.5 py-0.5 text-[10px] font-bold text-rose-700">
+                                                  {d.providers.length} nguồn
+                                                </span>
+                                              )}
+                                            </span>
+                                          ) : (
+                                            <span className="text-slate-300">↳</span>
+                                          )}
+                                        </td>
+                                        <td className="px-3 py-2">
+                                          <span
+                                            className={`inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-semibold ${
+                                              p.provider === "DeepSeek"
+                                                ? "bg-violet-50 text-violet-700"
+                                                : p.provider === "Anthropic"
+                                                ? "bg-amber-50 text-amber-700"
+                                                : "bg-slate-100 text-slate-600"
+                                            }`}
+                                          >
+                                            {p.provider}
+                                          </span>
+                                        </td>
+                                        <td className="px-3 py-2 font-mono text-[11px] text-slate-500">{p.api_key_id}</td>
+                                        <td className="px-3 py-2 text-slate-600">{p.model}</td>
+                                        <td className="px-3 py-2 text-right text-slate-700">
+                                          {p.query_count.toLocaleString()}
+                                        </td>
+                                        <td className="px-3 py-2 text-right font-semibold text-slate-800">
+                                          {Math.round(p.cost_vnd).toLocaleString()}đ
+                                        </td>
+                                      </tr>
+                                    ))
+                                  )}
+                              </tbody>
+                            </table>
+                          </ExportableTable>
+                          <p className="text-[11px] leading-relaxed text-slate-400">
+                            Nhãn API key chỉ để phân biệt các key với nhau (4 ký tự cuối kèm mã băm), không khôi phục
+                            được key. Bản ghi trước 17/08 chưa lưu nhãn key nên hiện “(không ghi)”, nhà cung cấp được
+                            suy từ tên model.
+                          </p>
+                        </div>
+                      )}
+
                       {/* Weekly User Breakdown Table */}
                       <div className="flex flex-col gap-2">
                         <h4 className="text-xs font-bold text-slate-700 flex items-center gap-1.5"><IconUsers className="w-3.5 h-3.5" /> Thống Kê Theo Tài Khoản Trong Tuần Này</h4>
-                        <div className="max-h-48 overflow-auto rounded-xl border border-slate-200 shadow-sm">
+                        <ExportableTable nhan="chi-phi-tuan-theo-tai-khoan" className="max-h-48 overflow-auto rounded-xl border border-slate-200 shadow-sm">
                           <table className="min-w-full text-xs tabular-nums">
                             <thead className="sticky top-0 bg-slate-100 text-slate-700 font-semibold shadow-[0_1px_0_0_theme(colors.slate.200)]">
                               <tr>
@@ -1845,7 +2291,7 @@ export default function Home() {
                               )}
                             </tbody>
                           </table>
-                        </div>
+                        </ExportableTable>
                       </div>
                     </div>
                   )}
@@ -1865,13 +2311,17 @@ export default function Home() {
                       <h3 className="text-sm font-bold text-slate-800">
                         📝 Nhật Ký Truy Vấn Chi Tiết ({queryOnlyLogs.length} dòng gần nhất)
                       </h3>
-                      <div className="max-h-[420px] overflow-auto rounded-xl border border-slate-200 shadow-sm">
+                      <ExportableTable nhan="nhat-ky-truy-van" className="max-h-[420px] overflow-auto rounded-xl border border-slate-200 shadow-sm">
                         <table className="min-w-full text-xs tabular-nums">
                           <thead className="sticky top-0 z-10 bg-[#F1F5F9] text-slate-700 font-semibold shadow-[0_1px_0_0_theme(colors.slate.200)]">
                             <tr>
                               <th className="px-4 py-3 text-left">Thời Gian</th>
                               <th className="px-4 py-3 text-left">Người Dùng</th>
+                              <th className="px-4 py-3 text-left">API sử dụng</th>
                               <th className="px-4 py-3 text-left">Nội Dung Câu Hỏi</th>
+                              <th className="px-4 py-3 text-center">Trạng Thái</th>
+                              <th className="px-4 py-3 text-left">Đánh Giá</th>
+                              <th className="px-4 py-3 text-left">Comment</th>
                               <th className="px-4 py-3 text-right">Input Tokens<div className="font-normal text-[10px] text-slate-400">(cả phiên)</div></th>
                               <th className="px-4 py-3 text-right">Output Tokens<div className="font-normal text-[10px] text-slate-400">(cả phiên)</div></th>
                               <th className="px-4 py-3 text-right">Chi Phí (VNĐ)<div className="font-normal text-[10px] text-slate-400">(cả phiên)</div></th>
@@ -1881,15 +2331,64 @@ export default function Home() {
                           </thead>
                           <tbody className="divide-y divide-slate-100 bg-white">
                             {queryOnlyLogs.map((log, idx) => (
-                              <tr key={idx} className="transition hover:bg-slate-50">
+                              <tr key={log.query_id ?? `${log.session_id}-${log.ts}-${idx}`} className="transition hover:bg-slate-50">
                                 <td className="px-4 py-3 text-slate-500 whitespace-nowrap">
                                   {log.ts ? log.ts.replace("T", " ").slice(0, 19) : "—"}
                                 </td>
                                 <td className="px-4 py-3 font-medium text-slate-900 whitespace-nowrap">
                                   {log.user_name}
                                 </td>
+                                <td className="px-4 py-3 whitespace-nowrap">
+                                  {log.api_provider ? (
+                                    <div>
+                                      <div className="font-medium text-indigo-700">{log.api_provider}</div>
+                                      {log.api_model && (
+                                        <div className="text-[10px] text-slate-400">{log.api_model}</div>
+                                      )}
+                                    </div>
+                                  ) : (
+                                    <span className="text-slate-400">—</span>
+                                  )}
+                                </td>
                                 <td className="px-4 py-3 text-slate-800 font-normal max-w-xs truncate" title={log.question}>
                                   {log.question}
+                                </td>
+                                <td className="px-4 py-3 text-center whitespace-nowrap">
+                                  <span className={`inline-flex rounded-full px-2 py-1 text-[10px] font-semibold ${
+                                    log.status === "completed" || log.status === "success" || log.status === "ok"
+                                      ? "bg-emerald-50 text-emerald-700"
+                                      : log.status === "running"
+                                        ? "bg-blue-50 text-blue-700"
+                                        : "bg-rose-50 text-rose-700"
+                                  }`} title={log.error_message || undefined}>
+                                    {log.status === "completed" || log.status === "success" || log.status === "ok"
+                                      ? "Hoàn thành"
+                                      : log.status === "running"
+                                        ? "Đang chạy"
+                                        : "Lỗi"}
+                                  </span>
+                                </td>
+                                <td className="px-4 py-3 text-left whitespace-nowrap">
+                                  {log.feedback_rating === 1 ? (
+                                    <span className="font-medium text-emerald-700">👍 Hài lòng</span>
+                                  ) : log.feedback_rating === -1 ? (
+                                    <div>
+                                      <div className="font-medium text-rose-700">👎 Không hài lòng</div>
+                                      {log.feedback_category && (
+                                        <div className="mt-0.5 text-[10px] text-slate-500">
+                                          {FEEDBACK_CATEGORY_LABELS[log.feedback_category] || log.feedback_category}
+                                        </div>
+                                      )}
+                                    </div>
+                                  ) : (
+                                    <span className="text-slate-400">Chưa đánh giá</span>
+                                  )}
+                                </td>
+                                <td
+                                  className="max-w-xs truncate px-4 py-3 text-left text-slate-600"
+                                  title={log.feedback_comment || undefined}
+                                >
+                                  {log.feedback_comment || "—"}
                                 </td>
                                 <td className="px-4 py-3 text-right text-slate-600">{log.session_input_tokens.toLocaleString()}</td>
                                 <td className="px-4 py-3 text-right text-slate-600">{log.session_output_tokens.toLocaleString()}</td>
@@ -1897,7 +2396,7 @@ export default function Home() {
                                   {log.session_cost_vnd.toLocaleString("vi-VN")} đ
                                 </td>
                                 <td className="px-4 py-3 text-center text-slate-500 whitespace-nowrap">
-                                  {log.duration_ms ? `${log.duration_ms} ms` : "—"}
+                                  {log.duration_ms != null ? `${log.duration_ms} ms` : "—"}
                                 </td>
                                 <td className="px-4 py-3 text-center">
                                   {log.sql ? (
@@ -1917,7 +2416,7 @@ export default function Home() {
                             ))}
                           </tbody>
                         </table>
-                      </div>
+                      </ExportableTable>
                     </div>
                     );
                   })()}
@@ -1936,7 +2435,7 @@ export default function Home() {
                 {auditData && auditData.summary.total_cost_usd > 0
                   ? Math.round(auditData.summary.total_cost_vnd / auditData.summary.total_cost_usd).toLocaleString("vi-VN")
                   : USD_TO_VND_RATE.toLocaleString("vi-VN")}{" "}
-                đ/USD và bảng giá Anthropic API chính thức. Tổng lấy thẳng từ sổ chi phí nên luôn đúng
+                đ/USD. Nhà cung cấp và model lấy từ log API thực tế của từng lượt; tổng lấy thẳng từ sổ chi phí nên luôn đúng
                 kể cả khi chưa quy được từng lượt về người dùng cụ thể.
               </span>
               <button

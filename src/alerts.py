@@ -596,9 +596,9 @@ def get_bravo_inventory_snapshot(force_refresh=False):
     scripts/sync_from_bravo_to_supabase.py::build_inventory_dataframe() để tránh trùng lặp/lệch
     công thức về sau (script đó giờ CHỈ còn là backup thủ công, không chạy tự động).
 
-    LƯU Ý: closing_value hiện luôn = 0 (chưa có nguồn giá trị tồn kho được DNH xác nhận) — mục
-    "tồn chết" (dead stock, lọc theo closing_value) vẫn sẽ luôn trống cho tới khi có nguồn đó; mục
-    "sắp hết hàng" (near-stockout, chỉ dựa vào months_to_sell) không bị ảnh hưởng.
+    LƯU Ý: closing_value hiện luôn = 0 (chưa có nguồn giá trị tồn kho được DNH xác nhận). Các trường
+    suy diễn months_to_sell còn được giữ trong cấu trúc legacy để audit, nhưng mọi cảnh báo/digest
+    dựa trên trường này đã bị khóa từ 14/08/2026 và không được hiển thị cho người dùng.
 
     Cache 30 phút (tồn kho không cần tươi từng phút như công nợ/doanh thu, và câu tính vận tốc bán
     6 tháng khá nặng — không nên chạy lại mỗi lần digest/alert gọi tới).
@@ -971,6 +971,15 @@ def _last_complete_data_day():
     liệu suốt ngày / sync chưa bắt kịp cuối ngày — xác minh thực tế 08/07/2026: ngày mới nhất chỉ
     16/~135 nhân viên phát sinh hóa đơn so với ngày liền trước có 135 người).
     None nếu chưa có dữ liệu hóa đơn nào. 20/07/2026: Bravo trực tiếp, bỏ hẳn nhánh Supabase.
+
+    20/08/2026 (thực tế, phát hiện qua rà lại pipeline khi ngân sách API chatbot hết): 1 hóa đơn
+    ETC thật (khách NDI00720, 7.606.900đ, đã có trong vHoaDonETCTotal — không phải bản nháp) bị ghi
+    DocDate=31/08/2026 (cuối tháng, có thể do thói quen ghi ngày kỳ kế toán) trong khi hôm nay mới
+    20/08. MAX("DocDate") không lọc tương lai coi 31/08 là "ngày mới nhất", nên "ngày liền trước"
+    lại rơi ĐÚNG vào HÔM NAY — trả về đúng cái ngày dở dang mà hàm này sinh ra để tránh (xác nhận
+    hôm đó: OTC 306 hóa đơn/ETC 40, thấp hơn 2 ngày liền trước 395-416/45-60, mới 16h30). Chặn bằng
+    cách không cho hóa đơn ghi ngày tương lai tham gia tính "ngày mới nhất" — không đụng gì tới
+    doanh thu/view gốc, chỉ ảnh hưởng mốc "hôm nay" dùng cho alert/digest.
     """
     from sqlalchemy import text
     from src.database import _get_bravo_engine
@@ -984,9 +993,11 @@ def _last_complete_data_day():
     with engine.connect() as conn:
         overall_max_row = conn.execute(text('''
             SELECT MAX(d) FROM (
-                SELECT MAX("DocDate") AS d FROM dbo.BRV_HoaDonHdr WHERE "IsActive"=1
+                SELECT MAX("DocDate") AS d FROM dbo.BRV_HoaDonHdr
+                    WHERE "IsActive"=1 AND "DocDate" <= CAST(GETDATE() AS DATE)
                 UNION ALL
-                SELECT MAX("DocDate") FROM dbo.BRVSX_HoaDonHdr WHERE "IsActive"=1
+                SELECT MAX("DocDate") FROM dbo.BRVSX_HoaDonHdr
+                    WHERE "IsActive"=1 AND "DocDate" <= CAST(GETDATE() AS DATE)
             ) x
         ''')).fetchone()
         overall_max = overall_max_row[0] if overall_max_row else None
@@ -1094,9 +1105,16 @@ def run_smart_business_alerts():
         print("[ALERTS][smart_debt] Không có khách hàng nào nợ quá hạn vượt ngưỡng 10 triệu.")
 
     # 2. CẢNH BÁO CHÁY HÀNG TỒN KHO (Inventory Out-of-Stock Risk) — 20/07/2026: Bravo trực tiếp
+    from src.feature_policy import (
+        PREDICTIVE_INVENTORY_ALERTS_ENABLED,
+        PREDICTIVE_INVENTORY_DISABLED_LOG,
+    )
     inv_rows = []
     try:
-        inv_snapshot = get_bravo_inventory_snapshot()
+        inv_snapshot = (
+            get_bravo_inventory_snapshot()
+            if PREDICTIVE_INVENTORY_ALERTS_ENABLED else []
+        )
         inv_rows = sorted(
             [r for r in inv_snapshot if 0.0 < r.months_to_sell <= 1.0 and r.closing_qty > 0],
             key=lambda r: r.months_to_sell)[:5]
@@ -1143,7 +1161,10 @@ def run_smart_business_alerts():
             )
             record_alert_sent(alert_key, top_qty, region="Toàn quốc")
     else:
-        print("[ALERTS][smart_inventory] Không có mặt hàng nào sắp cạn (dưới 1 tháng bán).")
+        if PREDICTIVE_INVENTORY_ALERTS_ENABLED:
+            print("[ALERTS][smart_inventory] Không có mặt hàng nào sắp cạn (dưới 1 tháng bán).")
+        else:
+            print(f"[ALERTS][smart_inventory] {PREDICTIVE_INVENTORY_DISABLED_LOG}")
 
     # 3. CẢNH BÁO TIẾN ĐỘ KPI DOANH SỐ THẤP (Low sales target progress) — Bravo trước (TDV), Supabase dự phòng
     kpi_rows = []
@@ -1770,6 +1791,14 @@ def check_dead_stock_alert():
     này (lọc theo closing_value > ngưỡng) sẽ KHÔNG bao giờ bắn cho tới khi có nguồn đó. Đây là gap
     có từ trước, không phải lỗi phát sinh từ lần sửa này.
     """
+    from src.feature_policy import (
+        PREDICTIVE_INVENTORY_ALERTS_ENABLED,
+        PREDICTIVE_INVENTORY_DISABLED_LOG,
+    )
+    if not PREDICTIVE_INVENTORY_ALERTS_ENABLED:
+        print(f"[ALERTS][dead_stock] {PREDICTIVE_INVENTORY_DISABLED_LOG}")
+        return
+
     dead_months = float(_biz_threshold('dead_stock_months', 12.0))
     min_value = float(_biz_threshold('dead_stock_min_value', 50000000))
     try:
@@ -1962,11 +1991,17 @@ def check_revenue_concentration_alert():
         if engine is None:
             raise RuntimeError("Chưa cấu hình BRAVO_SQL_* — không có nguồn nào khác cho concentration.")
         # TOP (:n) cần ngoặc vì n là bind param, không phải literal.
+        # 20/08/2026: lọc DocDate <= hôm nay trước khi lấy MAX — 1 hóa đơn ETC thật ghi ngày cuối
+        # tháng (xem _last_complete_data_day) đã chứng minh dữ liệu có hóa đơn ghi ngày tương lai;
+        # nếu rơi sang THÁNG sau, khối "mx" sẽ coi tháng đó là "tháng hiện tại" dù gần như trống,
+        # khiến % tập trung khách hàng bị thổi phồng giả (vd top 3 khách = gần 100% doanh thu).
         sql = text(f'''
             WITH mx AS (
-                SELECT 'OTC' AS channel, DATEFROMPARTS(YEAR(MAX(DocDate)), MONTH(MAX(DocDate)), 1) AS m FROM dbo.vHoaDonTotal
+                SELECT 'OTC' AS channel, DATEFROMPARTS(YEAR(MAX(DocDate)), MONTH(MAX(DocDate)), 1) AS m
+                    FROM dbo.vHoaDonTotal WHERE DocDate <= CAST(GETDATE() AS DATE)
                 UNION ALL
-                SELECT 'ETC', DATEFROMPARTS(YEAR(MAX(DocDate)), MONTH(MAX(DocDate)), 1) FROM dbo.vHoaDonETCTotal
+                SELECT 'ETC', DATEFROMPARTS(YEAR(MAX(DocDate)), MONTH(MAX(DocDate)), 1)
+                    FROM dbo.vHoaDonETCTotal WHERE DocDate <= CAST(GETDATE() AS DATE)
             ),
             cm AS (
                 SELECT 'OTC' AS channel, v.CustomerCode AS cc, SUM(v.Amount9) AS rev
@@ -2305,9 +2340,12 @@ def check_daily_kpi_pace_alert():
             raise RuntimeError("Không có Bravo engine")
         with bravo_engine.connect() as conn:
             # Dùng ngày LIỀN TRƯỚC ngày mới nhất có dữ liệu — cùng lý do đã ghi ở bản Supabase cũ
-            # (ngày mới nhất luôn có thể chưa đồng bộ xong).
+            # (ngày mới nhất luôn có thể chưa đồng bộ xong). 20/08/2026: chặn hóa đơn ghi ngày
+            # tương lai (xác nhận thực tế 1 hóa đơn ETC ghi DocDate cuối tháng làm hỏng đúng phép
+            # tính này ở _last_complete_data_day() — cùng 1 lỗi, chỗ này copy tay riêng cho OTC nên
+            # không tự động ăn theo bản sửa kia, phải chặn lại ở đây).
             overall_max_row = conn.execute(text(
-                'SELECT MAX([DocDate]) FROM [BRV_HoaDonHdr] WHERE [IsActive]=1'
+                'SELECT MAX([DocDate]) FROM [BRV_HoaDonHdr] WHERE [IsActive]=1 AND [DocDate] <= CAST(GETDATE() AS DATE)'
             )).fetchone()
             overall_max = overall_max_row[0] if overall_max_row else None
             if not overall_max:

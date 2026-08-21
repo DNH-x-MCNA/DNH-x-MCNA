@@ -138,6 +138,13 @@ def _get_period_warning_alerts(start_dt, end_dt, region=None, channel=None):
                 "issue": r[4],
                 "channel": r[5] if has_channel and len(r) > 5 else None
             }
+            # Khong de canh bao du doan da gui truoc ngay 14/08/2026 lot vao
+            # digest moi sau khi tinh nang da bi tat.
+            if item["alert_name"] in {
+                "CẢNH BÁO NGUY CƠ ĐỨT HÀNG (TOP 5)",
+                "CẢNH BÁO TỒN KHO CHẾT / BÁN CHẬM",
+            }:
+                continue
             if channel and item["channel"] and item["channel"] not in (channel, "OTC + ETC", "Multi"):
                 continue
             results.append(item)
@@ -662,7 +669,13 @@ _HIGHLIGHT_LABELS = {
 # nghiệp vụ; sales_kpi_insights_report chỉ là thông báo "đã gửi báo cáo định kỳ" (status luôn
 # "Đã gửi"), không phản ánh bất thường gì — liệt kê chung với các cảnh báo thật (nợ quá hạn, khách
 # rời bỏ...) sẽ làm loãng phần nội dung thực sự đáng chú ý.
-_HIGHLIGHT_EXCLUDE_PREFIXES = {"data_sanity_zero", "etl_stale", "sales_kpi_insights_report"}
+_HIGHLIGHT_EXCLUDE_PREFIXES = {
+    "data_sanity_zero",
+    "etl_stale",
+    "sales_kpi_insights_report",
+    "smart_inventory_depletion_top5",
+    "dead_stock_top10",
+}
 
 def _highlight_matches_channel(alert_key, channel):
     """17/07/2026: True nếu highlight này nên hiện cho audience đang lọc theo `channel` (None =
@@ -1248,9 +1261,13 @@ def get_digest_metrics(start_dt, end_dt, period_label, granularity=None, region=
     dead_stock_count = near_stockout_count = 0
     dead_items = []
     kpi_summary = None
+    from src.feature_policy import PREDICTIVE_INVENTORY_ALERTS_ENABLED
     try:
         from src.alerts import get_bravo_inventory_snapshot
-        inv_snapshot = get_bravo_inventory_snapshot()
+        inv_snapshot = (
+            get_bravo_inventory_snapshot()
+            if PREDICTIVE_INVENTORY_ALERTS_ENABLED else []
+        )
         if channel in ("OTC", "ETC"):
             inv_snapshot = [r for r in inv_snapshot if r.channel == channel]
 
@@ -1460,7 +1477,12 @@ def get_digest_metrics(start_dt, end_dt, period_label, granularity=None, region=
 
     # 1.3c: Cờ tường minh dead_stock_available
     show_dead_flag = config.get('report_feature_flags', {}).get('show_dead_stock', False)
-    dead_stock_available = show_dead_flag and (dead_stock_count >= 0)
+    dead_stock_available = (
+        PREDICTIVE_INVENTORY_ALERTS_ENABLED
+        and show_dead_flag
+        and (dead_stock_count >= 0)
+    )
+    near_stockout_available = PREDICTIVE_INVENTORY_ALERTS_ENABLED
 
     # 1.4c: Warning alerts trong kỳ
     warning_alerts = _get_period_warning_alerts(start_dt, end_dt, region=region, channel=channel)
@@ -1486,6 +1508,7 @@ def get_digest_metrics(start_dt, end_dt, period_label, granularity=None, region=
         "inventory": {
             "dead_stock_available": dead_stock_available,
             "dead_stock_count": dead_stock_count,
+            "near_stockout_available": near_stockout_available,
             "near_stockout_count": near_stockout_count,
             "dead_stock_items": [
                 {"item_code": r.item_code, "item_name": r.item_name, "closing_value": round(float(r.closing_value), 2),

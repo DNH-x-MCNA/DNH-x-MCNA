@@ -106,13 +106,16 @@ def check_qlv(qlv_code, tdv_codes, area_code, channel_scope):
     d = dict(date_from=DATE_FROM, date_to=DATE_TO)
 
     # --- (1) QLV co ra so khong ---
-    dms_ids = rt._get_team_dms_ids(qlv_code)
-    if not dms_ids:
+    # 13/08: _get_team_dms_ids() gio NEM KhongXacDinhDuocDoi thay vi tra [] -> tool bao ro ly do
+    # chu khong am tham tra 0d. Van la van de can bao, nhung KHAC HAN ve muc do nguy hiem.
+    try:
+        dms_ids = rt._get_team_dms_ids(qlv_code)
+    except rt.KhongXacDinhDuocDoi as e:
         problems.append((
-            "KHONG RA SO",
-            f"_get_team_dms_ids() rong -> menh de ' AND 1=0' -> ca 5 tool deu tra 0d cho QLV nay "
-            f"MA KHONG BAO LOI (revenue_tree lai thay {len(tdv_codes)} TDV). "
-            f"Nguyen nhan: org_hierarchy.qlv_zones() khong suy ra duoc zone phu trach."))
+            "KHONG XAC DINH DUOC DOI",
+            f"Tool BAO RO thay vi tra 0d am tham (day la hanh vi dung). Nhung van chua dung duoc: "
+            f"revenue_tree thay {len(tdv_codes)} TDV ma khong ai bao cao len ma nay qua manager_code. "
+            f"Can DNH kiem ManagerCode tren Bravo. Thong diep: {str(e)[:120]}"))
         return problems, 0.0
 
     # --- (2) 2 duong suy luan doi co khop khong ---
@@ -232,24 +235,24 @@ def main():
         for kind, msg in problems:
             print(f"    [{kind}] {msg}")
         print()
-        if "KHONG RA SO" in kinds:
+        if "KHONG XAC DINH DUOC DOI" in kinds:
             zero_qlv.append((qlv_code, qlv_name, len(tdv_codes)))
         if "LECH DOI HINH" in kinds:
             mismatch_qlv.append((qlv_code, qlv_name))
-        if kinds - {"KHONG RA SO", "LECH DOI HINH"}:
+        if kinds - {"KHONG XAC DINH DUOC DOI", "LECH DOI HINH"}:
             tool_bug_qlv.append((qlv_code, qlv_name))
 
     print("=" * 72)
     print("KET LUAN")
     print(f"  QLV khop hoan toan            : {len(ok_qlv)}/{len(qlv_list)}")
-    print(f"  QLV KHONG RA SO (tra 0d cam)  : {len(zero_qlv)}/{len(qlv_list)}")
+    print(f"  QLV khong xac dinh duoc doi   : {len(zero_qlv)}/{len(qlv_list)}")
     print(f"  QLV lech doi hinh             : {len(mismatch_qlv)}/{len(qlv_list)}")
     print(f"  QLV lech GIUA CAC TOOL        : {len(tool_bug_qlv)}/{len(qlv_list)}")
     if no_acc:
         print(f"  (QLV chua co tai khoan chatbot: {len(no_acc)} - khong demo duoc bang vai QLV)")
 
     if zero_qlv:
-        print("\n  >>> NGHIEM TRONG NHAT - cac QLV nay hoi gi cung ra 0 dong, khong canh bao:")
+        print("\n  >>> Cac QLV nay chua hoi duoc gi (tool BAO RO ly do, khong tra 0d am tham):")
         for c, n, k in zero_qlv:
             print(f"      {c:<14} {n}  ({k} TDV theo cay to chuc)")
         print("      TUYET DOI khong dung cac tai khoan nay de demo cho den khi sua xong.")

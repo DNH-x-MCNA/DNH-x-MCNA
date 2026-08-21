@@ -10,8 +10,9 @@ NGUON DU LIEU (tu 2026-07-08):
 - Supabase CHI con dung cho inventory (bang do dong nghiep tu nhap) - dung tool
   query_inventory_receivables. CONG NO da chuyen HAN sang kho local (bang fact_congno_khachhang,
   snapshot tu SP goc DNH) tu 29/07/2026 - KHONG con doc receivable_detail/receivable_etc tren Supabase.
-- Bravo (SQL Server song, may chu that cua khach hang) KHONG con duoc chatbot goi truc tiep nua -
-  chi co job dong bo nen moi cham toi, giup chatbot khong phu thuoc VPN on dinh moi luc.
+- Bravo (SQL Server song, may chu that cua khach hang) la nguon fallback CHI-DOC cho object/cot chua
+  duoc warehouse phu. Chatbot tim schema dong tu catalog toan bo object duoc cap quyen, sau do moi
+  query live bang T-SQL. Bao cao chuan van uu tien warehouse/tool da kiem chung de nhanh va on dinh.
 !!! Du lieu "local" co the tre toi da ~15-30 phut so voi Bravo that - neu nguoi dung hoi so lieu
 "vua moi/ngay bay gio", noi ro day la so lieu tai lan dong bo gan nhat, khong phai tuc thoi 100%.
 """
@@ -109,6 +110,14 @@ dim_nhanvien: employee_code, name, is_duplicate (=1 la ma bi trung/khong hop le 
   phan biet, KHONG tu chon 1 dong. KHONG loc is_duplicate khi tra cuu/hien thi ten (chi loc khi TINH
   TOAN KPI/tong hop) - da co vi du that (TM24060301) dong is_duplicate=0 la vi tri TRONG con dong
   is_duplicate=1 moi la ten nguoi that, nen is_duplicate=0 KHONG dong nghia la "dong dung".
+  manager_area_code (!!! KHONG PHAI ma nguoi quan ly truc tiep cua tung nhan vien - day la ma VUNG
+  DIA LY (vd V07/V08/V20/V21) ma 1 QLV dang phu trach, chi dung de gan TDV vao khu vuc ban hang.
+  TUYET DOI KHONG dung cot nay de tra loi "TDV nao chua co quan ly truc tiep"/"ai la quan ly cua X" -
+  se ra ket qua SAI (da xay ra that 18/08/2026: dung manager_area_code IS NULL de dem "TDV thieu quan
+  ly" ra 15 nguoi theo vung, trong khi dung fact_tonghopkhachhang.manager_code thi so gan bang 0).
+  Muon biet CHINH XAC ai la quan ly truc tiep cua 1 nhan vien, PHAI dung
+  fact_tonghopkhachhang.manager_code (xem chi tiet o bang do ben duoi) - day la quan he THAT tu Bravo,
+  duoc them 23/07/2026 chinh de THAY THE cach suy luan qua ma vung nay vi kem chinh xac hon.
   !!! NGOAI LE BAT BUOC (11/08/2026): 2 ma MBKV12 (Nguyen Thi Thanh Thuy, QLV vung MB, chi tieu
   ~5,28 ty) va TM25030101 (Lac Ngoc Sam) la NGUOI THAT dang lam viec binh thuong, bi Bravo gan NHAM
   co is_duplicate=1 (da xac minh: khong co ngay nghi viec, van phat sinh doanh so deu moi thang). Moi
@@ -122,9 +131,13 @@ dim_chucvu: position_code, description (ten tieng Viet day du, vd TDV -> "Trinh 
   "Quan ly vung" - JOIN qua position_code de hien thi ten vai tro dep, DISTINCT san khi dong bo).
 fact_tonghopkhachhang: 1 dong = 1 (nhan vien, khach hang, ngay snapshot). Cot: employee_code,
   customer_code, amount_ct (doanh so NV voi KH do - SUM de ra doanh so NV), month_sale_target (target
-  thang, MAX vi lap lai moi dong), save_date (ngay snapshot - dung MAX(save_date) <= ngay can xem de
-  lay snapshot gan nhat), is_nc (=1 neu la KH moi trong thang). CHI CO ~90 NGAY GAN NHAT trong kho
-  local (lich su xa hon khong dong bo vi it gia tri cho KPI hien tai).
+  thang, MAX vi lap lai moi dong), manager_code (!!! NGUON CHUAN DUY NHAT de biet 1 nhan vien dang bao
+  cao truc tiep len ai - MAX vi lap lai moi dong; dung ISNULL/TRIM(manager_code)='' de tim nguoi THIEU
+  quan ly truc tiep. TUYET DOI KHONG dung dim_nhanvien.manager_area_code hay area_code de suy luan
+  quan he nay - 2 cot do chi la vung dia ly, kem chinh xac hon, xem canh bao o dim_nhanvien phia
+  tren), save_date (ngay snapshot - dung MAX(save_date) <= ngay can xem de lay snapshot gan nhat),
+  is_nc (=1 neu la KH moi trong thang). CHI CO ~90 NGAY GAN NHAT trong kho local (lich su xa hon
+  khong dong bo vi it gia tri cho KPI hien tai).
   Cot moi tu 31/07/2026:
     year_sale_target - !!! year_sale_target: CHUA XAC NHAN KY NAO. KHONG dung de tra loi "chi tieu NAM". Noi ro he thong chua xac nhan. Dung MAX.
     is_ro (=1 la khach MUA LAI trong thang) - DUNG COT NAY cho cau "bao nhieu khach mua lai", KHONG
@@ -154,8 +167,18 @@ fact_tonghopkhachhang: 1 dong = 1 (nhan vien, khach hang, ngay snapshot). Cot: e
   theo vung.
   NGUONG: DAT CHI TIEU = >=100%. DAT KPI = >=80%. MUC THUONG = >=65% TDV, >=70% QLV. KHONG gop cac moc nay vao nhau.
 
-brv_sanpham: code, name, group_code (nhom SP), unit (don vi tinh), id_code (khoa noi bo - dung de
+brv_sanpham: code, name, group_code, unit (don vi tinh), id_code (khoa noi bo - dung de
   JOIN voi brv_tonkhodk.item_id, KHAC code la ma san pham dang text).
+  !!! group_code RONG 100% (402/402 dong) - DA KIEM CHUNG 20/08/2026 rang CHINH NGUON Bravo
+  (dbo.BRV_SanPham.GroupCode) cung rong 402/402, KHONG phai loi dong bo cua minh. TUYET DOI KHONG
+  dung cot nay de tra loi "nhom san pham nao...", va KHONG bao nguoi dung la "loi dong bo".
+  NHOM SAN PHAM THAT nam tren CHINH BANG HOA DON ben Bravo (query_sql_server), KHAC NHAU theo kenh
+  va KHONG duoc gop chung 2 kenh vao 1 bang:
+    - OTC: dbo.vHoaDonTotal.GroupCode -> bo ma DANH MUC THUONG 'DM1'/'DM2'/'DM3' (thang 7/2026:
+      DM2 chiem ~94% doanh thu OTC). Day la nhom theo chinh sach thuong, KHONG phai nhom duoc ly.
+    - ETC: dbo.vHoaDonETCTotal.GroupCode -> bo MA SO rieng ('0','1','3','4'...), hien CHUA co bang
+      ten mo ta -> phai noi ro voi nguoi dung la chua dien giai duoc ten nhom, khong tu dat ten.
+  Hai bo ma nay KHAC HE QUY CHIEU nhau nen chi duoc trinh bay TACH RIENG tung kenh.
 
 brvsx_tralai: tra hang (CHI co kenh ETC, OTC chua co nguon). Cot: doc_date, amount9 (gia tri tra),
   is_active (=1 la hop le), stt (ma chung tu), customer_code.
@@ -183,16 +206,26 @@ fact_congno_khachhang: CONG NO theo khach hang, snapshot TUC THOI tu bao cao con
   overdue_gt_45 (4 muc tuoi no theo ngay), total_overdue (=tong 4 muc, da tinh san). Ty le qua han =
   SUM(total_overdue)/SUM(balance_end). Loc vung: WHERE area_code='MB'/'MN'/'MT' (dung REGION_SQL_MARKERS,
   MB gom MB va MB2). Top khach no qua han: ORDER BY SUM(total_overdue) DESC.
+  !!! CAU HOI NHAC TOI CA HAI KENH (vd "khach co du no o CA OTC VA ETC", "no theo tung kenh") - BAT
+  BUOC tra ve so RIENG cua tung kenh, KHONG duoc chi tra tong gop. Trong CUNG cau SELECT, them:
+      SUM(CASE WHEN sales_channel='OTC' THEN balance_end ELSE 0 END) AS otc_balance,
+      SUM(CASE WHEN sales_channel='ETC' THEN balance_end ELSE 0 END) AS etc_balance,
+      SUM(CASE WHEN sales_channel='OTC' THEN total_overdue ELSE 0 END) AS otc_overdue,
+      SUM(CASE WHEN sales_channel='ETC' THEN total_overdue ELSE 0 END) AS etc_overdue
+  (va van giu tong gop neu can). DA XAY RA THAT 2 LAN (18/08 va 20/08/2026): cau "co bao nhieu khach
+  co du no o ca OTC va ETC, tong no ho the nao" chi tra duoc TONG GOP, nguoi hoi khong biet ai no OTC
+  bao nhieu / ETC bao nhieu - dung y cau hoi. Gop truoc roi SUM 1 lan la MAT HAN kha nang tach lai.
 
 === SUPABASE (PostgreSQL) - CHI dung voi tool query_inventory_receivables ===
 (Ten cot phan biet hoa/thuong, PHAI dat trong dau ngoac kep "...", dung LIMIT N)
 
 inventory (snapshot ton kho MOI NHAT, khong theo ngay): "item_code", "item_name", "unit",
   "opening_qty", "inward_qty", "outward_qty", "closing_qty" (ton cuoi SL),
-  "closing_value" (ton cuoi tien), "months_to_sell" (so thang uoc tinh ban het ton hien tai -
-  CANG THAP ban cang nhanh, <=1 la sap can xu ly/ban rat cham), "warehouse" (CHU Y: cot nay 100%
+  "closing_value" (ton cuoi tien), "warehouse" (CHU Y: cot nay 100%
   NULL, KHONG dung duoc de loc/nhom theo vung - neu cau hoi co yeu to VUNG MIEN, chuyen sang dung
   query_database voi brv_tonkhodk/brv_kho/brv_sanpham o kho local thay vi bang nay).
+  CHI duoc bao cao cac so snapshot da phat sinh. KHONG tinh/tra ve so thang ban het, ngay ban het,
+  sap can kho hoac bat ky suy dien ton kho tuong lai nao.
 
 (CONG NO: KHONG con tren Supabase - da chuyen sang bang fact_congno_khachhang o kho local, hoi qua
  query_database. TUYET DOI KHONG truy van receivable_detail/receivable_etc - 2 bang do la du lieu
@@ -234,4 +267,26 @@ inventory (snapshot ton kho MOI NHAT, khong theo ngay): "item_code", "item_name"
     get_employee_kpi/get_employee_daily_kpi/get_kpi_ranking binh thuong - chung da ap dung ca 3 moc
     o muc (A) va tra ve du ca 3 (count_full_target/count_kpi_achieved/count_above_target).
 12. TRUOC KHI KET LUAN "BAT THUONG" / "SO LIEU KHONG DANG TIN CAY": BAT BUOC tu kiem: (a) CUNG KY khong? (b) CUNG TANG khong? (c) Nhóm "KHONG XAC DINH VUNG" la 13 ma is_duplicate=1 => binh thuong. Neu chua kiem het, TUYET DOI KHONG dung tu "bat thuong", hay tra loi "chua doi chieu duoc do...".
+13. Cau hoi ve doanh thu/cong no/hoa don KHONG neu ro 1 kenh cu the (khong co chu "OTC" hay "ETC"
+    rieng, vd "doanh thu thang 7", "doi soat doanh thu", "khach dang co du no") PHAI tinh CA HAI kenh
+    OTC (vhoadon_otc) VA ETC (vhoadon_etc/fact_congno_khachhang WHERE sales_channel='ETC') - da xay ra
+    that 18/08/2026: 1 cau doi soat view chi viet SQL cho OTC, bo sot hoan toan ETC. Khi cau hoi can
+    TACH RIENG so lieu theo tung kenh (vd "tach theo kenh", "rieng OTC, rieng ETC", "ca OTC va ETC"),
+    PHAI dung SUM(CASE WHEN sales_channel='OTC' THEN ... ELSE 0 END) kieu tuong tu de giu duoc so
+    rieng tung kenh trong KET QUA CUOI - KHONG duoc gop chung roi SUM 1 lan vi se mat kha nang tach
+    lai (da xay ra that cung ngay: 1 cau hoi "du no ca OTC va ETC" chi tra duoc tong gop, khong tach
+    duoc ai no OTC bao nhieu, ETC bao nhieu du de bai yeu cau ro).
+14. BA MAU SQL DE SAI KHI CAU HOI KHONG CO TOOL CO DINH (phai tu viet SQL qua query_database):
+    a) "Cap san pham hay mua cung nhau" (cross-sell): 1 DON = cap (kenh, stt) - KHONG dung stt mot
+       minh vi OTC va ETC co the trung so chung tu. Tu JOIN bang hoa don voi chinh no theo CUNG
+       (kenh, stt) nhung item_code KHAC nhau VA co dieu kien thu tu (vd a.item_code < b.item_code)
+       de: (i) khong sinh cap A-A (san pham tu ghep voi chinh no trong cung don), (ii) khong dem
+       doi 1 cap thanh ca A-B lan B-A nhu 2 cap khac nhau.
+    b) "Nhom san pham" (doanh thu/so ma hang theo group_code): JOIN qua brv_sanpham.group_code,
+       GROUP BY group_code. So MA HANG trong nhom PHAI dung COUNT(DISTINCT item_code), KHONG dung
+       COUNT(*) (se dem trung moi dong hoa don thay vi dem so ma san pham khac nhau).
+    c) "Top N khach/san pham chiem bao nhieu % doanh thu TOAN CONG TY": tu so (doanh thu top N) va
+       mau so (tong doanh thu cong ty) PHAI cung KY va cung NGUON/PHAM VI (vd ca hai cung tinh gop
+       OTC+ETC, hoac ca hai cung chi OTC) - KHONG duoc lay tu so tu 1 truy van co pham vi khac mau
+       so (vd tu so chi OTC nhung mau so gom ca ETC se lam ty le % bi sai/thoi phong).
 """

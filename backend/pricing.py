@@ -38,7 +38,48 @@ MODEL_PRICING = {
         "cache_read": 0.50,
         "cache_write": 6.25,
     },
+
+    # DeepSeek V4 - bang gia cong bo chinh thuc, kiem tra 18/08/2026 (USD / 1M token).
+    # Khong dung bang gia "cao diem" cu: no cao hon gia cong bo 3-12 lan, lam dashboard va so sanh
+    # nha cung cap bi sai. DeepSeek khong tinh rieng cache write; cache miss da bao gom khoan nay.
+    "deepseek-v4-pro": {
+        "input": 0.435,       # cache miss
+        "output": 0.870,
+        "cache_read": 0.003625,  # cache hit
+        "cache_write": 0.0,
+    },
+    "deepseek-v4-flash": {
+        "input": 0.140,       # cache miss
+        "output": 0.280,
+        "cache_read": 0.0028, # cache hit
+        "cache_write": 0.0,
+    },
 }
+
+# Ghi version vao tung dong cost log de co the biet CHINH XAC dong nao tinh theo bang gia nao.
+# Lich su DeepSeek truoc 18/08 phai duoc tinh lai bang scripts/reprice_cost_log.py; khong duoc
+# tu y coi cost_usd cu la "chi phi thuc te" sau khi bang gia nguon da duoc sua.
+PRICING_VERSION_BY_PREFIX = {
+    "claude-": "anthropic-intro-2026-08-31",
+    "deepseek-": "deepseek-official-2026-08-18",
+}
+
+
+def pricing_version_for_model(model: str) -> str:
+    normalized = (model or "").strip().lower()
+    for prefix, version in PRICING_VERSION_BY_PREFIX.items():
+        if normalized.startswith(prefix):
+            return version
+    return "unpriced"
+
+
+def pricing_source_for_model(model: str) -> str:
+    normalized = (model or "").strip().lower()
+    if normalized.startswith("deepseek-"):
+        return "DeepSeek official pricing checked 2026-08-18"
+    if normalized.startswith("claude-"):
+        return "Anthropic pricing (introductory Sonnet 5 where applicable)"
+    return "No configured price"
 
 # Ty gia quy doi USD -> VND hien thi tren dashboard va bao cao. NGUON DUY NHAT - truoc day so 25400
 # bi chep cung o 8 cho trong 4 file (main.py x4, report_templates.py, audit_cost.py, page.tsx), sua
@@ -52,10 +93,31 @@ MONTHLY_BUDGET_USD = 50.00        # tran ngan sach thang nguoi dung dat (24/07/2
 MONTHLY_WARN_RATIO = 0.8          # canh bao SOM khi da dung 80% ngan sach ($40)
 
 
+def api_provider_for_model(model: str) -> str:
+    """Tra ten nha cung cap de hien thi; chi suy ra tu model da ghi trong cost log."""
+    normalized = (model or "").strip().lower()
+    if normalized.startswith("deepseek-"):
+        return "DeepSeek"
+    if normalized.startswith("claude-"):
+        return "Anthropic"
+    if normalized.startswith("gemini-"):
+        return "Google Gemini"
+    if normalized.startswith(("gpt-", "o1", "o3", "o4")):
+        return "OpenAI"
+    return "Không xác định" if not normalized else normalized
+
+
 def compute_cost_usd(model: str, input_tokens: int, output_tokens: int,
                       cache_read_tokens: int = 0, cache_write_tokens: int = 0) -> float:
     p = MODEL_PRICING.get(model)
     if not p:
+        # 13/08/2026: truoc day lang le tra 0.0 - doi model ma quen them gia thi MOI bao cao chi phi
+        # deu ra 0d, trong y het "dung it tien", khong ai nghi la thieu bang gia. Gio ghi canh bao
+        # ra log de con biet. Van tra 0.0 chu KHONG nem loi: chi phi sai khong duoc lam vo cau tra loi.
+        import logging
+        logging.getLogger(__name__).warning(
+            "Khong co bang gia cho model %r - moi chi phi cua model nay se ghi 0d. "
+            "Them vao MODEL_PRICING (backend/pricing.py) truoc khi tin bao cao chi phi.", model)
         return 0.0
     return (
         (input_tokens or 0) / 1_000_000 * p["input"]

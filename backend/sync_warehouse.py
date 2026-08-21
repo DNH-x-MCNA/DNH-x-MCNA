@@ -19,12 +19,15 @@ except Exception:
     pass
 
 def load_env():
-    env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
-    for line in open(env_path, encoding="utf-8"):
-        line = line.strip()
-        if line and not line.startswith("#") and "=" in line:
-            k, v = line.split("=", 1)
-            os.environ.setdefault(k.strip(), v.strip())
+    backend_dir = os.path.dirname(os.path.abspath(__file__))
+    for env_path in (os.path.join(backend_dir, ".env"), os.path.join(os.path.dirname(backend_dir), ".env")):
+        if not os.path.exists(env_path):
+            continue
+        for line in open(env_path, encoding="utf-8"):
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                k, v = line.split("=", 1)
+                os.environ.setdefault(k.strip(), v.strip())
 load_env()
 
 import decimal
@@ -381,65 +384,25 @@ def sync_fact_congno():
         chatbot mat kha nang tra loi cong no ma khong ai biet. 0 dong -> GIU snapshot cu, raise loi.
       - BEGIN IMMEDIATE + PRAGMA busy_timeout - backend doc song song, tranh 'database is locked'.
     """
-    from region_map import region_from_customer_code
+    from debt_source import fetch_debt_snapshot
 
-    def _norm_area(raw_area, customer_code):
-        # SP dung DIM_TinhThanhPho.AreaCode2 (MB1/MB2/MN/MT); phan con lai cua he thong theo quy uoc
-        # MB/MB2/MN/MT. Chi 'MB1' lech -> map ve 'MB'. NULL -> suy tu tien to ma KH (cuu khach "mo coi").
-        if raw_area == "MB1":
-            return "MB"
-        if raw_area:
-            return raw_area
-        return region_from_customer_code(customer_code)
-
-    today = dt.datetime.now()
-    d1 = dt.datetime(today.year, 1, 1).strftime("%Y-%m-%d")   # dau nam - khong anh huong CloseBal/tuoi no cuoi
-    d2 = today.strftime("%Y-%m-%d")
-
-    eng = _get_engine("bravo")
-    raw = eng.raw_connection()
-    try:
-        cur = raw.cursor()
-        cur.execute(
-            "EXEC dbo.usp_DeptAccDueDate_GetData "
-            "@_DocDate1=?, @_DocDate2=?, @_Period1=?, @_Period2=?, @_RepType=?, @_IsPrepaymentInclude=?",
-            d1, d2, 7, 15, 1, 1)
-        cols, data = None, None
-        while True:
-            if cur.description is not None:
-                c = [dsc[0] for dsc in cur.description]
-                if "CustomerCode" in c and "OverDueAmount" in c:
-                    cols = c
-                    data = cur.fetchall()
-                    break
-            if not cur.nextset():
-                break
-        if cols is None:
-            raise RuntimeError("SP usp_DeptAccDueDate_GetData khong tra ve result set cong no mong doi.")
-        ix = {name: i for i, name in enumerate(cols)}
-
-        def _f(v):
-            return float(v) if isinstance(v, decimal.Decimal) else (v if v is not None else 0.0)
-
-        snapshot_date = today.strftime("%Y-%m-%d")
-        snapshot_at = today.isoformat()
-        prepared = []
-        for rec in data:
-            b1 = _f(rec[ix["CloseBal5"]]); b2 = _f(rec[ix["CloseBal6"]])
-            b3 = _f(rec[ix["CloseBal7"]]); b4 = _f(rec[ix["CloseBal8"]])
-            prepared.append((
-                snapshot_date, snapshot_at,
-                rec[ix["CustomerCode"]], rec[ix["CustomerName"]],
-                "OTC" if rec[ix["ClassCode"]] == "TM" else "ETC",
-                _norm_area(rec[ix["AreaCode"]], rec[ix["CustomerCode"]]),
-                _f(rec[ix["CloseBal"]]), b1, b2, b3, b4, b1 + b2 + b3 + b4,
-            ))
-    finally:
-        try:
-            raw.rollback()  # bo moi thay doi temp-table, KHONG dung du lieu that
-        except Exception:
-            pass
-        raw.close()
+    source = fetch_debt_snapshot()
+    snapshot_date = source.as_of_date
+    snapshot_at = source.executed_at
+    prepared = [(
+        snapshot_date,
+        snapshot_at,
+        row["customer_code"],
+        row["customer_name"],
+        row["sales_channel"],
+        row["area_code"],
+        row["balance_end"],
+        row["overdue_1_15"],
+        row["overdue_15_30"],
+        row["overdue_30_45"],
+        row["overdue_gt_45"],
+        row["total_overdue"],
+    ) for row in source.rows]
 
     # CHOT AN TOAN 1: khong bao gio ghi de bang rong - giu snapshot cu, bao loi len tren.
     if not prepared:

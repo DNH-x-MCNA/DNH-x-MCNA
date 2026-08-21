@@ -10,7 +10,9 @@ MONTHLY_BUDGET_USD (nguoi dung dat $50/thang, 24/07/2026) - ghi canh bao rieng k
 sach. Van CHI la canh bao (ghi log/file), KHONG tu dong chan chatbot - giu dung nguyen tac cu.
 """
 import os, json, datetime as dt
-from pricing import compute_cost_usd, HARD_COST_LIMIT_USD, MONTHLY_BUDGET_USD, MONTHLY_WARN_RATIO
+from pricing import (compute_cost_usd, HARD_COST_LIMIT_USD, MONTHLY_BUDGET_USD,
+                     MONTHLY_WARN_RATIO, pricing_source_for_model, pricing_version_for_model)
+from llm_provider import current_info
 
 LOG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs", "cost_log.jsonl")
 MONTHLY_ALERT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs", "monthly_cost_alert.txt")
@@ -44,11 +46,18 @@ def compute_and_log_cost(usage, model: str, question: str = "", session_id: str 
         "username": username or "",
         "question_preview": (question or "")[:120],
         "model": model,
+        # 17/08/2026: ghi kem nha cung cap + nhan key. Trong cung 1 ngay co the chay nhieu nha cung
+        # cap (dang thu DeepSeek song song Claude) - gop chung mot cuc thi khong biet tien cua ben nao.
+        # api_key_id chi la nhan de PHAN BIET, khong khoi phuc duoc key (xem llm_provider.py).
+        **current_info(model),
         "input_tokens": input_tokens,
         "output_tokens": output_tokens,
         "cache_read_tokens": cache_read,
         "cache_write_tokens": cache_write,
         "cost_usd": round(cost, 6),
+        # Khong suy dien bang gia cua dong cu theo cau hinh hien tai: luu version/nguon ngay luc tinh.
+        "pricing_version": pricing_version_for_model(model),
+        "pricing_source": pricing_source_for_model(model),
     }
     if cost > HARD_COST_LIMIT_USD:
         entry["warn"] = f"Vuot tran ${HARD_COST_LIMIT_USD}/luot"
