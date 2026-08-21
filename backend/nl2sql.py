@@ -280,6 +280,26 @@ TEMPLATE_TOOLS = [
         },
     },
     {
+        "name": "get_revenue_ytd_cumulative",
+        "description": "LUY KE doanh thu tu dau ky (mac dinh dau nam duong lich) den 1 thang chi dinh, SO "
+                        "SANH TU DONG qua nhieu nam gan nhat trong CUNG 1 lan goi - dung cho cau hoi 'luy ke "
+                        "tu dau nam den nay', 'tu thang 1 den thang 7 nam nay so voi cung ky 3 nam gan nhat', "
+                        "'luy ke quy 1-2 nam nay tang/giam bao nhieu so nam ngoai'. KHAC voi compare_periods "
+                        "(chi so 2 khoang RIENG LE do AI tu chi dinh ngay, de sai/lech khi phai tu tinh ngay "
+                        "cho nhieu nam) - tool nay TU DONG dong bo cung khoang thang qua N nam lien tiep, UU "
+                        "TIEN dung khi cau hoi noi 'luy ke' hoac so sanh HON 2 ky cung luc. Day la du lieu "
+                        "THUC TE da phat sinh (khong phai du bao) nen luon tra loi duoc, khong bi chan.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "year_month_to": {"type": "string", "description": "YYYY-MM, thang KET THUC luy ke (nam cua thang nay la nam gan nhat trong so sanh)"},
+                "from_month": {"type": "string", "description": "MM, thang BAT DAU luy ke trong nam (mac dinh '01' = tu dau nam duong lich), ap dung chung cho moi nam"},
+                "years_back": {"type": "integer", "description": "So nam gan nhat can so sanh ke ca nam cua year_month_to (mac dinh 3)"},
+            },
+            "required": ["year_month_to"],
+        },
+    },
+    {
         "name": "get_customer_detail",
         "description": "Chi tiet 1 khach hang cu the (theo ma khach hang): gop doanh thu thuc te trong "
                         "1 khoang ngay + so don hang + gia tri TB/don, CUNG LUC voi du no cuoi ky/no qua han "
@@ -911,7 +931,7 @@ QUAN TRONG VE CHON TOOL:
   LICH SU TRUY VAN/CHI PHI AI cua chinh nguoi dang hoi, HIEU QUA CHUONG TRINH KHUYEN MAI, QUY TAC/BAC
   TIEN V15-V22-V25-ASO, THUONG KINH DOANH/PHU CAP thang cua 1 nhan vien -> BAT BUOC dung tool tuong ung
   (get_revenue_by_channel, get_top_products, get_top_customers, get_revenue_by_region, get_employee_kpi,
-  get_employee_daily_kpi, compare_periods, get_customer_detail, get_employee_directory, check_order_timing,
+  get_employee_daily_kpi, compare_periods, get_revenue_ytd_cumulative, get_customer_detail, get_employee_directory, check_order_timing,
   get_inventory_by_region, get_inventory_expiry_report, get_qlv_change_history, get_revenue_tree,
   get_kpi_ranking, get_revenue_reconciliation, get_receivables_overview, get_customer_revenue_debt_risk,
   get_audit_log, get_promotion_effectiveness, get_promotion_data_quality,

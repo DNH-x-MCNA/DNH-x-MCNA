@@ -1017,6 +1017,77 @@ def compare_periods(date_from_a: str, date_to_a: str, date_from_b: str, date_to_
     return {"period_a": a, "period_b": b, "delta": delta, "pct_change": pct_change}
 
 
+def revenue_ytd_cumulative(year_month_to: str, from_month: str = None, years_back: int = 3,
+                            scope_area_code: str = None, scope_channel: str = None,
+                            scope_employee_code: str = None) -> dict:
+    """LUY KE doanh thu tu dau ky den 1 thang chi dinh, SO SANH cung khoang do giua nhieu nam gan nhat
+    - dung khi cau hoi dang "luy ke tu thang 1 den thang 7", "so voi cung ky 3 nam gan nhat", "tu dau
+    nam den nay tang/giam bao nhieu so nam ngoai". KHAC voi compare_periods (chi so 2 khoang RIENG LE
+    do AI tu chi dinh ngay) - ham nay TU ĐỘNG dong bo cung 1 khoang thang (vd 01-07) qua N nam LIEN
+    TIEP, khong can AI tu tinh ngay cho tung nam (de sai/lech ngay khi doi nam).
+
+    year_month_to: thang KET THUC luy ke, dang YYYY-MM (vd '2026-07') - nam cua thang nay la nam GAN
+    NHAT trong so sanh, cac nam truoc do tu dong lui ve.
+    from_month: thang BAT DAU luy ke trong nam, dang MM (vd '01') - mac dinh '01' (tu dau nam duong
+    lich). Ap dung CHUNG cho moi nam trong so sanh (vd from_month='01' -> nam nao cung tinh tu thang 1).
+    years_back: so nam GAN NHAT can so sanh KE CA nam cua year_month_to (mac dinh 3, vd year_month_to=
+    '2026-07' va years_back=3 se so 2024/2025/2026, tu thang from_month den thang cua year_month_to).
+    Nam nao KHONG co du lieu (chua phat sinh, vd cong ty moi mo rong sau) se bi bo qua kem ghi chu,
+    KHONG hien 0 nhu the la that.
+
+    Day la du lieu THUC TE DA PHAT SINH (khong phai du bao) - KHONG bi chinh sach khoa tinh nang tuong
+    lai chan (xem feature_policy.py), dung tu do."""
+    if not year_month_to or len(str(year_month_to)) != 7 or str(year_month_to)[4] != "-":
+        return {"error": f"year_month_to phai o dang YYYY-MM (nhan duoc: {year_month_to})."}
+    year_to = int(str(year_month_to)[:4])
+    month_to = str(year_month_to)[5:7]
+    from_month = (from_month or "01").zfill(2)
+    if not (1 <= int(from_month) <= 12):
+        return {"error": f"from_month phai tu 01 den 12 (nhan duoc: {from_month})."}
+    if int(from_month) > int(month_to):
+        return {"error": f"from_month ({from_month}) phai <= thang cua year_month_to ({month_to})."}
+
+    years_back = max(1, min(int(years_back or 3), 10))
+    years, skipped = [], []
+    for i in range(years_back):
+        y = year_to - i
+        date_from = f"{y:04d}-{from_month}-01"
+        date_to = f"{y:04d}-{month_to}-{_last_day_of_month(y, int(month_to)):02d}"
+        r = revenue_by_channel(date_from, date_to, scope_area_code, scope_channel, scope_employee_code)
+        if r["total"]["revenue"] <= 0 and r["total"]["invoices"] == 0:
+            skipped.append(y)
+            continue
+        years.append({"year": y, "date_from": date_from, "date_to": date_to,
+                      "revenue": r["total"]["revenue"], "invoices": r["total"]["invoices"],
+                      "otc_revenue": r["otc"]["revenue"], "etc_revenue": r["etc"]["revenue"]})
+
+    # Moi nam sap xep TANG DAN theo thoi gian de tinh % tang truong giua nam lien ke (nam sau so nam
+    # truoc ngay ben canh), roi moi dao lai THANH GIAM DAN (nam gan nhat len dau) cho de doc khi tra loi.
+    years.sort(key=lambda r: r["year"])
+    for idx in range(1, len(years)):
+        prev = years[idx - 1]["revenue"]
+        years[idx]["pct_change_vs_prev_year"] = (
+            (years[idx]["revenue"] - prev) / prev * 100 if prev else None)
+    years.sort(key=lambda r: -r["year"])
+
+    result = {
+        "tu_thang": from_month, "den_thang": month_to, "cac_nam": years,
+        "data_as_of": latest_data_date(),
+    }
+    if skipped:
+        result["nam_bi_bo_qua"] = skipped
+        result["ghi_chu"] = (f"Cac nam {', '.join(str(y) for y in skipped)} KHONG co du lieu phat sinh "
+                              f"trong khoang thang {from_month}-{month_to} (co the chua kinh doanh giai "
+                              f"doan do) - da bo qua, KHONG hien nhu doanh thu 0.")
+    return result
+
+
+def _last_day_of_month(year: int, month: int) -> int:
+    if month == 12:
+        return 31
+    return (dt.date(year, month + 1, 1) - dt.timedelta(days=1)).day
+
+
 # ===================== DU BAO DOANH THU THEO THANG =====================
 # 12/08/2026. Thay cho get_kpi_forecast_model1 da GO ngay 10/08 (ham do crash 100% vi tham chieu
 # cot t.manager_code khong ton tai, va bia so o 4 cho). Mo hinh o day KHAC HAN: da duoc kiem chung
@@ -4154,6 +4225,7 @@ TEMPLATES = {
     "get_top_products": top_products,
     "get_top_customers": top_customers,
     "get_revenue_by_region": revenue_by_region,
+    "get_revenue_ytd_cumulative": revenue_ytd_cumulative,
     "get_employee_kpi": employee_kpi,
     "get_employee_daily_kpi": employee_daily_kpi,
     "compare_periods": compare_periods,
@@ -4194,7 +4266,7 @@ _PERSON_LEVEL_TEMPLATES = {
     "get_revenue_tree", "get_kpi_ranking", "get_employee_kpi",
     "get_employee_daily_kpi", "check_order_timing",
     "get_revenue_by_channel", "get_revenue_by_region", "get_top_customers",
-    "get_top_products", "compare_periods",
+    "get_top_products", "compare_periods", "get_revenue_ytd_cumulative",
     "get_promotion_effectiveness",
     "get_promotion_data_quality",
     "get_customer_revenue_debt_risk",
@@ -4223,7 +4295,8 @@ _PERSON_LEVEL_TEMPLATES = {
 _EMPLOYEE_SCOPED_TEMPLATES = {
     "get_revenue_tree", "get_kpi_ranking", "get_employee_kpi",
     "get_employee_daily_kpi", "get_revenue_by_channel", "get_top_customers",
-    "get_top_products", "get_revenue_by_region", "compare_periods", "get_promotion_effectiveness",
+    "get_top_products", "get_revenue_by_region", "compare_periods", "get_revenue_ytd_cumulative",
+    "get_promotion_effectiveness",
     "get_promotion_data_quality",
     "get_customer_revenue_debt_risk",
     "get_salary_detail", "get_salary_achievement_summary", "get_salary_bonus_policy",
@@ -4238,7 +4311,7 @@ _EMPLOYEE_SCOPED_TEMPLATES = {
 
 _CHANNEL_SCOPED_TEMPLATES = {
     "get_revenue_by_channel", "get_top_products", "get_top_customers",
-    "compare_periods", "get_customer_detail", "check_order_timing",
+    "compare_periods", "get_revenue_ytd_cumulative", "get_customer_detail", "check_order_timing",
     "get_revenue_by_region", "get_promotion_effectiveness", "get_promotion_data_quality",
     "get_customer_revenue_debt_risk"
 }
