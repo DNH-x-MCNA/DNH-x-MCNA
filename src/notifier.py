@@ -242,6 +242,13 @@ DIGEST_EMAIL_TEMPLATE = """
     </style>
 </head>
 <body>
+    <!-- 21/08/2026: preheader — tóm tắt ẩn hiển thị trong vùng preview của inbox (dưới subject)
+    thay vì để trống. display:none + font-size:1px + chuỗi &zwnj;&nbsp; lặp là pattern an toàn cho
+    Word engine (Outlook Desktop): text có trong DOM để client mail lấy làm preview nhưng không
+    chiếm chỗ hiển thị; chuỗi padding chặn nội dung kế tiếp bị kéo vào preview. -->
+    {% if preheader %}
+    <div style="display:none; font-size:1px; line-height:1px; max-height:0; max-width:0; opacity:0; overflow:hidden;">{{ preheader }}{% for _ in range(50) %}&zwnj;&nbsp;{% endfor %}</div>
+    {% endif %}
     <!-- 21/08/2026: bọc container bằng ghost table — Outlook Desktop không hỗ trợ max-width trên
     div nên khung 650px trước đây bị giãn full cửa sổ; table width=650 giữ nguyên khung ở mọi client,
     các client hiện đại vẫn co lại đúng trên màn hình nhỏ nhờ max-width. -->
@@ -274,6 +281,21 @@ DIGEST_EMAIL_TEMPLATE = """
             <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-left: 4px solid #94a3b8; border-radius: 8px; padding: 12px 16px; margin-bottom: 20px; font-size: 13px; color: #475569;">
                 Kỳ này có cảnh báo mức nghiêm trọng — xem chi tiết ở mục "Điểm Nổi Bật Trong Kỳ" bên dưới.
             </div>
+            {% endif %}
+
+            {% if show_period_warnings and metrics.warning_alerts %}
+            <!-- 21/08/2026: warning_alerts được _get_period_warning_alerts (src/etl.py) tính từ
+            alert_severity_log từ trước nhưng chưa bao giờ được render vào email định kỳ — người
+            đọc phải chờ mail alert riêng lẻ. Đặt ngay dưới banner has_critical để đối chiếu trực
+            tiếp. Block div full-width (không chia cột) nên an toàn Word engine. -->
+            <div class="section-title">Cảnh Báo Trong Kỳ</div>
+            {% for w in metrics.warning_alerts %}
+            <div style="background: #fffbeb; border: 1px solid #fde68a; border-left: 4px solid #d97706; border-radius: 8px; padding: 10px 14px; margin-bottom: 8px; font-size: 13px; color: #78350f;">
+                <strong>{{ w.alert_name }}</strong>{% if w.region %} &bull; {{ w.region }}{% endif %} &bull; lặp {{ w.repeat_count }} lần trong kỳ
+                {% if w.issue %}<div style="margin-top: 4px; color: #92400e;">{{ w.issue }}</div>{% endif %}
+                {% if w.last_sent_display %}<div style="margin-top: 2px; font-size: 12px; color: #a16207;">Lần cuối: {{ w.last_sent_display }}</div>{% endif %}
+            </div>
+            {% endfor %}
             {% endif %}
 
             {% if metrics.highlights %}
@@ -549,6 +571,31 @@ DIGEST_EMAIL_TEMPLATE = """
                     </td>
                 </tr>
             </table>
+            {% if period_label == 'Monthly' and show_receivables_detail and metrics.receivables.top_overdue_customers %}
+            <!-- 21/08/2026: chi tiết công nợ chỉ ở bản Monthly (audience C-Level đọc mail là chính,
+            Weekly giữ gọn 2 card tổng như cũ). Dữ liệu đã có sẵn trong metrics.receivables từ trước
+            (GD3a/GD3b) nhưng email chỉ vẽ 2 KPI card tổng. Tuổi nợ dùng strip ngang thay vì 4 card
+            25% — bài học layout cùng ngày: card bị ép hẹp làm label xuống dòng, cao lêu nghêu. -->
+            <table class="data-table">
+                <thead><tr><th>Khách hàng nợ quá hạn nhiều nhất</th><th>Kênh</th><th>Nợ quá hạn</th><th>Dư nợ</th></tr></thead>
+                <tbody>
+                    {% for c in metrics.receivables.top_overdue_customers[:5] %}
+                    <tr>
+                        <td>{{ c.customer_name }}{% if c.region %} <span style="color:#94a3b8;">({{ c.region }})</span>{% endif %}</td>
+                        <td>{{ c.channel }}</td>
+                        <td style="color: #ef4444; font-weight: bold;">{{ "{:,.0f}".format(c.overdue) }} đ</td>
+                        <td>{{ "{:,.0f}".format(c.balance) }} đ</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            {% if metrics.receivables.aging %}
+            <div style="background: #fef2f2; border: 1px solid #fecaca; border-radius: 8px; padding: 10px 14px; margin-top: 10px; font-size: 13px; color: #7f1d1d; text-align: center;">
+                <strong>Cơ cấu tuổi nợ:</strong>
+                {% for a in metrics.receivables.aging %}{% if not loop.first %} &bull;{% endif %} {{ a.label }}: <strong>{{ "{:,.0f}".format(a.amount) }} đ</strong>{% endfor %}
+            </div>
+            {% endif %}
+            {% endif %}
             {% endif %}
 
             {% if metrics.inventory.dead_stock_available != False or metrics.inventory.near_stockout_available != False %}
@@ -798,6 +845,26 @@ def build_alert_email(alert_name, severity, summary, table_headers, table_rows):
         dnh_logo_data_uri=_dnh_logo_data_uri()
     )
 
+def _digest_preheader(metrics):
+    """21/08/2026: dòng tóm tắt cho preheader email (vùng preview dưới subject trong inbox
+    Outlook/Gmail) — ghép từ số liệu chính của kỳ thay vì để inbox hiện trống/"View in browser".
+    Trả về chuỗi rỗng nếu không đủ dữ liệu; template tự ẩn preheader rỗng."""
+    parts = []
+    rev = metrics.get("revenue") or {}
+    if rev.get("total"):
+        line = f"Doanh thu {rev['total']:,.0f} đ"
+        if rev.get("change_pct") is not None:
+            line += f" ({rev['change_pct']:+.1f}% so kỳ trước)"
+        parts.append(line)
+    rec = metrics.get("receivables") or {}
+    if rec.get("total_overdue"):
+        parts.append(f"Nợ quá hạn {rec['total_overdue']:,.0f} đ")
+    warns = metrics.get("warning_alerts") or []
+    if warns:
+        parts.append(f"{len(warns)} cảnh báo trong kỳ")
+    return " · ".join(parts)
+
+
 def build_digest_email(metrics, period_label="Daily", audience=None, scope_label=None):
     """
     Tạo nội dung HTML cho email báo cáo tổng hợp định kỳ.
@@ -806,6 +873,13 @@ def build_digest_email(metrics, period_label="Daily", audience=None, scope_label
     cấp quản lý (xem main.py::send_weekly_report/send_monthly_report). None -> không hiện nhãn
     (giữ nguyên hành vi cũ cho các nơi gọi chưa truyền audience).
     """
+    # 21/08/2026: 2 section mới gate bằng report_feature_flags (config/config.yaml). Gate nằm
+    # Ở TEMPLATE chứ không blank key trong metrics — main.py (Teams Daily Digest) đọc chung
+    # dict receivables này, blank ở đây sẽ mất dữ liệu bên Teams.
+    try:
+        _flags = load_config().get('report_feature_flags', {})
+    except Exception:
+        _flags = {}
     template = Template(DIGEST_EMAIL_TEMPLATE)
     return template.render(
         metrics=metrics,
@@ -814,6 +888,9 @@ def build_digest_email(metrics, period_label="Daily", audience=None, scope_label
         scope_label=scope_label,
         chatbot_url=_chatbot_deep_link(),
         dnh_logo_data_uri=_dnh_logo_data_uri(),
+        preheader=_digest_preheader(metrics),
+        show_period_warnings=_flags.get('show_period_warnings', True),
+        show_receivables_detail=_flags.get('show_receivables_detail', True),
     )
 
 
