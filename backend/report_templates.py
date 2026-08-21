@@ -1925,6 +1925,139 @@ def inventory_by_region(area_code: str = None, scope_area_code: str = None) -> l
     return rows
 
 
+# 13/08/2026 (them 21/08 sau khi nguoi dung xac nhan): khung phan loai theo SO THANG CON LAI den han
+# su dung - KHOP voi cach DNH dang bao cao thu cong qua Excel "Bao cao ton kho thanh pham" (sheet
+# "Ton kho theo lo date", cot Q-V: Duoi 3T/3T-6T/6T-9T/9T-12T/12T-18T/Lon hon 18T). Dung "thang" =
+# 30 ngay (xap xi, DNH khong ghi ro quy uoc lich trong file mau - neu can chinh xac tuyet doi theo
+# thang duong lich thi phai hoi lai DNH, hien tai xap xi la du cho muc dich canh bao).
+_EXPIRY_BUCKET_DAYS = [
+    ("het_han", None, 0),           # da qua ExpiryDate
+    ("duoi_3_thang", 0, 90),
+    ("3_6_thang", 90, 180),
+    ("6_9_thang", 180, 270),
+    ("9_12_thang", 270, 360),
+    ("12_18_thang", 360, 540),
+    ("tren_18_thang", 540, None),
+]
+
+
+def _expiry_bucket(days_left: float) -> str:
+    if days_left < 0:
+        return "het_han"
+    if days_left < 90:
+        return "duoi_3_thang"
+    if days_left < 180:
+        return "3_6_thang"
+    if days_left < 270:
+        return "6_9_thang"
+    if days_left < 360:
+        return "9_12_thang"
+    if days_left < 540:
+        return "12_18_thang"
+    return "tren_18_thang"
+
+
+def inventory_expiry_report(area_code: str = None, max_bucket: str = None, limit: int = 30,
+                             scope_area_code: str = None) -> dict:
+    """Bao cao TON KHO THEO LO + HAN SU DUNG - tra loi cau hoi "hang nao sap het han/can date/da het
+    han", KHAC voi inventory_by_region() (chi co TONG so luong/gia tri theo vung, KHONG biet lo/han
+    su dung). Nguon: brv_tonkhodklot (ton kho tung lo) JOIN brv_lot (ngay san xuat/het han theo lo) -
+    xem local_warehouse.py::SCHEMA ve ly do BAT BUOC join CA HAI cot (item_lot_code, item_id), vi ma
+    lo CO THE trung giua cac san pham khac nhau tren Bravo (xac nhan 13/08/2026, vd ma lo '020521'
+    xuat hien o nhieu san pham voi han su dung khac nhau).
+
+    Phan loai theo SO THANG CON LAI (khop voi file Excel "Bao cao ton kho thanh pham" DNH dang dung
+    thu cong - sheet "Ton kho theo lo date"): het_han (da qua han), duoi_3_thang, 3_6_thang,
+    6_9_thang, 9_12_thang, 12_18_thang, tren_18_thang. LUON tra ve "summary" (tong gia tri + so luong
+    theo TUNG khung, toan bo pham vi) DE nguoi dung thay duoc BUC TRANH TONG THE truoc, "rows" (chi
+    tiet tung lo, XEP THEO SO NGAY CON LAI IT NHAT truoc - het han/sap het han len dau) chi la mau
+    minh hoa GIOI HAN theo limit, KHONG PHAI danh sach day du - PHAI noi ro dieu nay khi tra loi neu
+    tong so lo trong khung do lon hon limit.
+
+    area_code: 'MB'/'MT'/'MN' - loc theo vung (branch_code), bo trong = toan cong ty (gom ca San xuat).
+    max_bucket: neu truyen (vd '3_6_thang'), CHI tra ve cac lo tu khung do TRO XUONG (gan het han
+    hon) - dung khi nguoi dung hoi "hang nao con duoi 6 thang" v.v. Cac gia tri hop le: het_han,
+    duoi_3_thang, 3_6_thang, 6_9_thang, 9_12_thang, 12_18_thang, tren_18_thang (dung dung ten nay,
+    KHONG tu doi dinh dang).
+    scope_area_code: EP GHI DE area_code khi tai khoan bi gioi han vung (giong inventory_by_region).
+
+    LUU Y QUAN TRONG: du lieu chi co O CAC LO CON HOAT DONG (is_active=1) va CON SO LUONG TON >0 -
+    lo da xuat het/ngung theo doi se KHONG xuat hien, day la BINH THUONG (khong phai thieu du lieu).
+    Neu 1 lo TON KHO nhung KHONG tim thay han su dung trong brv_lot (hiem, xem "khong_xac_dinh_han"
+    trong summary), PHAI noi ro la "chua xac dinh duoc han su dung" cho phan do, TUYET DOI KHONG bo
+    qua trong im lang hay coi nhu khong co han."""
+    if scope_area_code:
+        area_code = scope_area_code
+    branch_filter = _AREA_TO_BRANCH.get(area_code) if area_code else None
+    if scope_area_code and not branch_filter:
+        return {"error": f"Khong xac dinh duoc vung '{scope_area_code}' de loc ton kho theo han su dung."}
+
+    valid_buckets = [b[0] for b in _EXPIRY_BUCKET_DAYS]
+    if max_bucket and max_bucket not in valid_buckets:
+        return {"error": f"max_bucket '{max_bucket}' khong hop le. Cac gia tri hop le: {', '.join(valid_buckets)}."}
+
+    sql = """SELECT t.item_lot_code, t.item_id, sp.name item_name, t.quantity, t.branch_code,
+                    k.branch_code kho_branch, l.mfg_date, l.expiry_date
+             FROM brv_tonkhodklot t
+             LEFT JOIN brv_lot l ON l.item_lot_code = t.item_lot_code AND l.item_id = t.item_id
+             LEFT JOIN brv_sanpham sp ON sp.id_code = t.item_id
+             LEFT JOIN brv_kho k ON k.id_code = t.warehouse_id
+             WHERE t.is_active = 1 AND t.quantity > 0"""
+    params = []
+    if branch_filter:
+        sql += " AND t.branch_code = ?"
+        params.append(branch_filter)
+    rows = _q(sql, tuple(params))
+
+    today = dt.date.today()
+    summary = {b[0]: {"so_lo": 0, "tong_so_luong": 0.0} for b in _EXPIRY_BUCKET_DAYS}
+    unknown_expiry_count = 0
+    detail = []
+    for r in rows:
+        qty = _f(r["quantity"])
+        if not r["expiry_date"]:
+            unknown_expiry_count += 1
+            continue
+        try:
+            expiry = dt.date.fromisoformat(r["expiry_date"])
+        except (ValueError, TypeError):
+            unknown_expiry_count += 1
+            continue
+        days_left = (expiry - today).days
+        bucket = _expiry_bucket(days_left)
+        summary[bucket]["so_lo"] += 1
+        summary[bucket]["tong_so_luong"] += qty
+        detail.append({
+            "item_lot_code": r["item_lot_code"],
+            "item_name": r["item_name"] or f'(chua co ten - ma {r["item_id"]})',
+            "quantity": qty,
+            "branch_code": r["kho_branch"] or r["branch_code"],
+            "area_label": _BRANCH_LABEL.get(r["kho_branch"] or r["branch_code"], r["kho_branch"] or r["branch_code"]),
+            "mfg_date": r["mfg_date"],
+            "expiry_date": r["expiry_date"],
+            "days_left": days_left,
+            "bucket": bucket,
+        })
+
+    if max_bucket:
+        allowed = set(valid_buckets[:valid_buckets.index(max_bucket) + 1])
+        detail = [d for d in detail if d["bucket"] in allowed]
+
+    detail.sort(key=lambda d: d["days_left"])
+
+    return {
+        "as_of": str(today),
+        "area_code": area_code,
+        "summary": summary,
+        "khong_xac_dinh_han": unknown_expiry_count,
+        "tong_so_lo_hien_thi": len(detail),
+        "rows": detail[:limit],
+        "note": (f"Chi hien thi {min(limit, len(detail))}/{len(detail)} lo (sap xep gan het han nhat "
+                 f"truoc) - dung 'summary' de biet TONG THE ca khung, 'rows' chi la mau minh hoa."
+                 if len(detail) > limit else None),
+    }
+
+
 # area_code (MB/MB2/MN/MT) -> ten mien tieng Viet, gom MB+MB2 thanh Mien Bac (theo REGION_SQL_MARKERS).
 _AREA_TO_REGION_VI = {m: REGION_NAMES_VI[key] for key, ms in REGION_SQL_MARKERS.items() for m in ms}
 
@@ -4028,6 +4161,7 @@ TEMPLATES = {
     "get_employee_directory": employee_directory,
     "check_order_timing": order_timing_check,
     "get_inventory_by_region": inventory_by_region,
+    "get_inventory_expiry_report": inventory_expiry_report,
     "get_qlv_change_history": qlv_change_history,
     "get_revenue_tree": revenue_tree,
     "get_kpi_ranking": kpi_ranking,

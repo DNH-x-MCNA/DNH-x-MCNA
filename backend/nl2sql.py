@@ -355,6 +355,31 @@ TEMPLATE_TOOLS = [
         },
     },
     {
+        "name": "get_inventory_expiry_report",
+        "description": "Ton kho THEO LO + HAN SU DUNG - dung cho cau hoi 'hang nao sap het han/can date/"
+                        "da het han', 'hang ton qua han su dung', 'kiem tra date hang ton kho'. KHAC voi "
+                        "get_inventory_by_region (chi co TONG so luong/gia tri theo vung, KHONG biet lo/han "
+                        "su dung tung mat hang). Tra ve 'summary' (tong so lo + so luong theo TUNG khung thoi "
+                        "gian con lai: het_han/duoi_3_thang/3_6_thang/6_9_thang/9_12_thang/12_18_thang/"
+                        "tren_18_thang - LUON dua CA BUC TRANH TONG THE nay truoc khi di vao chi tiet) va "
+                        "'rows' (chi tiet tung lo, CHI la mau minh hoa GIOI HAN theo limit, KHONG PHAI danh "
+                        "sach day du - neu 'note' bao con thieu, PHAI noi ro voi nguoi dung day chi la mot "
+                        "phan, khong phai toan bo). Neu nguoi dung hoi CHUNG CHUNG 'hang nao sap het han' "
+                        "khong noi ro khung thoi gian, uu tien de max_bucket trong (mac dinh) de thay CA het "
+                        "han LAN sap het han, hoac truyen max_bucket='duoi_3_thang' neu ho noi ro 'trong 3 "
+                        "thang toi'.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "area_code": {"type": "string", "description": "Loc theo 1 vung: 'MB'/'MT'/'MN' (khong bat buoc - bo trong de xem ca 4 vung gom ca San xuat)"},
+                "max_bucket": {"type": "string", "enum": ["het_han", "duoi_3_thang", "3_6_thang", "6_9_thang", "9_12_thang", "12_18_thang", "tren_18_thang"],
+                               "description": "Chi lay cac lo TU khung nay TRO XUONG (gan het han hon) - vd 'duoi_3_thang' se gom ca het_han + duoi_3_thang. Bo trong de xem TAT CA cac khung."},
+                "limit": {"type": "integer", "description": "So dong chi tiet toi da tra ve trong 'rows' (mac dinh 30) - KHONG anh huong 'summary' (luon tinh tren toan bo pham vi)."},
+            },
+            "required": [],
+        },
+    },
+    {
         "name": "get_receivables_overview",
         "description": "Tong quan CONG NO toan cong ty (hoac 1 vung neu tai khoan bi gioi han): tong du "
                         "no, tong no qua han, ty le qua han, tach theo kenh OTC/ETC va theo vung, va top N "
@@ -881,14 +906,14 @@ QUAN TRONG VE CHON TOOL:
 - Neu cau hoi thuoc cac nhom bao cao chuan: doanh thu theo kenh, top san pham, top khach hang, doanh thu
   theo vung mien, KPI/doanh so nhan vien (tong quan/thang), KPI THEO NGAY 1 nhan vien ca nhan, SO SANH
   2 khoang thoi gian, CHI TIET 1 khach hang cu the, TRA CUU ma/ten/vai tro nhan vien, KIEM TRA don hang
-  bat thuong/chay don KPI, TON KHO THEO VUNG, LICH SU DOI QLV, CAY DOANH THU/KPI TP-QLV-TDV, XEP HANG
-  KPI, DOI CHIEU doanh thu tu tren xuong vs cong don tu duoi len, LICH SU TRUY VAN/CHI PHI AI cua chinh
-  nguoi dang hoi, HIEU QUA CHUONG TRINH KHUYEN MAI, QUY TAC/BAC TIEN V15-V22-V25-ASO,
-  THUONG KINH DOANH/PHU CAP thang cua 1 nhan vien -> BAT BUOC dung tool tuong ung
+  bat thuong/chay don KPI, TON KHO THEO VUNG, TON KHO SAP/DA HET HAN SU DUNG THEO LO, LICH SU DOI QLV,
+  CAY DOANH THU/KPI TP-QLV-TDV, XEP HANG KPI, DOI CHIEU doanh thu tu tren xuong vs cong don tu duoi len,
+  LICH SU TRUY VAN/CHI PHI AI cua chinh nguoi dang hoi, HIEU QUA CHUONG TRINH KHUYEN MAI, QUY TAC/BAC
+  TIEN V15-V22-V25-ASO, THUONG KINH DOANH/PHU CAP thang cua 1 nhan vien -> BAT BUOC dung tool tuong ung
   (get_revenue_by_channel, get_top_products, get_top_customers, get_revenue_by_region, get_employee_kpi,
   get_employee_daily_kpi, compare_periods, get_customer_detail, get_employee_directory, check_order_timing,
-  get_inventory_by_region, get_qlv_change_history, get_revenue_tree, get_kpi_ranking,
-  get_revenue_reconciliation, get_receivables_overview, get_customer_revenue_debt_risk,
+  get_inventory_by_region, get_inventory_expiry_report, get_qlv_change_history, get_revenue_tree,
+  get_kpi_ranking, get_revenue_reconciliation, get_receivables_overview, get_customer_revenue_debt_risk,
   get_audit_log, get_promotion_effectiveness, get_promotion_data_quality,
   get_salary_bonus_policy, get_salary_data_quality, get_salary_detail,
   get_salary_achievement_summary).
