@@ -96,6 +96,26 @@ CREATE INDEX IF NOT EXISTS idx_bkho_idcode ON brv_kho(id_code);
 CREATE TABLE IF NOT EXISTS brv_tonkhodk (warehouse_id INTEGER, item_id INTEGER, quantity REAL, amount REAL, is_active INTEGER);
 CREATE INDEX IF NOT EXISTS idx_tk_warehouse ON brv_tonkhodk(warehouse_id);
 CREATE INDEX IF NOT EXISTS idx_tk_item ON brv_tonkhodk(item_id);
+
+-- 13/08/2026: TON KHO THEO LO + HAN SU DUNG - xac nhan qua doi chieu voi file Excel "Bao cao ton kho
+-- thanh pham" DNH tu cung cap (sheet "Ton kho theo lo date"): brv_tonkhodk (o tren) CHI co tong so
+-- luong/gia tri theo kho, KHONG co lo/han su dung - can 2 bang MOI nay de tra loi duoc cau hoi "hang
+-- nao sap het han/can date" (DNH dang theo doi thu cong qua Excel, chua co trong chatbot).
+--
+-- brv_tonkhodklot (nguon Bravo: BRV_TonKhoDKLot) = TON KHO theo TUNG LO (khac brv_tonkhodk la tong
+-- theo kho, khong tach lo). item_lot_code + item_id la khoa noi voi brv_lot de biet ngay het han.
+CREATE TABLE IF NOT EXISTS brv_tonkhodklot (branch_code TEXT, warehouse_id INTEGER, item_id INTEGER, item_lot_code TEXT, quantity REAL, is_active INTEGER);
+CREATE INDEX IF NOT EXISTS idx_tkl_item ON brv_tonkhodklot(item_id);
+CREATE INDEX IF NOT EXISTS idx_tkl_lotcode ON brv_tonkhodklot(item_lot_code);
+CREATE INDEX IF NOT EXISTS idx_tkl_warehouse ON brv_tonkhodklot(warehouse_id);
+
+-- brv_lot (nguon Bravo: BRV_Lot) = thong tin TUNG LO hang: ngay san xuat (mfg_date), ngay het han
+-- (expiry_date). Khoa (item_lot_code, item_id) KHOP VOI brv_tonkhodklot (KHONG dung item_lot_code
+-- rieng le - da xac nhan tren Bravo THAT 13/08/2026 co the trung ma lo giua cac san pham khac nhau,
+-- vd '020521' xuat hien o nhieu item_id khac nhau voi han su dung khac nhau - PHAI JOIN CA HAI cot
+-- cung luc, thieu item_id se gan nham han su dung).
+CREATE TABLE IF NOT EXISTS brv_lot (item_lot_code TEXT, item_id INTEGER, mfg_date TEXT, expiry_date TEXT, is_active INTEGER);
+CREATE INDEX IF NOT EXISTS idx_lot_code_item ON brv_lot(item_lot_code, item_id);
 CREATE TABLE IF NOT EXISTS brvsx_tralai (doc_date TEXT, amount9 REAL, is_active INTEGER, stt TEXT, customer_code TEXT);
 CREATE INDEX IF NOT EXISTS idx_tralai_docdate ON brvsx_tralai(doc_date);
 
