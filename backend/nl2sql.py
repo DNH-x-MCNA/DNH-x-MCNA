@@ -392,7 +392,10 @@ TEMPLATE_TOOLS = [
                         "phan, khong phai toan bo). Neu nguoi dung hoi CHUNG CHUNG 'hang nao sap het han' "
                         "khong noi ro khung thoi gian, uu tien de max_bucket trong (mac dinh) de thay CA het "
                         "han LAN sap het han, hoac truyen max_bucket='duoi_3_thang' neu ho noi ro 'trong 3 "
-                        "thang toi'.",
+                        "thang toi'. "
+                        "Neu ket qua co truong 'sync_warning' KHAC null - PHAI doc va noi ro voi nguoi dung: "
+                        "du lieu nay dong bo dinh ky tu Bravo (khong realtime), lan dong bo gan nhat da cach "
+                        "qua lau nen so lieu CO THE khac thuc te tai thoi diem hoi.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -424,6 +427,36 @@ TEMPLATE_TOOLS = [
                 "top_n": {"type": "integer", "description": "So khach no qua han nhieu nhat can liet ke (mac dinh 10)"},
             },
             "required": [],
+        },
+    },
+    {
+        "name": "get_receivables_history_dates",
+        "description": "Liet ke cac NGAY da co snapshot cong no LICH SU - dung TRUOC get_receivables_period_compare "
+                        "de biet co ngay nao de so sanh, hoac khi hoi 'cong no co du lieu tu bao gio'. He thong bat dau "
+                        "luu lich su cong no tu 21/08/2026, KHONG co du lieu truoc do (khac doanh thu co nhieu nam).",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "limit": {"type": "integer", "description": "So ngay gan nhat can liet ke (mac dinh 30)"},
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "get_receivables_period_compare",
+        "description": "SO SANH cong no (du no + no qua han) giua 2 NGAY snapshot lich su - dung cho cau hoi "
+                        "'cong no hom nay so voi tuan/thang truoc the nao', 'no qua han tang hay giam so voi ngay X'. "
+                        "KHAC voi get_receivables_overview (chi co snapshot HIEN TAI DUY NHAT, khong so sanh duoc). "
+                        "NEU CHUA CHAC ngay nao co du lieu, goi get_receivables_history_dates TRUOC. He thong moi bat "
+                        "dau luu lich su tu 21/08/2026 nen CHI so sanh duoc trong pham vi tu ngay do tro di - KHONG "
+                        "the so sanh 'cung ky nam ngoai' nhu doanh thu.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "snapshot_date_a": {"type": "string", "description": "YYYY-MM-DD, ngay can xem (ky hien tai/moi)"},
+                "snapshot_date_b": {"type": "string", "description": "YYYY-MM-DD, ngay doi chieu (ky truoc/cu)"},
+            },
+            "required": ["snapshot_date_a", "snapshot_date_b"],
         },
     },
     {

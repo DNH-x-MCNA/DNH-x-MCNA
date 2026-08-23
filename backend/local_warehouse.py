@@ -238,6 +238,32 @@ CREATE INDEX IF NOT EXISTS idx_congno_customer ON fact_congno_khachhang(customer
 CREATE INDEX IF NOT EXISTS idx_congno_channel ON fact_congno_khachhang(sales_channel);
 CREATE INDEX IF NOT EXISTS idx_congno_area ON fact_congno_khachhang(area_code);
 
+-- 21/08/2026: LICH SU cong no theo NGAY - fact_congno_khachhang o tren CHI giu snapshot HIEN TAI
+-- (moi lan dong bo DELETE+INSERT ghi de sach, xem sync_fact_congno()), nen KHONG the so sanh cong
+-- no giua cac ky (khac han doanh thu da co day du lich su nhieu nam qua vhoadon_otc/etc +
+-- monthly_customer_summary). Bang nay THEM MOI, KHONG thay the fact_congno_khachhang - moi lan dong
+-- bo, NEU snapshot_date hom do CHUA co trong bang nay thi moi INSERT them 1 bo dong (giu dung 1 ban
+-- ghi/khach/kenh/ngay, KHONG phai moi lan sync trong ngay - sync chay nhieu lan/ngay se lam bung no
+-- dung luong vo ich vi khong ai can so sanh cong no cach nhau 15-30 phut). Schema Y HET
+-- fact_congno_khachhang + them snapshot_date vao khoa de truy van theo ngay.
+CREATE TABLE IF NOT EXISTS fact_congno_khachhang_history (
+    snapshot_date TEXT,          -- 'YYYY-MM-DD' - ngay ghi nhan (khoa chinh cung customer_code+sales_channel)
+    snapshot_at TEXT,
+    customer_code TEXT,
+    customer_name TEXT,
+    sales_channel TEXT,
+    area_code TEXT,
+    balance_end REAL,
+    overdue_1_15 REAL,
+    overdue_15_30 REAL,
+    overdue_30_45 REAL,
+    overdue_gt_45 REAL,
+    total_overdue REAL
+);
+CREATE INDEX IF NOT EXISTS idx_congno_hist_date ON fact_congno_khachhang_history(snapshot_date);
+CREATE INDEX IF NOT EXISTS idx_congno_hist_customer ON fact_congno_khachhang_history(customer_code, snapshot_date);
+CREATE INDEX IF NOT EXISTS idx_congno_hist_area ON fact_congno_khachhang_history(area_code, snapshot_date);
+
 CREATE TABLE IF NOT EXISTS sync_meta (
     table_name TEXT PRIMARY KEY,
     last_synced_at TEXT,

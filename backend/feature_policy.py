@@ -56,12 +56,33 @@ _BUSINESS_METRIC_RE = re.compile(
 )
 _FACTUAL_PLAN_RE = re.compile(r"\b(?:target|chi tieu|ke hoach|ngan sach)\b")
 
+# 21/08/2026: bo sung sau khi ra soat thay nhanh chinh (_FUTURE_PERIOD_RE AND _SPECULATIVE_RE AND
+# _BUSINESS_METRIC_RE, ca 3 CUNG LUC) co the bi lot neu cau hoi dien dat kheo, thieu dung 1 trong 3
+# nhom tu khoa - vd "tinh hinh thang sau se the nao" (thieu chi so nghiep vu cu the), "kha nang dat
+# duoc khong" (thieu moc thoi gian tuong lai ro rang vi ngu canh da ham y "sap toi" qua hoi thoai
+# truoc do). Day la PHONG TUYEN CUNG BO SUNG (khong thay the nhanh cu, chi mo rong pham vi bat) -
+# nhan dien dong tu/cum tu "suy dien tuong lai" DOC LAP, khong doi hoi phai co ca moc thoi gian
+# TUONG MINH lan tu khoa nghiep vu cu the trong CUNG cau hoi.
+_IMPLICIT_FUTURE_SPECULATION_RE = re.compile(
+    r"\b(?:se (?:the nao|ra sao|nhu the nao|dat khong|tang|giam|len|xuong)|"
+    r"sap toi (?:the nao|ra sao|se)|"
+    r"kha nang (?:dat|hoan thanh|thanh cong)(?:\s+\w+){0,4}\s+khong\b|"
+    r"xu huong (?:sap toi|thoi gian toi|tiep theo)|"
+    r"neu tiep tuc (?:da tang|da giam|xu huong nay|nhu vay)|"
+    r"co dat duoc khong|lieu co (?:dat|hoan thanh))\b"
+)
+
 
 def is_future_forecast_question(question: str) -> bool:
     """Chan cau hoi yeu cau suy dien tuong lai, nhung khong chan tra cuu ke hoach da nhap.
 
     Day la lop chan xac dinh truoc khi goi LLM. Prompt van co quy tac tuong tu de
     phong truong hop mot cau hoi vong vo khong duoc bo loc nhan dien.
+
+    21/08/2026: THEM nhanh _IMPLICIT_FUTURE_SPECULATION_RE doc lap voi nhanh chinh (xem ghi chu
+    tren dinh nghia bien) - giam rui ro cau hoi dien dat kheo lot qua ca 2 lop (regex + prompt).
+    Van la phong tuyen tu khoa (khong the bat 100% cach dien dat), nhung mo rong dang ke pham vi
+    so voi truoc, ma khong sua doi hanh vi cu (moi test cu van phai qua y nguyen).
     """
     text = _plain_text(question)
     if not text:
@@ -72,12 +93,25 @@ def is_future_forecast_question(question: str) -> bool:
         return True
 
     # "Chi tieu/ke hoach thang sau la bao nhieu?" la tra cuu mot gia tri da nhap,
-    # khong phai yeu cau chatbot tu suy dien ra mot gia tri moi.
-    if _FACTUAL_PLAN_RE.search(text) and not _SPECULATIVE_RE.search(text):
+    # khong phai yeu cau chatbot tu suy dien ra mot gia tri moi. CHI thoat som neu KHONG co dau hieu
+    # suy dien nao (ca nhanh _SPECULATIVE_RE cu LAN nhanh _IMPLICIT_FUTURE_SPECULATION_RE moi) -
+    # "Lieu co dat chi tieu khong?" phai DI TIEP xuong nhanh implicit ben duoi, khong duoc thoat som
+    # chi vi co tu "chi tieu" (21/08/2026, phat hien qua test_nhan_dien_cau_hoi_du_bao).
+    if (_FACTUAL_PLAN_RE.search(text) and not _SPECULATIVE_RE.search(text)
+            and not _IMPLICIT_FUTURE_SPECULATION_RE.search(text)):
         return False
 
-    return bool(
+    if (
         _FUTURE_PERIOD_RE.search(text)
         and _SPECULATIVE_RE.search(text)
         and _BUSINESS_METRIC_RE.search(text)
-    )
+    ):
+        return True
+
+    # Nhanh bo sung: chi can dong tu/cum tu suy dien tuong lai DOC LAP + co nhac den 1 chi so
+    # nghiep vu (khong bat buoc phai co moc thoi gian tuong minh trong CUNG cau - vd cau hoi tiep
+    # theo trong hoi thoai da ham y dang noi ve tuong lai).
+    if _IMPLICIT_FUTURE_SPECULATION_RE.search(text) and _BUSINESS_METRIC_RE.search(text):
+        return True
+
+    return False

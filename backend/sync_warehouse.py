@@ -12,7 +12,7 @@ Che do:
 
 Chay: py sync_warehouse.py [--full]
 """
-import sys, os, argparse, datetime as dt, time
+import sys, os, argparse, datetime as dt, time, sqlite3
 try:
     sys.stdout.reconfigure(encoding="utf-8")
 except Exception:
@@ -383,6 +383,11 @@ def sync_fact_congno():
       - KHONG BAO GIO ghi de bang bang rong. SP loi quyen/VPN chap co the tra 0 dong; ghi de se lam
         chatbot mat kha nang tra loi cong no ma khong ai biet. 0 dong -> GIU snapshot cu, raise loi.
       - BEGIN IMMEDIATE + PRAGMA busy_timeout - backend doc song song, tranh 'database is locked'.
+
+    21/08/2026: THEM ghi vao fact_congno_khachhang_history (1 ban ghi/khach/kenh/NGAY, khong phai
+    moi lan sync) de tool bao cao co the so sanh cong no giua cac ky - truoc do bang chinh chi giu
+    snapshot HIEN TAI (ghi de sach moi lan), khong co lich su nhu doanh thu. Xem schema trong
+    local_warehouse.py de biet ly do chi insert 1 lan/ngay.
     """
     from debt_source import fetch_debt_snapshot
 
@@ -420,6 +425,27 @@ def sync_fact_congno():
             "customer_name, sales_channel, area_code, balance_end, overdue_1_15, overdue_15_30, "
             "overdue_30_45, overdue_gt_45, total_overdue) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
             prepared)
+        # 21/08/2026: THEM lich su theo ngay - CHI insert neu snapshot_date hom nay CHUA co trong
+        # bang history (sync chay nhieu lan/ngay, khong insert lai moi lan de tranh bung no dung
+        # luong - xem ghi chu day du trong local_warehouse.py::SCHEMA). Dung EXISTS trong CUNG
+        # transaction voi ghi de o tren de dam bao nhat quan (khong bao gio history thieu 1 ngay
+        # ma fact_congno_khachhang da co du lieu ngay do).
+        # Boc try/except RIENG (khong lam hong phan ghi snapshot chinh o tren): bang history la
+        # TINH NANG MOI, neu vi ly do gi bang chua ton tai (vd DB cu chua chay init_schema() moi
+        # nhat) thi VAN PHAI giu duoc hanh vi cu (snapshot hien tai ghi thanh cong) - khong duoc de
+        # 1 tinh nang phu lam crash ca luong cong no chinh nguoi dung dang phu thuoc.
+        try:
+            already = conn.execute(
+                "SELECT 1 FROM fact_congno_khachhang_history WHERE snapshot_date=? LIMIT 1",
+                (snapshot_date,)).fetchone()
+            if not already:
+                conn.executemany(
+                    "INSERT INTO fact_congno_khachhang_history (snapshot_date, snapshot_at, customer_code, "
+                    "customer_name, sales_channel, area_code, balance_end, overdue_1_15, overdue_15_30, "
+                    "overdue_30_45, overdue_gt_45, total_overdue) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                    prepared)
+        except sqlite3.OperationalError:
+            pass
         conn.execute("COMMIT")
     except Exception:
         conn.execute("ROLLBACK")
