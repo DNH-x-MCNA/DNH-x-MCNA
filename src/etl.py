@@ -130,10 +130,17 @@ def _get_period_warning_alerts(start_dt, end_dt, region=None, channel=None):
         
         results = []
         for r in rows:
+            # 21/08/2026: thêm last_sent_display (giống cách format highlights ở trên) — email
+            # "Cảnh Báo Trong Kỳ" không nên in timestamp thô "2026-08-21 09:12:33".
+            try:
+                last_sent_display = datetime.strptime(str(r[2]).split(".")[0], "%Y-%m-%d %H:%M:%S").strftime("%H:%M %d/%m")
+            except Exception:
+                last_sent_display = str(r[2])
             item = {
                 "alert_name": r[0],
                 "repeat_count": r[1],
                 "last_sent": r[2],
+                "last_sent_display": last_sent_display,
                 "region": r[3],
                 "issue": r[4],
                 "channel": r[5] if has_channel and len(r) > 5 else None

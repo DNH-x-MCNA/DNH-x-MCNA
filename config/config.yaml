@@ -154,6 +154,13 @@ report_feature_flags:
                                     # tắt — phát hiện lúc rà soát trước demo 13/08. Tắt mặc định theo đúng tiền lệ
                                     # show_dead_stock (mọi nội dung mới nằm sau cờ tắt cho tới khi dry-run sạch
                                     # + theo dõi ít nhất 1 chu kỳ Daily thật). Bật lại: đổi thành true.
+  # 21/08/2026: 2 section mới của email Weekly/Monthly (src/notifier.py::DIGEST_EMAIL_TEMPLATE).
+  # Dữ liệu đã có sẵn từ trước (warning_alerts / receivables.top_overdue_customers+aging), chỉ
+  # thêm phần hiển thị nên bật mặc định; cờ tắt để thu gọn mail nếu người nhận phản hồi nhiễu.
+  # LƯU Ý: gate nằm ở build_digest_email() (template), KHÔNG đụng metrics dict — vì main.py
+  # (Teams Daily Digest) cũng đọc receivables['aging']/['top_overdue_customers'] từ cùng dict.
+  show_period_warnings: true        # Section "Cảnh Báo Trong Kỳ" (render warning_alerts)
+  show_receivables_detail: true     # Chi tiết công nợ bản Monthly (top khách nợ + tuổi nợ)
 
 # Bật/tắt các trigger đang bị DATA GAP (thiếu cột nguồn) — tắt để đỡ tốn 1 query Supabase mỗi
 # chu kỳ quét cho việc chỉ để in "chưa có dữ liệu". Bật lại (đổi thành true) ngay khi DNH bổ

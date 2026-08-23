@@ -54,6 +54,18 @@ def _sample_metrics(period_label, channel=None):
              "value_display": "-55%"},
         ],
         "operational_quality_items": [],
+        # 21/08/2026: mẫu cho section "Cảnh Báo Trong Kỳ" (cùng cấu trúc dict với
+        # _get_period_warning_alerts trong src/etl.py, gồm cả last_sent_display mới thêm)
+        "warning_alerts": [
+            {"alert_name": "TỶ LỆ NỢ QUÁ HẠN VƯỢT NGƯỠNG", "repeat_count": 3,
+             "last_sent": "2026-08-21 09:12:33", "last_sent_display": "09:12 21/08",
+             "region": "Toàn quốc", "issue": "Tỷ lệ nợ quá hạn OTC 82.4% vượt ngưỡng 30%",
+             "channel": "OTC"},
+            {"alert_name": "KHÁCH LỚN SỤT GIẢM DOANH SỐ", "repeat_count": 1,
+             "last_sent": "2026-08-20 10:40:00", "last_sent_display": "10:40 20/08",
+             "region": "Miền Nam", "issue": "Nhà thuốc ABC giảm -55% so trung bình 4 tuần",
+             "channel": None},
+        ],
         "revenue": {
             "otc": 12345678900, "etc": 5432100000, "total": 17777778900,
             "invoice_count": 321, "otc_invoice_count": 250, "etc_invoice_count": 71,
@@ -120,7 +132,32 @@ def _sample_metrics(period_label, channel=None):
         "receivables": {
             "period": "Tức thời (đến 21/08/2026 17:45)",
             "total_overdue": 4200000000, "balance_end": 9000000000,
-            "aging": [], "by_channel": [], "by_region": [], "top_overdue_customers": [],
+            "overdue_pct": 46.7,
+            # 21/08/2026: đủ aging + top khách nợ để preview section chi tiết công nợ Monthly
+            "aging": [
+                {"label": "Từ 1 đến 15 ngày", "amount": 1200000000},
+                {"label": "Từ 16 đến 30 ngày", "amount": 800000000},
+                {"label": "Từ 31 đến 45 ngày", "amount": 500000000},
+                {"label": "Trên 45 ngày", "amount": 1700000000},
+            ],
+            "by_channel": [], "by_region": [],
+            "top_overdue_customers": [
+                c for c in [
+                    {"customer_code": "KH1023", "customer_name": "Nha thuoc Tay Ho",
+                     "channel": "OTC", "region": "Miền Bắc", "overdue": 850000000, "balance": 1200000000},
+                    {"customer_code": "KH2044", "customer_name": "Benh vien Da khoa Nam",
+                     "channel": "ETC", "region": "Miền Nam", "overdue": 720000000, "balance": 980000000},
+                    {"customer_code": "KH1188", "customer_name": "Nha thuoc Long Xuyen",
+                     "channel": "OTC", "region": "Miền Nam", "overdue": 640000000, "balance": 710000000},
+                    {"customer_code": "KH2077", "customer_name": "Phong kham Da khoa Trung",
+                     "channel": "ETC", "region": "Miền Trung", "overdue": 410000000, "balance": 520000000},
+                    {"customer_code": "KH1301", "customer_name": "Nha thuoc Song Cong",
+                     "channel": "OTC", "region": "Miền Bắc", "overdue": 380000000, "balance": 450000000},
+                    {"customer_code": "KH2150", "customer_name": "Trung tam Y te Ha Tinh",
+                     "channel": "ETC", "region": "Miền Bắc", "overdue": 300000000, "balance": 390000000},
+                ]
+                if channel is None or c["channel"] == channel
+            ],
         },
         "inventory": {
             "dead_stock_available": True, "dead_stock_count": 3,
