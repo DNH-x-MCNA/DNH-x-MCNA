@@ -81,10 +81,62 @@ MAX_TOOLS_PER_ROUND = 5  # 10/08/2026: truoc day so 3 nam hardcode giua ham ask(
                           # tham so nay chay THAT thay vi bi bo am tham, nen can them cho.
 MAX_UNIQUE_TOOL_CALLS = 12  # Chan chi phi: cung tool+cung tham so chi chay 1 lan trong mot cau hoi.
 MAX_ROWS_TO_MODEL = 20 # Giam tu 50 -> 30 -> 20 tiet kiem token (ad-hoc SQL, template tools khong dung)
-MAX_HISTORY_TURNS = 4  # 04/08/2026: giam tu 6 -> 4 tiet kiem token (ngu canh 4 luot la du, moi luot
-                       # cu cong don token lich su khien vong sau cham di dang ke)
-MAX_TOKENS = 6144  # 04/08/2026: giam tu 8192 -> 6144 ep Claude tra loi ngan gon hon, giam thoi gian
-                   # sinh output (~2-3s nhanh hon). Van du cho thinking + bang 30 dong.
+# 23/08/2026: MAX_HISTORY_TURNS va MAX_TOKENS DOI TU HANG SO PHANG SANG THEO VAI TRO (truoc do
+# ca 2 la 1 muc chung cho MOI vai tro - lich su ha MAX_HISTORY_TURNS 6->4 ngay 04/08 vi moi luot
+# cu cong don token lich su khien vong sau cham di dang ke, xem MAX_TOOL_ROUNDS_BY_ROLE o tren cho
+# tien le phan tang tuong tu). Nguoi dung yeu cau: qlv giu MUC THAP (doi rieng minh, ~5-10 nguoi,
+# it can hoi dong vong/nho lai nhieu); cac vai tro con lai (c_level/admin_ops/regional_director -
+# gom ca "giam doc mien"/"giam doc OTC"/"giam doc ETC": KHONG phai role rieng, la c_level bi gioi
+# han scope_channel, xem main.py) len MUC CAO vi hoi pham vi rong hon/nhieu buoc hon.
+#
+# RUI RO CHI PHI cua viec tang MAX_HISTORY_TURNS: CHI an toan NEU history duoc CACHE (xem
+# cache_control them vao messages truoc khi goi client.messages.create/stream ben duoi) - neu bo
+# cache di, tang len 6 se ton them dang ke MOI cau hoi (khong chi luc thuc su can nho lai), dung
+# nhu ly do ha tu 6 xuong 4 ngay 04/08. MAX_TOKENS thi doc lap (gioi han DAU RA, khong phai
+# INPUT/lich su) - qlv thap hon hop ly vi pham vi hoi hep hon, tiet kiem chi phi output truc tiep.
+MAX_HISTORY_TURNS_BY_ROLE = {"qlv": 4}
+DEFAULT_MAX_HISTORY_TURNS = 6
+
+
+def _max_history_turns(scope_role: str = None) -> int:
+    return MAX_HISTORY_TURNS_BY_ROLE.get(scope_role, DEFAULT_MAX_HISTORY_TURNS)
+
+
+def _history_to_messages(history: list) -> list:
+    """23/08/2026: chuyen history (tu load_history(), content la STRING thuan) thanh messages, danh
+    dau cache_control (TTL 5 phut - giong breakpoint tool_result, vi 2 cau hoi lien tiep cua CUNG
+    nguoi dung thuong cach nhau tu vai chuc giay den vai phut, hiem khi qua 5 phut) tren tin nhan
+    CUOI CUNG cua history NEU co.
+
+    LY DO CAN HAM NAY: truoc 23/08, history duoc noi thang vao messages KHONG co cache_control nao -
+    moi cau hoi moi trong CUNG phien phai tra GIA GOC cho toan bo lich su cu (khong doi giua 2 luot
+    hoi lien tiep, chi them 1 cap hoi-dap moi o cuoi). Day la ly do chinh khien MAX_HISTORY_TURNS
+    truoc do phai giu THAP (4) de kiem soat chi phi - tang len se an toan hon nhieu khi phan "cu"
+    duoc cache-hit (~10% gia goc) thay vi tra gia goc MOI lan.
+
+    cache_control CHI dat duoc tren content dang LIST cac block (khong dat truoc tren string don) -
+    nen tin nhan cuoi cung PHAI duoc chuyen tu string sang [{"type": "text", "text": ...}] truoc khi
+    gan cache_control vao block do. Cac tin nhan khac GIU NGUYEN dinh dang string (khong can doi,
+    tranh thay doi hanh vi ngoai pham vi can sua)."""
+    if not history:
+        return []
+    msgs = list(history)
+    last = dict(msgs[-1])
+    content = last.get("content")
+    if isinstance(content, str):
+        last["content"] = [{"type": "text", "text": content, "cache_control": {"type": "ephemeral"}}]
+    msgs[-1] = last
+    return msgs
+
+
+MAX_TOKENS_BY_ROLE = {"qlv": 5120}
+DEFAULT_MAX_TOKENS = 6144
+
+
+def _max_tokens(scope_role: str = None) -> int:
+    return MAX_TOKENS_BY_ROLE.get(scope_role, DEFAULT_MAX_TOKENS)
+
+
 MAX_PAYLOAD_CHARS = 6000  # Gioi han ky tu payload gui cho AI (~1500 tokens). Template tools (employee_kpi,
                           # revenue_tree...) tra JSON KHONG gioi han kich thuoc, truoc day co the len 20K-50K
                           # chars, gay phình context 7K->49K tokens khi AI goi nhieu tool lien tiep. last_result
@@ -1352,8 +1404,8 @@ def ask(question: str, session_id: str = "default", username: str = None, scope_
 
     freshness = FreshnessCollector()
     client = _llm_client()
-    history = load_history(session_id, max_turns=MAX_HISTORY_TURNS)
-    messages = list(history) + [{"role": "user", "content": question}]
+    history = load_history(session_id, max_turns=_max_history_turns(scope_role))
+    messages = _history_to_messages(history) + [{"role": "user", "content": question}]
     # Breakpoint cache thu 3 (ngoai tools + system tinh) - danh dau cuoi khoi tool_result MOI NHAT
     # de cache duoc ca lich su + tool_result cua cac vong truoc, khong bi tinh lai gia day du moi
     # vong. Chi giu 1 marker "dang hoat dong" tai 1 thoi diem (xoa marker vong truoc khi dat vong
@@ -1361,6 +1413,10 @@ def ask(question: str, session_id: str = "default", username: str = None, scope_
     # vong truoc nho co che nhin lui 20 block, khong can giu marker cu.
     # LUU Y breakpoint nay dung TTL MAC DINH (5 phut), khac 2 breakpoint kia dung "1h" - ly do day du
     # o cho dat cache_control trong vong lap ben duoi.
+    # 23/08/2026: THEM breakpoint thu 4 - _history_to_messages() da danh cache_control (TTL 5 phut,
+    # cung ly do voi breakpoint nay) tren tin nhan CUOI CUNG cua history (neu co). Tong 4 breakpoint
+    # dung DUNG gioi han toi da cua API (tools=1h, system=1h, history=5', tool_result dong=5') - neu
+    # sau nay can them breakpoint moi, phai bo bot 1 trong 4 cai nay truoc, KHONG duoc cong don.
     _last_msg_cache_block = None
 
     sql_used = []
@@ -1413,7 +1469,7 @@ def ask(question: str, session_id: str = "default", username: str = None, scope_
             break
         request_kwargs = {
             "model": MODEL,
-            "max_tokens": MAX_TOKENS,
+            "max_tokens": _max_tokens(scope_role),
             "system": system_blocks,
             "tools": tools_for_request,
             "messages": messages,
@@ -1437,7 +1493,7 @@ def ask(question: str, session_id: str = "default", username: str = None, scope_
                 # 06/08/2026: da GO effort="medium" o ca 2 lenh goi (xem ghi chu dai o vong lap tren) -
                 # co che thu lai nay GIU NGUYEN vi no van la luoi an toan cho dung tinh huong tren.
                 messages.append({"role": "user", "content": "Hay tra loi ngay bay gio, ngan gon truc tiep."})
-                resp2 = client.messages.create(model=MODEL, max_tokens=MAX_TOKENS, system=system_blocks,
+                resp2 = client.messages.create(model=MODEL, max_tokens=_max_tokens(scope_role), system=system_blocks,
                                                 tools=tools_for_request, messages=messages,
                                                 extra_headers=_CACHE_BETA_HEADERS,
                                                 timeout=max(1.0, min(
@@ -1662,7 +1718,7 @@ def ask(question: str, session_id: str = "default", username: str = None, scope_
         fallback = query_plan.timeout_answer()
     else:
         final_resp = client.messages.create(
-            model=MODEL, max_tokens=MAX_TOKENS, system=system_blocks,
+            model=MODEL, max_tokens=_max_tokens(scope_role), system=system_blocks,
             messages=messages, extra_headers=_CACHE_BETA_HEADERS,
             timeout=max(1.0, min(LLM_CALL_TIMEOUT_SECONDS, query_plan.remaining_seconds())),
         )
@@ -1729,8 +1785,8 @@ def ask_stream(question: str, session_id: str = "default", username: str = None,
 
     freshness = FreshnessCollector()
     client = _llm_client()
-    history = load_history(session_id, max_turns=MAX_HISTORY_TURNS)
-    messages = list(history) + [{"role": "user", "content": question}]
+    history = load_history(session_id, max_turns=_max_history_turns(scope_role))
+    messages = _history_to_messages(history) + [{"role": "user", "content": question}]
     _last_msg_cache_block = None  # xem ghi chu day du o ask()
 
     sql_used = []
@@ -1777,7 +1833,7 @@ def ask_stream(question: str, session_id: str = "default", username: str = None,
         # tool_use ve moi biet dc functon nao/tham so gi de goi that), doi lai dam bao vong tra loi
         # that SU (bat ky la vong thu may) LUON duoc stream.
         request_kwargs = {
-            "model": MODEL, "max_tokens": MAX_TOKENS, "system": system_blocks,
+            "model": MODEL, "max_tokens": _max_tokens(scope_role), "system": system_blocks,
             "tools": tools_for_request, "messages": messages,
             "extra_headers": _CACHE_BETA_HEADERS,
             "timeout": max(1.0, min(LLM_CALL_TIMEOUT_SECONDS, query_plan.remaining_seconds())),
@@ -1800,7 +1856,7 @@ def ask_stream(question: str, session_id: str = "default", username: str = None,
             if not answer_text:
                 # Xem ghi chu day du o ask() - truong hop hy huu het ngan sach thinking.
                 messages.append({"role": "user", "content": "Hay tra loi ngay bay gio, ngan gon truc tiep."})
-                with client.messages.stream(model=MODEL, max_tokens=MAX_TOKENS, system=system_blocks,
+                with client.messages.stream(model=MODEL, max_tokens=_max_tokens(scope_role), system=system_blocks,
                                              tools=tools_for_request, messages=messages,
                                              extra_headers=_CACHE_BETA_HEADERS,
                                              timeout=max(1.0, min(
@@ -2007,7 +2063,7 @@ def ask_stream(question: str, session_id: str = "default", username: str = None,
         fallback = query_plan.timeout_answer()
     else:
         with client.messages.stream(
-            model=MODEL, max_tokens=MAX_TOKENS, system=system_blocks,
+            model=MODEL, max_tokens=_max_tokens(scope_role), system=system_blocks,
             messages=messages, extra_headers=_CACHE_BETA_HEADERS,
             timeout=max(1.0, min(LLM_CALL_TIMEOUT_SECONDS, query_plan.remaining_seconds())),
         ) as final_stream:
