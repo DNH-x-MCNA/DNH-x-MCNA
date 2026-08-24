@@ -221,6 +221,10 @@ type UserInfo = {
   scope_channel?: string | null;
   status?: string;
   email?: string | null;
+  quota_used?: number | null;
+  quota_limit?: number | null;
+  quota_remaining?: number | null;
+  quota_resets_at?: string | null;
 };
 
 type AuditSummary = {
@@ -841,7 +845,9 @@ export default function Home() {
           const jsonStr = line.slice(5).trim();
           if (!jsonStr) continue;
           let evt: { type: string; text?: string; message?: string; answer?: string;
-                     sql_used?: string[]; columns?: string[] | null; rows?: unknown[][] | null };
+                     sql_used?: string[]; columns?: string[] | null; rows?: unknown[][] | null;
+                     quota_used?: number | null; quota_limit?: number | null;
+                     quota_remaining?: number | null; quota_resets_at?: string | null };
           try {
             evt = JSON.parse(jsonStr);
           } catch {
@@ -873,6 +879,17 @@ export default function Home() {
               }
               return next;
             });
+            // Cap nhat badge "còn X/Y câu tuần này" ngay sau moi cau tra loi - khong can goi rieng
+            // /auth/me. quota_limit null (vai tro khong bi gioi han) -> giu nguyen, khong ghi de.
+            if (evt.quota_limit != null) {
+              setUserInfo((prev) => prev && {
+                ...prev,
+                quota_used: evt.quota_used,
+                quota_limit: evt.quota_limit,
+                quota_remaining: evt.quota_remaining,
+                quota_resets_at: evt.quota_resets_at,
+              });
+            }
           } else if (evt.type === "error") {
             throw new Error(evt.message || "Lỗi không xác định");
           }
@@ -959,6 +976,10 @@ export default function Home() {
             scope_channel: user.scope_channel,
             status: user.status,
             email: user.email,
+            quota_used: user.quota_used,
+            quota_limit: user.quota_limit,
+            quota_remaining: user.quota_remaining,
+            quota_resets_at: user.quota_resets_at,
           });
         }}
       />
@@ -1142,6 +1163,24 @@ export default function Home() {
                       {ROLE_LABELS[userInfo.role] || userInfo.role}
                       {userInfo.scope_value ? ` · ${userInfo.scope_value}` : ""}
                     </span>
+                    {userInfo.quota_limit != null && (
+                      <span
+                        className={`text-[10px] font-semibold ${
+                          userInfo.quota_remaining === 0
+                            ? "text-rose-400"
+                            : (userInfo.quota_remaining ?? 0) <= userInfo.quota_limit * 0.2
+                            ? "text-amber-400"
+                            : "text-slate-400"
+                        }`}
+                        title={
+                          userInfo.quota_resets_at
+                            ? `Làm mới lúc ${new Date(userInfo.quota_resets_at).toLocaleString("vi-VN")}`
+                            : undefined
+                        }
+                      >
+                        Còn {userInfo.quota_remaining}/{userInfo.quota_limit} câu tuần này
+                      </span>
+                    )}
                   </div>
                 </div>
               </>

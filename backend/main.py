@@ -46,6 +46,7 @@ from auth import (
     get_user_by_email_or_username,
     get_subordinate_usernames,
     check_and_consume_weekly_quota,
+    get_weekly_quota_status,
 )
 from mailer import send_password_email
 from conversation_memory import (
@@ -123,7 +124,10 @@ WEEKLY_QUESTION_LIMITS = {
 }
 
 
-def _check_weekly_quota(user: dict):
+def _check_weekly_quota(user: dict) -> dict:
+    """Chan + tang dem quota tuan. Tra ve dict trang thai (used/limit/remaining/resets_at) de
+    /chat, /chat/stream ghep vao response - frontend cap nhat badge "con X/Y cau" ngay sau moi
+    lan hoi, khong can goi rieng /auth/me."""
     limit = WEEKLY_QUESTION_LIMITS.get(user["role"])
     result = check_and_consume_weekly_quota(user["username"], limit)
     if not result["allowed"]:
@@ -133,6 +137,21 @@ def _check_weekly_quota(user: dict):
             f"Đã dùng hết {result['limit']} câu hỏi trong tuần này. "
             f"Hạn mức làm mới lúc {reset_label} (thứ Hai tới).",
         )
+    return {
+        "quota_used": result["used"], "quota_limit": result["limit"],
+        "quota_remaining": (result["limit"] - result["used"]) if result["limit"] else None,
+        "quota_resets_at": result["resets_at"],
+    }
+
+
+def _quota_status_for(user: dict) -> dict:
+    """CHI DOC (khong tang dem) - dung cho /auth/login, /auth/me hien thi badge luc vao trang."""
+    limit = WEEKLY_QUESTION_LIMITS.get(user["role"])
+    status = get_weekly_quota_status(user["username"], limit)
+    return {
+        "quota_used": status["used"], "quota_limit": status["limit"],
+        "quota_remaining": status["remaining"], "quota_resets_at": status["resets_at"],
+    }
 
 
 def _check_public_auth_rate_limit(email: str, client_ip: str = "local"):
@@ -202,6 +221,10 @@ class LoginResponse(BaseModel):
     scope_channel: Optional[str]
     status: Optional[str] = 'approved'
     email: Optional[str] = None
+    quota_used: Optional[int] = None
+    quota_limit: Optional[int] = None
+    quota_remaining: Optional[int] = None
+    quota_resets_at: Optional[str] = None
 
 
 class UserInfo(BaseModel):
@@ -212,6 +235,10 @@ class UserInfo(BaseModel):
     scope_channel: Optional[str]
     status: Optional[str] = 'approved'
     email: Optional[str] = None
+    quota_used: Optional[int] = None
+    quota_limit: Optional[int] = None
+    quota_remaining: Optional[int] = None
+    quota_resets_at: Optional[str] = None
 
 
 class RegisterRequest(BaseModel):
@@ -249,6 +276,10 @@ class ChatResponse(BaseModel):
     rows: Optional[list[list[Any]]] = None
     row_count: Optional[int] = None
     query_plan: Optional[dict[str, Any]] = None
+    quota_used: Optional[int] = None
+    quota_limit: Optional[int] = None
+    quota_remaining: Optional[int] = None
+    quota_resets_at: Optional[str] = None
 
 
 class SessionSummary(BaseModel):
@@ -326,6 +357,7 @@ def login(req: LoginRequest):
         scope_channel=user["scope_channel"],
         status=user.get("status", "approved"),
         email=user.get("email"),
+        **_quota_status_for(user),
     )
 
 
@@ -436,6 +468,7 @@ def me(user: dict = Depends(require_user)):
         scope_channel=user["scope_channel"],
         status=user.get("status", "approved"),
         email=user.get("email"),
+        **_quota_status_for(user),
     )
 
 
@@ -617,7 +650,7 @@ def chat(req: ChatRequest, user: dict = Depends(require_approved_user)):
     if not req.question or not req.question.strip():
         raise HTTPException(400, "Cau hoi khong duoc de trong")
     _check_rate_limit(user["username"])
-    _check_weekly_quota(user)
+    quota = _check_weekly_quota(user)
     _require_session_write_access(req.session_id, user)
     query_id = str(uuid.uuid4())
     started_at = time.monotonic()
@@ -656,6 +689,7 @@ def chat(req: ChatRequest, user: dict = Depends(require_approved_user)):
         rows=lr.get("rows") if is_raw_sql else None,
         row_count=lr.get("row_count") if is_raw_sql else None,
         query_plan=result.get("query_plan"),
+        **quota,
     )
 
 
@@ -673,7 +707,7 @@ def chat_stream(req: ChatRequest, user: dict = Depends(require_approved_user)):
     if not req.question or not req.question.strip():
         raise HTTPException(400, "Cau hoi khong duoc de trong")
     _check_rate_limit(user["username"])
-    _check_weekly_quota(user)
+    quota = _check_weekly_quota(user)
     _require_session_write_access(req.session_id, user)
 
     scope_area_code = user["scope_value"] if user["role"] in ("regional_director", "qlv") else None
@@ -710,6 +744,7 @@ def chat_stream(req: ChatRequest, user: dict = Depends(require_approved_user)):
                         "rows": lr.get("rows") if is_raw_sql else None,
                         "row_count": lr.get("row_count") if is_raw_sql else None,
                         "query_plan": chunk.get("query_plan"),
+                        **quota,
                     }
                 else:
                     payload = chunk

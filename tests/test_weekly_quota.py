@@ -116,6 +116,56 @@ def test_username_khong_ton_tai_fail_open(monkeypatch, tmp_path):
     assert result["allowed"] is True
 
 
+# ---------- auth.get_weekly_quota_status: CHI DOC, khong tang dem (dung cho UI/badge) ----------
+
+def test_doc_trang_thai_khong_lam_tang_dem(monkeypatch, tmp_path):
+    """Goi get_weekly_quota_status() nhieu lan lien tiep KHONG duoc lam used tang len - khac han
+    check_and_consume_weekly_quota() (moi vai tro ho tro chatbot mo trang la mat 1 luot oan)."""
+    _fresh_db(monkeypatch, tmp_path)
+    _create("qlv_doc", role="qlv")
+    auth.check_and_consume_weekly_quota("qlv_doc", 10)  # dung that 1 cau -> used=1
+
+    for _ in range(5):
+        status = auth.get_weekly_quota_status("qlv_doc", 10)
+        assert status["used"] == 1
+        assert status["remaining"] == 9
+        assert status["limit"] == 10
+
+
+def test_doc_trang_thai_tinh_dung_reset_tuan_moi_ma_khong_ghi_db(monkeypatch, tmp_path):
+    _fresh_db(monkeypatch, tmp_path)
+    _create("qlv_doc2", role="qlv")
+    two_weeks_ago = dt.datetime.now() - dt.timedelta(days=14)
+    conn = auth.get_conn()
+    try:
+        conn.execute(
+            "UPDATE users SET weekly_question_count=?, weekly_reset_at=? WHERE username=?",
+            (10, two_weeks_ago.isoformat(), "qlv_doc2"),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    status = auth.get_weekly_quota_status("qlv_doc2", 10)
+    assert status["used"] == 0
+    assert status["remaining"] == 10
+
+    # Xac nhan KHONG ghi gi xuong DB (chi doc) - dong ho tuan truoc van con nguyen trong bang.
+    conn = auth.get_conn()
+    try:
+        row = conn.execute("SELECT weekly_question_count FROM users WHERE username=?", ("qlv_doc2",)).fetchone()
+    finally:
+        conn.close()
+    assert row[0] == 10
+
+
+def test_doc_trang_thai_khong_gioi_han(monkeypatch, tmp_path):
+    _fresh_db(monkeypatch, tmp_path)
+    _create("clevel_doc", role="c_level")
+    status = auth.get_weekly_quota_status("clevel_doc", None)
+    assert status == {"used": 0, "limit": None, "remaining": None, "resets_at": None}
+
+
 # ---------- backend/main.py: noi day WEEKLY_QUESTION_LIMITS + _check_weekly_quota ----------
 
 def test_han_muc_dung_3_vai_tro_da_chot():
@@ -131,7 +181,29 @@ def test_check_weekly_quota_khong_chan_khi_con_han_muc(monkeypatch):
         chatbot_main, "check_and_consume_weekly_quota",
         lambda username, limit: {"allowed": True, "used": 5, "limit": 30, "resets_at": "2026-08-24T00:00:00"},
     )
-    chatbot_main._check_weekly_quota({"username": "qlv_bac", "role": "qlv"})  # khong duoc nem loi
+    quota = chatbot_main._check_weekly_quota({"username": "qlv_bac", "role": "qlv"})  # khong duoc nem loi
+    assert quota == {
+        "quota_used": 5, "quota_limit": 30, "quota_remaining": 25,
+        "quota_resets_at": "2026-08-24T00:00:00",
+    }
+
+
+def test_quota_status_for_chi_doc_dung_ham_khong_tang_dem(monkeypatch):
+    """_quota_status_for (dung cho /auth/login, /auth/me) phai goi get_weekly_quota_status - KHONG
+    duoc goi nham check_and_consume_weekly_quota (se lam hut mat 1 luot moi lan mo trang)."""
+    monkeypatch.setattr(
+        chatbot_main, "get_weekly_quota_status",
+        lambda username, limit: {"used": 12, "limit": 30, "remaining": 18, "resets_at": "2026-08-24T00:00:00"},
+    )
+    monkeypatch.setattr(
+        chatbot_main, "check_and_consume_weekly_quota",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("khong duoc goi ham tang dem o day")),
+    )
+    quota = chatbot_main._quota_status_for({"username": "qlv_bac", "role": "qlv"})
+    assert quota == {
+        "quota_used": 12, "quota_limit": 30, "quota_remaining": 18,
+        "quota_resets_at": "2026-08-24T00:00:00",
+    }
 
 
 def test_check_weekly_quota_chan_va_bao_dung_gio_reset(monkeypatch):

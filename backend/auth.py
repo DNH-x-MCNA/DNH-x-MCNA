@@ -461,6 +461,45 @@ def check_and_consume_weekly_quota(username: str, limit: int | None) -> dict:
         conn.close()
 
 
+def get_weekly_quota_status(username: str, limit: int | None) -> dict:
+    """CHI DOC trang thai quota tuan, KHONG tang dem - dung de hien thi UI ("con X/Y cau tuan
+    nay"). Khac han check_and_consume_weekly_quota() (dung khi THAT SU goi 1 cau hoi vao chatbot,
+    co tang dem) - goi ham nay khi mo trang/dang nhap khong duoc lam hut mat 1 luot cua nguoi dung.
+
+    Tra ve {"used", "limit", "remaining", "resets_at"}. limit None/<=0: khong gioi han, moi truong
+    deu None ngoai "used"=0.
+    """
+    now = dt.datetime.now()
+    week_start = _week_start(now)
+    next_reset = week_start + dt.timedelta(days=7)
+
+    if not limit or limit <= 0:
+        return {"used": 0, "limit": None, "remaining": None, "resets_at": None}
+
+    clean_username = username.lower().strip()
+    conn = get_conn()
+    try:
+        row = conn.execute(
+            "SELECT weekly_question_count, weekly_reset_at FROM users WHERE username=?",
+            (clean_username,),
+        ).fetchone()
+    finally:
+        conn.close()
+
+    if not row:
+        return {"used": 0, "limit": limit, "remaining": limit, "resets_at": next_reset.isoformat()}
+
+    count, reset_at = row
+    count = count or 0
+    needs_reset = not reset_at or dt.datetime.fromisoformat(reset_at) < week_start
+    if needs_reset:
+        count = 0
+    return {
+        "used": count, "limit": limit, "remaining": max(0, limit - count),
+        "resets_at": next_reset.isoformat(),
+    }
+
+
 def migrate_and_seed_users():
     """Chay cac migration mot lan va tao tai khoan he thong neu con thieu.
 
