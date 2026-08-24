@@ -245,6 +245,7 @@ def test_ask_sends_forced_tool_choice_only_on_first_round(monkeypatch):
     monkeypatch.setattr(nl2sql, "append_message", lambda *args, **kwargs: None)
     monkeypatch.setattr(nl2sql, "set_query_state", lambda *args, **kwargs: None)
     monkeypatch.setattr(nl2sql, "compute_and_log_cost", lambda *args, **kwargs: None)
+    monkeypatch.setattr(nl2sql, "latest_data_date", lambda: "2026-08-24")
     monkeypatch.setattr(
         nl2sql, "call_template",
         lambda *args, **kwargs: {"ok": True, "result": {
@@ -365,6 +366,7 @@ def _run_ask_until_rounds_exhausted(monkeypatch, scope_role):
     monkeypatch.setattr(nl2sql, "append_message", lambda *args, **kwargs: None)
     monkeypatch.setattr(nl2sql, "set_query_state", lambda *args, **kwargs: None)
     monkeypatch.setattr(nl2sql, "compute_and_log_cost", lambda *args, **kwargs: None)
+    monkeypatch.setattr(nl2sql, "latest_data_date", lambda: "2026-08-24")
     monkeypatch.setattr(nl2sql, "call_template",
                         lambda name, args, **kw: {"ok": True, "result": {"programs": []}})
 
@@ -416,6 +418,7 @@ def test_repeated_tool_call_is_not_reexecuted_and_forces_final_answer(monkeypatc
     monkeypatch.setattr(nl2sql, "append_message", lambda *args, **kwargs: None)
     monkeypatch.setattr(nl2sql, "set_query_state", lambda *args, **kwargs: None)
     monkeypatch.setattr(nl2sql, "compute_and_log_cost", lambda *args, **kwargs: None)
+    monkeypatch.setattr(nl2sql, "latest_data_date", lambda: "2026-08-24")
 
     def fake_template(name, args, **kwargs):
         tool_runs.append((name, args))

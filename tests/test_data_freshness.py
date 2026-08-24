@@ -221,6 +221,7 @@ def _patch_nl2sql_runtime(monkeypatch, fake_client, appended):
     monkeypatch.setattr(nl2sql, "append_message", lambda *args, **kwargs: appended.append(args))
     monkeypatch.setattr(nl2sql, "set_query_state", lambda *args, **kwargs: None)
     monkeypatch.setattr(nl2sql, "compute_and_log_cost", lambda *args, **kwargs: None)
+    monkeypatch.setattr(nl2sql, "latest_data_date", lambda: "2026-08-24")
 
     class FixedCollector(FreshnessCollector):
         def __init__(self):
