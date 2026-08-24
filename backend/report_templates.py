@@ -2444,7 +2444,10 @@ def revenue_tree(as_of_date: str = None, area_code: str = None, scope_area_code:
     loc theo 1 vung MB/MT/MN (khuyen khich dung khi hoi ca cong ty vi cay day du RAT dai). scope_area_code:
     ep gioi han vung khi tai khoan bi han che. scope_employee_code: CHI danh cho qlv - ep chi tra ve
     DUNG 1 QLV nay (khong thay cac QLV khac cung vung) vi day la du lieu hieu suat CA NHAN dong nghiep,
-    nhay cam hon so lieu tong hop thong thuong. Cac 'to' KHONG xac dinh duoc QLV (xem org_hierarchy.py)
+    nhay cam hon so lieu tong hop thong thuong. 24/08/2026: cung TU DONG gioi han ca tang TP xuong dung
+    vung cua QLV do (truoc day chi loc QLV, van tra ve TP cac vung khac voi node rong - xem ghi chu
+    "BUG DA SUA" trong than ham); neu khong xac dinh duoc vung cua QLV se tra ve loi ro rang thay vi
+    am tham bo qua loc. Cac 'to' KHONG xac dinh duoc QLV (xem org_hierarchy.py)
     se KHONG xuat hien duoi bat ky TP nao - can luu y khi doc ket qua co the thieu 1 vai to.
     LUU Y QUAN TRONG: cap TP hien LUON co sales/target/pct = 0 (Bravo khong tracking target ca nhan
     cho TP trong fact_tonghopkhachhang) - khi tra loi PHAI noi ro so 0 nay la "chua co du lieu target
@@ -2463,6 +2466,25 @@ def revenue_tree(as_of_date: str = None, area_code: str = None, scope_area_code:
         area_code = scope_area_code
     if as_of_date is None:
         as_of_date = str(dt.date.today())
+    # 24/08/2026: BUG DA SUA - scope_employee_code truoc day CHI loc qlv_rows BEN TRONG vong lap (xem
+    # duoi), nhung vong lap "for tp in tp_rows" van chay qua TAT CA TP toan cong ty truoc do. Voi cac
+    # TP khong lien quan, code tao 1 node RONG (qlv=[]) thay vi loai han - lo TEN + MA nhan vien cua
+    # Truong phong CAC VUNG KHAC cho tai khoan QLV (xac nhan that: QLV MBKV1 vung MB nhan ve ca TP
+    # Mien Nam/Mien Trung du qlv_count=0). Sua: tra area_code CUA CHINH QLV do truoc, gan vao bien
+    # area_code local de tp_sql o duoi TU LOC theo dung 1 vung ngay tu dau - dung chung co che loc
+    # area_code da co san, khong them nhanh loc song song moi. Bo loc qlv_rows ben duoi GIU NGUYEN
+    # lam lop bao ve thu 2 (phong truong hop 1 vung co nhieu TP).
+    if scope_employee_code and not area_code:
+        qlv_area_r = _q("SELECT area_code FROM dim_nhanvien WHERE employee_code=?", (scope_employee_code,))
+        if qlv_area_r and qlv_area_r[0]["area_code"]:
+            area_code = qlv_area_r[0]["area_code"]
+        else:
+            # Fail-closed: KHONG xac dinh duoc vung cua QLV nay -> KHONG duoc de tp_sql roi ve khong
+            # loc gi (se quay lai dung bug cu, loop toan bo TP toan cong ty). Tha tu choi con hon lo
+            # ten/ma cac Truong phong vung khac.
+            return {"as_of": None, "tree": [], "error": (
+                f"Khong xac dinh duoc vung phu trach cua tai khoan '{scope_employee_code}' de gioi han "
+                "cay to chuc - tam thoi khong the tra ket qua de tranh lo du lieu ngoai pham vi.")}
     # 13/08/2026: dung CHUNG _fact_date_le() voi bo loc pham vi doanh thu (_employee_scope_clause).
     # Truoc do 2 ben tu tinh moc chot doi mot kieu nen lech nhau 8/18 QLV - viet 1 lan o 1 cho thi
     # khong the lech tro lai.

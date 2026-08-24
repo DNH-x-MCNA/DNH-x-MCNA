@@ -125,6 +125,13 @@ def test_scope_employee_code_chi_tra_ve_dung_1_qlv(tmp_path, monkeypatch):
     all_qlv = [q["employee_code"] for t in result["tree"] for q in t["qlv"]]
 
     assert all_qlv == ["QLV_MN"], f"lo QLV khac: {all_qlv}"
+    # 24/08/2026: BUG THAT da xac nhan tren du lieu that (QLV MBKV1 vung MB nhan ve ca TP Mien Nam/
+    # Mien Trung du qlv_count=0) - vong lap "for tp in tp_rows" truoc day chay qua TAT CA TP toan
+    # cong ty roi moi loc qlv_rows BEN TRONG, tao node RONG cho TP khong lien quan thay vi loai han,
+    # lo TEN + MA nhan vien cua Truong phong VUNG KHAC. Du lieu test co 2 vung (MN, MB) - PHAI CHI
+    # con dung 1 node TP (cua vung MN, noi QLV_MN thuoc ve), khong duoc thay ca TP_MB.
+    assert len(result["tree"]) == 1, f"lo them TP khong lien quan: {[t['employee_code'] for t in result['tree']]}"
+    assert result["tree"][0]["employee_code"] == "TP_MN"
 
 
 def test_cap_TP_khong_co_target_rieng_van_tra_ve_0_khong_bao_loi(tmp_path, monkeypatch):
