@@ -352,6 +352,173 @@ TEMPLATE_TOOLS = [
         },
     },
     {
+        "name": "get_revenue_monthly_series",
+        "description": "CHUOI DOANH THU THEO TUNG THANG (moi thang mot dong) kem MoM va YoY tinh san - "
+                        "BAT BUOC dung tool nay cho MOI cau hoi dang 'doanh thu 12 thang gan nhat', 'theo "
+                        "tung thang', 'thang qua thang', 'xu huong may thang qua', 'thang nao tang/giam manh "
+                        "nhat', 'trung binh truot 3/6 thang', 'bien dong doanh thu qua cac thang'. CHi CAN GOI "
+                        "DUNG 1 LAN cho ca chuoi - TUYET DOI KHONG goi get_revenue_by_channel nhieu lan cho "
+                        "tung thang (se an het han muc goi tool va van thieu MoM/YoY). KHAC get_revenue_by_"
+                        "channel (chi 1 con so TONG cho ca khoang) va compare_periods (dung 2 khoang). Thang "
+                        "nao nam ngoai pham vi du lieu se co 'khong_co_du_lieu': true va revenue=None - PHAI "
+                        "noi ro voi nguoi dung la thang do CHUA CO DU LIEU, TUYET DOI KHONG trinh bay thanh "
+                        "0 dong va khong tinh vao trung binh/tang truong.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "month_to": {"type": "string", "description": "YYYY-MM, thang CUOI cua chuoi (mac dinh: thang co du lieu moi nhat)"},
+                "months_back": {"type": "integer", "description": "So thang tra ve tinh ca month_to (mac dinh 12, toi da 24)"},
+                "include_yoy": {"type": "boolean", "description": "Tu dong lay them 12 thang truoc de tinh YoY (mac dinh true)"},
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "get_customer_lifecycle_summary",
+        "description": "DEM SO KHACH HANG theo cac co vong doi cua Bravo theo TUNG THANG (khach moi "
+                        "trong thang, va 2 co is_ro/is_ac) tu snapshot KPI - dung cho 'thang nay co bao "
+                        "nhieu khach mo moi', 'so khach moi tung thang', 'khach moi dong gop bao nhieu "
+                        "doanh thu'. BAT BUOC: khi tra loi PHAI doc va nhac lai truong 'canh_bao_dinh_"
+                        "nghia' - CHUA XAC NHAN voi DNH nghia nghiep vu cua is_ro va is_ac (do thuc te: "
+                        "is_ac chi ung ~44/6.859 khach nen KHONG THE la 'khach hoat dong'; 646 khach "
+                        "khong mang co nao van co doanh thu 1,66 ty nen 'khong co co' KHONG phai la "
+                        "'khong mua'). CHi rieng 'khach_moi' (is_nc) la nhan da on dinh, duoc goi thang "
+                        "la khach moi. TUYET DOI KHONG tu dat ten 'khach mua lai'/'khach hoat dong' cho "
+                        "so_is_ro/so_is_ac. Neu nguoi dung hoi ve khach NGUNG MUA thi dung "
+                        "get_customers_silent (dua tren hoa don that, chac chan hon). Nguon nay hien "
+                        "CHI phu kenh OTC; voi tai khoan ETC tool se tra not_applicable, KHONG duoc "
+                        "trinh bay so OTC nhu so cua ETC. Kho chi giu khoang 90 ngay snapshot, neu ket "
+                        "qua co canh_bao_thieu_lich_su thi PHAI noi ro, KHONG coi thang thieu la 0 khach.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "year_month": {"type": "string", "description": "YYYY-MM, thang cuoi (mac dinh: thang co snapshot moi nhat)"},
+                "months_back": {"type": "integer", "description": "So thang tra ve tinh ca thang cuoi (mac dinh 1, toi da 12)"},
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "get_customers_silent",
+        "description": "DANH SACH KHACH DA NGUNG MUA / IM LANG: khach TUNG mua nhung lan mua gan nhat "
+                        "da cach day >= silent_days. Dung cho 'khach nao ngung mua', 'khach im lang 30/60/"
+                        "90 ngay', 'khach thang truoc co mua ma thang nay khong thay', 'khach lon nao dang "
+                        "mat dan', 'doanh thu co nguy co mat vi khach bo di'. Dua tren LICH SU HOA DON "
+                        "THAT (lan mua cuoi + doanh thu ky nhin lai) nen chac chan hon get_customer_"
+                        "lifecycle_summary (dem theo co Bravo chua xac nhan nghia). Sap xep theo doanh thu "
+                        "ky truoc giam dan - khach mat nhieu tien nhat len dau. Kho local chi giu chi tiet "
+                        "hoa don ~12 thang gan nhat, PHAI noi ro gioi han nay neu nguoi dung hoi xa hon.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "as_of_date": {"type": "string", "description": "YYYY-MM-DD, moc tinh im lang (mac dinh: ngay du lieu moi nhat)"},
+                "silent_days": {"type": "integer", "description": "So ngay khong mua toi thieu de bi liet ke (mac dinh 60)"},
+                "lookback_months": {"type": "integer", "description": "Cua so nhin lai de tinh doanh thu 'tung mua' (mac dinh 6 thang)"},
+                "limit": {"type": "integer", "description": "So khach tra ve (mac dinh 50, toi da 200)"},
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "get_customer_cohort_retention",
+        "description": "COHORT GIU CHAN khach theo thang co hoa don dau tien QUAN SAT DUOC, tinh ty "
+                       "le con mua o tuoi 1/3/6/12 thang. BAT BUOC dung cho cau hoi 'giu chan cohort', "
+                       "'khach mo moi sau 3/6/12 thang con mua bao nhieu'. Co the tach overall/channel/"
+                       "area. PHAI nhac canh bao: neu kho thieu lich su truoc do thi first observed KHONG "
+                       "chac la lan mua dau tien trong doi; ky chua du tuoi tra None, KHONG coi la 0%.",
+        "input_schema": {"type": "object", "properties": {
+            "month_to": {"type": "string", "description": "YYYY-MM, thang cohort cuoi."},
+            "months_back": {"type": "integer", "description": "So thang cohort, mac dinh 6, toi da 24."},
+            "age_months": {"type": "array", "items": {"type": "integer"}, "description": "Cac tuoi can do, vd [1,3,6,12]."},
+            "group_by": {"type": "string", "enum": ["overall", "channel", "area"]},
+        }, "required": []},
+    },
+    {
+        "name": "get_customer_movement",
+        "description": "LUONG KHACH giua thang dang xem va thang truoc: NEW_OR_FIRST_OBSERVED, "
+                       "REACTIVATED, STOPPED, GROWING, DECLINING; kem doanh thu, delta, so don, co don "
+                       "lap lai va NV phu trach. BAT BUOC dung cho khach moi co lap don, tai kich hoat, "
+                       "khach ngung/tang/giam va doanh thu them-mat. NEW_OR_FIRST_OBSERVED chi la lan dau "
+                       "thay trong cua so kho, KHONG tu goi chac chan la khach moi trong doi.",
+        "input_schema": {"type": "object", "properties": {
+            "month": {"type": "string", "description": "YYYY-MM."},
+            "history_months": {"type": "integer", "description": "Cua so nhan biet tai kich hoat, mac dinh 6."},
+            "movement_filter": {"type": "string", "enum": ["all", "NEW_OR_FIRST_OBSERVED", "REACTIVATED", "STOPPED", "GROWING", "DECLINING"]},
+            "limit": {"type": "integer"},
+        }, "required": []},
+    },
+    {
+        "name": "get_kpi_gap_run_rate",
+        "description": "GAP den 65/70/80/100/120% target va so tien can ban moi ngay con lai, theo "
+                       "nhan vien/QLV/vung/tong. Co linear_run_rate tinh san. BAT BUOC dung cho 'con thieu "
+                       "bao nhieu', 'moi ngay can ban bao nhieu', 'nhiep hien tai'. Day CHI la ngoai suy "
+                       "tuyen tinh, KHONG phai forecast/xac suat; PHAI noi ro dieu nay. Nguon KPI chi phu OTC.",
+        "input_schema": {"type": "object", "properties": {
+            "as_of_date": {"type": "string", "description": "YYYY-MM-DD."},
+            "group_by": {"type": "string", "enum": ["employee", "qlv", "area", "total"]},
+            "limit": {"type": "integer"},
+        }, "required": []},
+    },
+    {
+        "name": "get_cross_sell_opportunities",
+        "description": "CAP SKU thuong mua cung va danh sach khach da mua A nhung chua mua B trong "
+                       "cua so 1-12 thang. Dung cho ban cheo/combo/share-of-wallet noi bo. Ket qua chi "
+                       "la GOI Y tu dong mua kem, KHONG phai ket luan nhu cau hay thi phan ngoai DNH.",
+        "input_schema": {"type": "object", "properties": {
+            "as_of_date": {"type": "string"}, "lookback_months": {"type": "integer"},
+            "min_together_orders": {"type": "integer"}, "pair_limit": {"type": "integer"},
+            "opportunity_limit": {"type": "integer"},
+        }, "required": []},
+    },
+    {
+        "name": "get_customer_product_coverage",
+        "description": "DO PHU/BENCHMARK NOI BO theo khach, san pham hoac nhan vien: doanh thu, don, "
+                       "so SKU, so khach, AOV va chenh lech voi ky truoc cung do dai. Dung cho khach "
+                       "mua it SKU, tan suat/AOV giam, NV co nhieu khach nhung mua thap, san pham nhieu "
+                       "khach nhung luong/don thap. Benchmark chi trong DUNG pham vi tai khoan, KHONG "
+                       "phai market share/share-of-wallet ngoai DNH va KHONG tu ket luan nhu cau.",
+        "input_schema": {"type": "object", "properties": {
+            "as_of_date": {"type": "string"}, "lookback_months": {"type": "integer"},
+            "mode": {"type": "string", "enum": ["customer", "product", "employee"]},
+            "limit": {"type": "integer"},
+        }, "required": []},
+    },
+    {
+        "name": "get_geography_monthly_performance",
+        "description": "HIỆU SUAT DIA BAN theo thang: doanh thu, don, khach, MoM, ty trong, thu hang "
+                       "va streak tang/giam theo MIEN hoac TINH. Dung cho xep hang/diem keo giam/co hoi "
+                       "dia ban. Kho local CHUA co khoa chi nhanh/NPP/distributor; neu hoi chieu do tool "
+                       "tra not_applicable, PHAI noi ro, KHONG tu suy tu tinh/vung.",
+        "input_schema": {"type": "object", "properties": {
+            "month_to": {"type": "string"}, "months_back": {"type": "integer"},
+            "dimension": {"type": "string", "enum": ["area", "city", "branch", "npp", "distributor"]},
+            "limit": {"type": "integer"},
+        }, "required": []},
+    },
+    {
+        "name": "get_workforce_productivity",
+        "description": "NANG SUAT DOI NGU theo thang: headcount TDV/CTV/CS, doanh so, target, doanh "
+                       "thu/nhan vien, MoM va streak giam theo nhan vien/QLV/vung/tong. Dung cho span of "
+                       "control, headcount tang nhung nang suat giam, ai/doi giam lien tiep. Chua co lich "
+                       "su vao-ra-chuyen vung chot chuan nen KHONG ket luan nhan qua tu bien dong headcount.",
+        "input_schema": {"type": "object", "properties": {
+            "month_to": {"type": "string"}, "months_back": {"type": "integer"},
+            "group_by": {"type": "string", "enum": ["employee", "manager", "area", "total"]},
+            "limit": {"type": "integer"},
+        }, "required": []},
+    },
+    {
+        "name": "get_operational_data_quality",
+        "description": "CHAT LUONG DU LIEU VAN HANH: nhan vien thieu manager/target/danh muc, ma "
+                       "trung, khach hoa don mo coi, thieu mapping tinh, thieu ma NV va dong ghi ngay "
+                       "tuong lai. Dung cho checklist cuoi thang/khach chua gan/sai mapping. Tool se liet "
+                       "ke ro cac check CHUA CO NGUON (don chua hoa don, action tracker, chi nhanh/NPP); "
+                       "KHONG duoc bien not_available thanh 0 loi.",
+        "input_schema": {"type": "object", "properties": {
+            "as_of_date": {"type": "string"}, "sample_limit": {"type": "integer"},
+        }, "required": []},
+    },
+    {
         "name": "get_customer_detail",
         "description": "Chi tiet 1 khach hang cu the (theo ma khach hang): gop doanh thu thuc te trong "
                         "1 khoang ngay + so don hang + gia tri TB/don, CUNG LUC voi du no cuoi ky/no qua han "

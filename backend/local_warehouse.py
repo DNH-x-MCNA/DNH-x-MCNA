@@ -287,7 +287,8 @@ def get_conn() -> sqlite3.Connection:
 # chua duoc --full lai sau khi SCHEMA doi).
 _COLUMN_MIGRATIONS = {
     "vhoadon_otc": [("channel_code", "TEXT")],
-    "dim_nhanvien": [("dmsid", "TEXT"), ("start_date", "TEXT"), ("end_date", "TEXT"),
+    "dim_nhanvien": [("is_duplicate", "INTEGER"), ("dmsid", "TEXT"),
+                      ("start_date", "TEXT"), ("end_date", "TEXT"),
                       ("is_resigned", "INTEGER"), ("manager_area_code", "TEXT")],
     "brv_sanpham": [("id_code", "INTEGER")],
     "fact_tonghopkhachhang": [("manager_code", "TEXT"), ("year_sale_target", "REAL"),
