@@ -216,3 +216,54 @@ def test_check_weekly_quota_chan_va_bao_dung_gio_reset(monkeypatch):
     assert exc_info.value.status_code == 429
     assert "30" in exc_info.value.detail
     assert "24/08" in exc_info.value.detail
+
+
+# ---------- _quota_for_question: cau hoi bi chan mien phi (du bao) KHONG duoc tru quota ----------
+
+def test_cau_hoi_du_bao_khong_tru_quota(monkeypatch):
+    """24/08/2026: is_future_forecast_question() chan cau hoi NGAY DAU ask() truoc khi goi model -
+    khong ton dong nao. Tru quota cho cau nay la khong cong bang (phat hien tu phan hoi thuc te cua
+    user: hoi "du bao doanh thu thang 8" bi tu choi nhung van bi tinh vao han muc tuan)."""
+    monkeypatch.setattr(
+        chatbot_main, "check_and_consume_weekly_quota",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("cau hoi mien phi khong duoc goi ham tang dem")),
+    )
+    monkeypatch.setattr(
+        chatbot_main, "get_weekly_quota_status",
+        lambda username, limit: {"used": 5, "limit": 30, "remaining": 25, "resets_at": "2026-08-31T00:00:00"},
+    )
+    quota = chatbot_main._quota_for_question(
+        {"username": "qlv_bac", "role": "qlv"}, "Dự báo doanh thu tháng 8 là bao nhiêu?"
+    )
+    assert quota == {
+        "quota_used": 5, "quota_limit": 30, "quota_remaining": 25,
+        "quota_resets_at": "2026-08-31T00:00:00",
+    }
+
+
+def test_cau_hoi_binh_thuong_van_tru_quota_nhu_cu(monkeypatch):
+    monkeypatch.setattr(
+        chatbot_main, "check_and_consume_weekly_quota",
+        lambda username, limit: {"allowed": True, "used": 6, "limit": 30, "resets_at": "2026-08-31T00:00:00"},
+    )
+    quota = chatbot_main._quota_for_question(
+        {"username": "qlv_bac", "role": "qlv"}, "Doanh thu tháng 7 theo vùng là bao nhiêu?"
+    )
+    assert quota["quota_used"] == 6
+
+
+def test_cau_hoi_du_bao_van_duoc_tra_loi_du_da_het_quota(monkeypatch):
+    """Cau hoi mien phi PHAI luot qua ca gate 429 - het quota van tra loi tu choi du bao binh
+    thuong, khong bi chan vi ly do khac (het luot)."""
+    monkeypatch.setattr(
+        chatbot_main, "check_and_consume_weekly_quota",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("khong duoc goi - se bi chan 429 oan")),
+    )
+    monkeypatch.setattr(
+        chatbot_main, "get_weekly_quota_status",
+        lambda username, limit: {"used": 30, "limit": 30, "remaining": 0, "resets_at": "2026-08-31T00:00:00"},
+    )
+    quota = chatbot_main._quota_for_question(
+        {"username": "qlv_bac", "role": "qlv"}, "Xu hướng doanh số sắp tới ra sao?"
+    )
+    assert quota["quota_remaining"] == 0

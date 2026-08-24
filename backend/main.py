@@ -48,6 +48,7 @@ from auth import (
     check_and_consume_weekly_quota,
     get_weekly_quota_status,
 )
+from feature_policy import is_future_forecast_question
 from mailer import send_password_email
 from conversation_memory import (
     register_session,
@@ -152,6 +153,18 @@ def _quota_status_for(user: dict) -> dict:
         "quota_used": status["used"], "quota_limit": status["limit"],
         "quota_remaining": status["remaining"], "quota_resets_at": status["resets_at"],
     }
+
+
+def _quota_for_question(user: dict, question: str) -> dict:
+    """24/08/2026: cau hoi bi is_future_forecast_question() chan NGAY DAU ask()/ask_stream() (xem
+    nl2sql.py) khong bao gio goi model - tra loi tu choi ma van tru quota la KHONG CONG BANG (nguoi
+    dung mat 1 luot cho cau hoi khong ton dong nao ca). Kiem tra CUNG mot dieu kien o day, TRUOC khi
+    goi ask() that: neu se bi chan mien phi thi CHI DOC trang thai (khong tru), con lai chan+tru nhu
+    binh thuong. Neu sau nay them nhanh mien phi khac trong ask(), phai them dieu kien tuong ung o
+    day (khong tu dong dong bo)."""
+    if is_future_forecast_question(question):
+        return _quota_status_for(user)
+    return _check_weekly_quota(user)
 
 
 def _check_public_auth_rate_limit(email: str, client_ip: str = "local"):
@@ -650,7 +663,7 @@ def chat(req: ChatRequest, user: dict = Depends(require_approved_user)):
     if not req.question or not req.question.strip():
         raise HTTPException(400, "Cau hoi khong duoc de trong")
     _check_rate_limit(user["username"])
-    quota = _check_weekly_quota(user)
+    quota = _quota_for_question(user, req.question)
     _require_session_write_access(req.session_id, user)
     query_id = str(uuid.uuid4())
     started_at = time.monotonic()
@@ -698,7 +711,7 @@ def chat(req: ChatRequest, user: dict = Depends(require_approved_user)):
 # Events (SSE, "data: {...}\n\n") - format don gian, browser/fetch doc duoc truc tiep khong can thu
 # vien them o frontend. 17/08/2026: backend chi phat text sau khi da loai timestamp model tu sinh va
 # gan metadata nguon, de noi dung UI trung khop noi dung luu lich su. Kiem tra QUYEN/rate-limit
-# GIONG HET /chat (dung chung _check_rate_limit, _check_weekly_quota,
+# GIONG HET /chat (dung chung _check_rate_limit, _quota_for_question,
 # _require_session_write_access) - CHi khac cach tra ket qua ve client.
 @app.post("/chat/stream", dependencies=[Depends(require_api_key)])
 def chat_stream(req: ChatRequest, user: dict = Depends(require_approved_user)):
@@ -707,7 +720,7 @@ def chat_stream(req: ChatRequest, user: dict = Depends(require_approved_user)):
     if not req.question or not req.question.strip():
         raise HTTPException(400, "Cau hoi khong duoc de trong")
     _check_rate_limit(user["username"])
-    quota = _check_weekly_quota(user)
+    quota = _quota_for_question(user, req.question)
     _require_session_write_access(req.session_id, user)
 
     scope_area_code = user["scope_value"] if user["role"] in ("regional_director", "qlv") else None
