@@ -1443,12 +1443,12 @@ export default function Home() {
                     </span>
                     {userInfo.quota_limit != null && (
                       <span
-                        className={`text-[10px] font-semibold ${
+                        className={`text-xs font-bold ${
                           userInfo.quota_remaining === 0
                             ? "text-rose-400"
                             : (userInfo.quota_remaining ?? 0) <= userInfo.quota_limit * 0.2
                             ? "text-amber-400"
-                            : "text-slate-400"
+                            : "text-slate-300"
                         }`}
                         title={
                           userInfo.quota_resets_at
