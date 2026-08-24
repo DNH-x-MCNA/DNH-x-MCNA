@@ -756,7 +756,7 @@ class DNHChatbot:
         def strip_accents(s):
             accents_map = {
                 'a': 'áàảãạăắằẳẵặâấầẩẫậ',
-                'A': 'ÁÀẢÃẠĂẮẰClarẴẶÂẤẦẨẪẬ',
+                'A': 'ÁÀẢÃẠĂẮẰẲẴẶÂẤẦẨẪẬ',
                 'd': 'đ', 'D': 'Đ',
                 'e': 'éèẻẽẹêếềểễệ', 'E': 'ÉÈẺẼẸÊẾỀỂỄỆ',
                 'i': 'íìỉĩị', 'I': 'ÍÌỈĨỊ',
@@ -2680,4 +2680,3 @@ if __name__ == "__main__":
     # Test data query
     res_data = chatbot.ask("Cho tôi biết doanh thu mien bac")
     print("Data response:\n", res_data["answer"])
-
