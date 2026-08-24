@@ -2979,7 +2979,8 @@ def receivables_history_dates(limit: int = 30) -> dict:
 
 
 def receivables_period_compare(snapshot_date_a: str, snapshot_date_b: str,
-                                scope_area_code: str = None) -> dict:
+                                scope_area_code: str = None,
+                                scope_channel: str = None) -> dict:
     """SO SANH cong no giua 2 NGAY snapshot lich su (fact_congno_khachhang_history) - dung khi cau
     hoi dang "cong no hom nay so voi tuan truoc/thang truoc the nao", "no qua han tang hay giam so
     voi ngay X". KHAC voi get_receivables_overview (chi tra ve snapshot HIEN TAI DUY NHAT, khong so
@@ -2991,12 +2992,19 @@ def receivables_period_compare(snapshot_date_a: str, snapshot_date_b: str,
 
     21/08/2026: bang lich su moi duoc them nen CHI so sanh duoc trong pham vi tu ngay bat dau ghi -
     KHONG the so sanh voi cac ky xa hon (vd "cung ky nam ngoai") nhu doanh thu da lam duoc."""
-    where, params = "", []
+    conditions, params = [], []
     if scope_area_code:
         region_key = next((k for k, ms in REGION_SQL_MARKERS.items() if scope_area_code in ms), None)
         markers = REGION_SQL_MARKERS.get(region_key, [scope_area_code])
-        where = f" AND area_code IN ({','.join(['?'] * len(markers))})"
-        params = list(markers)
+        conditions.append(f"area_code IN ({','.join(['?'] * len(markers))})")
+        params.extend(markers)
+    if scope_channel:
+        channel = str(scope_channel).strip().upper()
+        if channel not in {"OTC", "ETC"}:
+            raise ValueError(f"scope_channel khong hop le: {scope_channel}")
+        conditions.append("UPPER(TRIM(sales_channel))=?")
+        params.append(channel)
+    where = "".join(f" AND {condition}" for condition in conditions)
 
     def _snapshot(d):
         r = _q(f"SELECT COALESCE(SUM(balance_end),0) bal, COALESCE(SUM(total_overdue),0) od, COUNT(*) n "
@@ -3019,6 +3027,8 @@ def receivables_period_compare(snapshot_date_a: str, snapshot_date_b: str,
         "pct_change_balance_end": (delta_balance / b["balance_end"] * 100) if b["balance_end"] else None,
         "pct_change_total_overdue": (delta_overdue / b["total_overdue"] * 100) if b["total_overdue"] else None,
         "aging_bucket_note": _AGING_BUCKET_NOTE,
+        "scope_area_code": scope_area_code,
+        "scope_channel": str(scope_channel).strip().upper() if scope_channel else None,
     }
 
 
@@ -3405,13 +3415,16 @@ def inventory_expiry_report(area_code: str = None, max_bucket: str = None, limit
 _AREA_TO_REGION_VI = {m: REGION_NAMES_VI[key] for key, ms in REGION_SQL_MARKERS.items() for m in ms}
 
 
-def receivables_overview(top_n: int = 10, scope_area_code: str = None) -> dict:
+def receivables_overview(top_n: int = 10, scope_area_code: str = None,
+                         scope_channel: str = None) -> dict:
     """Tong quan CONG NO tu kho local fact_congno_khachhang (snapshot tuc thoi tu SP goc DNH
     usp_DeptAccDueDate_GetData): tong du no, tong qua han, ty le qua han, tach theo KENH (OTC/ETC)
     va theo VUNG, top N khach no qua han nhieu nhat.
 
     MOT DONG = (khach x kenh) nen luon SUM. scope_area_code: EP LOC theo vung khi tai khoan bi gioi
     han (regional_director/qlv) - dung REGION_SQL_MARKERS de gom ca MB va MB2 cho mien Bac.
+    scope_channel: EP LOC OTC/ETC ngay trong SQL cho tai khoan Giam doc Kenh/OTC-only; khong chi
+    an breakdown sau khi da tinh tong, de tong/top khach/bucket deu khong the lot kenh khac.
 
     Ket qua LUON kem "aging_bucket_note" (xem _AGING_BUCKET_NOTE) canh bao 4 bucket overdue_1_15/
     15_30/30_45/gt_45 lay THANG tu SP goc, co the khac moc Excel noi bo DNH hay dung.
@@ -3422,7 +3435,23 @@ def receivables_overview(top_n: int = 10, scope_area_code: str = None) -> dict:
       - ok: binh thuong.
     (khong co trang thai no_data rieng: neu co du lieu ma vung nay = 0 thi cac tong = 0, van la 'ok'.)
     """
-    meta = _q("SELECT COUNT(*) n, MAX(snapshot_at) at FROM fact_congno_khachhang")
+    conditions, params = [], []
+    if scope_area_code:
+        region_key = next((k for k, ms in REGION_SQL_MARKERS.items() if scope_area_code in ms), None)
+        markers = REGION_SQL_MARKERS.get(region_key, [scope_area_code])
+        conditions.append(f"area_code IN ({','.join(['?'] * len(markers))})")
+        params.extend(markers)
+    channel = None
+    if scope_channel:
+        channel = str(scope_channel).strip().upper()
+        if channel not in {"OTC", "ETC"}:
+            raise ValueError(f"scope_channel khong hop le: {scope_channel}")
+        conditions.append("UPPER(TRIM(sales_channel))=?")
+        params.append(channel)
+    where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+
+    meta = _q(f"SELECT COUNT(*) n, MAX(snapshot_at) at FROM fact_congno_khachhang {where}",
+              tuple(params))
     total_rows = int(meta[0]["n"]) if meta else 0
     if total_rows == 0:
         _warn("Bang cong no (fact_congno_khachhang) CHUA co du lieu (chua dong bo hoac SP loi). PHAI "
@@ -3430,16 +3459,10 @@ def receivables_overview(top_n: int = 10, scope_area_code: str = None) -> dict:
         return {"receivable_status": "unavailable", "receivable_as_of": None,
                 "receivable_source": "bao cao cong no goc DNH (SP)",
                 "receivable_warning": (
-                    "Chua tra cuu duoc cong no (kho cong no chua co du lieu tai thoi diem nay).")}
+                    "Chua tra cuu duoc cong no trong pham vi tai khoan tai thoi diem nay."),
+                "scope_area_code": scope_area_code, "scope_channel": channel}
 
     snapshot_at = meta[0]["at"]
-    # Loc vung: gom cac ma area cua mien (MB -> MB,MB2). Khong scope -> tra toan cong ty.
-    where, params = "", []
-    if scope_area_code:
-        region_key = next((k for k, ms in REGION_SQL_MARKERS.items() if scope_area_code in ms), None)
-        markers = REGION_SQL_MARKERS.get(region_key, [scope_area_code])
-        where = f"WHERE area_code IN ({','.join(['?'] * len(markers))})"
-        params = list(markers)
 
     tot = _q(f"SELECT COALESCE(SUM(balance_end),0) bal, COALESCE(SUM(total_overdue),0) od, "
              f"COALESCE(SUM(overdue_1_15),0) b1, COALESCE(SUM(overdue_15_30),0) b2, "
@@ -3457,9 +3480,9 @@ def receivables_overview(top_n: int = 10, scope_area_code: str = None) -> dict:
 
     regions = []
     if not scope_area_code:  # scope roi thi chi con 1 vung, khong can tach
-        by_area = _q("SELECT area_code, COALESCE(SUM(balance_end),0) bal, "
-                     "COALESCE(SUM(total_overdue),0) od FROM fact_congno_khachhang "
-                     "GROUP BY area_code")
+        by_area = _q(f"SELECT area_code, COALESCE(SUM(balance_end),0) bal, "
+                     f"COALESCE(SUM(total_overdue),0) od FROM fact_congno_khachhang {where} "
+                     f"GROUP BY area_code", tuple(params))
         agg = {}
         for r in by_area:
             label = _AREA_TO_REGION_VI.get(r["area_code"], "Khac/chua xac dinh")
@@ -3482,6 +3505,7 @@ def receivables_overview(top_n: int = 10, scope_area_code: str = None) -> dict:
         "receivable_source": "bao cao cong no goc DNH (SP)",
         "receivable_as_of": snapshot_at,
         "scope_area_code": scope_area_code,
+        "scope_channel": channel,
         "total_balance_end": total_balance,
         "total_overdue": total_overdue,
         "overdue_pct": (total_overdue / total_balance * 100) if total_balance else 0.0,
@@ -3499,8 +3523,13 @@ def receivables_overview(top_n: int = 10, scope_area_code: str = None) -> dict:
                 f"So cong no lay tu snapshot luc {snapshot_at} (da cu hon 6 gio) - luu y moc thoi gian.")
     except Exception:
         pass
+    scope_parts = []
     if scope_area_code:
-        result["scope_note"] = f"(chi vung {scope_area_code})"
+        scope_parts.append(f"vung {scope_area_code}")
+    if channel:
+        scope_parts.append(f"kenh {channel}")
+    if scope_parts:
+        result["scope_note"] = "(chi " + ", ".join(scope_parts) + ")"
     return result
 
 
@@ -5640,7 +5669,8 @@ _CHANNEL_SCOPED_TEMPLATES = {
     "get_geography_monthly_performance", "get_workforce_productivity", "get_operational_data_quality",
     "get_customer_detail", "check_order_timing",
     "get_revenue_by_region", "get_promotion_effectiveness", "get_promotion_data_quality",
-    "get_customer_revenue_debt_risk"
+    "get_customer_revenue_debt_risk", "get_receivables_overview",
+    "get_receivables_period_compare"
 }
 
 

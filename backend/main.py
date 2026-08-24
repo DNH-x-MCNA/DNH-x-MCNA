@@ -155,6 +155,43 @@ def _quota_status_for(user: dict) -> dict:
     }
 
 
+def _business_scopes(user: dict) -> tuple[Optional[str], Optional[str], Optional[str]]:
+    """Chuan hoa va fail-closed pham vi truoc khi tru quota/goi model.
+
+    `regional_director` gom ca Giam doc Mien (co area) va Giam doc Kenh (co channel), nen chi
+    chan khi thieu CA HAI. QLV bat buoc co vung va ma nhan vien de cac tool theo vung/doi deu
+    khong the vo tinh mo rong thanh toan cong ty.
+    """
+    role = str(user.get("role") or "").strip().lower()
+    raw_area = user.get("scope_value")
+    raw_employee = user.get("employee_code")
+    raw_channel = user.get("scope_channel")
+    area = str(raw_area).strip().upper() if raw_area else None
+    employee = str(raw_employee).strip() if raw_employee else None
+    channel = str(raw_channel).strip().upper() if raw_channel else None
+
+    if area and area not in {"MB", "MT", "MN"}:
+        raise HTTPException(403, f"Phạm vi miền của tài khoản không hợp lệ: {area}.")
+    if channel and channel not in {"OTC", "ETC"}:
+        raise HTTPException(403, f"Phạm vi kênh của tài khoản không hợp lệ: {channel}.")
+    if role == "regional_director" and not (area or channel):
+        raise HTTPException(
+            403,
+            "Tài khoản Giám đốc miền/kênh chưa được gán miền hoặc kênh. "
+            "Hệ thống đã chặn truy vấn để tránh mở nhầm dữ liệu toàn công ty.",
+        )
+    if role == "qlv" and (not area or not employee):
+        raise HTTPException(
+            403,
+            "Tài khoản QLV chưa được gán đủ miền và mã nhân viên. "
+            "Hệ thống đã chặn truy vấn để tránh mở nhầm dữ liệu ngoài đội.",
+        )
+
+    return (area if role in {"regional_director", "qlv"} else None,
+            employee if role == "qlv" else None,
+            channel)
+
+
 def _quota_for_question(user: dict, question: str) -> dict:
     """24/08/2026: cau hoi bi is_future_forecast_question() chan NGAY DAU ask()/ask_stream() (xem
     nl2sql.py) khong bao gio goi model - tra loi tu choi ma van tru quota la KHONG CONG BANG (nguoi
@@ -662,6 +699,7 @@ def chat(req: ChatRequest, user: dict = Depends(require_approved_user)):
         raise HTTPException(403, "Tài khoản Admin Vận Hành (admin.dnh) chỉ dùng để quản trị hệ thống, không có quyền truy vấn dữ liệu kinh doanh qua Chatbot.")
     if not req.question or not req.question.strip():
         raise HTTPException(400, "Cau hoi khong duoc de trong")
+    scope_area_code, scope_employee_code, scope_channel = _business_scopes(user)
     _check_rate_limit(user["username"])
     quota = _quota_for_question(user, req.question)
     _require_session_write_access(req.session_id, user)
@@ -669,9 +707,6 @@ def chat(req: ChatRequest, user: dict = Depends(require_approved_user)):
     started_at = time.monotonic()
     create_query_run(query_id, req.session_id, user["username"], req.question.strip())
     try:
-        scope_area_code = user["scope_value"] if user["role"] in ("regional_director", "qlv") else None
-        scope_employee_code = user["employee_code"] if user["role"] == "qlv" else None
-        scope_channel = user.get("scope_channel")
         result = ask(req.question, session_id=req.session_id, username=user["username"],
                      scope_area_code=scope_area_code, scope_employee_code=scope_employee_code,
                      scope_channel=scope_channel, scope_role=user["role"], query_id=query_id)
@@ -719,13 +754,11 @@ def chat_stream(req: ChatRequest, user: dict = Depends(require_approved_user)):
         raise HTTPException(403, "Tài khoản Admin Vận Hành (admin.dnh) chỉ dùng để quản trị hệ thống, không có quyền truy vấn dữ liệu kinh doanh qua Chatbot.")
     if not req.question or not req.question.strip():
         raise HTTPException(400, "Cau hoi khong duoc de trong")
+    scope_area_code, scope_employee_code, scope_channel = _business_scopes(user)
     _check_rate_limit(user["username"])
     quota = _quota_for_question(user, req.question)
     _require_session_write_access(req.session_id, user)
 
-    scope_area_code = user["scope_value"] if user["role"] in ("regional_director", "qlv") else None
-    scope_employee_code = user["employee_code"] if user["role"] == "qlv" else None
-    scope_channel = user.get("scope_channel")
     query_id = str(uuid.uuid4())
     started_at = time.monotonic()
     create_query_run(query_id, req.session_id, user["username"], req.question.strip())

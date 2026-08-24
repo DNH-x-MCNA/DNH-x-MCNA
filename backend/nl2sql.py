@@ -634,7 +634,7 @@ TEMPLATE_TOOLS = [
     },
     {
         "name": "get_receivables_overview",
-        "description": "Tong quan CONG NO toan cong ty (hoac 1 vung neu tai khoan bi gioi han): tong du "
+        "description": "Tong quan CONG NO toan cong ty (hoac 1 vung/kenh neu tai khoan bi gioi han): tong du "
                         "no, tong no qua han, ty le qua han, tach theo kenh OTC/ETC va theo vung, va top N "
                         "khach no qua han nhieu nhat. Nguon: bao cao cong no GOC cua DNH (SP), dong bo dinh "
                         "ky vao kho local. BAT BUOC dung tool nay cho cau hoi cong no TONG HOP/NHIEU KHACH "
@@ -645,7 +645,10 @@ TEMPLATE_TOOLS = [
                         "truong 'aging_bucket_note' - PHAI doc va nhac lai noi dung ghi chu do khi tra loi: "
                         "khung nay (1-15/15-30/30-45/>45 ngay) LAY THANG tu he thong goc, co the KHAC voi moc "
                         "trong bao cao Excel noi bo DNH hay dung (vd 1-7/8-14/15-21/>21 ngay) - khong duoc "
-                        "quy doi ngam hay coi 2 khung la mot.",
+                        "quy doi ngam hay coi 2 khung la mot. Pham vi vung/kenh duoc backend ep tu tai "
+                        "khoan; neu ket qua co scope_note/scope_channel thi PHAI trinh bay dung pham vi, "
+                        "KHONG duoc goi la 'toan cong ty' hay hien thi kenh khac. Khi hien thi bucket "
+                        "cuoi, viet 'tren 45 ngay', KHONG bat dau dong Markdown bang ky tu >.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -674,7 +677,8 @@ TEMPLATE_TOOLS = [
                         "KHAC voi get_receivables_overview (chi co snapshot HIEN TAI DUY NHAT, khong so sanh duoc). "
                         "NEU CHUA CHAC ngay nao co du lieu, goi get_receivables_history_dates TRUOC. He thong moi bat "
                         "dau luu lich su tu 21/08/2026 nen CHI so sanh duoc trong pham vi tu ngay do tro di - KHONG "
-                        "the so sanh 'cung ky nam ngoai' nhu doanh thu.",
+                        "the so sanh 'cung ky nam ngoai' nhu doanh thu. Pham vi vung/kenh duoc backend "
+                        "ep tu tai khoan va phai duoc giu nguyen trong ca hai ky.",
         "input_schema": {
             "type": "object",
             "properties": {

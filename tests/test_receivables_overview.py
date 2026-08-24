@@ -27,6 +27,12 @@ def _make_db(path):
             overdue_1_15 REAL, overdue_15_30 REAL, overdue_30_45 REAL, overdue_gt_45 REAL,
             total_overdue REAL
         );
+        CREATE TABLE fact_congno_khachhang_history (
+            snapshot_date TEXT, snapshot_at TEXT, customer_code TEXT, customer_name TEXT,
+            sales_channel TEXT, area_code TEXT, balance_end REAL,
+            overdue_1_15 REAL, overdue_15_30 REAL, overdue_30_45 REAL, overdue_gt_45 REAL,
+            total_overdue REAL
+        );
         """
     )
     rows = [
@@ -110,6 +116,75 @@ def test_scope_area_code_chi_loc_dung_vung(tmp_path, monkeypatch):
     assert result["total_balance_end"] == 3_500_000
     assert result["total_overdue"] == 2_300_000
     assert result["by_region"] == []  # da gioi han 1 vung, khong tach lai theo vung nua
+
+
+def test_scope_channel_otc_loai_etc_khoi_moi_tong_hop(tmp_path, monkeypatch):
+    """Tai khoan Giam doc Kenh OTC co the xem moi vung, nhung KHONG duoc lot ETC vao tong/top."""
+    db_path = tmp_path / "warehouse.db"
+    _make_db(db_path)
+    monkeypatch.setattr(local_warehouse, "DB_PATH", str(db_path))
+
+    result = report_templates.receivables_overview(scope_channel="OTC")
+
+    assert result["total_balance_end"] == 3_100_000
+    assert result["total_overdue"] == 2_200_000
+    assert result["scope_channel"] == "OTC"
+    assert result["scope_note"] == "(chi kenh OTC)"
+    assert {r["channel"] for r in result["by_channel"]} == {"OTC"}
+    regions = {r["region"]: r for r in result["by_region"]}
+    assert regions["Miền Bắc"]["balance_end"] == 3_000_000
+    top = {r["customer_code"]: r for r in result["top_overdue_customers"]}
+    assert top["C1"]["balance_end"] == 1_000_000  # khong cong dong ETC 500k
+
+
+def test_call_template_ep_scope_channel_cho_giam_doc_kenh(tmp_path, monkeypatch):
+    """Bat dung duong production: scope_channel tu server phai duoc ep vao tool cong no."""
+    db_path = tmp_path / "warehouse.db"
+    _make_db(db_path)
+    monkeypatch.setattr(local_warehouse, "DB_PATH", str(db_path))
+
+    payload = report_templates.call_template(
+        "get_receivables_overview", {}, scope_role="regional_director", scope_channel="OTC"
+    )
+
+    assert payload["ok"] is True
+    assert payload["result"]["total_overdue"] == 2_200_000
+    assert {r["channel"] for r in payload["result"]["by_channel"]} == {"OTC"}
+
+
+def test_so_sanh_cong_no_lich_su_cung_giu_scope_channel(tmp_path, monkeypatch):
+    db_path = tmp_path / "warehouse.db"
+    _make_db(db_path)
+    conn = sqlite3.connect(db_path)
+    conn.executemany(
+        "INSERT INTO fact_congno_khachhang_history VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+        [
+            ("2026-08-24", "2026-08-24T10:00:00", "C1", "C1", "OTC", "MB",
+             1_000, 100, 0, 0, 0, 100),
+            ("2026-08-23", "2026-08-23T10:00:00", "C1", "C1", "OTC", "MB",
+             800, 80, 0, 0, 0, 80),
+            ("2026-08-24", "2026-08-24T10:00:00", "E1", "E1", "ETC", "MB",
+             9_000, 9_000, 0, 0, 0, 9_000),
+            ("2026-08-23", "2026-08-23T10:00:00", "E1", "E1", "ETC", "MB",
+             7_000, 7_000, 0, 0, 0, 7_000),
+        ],
+    )
+    conn.commit()
+    conn.close()
+    monkeypatch.setattr(local_warehouse, "DB_PATH", str(db_path))
+
+    payload = report_templates.call_template(
+        "get_receivables_period_compare",
+        {"snapshot_date_a": "2026-08-24", "snapshot_date_b": "2026-08-23"},
+        scope_role="regional_director", scope_channel="OTC",
+    )
+    assert payload["ok"] is True
+    result = payload["result"]
+
+    assert result["ky_a"]["balance_end"] == 1_000
+    assert result["ky_b"]["balance_end"] == 800
+    assert result["delta_total_overdue"] == 20
+    assert result["scope_channel"] == "OTC"
 
 
 def test_khong_co_du_lieu_thi_bao_ro_khong_am_tham_thanh_0(tmp_path, monkeypatch):

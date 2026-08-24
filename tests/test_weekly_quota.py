@@ -37,6 +37,34 @@ def _create(username, role="qlv"):
     auth.create_user(username=username, password="temp-pass-1234", name=username, role=role)
 
 
+def test_scope_giam_doc_kenh_otc_khong_can_mien():
+    area, employee, channel = chatbot_main._business_scopes({
+        "role": "regional_director", "scope_value": None,
+        "employee_code": None, "scope_channel": "otc",
+    })
+    assert (area, employee, channel) == (None, None, "OTC")
+
+
+def test_scope_giam_doc_thieu_ca_mien_lan_kenh_bi_chan():
+    with pytest.raises(chatbot_main.HTTPException) as exc_info:
+        chatbot_main._business_scopes({
+            "role": "regional_director", "scope_value": None,
+            "employee_code": None, "scope_channel": None,
+        })
+    assert exc_info.value.status_code == 403
+    assert "tránh mở nhầm dữ liệu toàn công ty" in exc_info.value.detail
+
+
+def test_scope_qlv_thieu_mien_hoac_ma_nhan_vien_bi_chan():
+    for area, employee in ((None, "QLV01"), ("MB", None)):
+        with pytest.raises(chatbot_main.HTTPException) as exc_info:
+            chatbot_main._business_scopes({
+                "role": "qlv", "scope_value": area,
+                "employee_code": employee, "scope_channel": "OTC",
+            })
+        assert exc_info.value.status_code == 403
+
+
 # ---------- auth.check_and_consume_weekly_quota: logic loi ----------
 
 def test_khong_gioi_han_khi_limit_none_hoac_0(monkeypatch, tmp_path):
