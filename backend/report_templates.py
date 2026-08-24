@@ -1017,6 +1017,77 @@ def compare_periods(date_from_a: str, date_to_a: str, date_from_b: str, date_to_
     return {"period_a": a, "period_b": b, "delta": delta, "pct_change": pct_change}
 
 
+def revenue_ytd_cumulative(year_month_to: str, from_month: str = None, years_back: int = 3,
+                            scope_area_code: str = None, scope_channel: str = None,
+                            scope_employee_code: str = None) -> dict:
+    """LUY KE doanh thu tu dau ky den 1 thang chi dinh, SO SANH cung khoang do giua nhieu nam gan nhat
+    - dung khi cau hoi dang "luy ke tu thang 1 den thang 7", "so voi cung ky 3 nam gan nhat", "tu dau
+    nam den nay tang/giam bao nhieu so nam ngoai". KHAC voi compare_periods (chi so 2 khoang RIENG LE
+    do AI tu chi dinh ngay) - ham nay TU ĐỘNG dong bo cung 1 khoang thang (vd 01-07) qua N nam LIEN
+    TIEP, khong can AI tu tinh ngay cho tung nam (de sai/lech ngay khi doi nam).
+
+    year_month_to: thang KET THUC luy ke, dang YYYY-MM (vd '2026-07') - nam cua thang nay la nam GAN
+    NHAT trong so sanh, cac nam truoc do tu dong lui ve.
+    from_month: thang BAT DAU luy ke trong nam, dang MM (vd '01') - mac dinh '01' (tu dau nam duong
+    lich). Ap dung CHUNG cho moi nam trong so sanh (vd from_month='01' -> nam nao cung tinh tu thang 1).
+    years_back: so nam GAN NHAT can so sanh KE CA nam cua year_month_to (mac dinh 3, vd year_month_to=
+    '2026-07' va years_back=3 se so 2024/2025/2026, tu thang from_month den thang cua year_month_to).
+    Nam nao KHONG co du lieu (chua phat sinh, vd cong ty moi mo rong sau) se bi bo qua kem ghi chu,
+    KHONG hien 0 nhu the la that.
+
+    Day la du lieu THUC TE DA PHAT SINH (khong phai du bao) - KHONG bi chinh sach khoa tinh nang tuong
+    lai chan (xem feature_policy.py), dung tu do."""
+    if not year_month_to or len(str(year_month_to)) != 7 or str(year_month_to)[4] != "-":
+        return {"error": f"year_month_to phai o dang YYYY-MM (nhan duoc: {year_month_to})."}
+    year_to = int(str(year_month_to)[:4])
+    month_to = str(year_month_to)[5:7]
+    from_month = (from_month or "01").zfill(2)
+    if not (1 <= int(from_month) <= 12):
+        return {"error": f"from_month phai tu 01 den 12 (nhan duoc: {from_month})."}
+    if int(from_month) > int(month_to):
+        return {"error": f"from_month ({from_month}) phai <= thang cua year_month_to ({month_to})."}
+
+    years_back = max(1, min(int(years_back or 3), 10))
+    years, skipped = [], []
+    for i in range(years_back):
+        y = year_to - i
+        date_from = f"{y:04d}-{from_month}-01"
+        date_to = f"{y:04d}-{month_to}-{_last_day_of_month(y, int(month_to)):02d}"
+        r = revenue_by_channel(date_from, date_to, scope_area_code, scope_channel, scope_employee_code)
+        if r["total"]["revenue"] <= 0 and r["total"]["invoices"] == 0:
+            skipped.append(y)
+            continue
+        years.append({"year": y, "date_from": date_from, "date_to": date_to,
+                      "revenue": r["total"]["revenue"], "invoices": r["total"]["invoices"],
+                      "otc_revenue": r["otc"]["revenue"], "etc_revenue": r["etc"]["revenue"]})
+
+    # Moi nam sap xep TANG DAN theo thoi gian de tinh % tang truong giua nam lien ke (nam sau so nam
+    # truoc ngay ben canh), roi moi dao lai THANH GIAM DAN (nam gan nhat len dau) cho de doc khi tra loi.
+    years.sort(key=lambda r: r["year"])
+    for idx in range(1, len(years)):
+        prev = years[idx - 1]["revenue"]
+        years[idx]["pct_change_vs_prev_year"] = (
+            (years[idx]["revenue"] - prev) / prev * 100 if prev else None)
+    years.sort(key=lambda r: -r["year"])
+
+    result = {
+        "tu_thang": from_month, "den_thang": month_to, "cac_nam": years,
+        "data_as_of": latest_data_date(),
+    }
+    if skipped:
+        result["nam_bi_bo_qua"] = skipped
+        result["ghi_chu"] = (f"Cac nam {', '.join(str(y) for y in skipped)} KHONG co du lieu phat sinh "
+                              f"trong khoang thang {from_month}-{month_to} (co the chua kinh doanh giai "
+                              f"doan do) - da bo qua, KHONG hien nhu doanh thu 0.")
+    return result
+
+
+def _last_day_of_month(year: int, month: int) -> int:
+    if month == 12:
+        return 31
+    return (dt.date(year, month + 1, 1) - dt.timedelta(days=1)).day
+
+
 # ===================== DU BAO DOANH THU THEO THANG =====================
 # 12/08/2026. Thay cho get_kpi_forecast_model1 da GO ngay 10/08 (ham do crash 100% vi tham chieu
 # cot t.manager_code khong ton tai, va bia so o 4 cho). Mo hinh o day KHAC HAN: da duoc kiem chung
@@ -1631,6 +1702,21 @@ def kpi_forecast_month(year_month: str = None, as_of_date: str = None,
     }
 
 
+# 21/08/2026: khung tuoi no CHATBOT dang dung (1-15/15-30/30-45/>45 ngay) lay THANG tu SP goc Bravo
+# usp_DeptAccDueDate_GetData - xac nhan qua doi chieu voi file Excel "Bao cao cong no phai thu" DNH
+# tu cung cap: file do chia theo mac khac han (1-7/8-14/15-21/>21 ngay). HAI khung nay CUNG TON TAI
+# that trong nghiep vu DNH (SP he thong dung 1 kieu, bao cao thu cong Excel dung kieu khac) - KHONG
+# phai loi du lieu/code, nhung neu tra loi ma khong noi ro se de bi hieu nham la chatbot tinh sai so
+# voi bao cao Excel quen thuoc. Chua co xac nhan tu DNH kieu nao la "chuan chinh thuc" nen KHONG tu
+# doi bucket - chi gan canh bao ro rang de AI PHAI nhac lai voi nguoi dung khi tra ve breakdown nay.
+_AGING_BUCKET_NOTE = (
+    "Khung qua han duoi day (1-15 / 15-30 / 30-45 / >45 ngay) lay THANG tu he thong cong no goc cua "
+    "DNH (SP usp_DeptAccDueDate_GetData). Neu ban dang doi chieu voi bao cao Excel noi bo (mot so ban "
+    "dung moc 1-7 / 8-14 / 15-21 / >21 ngay), 2 khung nay KHAC NHAU va KHONG the quy doi truc tiep tuong "
+    "ung tung khoang - can hoi lai bo phan ke toan/DNH de xac nhan khung nao dang duoc dung lam chuan."
+)
+
+
 def _customer_receivable(customer_code: str, channel: str) -> dict:
     """Tra du no/qua han cua 1 khach tu KHO LOCAL fact_congno_khachhang - snapshot tuc thoi tu SP goc
     DNH usp_DeptAccDueDate_GetData (xem sync_warehouse.py::sync_fact_congno). Truoc 29/07/2026 doc tu
@@ -1643,7 +1729,8 @@ def _customer_receivable(customer_code: str, channel: str) -> dict:
 
     Giu 5 khoa cu (balance_end, total_overdue, overdue_pct, receivable_status, receivable_warning) de
     KHONG phai sua nl2sql.py; them khoa moi khong pha tuong thich: receivable_as_of, receivable_source,
-    va 4 bucket overdue_1_15/15_30/30_45/gt_45 (de tra loi "qua han bao lau").
+    va 4 bucket overdue_1_15/15_30/30_45/gt_45 (de tra loi "qua han bao lau") kem "aging_bucket_note"
+    (xem _AGING_BUCKET_NOTE) - PHAI co mat cung breakdown de AI biet ma khung nay khac Excel noi bo.
 
     4 trang thai (receivable_status):
       - "unavailable": bang CHUA co du lieu (chua dong bo/SP loi) -> canh bao BAT BUOC "chua tra cuu
@@ -1704,12 +1791,73 @@ def _customer_receivable(customer_code: str, channel: str) -> dict:
               "receivable_status": "ok",
               "receivable_source": "bao cao cong no goc DNH (SP)", "receivable_as_of": snapshot_at,
               "overdue_1_15": _f(r["b1"]), "overdue_15_30": _f(r["b2"]),
-              "overdue_30_45": _f(r["b3"]), "overdue_gt_45": _f(r["b4"])}
+              "overdue_30_45": _f(r["b3"]), "overdue_gt_45": _f(r["b4"]),
+              "aging_bucket_note": _AGING_BUCKET_NOTE}
     if stale:
         result["receivable_warning"] = (
             f"So cong no lay tu snapshot luc {snapshot_at} (da cu hon 6 gio) - nen luu y moc thoi gian "
             "khi tra loi.")
     return result
+
+
+def receivables_history_dates(limit: int = 30) -> dict:
+    """Liet ke cac NGAY da co snapshot cong no LICH SU (fact_congno_khachhang_history) - dung TRUOC
+    khi goi get_receivables_period_compare de biet co ngay nao de so sanh chua, hoac khi nguoi dung
+    hoi 'cong no co du lieu tu bao gio', 'co the so sanh cong no voi ngay nao'.
+
+    21/08/2026: bang lich su MOI duoc them (xem sync_fact_congno trong sync_warehouse.py) - CHI co
+    du lieu TU NGAY BAT DAU GHI TRO DI, KHONG co lich su cong no truoc do (khac han doanh thu co du
+    lieu nhieu nam). PHAI noi ro dieu nay neu danh sach ngay con it/moi bat dau."""
+    rows = _q("SELECT DISTINCT snapshot_date FROM fact_congno_khachhang_history "
+              "ORDER BY snapshot_date DESC LIMIT ?", (int(limit or 30),))
+    dates = [r["snapshot_date"] for r in rows]
+    return {"so_ngay_co_du_lieu": len(dates), "cac_ngay": dates,
+            "ghi_chu": ("He thong bat dau luu lich su cong no tu 21/08/2026 - CHUA co du lieu cong "
+                        "no cua cac ky truoc ngay do, khac voi doanh thu (co du lieu nhieu nam).")}
+
+
+def receivables_period_compare(snapshot_date_a: str, snapshot_date_b: str,
+                                scope_area_code: str = None) -> dict:
+    """SO SANH cong no giua 2 NGAY snapshot lich su (fact_congno_khachhang_history) - dung khi cau
+    hoi dang "cong no hom nay so voi tuan truoc/thang truoc the nao", "no qua han tang hay giam so
+    voi ngay X". KHAC voi get_receivables_overview (chi tra ve snapshot HIEN TAI DUY NHAT, khong so
+    sanh duoc) - dung get_receivables_history_dates TRUOC de biet cac ngay co san neu chua chac.
+
+    snapshot_date_a/date_b: 'YYYY-MM-DD', PHAI la ngay CO trong fact_congno_khachhang_history (dung
+    get_receivables_history_dates de tra cuu) - neu 1 trong 2 ngay khong co du lieu, tra ve loi ro
+    rang thay vi so sanh voi 0.
+
+    21/08/2026: bang lich su moi duoc them nen CHI so sanh duoc trong pham vi tu ngay bat dau ghi -
+    KHONG the so sanh voi cac ky xa hon (vd "cung ky nam ngoai") nhu doanh thu da lam duoc."""
+    where, params = "", []
+    if scope_area_code:
+        region_key = next((k for k, ms in REGION_SQL_MARKERS.items() if scope_area_code in ms), None)
+        markers = REGION_SQL_MARKERS.get(region_key, [scope_area_code])
+        where = f" AND area_code IN ({','.join(['?'] * len(markers))})"
+        params = list(markers)
+
+    def _snapshot(d):
+        r = _q(f"SELECT COALESCE(SUM(balance_end),0) bal, COALESCE(SUM(total_overdue),0) od, COUNT(*) n "
+               f"FROM fact_congno_khachhang_history WHERE snapshot_date=?{where}", (d, *params))[0]
+        return {"snapshot_date": d, "balance_end": _f(r["bal"]), "total_overdue": _f(r["od"]),
+                "so_dong": int(r["n"])}
+
+    a, b = _snapshot(snapshot_date_a), _snapshot(snapshot_date_b)
+    missing = [d for d, s in ((snapshot_date_a, a), (snapshot_date_b, b)) if s["so_dong"] == 0]
+    if missing:
+        return {"error": (f"Khong co du lieu cong no lich su cho ngay {', '.join(missing)}. "
+                           "Dung get_receivables_history_dates de xem cac ngay dang co san.")}
+
+    delta_balance = a["balance_end"] - b["balance_end"]
+    delta_overdue = a["total_overdue"] - b["total_overdue"]
+    return {
+        "ky_a": a, "ky_b": b,
+        "delta_balance_end": delta_balance,
+        "delta_total_overdue": delta_overdue,
+        "pct_change_balance_end": (delta_balance / b["balance_end"] * 100) if b["balance_end"] else None,
+        "pct_change_total_overdue": (delta_overdue / b["total_overdue"] * 100) if b["total_overdue"] else None,
+        "aging_bucket_note": _AGING_BUCKET_NOTE,
+    }
 
 
 def customer_detail(customer_code: str, date_from: str, date_to: str, scope_area_code: str = None,
@@ -1925,6 +2073,164 @@ def inventory_by_region(area_code: str = None, scope_area_code: str = None) -> l
     return rows
 
 
+# 13/08/2026 (them 21/08 sau khi nguoi dung xac nhan): khung phan loai theo SO THANG CON LAI den han
+# su dung - KHOP voi cach DNH dang bao cao thu cong qua Excel "Bao cao ton kho thanh pham" (sheet
+# "Ton kho theo lo date", cot Q-V: Duoi 3T/3T-6T/6T-9T/9T-12T/12T-18T/Lon hon 18T). Dung "thang" =
+# 30 ngay (xap xi, DNH khong ghi ro quy uoc lich trong file mau - neu can chinh xac tuyet doi theo
+# thang duong lich thi phai hoi lai DNH, hien tai xap xi la du cho muc dich canh bao).
+_EXPIRY_BUCKET_DAYS = [
+    ("het_han", None, 0),           # da qua ExpiryDate
+    ("duoi_3_thang", 0, 90),
+    ("3_6_thang", 90, 180),
+    ("6_9_thang", 180, 270),
+    ("9_12_thang", 270, 360),
+    ("12_18_thang", 360, 540),
+    ("tren_18_thang", 540, None),
+]
+
+
+def _expiry_bucket(days_left: float) -> str:
+    if days_left < 0:
+        return "het_han"
+    if days_left < 90:
+        return "duoi_3_thang"
+    if days_left < 180:
+        return "3_6_thang"
+    if days_left < 270:
+        return "6_9_thang"
+    if days_left < 360:
+        return "9_12_thang"
+    if days_left < 540:
+        return "12_18_thang"
+    return "tren_18_thang"
+
+
+def inventory_expiry_report(area_code: str = None, max_bucket: str = None, limit: int = 30,
+                             scope_area_code: str = None) -> dict:
+    """Bao cao TON KHO THEO LO + HAN SU DUNG - tra loi cau hoi "hang nao sap het han/can date/da het
+    han", KHAC voi inventory_by_region() (chi co TONG so luong/gia tri theo vung, KHONG biet lo/han
+    su dung). Nguon: brv_tonkhodklot (ton kho tung lo) JOIN brv_lot (ngay san xuat/het han theo lo) -
+    xem local_warehouse.py::SCHEMA ve ly do BAT BUOC join CA HAI cot (item_lot_code, item_id), vi ma
+    lo CO THE trung giua cac san pham khac nhau tren Bravo (xac nhan 13/08/2026, vd ma lo '020521'
+    xuat hien o nhieu san pham voi han su dung khac nhau).
+
+    Phan loai theo SO THANG CON LAI (khop voi file Excel "Bao cao ton kho thanh pham" DNH dang dung
+    thu cong - sheet "Ton kho theo lo date"): het_han (da qua han), duoi_3_thang, 3_6_thang,
+    6_9_thang, 9_12_thang, 12_18_thang, tren_18_thang. LUON tra ve "summary" (tong gia tri + so luong
+    theo TUNG khung, toan bo pham vi) DE nguoi dung thay duoc BUC TRANH TONG THE truoc, "rows" (chi
+    tiet tung lo, XEP THEO SO NGAY CON LAI IT NHAT truoc - het han/sap het han len dau) chi la mau
+    minh hoa GIOI HAN theo limit, KHONG PHAI danh sach day du - PHAI noi ro dieu nay khi tra loi neu
+    tong so lo trong khung do lon hon limit.
+
+    area_code: 'MB'/'MT'/'MN' - loc theo vung (branch_code), bo trong = toan cong ty (gom ca San xuat).
+    max_bucket: neu truyen (vd '3_6_thang'), CHI tra ve cac lo tu khung do TRO XUONG (gan het han
+    hon) - dung khi nguoi dung hoi "hang nao con duoi 6 thang" v.v. Cac gia tri hop le: het_han,
+    duoi_3_thang, 3_6_thang, 6_9_thang, 9_12_thang, 12_18_thang, tren_18_thang (dung dung ten nay,
+    KHONG tu doi dinh dang).
+    scope_area_code: EP GHI DE area_code khi tai khoan bi gioi han vung (giong inventory_by_region).
+
+    LUU Y QUAN TRONG: du lieu chi co O CAC LO CON HOAT DONG (is_active=1) va CON SO LUONG TON >0 -
+    lo da xuat het/ngung theo doi se KHONG xuat hien, day la BINH THUONG (khong phai thieu du lieu).
+    Neu 1 lo TON KHO nhung KHONG tim thay han su dung trong brv_lot (hiem, xem "khong_xac_dinh_han"
+    trong summary), PHAI noi ro la "chua xac dinh duoc han su dung" cho phan do, TUYET DOI KHONG bo
+    qua trong im lang hay coi nhu khong co han.
+
+    21/08/2026: THEM canh bao do moi dong bo ("sync_warning" trong ket qua, chi xuat hien khi lan
+    dong bo brv_tonkhodklot/brv_lot gan nhat CU HON 6 GIO - cung nguong voi cong no) - day la du
+    lieu tu Bravo qua sync dinh ky, KHONG realtime; neu dong bo bi tre/loi ma khong canh bao, so
+    lieu het han/con date co the SAI LECH THUC TE (vd lo da xuat het nhung he thong local chua kip
+    cap nhat) ma khong ai biet. day la RUI RO VAN HANH khong sua duoc tu code (phu thuoc chat luong
+    dong bo Bravo /VPN/lich chay), nen chi co the CANH BAO ro cho nguoi dung biet gioi han nay."""
+    if scope_area_code:
+        area_code = scope_area_code
+    branch_filter = _AREA_TO_BRANCH.get(area_code) if area_code else None
+    if scope_area_code and not branch_filter:
+        return {"error": f"Khong xac dinh duoc vung '{scope_area_code}' de loc ton kho theo han su dung."}
+
+    valid_buckets = [b[0] for b in _EXPIRY_BUCKET_DAYS]
+    if max_bucket and max_bucket not in valid_buckets:
+        return {"error": f"max_bucket '{max_bucket}' khong hop le. Cac gia tri hop le: {', '.join(valid_buckets)}."}
+
+    sql = """SELECT t.item_lot_code, t.item_id, sp.name item_name, t.quantity, t.branch_code,
+                    k.branch_code kho_branch, l.mfg_date, l.expiry_date
+             FROM brv_tonkhodklot t
+             LEFT JOIN brv_lot l ON l.item_lot_code = t.item_lot_code AND l.item_id = t.item_id
+             LEFT JOIN brv_sanpham sp ON sp.id_code = t.item_id
+             LEFT JOIN brv_kho k ON k.id_code = t.warehouse_id
+             WHERE t.is_active = 1 AND t.quantity > 0"""
+    params = []
+    if branch_filter:
+        sql += " AND t.branch_code = ?"
+        params.append(branch_filter)
+    rows = _q(sql, tuple(params))
+
+    today = dt.date.today()
+    summary = {b[0]: {"so_lo": 0, "tong_so_luong": 0.0} for b in _EXPIRY_BUCKET_DAYS}
+    unknown_expiry_count = 0
+    detail = []
+    for r in rows:
+        qty = _f(r["quantity"])
+        if not r["expiry_date"]:
+            unknown_expiry_count += 1
+            continue
+        try:
+            expiry = dt.date.fromisoformat(r["expiry_date"])
+        except (ValueError, TypeError):
+            unknown_expiry_count += 1
+            continue
+        days_left = (expiry - today).days
+        bucket = _expiry_bucket(days_left)
+        summary[bucket]["so_lo"] += 1
+        summary[bucket]["tong_so_luong"] += qty
+        detail.append({
+            "item_lot_code": r["item_lot_code"],
+            "item_name": r["item_name"] or f'(chua co ten - ma {r["item_id"]})',
+            "quantity": qty,
+            "branch_code": r["kho_branch"] or r["branch_code"],
+            "area_label": _BRANCH_LABEL.get(r["kho_branch"] or r["branch_code"], r["kho_branch"] or r["branch_code"]),
+            "mfg_date": r["mfg_date"],
+            "expiry_date": r["expiry_date"],
+            "days_left": days_left,
+            "bucket": bucket,
+        })
+
+    if max_bucket:
+        allowed = set(valid_buckets[:valid_buckets.index(max_bucket) + 1])
+        detail = [d for d in detail if d["bucket"] in allowed]
+
+    detail.sort(key=lambda d: d["days_left"])
+
+    # Canh bao do moi dong bo - cung nguong 6 gio voi cong no (_customer_receivable/receivables_overview).
+    # brv_tonkhodklot va brv_lot dong bo CUNG 1 lan (2 bang duoc them chung trong SMALL_TABLES, xem
+    # sync_warehouse.py) nen chi can kiem tra 1 trong 2, lay bang co Y NGHIA nghiep vu ro hon (ton kho).
+    sync_warning = None
+    try:
+        last_synced_at, _, _ = get_sync_meta("brv_tonkhodklot")
+        if last_synced_at:
+            age_h = (dt.datetime.now() - dt.datetime.fromisoformat(last_synced_at)).total_seconds() / 3600.0
+            if age_h > 6:
+                sync_warning = (
+                    f"Du lieu ton kho theo lo nay dong bo tu Bravo lan gan nhat luc {last_synced_at} "
+                    f"(da cu hon {age_h:.0f} gio) - so lo/han su dung CO THE da thay doi tren he thong "
+                    "that (xuat kho, nhap lo moi...) ma chua duoc cap nhat vao day. PHAI noi ro voi "
+                    "nguoi dung day la so lieu tai lan dong bo gan nhat, khong phai realtime.")
+    except Exception:
+        pass
+
+    return {
+        "as_of": str(today),
+        "area_code": area_code,
+        "summary": summary,
+        "khong_xac_dinh_han": unknown_expiry_count,
+        "tong_so_lo_hien_thi": len(detail),
+        "rows": detail[:limit],
+        "note": (f"Chi hien thi {min(limit, len(detail))}/{len(detail)} lo (sap xep gan het han nhat "
+                 f"truoc) - dung 'summary' de biet TONG THE ca khung, 'rows' chi la mau minh hoa."
+                 if len(detail) > limit else None),
+        "sync_warning": sync_warning,
+    }
+
+
 # area_code (MB/MB2/MN/MT) -> ten mien tieng Viet, gom MB+MB2 thanh Mien Bac (theo REGION_SQL_MARKERS).
 _AREA_TO_REGION_VI = {m: REGION_NAMES_VI[key] for key, ms in REGION_SQL_MARKERS.items() for m in ms}
 
@@ -1936,6 +2242,9 @@ def receivables_overview(top_n: int = 10, scope_area_code: str = None) -> dict:
 
     MOT DONG = (khach x kenh) nen luon SUM. scope_area_code: EP LOC theo vung khi tai khoan bi gioi
     han (regional_director/qlv) - dung REGION_SQL_MARKERS de gom ca MB va MB2 cho mien Bac.
+
+    Ket qua LUON kem "aging_bucket_note" (xem _AGING_BUCKET_NOTE) canh bao 4 bucket overdue_1_15/
+    15_30/30_45/gt_45 lay THANG tu SP goc, co the khac moc Excel noi bo DNH hay dung.
 
     4 trang thai giong _customer_receivable:
       - unavailable: bang chua co du lieu -> canh bao BAT BUOC, khong ket luan "khong co no".
@@ -2008,6 +2317,7 @@ def receivables_overview(top_n: int = 10, scope_area_code: str = None) -> dict:
         "overdue_pct": (total_overdue / total_balance * 100) if total_balance else 0.0,
         "overdue_1_15": _f(tot["b1"]), "overdue_15_30": _f(tot["b2"]),
         "overdue_30_45": _f(tot["b3"]), "overdue_gt_45": _f(tot["b4"]),
+        "aging_bucket_note": _AGING_BUCKET_NOTE,
         "by_channel": channels,
         "by_region": regions,
         "top_overdue_customers": top_customers,
@@ -4021,6 +4331,7 @@ TEMPLATES = {
     "get_top_products": top_products,
     "get_top_customers": top_customers,
     "get_revenue_by_region": revenue_by_region,
+    "get_revenue_ytd_cumulative": revenue_ytd_cumulative,
     "get_employee_kpi": employee_kpi,
     "get_employee_daily_kpi": employee_daily_kpi,
     "compare_periods": compare_periods,
@@ -4028,11 +4339,14 @@ TEMPLATES = {
     "get_employee_directory": employee_directory,
     "check_order_timing": order_timing_check,
     "get_inventory_by_region": inventory_by_region,
+    "get_inventory_expiry_report": inventory_expiry_report,
     "get_qlv_change_history": qlv_change_history,
     "get_revenue_tree": revenue_tree,
     "get_kpi_ranking": kpi_ranking,
     "get_revenue_reconciliation": revenue_reconciliation_check,
     "get_receivables_overview": receivables_overview,
+    "get_receivables_period_compare": receivables_period_compare,
+    "get_receivables_history_dates": receivables_history_dates,
     "get_customer_revenue_debt_risk": customer_revenue_debt_risk,
     "get_audit_log": audit_log_summary,
     "get_promotion_effectiveness": promotion_effectiveness,
@@ -4054,13 +4368,17 @@ _ROLE_SCOPED_TEMPLATES = {
 _AREA_EXEMPT_TEMPLATES = {
     "get_audit_log", "get_salary_detail", "get_salary_achievement_summary", "get_salary_ranking",
     "get_salary_bonus_policy", "get_salary_data_quality",
+    # 21/08/2026: get_receivables_history_dates chi liet ke NGAY co du lieu (khong co so lieu cong
+    # no nao), khong nhan tham so scope_area_code trong chu ky ham - PHAI o day neu khong call_template
+    # se ep them tham so ma ham khong khai bao, gay TypeError.
+    "get_receivables_history_dates",
 }
 
 _PERSON_LEVEL_TEMPLATES = {
     "get_revenue_tree", "get_kpi_ranking", "get_employee_kpi",
     "get_employee_daily_kpi", "check_order_timing",
     "get_revenue_by_channel", "get_revenue_by_region", "get_top_customers",
-    "get_top_products", "compare_periods",
+    "get_top_products", "compare_periods", "get_revenue_ytd_cumulative",
     "get_promotion_effectiveness",
     "get_promotion_data_quality",
     "get_customer_revenue_debt_risk",
@@ -4089,7 +4407,8 @@ _PERSON_LEVEL_TEMPLATES = {
 _EMPLOYEE_SCOPED_TEMPLATES = {
     "get_revenue_tree", "get_kpi_ranking", "get_employee_kpi",
     "get_employee_daily_kpi", "get_revenue_by_channel", "get_top_customers",
-    "get_top_products", "get_revenue_by_region", "compare_periods", "get_promotion_effectiveness",
+    "get_top_products", "get_revenue_by_region", "compare_periods", "get_revenue_ytd_cumulative",
+    "get_promotion_effectiveness",
     "get_promotion_data_quality",
     "get_customer_revenue_debt_risk",
     "get_salary_detail", "get_salary_achievement_summary", "get_salary_bonus_policy",
@@ -4104,7 +4423,7 @@ _EMPLOYEE_SCOPED_TEMPLATES = {
 
 _CHANNEL_SCOPED_TEMPLATES = {
     "get_revenue_by_channel", "get_top_products", "get_top_customers",
-    "compare_periods", "get_customer_detail", "check_order_timing",
+    "compare_periods", "get_revenue_ytd_cumulative", "get_customer_detail", "check_order_timing",
     "get_revenue_by_region", "get_promotion_effectiveness", "get_promotion_data_quality",
     "get_customer_revenue_debt_risk"
 }

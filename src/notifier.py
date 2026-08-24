@@ -214,8 +214,8 @@ DIGEST_EMAIL_TEMPLATE = """
 <head>
     <meta charset="utf-8">
     <style>
-        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; color: #333333; margin: 0; padding: 20px; background-color: #f4f5f8; }
-        .container { max-width: 650px; margin: 0 auto; background: #ffffff; border-radius: 16px; box-shadow: 0 4px 20px rgba(0,0,0,0.06); overflow: hidden; border: 1px solid #e2e8f0; border-top: 5px solid #f15a25; }
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; color: #333333; margin: 0; padding: 0; background-color: #f4f5f8; }
+        .container { width: 650px; max-width: 650px; background: #ffffff; border-radius: 16px; box-shadow: 0 4px 20px rgba(0,0,0,0.06); overflow: hidden; border: 1px solid #e2e8f0; border-top: 5px solid #f15a25; }
         .header { background-color: #1f4a22; background: linear-gradient(135deg, #153a1a 0%, #1f4a22 35%, #2f6b32 70%, #3c8a3f 100%); padding: 24px 24px 26px; color: #ffffff; }
         .header.header-monthly { background-color: #1f4a22; background: linear-gradient(135deg, #153a1a 0%, #1f4a22 35%, #2f6b32 70%, #3c8a3f 100%); }
         .header-top { display: table; width: 100%; margin-bottom: 14px; }
@@ -227,10 +227,8 @@ DIGEST_EMAIL_TEMPLATE = """
         .content { padding: 24px; }
         .section-title { font-size: 15px; font-weight: 800; color: #1f4a22; margin-top: 24px; margin-bottom: 12px; border-bottom: 2.5px solid #337337; padding-bottom: 7px; text-transform: uppercase; letter-spacing: 0.5px; }
         .section-title::before { content: "\25A0"; color: #f15a25; font-size: 10px; margin-right: 7px; }
-        .grid { display: block; width: 100%; margin: -8px 0; }
-        .col { display: inline-block; vertical-align: top; box-sizing: border-box; }
         .kpi-card { background: #eef5ea; border: 1px solid #d6e6cd; border-radius: 8px; padding: 16px; text-align: center; height: 100%; box-sizing: border-box; }
-        .kpi-card .val { font-size: 20px; font-weight: 700; color: #1e293b; margin: 5px 0; }
+        .kpi-card .val { font-size: 18px; font-weight: 700; color: #1e293b; margin: 5px 0; }
         .kpi-card .lbl { font-size: 11px; color: #54604f; font-weight: 600; text-transform: uppercase; }
         .kpi-card.failed { background: #fdece3; border-color: #f6c7ac; border-left: 4px solid #ef4444; }
         .kpi-card.success { background: #e3f0dc; border-color: #bfdcaf; border-left: 4px solid #337337; }
@@ -244,7 +242,20 @@ DIGEST_EMAIL_TEMPLATE = """
     </style>
 </head>
 <body>
-    <div class="container">
+    <!-- 21/08/2026: preheader — tóm tắt ẩn hiển thị trong vùng preview của inbox (dưới subject)
+    thay vì để trống. display:none + font-size:1px + chuỗi &zwnj;&nbsp; lặp là pattern an toàn cho
+    Word engine (Outlook Desktop): text có trong DOM để client mail lấy làm preview nhưng không
+    chiếm chỗ hiển thị; chuỗi padding chặn nội dung kế tiếp bị kéo vào preview. -->
+    {% if preheader %}
+    <div style="display:none; font-size:1px; line-height:1px; max-height:0; max-width:0; opacity:0; overflow:hidden;">{{ preheader }}{% for _ in range(50) %}&zwnj;&nbsp;{% endfor %}</div>
+    {% endif %}
+    <!-- 21/08/2026: bọc container bằng ghost table — Outlook Desktop không hỗ trợ max-width trên
+    div nên khung 650px trước đây bị giãn full cửa sổ; table width=650 giữ nguyên khung ở mọi client,
+    các client hiện đại vẫn co lại đúng trên màn hình nhỏ nhờ max-width. -->
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color: #f4f5f8;">
+    <tr><td align="center" style="padding: 20px 12px;">
+    <table role="presentation" class="container" width="650" cellpadding="0" cellspacing="0" style="width: 650px; max-width: 650px; background: #ffffff; border-radius: 16px; box-shadow: 0 4px 20px rgba(0,0,0,0.06); overflow: hidden; border: 1px solid #e2e8f0; border-top: 5px solid #f15a25;">
+    <tr><td>
         <div class="header{% if period_label == 'Monthly' %} header-monthly{% endif %}">
             <div class="header-top">
                 <span class="logo-chip"><img src="{{ dnh_logo_data_uri }}" alt="" /></span>
@@ -270,6 +281,21 @@ DIGEST_EMAIL_TEMPLATE = """
             <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-left: 4px solid #94a3b8; border-radius: 8px; padding: 12px 16px; margin-bottom: 20px; font-size: 13px; color: #475569;">
                 Kỳ này có cảnh báo mức nghiêm trọng — xem chi tiết ở mục "Điểm Nổi Bật Trong Kỳ" bên dưới.
             </div>
+            {% endif %}
+
+            {% if show_period_warnings and metrics.warning_alerts %}
+            <!-- 21/08/2026: warning_alerts được _get_period_warning_alerts (src/etl.py) tính từ
+            alert_severity_log từ trước nhưng chưa bao giờ được render vào email định kỳ — người
+            đọc phải chờ mail alert riêng lẻ. Đặt ngay dưới banner has_critical để đối chiếu trực
+            tiếp. Block div full-width (không chia cột) nên an toàn Word engine. -->
+            <div class="section-title">Cảnh Báo Trong Kỳ</div>
+            {% for w in metrics.warning_alerts %}
+            <div style="background: #fffbeb; border: 1px solid #fde68a; border-left: 4px solid #d97706; border-radius: 8px; padding: 10px 14px; margin-bottom: 8px; font-size: 13px; color: #78350f;">
+                <strong>{{ w.alert_name }}</strong>{% if w.region %} &bull; {{ w.region }}{% endif %} &bull; lặp {{ w.repeat_count }} lần trong kỳ
+                {% if w.issue %}<div style="margin-top: 4px; color: #92400e;">{{ w.issue }}</div>{% endif %}
+                {% if w.last_sent_display %}<div style="margin-top: 2px; font-size: 12px; color: #a16207;">Lần cuối: {{ w.last_sent_display }}</div>{% endif %}
+            </div>
+            {% endfor %}
             {% endif %}
 
             {% if metrics.highlights %}
@@ -302,73 +328,63 @@ DIGEST_EMAIL_TEMPLATE = """
             {% else %}
             <div class="section-title">Doanh Thu (OTC + ETC)</div>
             {% endif %}
-            <div class="grid">
-                <!--[if mso]>
-                <table role="presentation" width="100%" style="border-collapse: collapse; border: 0;"><tr>
-                <![endif]-->
+            <!-- 21/08/2026 (lần 2): hàng card tiền gộp còn 3 card (OTC/ETC/Tổng) — card thứ 4
+            "Số Hóa Đơn" trước đây bị ép còn ~25% width khiến label xuống dòng, card cao lêu nghêu.
+            Số hóa đơn chuyển thành dải strip ngang bên dưới (đủ rộng, 1 dòng). Table td % render
+            đúng ở mọi client, tự chia đều theo số card thực tế của từng audience. -->
+            {% set rev_card_count = 2 if metrics.channel else 3 %}
+            {% set rev_col_w = 100 // rev_card_count %}
+            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse: collapse;">
+                <tr>
                 {% if metrics.channel != 'ETC' %}
-                <!--[if mso]><td width="25%" valign="top" style="padding: 8px;"><![endif]-->
-                <div class="col" style="width: 100%; max-width: 145px; padding: 8px;">
-                    <div class="kpi-card">
-                        <div class="lbl">Doanh Thu OTC</div>
-                        <div class="val">{{ "{:,.0f}".format(metrics.revenue.otc) }} đ</div>
-                    </div>
-                </div>
-                <!--[if mso]></td><![endif]-->
+                    <td width="{{ rev_col_w }}%" valign="top" style="padding: 8px;">
+                        <div class="kpi-card">
+                            <div class="lbl">Doanh Thu OTC</div>
+                            <div class="val">{{ "{:,.0f}".format(metrics.revenue.otc) }} đ</div>
+                        </div>
+                    </td>
                 {% endif %}
                 {% if metrics.channel != 'OTC' %}
-                <!--[if mso]><td width="25%" valign="top" style="padding: 8px;"><![endif]-->
-                <div class="col" style="width: 100%; max-width: 145px; padding: 8px;">
-                    <div class="kpi-card">
-                        <div class="lbl">Doanh Thu ETC</div>
-                        <div class="val">{{ "{:,.0f}".format(metrics.revenue.etc) }} đ</div>
-                    </div>
-                </div>
-                <!--[if mso]></td><![endif]-->
-                {% endif %}
-                <!--[if mso]><td width="25%" valign="top" style="padding: 8px;"><![endif]-->
-                <div class="col" style="width: 100%; max-width: 145px; padding: 8px;">
-                    <div class="kpi-card success">
-                        <div class="lbl">Tổng Doanh Thu</div>
-                        <div class="val" style="color: #337337;">{{ "{:,.0f}".format(metrics.revenue.total) }} đ</div>
-                        {% if metrics.revenue.change_pct is not none %}
-                        <div class="{{ 'trend-up' if metrics.revenue.change_pct >= 0 else 'trend-down' }}">
-                            {{ "%+.1f"|format(metrics.revenue.change_pct) }}% so kỳ {{ metrics.revenue.prev_period_label }}
+                    <td width="{{ rev_col_w }}%" valign="top" style="padding: 8px;">
+                        <div class="kpi-card">
+                            <div class="lbl">Doanh Thu ETC</div>
+                            <div class="val">{{ "{:,.0f}".format(metrics.revenue.etc) }} đ</div>
                         </div>
-                        {% else %}
-                        <div class="no-data">Chưa đủ dữ liệu kỳ trước</div>
-                        {% endif %}
-                        {% if metrics.channel_share %}
-                        <div class="no-data">OTC {{ metrics.channel_share.otc_pct }}% &bull; ETC {{ metrics.channel_share.etc_pct }}%</div>
-                        {% endif %}
-                    </div>
-                </div>
-                <!--[if mso]></td><![endif]-->
-                <!--[if mso]><td width="25%" valign="top" style="padding: 8px;"><![endif]-->
-                <div class="col" style="width: 100%; max-width: 145px; padding: 8px;">
-                    {% if metrics.channel == 'OTC' %}
-                    <div class="kpi-card">
-                        <div class="lbl">Số Hóa Đơn OTC</div>
-                        <div class="val">{{ metrics.revenue.otc_invoice_count }}</div>
-                    </div>
-                    {% elif metrics.channel == 'ETC' %}
-                    <div class="kpi-card">
-                        <div class="lbl">Số Hóa Đơn ETC</div>
-                        <div class="val">{{ metrics.revenue.etc_invoice_count }}</div>
-                    </div>
-                    {% else %}
-                    <div class="kpi-card">
-                        <div class="lbl">Số Hóa Đơn (OTC/ETC)</div>
-                        <div class="val">{{ metrics.revenue.otc_invoice_count }} / {{ metrics.revenue.etc_invoice_count }}</div>
-                        <div class="no-data">Tổng: {{ metrics.revenue.invoice_count }}</div>
-                    </div>
-                    {% endif %}
-                </div>
-                <!--[if mso]></td><![endif]-->
-                <!--[if mso]>
-                </tr></table>
-                <![endif]-->
-            </div>
+                    </td>
+                {% endif %}
+                    <td width="{{ rev_col_w }}%" valign="top" style="padding: 8px;">
+                        <div class="kpi-card success">
+                            <div class="lbl">Tổng Doanh Thu</div>
+                            <div class="val" style="color: #337337;">{{ "{:,.0f}".format(metrics.revenue.total) }} đ</div>
+                            {% if metrics.revenue.change_pct is not none %}
+                            <div class="{{ 'trend-up' if metrics.revenue.change_pct >= 0 else 'trend-down' }}">
+                                {{ "%+.1f"|format(metrics.revenue.change_pct) }}% so kỳ {{ metrics.revenue.prev_period_label }}
+                            </div>
+                            {% else %}
+                            <div class="no-data">Chưa đủ dữ liệu kỳ trước</div>
+                            {% endif %}
+                            {% if metrics.channel_share %}
+                            <div class="no-data">OTC {{ metrics.channel_share.otc_pct }}% &bull; ETC {{ metrics.channel_share.etc_pct }}%</div>
+                            {% endif %}
+                        </div>
+                    </td>
+                </tr>
+            </table>
+            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse: collapse;">
+                <tr>
+                    <td style="padding: 0 8px 8px;">
+                        <div style="background: #f1f5f9; border: 1px solid #e2e8f0; border-radius: 8px; padding: 10px 14px; text-align: center; font-size: 13px; color: #334155;">
+                            {% if metrics.channel == 'OTC' %}
+                            <strong>Số hóa đơn OTC:</strong> {{ metrics.revenue.otc_invoice_count }}
+                            {% elif metrics.channel == 'ETC' %}
+                            <strong>Số hóa đơn ETC:</strong> {{ metrics.revenue.etc_invoice_count }}
+                            {% else %}
+                            <strong>Số hóa đơn:</strong> &nbsp;OTC {{ metrics.revenue.otc_invoice_count }} &nbsp;&bull;&nbsp; ETC {{ metrics.revenue.etc_invoice_count }} &nbsp;&bull;&nbsp; Tổng <strong>{{ metrics.revenue.invoice_count }}</strong>
+                            {% endif %}
+                        </div>
+                    </td>
+                </tr>
+            </table>
 
             {% if metrics.trend %}
             <!-- Xu hướng trong kỳ Section — weekly: theo NGÀY, monthly: theo TUẦN.
@@ -427,65 +443,50 @@ DIGEST_EMAIL_TEMPLATE = """
             {% if metrics.kpi_summary %}
             <!-- Tóm tắt KPI Section — kpi_summary là SNAPSHOT hiện tại, không lưu lịch sử theo kỳ -->
             <div class="section-title">Tóm Tắt KPI Đội Ngũ (tính đến hiện tại)</div>
-            <div class="grid">
-                <!--[if mso]>
-                <table role="presentation" width="100%" style="border-collapse: collapse; border: 0;"><tr><td width="33.3%" valign="top" style="padding: 8px;">
-                <![endif]-->
-                <div class="col" style="width: 100%; max-width: 190px; padding: 8px;">
-                    <div class="kpi-card success">
-                        <div class="lbl">Tới Mức Thưởng Nhóm Hàng{% if metrics.kpi_summary.achieved_threshold_pct %} (≥{{ metrics.kpi_summary.achieved_threshold_pct }}%){% endif %}</div>
-                        <div class="val" style="color: #337337;">{{ metrics.kpi_summary.achieved_count }}/{{ metrics.kpi_summary.total_count }}</div>
-                        {% if metrics.kpi_summary.kpi_achieved_count is not none %}<div class="lbl" style="margin-top: 6px; font-weight: 400;">Đạt KPI (≥{{ metrics.kpi_summary.kpi_threshold_pct }}%): {{ metrics.kpi_summary.kpi_achieved_count }}/{{ metrics.kpi_summary.total_count }}</div>{% endif %}
-                        {% if metrics.kpi_summary.full_target_count is not none %}<div class="lbl" style="margin-top: 6px; font-weight: 400;">Đạt chỉ tiêu (≥100%): {{ metrics.kpi_summary.full_target_count }}/{{ metrics.kpi_summary.total_count }}</div>{% endif %}
-                    </div>
-                </div>
-                <!--[if mso]>
-                </td><td width="33.3%" valign="top" style="padding: 8px;">
-                <![endif]-->
-                <div class="col" style="width: 100%; max-width: 190px; padding: 8px;">
-                    <div class="kpi-card">
-                        <div class="lbl">% Hoàn Thành Toàn Đội</div>
-                        <div class="val">{% if metrics.kpi_summary.team_pct is not none %}{{ "%.1f"|format(metrics.kpi_summary.team_pct) }}%{% else %}—{% endif %}</div>
-                    </div>
-                </div>
-                <!--[if mso]>
-                </td><td width="33.3%" valign="top" style="padding: 8px;">
-                <![endif]-->
-                <div class="col" style="width: 100%; max-width: 190px; padding: 8px;">
-                    <div class="kpi-card">
-                        <div class="lbl">Tổng Doanh Số Đạt</div>
-                        <div class="val">{{ "{:,.0f}".format(metrics.kpi_summary.total_amount) }} đ</div>
-                    </div>
-                </div>
-                <!--[if mso]>
-                </td></tr></table>
-                <![endif]-->
-                {% if metrics.channel_share and metrics.kpi_summary.total_target %}
-                <!-- 16/07/2026: chỉ tiêu tháng — chỉ hiện ở Monthly (channel_share chỉ tính cho
-                granularity="monthly", dùng làm cờ đánh dấu, xem etl.py). -->
-                <!--[if mso]>
-                <table role="presentation" width="100%" style="border-collapse: collapse; border: 0;"><tr><td width="50%" valign="top" style="padding: 8px;">
-                <![endif]-->
-                <div class="col" style="width: 100%; max-width: 290px; padding: 8px;">
-                    <div class="kpi-card">
-                        <div class="lbl">Tổng Chỉ Tiêu Tháng</div>
-                        <div class="val">{{ "{:,.0f}".format(metrics.kpi_summary.total_target) }} đ</div>
-                    </div>
-                </div>
-                <!--[if mso]>
-                </td><td width="50%" valign="top" style="padding: 8px;">
-                <![endif]-->
-                <div class="col" style="width: 100%; max-width: 290px; padding: 8px;">
-                    <div class="kpi-card {{ 'success' if metrics.kpi_summary.total_amount >= metrics.kpi_summary.total_target else 'failed' }}">
-                        <div class="lbl">Còn Thiếu Để Đạt 100%</div>
-                        <div class="val">{{ "{:,.0f}".format([metrics.kpi_summary.total_target - metrics.kpi_summary.total_amount, 0]|max) }} đ</div>
-                    </div>
-                </div>
-                <!--[if mso]>
-                </td></tr></table>
-                <![endif]-->
-                {% endif %}
-            </div>
+            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse: collapse;">
+                <tr>
+                    <td width="33%" valign="top" style="padding: 8px;">
+                        <div class="kpi-card success">
+                            <div class="lbl">Tới Mức Thưởng Nhóm Hàng{% if metrics.kpi_summary.achieved_threshold_pct %} (≥{{ metrics.kpi_summary.achieved_threshold_pct }}%){% endif %}</div>
+                            <div class="val" style="color: #337337;">{{ metrics.kpi_summary.achieved_count }}/{{ metrics.kpi_summary.total_count }}</div>
+                            {% if metrics.kpi_summary.kpi_achieved_count is not none %}<div class="lbl" style="margin-top: 6px; font-weight: 400;">Đạt KPI (≥{{ metrics.kpi_summary.kpi_threshold_pct }}%): {{ metrics.kpi_summary.kpi_achieved_count }}/{{ metrics.kpi_summary.total_count }}</div>{% endif %}
+                            {% if metrics.kpi_summary.full_target_count is not none %}<div class="lbl" style="margin-top: 6px; font-weight: 400;">Đạt chỉ tiêu (≥100%): {{ metrics.kpi_summary.full_target_count }}/{{ metrics.kpi_summary.total_count }}</div>{% endif %}
+                        </div>
+                    </td>
+                    <td width="33%" valign="top" style="padding: 8px;">
+                        <div class="kpi-card">
+                            <div class="lbl">% Hoàn Thành Toàn Đội</div>
+                            <div class="val">{% if metrics.kpi_summary.team_pct is not none %}{{ "%.1f"|format(metrics.kpi_summary.team_pct) }}%{% else %}—{% endif %}</div>
+                        </div>
+                    </td>
+                    <td width="34%" valign="top" style="padding: 8px;">
+                        <div class="kpi-card">
+                            <div class="lbl">Tổng Doanh Số Đạt</div>
+                            <div class="val">{{ "{:,.0f}".format(metrics.kpi_summary.total_amount) }} đ</div>
+                        </div>
+                    </td>
+                </tr>
+            </table>
+            {% if metrics.channel_share and metrics.kpi_summary.total_target %}
+            <!-- 16/07/2026: chỉ tiêu tháng — chỉ hiện ở Monthly (channel_share chỉ tính cho
+            granularity="monthly", dùng làm cờ đánh dấu, xem etl.py). -->
+            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse: collapse;">
+                <tr>
+                    <td width="50%" valign="top" style="padding: 8px;">
+                        <div class="kpi-card">
+                            <div class="lbl">Tổng Chỉ Tiêu Tháng</div>
+                            <div class="val">{{ "{:,.0f}".format(metrics.kpi_summary.total_target) }} đ</div>
+                        </div>
+                    </td>
+                    <td width="50%" valign="top" style="padding: 8px;">
+                        <div class="kpi-card {{ 'success' if metrics.kpi_summary.total_amount >= metrics.kpi_summary.total_target else 'failed' }}">
+                            <div class="lbl">Còn Thiếu Để Đạt 100%</div>
+                            <div class="val">{{ "{:,.0f}".format([metrics.kpi_summary.total_target - metrics.kpi_summary.total_amount, 0]|max) }} đ</div>
+                        </div>
+                    </td>
+                </tr>
+            </table>
+            {% endif %}
             {% endif %}
 
             {% if metrics.kpi_breakdown %}
@@ -554,29 +555,47 @@ DIGEST_EMAIL_TEMPLATE = """
             {% if metrics.receivables %}
             <!-- Công nợ Section (chỉ hiện khi dữ liệu còn mới — cùng tháng hoặc tháng liền trước kỳ báo cáo) -->
             <div class="section-title">Công Nợ (Kỳ {{ metrics.receivables.period }})</div>
-            <div class="grid">
-                <!--[if mso]>
-                <table role="presentation" width="100%" style="border-collapse: collapse; border: 0;"><tr><td width="50%" valign="top" style="padding: 8px;">
-                <![endif]-->
-                <div class="col" style="width: 100%; max-width: 290px; padding: 8px;">
-                    <div class="kpi-card failed">
-                        <div class="lbl">Nợ Quá Hạn</div>
-                        <div class="val" style="color: #ef4444;">{{ "{:,.0f}".format(metrics.receivables.total_overdue) }} đ</div>
-                    </div>
-                </div>
-                <!--[if mso]>
-                </td><td width="50%" valign="top" style="padding: 8px;">
-                <![endif]-->
-                <div class="col" style="width: 100%; max-width: 290px; padding: 8px;">
-                    <div class="kpi-card">
-                        <div class="lbl">Tổng Dư Nợ</div>
-                        <div class="val">{{ "{:,.0f}".format(metrics.receivables.balance_end) }} đ</div>
-                    </div>
-                </div>
-                <!--[if mso]>
-                </td></tr></table>
-                <![endif]-->
+            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse: collapse;">
+                <tr>
+                    <td width="50%" valign="top" style="padding: 8px;">
+                        <div class="kpi-card failed">
+                            <div class="lbl">Nợ Quá Hạn</div>
+                            <div class="val" style="color: #ef4444;">{{ "{:,.0f}".format(metrics.receivables.total_overdue) }} đ</div>
+                        </div>
+                    </td>
+                    <td width="50%" valign="top" style="padding: 8px;">
+                        <div class="kpi-card">
+                            <div class="lbl">Tổng Dư Nợ</div>
+                            <div class="val">{{ "{:,.0f}".format(metrics.receivables.balance_end) }} đ</div>
+                        </div>
+                    </td>
+                </tr>
+            </table>
+            {% if period_label == 'Monthly' and show_receivables_detail and metrics.receivables.top_overdue_customers %}
+            <!-- 21/08/2026: chi tiết công nợ chỉ ở bản Monthly (audience C-Level đọc mail là chính,
+            Weekly giữ gọn 2 card tổng như cũ). Dữ liệu đã có sẵn trong metrics.receivables từ trước
+            (GD3a/GD3b) nhưng email chỉ vẽ 2 KPI card tổng. Tuổi nợ dùng strip ngang thay vì 4 card
+            25% — bài học layout cùng ngày: card bị ép hẹp làm label xuống dòng, cao lêu nghêu. -->
+            <table class="data-table">
+                <thead><tr><th>Khách hàng nợ quá hạn nhiều nhất</th><th>Kênh</th><th>Nợ quá hạn</th><th>Dư nợ</th></tr></thead>
+                <tbody>
+                    {% for c in metrics.receivables.top_overdue_customers[:5] %}
+                    <tr>
+                        <td>{{ c.customer_name }}{% if c.region %} <span style="color:#94a3b8;">({{ c.region }})</span>{% endif %}</td>
+                        <td>{{ c.channel }}</td>
+                        <td style="color: #ef4444; font-weight: bold;">{{ "{:,.0f}".format(c.overdue) }} đ</td>
+                        <td>{{ "{:,.0f}".format(c.balance) }} đ</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            {% if metrics.receivables.aging %}
+            <div style="background: #fef2f2; border: 1px solid #fecaca; border-radius: 8px; padding: 10px 14px; margin-top: 10px; font-size: 13px; color: #7f1d1d; text-align: center;">
+                <strong>Cơ cấu tuổi nợ:</strong>
+                {% for a in metrics.receivables.aging %}{% if not loop.first %} &bull;{% endif %} {{ a.label }}: <strong>{{ "{:,.0f}".format(a.amount) }} đ</strong>{% endfor %}
             </div>
+            {% endif %}
+            {% endif %}
             {% endif %}
 
             {% if metrics.inventory.dead_stock_available != False or metrics.inventory.near_stockout_available != False %}
@@ -587,34 +606,27 @@ DIGEST_EMAIL_TEMPLATE = """
                 Mục Tồn kho chết đang tạm ẩn do chưa có nguồn dữ liệu giá trị tồn chính thức được xác nhận.
             </div>
             {% endif %}
-            <div class="grid">
-                <!--[if mso]>
-                <table role="presentation" width="100%" style="border-collapse: collapse; border: 0;"><tr>
-                <![endif]-->
+            {% set inv_col_w = 50 if metrics.inventory.dead_stock_available != False else 100 %}
+            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse: collapse;">
+                <tr>
                 {% if metrics.inventory.dead_stock_available != False %}
-                <!--[if mso]><td width="50%" valign="top" style="padding: 8px;"><![endif]-->
-                <div class="col" style="width: 100%; max-width: 290px; padding: 8px;">
-                    <div class="kpi-card failed">
-                        <div class="lbl">Tồn Chết (&ge;12 tháng)</div>
-                        <div class="val" style="color: #d94e1c;">{{ metrics.inventory.dead_stock_count }}</div>
-                    </div>
-                </div>
-                <!--[if mso]></td><![endif]-->
+                    <td width="{{ inv_col_w }}%" valign="top" style="padding: 8px;">
+                        <div class="kpi-card failed">
+                            <div class="lbl">Tồn Chết (&ge;12 tháng)</div>
+                            <div class="val" style="color: #d94e1c;">{{ metrics.inventory.dead_stock_count }}</div>
+                        </div>
+                    </td>
                 {% endif %}
                 {% if metrics.inventory.near_stockout_available != False %}
-                <!--[if mso]><td width="50%" valign="top" style="padding: 8px;"><![endif]-->
-                <div class="col" style="width: 100%; max-width: {% if metrics.inventory.dead_stock_available == False %}580px{% else %}290px{% endif %}; padding: 8px;">
-                    <div class="kpi-card failed">
-                        <div class="lbl">Sắp Hết Hàng (&le;1 tháng)</div>
-                        <div class="val" style="color: #ef4444;">{{ metrics.inventory.near_stockout_count }}</div>
-                    </div>
-                </div>
-                <!--[if mso]></td><![endif]-->
+                    <td width="{{ inv_col_w }}%" valign="top" style="padding: 8px;">
+                        <div class="kpi-card failed">
+                            <div class="lbl">Sắp Hết Hàng (&le;1 tháng)</div>
+                            <div class="val" style="color: #ef4444;">{{ metrics.inventory.near_stockout_count }}</div>
+                        </div>
+                    </td>
                 {% endif %}
-                <!--[if mso]>
-                </tr></table>
-                <![endif]-->
-            </div>
+                </tr>
+            </table>
             {% if metrics.inventory.dead_stock_available != False and metrics.inventory.dead_stock_items %}
             <table class="data-table">
                 <thead><tr><th>Mã SKU</th><th>Tên hàng</th><th>Giá trị tồn</th><th>Số tháng bán</th></tr></thead>
@@ -645,7 +657,10 @@ DIGEST_EMAIL_TEMPLATE = """
         <div class="footer">
             Báo cáo tự động từ Pipeline ETL &bull; Vui lòng không trả lời trực tiếp email này.
         </div>
-    </div>
+    </td></tr>
+    </table>
+    </td></tr>
+    </table>
 </body>
 </html>
 """
@@ -830,6 +845,26 @@ def build_alert_email(alert_name, severity, summary, table_headers, table_rows):
         dnh_logo_data_uri=_dnh_logo_data_uri()
     )
 
+def _digest_preheader(metrics):
+    """21/08/2026: dòng tóm tắt cho preheader email (vùng preview dưới subject trong inbox
+    Outlook/Gmail) — ghép từ số liệu chính của kỳ thay vì để inbox hiện trống/"View in browser".
+    Trả về chuỗi rỗng nếu không đủ dữ liệu; template tự ẩn preheader rỗng."""
+    parts = []
+    rev = metrics.get("revenue") or {}
+    if rev.get("total"):
+        line = f"Doanh thu {rev['total']:,.0f} đ"
+        if rev.get("change_pct") is not None:
+            line += f" ({rev['change_pct']:+.1f}% so kỳ trước)"
+        parts.append(line)
+    rec = metrics.get("receivables") or {}
+    if rec.get("total_overdue"):
+        parts.append(f"Nợ quá hạn {rec['total_overdue']:,.0f} đ")
+    warns = metrics.get("warning_alerts") or []
+    if warns:
+        parts.append(f"{len(warns)} cảnh báo trong kỳ")
+    return " · ".join(parts)
+
+
 def build_digest_email(metrics, period_label="Daily", audience=None, scope_label=None):
     """
     Tạo nội dung HTML cho email báo cáo tổng hợp định kỳ.
@@ -838,6 +873,13 @@ def build_digest_email(metrics, period_label="Daily", audience=None, scope_label
     cấp quản lý (xem main.py::send_weekly_report/send_monthly_report). None -> không hiện nhãn
     (giữ nguyên hành vi cũ cho các nơi gọi chưa truyền audience).
     """
+    # 21/08/2026: 2 section mới gate bằng report_feature_flags (config/config.yaml). Gate nằm
+    # Ở TEMPLATE chứ không blank key trong metrics — main.py (Teams Daily Digest) đọc chung
+    # dict receivables này, blank ở đây sẽ mất dữ liệu bên Teams.
+    try:
+        _flags = load_config().get('report_feature_flags', {})
+    except Exception:
+        _flags = {}
     template = Template(DIGEST_EMAIL_TEMPLATE)
     return template.render(
         metrics=metrics,
@@ -846,6 +888,9 @@ def build_digest_email(metrics, period_label="Daily", audience=None, scope_label
         scope_label=scope_label,
         chatbot_url=_chatbot_deep_link(),
         dnh_logo_data_uri=_dnh_logo_data_uri(),
+        preheader=_digest_preheader(metrics),
+        show_period_warnings=_flags.get('show_period_warnings', True),
+        show_receivables_detail=_flags.get('show_receivables_detail', True),
     )
 
 

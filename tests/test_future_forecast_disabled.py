@@ -22,6 +22,13 @@ import nl2sql  # noqa: E402
     "Doanh thu cuối tháng sẽ là bao nhiêu?",
     "Ước tính KPI cuối tháng của đội miền Bắc",
     "Mặt hàng này còn bao nhiêu ngày thì hết kho trong tương lai?",
+    # 21/08/2026: cac cach dien dat KHEO tung lot qua nhanh chinh (thieu 1 trong 3 nhom tu khoa) -
+    # xem _IMPLICIT_FUTURE_SPECULATION_RE trong feature_policy.py.
+    "Tình hình doanh thu tháng sau sẽ thế nào?",
+    "KPI đội miền Nam có khả năng đạt không?",
+    "Xu hướng doanh số sắp tới ra sao?",
+    "Nếu tiếp tục đà tăng này thì công nợ sẽ tăng hay giảm?",
+    "Liệu có đạt chỉ tiêu doanh thu không?",
 ])
 def test_nhan_dien_cau_hoi_du_bao(question):
     assert policy.is_future_forecast_question(question) is True
@@ -33,6 +40,11 @@ def test_nhan_dien_cau_hoi_du_bao(question):
     "Chỉ tiêu tháng sau đã nhập là bao nhiêu?",
     "Kế hoạch quý tới của miền Bắc là bao nhiêu?",
     "KPI thực đạt so với target hiện tại",
+    # 21/08/2026: cac cau hoi qua khu/hien tai KHONG duoc bi chan nham boi nhanh bo sung
+    # _IMPLICIT_FUTURE_SPECULATION_RE (phai giu duoc kha nang tra loi du lieu thuc te).
+    "Công nợ tuần trước so với tuần này thế nào?",
+    "Doanh thu tháng 7 đã tăng hay giảm so với tháng 6?",
+    "Đội miền Bắc đã đạt KPI tháng này chưa?",
 ])
 def test_khong_chan_du_lieu_thuc_te_lich_su_va_ke_hoach(question):
     assert policy.is_future_forecast_question(question) is False

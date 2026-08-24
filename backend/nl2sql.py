@@ -81,10 +81,62 @@ MAX_TOOLS_PER_ROUND = 5  # 10/08/2026: truoc day so 3 nam hardcode giua ham ask(
                           # tham so nay chay THAT thay vi bi bo am tham, nen can them cho.
 MAX_UNIQUE_TOOL_CALLS = 12  # Chan chi phi: cung tool+cung tham so chi chay 1 lan trong mot cau hoi.
 MAX_ROWS_TO_MODEL = 20 # Giam tu 50 -> 30 -> 20 tiet kiem token (ad-hoc SQL, template tools khong dung)
-MAX_HISTORY_TURNS = 4  # 04/08/2026: giam tu 6 -> 4 tiet kiem token (ngu canh 4 luot la du, moi luot
-                       # cu cong don token lich su khien vong sau cham di dang ke)
-MAX_TOKENS = 6144  # 04/08/2026: giam tu 8192 -> 6144 ep Claude tra loi ngan gon hon, giam thoi gian
-                   # sinh output (~2-3s nhanh hon). Van du cho thinking + bang 30 dong.
+# 23/08/2026: MAX_HISTORY_TURNS va MAX_TOKENS DOI TU HANG SO PHANG SANG THEO VAI TRO (truoc do
+# ca 2 la 1 muc chung cho MOI vai tro - lich su ha MAX_HISTORY_TURNS 6->4 ngay 04/08 vi moi luot
+# cu cong don token lich su khien vong sau cham di dang ke, xem MAX_TOOL_ROUNDS_BY_ROLE o tren cho
+# tien le phan tang tuong tu). Nguoi dung yeu cau: qlv giu MUC THAP (doi rieng minh, ~5-10 nguoi,
+# it can hoi dong vong/nho lai nhieu); cac vai tro con lai (c_level/admin_ops/regional_director -
+# gom ca "giam doc mien"/"giam doc OTC"/"giam doc ETC": KHONG phai role rieng, la c_level bi gioi
+# han scope_channel, xem main.py) len MUC CAO vi hoi pham vi rong hon/nhieu buoc hon.
+#
+# RUI RO CHI PHI cua viec tang MAX_HISTORY_TURNS: CHI an toan NEU history duoc CACHE (xem
+# cache_control them vao messages truoc khi goi client.messages.create/stream ben duoi) - neu bo
+# cache di, tang len 6 se ton them dang ke MOI cau hoi (khong chi luc thuc su can nho lai), dung
+# nhu ly do ha tu 6 xuong 4 ngay 04/08. MAX_TOKENS thi doc lap (gioi han DAU RA, khong phai
+# INPUT/lich su) - qlv thap hon hop ly vi pham vi hoi hep hon, tiet kiem chi phi output truc tiep.
+MAX_HISTORY_TURNS_BY_ROLE = {"qlv": 4}
+DEFAULT_MAX_HISTORY_TURNS = 6
+
+
+def _max_history_turns(scope_role: str = None) -> int:
+    return MAX_HISTORY_TURNS_BY_ROLE.get(scope_role, DEFAULT_MAX_HISTORY_TURNS)
+
+
+def _history_to_messages(history: list) -> list:
+    """23/08/2026: chuyen history (tu load_history(), content la STRING thuan) thanh messages, danh
+    dau cache_control (TTL 5 phut - giong breakpoint tool_result, vi 2 cau hoi lien tiep cua CUNG
+    nguoi dung thuong cach nhau tu vai chuc giay den vai phut, hiem khi qua 5 phut) tren tin nhan
+    CUOI CUNG cua history NEU co.
+
+    LY DO CAN HAM NAY: truoc 23/08, history duoc noi thang vao messages KHONG co cache_control nao -
+    moi cau hoi moi trong CUNG phien phai tra GIA GOC cho toan bo lich su cu (khong doi giua 2 luot
+    hoi lien tiep, chi them 1 cap hoi-dap moi o cuoi). Day la ly do chinh khien MAX_HISTORY_TURNS
+    truoc do phai giu THAP (4) de kiem soat chi phi - tang len se an toan hon nhieu khi phan "cu"
+    duoc cache-hit (~10% gia goc) thay vi tra gia goc MOI lan.
+
+    cache_control CHI dat duoc tren content dang LIST cac block (khong dat truoc tren string don) -
+    nen tin nhan cuoi cung PHAI duoc chuyen tu string sang [{"type": "text", "text": ...}] truoc khi
+    gan cache_control vao block do. Cac tin nhan khac GIU NGUYEN dinh dang string (khong can doi,
+    tranh thay doi hanh vi ngoai pham vi can sua)."""
+    if not history:
+        return []
+    msgs = list(history)
+    last = dict(msgs[-1])
+    content = last.get("content")
+    if isinstance(content, str):
+        last["content"] = [{"type": "text", "text": content, "cache_control": {"type": "ephemeral"}}]
+    msgs[-1] = last
+    return msgs
+
+
+MAX_TOKENS_BY_ROLE = {"qlv": 5120}
+DEFAULT_MAX_TOKENS = 6144
+
+
+def _max_tokens(scope_role: str = None) -> int:
+    return MAX_TOKENS_BY_ROLE.get(scope_role, DEFAULT_MAX_TOKENS)
+
+
 MAX_PAYLOAD_CHARS = 6000  # Gioi han ky tu payload gui cho AI (~1500 tokens). Template tools (employee_kpi,
                           # revenue_tree...) tra JSON KHONG gioi han kich thuoc, truoc day co the len 20K-50K
                           # chars, gay phình context 7K->49K tokens khi AI goi nhieu tool lien tiep. last_result
@@ -280,6 +332,26 @@ TEMPLATE_TOOLS = [
         },
     },
     {
+        "name": "get_revenue_ytd_cumulative",
+        "description": "LUY KE doanh thu tu dau ky (mac dinh dau nam duong lich) den 1 thang chi dinh, SO "
+                        "SANH TU DONG qua nhieu nam gan nhat trong CUNG 1 lan goi - dung cho cau hoi 'luy ke "
+                        "tu dau nam den nay', 'tu thang 1 den thang 7 nam nay so voi cung ky 3 nam gan nhat', "
+                        "'luy ke quy 1-2 nam nay tang/giam bao nhieu so nam ngoai'. KHAC voi compare_periods "
+                        "(chi so 2 khoang RIENG LE do AI tu chi dinh ngay, de sai/lech khi phai tu tinh ngay "
+                        "cho nhieu nam) - tool nay TU DONG dong bo cung khoang thang qua N nam lien tiep, UU "
+                        "TIEN dung khi cau hoi noi 'luy ke' hoac so sanh HON 2 ky cung luc. Day la du lieu "
+                        "THUC TE da phat sinh (khong phai du bao) nen luon tra loi duoc, khong bi chan.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "year_month_to": {"type": "string", "description": "YYYY-MM, thang KET THUC luy ke (nam cua thang nay la nam gan nhat trong so sanh)"},
+                "from_month": {"type": "string", "description": "MM, thang BAT DAU luy ke trong nam (mac dinh '01' = tu dau nam duong lich), ap dung chung cho moi nam"},
+                "years_back": {"type": "integer", "description": "So nam gan nhat can so sanh ke ca nam cua year_month_to (mac dinh 3)"},
+            },
+            "required": ["year_month_to"],
+        },
+    },
+    {
         "name": "get_customer_detail",
         "description": "Chi tiet 1 khach hang cu the (theo ma khach hang): gop doanh thu thuc te trong "
                         "1 khoang ngay + so don hang + gia tri TB/don, CUNG LUC voi du no cuoi ky/no qua han "
@@ -290,7 +362,12 @@ TEMPLATE_TOOLS = [
                         "thu bao nhieu, ai phu trach, con no khong'). "
                         "LUU Y: kenh ETC KHONG co NV phu trach truc tiep gan tren khach hang (chi OTC co) - "
                         "voi khach ETC thuan tuy, cac truong employee_code/employee_name/position_label se rong, "
-                        "KHONG phai loi.",
+                        "KHONG phai loi. "
+                        "Neu ket qua co breakdown qua han theo bucket (overdue_1_15/15_30/30_45/gt_45) kem "
+                        "truong 'aging_bucket_note' - PHAI doc va nhac lai noi dung ghi chu do khi tra loi: "
+                        "khung nay (1-15/15-30/30-45/>45 ngay) LAY THANG tu he thong goc, co the KHAC voi moc "
+                        "trong bao cao Excel noi bo DNH hay dung (vd 1-7/8-14/15-21/>21 ngay) - khong duoc "
+                        "quy doi ngam hay coi 2 khung la mot.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -355,6 +432,34 @@ TEMPLATE_TOOLS = [
         },
     },
     {
+        "name": "get_inventory_expiry_report",
+        "description": "Ton kho THEO LO + HAN SU DUNG - dung cho cau hoi 'hang nao sap het han/can date/"
+                        "da het han', 'hang ton qua han su dung', 'kiem tra date hang ton kho'. KHAC voi "
+                        "get_inventory_by_region (chi co TONG so luong/gia tri theo vung, KHONG biet lo/han "
+                        "su dung tung mat hang). Tra ve 'summary' (tong so lo + so luong theo TUNG khung thoi "
+                        "gian con lai: het_han/duoi_3_thang/3_6_thang/6_9_thang/9_12_thang/12_18_thang/"
+                        "tren_18_thang - LUON dua CA BUC TRANH TONG THE nay truoc khi di vao chi tiet) va "
+                        "'rows' (chi tiet tung lo, CHI la mau minh hoa GIOI HAN theo limit, KHONG PHAI danh "
+                        "sach day du - neu 'note' bao con thieu, PHAI noi ro voi nguoi dung day chi la mot "
+                        "phan, khong phai toan bo). Neu nguoi dung hoi CHUNG CHUNG 'hang nao sap het han' "
+                        "khong noi ro khung thoi gian, uu tien de max_bucket trong (mac dinh) de thay CA het "
+                        "han LAN sap het han, hoac truyen max_bucket='duoi_3_thang' neu ho noi ro 'trong 3 "
+                        "thang toi'. "
+                        "Neu ket qua co truong 'sync_warning' KHAC null - PHAI doc va noi ro voi nguoi dung: "
+                        "du lieu nay dong bo dinh ky tu Bravo (khong realtime), lan dong bo gan nhat da cach "
+                        "qua lau nen so lieu CO THE khac thuc te tai thoi diem hoi.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "area_code": {"type": "string", "description": "Loc theo 1 vung: 'MB'/'MT'/'MN' (khong bat buoc - bo trong de xem ca 4 vung gom ca San xuat)"},
+                "max_bucket": {"type": "string", "enum": ["het_han", "duoi_3_thang", "3_6_thang", "6_9_thang", "9_12_thang", "12_18_thang", "tren_18_thang"],
+                               "description": "Chi lay cac lo TU khung nay TRO XUONG (gan het han hon) - vd 'duoi_3_thang' se gom ca het_han + duoi_3_thang. Bo trong de xem TAT CA cac khung."},
+                "limit": {"type": "integer", "description": "So dong chi tiet toi da tra ve trong 'rows' (mac dinh 30) - KHONG anh huong 'summary' (luon tinh tren toan bo pham vi)."},
+            },
+            "required": [],
+        },
+    },
+    {
         "name": "get_receivables_overview",
         "description": "Tong quan CONG NO toan cong ty (hoac 1 vung neu tai khoan bi gioi han): tong du "
                         "no, tong no qua han, ty le qua han, tach theo kenh OTC/ETC va theo vung, va top N "
@@ -362,13 +467,48 @@ TEMPLATE_TOOLS = [
                         "ky vao kho local. BAT BUOC dung tool nay cho cau hoi cong no TONG HOP/NHIEU KHACH "
                         "(vd 'tong no qua han', 'top khach no', 'ty le qua han theo vung') - KHONG tu sinh "
                         "SQL va KHONG dung bang receivable_detail/receivable_etc cu (da ngung). Cong no cua "
-                        "MOT khach cu the -> dung get_customer_detail.",
+                        "MOT khach cu the -> dung get_customer_detail. "
+                        "Ket qua co breakdown qua han theo bucket (overdue_1_15/15_30/30_45/gt_45) kem "
+                        "truong 'aging_bucket_note' - PHAI doc va nhac lai noi dung ghi chu do khi tra loi: "
+                        "khung nay (1-15/15-30/30-45/>45 ngay) LAY THANG tu he thong goc, co the KHAC voi moc "
+                        "trong bao cao Excel noi bo DNH hay dung (vd 1-7/8-14/15-21/>21 ngay) - khong duoc "
+                        "quy doi ngam hay coi 2 khung la mot.",
         "input_schema": {
             "type": "object",
             "properties": {
                 "top_n": {"type": "integer", "description": "So khach no qua han nhieu nhat can liet ke (mac dinh 10)"},
             },
             "required": [],
+        },
+    },
+    {
+        "name": "get_receivables_history_dates",
+        "description": "Liet ke cac NGAY da co snapshot cong no LICH SU - dung TRUOC get_receivables_period_compare "
+                        "de biet co ngay nao de so sanh, hoac khi hoi 'cong no co du lieu tu bao gio'. He thong bat dau "
+                        "luu lich su cong no tu 21/08/2026, KHONG co du lieu truoc do (khac doanh thu co nhieu nam).",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "limit": {"type": "integer", "description": "So ngay gan nhat can liet ke (mac dinh 30)"},
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "get_receivables_period_compare",
+        "description": "SO SANH cong no (du no + no qua han) giua 2 NGAY snapshot lich su - dung cho cau hoi "
+                        "'cong no hom nay so voi tuan/thang truoc the nao', 'no qua han tang hay giam so voi ngay X'. "
+                        "KHAC voi get_receivables_overview (chi co snapshot HIEN TAI DUY NHAT, khong so sanh duoc). "
+                        "NEU CHUA CHAC ngay nao co du lieu, goi get_receivables_history_dates TRUOC. He thong moi bat "
+                        "dau luu lich su tu 21/08/2026 nen CHI so sanh duoc trong pham vi tu ngay do tro di - KHONG "
+                        "the so sanh 'cung ky nam ngoai' nhu doanh thu.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "snapshot_date_a": {"type": "string", "description": "YYYY-MM-DD, ngay can xem (ky hien tai/moi)"},
+                "snapshot_date_b": {"type": "string", "description": "YYYY-MM-DD, ngay doi chieu (ky truoc/cu)"},
+            },
+            "required": ["snapshot_date_a", "snapshot_date_b"],
         },
     },
     {
@@ -881,14 +1021,14 @@ QUAN TRONG VE CHON TOOL:
 - Neu cau hoi thuoc cac nhom bao cao chuan: doanh thu theo kenh, top san pham, top khach hang, doanh thu
   theo vung mien, KPI/doanh so nhan vien (tong quan/thang), KPI THEO NGAY 1 nhan vien ca nhan, SO SANH
   2 khoang thoi gian, CHI TIET 1 khach hang cu the, TRA CUU ma/ten/vai tro nhan vien, KIEM TRA don hang
-  bat thuong/chay don KPI, TON KHO THEO VUNG, LICH SU DOI QLV, CAY DOANH THU/KPI TP-QLV-TDV, XEP HANG
-  KPI, DOI CHIEU doanh thu tu tren xuong vs cong don tu duoi len, LICH SU TRUY VAN/CHI PHI AI cua chinh
-  nguoi dang hoi, HIEU QUA CHUONG TRINH KHUYEN MAI, QUY TAC/BAC TIEN V15-V22-V25-ASO,
-  THUONG KINH DOANH/PHU CAP thang cua 1 nhan vien -> BAT BUOC dung tool tuong ung
+  bat thuong/chay don KPI, TON KHO THEO VUNG, TON KHO SAP/DA HET HAN SU DUNG THEO LO, LICH SU DOI QLV,
+  CAY DOANH THU/KPI TP-QLV-TDV, XEP HANG KPI, DOI CHIEU doanh thu tu tren xuong vs cong don tu duoi len,
+  LICH SU TRUY VAN/CHI PHI AI cua chinh nguoi dang hoi, HIEU QUA CHUONG TRINH KHUYEN MAI, QUY TAC/BAC
+  TIEN V15-V22-V25-ASO, THUONG KINH DOANH/PHU CAP thang cua 1 nhan vien -> BAT BUOC dung tool tuong ung
   (get_revenue_by_channel, get_top_products, get_top_customers, get_revenue_by_region, get_employee_kpi,
-  get_employee_daily_kpi, compare_periods, get_customer_detail, get_employee_directory, check_order_timing,
-  get_inventory_by_region, get_qlv_change_history, get_revenue_tree, get_kpi_ranking,
-  get_revenue_reconciliation, get_receivables_overview, get_customer_revenue_debt_risk,
+  get_employee_daily_kpi, compare_periods, get_revenue_ytd_cumulative, get_customer_detail, get_employee_directory, check_order_timing,
+  get_inventory_by_region, get_inventory_expiry_report, get_qlv_change_history, get_revenue_tree,
+  get_kpi_ranking, get_revenue_reconciliation, get_receivables_overview, get_customer_revenue_debt_risk,
   get_audit_log, get_promotion_effectiveness, get_promotion_data_quality,
   get_salary_bonus_policy, get_salary_data_quality, get_salary_detail,
   get_salary_achievement_summary).
@@ -1264,8 +1404,8 @@ def ask(question: str, session_id: str = "default", username: str = None, scope_
 
     freshness = FreshnessCollector()
     client = _llm_client()
-    history = load_history(session_id, max_turns=MAX_HISTORY_TURNS)
-    messages = list(history) + [{"role": "user", "content": question}]
+    history = load_history(session_id, max_turns=_max_history_turns(scope_role))
+    messages = _history_to_messages(history) + [{"role": "user", "content": question}]
     # Breakpoint cache thu 3 (ngoai tools + system tinh) - danh dau cuoi khoi tool_result MOI NHAT
     # de cache duoc ca lich su + tool_result cua cac vong truoc, khong bi tinh lai gia day du moi
     # vong. Chi giu 1 marker "dang hoat dong" tai 1 thoi diem (xoa marker vong truoc khi dat vong
@@ -1273,6 +1413,10 @@ def ask(question: str, session_id: str = "default", username: str = None, scope_
     # vong truoc nho co che nhin lui 20 block, khong can giu marker cu.
     # LUU Y breakpoint nay dung TTL MAC DINH (5 phut), khac 2 breakpoint kia dung "1h" - ly do day du
     # o cho dat cache_control trong vong lap ben duoi.
+    # 23/08/2026: THEM breakpoint thu 4 - _history_to_messages() da danh cache_control (TTL 5 phut,
+    # cung ly do voi breakpoint nay) tren tin nhan CUOI CUNG cua history (neu co). Tong 4 breakpoint
+    # dung DUNG gioi han toi da cua API (tools=1h, system=1h, history=5', tool_result dong=5') - neu
+    # sau nay can them breakpoint moi, phai bo bot 1 trong 4 cai nay truoc, KHONG duoc cong don.
     _last_msg_cache_block = None
 
     sql_used = []
@@ -1325,7 +1469,7 @@ def ask(question: str, session_id: str = "default", username: str = None, scope_
             break
         request_kwargs = {
             "model": MODEL,
-            "max_tokens": MAX_TOKENS,
+            "max_tokens": _max_tokens(scope_role),
             "system": system_blocks,
             "tools": tools_for_request,
             "messages": messages,
@@ -1349,7 +1493,7 @@ def ask(question: str, session_id: str = "default", username: str = None, scope_
                 # 06/08/2026: da GO effort="medium" o ca 2 lenh goi (xem ghi chu dai o vong lap tren) -
                 # co che thu lai nay GIU NGUYEN vi no van la luoi an toan cho dung tinh huong tren.
                 messages.append({"role": "user", "content": "Hay tra loi ngay bay gio, ngan gon truc tiep."})
-                resp2 = client.messages.create(model=MODEL, max_tokens=MAX_TOKENS, system=system_blocks,
+                resp2 = client.messages.create(model=MODEL, max_tokens=_max_tokens(scope_role), system=system_blocks,
                                                 tools=tools_for_request, messages=messages,
                                                 extra_headers=_CACHE_BETA_HEADERS,
                                                 timeout=max(1.0, min(
@@ -1574,7 +1718,7 @@ def ask(question: str, session_id: str = "default", username: str = None, scope_
         fallback = query_plan.timeout_answer()
     else:
         final_resp = client.messages.create(
-            model=MODEL, max_tokens=MAX_TOKENS, system=system_blocks,
+            model=MODEL, max_tokens=_max_tokens(scope_role), system=system_blocks,
             messages=messages, extra_headers=_CACHE_BETA_HEADERS,
             timeout=max(1.0, min(LLM_CALL_TIMEOUT_SECONDS, query_plan.remaining_seconds())),
         )
@@ -1641,8 +1785,8 @@ def ask_stream(question: str, session_id: str = "default", username: str = None,
 
     freshness = FreshnessCollector()
     client = _llm_client()
-    history = load_history(session_id, max_turns=MAX_HISTORY_TURNS)
-    messages = list(history) + [{"role": "user", "content": question}]
+    history = load_history(session_id, max_turns=_max_history_turns(scope_role))
+    messages = _history_to_messages(history) + [{"role": "user", "content": question}]
     _last_msg_cache_block = None  # xem ghi chu day du o ask()
 
     sql_used = []
@@ -1689,7 +1833,7 @@ def ask_stream(question: str, session_id: str = "default", username: str = None,
         # tool_use ve moi biet dc functon nao/tham so gi de goi that), doi lai dam bao vong tra loi
         # that SU (bat ky la vong thu may) LUON duoc stream.
         request_kwargs = {
-            "model": MODEL, "max_tokens": MAX_TOKENS, "system": system_blocks,
+            "model": MODEL, "max_tokens": _max_tokens(scope_role), "system": system_blocks,
             "tools": tools_for_request, "messages": messages,
             "extra_headers": _CACHE_BETA_HEADERS,
             "timeout": max(1.0, min(LLM_CALL_TIMEOUT_SECONDS, query_plan.remaining_seconds())),
@@ -1712,7 +1856,7 @@ def ask_stream(question: str, session_id: str = "default", username: str = None,
             if not answer_text:
                 # Xem ghi chu day du o ask() - truong hop hy huu het ngan sach thinking.
                 messages.append({"role": "user", "content": "Hay tra loi ngay bay gio, ngan gon truc tiep."})
-                with client.messages.stream(model=MODEL, max_tokens=MAX_TOKENS, system=system_blocks,
+                with client.messages.stream(model=MODEL, max_tokens=_max_tokens(scope_role), system=system_blocks,
                                              tools=tools_for_request, messages=messages,
                                              extra_headers=_CACHE_BETA_HEADERS,
                                              timeout=max(1.0, min(
@@ -1919,7 +2063,7 @@ def ask_stream(question: str, session_id: str = "default", username: str = None,
         fallback = query_plan.timeout_answer()
     else:
         with client.messages.stream(
-            model=MODEL, max_tokens=MAX_TOKENS, system=system_blocks,
+            model=MODEL, max_tokens=_max_tokens(scope_role), system=system_blocks,
             messages=messages, extra_headers=_CACHE_BETA_HEADERS,
             timeout=max(1.0, min(LLM_CALL_TIMEOUT_SECONDS, query_plan.remaining_seconds())),
         ) as final_stream:
