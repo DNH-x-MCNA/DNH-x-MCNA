@@ -367,11 +367,17 @@ TEMPLATE_TOOLS = [
                         "truong 'aging_bucket_note' - PHAI doc va nhac lai noi dung ghi chu do khi tra loi: "
                         "khung nay (1-15/15-30/30-45/>45 ngay) LAY THANG tu he thong goc, co the KHAC voi moc "
                         "trong bao cao Excel noi bo DNH hay dung (vd 1-7/8-14/15-21/>21 ngay) - khong duoc "
-                        "quy doi ngam hay coi 2 khung la mot.",
+                        "quy doi ngam hay coi 2 khung la mot. "
+                        "HOI NHIEU KHACH HANG CUNG LUC: TRUYEN DANH SACH MA CACH NHAU DAU PHAY trong CUNG "
+                        "customer_code (vd 'DBI00013,AGI00573') TRONG DUNG 1 LAN GOI, KHONG goi tool nhieu "
+                        "lan lap lai cho tung ma. Ket qua tra ve {'is_bulk': true, 'customers': [...]}, MOI "
+                        "phan tu kem 'requested_customer_code' de biet ung voi ma nao da yeu cau - neu 1 ma "
+                        "bi loi/tu choi (vd ngoai vung, khach thuan kenh khac), phan tu do se co 'error' "
+                        "kem ly do, PHAI neu ro voi nguoi dung, KHONG duoc im lang bo qua ma do.",
         "input_schema": {
             "type": "object",
             "properties": {
-                "customer_code": {"type": "string", "description": "Ma khach hang can xem chi tiet"},
+                "customer_code": {"type": "string", "description": "Ma khach hang can xem chi tiet, hoac nhieu ma cach nhau dau phay"},
                 "date_from": {"type": "string", "description": "YYYY-MM-DD, dau ky tinh doanh thu"},
                 "date_to": {"type": "string", "description": "YYYY-MM-DD, cuoi ky tinh doanh thu"},
             },

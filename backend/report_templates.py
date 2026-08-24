@@ -1862,14 +1862,6 @@ def receivables_period_compare(snapshot_date_a: str, snapshot_date_b: str,
 
 def customer_detail(customer_code: str, date_from: str, date_to: str, scope_area_code: str = None,
                      scope_channel: str = None) -> dict:
-    if customer_code and "," in customer_code:
-        codes = [c.strip() for c in customer_code.split(",") if c.strip()]
-        results = []
-        for code in codes[:30]:
-            r_single = customer_detail(customer_code=code, date_from=date_from, date_to=date_to, scope_area_code=scope_area_code, scope_channel=scope_channel)
-            if r_single and "error" not in r_single:
-                results.append(r_single)
-        return {"is_bulk": True, "count": len(results), "customers": results}
     """Chi tiet 1 khach hang: gop doanh thu thuc te (kho local, tu Bravo) + du no/qua han (Supabase) +
     mapping vung mien/NV phu trach (DMS_KhachHang + DIM_NhanVien). Doanh thu tinh trong [date_from,date_to],
     du no/qua han la SNAPSHOT KY GAN NHAT hien co (khong theo date_from/date_to).
@@ -1879,7 +1871,23 @@ def customer_detail(customer_code: str, date_from: str, date_to: str, scope_area
     (dung ca tien to ma KH lam fallback cho khach "mo coi" giong revenue_by_region).
     scope_channel: NEU co (vd 'OTC'), tu choi thang neu khach hang la khach THUAN kenh khac (khong co
     giao dich nao trong kenh duoc phep) - neu khach co CA 2 kenh, chi hien phan doanh thu cua kenh
-    duoc phep (redact kenh kia ve 0, KHONG lo so lieu that)."""
+    duoc phep (redact kenh kia ve 0, KHONG lo so lieu that).
+
+    24/08/2026: SUA 2 loi - (1) docstring nay TRUOC DAY nam SAU nhanh xu ly hang loat ben duoi nen
+    KHONG PHAI __doc__ that cua ham (Python chi coi statement DAU TIEN la docstring) - da chuyen len
+    dung vi tri; (2) duong hang loat (customer_code co dau phay) AM THAM loai bo cac ma bi tu choi/loi
+    (vd ngoai vung, khach thuan kenh khac) khoi ket qua ma KHONG bao ly do - nguoi dung hoi 3 ma nhung
+    chi thay 1 ket qua ma khong biet 2 ma kia bi gi. Sua theo dung pattern salary_detail(): giu lai loi
+    kem 'requested_customer_code' thay vi im lang bo qua."""
+    if customer_code and "," in customer_code:
+        codes = [c.strip() for c in customer_code.split(",") if c.strip()]
+        results = []
+        for code in codes[:30]:
+            r_single = customer_detail(customer_code=code, date_from=date_from, date_to=date_to, scope_area_code=scope_area_code, scope_channel=scope_channel)
+            r_single = dict(r_single) if r_single else {"error": f"Khong tra ve duoc du lieu cho khach hang '{code}'."}
+            r_single["requested_customer_code"] = code
+            results.append(r_single)
+        return {"is_bulk": True, "count": len(results), "customers": results}
     if scope_area_code:
         c = _q("""SELECT tp.area_code a FROM dms_khachhang kh
                   LEFT JOIN dim_tinhthanhpho tp ON tp.city_id=kh.city_id WHERE kh.code=?

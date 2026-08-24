@@ -119,7 +119,11 @@ def test_scope_area_code_tu_choi_khach_ngoai_vung(tmp_path, monkeypatch):
     assert "error" in result
 
 
-def test_goi_hang_loat_nhieu_ma_bo_qua_loi_khong_lam_hong_ca_lo(tmp_path, monkeypatch):
+def test_goi_hang_loat_nhieu_ma_1_loi_khong_lam_hong_ca_lo_nhung_khong_duoc_im_lang(tmp_path, monkeypatch):
+    """24/08/2026: SUA hanh vi - truoc day ma bi tu choi (ngoai vung) bi AM THAM loai khoi ket qua,
+    khien nguoi dung hoi 2 ma nhung chi thay 1 ket qua ma khong biet ma kia bi gi (khac han nguyen tac
+    "khong duoc im lang bo qua loi" da ap dung nhat quan o salary_detail). Gio ca 2 ma DEU co mat
+    trong 'customers', ma bi loi mang 'error' + 'requested_customer_code' thay vi bi xoa mat."""
     db_path = tmp_path / "warehouse.db"
     _make_db(db_path)
     conn = sqlite3.connect(db_path)
@@ -136,5 +140,8 @@ def test_goi_hang_loat_nhieu_ma_bo_qua_loi_khong_lam_hong_ca_lo(tmp_path, monkey
                                 date_to="2026-07-31", scope_area_code="MB")
 
     assert result["is_bulk"] is True
-    codes = {c["customer_code"] for c in result["customers"]}
-    assert codes == {"KH_MB"}  # KH_MN bi loai (ngoai vung), KHONG lam hong ca lo
+    assert result["count"] == 2  # CA HAI ma deu co mat, khong bi xoa mat ma nao
+    by_requested = {c["requested_customer_code"]: c for c in result["customers"]}
+    assert by_requested["KH_MB"].get("customer_code") == "KH_MB"
+    assert "error" not in by_requested["KH_MB"]
+    assert "error" in by_requested["KH_MN"]  # KH_MN bi tu choi (ngoai vung) NHUNG van duoc bao ro ly do
