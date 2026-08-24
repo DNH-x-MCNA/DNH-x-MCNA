@@ -16,6 +16,10 @@ type AuthUser = {
   scope_channel?: string | null;
   status?: string;
   email?: string | null;
+  quota_used?: number | null;
+  quota_limit?: number | null;
+  quota_remaining?: number | null;
+  quota_resets_at?: string | null;
 };
 
 export default function AuthScreens({ onLoginSuccess }: AuthScreensProps) {
