@@ -45,6 +45,7 @@ from auth import (
     delete_all_sessions_for_user,
     get_user_by_email_or_username,
     get_subordinate_usernames,
+    check_and_consume_weekly_quota,
 )
 from mailer import send_password_email
 from conversation_memory import (
@@ -109,6 +110,29 @@ def _check_rate_limit(username: str):
     if last and (now - last).total_seconds() < RATE_LIMIT_INTERVAL_SEC:
         raise HTTPException(429, "Thao tac qua nhanh, vui long cho 2 giay")
     _USER_LAST_REQUEST[username] = now
+
+
+# 21/08/2026: han muc cau hoi/tuan theo vai tro, chot voi DNH de khong vuot ngan sach API hang
+# thang (300 USD). Dua tren so nguoi that trong Bravo (21 QLV, 3 TP, 1 C-level) va don gia/cau do
+# that tren may 24 (~0,047-0,052 USD/cau, se tang ~50% sau khi het gia khuyen mai Anthropic
+# 31/08/2026). admin_ops khong can trong bang nay - da bi chan hoan toan khoi /chat o duoi.
+WEEKLY_QUESTION_LIMITS = {
+    "qlv": 30,
+    "regional_director": 60,
+    "c_level": 120,
+}
+
+
+def _check_weekly_quota(user: dict):
+    limit = WEEKLY_QUESTION_LIMITS.get(user["role"])
+    result = check_and_consume_weekly_quota(user["username"], limit)
+    if not result["allowed"]:
+        reset_label = dt.datetime.fromisoformat(result["resets_at"]).strftime("%H:%M %d/%m")
+        raise HTTPException(
+            429,
+            f"Đã dùng hết {result['limit']} câu hỏi trong tuần này. "
+            f"Hạn mức làm mới lúc {reset_label} (thứ Hai tới).",
+        )
 
 
 def _check_public_auth_rate_limit(email: str, client_ip: str = "local"):
@@ -593,6 +617,7 @@ def chat(req: ChatRequest, user: dict = Depends(require_approved_user)):
     if not req.question or not req.question.strip():
         raise HTTPException(400, "Cau hoi khong duoc de trong")
     _check_rate_limit(user["username"])
+    _check_weekly_quota(user)
     _require_session_write_access(req.session_id, user)
     query_id = str(uuid.uuid4())
     started_at = time.monotonic()
@@ -639,7 +664,7 @@ def chat(req: ChatRequest, user: dict = Depends(require_approved_user)):
 # Events (SSE, "data: {...}\n\n") - format don gian, browser/fetch doc duoc truc tiep khong can thu
 # vien them o frontend. 17/08/2026: backend chi phat text sau khi da loai timestamp model tu sinh va
 # gan metadata nguon, de noi dung UI trung khop noi dung luu lich su. Kiem tra QUYEN/rate-limit
-# GIONG HET /chat (dung chung _check_rate_limit,
+# GIONG HET /chat (dung chung _check_rate_limit, _check_weekly_quota,
 # _require_session_write_access) - CHi khac cach tra ket qua ve client.
 @app.post("/chat/stream", dependencies=[Depends(require_api_key)])
 def chat_stream(req: ChatRequest, user: dict = Depends(require_approved_user)):
@@ -648,6 +673,7 @@ def chat_stream(req: ChatRequest, user: dict = Depends(require_approved_user)):
     if not req.question or not req.question.strip():
         raise HTTPException(400, "Cau hoi khong duoc de trong")
     _check_rate_limit(user["username"])
+    _check_weekly_quota(user)
     _require_session_write_access(req.session_id, user)
 
     scope_area_code = user["scope_value"] if user["role"] in ("regional_director", "qlv") else None

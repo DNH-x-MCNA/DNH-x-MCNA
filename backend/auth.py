@@ -61,6 +61,8 @@ def init_schema():
         ("must_change_password", "INTEGER DEFAULT 0"),
         ("password_changed_at", "TEXT"),
         ("last_login_at", "TEXT"),
+        ("weekly_question_count", "INTEGER DEFAULT 0"),
+        ("weekly_reset_at", "TEXT"),
     ]:
         col_name, col_type = col_def
         try:
@@ -392,6 +394,69 @@ def get_subordinate_usernames(director_user: dict) -> list[str] | None:
         if username and username not in result:
             result.append(username)
         return result
+    finally:
+        conn.close()
+
+
+def _week_start(now: dt.datetime) -> dt.datetime:
+    """Moc 00:00 thu Hai cua tuan chua `now` (weekday(): Thu Hai=0)."""
+    monday = now - dt.timedelta(days=now.weekday())
+    return monday.replace(hour=0, minute=0, second=0, microsecond=0)
+
+
+def check_and_consume_weekly_quota(username: str, limit: int | None) -> dict:
+    """Kiem tra + tang bo dem cau hoi chatbot trong tuan cho 1 tai khoan, reset 00:00 thu Hai.
+
+    Nguyen tu qua BEGIN IMMEDIATE (khoa ghi ngay khi bat dau transaction) - tranh 2 request cung
+    luc doc chung so du TRUOC khi tang, lam lot qua vuot limit that (race condition kinh dien cua
+    kieu check-then-act tren SQLite/nhieu request).
+
+    limit None hoac <=0: khong gioi han (vai tro chua duoc gan han o main.py).
+    Tra ve {"allowed": bool, "used": int, "limit": int|None, "resets_at": ISO 00:00 thu Hai ke tiep}.
+    """
+    if not limit or limit <= 0:
+        return {"allowed": True, "used": 0, "limit": None, "resets_at": None}
+
+    now = dt.datetime.now()
+    week_start = _week_start(now)
+    next_reset = week_start + dt.timedelta(days=7)
+    clean_username = username.lower().strip()
+
+    conn = get_conn()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute(
+            "SELECT weekly_question_count, weekly_reset_at FROM users WHERE username=?",
+            (clean_username,),
+        ).fetchone()
+        if not row:
+            conn.execute("ROLLBACK")
+            return {"allowed": True, "used": 0, "limit": limit, "resets_at": next_reset.isoformat()}
+
+        count, reset_at = row
+        count = count or 0
+        needs_reset = not reset_at or dt.datetime.fromisoformat(reset_at) < week_start
+        if needs_reset:
+            count = 0
+
+        if count >= limit:
+            conn.execute(
+                "UPDATE users SET weekly_reset_at=? WHERE username=?",
+                (week_start.isoformat(), clean_username),
+            )
+            conn.commit()
+            return {"allowed": False, "used": count, "limit": limit, "resets_at": next_reset.isoformat()}
+
+        new_count = count + 1
+        conn.execute(
+            "UPDATE users SET weekly_question_count=?, weekly_reset_at=? WHERE username=?",
+            (new_count, week_start.isoformat(), clean_username),
+        )
+        conn.commit()
+        return {"allowed": True, "used": new_count, "limit": limit, "resets_at": next_reset.isoformat()}
+    except Exception:
+        conn.rollback()
+        raise
     finally:
         conn.close()
 
