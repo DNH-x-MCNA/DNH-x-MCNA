@@ -17,6 +17,48 @@ import datetime as dt
 DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "auth.db")
 SESSION_TTL_HOURS = 24 * 7  # phien dang nhap song 7 ngay
 
+VALID_ROLES = frozenset({"c_level", "admin_ops", "regional_director", "qlv"})
+VALID_STATUSES = frozenset({"pending", "approved"})
+VALID_AREA_CODES = frozenset({"MB", "MT", "MN"})
+VALID_CHANNEL_CODES = frozenset({"OTC", "ETC"})
+
+
+def validate_account_assignment(role: str, scope_value: str = None,
+                                employee_code: str = None, scope_channel: str = None,
+                                status: str = "approved", require_complete: bool = False) -> tuple:
+    """Chuan hoa va kiem tra role/scope tai mot cho, dung cho moi duong ghi tai khoan.
+
+    `require_complete=False` cho phep tao tai khoan pending hoac fixture noi bo chua gan du pham vi.
+    Moi duong admin tao/duyet tai khoan approved phai truyen True de khong luu mot tai khoan co quyen
+    nhung thieu scope. Runtime van kiem tra lai doc lap trong main.py theo nguyen tac fail-closed.
+    """
+    normalized_role = str(role or "").strip().lower()
+    normalized_status = str(status or "").strip().lower()
+    area = str(scope_value).strip().upper() if scope_value else None
+    employee = str(employee_code).strip() if employee_code else None
+    channel = str(scope_channel).strip().upper() if scope_channel else None
+
+    if normalized_role not in VALID_ROLES:
+        raise ValueError(f"Vai tro khong hop le: {role}")
+    if normalized_status not in VALID_STATUSES:
+        raise ValueError(f"Trang thai tai khoan khong hop le: {status}")
+    if area and area not in VALID_AREA_CODES:
+        raise ValueError(f"Pham vi mien khong hop le: {scope_value}")
+    if channel and channel not in VALID_CHANNEL_CODES:
+        raise ValueError(f"Pham vi kenh khong hop le: {scope_channel}")
+
+    if normalized_role in {"c_level", "admin_ops"} and (area or employee or channel):
+        raise ValueError(f"Vai tro {normalized_role} khong duoc gan scope mien/kenh/nhan vien")
+    if normalized_role == "regional_director" and employee:
+        raise ValueError("Giam doc mien/kenh khong duoc gan employee_code cua QLV")
+    if require_complete and normalized_status == "approved":
+        if normalized_role == "regional_director" and not (area or channel):
+            raise ValueError("Giam doc mien/kenh phai duoc gan it nhat mot scope mien hoac kenh")
+        if normalized_role == "qlv" and (not area or not employee):
+            raise ValueError("QLV phai duoc gan day du scope mien va employee_code")
+
+    return normalized_role, area, employee, channel, normalized_status
+
 
 def get_conn() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH, timeout=30)
@@ -96,9 +138,10 @@ def generate_password(length: int = 10) -> str:
 
 def create_user(username: str, password: str, name: str, role: str, scope_value: str = None,
                 employee_code: str = None, scope_channel: str = None, email: str = None,
-                status: str = 'approved') -> dict:
-    if role not in ("c_level", "admin_ops", "regional_director", "qlv"):
-        raise ValueError(f"Vai tro khong hop le: {role}")
+                status: str = 'approved', must_change_password: int = 0) -> dict:
+    role, scope_value, employee_code, scope_channel, status = validate_account_assignment(
+        role, scope_value, employee_code, scope_channel, status, require_complete=False
+    )
     salt = secrets.token_hex(16)
     pwd_hash = _hash_password(password, salt)
     clean_username = username.lower().strip()
@@ -108,15 +151,17 @@ def create_user(username: str, password: str, name: str, role: str, scope_value:
     try:
         conn.execute(
             "INSERT INTO users (username, email, password_hash, salt, name, role, scope_value, employee_code, "
-            "scope_channel, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "scope_channel, status, must_change_password, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (clean_username, clean_email, pwd_hash, salt, name, role, scope_value, employee_code, scope_channel, status,
-             dt.datetime.now().isoformat()),
+             1 if must_change_password else 0, dt.datetime.now().isoformat()),
         )
         conn.commit()
     finally:
         conn.close()
     return {"username": clean_username, "email": clean_email, "name": name, "role": role, "scope_value": scope_value,
-            "employee_code": employee_code, "scope_channel": scope_channel, "status": status}
+            "employee_code": employee_code, "scope_channel": scope_channel, "status": status,
+            "must_change_password": 1 if must_change_password else 0}
 
 
 def create_pending_user(email: str, name: str = None) -> tuple[dict, str]:
@@ -134,7 +179,8 @@ def create_pending_user(email: str, name: str = None) -> tuple[dict, str]:
         role='qlv',           # Role mặc định
         scope_value=None,    # Chưa được phân vùng
         employee_code=None,  # Chưa gán mã nhân viên
-        status='pending'     # Trạng thái chờ duyệt
+        status='pending',    # Trạng thái chờ duyệt
+        must_change_password=1,
     )
     return user_info, raw_pwd
 
@@ -145,6 +191,9 @@ def admin_create_user(username: str, name: str = None, role: str = 'qlv', scope_
     """Admin tao tai khoan moi truc tiep voi status=approved.
     Neu khong truyen password, se sinh mat khau ngau nhien.
     Email la optional - khong bat buoc @namhapharma.com nua."""
+    role, scope_value, employee_code, scope_channel, _ = validate_account_assignment(
+        role, scope_value, employee_code, scope_channel, "approved", require_complete=True
+    )
     raw_pwd = password or generate_password(10)
     clean_email = email.lower().strip() if email else None
     display_name = name or username
@@ -158,7 +207,8 @@ def admin_create_user(username: str, name: str = None, role: str = 'qlv', scope_
         scope_value=scope_value,
         employee_code=employee_code,
         scope_channel=scope_channel,
-        status='approved'
+        status='approved',
+        must_change_password=1,
     )
     return user_info, raw_pwd
 
@@ -168,7 +218,8 @@ def get_user_by_email_or_username(identifier: str) -> dict | None:
     conn = get_conn()
     try:
         row = conn.execute(
-            "SELECT id, username, email, name, role, scope_value, employee_code, scope_channel, status, is_active "
+            "SELECT id, username, email, name, role, scope_value, employee_code, scope_channel, status, is_active, "
+            "must_change_password "
             "FROM users WHERE username=? OR email=?",
             (clean_id, clean_id)
         ).fetchone()
@@ -177,7 +228,8 @@ def get_user_by_email_or_username(identifier: str) -> dict | None:
         return {
             "id": row[0], "username": row[1], "email": row[2], "name": row[3],
             "role": row[4], "scope_value": row[5], "employee_code": row[6],
-            "scope_channel": row[7], "status": row[8] or 'approved', "is_active": row[9]
+            "scope_channel": row[7], "status": row[8] or 'approved', "is_active": row[9],
+            "must_change_password": int(row[10] or 0),
         }
     finally:
         conn.close()
@@ -188,7 +240,8 @@ def verify_login(identifier: str, password: str) -> dict | None:
     conn = get_conn()
     try:
         row = conn.execute(
-            "SELECT id, username, email, password_hash, salt, name, role, scope_value, employee_code, scope_channel, status, is_active "
+            "SELECT id, username, email, password_hash, salt, name, role, scope_value, employee_code, scope_channel, "
+            "status, is_active, must_change_password "
             "FROM users WHERE username=? OR email=?",
             (clean_id, clean_id),
         ).fetchone()
@@ -198,7 +251,8 @@ def verify_login(identifier: str, password: str) -> dict | None:
     if not row:
         return None
 
-    uid, db_username, db_email, pwd_hash, salt, name, role, scope_value, employee_code, scope_channel, status, is_active = row
+    (uid, db_username, db_email, pwd_hash, salt, name, role, scope_value, employee_code,
+     scope_channel, status, is_active, must_change_password) = row
 
     if not hmac.compare_digest(_hash_password(password, salt), pwd_hash):
         return {"error": "wrong_password"}
@@ -213,11 +267,12 @@ def verify_login(identifier: str, password: str) -> dict | None:
         "employee_code": employee_code,
         "scope_channel": scope_channel,
         "status": status or 'approved',
-        "is_active": is_active
+        "is_active": is_active,
+        "must_change_password": int(must_change_password or 0),
     }
 
 
-def set_password(identifier: str, new_password: str) -> bool:
+def set_password(identifier: str, new_password: str, must_change_password: bool = False) -> bool:
     """Dat lai mat khau cho 1 tai khoan theo username hoac email."""
     clean_id = identifier.lower().strip()
     salt = secrets.token_hex(16)
@@ -226,8 +281,8 @@ def set_password(identifier: str, new_password: str) -> bool:
     conn = get_conn()
     try:
         cur = conn.execute(
-            "UPDATE users SET password_hash=?, salt=?, must_change_password=0, password_changed_at=? WHERE username=? OR email=?",
-            (pwd_hash, salt, now_iso, clean_id, clean_id)
+            "UPDATE users SET password_hash=?, salt=?, must_change_password=?, password_changed_at=? WHERE username=? OR email=?",
+            (pwd_hash, salt, 1 if must_change_password else 0, now_iso, clean_id, clean_id)
         )
         conn.commit()
         return cur.rowcount > 0
@@ -238,6 +293,9 @@ def set_password(identifier: str, new_password: str) -> bool:
 def approve_user(username_or_email: str, role: str, scope_value: str = None,
                  employee_code: str = None, scope_channel: str = None) -> bool:
     """Quan tri vien duyet tai khoan tu pending -> approved va gan phan quyen."""
+    role, scope_value, employee_code, scope_channel, _ = validate_account_assignment(
+        role, scope_value, employee_code, scope_channel, "approved", require_complete=True
+    )
     clean_id = username_or_email.lower().strip()
     conn = get_conn()
     try:
@@ -341,7 +399,8 @@ def get_user_by_session(token: str) -> dict | None:
     conn = get_conn()
     try:
         row = conn.execute(
-            "SELECT s.expires_at, u.id, u.username, u.email, u.name, u.role, u.scope_value, u.employee_code, u.scope_channel, u.status, u.is_active "
+            "SELECT s.expires_at, u.id, u.username, u.email, u.name, u.role, u.scope_value, u.employee_code, "
+            "u.scope_channel, u.status, u.is_active, u.must_change_password "
             "FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token=?",
             (token,),
         ).fetchone()
@@ -349,13 +408,15 @@ def get_user_by_session(token: str) -> dict | None:
         conn.close()
     if not row:
         return None
-    expires_at, uid, username, email, name, role, scope_value, employee_code, scope_channel, status, is_active = row
+    (expires_at, uid, username, email, name, role, scope_value, employee_code, scope_channel,
+     status, is_active, must_change_password) = row
     if dt.datetime.fromisoformat(expires_at) < dt.datetime.now():
         return None
     return {
         "id": uid, "username": username, "email": email, "name": name, "role": role,
         "scope_value": scope_value, "employee_code": employee_code,
-        "scope_channel": scope_channel, "status": status or 'approved', "is_active": is_active
+        "scope_channel": scope_channel, "status": status or 'approved', "is_active": is_active,
+        "must_change_password": int(must_change_password or 0),
     }
 
 
@@ -501,7 +562,7 @@ def get_weekly_quota_status(username: str, limit: int | None) -> dict:
 
 
 def migrate_and_seed_users():
-    """Chay cac migration mot lan va tao tai khoan he thong neu con thieu.
+    """Chay migration danh tinh cu, KHONG tu tao tai khoan dac quyen.
 
     Ham nay duoc goi moi khi backend khoi dong, vi vay tuyet doi khong duoc gan lai role cua
     tai khoan da ton tai. Role/pham vi sau khi admin cap nhat la du lieu nghiep vu va phai duoc
@@ -516,26 +577,8 @@ def migrate_and_seed_users():
         if row_trieu and not row_admin:
             conn.execute("UPDATE users SET username='admin.dnh', role='admin_ops', name='Admin Vận Hành' WHERE id=?", (row_trieu[0],))
             conn.commit()
-        elif not row_trieu and not row_admin:
-            salt = secrets.token_hex(16)
-            pwd_hash = _hash_password("dnh@admin2026", salt)
-            conn.execute(
-                "INSERT INTO users (username, email, password_hash, salt, name, role, status, created_at) "
-                "VALUES ('admin.dnh', 'admin@namhapharma.com', ?, ?, 'Admin Vận Hành', 'admin_ops', 'approved', ?)",
-                (pwd_hash, salt, dt.datetime.now().isoformat())
-            )
-            conn.commit()
-        # 2. Dam bao tai khoan dnh (C-Level duy nhat) ton tai
-        row_dnh = conn.execute("SELECT id FROM users WHERE username='dnh'").fetchone()
-        if not row_dnh:
-            salt = secrets.token_hex(16)
-            pwd_hash = _hash_password("dnh@clevel2026", salt)
-            conn.execute(
-                "INSERT INTO users (username, email, password_hash, salt, name, role, status, created_at) "
-                "VALUES ('dnh', 'dnh@namhapharma.com', ?, ?, 'Tổng Giám Đốc', 'c_level', 'approved', ?)",
-                (pwd_hash, salt, dt.datetime.now().isoformat())
-            )
-            conn.commit()
+        # Tuyet doi khong seed admin/C-Level bang mat khau co dinh. Tai khoan dac quyen phai duoc
+        # tao qua quy trinh bootstrap van hanh voi mat khau ngau nhien va must_change_password=1.
         # Khong UPDATE role cua bat ky tai khoan da ton tai nao o day. Truoc 13/08/2026, khoi
         # dong backend tu dong ep manager_* thanh regional_director va moi tai khoan con lai
         # thanh qlv. Do do role Giam doc Mien/Kenh admin vua luu se bi mat sau lan restart ke tiep.

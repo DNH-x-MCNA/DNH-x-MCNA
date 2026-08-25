@@ -21,7 +21,12 @@ from collections import defaultdict
 import anthropic
 from schema_context import SCHEMA_CONTEXT
 from query_engine import run_query
-from report_templates import call_template, latest_data_date, sync_freshness_note
+from report_templates import (
+    call_template,
+    latest_data_date,
+    sync_freshness_note,
+    template_available_for_channel,
+)
 from conversation_memory import load_history, append_message, get_query_state, set_query_state
 from data_freshness import FreshnessCollector
 from realtime_context import REALTIME_TOOLS, REALTIME_TOOL_NAMES, get_current_datetime, resolve_relative_date
@@ -1111,13 +1116,24 @@ def _cache_tools(tools: list[dict]) -> list[dict]:
 
 
 def _tools_for_request(scope_area_code: str = None, scope_channel: str = None,
-                       scope_role: str = None) -> list[dict]:
+                       scope_role: str = None, scope_employee_code: str = None) -> list[dict]:
     """Phan quyen tool o tang code, dung chung cho ask va ask_stream."""
+    if scope_role is not None and scope_role not in {
+        "c_level", "admin_ops", "regional_director", "qlv"
+    }:
+        return []
     tools = ALL_TOOLS
     if scope_area_code or scope_channel:
         tools = [tool for tool in tools if tool["name"] not in RAW_SQL_TOOLS]
     elif scope_role not in LIVE_SQL_ALLOWED_ROLES:
         tools = [tool for tool in tools if tool["name"] not in LIVE_SQL_TOOL_NAMES]
+    if scope_channel:
+        tools = [
+            tool for tool in tools
+            if template_available_for_channel(
+                tool["name"], scope_channel, scope_employee_code
+            )
+        ]
     return ALL_TOOLS_CACHED if tools is ALL_TOOLS else _cache_tools(tools)
 
 
@@ -1420,7 +1436,8 @@ def _response_text(response) -> str:
 
 
 def _dynamic_context_note(question: str = "", session_id: str = "", scope_area_code: str = None,
-                           scope_employee_code: str = None, scope_channel: str = None) -> str:
+                           scope_employee_code: str = None, scope_channel: str = None,
+                           username: str = None) -> str:
     """Phan DONG cua system prompt (ngay du lieu + ngu canh doi theo tung cau hoi) - tach rieng khoi
     phan tinh de KHONG lam vo cache (kho local dong bo lai moi 15-30 phut, glossary/query-state doi
     theo tung cau hoi nen KHONG the cache chung voi schema/rules tinh)."""
@@ -1499,7 +1516,7 @@ def _dynamic_context_note(question: str = "", session_id: str = "", scope_area_c
             f'dang "(chi kenh {scope_channel})" ngay canh con so.'
         )
 
-    glossary = retrieve_relevant_glossary(question)
+    glossary = retrieve_relevant_glossary(question, username=username)
     if glossary:
         parts.append("Dinh nghia nghiep vu nguoi dung da giai thich truoc do, ap dung neu lien quan:\n"
                       + "\n".join(f"- {g}" for g in glossary))
@@ -1606,7 +1623,9 @@ def ask(question: str, session_id: str = "default", username: str = None, scope_
     # Tai khoan bi gioi han vung: loai han tool SQL tu do khoi danh sach gui cho AI (AI KHONG CO KHA
     # NANG goi, khong chi la "duoc dan dung goi") - chi con lai cac tool bao cao chuan da kiem soat
     # duoc filter vung o tang code.
-    tools_for_request = _tools_for_request(scope_area_code, scope_channel, scope_role)
+    tools_for_request = _tools_for_request(
+        scope_area_code, scope_channel, scope_role, scope_employee_code
+    )
     max_rounds = _max_tool_rounds(scope_role)
     query_plan = build_query_plan(
         question,
@@ -1627,7 +1646,7 @@ def ask(question: str, session_id: str = "default", username: str = None, scope_
     system_blocks = [
         {"type": "text", "text": _static_system_prompt(), "cache_control": {"type": "ephemeral", "ttl": "1h"}},
         {"type": "text", "text": (_dynamic_context_note(
-            question, session_id, scope_area_code, scope_employee_code, scope_channel
+            question, session_id, scope_area_code, scope_employee_code, scope_channel, username
         ) + "\n\n" + query_plan.prompt_note())},
     ]
 
@@ -1781,8 +1800,15 @@ def ask(question: str, session_id: str = "default", username: str = None, scope_
                     payload = resolve_relative_date(tu.input.get("phrase", ""))
                 elif tu.name == "save_business_term":
                     save_glossary_term(tu.input.get("term", ""), tu.input.get("definition", ""),
-                                        defined_by=username)
-                    payload = {"ok": True, "message": "Da luu dinh nghia."}
+                                        defined_by=username,
+                                        is_global=scope_role in {"c_level", "admin_ops"})
+                    payload = {
+                        "ok": True,
+                        "message": "Da luu dinh nghia " + (
+                            "toan he thong." if scope_role in {"c_level", "admin_ops"}
+                            else "cho rieng tai khoan nay."
+                        ),
+                    }
                 elif tu.name == "search_sql_server_catalog":
                     payload = search_sql_catalog(
                         tu.input.get("query", question),
@@ -1973,7 +1999,9 @@ def ask_stream(question: str, session_id: str = "default", username: str = None,
     seen_tool_calls = set()
     unique_tool_calls = 0
 
-    tools_for_request = _tools_for_request(scope_area_code, scope_channel, scope_role)
+    tools_for_request = _tools_for_request(
+        scope_area_code, scope_channel, scope_role, scope_employee_code
+    )
 
     max_rounds = _max_tool_rounds(scope_role)
     query_plan = build_query_plan(
@@ -1992,7 +2020,7 @@ def ask_stream(question: str, session_id: str = "default", username: str = None,
     system_blocks = [
         {"type": "text", "text": _static_system_prompt(), "cache_control": {"type": "ephemeral", "ttl": "1h"}},
         {"type": "text", "text": (_dynamic_context_note(
-            question, session_id, scope_area_code, scope_employee_code, scope_channel
+            question, session_id, scope_area_code, scope_employee_code, scope_channel, username
         ) + "\n\n" + query_plan.prompt_note())},
     ]
 
@@ -2148,8 +2176,15 @@ def ask_stream(question: str, session_id: str = "default", username: str = None,
                     payload = resolve_relative_date(tu.input.get("phrase", ""))
                 elif tu.name == "save_business_term":
                     save_glossary_term(tu.input.get("term", ""), tu.input.get("definition", ""),
-                                        defined_by=username)
-                    payload = {"ok": True, "message": "Da luu dinh nghia."}
+                                        defined_by=username,
+                                        is_global=scope_role in {"c_level", "admin_ops"})
+                    payload = {
+                        "ok": True,
+                        "message": "Da luu dinh nghia " + (
+                            "toan he thong." if scope_role in {"c_level", "admin_ops"}
+                            else "cho rieng tai khoan nay."
+                        ),
+                    }
                 elif tu.name == "search_sql_server_catalog":
                     payload = search_sql_catalog(
                         tu.input.get("query", question),

@@ -192,7 +192,7 @@ def test_khong_gioi_han_thi_van_con_phep_tu_doi_chieu(kho):
     thang = _ym_add(dt.date.today().strftime("%Y-%m"), -1)
     p = rt.call_template("get_revenue_by_region",
                          {"date_from": f"{thang}-01", "date_to": f"{thang}-28"},
-                         scope_role="tp")
+                         scope_role="c_level")
     assert p["ok"], p.get("error")
     assert not (p.get("canh_bao") or []), "Du lieu gia vay khong lech, khong duoc canh bao gi"
 

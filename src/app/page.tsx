@@ -255,6 +255,7 @@ type UserInfo = {
   scope_value: string | null;
   scope_channel?: string | null;
   status?: string;
+  must_change_password?: boolean;
   email?: string | null;
   quota_used?: number | null;
   quota_limit?: number | null;
@@ -836,6 +837,14 @@ export default function Home() {
   const [newPwdInput, setNewPwdInput] = useState("");
   const [pwdChangeMsg, setPwdChangeMsg] = useState<{ text: string; type: "success" | "error" } | null>(null);
   const [pwdChangeSubmitting, setPwdChangeSubmitting] = useState(false);
+  const passwordChangeRequired = Boolean(userInfo?.must_change_password);
+
+  useEffect(() => {
+    if (passwordChangeRequired) {
+      setPwdChangeMsg(null);
+      setChangePwdOpen(true);
+    }
+  }, [passwordChangeRequired]);
 
   // 28/07/2026: CHI dua vao role, KHONG suy quyen tu chuoi username nua (truoc day con nhan
   // username === "c_level" || username === "dnh"). Day la ban sao o tang giao dien cua lo hong R-I
@@ -1252,6 +1261,7 @@ export default function Home() {
             scope_value: user.scope_value,
             scope_channel: user.scope_channel,
             status: user.status,
+            must_change_password: user.must_change_password,
             email: user.email,
             quota_used: user.quota_used,
             quota_limit: user.quota_limit,
@@ -2494,12 +2504,14 @@ export default function Home() {
       )}
 
       {/* Modal Đổi Mật Khẩu */}
-      {changePwdOpen && (
+      {(changePwdOpen || passwordChangeRequired) && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 backdrop-blur-sm p-4">
           <div className="w-full max-w-md bg-white rounded-2xl shadow-2xl overflow-hidden border border-slate-200">
             <div className="bg-slate-900 text-white p-4 flex justify-between items-center">
               <h3 id="change-pwd-title" className="font-bold text-sm flex items-center gap-1.5"><IconKey className="w-4 h-4" /> Đổi Mật Khẩu Tài Khoản</h3>
-              <button onClick={() => setChangePwdOpen(false)} className="text-slate-400 hover:text-white"><IconClose className="w-4 h-4" /></button>
+              {!passwordChangeRequired && (
+                <button onClick={() => setChangePwdOpen(false)} className="text-slate-400 hover:text-white"><IconClose className="w-4 h-4" /></button>
+              )}
             </div>
             <form
               onSubmit={async (e) => {
@@ -2520,6 +2532,13 @@ export default function Home() {
                   setPwdChangeMsg({ text: data.message || "Đổi mật khẩu thành công!", type: "success" });
                   setCurrentPwdInput("");
                   setNewPwdInput("");
+                  window.setTimeout(() => {
+                    window.localStorage.removeItem(AUTH_TOKEN_KEY);
+                    setAuthToken(null);
+                    setUserInfo(null);
+                    setChangePwdOpen(false);
+                    setMessages([]);
+                  }, 1000);
                 } catch (err: any) {
                   setPwdChangeMsg({ text: err.message, type: "error" });
                 } finally {
@@ -2540,6 +2559,12 @@ export default function Home() {
                 </div>
               )}
 
+              {passwordChangeRequired && !pwdChangeMsg && (
+                <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs font-medium text-amber-900">
+                  Đây là mật khẩu tạm. Bạn phải đặt mật khẩu mới trước khi truy cập dữ liệu kinh doanh.
+                </div>
+              )}
+
               <div>
                 <label className="block text-xs font-semibold text-slate-700 mb-1">Mật khẩu hiện tại</label>
                 <input
@@ -2552,11 +2577,11 @@ export default function Home() {
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">Mật khẩu mới (Tối thiểu 6 ký tự)</label>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">Mật khẩu mới (Tối thiểu 10 ký tự)</label>
                 <input
                   type="password"
                   required
-                  minLength={6}
+                  minLength={10}
                   value={newPwdInput}
                   onChange={(e) => setNewPwdInput(e.target.value)}
                   className="w-full px-3.5 py-2 border border-slate-300 rounded-lg text-sm focus:outline-none focus:border-blue-600"
@@ -2564,13 +2589,15 @@ export default function Home() {
               </div>
 
               <div className="flex justify-end gap-2 pt-2">
-                <button
-                  type="button"
-                  onClick={() => setChangePwdOpen(false)}
-                  className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-semibold"
-                >
-                  Hủy
-                </button>
+                {!passwordChangeRequired && (
+                  <button
+                    type="button"
+                    onClick={() => setChangePwdOpen(false)}
+                    className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-semibold"
+                  >
+                    Hủy
+                  </button>
+                )}
                 <button
                   type="submit"
                   disabled={pwdChangeSubmitting}

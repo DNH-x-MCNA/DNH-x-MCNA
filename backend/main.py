@@ -31,6 +31,10 @@ load_env()
 
 from auth import (
     init_schema as init_auth_schema,
+    VALID_ROLES,
+    VALID_STATUSES,
+    VALID_AREA_CODES,
+    VALID_CHANNEL_CODES,
     verify_login,
     create_session,
     get_user_by_session,
@@ -97,13 +101,26 @@ def require_approved_user(user: dict = Depends(require_user)) -> dict:
     """Fail-closed dependency cho moi endpoint du lieu: Yeu cau tai khoan da duoc duyet (status=='approved') va active."""
     if user.get("is_active") != 1:
         raise HTTPException(403, "Tài khoản của bạn đã bị khóa. Vui lòng liên hệ Quản trị viên.")
-    if user.get("status") == "pending":
-        raise HTTPException(403, "Tài khoản của bạn đang ở trạng thái CHỜ DUYỆT. Quản trị viên chưa gán vai trò và phạm vi truy cập cho bạn.")
+    status = str(user.get("status") or "").strip().lower()
+    role = str(user.get("role") or "").strip().lower()
+    if status != "approved":
+        if status == "pending":
+            raise HTTPException(403, "Tài khoản của bạn đang ở trạng thái CHỜ DUYỆT. Quản trị viên chưa gán vai trò và phạm vi truy cập cho bạn.")
+        raise HTTPException(403, "Trạng thái tài khoản không hợp lệ. Hệ thống đã chặn truy cập dữ liệu.")
+    if role not in VALID_ROLES:
+        raise HTTPException(403, "Vai trò tài khoản không hợp lệ. Hệ thống đã chặn truy cập dữ liệu.")
+    if int(user.get("must_change_password") or 0) == 1:
+        raise HTTPException(403, "Bạn phải đổi mật khẩu tạm trước khi truy cập dữ liệu kinh doanh.")
     return user
 
 
 _USER_LAST_REQUEST = {}
 RATE_LIMIT_INTERVAL_SEC = 2.0
+_LOGIN_IDENTIFIER_ATTEMPTS = defaultdict(list)
+_LOGIN_IP_ATTEMPTS = defaultdict(list)
+LOGIN_RATE_WINDOW_MINUTES = 15
+LOGIN_IDENTIFIER_LIMIT = 5
+LOGIN_IP_LIMIT = 30
 
 
 def _check_rate_limit(username: str):
@@ -112,6 +129,39 @@ def _check_rate_limit(username: str):
     if last and (now - last).total_seconds() < RATE_LIMIT_INTERVAL_SEC:
         raise HTTPException(429, "Thao tac qua nhanh, vui long cho 2 giay")
     _USER_LAST_REQUEST[username] = now
+
+
+def _login_client_ip(request: Request) -> str:
+    """Lay IP ket noi that. Khong tin X-Forwarded-For vi backend quick-tunnel co the bi goi truc tiep."""
+    return request.client.host if request.client else "unknown"
+
+
+def _prune_login_attempts(key: str, store: dict, now: dt.datetime) -> list:
+    cutoff = now - dt.timedelta(minutes=LOGIN_RATE_WINDOW_MINUTES)
+    current = [stamp for stamp in store.get(key, []) if stamp > cutoff]
+    if current:
+        store[key] = current
+    else:
+        store.pop(key, None)
+    return current
+
+
+def _check_login_rate_limit(identifier: str, client_ip: str) -> None:
+    now = dt.datetime.now()
+    identifier_attempts = _prune_login_attempts(identifier, _LOGIN_IDENTIFIER_ATTEMPTS, now)
+    ip_attempts = _prune_login_attempts(client_ip, _LOGIN_IP_ATTEMPTS, now)
+    if len(identifier_attempts) >= LOGIN_IDENTIFIER_LIMIT or len(ip_attempts) >= LOGIN_IP_LIMIT:
+        raise HTTPException(429, "Đăng nhập sai quá nhiều lần. Vui lòng thử lại sau 15 phút.")
+
+
+def _record_login_failure(identifier: str, client_ip: str) -> None:
+    now = dt.datetime.now()
+    _LOGIN_IDENTIFIER_ATTEMPTS[identifier].append(now)
+    _LOGIN_IP_ATTEMPTS[client_ip].append(now)
+
+
+def _clear_login_failures(identifier: str) -> None:
+    _LOGIN_IDENTIFIER_ATTEMPTS.pop(identifier, None)
 
 
 # 21/08/2026: han muc cau hoi/tuan theo vai tro, chot voi DNH de khong vuot ngan sach API hang
@@ -170,16 +220,22 @@ def _business_scopes(user: dict) -> tuple[Optional[str], Optional[str], Optional
     employee = str(raw_employee).strip() if raw_employee else None
     channel = str(raw_channel).strip().upper() if raw_channel else None
 
-    if area and area not in {"MB", "MT", "MN"}:
+    if role not in VALID_ROLES:
+        raise HTTPException(403, "Vai trò tài khoản không hợp lệ. Hệ thống đã chặn truy vấn.")
+    if area and area not in VALID_AREA_CODES:
         raise HTTPException(403, f"Phạm vi miền của tài khoản không hợp lệ: {area}.")
-    if channel and channel not in {"OTC", "ETC"}:
+    if channel and channel not in VALID_CHANNEL_CODES:
         raise HTTPException(403, f"Phạm vi kênh của tài khoản không hợp lệ: {channel}.")
+    if role in {"c_level", "admin_ops"} and (area or employee or channel):
+        raise HTTPException(403, f"Tài khoản {role} đang bị gán scope không hợp lệ.")
     if role == "regional_director" and not (area or channel):
         raise HTTPException(
             403,
             "Tài khoản Giám đốc miền/kênh chưa được gán miền hoặc kênh. "
             "Hệ thống đã chặn truy vấn để tránh mở nhầm dữ liệu toàn công ty.",
         )
+    if role == "regional_director" and employee:
+        raise HTTPException(403, "Tài khoản Giám đốc miền/kênh không được gán employee_code của QLV.")
     if role == "qlv" and (not area or not employee):
         raise HTTPException(
             403,
@@ -226,7 +282,7 @@ def _require_session_access(session_id: str, user: dict):
     from conversation_memory import get_session_owner
     owner = get_session_owner(session_id)
     if owner is None:
-        return
+        raise HTTPException(404, "Khong tim thay cuoc tro chuyen hoac chua xac dinh duoc chu so huu")
     role = user.get("role")
     if role in ("c_level", "admin_ops"):
         return
@@ -250,7 +306,9 @@ def _require_session_write_access(session_id: str, user: dict):
     vai tro."""
     from conversation_memory import get_session_owner
     owner = get_session_owner(session_id)
-    if owner is not None and owner != user["username"]:
+    if owner is None:
+        raise HTTPException(404, "Khong tim thay cuoc tro chuyen hoac chua xac dinh duoc chu so huu")
+    if owner != user["username"]:
         raise HTTPException(403, "Chi chu so huu moi duoc gui tin nhan hoac xoa cuoc tro chuyen nay. "
                                   "C-Level chi co quyen XEM lich su, khong duoc thao tac thay nguoi khac.")
 
@@ -270,6 +328,7 @@ class LoginResponse(BaseModel):
     scope_value: Optional[str]
     scope_channel: Optional[str]
     status: Optional[str] = 'approved'
+    must_change_password: bool = False
     email: Optional[str] = None
     quota_used: Optional[int] = None
     quota_limit: Optional[int] = None
@@ -284,6 +343,7 @@ class UserInfo(BaseModel):
     scope_value: Optional[str]
     scope_channel: Optional[str]
     status: Optional[str] = 'approved'
+    must_change_password: bool = False
     email: Optional[str] = None
     quota_used: Optional[int] = None
     quota_limit: Optional[int] = None
@@ -380,15 +440,26 @@ def health():
 
 
 @app.post("/auth/login", response_model=LoginResponse, dependencies=[Depends(require_api_key)])
-def login(req: LoginRequest):
+def login(req: LoginRequest, request: Request):
+    clean_identifier = (req.username or "").strip().lower()
+    client_ip = _login_client_ip(request)
+    _check_login_rate_limit(clean_identifier, client_ip)
     user = verify_login(req.username, req.password)
     if not user:
+        _record_login_failure(clean_identifier, client_ip)
         raise HTTPException(401, "Tài khoản hoặc mật khẩu không chính xác")
     if isinstance(user, dict) and user.get("error") == "wrong_password":
+        _record_login_failure(clean_identifier, client_ip)
         raise HTTPException(401, "Tài khoản hoặc mật khẩu không chính xác")
+
+    _clear_login_failures(clean_identifier)
 
     if user.get("is_active") != 1:
         raise HTTPException(403, "Tài khoản của bạn đã bị khóa. Vui lòng liên hệ Quản trị viên.")
+    if str(user.get("status") or "").strip().lower() not in VALID_STATUSES:
+        raise HTTPException(403, "Trạng thái tài khoản không hợp lệ.")
+    if str(user.get("role") or "").strip().lower() not in VALID_ROLES:
+        raise HTTPException(403, "Vai trò tài khoản không hợp lệ.")
 
     token = create_session(user["id"])
     _write_log({
@@ -406,6 +477,7 @@ def login(req: LoginRequest):
         scope_value=user["scope_value"],
         scope_channel=user["scope_channel"],
         status=user.get("status", "approved"),
+        must_change_password=bool(user.get("must_change_password")),
         email=user.get("email"),
         **_quota_status_for(user),
     )
@@ -449,7 +521,7 @@ def forgot_password(req: ForgotPasswordRequest, request: Request):
         # tu khoa chinh minh ra khoi tai khoan va bat buoc phai nho admin can thiep.
         new_pwd = generate_password(10)
         if send_password_email(clean_email, new_pwd, is_reset=True):
-            set_password(clean_email, new_pwd)
+            set_password(clean_email, new_pwd, must_change_password=True)
             delete_all_sessions_for_user(user["id"])
             _write_log({
                 "ts": dt.datetime.now().isoformat(),
@@ -481,8 +553,10 @@ def change_password(req: ChangePasswordRequest, user: dict = Depends(require_use
     if not req.current_password or not req.new_password:
         raise HTTPException(400, "Vui lòng nhập đầy đủ mật khẩu hiện tại và mật khẩu mới")
 
-    if len(req.new_password) < 6:
-        raise HTTPException(400, "Mật khẩu mới phải có tối thiểu 6 ký tự")
+    if len(req.new_password) < 10:
+        raise HTTPException(400, "Mật khẩu mới phải có tối thiểu 10 ký tự")
+    if req.new_password == req.current_password:
+        raise HTTPException(400, "Mật khẩu mới phải khác mật khẩu hiện tại")
 
     # Xác thực mật khẩu cũ
     verified = verify_login(user["username"], req.current_password)
@@ -490,6 +564,9 @@ def change_password(req: ChangePasswordRequest, user: dict = Depends(require_use
         raise HTTPException(400, "Mật khẩu hiện tại không chính xác")
 
     set_password(user["username"], req.new_password)
+    # Mat khau cu co the da lo: thu hoi CA phien hien tai va moi phien khac. Nguoi dung dang nhap lai
+    # bang mat khau moi thay vi de token cu tiep tuc song toi 7 ngay.
+    delete_all_sessions_for_user(user["id"])
     _write_log({
         "ts": dt.datetime.now().isoformat(),
         "username": user["username"],
@@ -497,7 +574,7 @@ def change_password(req: ChangePasswordRequest, user: dict = Depends(require_use
         "sql": "<auth:change_password>",
         "status": "ok"
     })
-    return {"ok": True, "message": "Đổi mật khẩu thành công!"}
+    return {"ok": True, "message": "Đổi mật khẩu thành công. Vui lòng đăng nhập lại."}
 
 
 @app.post("/auth/logout", dependencies=[Depends(require_api_key)])
@@ -517,6 +594,7 @@ def me(user: dict = Depends(require_user)):
         scope_value=user["scope_value"],
         scope_channel=user["scope_channel"],
         status=user.get("status", "approved"),
+        must_change_password=bool(user.get("must_change_password")),
         email=user.get("email"),
         **_quota_status_for(user),
     )
@@ -533,24 +611,27 @@ def get_users_list(status: Optional[str] = Query(default=None), user: dict = Dep
 
 @app.post("/admin/users/create", dependencies=[Depends(require_api_key)])
 def create_user_by_admin(req: AdminCreateUserRequest, user: dict = Depends(require_approved_user)):
-    if user["role"] not in ("c_level", "admin_ops"):
-        raise HTTPException(403, "Chi Quản trị viên mới có quyền tạo tài khoản mới")
+    if user["role"] != "c_level":
+        raise HTTPException(403, "Chỉ C-Level mới có quyền tạo tài khoản mới")
 
     clean_username = req.username.strip().lower()
     existing = get_user_by_email_or_username(clean_username)
     if existing:
         raise HTTPException(400, f"Tài khoản hoặc username '{clean_username}' đã tồn tại")
 
-    user_info, generated_pwd = admin_create_user(
-        username=clean_username,
-        name=req.name,
-        role=req.role,
-        scope_value=req.scope_value if req.role != "c_level" else None,
-        employee_code=req.employee_code if req.role == "qlv" else None,
-        scope_channel=req.scope_channel,
-        email=req.email.strip().lower() if req.email else None,
-        password=req.password,
-    )
+    try:
+        user_info, generated_pwd = admin_create_user(
+            username=clean_username,
+            name=req.name,
+            role=req.role,
+            scope_value=req.scope_value,
+            employee_code=req.employee_code,
+            scope_channel=req.scope_channel,
+            email=req.email.strip().lower() if req.email else None,
+            password=req.password,
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
 
     if req.email and req.email.strip():
         send_password_email(
@@ -578,10 +659,13 @@ def create_user_by_admin(req: AdminCreateUserRequest, user: dict = Depends(requi
 
 @app.post("/admin/users/{username}/approve", dependencies=[Depends(require_api_key)])
 def approve_user_endpoint(username: str, req: ApproveUserRequest, user: dict = Depends(require_approved_user)):
-    if user["role"] not in ("c_level", "admin_ops"):
-        raise HTTPException(403, "Chi Quản trị viên mới có quyền phê duyệt tài khoản")
+    if user["role"] != "c_level":
+        raise HTTPException(403, "Chỉ C-Level mới có quyền phê duyệt và gán phạm vi tài khoản")
 
-    success = approve_user(username, req.role, req.scope_value, req.employee_code, req.scope_channel)
+    try:
+        success = approve_user(username, req.role, req.scope_value, req.employee_code, req.scope_channel)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
     if not success:
         raise HTTPException(404, "Không tìm thấy tài khoản để phê duyệt")
     _write_log({
@@ -598,6 +682,12 @@ def approve_user_endpoint(username: str, req: ApproveUserRequest, user: dict = D
 def toggle_user_active_endpoint(username: str, user: dict = Depends(require_approved_user)):
     if user["role"] not in ("c_level", "admin_ops"):
         raise HTTPException(403, "Chi Quản trị viên mới có quyền bật/tắt tài khoản")
+
+    target = get_user_by_email_or_username(username)
+    if not target:
+        raise HTTPException(404, "Không tìm thấy tài khoản")
+    if user["role"] == "admin_ops" and target.get("role") in {"c_level", "admin_ops"}:
+        raise HTTPException(403, "Admin Vận Hành không được khóa/mở tài khoản đặc quyền")
 
     res = toggle_user_active(username)
     if not res:
@@ -701,8 +791,12 @@ def chat(req: ChatRequest, user: dict = Depends(require_approved_user)):
         raise HTTPException(400, "Cau hoi khong duoc de trong")
     scope_area_code, scope_employee_code, scope_channel = _business_scopes(user)
     _check_rate_limit(user["username"])
-    quota = _quota_for_question(user, req.question)
+    try:
+        register_session(req.session_id, user["username"], req.question)
+    except PermissionError:
+        raise HTTPException(403, "Cuoc tro chuyen nay da thuoc mot tai khoan khac")
     _require_session_write_access(req.session_id, user)
+    quota = _quota_for_question(user, req.question)
     query_id = str(uuid.uuid4())
     started_at = time.monotonic()
     create_query_run(query_id, req.session_id, user["username"], req.question.strip())
@@ -710,7 +804,6 @@ def chat(req: ChatRequest, user: dict = Depends(require_approved_user)):
         result = ask(req.question, session_id=req.session_id, username=user["username"],
                      scope_area_code=scope_area_code, scope_employee_code=scope_employee_code,
                      scope_channel=scope_channel, scope_role=user["role"], query_id=query_id)
-        register_session(req.session_id, user["username"], req.question)
         lr = result.get("last_result") or {}
         is_raw_sql = lr.get("ok") and "columns" in lr
         complete_query_run(
@@ -756,8 +849,12 @@ def chat_stream(req: ChatRequest, user: dict = Depends(require_approved_user)):
         raise HTTPException(400, "Cau hoi khong duoc de trong")
     scope_area_code, scope_employee_code, scope_channel = _business_scopes(user)
     _check_rate_limit(user["username"])
-    quota = _quota_for_question(user, req.question)
+    try:
+        register_session(req.session_id, user["username"], req.question)
+    except PermissionError:
+        raise HTTPException(403, "Cuoc tro chuyen nay da thuoc mot tai khoan khac")
     _require_session_write_access(req.session_id, user)
+    quota = _quota_for_question(user, req.question)
 
     query_id = str(uuid.uuid4())
     started_at = time.monotonic()
@@ -769,7 +866,6 @@ def chat_stream(req: ChatRequest, user: dict = Depends(require_approved_user)):
                                      scope_area_code=scope_area_code, scope_employee_code=scope_employee_code,
                                      scope_channel=scope_channel, scope_role=user["role"], query_id=query_id):
                 if chunk["type"] == "done":
-                    register_session(req.session_id, user["username"], req.question)
                     lr = chunk.get("last_result") or {}
                     is_raw_sql = lr.get("ok") and "columns" in lr
                     complete_query_run(

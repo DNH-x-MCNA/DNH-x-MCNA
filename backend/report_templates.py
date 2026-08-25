@@ -816,12 +816,15 @@ def _daily_kpi_status(pct: float) -> str:
 
 
 def employee_daily_kpi(employee_code: str, year_month: str, scope_area_code: str = None,
-                        scope_employee_code: str = None) -> dict:
+                        scope_employee_code: str = None, scope_channel: str = None) -> dict:
     if employee_code and "," in employee_code:
         codes = [c.strip() for c in employee_code.split(",") if c.strip()]
         results = []
         for code in codes[:30]:
-            r_single = employee_daily_kpi(employee_code=code, year_month=year_month, scope_area_code=scope_area_code, scope_employee_code=scope_employee_code)
+            r_single = employee_daily_kpi(
+                employee_code=code, year_month=year_month, scope_area_code=scope_area_code,
+                scope_employee_code=scope_employee_code, scope_channel=scope_channel,
+            )
             if r_single and "error" not in r_single:
                 results.append(r_single)
         return {"is_bulk": True, "count": len(results), "employees": results}
@@ -856,6 +859,10 @@ def employee_daily_kpi(employee_code: str, year_month: str, scope_area_code: str
         allowed = {scope_employee_code} | {t["employee_code"] for t in _team_of_qlv(scope_employee_code)}
         if resolved_code not in allowed:
             return {"error": "Ban chi duoc xem du lieu cua cac nhan vien trong doi minh phu trach."}
+    channel = str(scope_channel or "").strip().upper() or None
+    if channel not in {None, "OTC", "ETC"}:
+        raise ValueError("scope_channel chi nhan OTC hoac ETC.")
+
     # 23/07/2026 (R-G): CHAN ma cap quan ly thay vi tra "0 dong moi ngay". Ma QLV/TP/PP khong xuat
     # hien tren hoa don (hoa don ghi ma nhan vien ban hang ca nhan), nen ham nay se cong ra 0 va AI
     # dien giai thanh "17/17 ngay do, van de nghiem trong" - da xay ra that voi tungtx (QLV thuc te
@@ -899,12 +906,20 @@ def employee_daily_kpi(employee_code: str, year_month: str, scope_area_code: str
     total_sales_month = 0.0
     count_red = count_yellow = count_green = 0
     if range_end >= month_start:
-        rows = _q("""SELECT doc_date, SUM(amount9) rev FROM (
-                        SELECT doc_date, amount9 FROM vhoadon_otc WHERE employee_code=? AND doc_date BETWEEN ? AND ?
-                        UNION ALL
-                        SELECT doc_date, amount9 FROM vhoadon_etc WHERE employee_code=? AND doc_date BETWEEN ? AND ?
-                     ) GROUP BY doc_date""",
-                  (dms_code, str(month_start), str(range_end), dms_code, str(month_start), str(range_end)))
+        sources = [channel.lower()] if channel else ["otc", "etc"]
+        selects = [
+            f"SELECT doc_date, amount9 FROM vhoadon_{source} "
+            "WHERE employee_code=? AND doc_date BETWEEN ? AND ?"
+            for source in sources
+        ]
+        query_params = []
+        for _source in sources:
+            query_params.extend([dms_code, str(month_start), str(range_end)])
+        rows = _q(
+            "SELECT doc_date, SUM(amount9) rev FROM (" + " UNION ALL ".join(selects) +
+            ") GROUP BY doc_date",
+            tuple(query_params),
+        )
         by_date = {r["doc_date"]: _f(r["rev"]) for r in rows}
         total_sales_month = sum(by_date.values())
         d = month_start
@@ -927,6 +942,7 @@ def employee_daily_kpi(employee_code: str, year_month: str, scope_area_code: str
         "days": days,
         "count_red": count_red, "count_yellow": count_yellow, "count_green": count_green,
         "month_total_sales": total_sales_month, "month_pct_of_target": month_pct,
+        "channel_scope": channel,
         "data_as_of": latest_data_date(),
     }
 
@@ -4938,7 +4954,7 @@ def salary_bonus_policy(bonus_type: str = "v25", as_of_date: str = None,
     }
 
 
-def salary_data_quality(check_type: str, year_month: str = None,
+def salary_data_quality(check_type: str, year_month: str = None, scope_area_code: str = None,
                         scope_employee_code: str = None, scope_role: str = None) -> dict:
     """Doi chieu DM bonus, schema luong co ban, hoac chat luong snapshot bang luong.
 
@@ -4981,21 +4997,25 @@ def salary_data_quality(check_type: str, year_month: str = None,
             ),
         }
 
+    scope_clauses = []
+    scope_params: list = []
+    if scope_area_code:
+        scope_clauses.append("area_code=?")
+        scope_params.append(scope_area_code)
+    if scope_employee_code:
+        scope_clauses.append("(employee_code=? OR manager_code=?)")
+        scope_params.extend([scope_employee_code, scope_employee_code])
+    scope_sql = "" if not scope_clauses else " AND " + " AND ".join(scope_clauses)
+
     date_cond, date_params = _closed_salary_date_filter("", year_month)
     date_rows = _q(
         f"SELECT MAX(save_date) d FROM fact_thongketinhluong WHERE 1=1 {date_cond} "
-        "AND v25_percent IS NOT NULL",
-        date_params,
+        f"AND v25_percent IS NOT NULL{scope_sql}",
+        tuple(date_params) + tuple(scope_params),
     )
     snapshot_date = date_rows[0]["d"] if date_rows and date_rows[0].get("d") else None
     if not snapshot_date:
         return {"status": "no_data", "note": "Chua co snapshot luong cuoi ky da chot."}
-
-    scope_sql = ""
-    scope_params: list = []
-    if scope_employee_code:
-        scope_sql = " AND (employee_code=? OR manager_code=?)"
-        scope_params.extend([scope_employee_code, scope_employee_code])
 
     if check == "snapshot_quality":
         rows = _q(
@@ -5661,17 +5681,67 @@ _EMPLOYEE_SCOPED_TEMPLATES = {
     "check_order_timing",
 }
 
-_CHANNEL_SCOPED_TEMPLATES = {
-    "get_revenue_by_channel", "get_top_products", "get_top_customers",
-    "compare_periods", "get_revenue_ytd_cumulative", "get_revenue_monthly_series",
-    "get_customer_lifecycle_summary", "get_customers_silent", "get_customer_cohort_retention",
-    "get_customer_movement", "get_kpi_gap_run_rate", "get_cross_sell_opportunities", "get_customer_product_coverage",
-    "get_geography_monthly_performance", "get_workforce_productivity", "get_operational_data_quality",
-    "get_customer_detail", "check_order_timing",
-    "get_revenue_by_region", "get_promotion_effectiveness", "get_promotion_data_quality",
-    "get_customer_revenue_debt_risk", "get_receivables_overview",
-    "get_receivables_period_compare"
+_CHANNEL_SCOPE_POLICIES = {
+    # Tool co tham so scope_channel va bat buoc duoc backend ghi de.
+    **{name: "filter" for name in {
+        "get_revenue_by_channel", "get_top_products", "get_top_customers",
+        "compare_periods", "get_revenue_ytd_cumulative", "get_revenue_monthly_series",
+        "get_customer_lifecycle_summary", "get_customers_silent", "get_customer_cohort_retention",
+        "get_customer_movement", "get_kpi_gap_run_rate", "get_cross_sell_opportunities",
+        "get_customer_product_coverage", "get_geography_monthly_performance",
+        "get_workforce_productivity", "get_operational_data_quality", "get_customer_detail",
+        "check_order_timing", "get_revenue_by_region", "get_promotion_effectiveness",
+        "get_promotion_data_quality", "get_customer_revenue_debt_risk",
+        "get_receivables_overview", "get_receivables_period_compare", "get_employee_daily_kpi",
+    }},
+    # Cac tool nay hien chi co nguon OTC. Tai khoan OTC duoc dung; ETC bi chan de tranh tra sai kenh.
+    **{name: "otc_only" for name in {
+        "get_employee_kpi", "get_revenue_tree", "get_kpi_ranking", "get_revenue_reconciliation",
+    }},
+    # Du lieu luong chi duoc mo cho tai khoan QLV da co scope nhan vien; regional channel-only bi chan.
+    **{name: "employee" for name in {
+        "get_salary_bonus_policy", "get_salary_data_quality", "get_salary_detail",
+        "get_salary_achievement_summary", "get_salary_ranking",
+    }},
+    # Chua co cot/quan he kenh du tin cay: fail-closed thay vi mac dinh xem toan cong ty.
+    **{name: "blocked" for name in {
+        "get_employee_directory", "get_inventory_by_region", "get_inventory_expiry_report",
+        "get_qlv_change_history",
+    }},
+    # Metadata khong chua so lieu kinh doanh theo kenh, hoac da tu gioi han theo chinh nguoi dung.
+    "get_receivables_history_dates": "exempt",
+    "get_audit_log": "exempt",
 }
+
+if set(_CHANNEL_SCOPE_POLICIES) != set(TEMPLATES):
+    missing = sorted(set(TEMPLATES) - set(_CHANNEL_SCOPE_POLICIES))
+    extra = sorted(set(_CHANNEL_SCOPE_POLICIES) - set(TEMPLATES))
+    raise RuntimeError(f"Channel scope policy incomplete; missing={missing}, extra={extra}")
+
+_CHANNEL_SCOPED_TEMPLATES = {
+    name for name, policy in _CHANNEL_SCOPE_POLICIES.items() if policy == "filter"
+}
+_SALARY_SENSITIVE_TEMPLATES = {
+    name for name, policy in _CHANNEL_SCOPE_POLICIES.items() if policy == "employee"
+}
+
+
+def template_available_for_channel(name: str, scope_channel: str = None,
+                                   scope_employee_code: str = None) -> bool:
+    """Fail-closed availability used by both tool advertisement and execution."""
+    if name not in TEMPLATES or not scope_channel:
+        return True
+    channel = str(scope_channel).strip().upper()
+    if channel not in {"OTC", "ETC"}:
+        return False
+    policy = _CHANNEL_SCOPE_POLICIES[name]
+    if policy in {"filter", "exempt"}:
+        return True
+    if policy == "otc_only":
+        return channel == "OTC"
+    if policy == "employee":
+        return bool(scope_employee_code)
+    return False
 
 
 _SINGLE_PERIOD_TEMPLATES = {
@@ -5752,6 +5822,32 @@ def call_template(name: str, args: dict, question: str = "", username: str = Non
     try:
         fn = TEMPLATES[name]
         call_args = dict(args)
+        if scope_role is not None and scope_role not in {"c_level", "admin_ops", "regional_director", "qlv"}:
+            entry["status"] = "blocked"
+            entry["error"] = "Vai tro tai khoan khong hop le."
+            _write_log(entry)
+            return {"ok": False, "error": entry["error"]}
+        if name in _SALARY_SENSITIVE_TEMPLATES:
+            if scope_role == "regional_director":
+                entry["status"] = "blocked"
+                entry["error"] = "Bao cao luong ca nhan khong mo cho vai tro giam doc mien/kenh."
+                _write_log(entry)
+                return {"ok": False, "error": entry["error"]}
+            if scope_role == "qlv" and not scope_employee_code:
+                entry["status"] = "blocked"
+                entry["error"] = "Tai khoan QLV thieu scope nhan vien nen khong the xem bao cao luong."
+                _write_log(entry)
+                return {"ok": False, "error": entry["error"]}
+        if scope_channel and not template_available_for_channel(
+            name, scope_channel, scope_employee_code
+        ):
+            entry["status"] = "blocked"
+            entry["error"] = (
+                f"Bao cao '{name}' chua co co che gioi han du lieu an toan cho kenh "
+                f"{str(scope_channel).upper()}."
+            )
+            _write_log(entry)
+            return {"ok": False, "error": entry["error"]}
         if name in _SELF_SCOPED_TEMPLATES:
             # EP CA HAI tu server, ghi de bat ky gia tri nao AI dua vao args: username (danh tinh)
             # va scope_role (vai tro, quyet dinh co duoc xem toan cong ty hay khong). Thieu 1 trong 2
@@ -5788,7 +5884,7 @@ def call_template(name: str, args: dict, question: str = "", username: str = Non
                     f"Bao cao '{name}' chua ho tro gioi han theo doi cua rieng ban nen khong the chay "
                     "voi tai khoan quan ly vung. Hay hoi ve doi cua chinh ban, hoac lien he cap quan ly "
                     "cao hon (Truong phong/Giam doc vung) neu can pham vi rong hon.")}
-        if scope_channel and name in _CHANNEL_SCOPED_TEMPLATES:
+        if scope_channel and _CHANNEL_SCOPE_POLICIES[name] == "filter":
             call_args["scope_channel"] = scope_channel
         result = fn(**call_args)
         entry["status"] = "ok"

@@ -92,6 +92,17 @@ def init():
     conn.execute("CREATE INDEX IF NOT EXISTS idx_query_runs_session ON query_runs(session_id, created_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_query_runs_user ON query_runs(username, created_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_query_runs_feedback ON query_runs(feedback_rating, feedback_at)")
+    # Gan owner cho session cu neu so cai query_runs chung minh session do chi thuoc duy nhat 1 user.
+    # Session legacy khong du du lieu de suy ra owner se tiep tuc bi an (fail-closed), khong tu gan bua.
+    conn.execute("""
+        INSERT OR IGNORE INTO sessions (session_id, owner_username, title, created_at, updated_at)
+        SELECT session_id, MIN(username), substr(MIN(question),1,50),
+               MIN(created_at), MAX(created_at)
+        FROM query_runs
+        WHERE session_id IS NOT NULL AND username IS NOT NULL
+        GROUP BY session_id
+        HAVING COUNT(DISTINCT username)=1
+    """)
     # Event append-only giu lich su khi nguoi dung thay doi danh gia; query_runs van la current state.
     conn.execute("""CREATE TABLE IF NOT EXISTS query_feedback_events (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -116,12 +127,24 @@ def register_session(session_id: str, owner_username: str, first_question: str):
     title = (first_question or "").strip()[:50] or "Cuộc trò chuyện mới"
     conn = _conn()
     try:
-        conn.execute(
-            "INSERT INTO sessions (session_id, owner_username, title, created_at, updated_at) "
-            "VALUES (?,?,?,?,?) "
-            "ON CONFLICT(session_id) DO UPDATE SET updated_at=excluded.updated_at",
-            (session_id, owner_username, title, now, now),
-        )
+        conn.execute("BEGIN IMMEDIATE")
+        existing = conn.execute(
+            "SELECT owner_username FROM sessions WHERE session_id=?", (session_id,)
+        ).fetchone()
+        if existing and existing[0] != owner_username:
+            conn.rollback()
+            raise PermissionError("Session da thuoc mot tai khoan khac.")
+        if existing:
+            conn.execute(
+                "UPDATE sessions SET updated_at=? WHERE session_id=?",
+                (now, session_id),
+            )
+        else:
+            conn.execute(
+                "INSERT INTO sessions (session_id, owner_username, title, created_at, updated_at) "
+                "VALUES (?,?,?,?,?)",
+                (session_id, owner_username, title, now, now),
+            )
         conn.commit()
     finally:
         conn.close()

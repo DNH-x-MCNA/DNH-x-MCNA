@@ -15,6 +15,7 @@ type AuthUser = {
   scope_value: string | null;
   scope_channel?: string | null;
   status?: string;
+  must_change_password?: boolean;
   email?: string | null;
   quota_used?: number | null;
   quota_limit?: number | null;
