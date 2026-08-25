@@ -27,6 +27,27 @@ $CHECK_INTERVAL_SEC = 30
 
 if (-not (Test-Path $LOG_DIR)) { New-Item -ItemType Directory -Path $LOG_DIR -Force | Out-Null }
 
+# Chi cho phep DUNG MOT supervisor tren toan may. Task Scheduler/service/lenh tay co the vo tinh
+# khoi dong cung script nhieu lan; moi ban se sinh mot sync_scheduler rieng va tranh nhau ghi
+# warehouse.db. Named mutex duoc Windows tu dong giai phong khi process chet, ke ca Stop-Process.
+$SUPERVISOR_MUTEX_NAME = "Global\DNH_Chatbot_RunSupervisor"
+$ownsSupervisorMutex = $false
+try {
+    $supervisorMutex = New-Object System.Threading.Mutex($false, $SUPERVISOR_MUTEX_NAME)
+    try {
+        $ownsSupervisorMutex = $supervisorMutex.WaitOne(0, $false)
+    } catch [System.Threading.AbandonedMutexException] {
+        $ownsSupervisorMutex = $true
+    }
+} catch {
+    Add-Content -Path $SUPERVISOR_LOG -Value "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') Khong tao/mo duoc singleton mutex: $_ - thoat de tranh chay trung." -Encoding utf8
+    exit 0
+}
+if (-not $ownsSupervisorMutex) {
+    Add-Content -Path $SUPERVISOR_LOG -Value "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') Da co run_supervisor khac dang chay - ban khoi dong trung tu thoat." -Encoding utf8
+    exit 0
+}
+
 function Log($msg) {
     $line = "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') $msg"
     Add-Content -Path $SUPERVISOR_LOG -Value $line -Encoding utf8
