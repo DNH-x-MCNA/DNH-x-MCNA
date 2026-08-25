@@ -53,6 +53,16 @@ backend/*.db-shm
 backend/logs/
 backend/*.txt
 
+# Database runtime do ETL/bao cao sinh ra. Cac file nay co the chua du lieu
+# van hanh thuc te, tuyet doi khong dua vao Git. DB fixture trong mock_source/
+# van duoc phep track de phuc vu test.
+/scripts/*.db
+/scripts/*.db-wal
+/scripts/*.db-shm
+/bao-cao-canh-bao/scripts/*.db
+/bao-cao-canh-bao/scripts/*.db-wal
+/bao-cao-canh-bao/scripts/*.db-shm
+
 # Python cache o MOI thu muc (truoc day chi chan backend/, nen __pycache__ o root,
 # ai_agent/, scripts/, src/, tests/ van hien trong git status)
 __pycache__/
