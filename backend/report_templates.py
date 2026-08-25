@@ -205,6 +205,13 @@ class KhongXacDinhDuocDoi(Exception):
     tra 0 dong - xem ghi chu trong _get_team_dms_ids()."""
 
 
+# QLV tu phu trach khach hang truc tiep, khong co TDV bao cao ben duoi. Cac ma trong danh sach nay
+# da duoc doi chieu rieng voi du lieu giao dich: DMSId tren dim_nhanvien la pham vi ca nhan cua chinh
+# ho, KHONG phai ma tong hop toan mien. Chi fallback cho danh sach xac minh nay; moi ma khac van
+# fail-closed de khong bien loi ManagerCode thanh bao cao thieu ma nguoi dung khong biet.
+_VERIFIED_SELF_MANAGED_QLV_CODES = {"MBKV12"}
+
+
 def _fact_date_le(as_of_date: str = None) -> str:
     """Ngay snapshot KPI gan nhat KHONG VUOT QUA as_of_date (rong = moi nhat co trong kho).
 
@@ -249,6 +256,21 @@ def _get_team_dms_ids(scope_employee_code: str, fdate: str = None) -> list:
     team = _team_of_qlv(scope_employee_code, fdate)
     codes = [t["employee_code"] for t in team if t.get("employee_code")]
     if not codes:
+        if scope_employee_code in _VERIFIED_SELF_MANAGED_QLV_CODES:
+            rows = _q(
+                "SELECT DISTINCT dmsid FROM dim_nhanvien "
+                "WHERE employee_code=? AND position_code='QLV' "
+                "AND dmsid IS NOT NULL AND TRIM(dmsid)<>''",
+                (scope_employee_code,),
+            )
+            own_dms_ids = list(dict.fromkeys(str(r["dmsid"]).strip() for r in rows if r.get("dmsid")))
+            if own_dms_ids:
+                _warn(
+                    f"Ma QLV '{scope_employee_code}' khong co TDV bao cao truc tiep. "
+                    "Bao cao nay CHI gom giao dich ghi theo DMSId cua chinh QLV, "
+                    "khong phai doanh so toan mien."
+                )
+                return own_dms_ids
         raise KhongXacDinhDuocDoi(
             f"Khong xac dinh duoc doi cua quan ly vung '{scope_employee_code}': khong tim thay TDV "
             f"nao bao cao len ma nay trong FACT_TongHopKhachHang. KHONG the tra so doanh thu theo "

@@ -27,17 +27,12 @@ export async function POST(request: Request) {
     });
   } catch (e) {
     const reason = e instanceof Error ? e.message : String(e);
-    // Loi ket noi truoc ca khi co response (tunnel dut/backend chet) - client (page.tsx) doc SSE
-    // nen tra ve 1 event "error" dung format SSE thay vi JSON thuong, de logic doc stream o
-    // frontend xu ly duoc dong nhat (khong can nhanh rieng cho loi tang proxy).
-    const errEvent = `data: ${JSON.stringify({
-      type: "error",
-      message: `Khong ket noi duoc may chu backend. (Chi tiet: ${reason})`,
-    })}\n\n`;
-    return new Response(errEvent, {
-      status: 502,
-      headers: { "Content-Type": "text/event-stream" },
-    });
+    // Client chi vao bo doc SSE khi HTTP thanh cong. Voi HTTP loi, page.tsx doc body bang res.json(),
+    // vi vay bat buoc tra JSON; tra SSE kem status 502 se bi bien thanh "Loi khong xac dinh".
+    return Response.json(
+      { detail: `Khong ket noi duoc may chu backend. (Chi tiet: ${reason})` },
+      { status: 502 },
+    );
   }
 
   if (!res.ok || !res.body) {
@@ -53,11 +48,10 @@ export async function POST(request: Request) {
       // Body khong phai JSON (vd trang HTML loi cua tunnel/reverse proxy dung giua, giong 530
       // tung gap o /chat thuong) - giu message mac dinh o tren, KHONG lo trang HTML tho ra UI.
     }
-    const errEvent = `data: ${JSON.stringify({ type: "error", message })}\n\n`;
-    return new Response(errEvent, {
-      status: res.status >= 400 ? res.status : 502,
-      headers: { "Content-Type": "text/event-stream" },
-    });
+    return Response.json(
+      { detail: message },
+      { status: res.status >= 400 ? res.status : 502 },
+    );
   }
 
   // Backend OK va co body dang stream - pipe THANG, khong doc/buffer.
