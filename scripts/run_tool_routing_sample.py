@@ -167,6 +167,18 @@ def main():
         return 2
 
     helpers = _load_eval_helpers()
+    # 25/08/2026 - BAT BUOC ep lai duong dan log. run_business_evaluation.py tinh duong dan doc qua
+    # bien moi truong DNH_BACKEND_DIR, con code GHI log (cost_logger.py, query_engine.py) lai dung
+    # vi tri file cua chinh no - hai ben CO THE tro ve hai cho khac nhau. Khi do doc ra 0 dong va
+    # bao cao thanh "model khong goi tool nao", trong y het loi chat luong model.
+    # Da dinh dung bay nay tren may 24: chatbot tra loi HOAN TOAN DUNG (bang 12 thang co MoM/YoY,
+    # danh sach khach im lang...), cost_log co 33 dong / 0,87 USD, nhung bao cao van ra "1/25 (4%)
+    # va $0.0000". Lay thang duong dan tu module dang GHI thi khong the lech duoc nua.
+    import cost_logger as _cl
+    import query_engine as _qe
+    helpers.COST_LOG = Path(_cl.LOG_PATH)
+    helpers.AUDIT_LOG = Path(_qe.LOG_PATH)
+
     results = []
     for i, (cid, role, question, expect) in enumerate(cases, 1):
         sid = "routing-%s-%s-%s" % (args.label, cid, uuid.uuid4().hex[:8])
@@ -226,6 +238,21 @@ def main():
     print("CHON DUNG TOOL: %d/%d (%.0f%%)   |   Chi phi: %.4f USD"
           % (len(dat), len(results), 100.0 * len(dat) / len(results), tong_cost))
     print("=" * 72)
+    if tong_cost <= 0 and any(not r["error"] and r["answer"] for r in results):
+        # Co cau tra loi that nhung doc ra 0 dong chi phi -> gan nhu chac chan la DOI CHIEU LOG hong,
+        # khong phai model. In bang chung doi chieu de thay ngay chO lech.
+        print("\n!!! CO CAU TRA LOI NHUNG DOC RA 0 DONG CHI PHI - loi doi chieu log, khong phai model.")
+        print("    File chi phi dang doc: %s" % helpers.COST_LOG)
+        try:
+            dong = [json.loads(l) for l in io.open(helpers.COST_LOG, encoding="utf-8", errors="replace")
+                    if l.strip()]
+            print("    Tong so dong trong file: %d" % len(dong))
+            if dong:
+                print("    session_id dong cuoi cung : %r" % dong[-1].get("session_id"))
+            print("    session_id kich ban tao ra: %r" % results[0]["session_id"])
+        except Exception as exc:
+            print("    Khong doc duoc file: %s" % exc)
+
     if tong_cost <= 0:
         # Goi model that thi LUON ton tien. Tong = 0 nghia la khong co lan goi nao den duoc model,
         # hoac session_id khong khop duoc voi cost_log.jsonl -> con so % o tren VO NGHIA, khong duoc
