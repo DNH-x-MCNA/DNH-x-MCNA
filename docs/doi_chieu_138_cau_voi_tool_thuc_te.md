@@ -119,3 +119,28 @@ Các vòng P0/P1/P2 đã được triển khai hết trong phạm vi dữ liệu
 thành “138/138 câu đều trả lời đầy đủ”: các nhóm tại mục 3 vẫn cần DNH cung cấp hoặc xác nhận nguồn dữ
 liệu. Bước tiếp theo nên là kiểm thử live theo bộ câu hỏi và thu lại câu trả lời/SQL để đánh giá khả năng
 model chọn đúng tool; việc này chưa được thực hiện vì vòng này chủ động **không gọi API**.
+
+---
+
+# Bổ sung 25/08/2026 — đã thử kiểm chứng live, bị chặn
+
+Mục 5 ở trên nêu bước tiếp theo là **kiểm thử live để đánh giá model có chọn đúng tool không**.
+Ngày 25/08/2026 đã thử chạy nhưng **không thực hiện được**: tài khoản Anthropic hết số dư
+(`Your credit balance is too low to access the Anthropic API`) — không phải hết hạn mức tạm thời.
+
+Vì vậy cần đọc toàn bộ tài liệu này với một lưu ý quan trọng:
+
+**Toàn bộ đánh giá phủ câu hỏi ở trên là đối chiếu TRÊN GIẤY** (mô tả tool ↔ nội dung câu hỏi).
+322 test đơn vị chứng minh SQL của từng tool chạy đúng, nhưng **không** chứng minh model biết chọn
+đúng tool khi người dùng hỏi bằng tiếng Việt tự nhiên. **11 tool mới chưa từng được model gọi thật
+lần nào.** Đây đúng là khoảng cách đã nhiều lần gây lỗi trong dự án này (câu trả lời trông hợp lý
+nhưng gọi nhầm tool/nhầm tầng dữ liệu).
+
+Ước lượng thô mức phủ hiện tại: khoảng **84/138 câu (61%)** trả lời được, ~22 câu còn thiếu tool
+(tập trung ở target theo SKU, chi nhánh/NPP, thiếu hàng, hàng trả — đều do **hạ tầng dữ liệu chưa
+có**, không phải thiếu công sức viết tool), ~20 câu chờ DNH cung cấp nguồn, 3 câu chặn có chủ đích.
+Con số 61% phải coi là **giới hạn trên chưa kiểm chứng**, không phải kết quả đã đo.
+
+**Việc cần làm ngay khi có ngân sách API**: chạy mẫu phân tầng ~25 câu (mỗi nhóm vài câu, ưu tiên
+các câu dùng 11 tool mới), thu lại câu trả lời + tool đã gọi, để biến con số trên giấy thành số đo
+thật. Chi phí ước tính 1–2 USD.

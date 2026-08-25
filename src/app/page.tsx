@@ -2486,6 +2486,14 @@ export default function Home() {
                   : USD_TO_VND_RATE.toLocaleString("vi-VN")}{" "}
                 đ/USD. Nhà cung cấp và model lấy từ log API thực tế của từng lượt; tổng lấy thẳng từ sổ chi phí nên luôn đúng
                 kể cả khi chưa quy được từng lượt về người dùng cụ thể.
+                {" "}
+                <strong className="text-slate-700">
+                  Số liệu ở đây chia ngày theo giờ Việt Nam, còn Anthropic Console chia theo giờ UTC (lệch 7 tiếng) —
+                  không so trực tiếp từng ngày giữa hai nơi được.
+                </strong>{" "}
+                Ví dụ phần phát sinh từ 00:00–07:00 giờ Việt Nam sẽ nằm ở ngày hôm trước bên Console, và ngày UTC hiện
+                tại luôn thiếu vài giờ cuối so với ngày Việt Nam. Muốn đối chiếu chính xác thì so tổng nhiều ngày liền
+                nhau, đừng so lẻ từng ngày.
               </span>
               <button
                 onClick={() => setAuditModalOpen(false)}

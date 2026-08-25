@@ -11,32 +11,25 @@ MODEL_PRICING = {
     "claude-sonnet-5": {
         "input": 2.00,        # gia gioi thieu den 31/08/2026, sau do $3.00
         "output": 10.00,      # gia gioi thieu den 31/08/2026, sau do $15.00
-        "cache_read": 0.20,   # 0.1x input - he so chuan Anthropic
-        "cache_write": 4.00,  # 2x input - he so cache TTL 1 GIO. Sua 05/08/2026 - truoc do ghi
-                               # 2.50 (1.25x cua TTL 5 phut) lam MOI bao cao chi phi cache-write bi
-                               # bao THIEU ~37%.
-                               #
-                               # HAN CHE DO DAC (06/08/2026): tu nay nl2sql.py dung HAI TTL khac nhau
-                               # - system prompt + tool definitions van "1h" (2x = 4.00), rieng
-                               # breakpoint tren tool_results ha ve mac dinh 5 phut (1.25x = 2.50) vi
-                               # chi doc lai trong cung 1 cau hoi. Bang gia nay chi co MOT don gia
-                               # cache_write nen phan ghi 5 phut dang bi tinh theo gia 1 gio ->
-                               # bao cao chi phi cache-write hoi CAO HON thuc te (nguoc voi loi cu la
-                               # bao thap hon). Chua kiem chung duoc API co tra ve token ghi tach
-                               # rieng theo tung TTL hay khong (can goi that, luc sua thi API key dang
-                               # ngat). Neu co, tach thanh 2 don gia rieng va sua cost_logger.py.
+        "cache_read": 0.20,      # 0.1x input - he so chuan Anthropic
+        "cache_write": 4.00,     # 2x input - TTL 1 GIO
+        "cache_write_5m": 2.50,  # 1.25x input - TTL 5 PHUT (xem ghi chu ben duoi)
     },
     "claude-haiku-4-5": {
         "input": 1.00,
         "output": 5.00,
         "cache_read": 0.10,
-        "cache_write": 1.25,
+        "cache_write": 2.00,     # 2x input - TTL 1 gio. 25/08/2026: SUA tu 1.25 (do la he so 1.25x
+                                  # cua TTL 5 phut, bi dat nham vao o gia TTL 1 gio - nguoc chieu sai
+                                  # so voi sonnet-5, nen 2 model dang tinh theo 2 quy uoc khac nhau).
+        "cache_write_5m": 1.25,  # 1.25x input - TTL 5 phut
     },
     "claude-opus-4-8": {
         "input": 5.00,
         "output": 25.00,
         "cache_read": 0.50,
-        "cache_write": 6.25,
+        "cache_write": 10.00,    # 2x input - TTL 1 gio (25/08/2026: sua tu 6.25, cung loi voi haiku)
+        "cache_write_5m": 6.25,  # 1.25x input - TTL 5 phut
     },
 
     # DeepSeek V4 - bang gia cong bo chinh thuc, kiem tra 18/08/2026 (USD / 1M token).
@@ -108,7 +101,23 @@ def api_provider_for_model(model: str) -> str:
 
 
 def compute_cost_usd(model: str, input_tokens: int, output_tokens: int,
-                      cache_read_tokens: int = 0, cache_write_tokens: int = 0) -> float:
+                      cache_read_tokens: int = 0, cache_write_tokens: int = 0,
+                      cache_write_5m_tokens: int = None) -> float:
+    """cache_write_tokens: token GHI cache.
+    cache_write_5m_tokens: PHAN trong so do dung TTL 5 phut (re hon: 1.25x input thay vi 2x).
+
+    25/08/2026 - VI SAO TACH: nl2sql.py co 4 breakpoint cache voi HAI TTL khac nhau (system prompt +
+    tool definitions = 1 gio; tool_results + lich su hoi thoai = 5 phut). Truoc do bang gia chi co
+    MOT don gia cache_write nen TOAN BO phan ghi 5 phut bi tinh theo gia 1 gio -> bao cao chi phi
+    CAO HON thuc te. Do tren 89 dong log that cua may 24: thoi phong toi da 1,13 lan.
+
+    Ghi chu cu trong file nay noi "chua kiem chung duoc API co tra ve token ghi tach rieng theo tung
+    TTL hay khong" - 25/08/2026 da kiem: CO. anthropic SDK 0.116.0 tra ve
+    usage.cache_creation.ephemeral_5m_input_tokens va .ephemeral_1h_input_tokens (xem cost_logger.py).
+
+    cache_write_5m_tokens=None nghia la KHONG BIET tach the nao (API cu, model khac khong tra truong
+    nay, hoac tinh lai tu dong log cu chi co mot con so tong) -> giu nguyen hanh vi cu: tinh TAT CA
+    theo gia 1 gio. Chon huong tinh CAO HON khi khong chac, de khong bao gio bao thieu tien."""
     p = MODEL_PRICING.get(model)
     if not p:
         # 13/08/2026: truoc day lang le tra 0.0 - doi model ma quen them gia thi MOI bao cao chi phi
@@ -119,9 +128,18 @@ def compute_cost_usd(model: str, input_tokens: int, output_tokens: int,
             "Khong co bang gia cho model %r - moi chi phi cua model nay se ghi 0d. "
             "Them vao MODEL_PRICING (backend/pricing.py) truoc khi tin bao cao chi phi.", model)
         return 0.0
+    total_write = cache_write_tokens or 0
+    if cache_write_5m_tokens is None:
+        write_5m, write_1h = 0, total_write
+    else:
+        # Kep trong [0, tong] phong truong hop API tra ve khong nhat quan - khong bao gio de phan
+        # 1 gio thanh am (se tru tien khong co that).
+        write_5m = max(0, min(int(cache_write_5m_tokens), total_write))
+        write_1h = total_write - write_5m
     return (
         (input_tokens or 0) / 1_000_000 * p["input"]
         + (output_tokens or 0) / 1_000_000 * p["output"]
         + (cache_read_tokens or 0) / 1_000_000 * p["cache_read"]
-        + (cache_write_tokens or 0) / 1_000_000 * p["cache_write"]
+        + write_1h / 1_000_000 * p["cache_write"]
+        + write_5m / 1_000_000 * p.get("cache_write_5m", p["cache_write"])
     )

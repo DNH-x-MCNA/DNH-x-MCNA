@@ -38,7 +38,20 @@ def compute_and_log_cost(usage, model: str, question: str = "", session_id: str 
     cache_read = getattr(usage, "cache_read_input_tokens", 0) or 0
     cache_write = getattr(usage, "cache_creation_input_tokens", 0) or 0
 
-    cost = compute_cost_usd(model, input_tokens, output_tokens, cache_read, cache_write)
+    # 25/08/2026: TACH token ghi cache theo TTL. nl2sql.py dung 4 breakpoint voi HAI TTL khac nhau
+    # (system prompt + tool definitions = 1 gio; tool_results + lich su hoi thoai = 5 phut), nhung
+    # truoc do moi thu deu bi tinh theo gia 1 gio (2x input) - ke ca phan 5 phut chi dang gia 1.25x.
+    # Do tren 89 dong log that cua may 24: thoi phong toi da 1,13 lan.
+    # anthropic SDK 0.116.0 tra ve usage.cache_creation.ephemeral_5m_input_tokens va
+    # .ephemeral_1h_input_tokens - da kiem chung 25/08/2026 (truoc day pricing.py ghi la "chua kiem
+    # chung duoc"). Neu nha cung cap khac / SDK cu khong co truong nay thi de None, compute_cost_usd
+    # se giu nguyen cach tinh cu (toan bo theo gia 1 gio).
+    cache_creation = getattr(usage, "cache_creation", None)
+    cache_write_5m = getattr(cache_creation, "ephemeral_5m_input_tokens", None) if cache_creation else None
+    cache_write_1h = getattr(cache_creation, "ephemeral_1h_input_tokens", None) if cache_creation else None
+
+    cost = compute_cost_usd(model, input_tokens, output_tokens, cache_read, cache_write,
+                            cache_write_5m_tokens=cache_write_5m)
 
     entry = {
         "ts": dt.datetime.now().isoformat(),
@@ -54,6 +67,10 @@ def compute_and_log_cost(usage, model: str, question: str = "", session_id: str 
         "output_tokens": output_tokens,
         "cache_read_tokens": cache_read,
         "cache_write_tokens": cache_write,
+        # Ghi ca 2 phan tach de sau nay con doi chieu/tinh lai duoc. Dong log CU khong co 2 truong
+        # nay - do la cach phan biet dong tinh theo bang gia cu (toan bo 1 gio) voi dong tinh dung.
+        "cache_write_5m_tokens": cache_write_5m,
+        "cache_write_1h_tokens": cache_write_1h,
         "cost_usd": round(cost, 6),
         # Khong suy dien bang gia cua dong cu theo cau hinh hien tai: luu version/nguon ngay luc tinh.
         "pricing_version": pricing_version_for_model(model),
