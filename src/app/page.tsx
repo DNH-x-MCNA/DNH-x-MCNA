@@ -2500,7 +2500,11 @@ export default function Home() {
 
       {/* Modal Admin Users Panel */}
       {adminUsersOpen && authToken && (
-        <AdminUsersPanel authToken={authToken} onClose={() => setAdminUsersOpen(false)} />
+        <AdminUsersPanel
+          authToken={authToken}
+          currentRole={userInfo.role}
+          onClose={() => setAdminUsersOpen(false)}
+        />
       )}
 
       {/* Modal Đổi Mật Khẩu */}

@@ -43,6 +43,7 @@ from auth import (
     generate_password,
     admin_create_user,
     set_password,
+    reset_password_and_revoke_sessions,
     approve_user,
     toggle_user_active,
     list_users,
@@ -700,6 +701,55 @@ def toggle_user_active_endpoint(username: str, user: dict = Depends(require_appr
         "status": "ok"
     })
     return {"ok": True, "result": res}
+
+
+@app.post("/admin/users/{username}/reset-password", dependencies=[Depends(require_api_key)])
+def reset_user_password_endpoint(username: str, user: dict = Depends(require_approved_user)):
+    """Admin van hanh gui mat khau tam qua email; khong duoc nhin thay mat khau do."""
+    if user["role"] != "admin_ops":
+        raise HTTPException(403, "Chỉ Admin Vận Hành mới có quyền đặt lại mật khẩu người dùng")
+
+    target = get_user_by_email_or_username(username)
+    if not target:
+        raise HTTPException(404, "Không tìm thấy tài khoản")
+    if target["role"] in {"c_level", "admin_ops"}:
+        raise HTTPException(
+            403, "Admin Vận Hành không được đặt lại mật khẩu tài khoản đặc quyền."
+        )
+    target_email = str(target.get("email") or "").strip().lower()
+    if not target_email.endswith(f"@{ALLOWED_EMAIL_DOMAIN}"):
+        raise HTTPException(
+            400, "Tài khoản chưa có email công ty hợp lệ; chưa thể cấp lại mật khẩu an toàn."
+        )
+
+    temporary_password = generate_password(20)
+    # Gui TRUOC, doi trong DB SAU: admin_ops khong duoc nhin thay mat khau. Neu SMTP loi thi giu
+    # nguyen mat khau/session cu, tranh khoa nguoi dung khoi tai khoan.
+    if not send_password_email(target_email, temporary_password, is_reset=True):
+        raise HTTPException(
+            502, "Không gửi được email mật khẩu tạm; mật khẩu và phiên đăng nhập cũ được giữ nguyên."
+        )
+    if not reset_password_and_revoke_sessions(
+        target["username"], temporary_password, must_change_password=True
+    ):
+        raise HTTPException(404, "Không tìm thấy tài khoản")
+
+    _write_log({
+        "ts": dt.datetime.now().isoformat(),
+        "username": user["username"],
+        "question": f"🔐 Cấp lại mật khẩu tạm cho {target['username']}",
+        "sql": "<admin:reset_password>",
+        "status": "ok",
+    })
+    return {
+        "ok": True,
+        "message": (
+            f"Đã đặt lại mật khẩu cho {target['username']}, thu hồi mọi phiên đăng nhập cũ và "
+            "bắt buộc đổi mật khẩu khi đăng nhập."
+        ),
+        "username": target["username"],
+        "email_sent": True,
+    }
 
 
 # --- DATA ENDPOINTS (Được bảo vệ bằng require_approved_user) ---

@@ -82,6 +82,81 @@ def test_password_change_revokes_all_sessions_and_login_rate_limit_blocks(tmp_pa
     assert rate_error.value.status_code == 429
 
 
+def test_admin_ops_reset_password_is_email_only_and_revokes_sessions(tmp_path, monkeypatch):
+    monkeypatch.setattr(auth, "DB_PATH", str(tmp_path / "auth.db"))
+    module_name = "security_admin_reset_main"
+    spec = importlib.util.spec_from_file_location(module_name, os.path.join(BACKEND, "main.py"))
+    chatbot_main = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = chatbot_main
+    spec.loader.exec_module(chatbot_main)
+
+    auth.create_user(
+        "regional.user", "old-password-value", name="Regional User",
+        role="regional_director", scope_value="MB",
+        email="regional.user@namhapharma.com",
+    )
+    target = auth.verify_login("regional.user", "old-password-value")
+    old_token = auth.create_session(target["id"])
+    sent = {}
+
+    def fake_mail(email, password, is_reset=False):
+        sent.update(email=email, password=password, is_reset=is_reset)
+        return True
+
+    monkeypatch.setattr(chatbot_main, "send_password_email", fake_mail)
+    result = chatbot_main.reset_user_password_endpoint(
+        "regional.user", {"role": "admin_ops", "username": "admin.dnh"}
+    )
+
+    assert result["ok"] is True
+    assert result["email_sent"] is True
+    assert "temporary_password" not in result
+    assert sent["email"] == "regional.user@namhapharma.com"
+    assert sent["is_reset"] is True
+    assert auth.verify_login("regional.user", "old-password-value").get("error")
+    reset_user = auth.verify_login("regional.user", sent["password"])
+    assert reset_user["must_change_password"] == 1
+    assert auth.get_user_by_session(old_token) is None
+
+
+def test_admin_ops_reset_failure_preserves_password_and_privileged_targets_are_blocked(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(auth, "DB_PATH", str(tmp_path / "auth.db"))
+    module_name = "security_admin_reset_failure_main"
+    spec = importlib.util.spec_from_file_location(module_name, os.path.join(BACKEND, "main.py"))
+    chatbot_main = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = chatbot_main
+    spec.loader.exec_module(chatbot_main)
+
+    auth.create_user(
+        "qlv.user", "old-password-value", name="QLV User", role="qlv",
+        email="qlv.user@namhapharma.com",
+    )
+    auth.create_user(
+        "privileged.user", "privileged-password", name="Privileged User", role="c_level",
+    )
+    target = auth.verify_login("qlv.user", "old-password-value")
+    old_token = auth.create_session(target["id"])
+    monkeypatch.setattr(chatbot_main, "send_password_email", lambda *args, **kwargs: False)
+    admin_ops = {"role": "admin_ops", "username": "admin.dnh"}
+
+    with pytest.raises(chatbot_main.HTTPException) as mail_error:
+        chatbot_main.reset_user_password_endpoint("qlv.user", admin_ops)
+    with pytest.raises(chatbot_main.HTTPException) as privileged_error:
+        chatbot_main.reset_user_password_endpoint("privileged.user", admin_ops)
+    with pytest.raises(chatbot_main.HTTPException) as c_level_error:
+        chatbot_main.reset_user_password_endpoint(
+            "qlv.user", {"role": "c_level", "username": "dnh"}
+        )
+
+    assert mail_error.value.status_code == 502
+    assert privileged_error.value.status_code == 403
+    assert c_level_error.value.status_code == 403
+    assert auth.verify_login("qlv.user", "old-password-value")["username"] == "qlv.user"
+    assert auth.get_user_by_session(old_token) is not None
+
+
 @pytest.mark.parametrize(
     "kwargs",
     [

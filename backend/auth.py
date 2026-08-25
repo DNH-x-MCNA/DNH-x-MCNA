@@ -290,6 +290,41 @@ def set_password(identifier: str, new_password: str, must_change_password: bool 
         conn.close()
 
 
+def reset_password_and_revoke_sessions(identifier: str, new_password: str,
+                                       must_change_password: bool = True) -> bool:
+    """Dat mat khau va thu hoi moi session trong cung mot transaction.
+
+    Dung cho thao tac reset cua quan tri vien de khong co cua so thoi gian token cu con hieu luc
+    sau khi mat khau da bi thay doi.
+    """
+    clean_id = identifier.lower().strip()
+    salt = secrets.token_hex(16)
+    pwd_hash = _hash_password(new_password, salt)
+    now_iso = dt.datetime.now().isoformat()
+    conn = get_conn()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute(
+            "SELECT id FROM users WHERE username=? OR email=?", (clean_id, clean_id)
+        ).fetchone()
+        if not row:
+            conn.rollback()
+            return False
+        conn.execute(
+            "UPDATE users SET password_hash=?, salt=?, must_change_password=?, "
+            "password_changed_at=? WHERE id=?",
+            (pwd_hash, salt, 1 if must_change_password else 0, now_iso, row[0]),
+        )
+        conn.execute("DELETE FROM sessions WHERE user_id=?", (row[0],))
+        conn.commit()
+        return True
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
 def approve_user(username_or_email: str, role: str, scope_value: str = None,
                  employee_code: str = None, scope_channel: str = None) -> bool:
     """Quan tri vien duyet tai khoan tu pending -> approved va gan phan quyen."""

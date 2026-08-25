@@ -27,6 +27,7 @@ interface UserItem {
 
 interface AdminUsersPanelProps {
   authToken: string;
+  currentRole: string;
   onClose: () => void;
 }
 
@@ -40,9 +41,10 @@ const SEC_EVENT_CATEGORIES: { value: string; label: string; match: (sql: string)
   { value: "create_user", label: "Tạo tài khoản", match: (sql) => sql === "<auth:create_user>" || sql === "<admin:create_user>" },
   { value: "approve_user", label: "Phê duyệt tài khoản", match: (sql) => sql === "<admin:approve_user>" },
   { value: "toggle_active", label: "Khóa / Mở khóa tài khoản", match: (sql) => sql === "<admin:toggle_active>" },
+  { value: "reset_password", label: "Admin cấp lại mật khẩu", match: (sql) => sql === "<admin:reset_password>" },
 ];
 
-export default function AdminUsersPanel({ authToken, onClose }: AdminUsersPanelProps) {
+export default function AdminUsersPanel({ authToken, currentRole, onClose }: AdminUsersPanelProps) {
   const [users, setUsers] = useState<UserItem[]>([]);
   const [filterStatus, setFilterStatus] = useState<string>("");
   const [loading, setLoading] = useState<boolean>(false);
@@ -68,6 +70,11 @@ export default function AdminUsersPanel({ authToken, onClose }: AdminUsersPanelP
   const [newEmployeeCode, setNewEmployeeCode] = useState<string>("");
   const [newScopeChannel, setNewScopeChannel] = useState<string>("");
   const [createMsg, setCreateMsg] = useState<{ text: string; type: "success" | "error"; pwd?: string } | null>(null);
+  const [resettingUsername, setResettingUsername] = useState<string | null>(null);
+  const [resetMsg, setResetMsg] = useState<{
+    text: string;
+    type: "success" | "error";
+  } | null>(null);
 
   // Active Tab state inside Admin Users Panel
   const [activeTab, setActiveTab] = useState<"users" | "security">("users");
@@ -252,6 +259,39 @@ export default function AdminUsersPanel({ authToken, onClose }: AdminUsersPanelP
     }
   };
 
+  const handleResetPassword = async (target: UserItem) => {
+    const confirmed = window.confirm(
+      `Đặt lại mật khẩu cho ${target.username}? Mọi phiên đăng nhập hiện tại của tài khoản này sẽ bị thu hồi.`,
+    );
+    if (!confirmed) return;
+
+    setResettingUsername(target.username);
+    setResetMsg(null);
+    try {
+      const res = await fetch(
+        `/api/admin/users/${encodeURIComponent(target.username)}/reset-password`,
+        {
+          method: "POST",
+          headers: { Authorization: `Bearer ${authToken}` },
+        },
+      );
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || "Đặt lại mật khẩu thất bại");
+      setResetMsg({
+        text: data.message || "Đã đặt lại mật khẩu.",
+        type: "success",
+      });
+      fetchUsers();
+    } catch (err: unknown) {
+      setResetMsg({
+        text: err instanceof Error ? err.message : "Đặt lại mật khẩu thất bại",
+        type: "error",
+      });
+    } finally {
+      setResettingUsername(null);
+    }
+  };
+
   // Tam dung bay focus/Escape cua khung chinh khi modal tao tai khoan (long ben trong) dang mo,
   // de Escape/Tab chi tac dong len modal tren cung, tranh 2 modal cung phan hoi 1 luc.
   const panelRef = useModal(!showCreateModal, onClose);
@@ -271,15 +311,21 @@ export default function AdminUsersPanel({ authToken, onClose }: AdminUsersPanelP
         <div className="bg-slate-900 text-white p-5 flex items-center justify-between">
           <div>
             <h2 id="admin-panel-title" className="text-lg font-bold flex items-center gap-2"><IconShield className="w-5 h-5" /> Quản lý & Phê duyệt Tài khoản Nhân viên</h2>
-            <p className="text-xs text-slate-400">Dành riêng cho Quản trị viên C-Level / Ban Điều Hành</p>
+            <p className="text-xs text-slate-400">
+              {currentRole === "admin_ops"
+                ? "Admin Vận Hành: quản lý trạng thái và cấp lại mật khẩu qua email"
+                : "C-Level: tạo, phê duyệt và phân quyền tài khoản"}
+            </p>
           </div>
           <div className="flex items-center gap-3">
-            <button
-              onClick={() => { setShowCreateModal(true); setCreateMsg(null); }}
-              className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-bold text-xs shadow-md transition flex items-center gap-1.5"
-            >
-              <IconPlus className="w-3.5 h-3.5" /> Tạo Tài khoản Mới
-            </button>
+            {currentRole === "c_level" && (
+              <button
+                onClick={() => { setShowCreateModal(true); setCreateMsg(null); }}
+                className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-bold text-xs shadow-md transition flex items-center gap-1.5"
+              >
+                <IconPlus className="w-3.5 h-3.5" /> Tạo Tài khoản Mới
+              </button>
+            )}
             <button
               onClick={onClose}
               className="w-8 h-8 rounded-full bg-slate-800 hover:bg-slate-700 text-slate-300 flex items-center justify-center font-bold text-sm transition"
@@ -381,6 +427,34 @@ export default function AdminUsersPanel({ authToken, onClose }: AdminUsersPanelP
             {/* Content Table */}
             <div className="p-5 max-h-[60vh] overflow-y-auto">
               {error && <div className="p-3 bg-rose-50 text-rose-800 text-xs rounded-lg mb-4">{error}</div>}
+              {resetMsg && (
+                <div
+                  className={`mb-4 rounded-lg border p-3 text-xs font-medium ${
+                    resetMsg.type === "success"
+                      ? "border-emerald-200 bg-emerald-50 text-emerald-800"
+                      : "border-rose-200 bg-rose-50 text-rose-800"
+                  }`}
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <div>{resetMsg.text}</div>
+                      {resetMsg.type === "success" && (
+                        <div className="mt-1 text-[11px] font-normal">
+                          Đã gửi mật khẩu tạm tới email công ty của người dùng. Admin không nhìn thấy mật khẩu.
+                        </div>
+                      )}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setResetMsg(null)}
+                      className="shrink-0 text-slate-500 hover:text-slate-800"
+                      aria-label="Đóng thông báo đặt lại mật khẩu"
+                    >
+                      <IconClose className="h-4 w-4" />
+                    </button>
+                  </div>
+                </div>
+              )}
 
               {loading ? (
                 <div className="py-12 text-center text-slate-500 text-sm">Đang tải danh sách tài khoản...</div>
@@ -442,28 +516,42 @@ export default function AdminUsersPanel({ authToken, onClose }: AdminUsersPanelP
                           )}
                         </td>
                         <td className="p-3 text-right space-x-2">
-                          <button
-                            onClick={() => {
-                              setSelectedUser(u);
-                              setRole(u.role || "qlv");
-                              setScopeValue(u.scope_value || "");
-                              setEmployeeCode(u.employee_code || "");
-                              setScopeChannel(u.scope_channel || "");
-                            }}
-                            className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded font-semibold text-[11px] shadow-sm inline-flex items-center gap-1"
-                          >
-                            {u.status === "pending" ? "Phê duyệt" : "Sửa quyền"} <IconSettings className="w-3 h-3" />
-                          </button>
-                          <button
-                            onClick={() => handleToggleActive(u.username)}
-                            className={`px-2.5 py-1.5 rounded font-semibold text-[11px] border inline-flex items-center gap-1 ${
-                              u.is_active === 1
-                                ? "bg-rose-50 text-rose-700 border-rose-200 hover:bg-rose-100"
-                                : "bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100"
-                            }`}
-                          >
-                            {u.is_active === 1 ? (<>Khóa <IconLock className="w-3 h-3" /></>) : (<>Mở <IconUnlock className="w-3 h-3" /></>)}
-                          </button>
+                          {currentRole === "c_level" && (
+                            <button
+                              onClick={() => {
+                                setSelectedUser(u);
+                                setRole(u.role || "qlv");
+                                setScopeValue(u.scope_value || "");
+                                setEmployeeCode(u.employee_code || "");
+                                setScopeChannel(u.scope_channel || "");
+                              }}
+                              className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded font-semibold text-[11px] shadow-sm inline-flex items-center gap-1"
+                            >
+                              {u.status === "pending" ? "Phê duyệt" : "Sửa quyền"} <IconSettings className="w-3 h-3" />
+                            </button>
+                          )}
+                          {currentRole === "admin_ops" && !["c_level", "admin_ops"].includes(u.role) && (
+                            <button
+                              onClick={() => handleResetPassword(u)}
+                              disabled={resettingUsername === u.username}
+                              className="px-2.5 py-1.5 rounded font-semibold text-[11px] border border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100 disabled:cursor-wait disabled:opacity-50 inline-flex items-center gap-1"
+                            >
+                              {resettingUsername === u.username ? "Đang gửi..." : "Cấp lại MK"}
+                              <IconKey className="w-3 h-3" />
+                            </button>
+                          )}
+                          {!(currentRole === "admin_ops" && ["c_level", "admin_ops"].includes(u.role)) && (
+                            <button
+                              onClick={() => handleToggleActive(u.username)}
+                              className={`px-2.5 py-1.5 rounded font-semibold text-[11px] border inline-flex items-center gap-1 ${
+                                u.is_active === 1
+                                  ? "bg-rose-50 text-rose-700 border-rose-200 hover:bg-rose-100"
+                                  : "bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100"
+                              }`}
+                            >
+                              {u.is_active === 1 ? (<>Khóa <IconLock className="w-3 h-3" /></>) : (<>Mở <IconUnlock className="w-3 h-3" /></>)}
+                            </button>
+                          )}
                         </td>
                       </tr>
                     ))}
