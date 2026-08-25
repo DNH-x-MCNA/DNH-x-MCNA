@@ -57,14 +57,24 @@ _load_env()
 # THUONG mot cau "Chua cau hinh API Key" (nl2sql.py dong ~1585), khong goi tool nao va khong ton
 # tien. Ket qua la bao cao ra "1/25 (4%)" trong y het model chon sai tool hang loat, ke ca 5 cau
 # doi chung dung tool cu da chay on dinh nhieu thang. Dau hieu that: chi phi $0.0000.
-if not (os.environ.get("LLM_API_KEY", "").strip() or os.environ.get("ANTHROPIC_API_KEY", "").strip()):
-    print("LOI: khong tim thay ANTHROPIC_API_KEY (hoac LLM_API_KEY) trong moi truong.")
+_API_KEY = (os.environ.get("LLM_API_KEY", "").strip()
+            or os.environ.get("ANTHROPIC_API_KEY", "").strip())
+# PHAI kiem CA gia tri gia "mock-key-for-local-testing": ask() coi no NHU LA thieu key va tra ve
+# "Chua cau hinh API Key" (nl2sql.py:1587 va :1977) - chi kiem key rong thi van lot. Lan chay thu 2
+# tren may 24 dinh dung ca nay: guard cu di qua duoc nhung ket qua van 0% va $0.
+if not _API_KEY or _API_KEY == "mock-key-for-local-testing":
+    print("LOI: khong co API key dung de goi model.")
+    print("     Gia tri dang thay: %s" % (repr(_API_KEY) if _API_KEY else "(rong)"))
     print("     Da thu doc: %s va %s" % (BACKEND / ".env", ROOT / ".env"))
     print("     ask() se tra ve 'Chua cau hinh API Key' cho MOI cau - khong goi tool, khong ton tien,")
     print("     nhung bao cao se trong nhu model chon sai tool 100%. Dung truoc de khoi hieu nham.")
-    print("     Neu key duoc dat o moi truong cua service (NSSM) chu khong phai file .env, hay chay:")
+    print("     Neu key nam o moi truong cua service (NSSM) chu khong phai file .env, hay chay:")
     print('       $env:ANTHROPIC_API_KEY = "<key>"   roi chay lai kich ban nay.')
     raise SystemExit(2)
+
+# In DANH TINH key (che phan giua) de doi chieu voi key dang co so du tren Anthropic Console -
+# may dev va may 24 tung dung 2 key khac nhau, nhin ky nay la biet ngay dang chay bang key nao.
+print("API key dang dung: %s...%s (dai %d)" % (_API_KEY[:14], _API_KEY[-6:], len(_API_KEY)))
 
 import nl2sql  # noqa: E402
 
@@ -174,6 +184,14 @@ def main():
             answer, error = str(resp.get("answer") or ""), None
         except Exception as exc:
             answer, error = "", "%s: %s" % (type(exc).__name__, exc)
+        # Chot chan cuoi: ask() tra ve thong bao nay NHU MOT CAU TRA LOI BINH THUONG (khong nem loi)
+        # khi khong dung duoc key. Bat ngay o cau dau thay vi chay not 24 cau roi bao "0% chon dung
+        # tool" - da mat 2 lan chay tren may 24 vi khong co chot nay.
+        if "Chưa cấu hình API Key" in answer:
+            print("\nDUNG: ask() tra ve 'Chua cau hinh API Key' - khong lan goi nao den duoc model.")
+            print("      Key da nap vao moi truong nhung backend van khong dung duoc no.")
+            print("      Kiem: key co dung dinh dang sk-ant-... khong, va co phai key CON SO DU khong.")
+            return 3
         results.append({
             "id": cid, "role": role, "question": question,
             "expected_tools": sorted(expect), "answer": answer, "error": error,
