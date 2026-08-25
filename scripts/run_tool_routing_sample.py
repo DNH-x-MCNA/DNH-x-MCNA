@@ -140,8 +140,13 @@ SAMPLE = [
      {"get_top_products"}),
     ("C04", "qlv", "Đội tôi tháng 7 ai đạt chỉ tiêu, ai chưa?",
      {"get_employee_kpi", "get_revenue_tree", "get_kpi_ranking"}),
+    # 25/08/2026: ky vong ban dau ({get_receivables_overview, get_revenue_by_channel}) la SAI - hai
+    # tool do tra ve SO TIEN, khong tra ve ngay du lieu. Chay that model goi
+    # get_receivables_history_dates, dung y nhu docstring cua chinh tool do chi dan ("khi nguoi dung
+    # hoi 'cong no co du lieu tu bao gio'"). Ngay du lieu doanh thu thi da co san trong
+    # _dynamic_context_note() nen khong can tool. Sua ky vong cho khop thuc te nghiep vu.
     ("C05", "c_level", "Dữ liệu doanh thu và công nợ đang cập nhật đến ngày nào?",
-     {"get_receivables_overview", "get_revenue_by_channel"}),
+     {"get_receivables_history_dates", "get_receivables_overview", "get_revenue_by_channel"}),
     ("B01", "c_level", "Dự báo doanh thu cuối tháng này là bao nhiêu?", set()),
 ]
 

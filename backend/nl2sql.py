@@ -492,7 +492,8 @@ TEMPLATE_TOOLS = [
         "name": "get_geography_monthly_performance",
         "description": "HIỆU SUAT DIA BAN theo thang: doanh thu, don, khach, MoM, ty trong, thu hang "
                        "va streak tang/giam theo MIEN hoac TINH. Dung cho xep hang/diem keo giam/co hoi "
-                       "dia ban. Kho local CHUA co khoa chi nhanh/NPP/distributor; neu hoi chieu do tool "
+                       "dia ban, ke ca cau hoi dang 'dia ban QUY MO LON nhung TANG TRUONG THAP' "
+                       "(doi chieu cot revenue/ty trong voi cot MoM - KHONG can viet SQL tay). Kho local CHUA co khoa chi nhanh/NPP/distributor; neu hoi chieu do tool "
                        "tra not_applicable, PHAI noi ro, KHONG tu suy tu tinh/vung.",
         "input_schema": {"type": "object", "properties": {
             "month_to": {"type": "string"}, "months_back": {"type": "integer"},
