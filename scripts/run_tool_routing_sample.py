@@ -52,6 +52,20 @@ def _load_env():
 
 _load_env()
 
+# 25/08/2026 - DUNG NGAY neu khong thay API key, thay vi chay het 25 cau roi bao "0% chon dung tool".
+# Lan chay dau tren may 24 dinh dung bay nay: ask() KHONG nem loi khi thieu key - no tra ve BINH
+# THUONG mot cau "Chua cau hinh API Key" (nl2sql.py dong ~1585), khong goi tool nao va khong ton
+# tien. Ket qua la bao cao ra "1/25 (4%)" trong y het model chon sai tool hang loat, ke ca 5 cau
+# doi chung dung tool cu da chay on dinh nhieu thang. Dau hieu that: chi phi $0.0000.
+if not (os.environ.get("LLM_API_KEY", "").strip() or os.environ.get("ANTHROPIC_API_KEY", "").strip()):
+    print("LOI: khong tim thay ANTHROPIC_API_KEY (hoac LLM_API_KEY) trong moi truong.")
+    print("     Da thu doc: %s va %s" % (BACKEND / ".env", ROOT / ".env"))
+    print("     ask() se tra ve 'Chua cau hinh API Key' cho MOI cau - khong goi tool, khong ton tien,")
+    print("     nhung bao cao se trong nhu model chon sai tool 100%. Dung truoc de khoi hieu nham.")
+    print("     Neu key duoc dat o moi truong cua service (NSSM) chu khong phai file .env, hay chay:")
+    print('       $env:ANTHROPIC_API_KEY = "<key>"   roi chay lai kich ban nay.')
+    raise SystemExit(2)
+
 import nl2sql  # noqa: E402
 
 
@@ -194,6 +208,17 @@ def main():
     print("CHON DUNG TOOL: %d/%d (%.0f%%)   |   Chi phi: %.4f USD"
           % (len(dat), len(results), 100.0 * len(dat) / len(results), tong_cost))
     print("=" * 72)
+    if tong_cost <= 0:
+        # Goi model that thi LUON ton tien. Tong = 0 nghia la khong co lan goi nao den duoc model,
+        # hoac session_id khong khop duoc voi cost_log.jsonl -> con so % o tren VO NGHIA, khong duoc
+        # doc thanh "model chon sai tool". Xem 3 nguyen nhan hay gap ben duoi.
+        print("\n!!! CANH BAO: TONG CHI PHI BANG 0 - KET QUA TREN KHONG DANG TIN.")
+        print("    Goi model that thi luon ton tien. Bang 0 nghia la mot trong ba:")
+        print("      1. Khong lan goi nao den duoc model (thieu API key / het so du / mat mang).")
+        print("      2. Kich ban chay o thu muc khac noi backend ghi log (kiem AUDIT_LOG/COST_LOG).")
+        print("      3. session_id khong duoc ghi vao cost_log.jsonl.")
+        print("    Doc thu mot cau tra loi de biet ngay nguyen nhan:")
+        print('      python -c "import json,io;d=json.load(io.open(r\'%s\',encoding=\'utf-8\'));print(d[0][\'answer\'][:400])"' % out)
     truot = [r for r in results if not r["dat"]]
     if truot:
         print("\nCAC CAU TRUOT (ky vong -> thuc te goi):")
