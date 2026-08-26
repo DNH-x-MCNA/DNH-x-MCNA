@@ -140,19 +140,20 @@ fact_tonghopkhachhang: 1 dong = 1 (nhan vien, khach hang, ngay snapshot). Cot: e
   khong dong bo vi it gia tri cho KPI hien tai).
   Cot moi tu 31/07/2026:
     year_sale_target - !!! year_sale_target: CHUA XAC NHAN KY NAO. KHONG dung de tra loi "chi tieu NAM". Noi ro he thong chua xac nhan. Dung MAX.
-    is_ro (=1 la khach MUA LAI trong thang) - DUNG COT NAY cho cau "bao nhieu khach mua lai", KHONG
-      duoc suy dien "khong phai khach moi thi la mua lai": cach suy dien cu tra 6.002 trong khi so
-      that la 5.373.
-      Do 26/08/2026 tren 3 thang lien tiep, du lieu that: is_nc + is_ro + (khong mang co nao) = DUNG
-      BANG tong so khach, khong du khong thieu thang nao (06/2026: 752+4.757+462=5.971; 07/2026:
-      605+5.579+643=6.827; 08/2026: 521+4.846+623=5.990). Tuc is_nc va is_ro LOAI TRU NHAU va cung
-      phu ~90% khach - hop voi cach hieu "moi / mua lai". Van CHUA duoc DNH xac nhan chinh thuc, nen
-      khi tra loi nen noi day la co goc cua Bravo,
-    is_ac - !!! CHUA XAC NHAN NGHIA, KHONG duoc dung tra loi "bao nhieu khach hoat dong". Nhan "khach
-      hoat dong" o day truoc 26/08/2026 la SUY DOAN tu chu viet tat (AC = Active Customer), chua ai
-      xac nhan. Do that 06-08/2026: chi 37-44 khach moi thang tren tong ~6.000 (0,6%) - mot con so
-      khong the nao la "khach hoat dong". Neu nguoi dung hoi ve khach hoat dong thi PHAI noi ro he
-      thong chua co dinh nghia duoc DNH xac nhan, KHONG duoc tra con so nay kem nhan do,
+    is_ro = RE-ORDER (khach DAT LAI HANG trong thang) - XAC NHAN 26/08/2026. DUNG COT NAY cho cau
+      "bao nhieu khach mua lai/dat lai", KHONG duoc suy dien "khong phai khach moi thi la mua lai":
+      cach suy dien cu tra 6.002 trong khi so that la 5.373.
+      Do 3 thang lien tiep, du lieu that: is_nc + is_ro + (khong mang co nao) = DUNG BANG tong so
+      khach, khong du khong thieu thang nao (06/2026: 752+4.757+462=5.971; 07/2026: 605+5.579+643=
+      6.827; 08/2026: 521+4.846+623=5.990). Khop voi nghia re-order,
+    is_ac = ACTIVE CUSTOMER (khach hoat dong) - XAC NHAN 26/08/2026 ve TEN GOI. NHUNG con so thi
+      KHONG hanh xu nhu mot phep dem "khach dang hoat dong" thong thuong: chi 37-44 khach moi thang
+      tren tong ~6.000 (0,6%), trong khi ~80% khach co is_ro (dat lai hang) - tuc phan lon khach VAN
+      DANG MUA nhung khong mang co nay. Suy ra is_ac dem mot trang thai HEP hon nhieu (chua ro tieu
+      chi). Vi vay: duoc goi ten la "khach hoat dong (co is_ac)", nhung TUYET DOI khong dung con so
+      nay tra loi "cong ty co bao nhieu khach dang hoat dong" - phai noi ro day la co is_ac cua
+      Bravo voi tieu chi chua duoc lam ro, va neu nguoi dung muon dem khach con mua thi dung is_ro
+      hoac dem tu hoa don,
     max_customer_ord_amount (don hang lon nhat cua khach do trong ky),
     emp_dms_code (ma nhan vien theo dinh dang HOA DON - noi thang sang vhoadon_otc.employee_code ma
       khong phai vong qua dim_nhanvien),

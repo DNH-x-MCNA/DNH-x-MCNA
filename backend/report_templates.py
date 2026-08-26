@@ -1286,17 +1286,19 @@ def _customer_flag_caveat() -> str:
         - tuc "khong co co" KHONG phai la "khong mua". Suy ra is_ro cung khong han la "mua lai" theo
         nghia thong thuong.
     Vi vay tuyet doi khong duoc trinh bay 2 con so nay nhu dinh nghia da chot."""
-    return ("So dem theo CO GOC cua Bravo. Muc do chac chan KHAC NHAU giua ba co, phai noi dung muc: "
-            "(1) is_nc (khach moi trong thang) da dung on dinh tu truoc. "
-            "(2) is_ro: do 26/08/2026 tren 3 thang lien tiep cho thay is_nc + is_ro + (khong mang co "
-            "nao) BANG DUNG tong so khach moi thang, tuc hai co loai tru nhau va cung phu ~90% khach "
-            "- hop voi cach hieu 'moi / mua lai', nhung DNH VAN CHUA xac nhan chinh thuc, nen goi la "
-            "'khach mang co is_ro' thi an toan hon la khang dinh 'khach mua lai'. "
-            "(3) is_ac: KHONG duoc goi la 'khach hoat dong'. Chi 37-44 khach moi thang tren tong "
-            "~6.000 (0,6%) - khong the nao la khach hoat dong; nhan cu la suy doan tu chu viet tat, "
-            "chua ai xac nhan. Neu nguoi dung hoi ve khach hoat dong, PHAI noi ro chua co dinh nghia "
-            "duoc DNH xac nhan thay vi tra con so nay. "
-            "(4) Con ~8-10% khach KHONG mang co nao NHUNG VAN CO doanh thu - chua giai thich duoc, "
+    return ("So dem theo CO GOC cua Bravo. DNH da xac nhan ten viet tat ngay 26/08/2026: "
+            "NC = New Customer (khach moi), RO = Re-Order (khach dat lai hang), AC = Active Customer. "
+            "Muc do TIN CAY khi tra loi thi VAN khac nhau, phai noi dung muc: "
+            "(1) is_nc va is_ro dung on dinh - do 3 thang lien tiep cho thay is_nc + is_ro + (khong "
+            "mang co nao) BANG DUNG tong so khach moi thang, tuc hai co loai tru nhau va cung phu "
+            "~90% khach, khop voi nghia moi/dat lai. "
+            "(2) is_ac: ten la 'Active Customer' nhung CON SO khong hanh xu nhu phep dem khach dang "
+            "hoat dong - chi 37-44 khach moi thang tren tong ~6.000 (0,6%), trong khi ~80% khach co "
+            "is_ro tuc VAN DANG MUA. Suy ra is_ac danh dau mot trang thai HEP hon nhieu, tieu chi "
+            "chua duoc lam ro. Duoc goi ten 'khach hoat dong (co is_ac)', nhung KHONG duoc dung con "
+            "so nay tra loi 'cong ty co bao nhieu khach dang hoat dong'; muon dem khach con mua thi "
+            "dung is_ro hoac dem tu hoa don. "
+            "(3) Con ~8-10% khach KHONG mang co nao NHUNG VAN CO doanh thu - chua giai thich duoc, "
             "khong duoc coi la 'khong mua'.")
 
 
@@ -2084,8 +2086,10 @@ def geography_monthly_performance(month_to: str = None, months_back: int = 6,
     limit = max(1, min(int(limit or 100), 500))
     # 26/08/2026: ham nay CHi truy van vhoadon_otc/etc, KHONG cong monthly_customer_summary nhu
     # revenue_by_channel lam - vi bang nen khong co khoa tinh (chi co khach + nhan vien), suy tinh
-    # phai di qua danh muc khach HIEN TAI, tuc gan tinh hom nay cho doanh thu nam ngoai. Do la danh
-    # doi nghiep vu, dang cho DNH quyet.
+    # phai di qua danh muc khach HIEN TAI, tuc gan tinh hom nay cho doanh thu nam ngoai.
+    # DA QUYET 26/08/2026: GIU NGUYEN, khong bu tu bang nen. Doi lay so "co ve day du" bang cach quy
+    # sai vung cho khach da chuyen dia ban la danh doi khong dang - bao cao dia ban chi phu 12 thang
+    # gan nhat, va noi ro dieu do. DUNG mo lai cach bu nay neu khong co khoa tinh trong bang nen.
     # Nhung viec CHUA sua duoc khong cho phep IM LANG: neu khong bao gi, thang nam ngoai cua so chi
     # tiet se ra 0 dong trong khi tool doanh thu tra ve so that - cung mot thang, hai con so, va
     # model rat de doc 0 thanh "dia ban do khong ban duoc gi". Bao ra thanh mot truong rieng de model

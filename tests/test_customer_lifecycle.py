@@ -130,22 +130,26 @@ def test_loai_nhan_vien_bi_danh_dau_trung_khoi_doanh_so(tmp_path, monkeypatch):
     assert m["doanh_so_khach_moi"] == 100 + 70
 
 
-def test_luon_kem_canh_bao_dinh_nghia_chua_xac_nhan(tmp_path, monkeypatch):
-    """is_ro/is_ac chua duoc DNH xac nhan nghia - so lieu KHONG duoc tra ve tran khong canh bao.
+def test_canh_bao_dinh_nghia_co_khoa_dung_muc_tin_cay_tung_co(tmp_path, monkeypatch):
+    """DNH da xac nhan TEN VIET TAT ngay 26/08/2026 (NC=New Customer, RO=Re-Order, AC=Active
+    Customer) - nhung ten duoc xac nhan KHONG co nghia moi con so deu dung duoc nhu nhau.
 
-    26/08/2026: truoc day test nay khoa DUNG CHUOI CHU "CHUA XAC NHAN VOI DNH". Khi canh bao duoc
-    viet lai cho chinh xac hon (tach muc do chac chan cua tung co dua tren du lieu that), test do
-    len mac du canh bao van day du y - tuc no dang bao ve CACH DIEN DAT chu khong bao ve NOI DUNG.
-    Nay khoa theo Y: phai noi ro DNH chua xac nhan, va phai cam ro nhan "khach hoat dong" cho is_ac
-    (con so that chi 0,6% khach nen nhan do chac chan sai)."""
+    is_ac ten la "Active Customer" ma chi ung 37-44 khach/thang tren ~6.000 (0,6%), trong khi ~80%
+    khach mang is_ro tuc VAN DANG MUA. Hai dieu do khong the cung dung neu hieu is_ac la phep dem
+    khach dang hoat dong. Nen canh bao PHAI giu dung khoang cach: goi ten thi duoc, dung con so de
+    tra loi "cong ty co bao nhieu khach dang hoat dong" thi KHONG.
+
+    Test nay tung khoa DUNG CHUOI CHU "CHUA XAC NHAN VOI DNH" - viet lai canh bao la no do du noi
+    dung van du y, tuc bao ve cach dien dat chu khong bao ve noi dung. Nay khoa theo Y."""
     _setup(tmp_path, monkeypatch)
     r = rt.customer_lifecycle_summary(year_month="2026-07")
     canh_bao = r["canh_bao_dinh_nghia"]
-    assert "DNH" in canh_bao and "XAC NHAN" in canh_bao.upper(), \
-        "canh bao phai noi ro DNH chua xac nhan nghia cac co"
-    assert "is_ac" in canh_bao and "hoat dong" in canh_bao, \
-        "canh bao phai cam ro viec goi is_ac la 'khach hoat dong'"
-    assert "so_is_ro" in r["months"][0] and "so_is_ac" in r["months"][0]
+    assert "is_ac" in canh_bao, "canh bao phai noi den is_ac"
+    assert "hoat dong" in canh_bao, "canh bao phai nhac cum 'khach hoat dong' de canh chinh no"
+    assert "0,6%" in canh_bao or "37-44" in canh_bao, \
+        "phai neu CON SO that lam bang chung, khong chi noi chung chung la 'can than'"
+    assert "so_is_ro" in r["months"][0] and "so_is_ac" in r["months"][0], \
+        "ten truong tra ve van phai trung tinh, de model khong tu dat nhan nghiep vu"
     for cam in ("mua_lai", "khach_mua_lai", "khach_hoat_dong"):
         assert cam not in r["months"][0], f"khong duoc dat ten nghiep vu chua xac nhan: {cam}"
 
