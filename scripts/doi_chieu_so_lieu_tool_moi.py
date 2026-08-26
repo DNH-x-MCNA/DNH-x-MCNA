@@ -54,6 +54,7 @@ KHO_THUC_TE = Path(_lw.DB_PATH)
 
 _loi = []
 _bo_qua = []
+_dat = [0]  # dem so phep kiem THUC SU chay va dat - de dong tong ket khong noi qua muc bang chung
 
 
 def _kiem(ten, dat, chi_tiet=""):
@@ -61,7 +62,9 @@ def _kiem(ten, dat, chi_tiet=""):
     if chi_tiet:
         for dong in str(chi_tiet).splitlines():
             print("         %s" % dong)
-    if not dat:
+    if dat:
+        _dat[0] += 1
+    else:
         _loi.append(ten)
 
 
@@ -69,6 +72,16 @@ def _bo(ten, ly_do):
     print("  [BO  ] %s" % ten)
     print("         %s" % ly_do)
     _bo_qua.append(ten)
+
+
+def _f0(x):
+    """Doc so an toan tu ket qua tool: None / chuoi rong / kieu la deu ve 0 thay vi lam vo phep kiem.
+    Mot phep kiem vo vi TypeError se bi ghi thanh "LECH" - tuc bao dong gia, dung thu lam nguoi doc
+    quen mat canh giac voi bao dong that."""
+    try:
+        return float(x or 0)
+    except (TypeError, ValueError):
+        return 0.0
 
 
 def _tien(x):
@@ -221,6 +234,211 @@ def kiem_5_vong_doi_khach_co_bao_nhieu_khach_khong_mang_co():
               None if m["khach_moi"] <= tong else "moi %s > tong %s" % (m["khach_moi"], tong))
 
 
+
+# =======================================================================================
+# 26/08/2026 - MO RONG SANG CAC TOOL CU
+#
+# Nam phep kiem tren chi phu 11 tool MOI. Nhung cac tool CU (doanh thu theo vung, top khach,
+# top san pham, so sanh ky, cong no, cay KPI, xep hang) moi la thu nguoi dung cham vao nhieu
+# nhat - va chua tung bi soi kieu nay. Ca ba lan dau nhat cua du an deu roi vao nhom nay.
+# =======================================================================================
+
+def _thang_tron_gan_nhat():
+    """Thang TRON VEN gan nhat co du lieu. KHONG lay thang hien tai: no chua ket thuc nen moi con so
+    deu la so do dang, rat de bi doc nham thanh 'sut giam'."""
+    earliest, latest = rt._revenue_data_month_range()
+    if not latest:
+        return None, None, None
+    hom_nay = rt.dt.date.today().strftime("%Y-%m")
+    ym = rt._month_add(latest, -1) if latest >= hom_nay else latest
+    if earliest and ym < earliest:
+        ym = latest
+    d_from, d_to = rt._month_bounds(ym)
+    return ym, d_from, d_to
+
+
+def kiem_6_doanh_thu_theo_vung_bang_tong_cong_ty():
+    """revenue_by_region va revenue_by_channel di hai duong SQL khac nhau (mot ben GROUP BY vung qua
+    join danh muc tinh, mot ben SUM thang) nhung PHAI ra cung mot tong. Lech = co khach roi am tham
+    khi join - dung loai loi tung lam bay hoi 4 QLV that va 7,93 ty chi tieu Mien Nam."""
+    print()
+    print("6. DOANH THU THEO VUNG == TONG TOAN CONG TY")
+    ym, d_from, d_to = _thang_tron_gan_nhat()
+    if not ym:
+        return _bo("doanh thu theo vung", "Kho chua co hoa don.")
+    vung = rt.revenue_by_region(d_from, d_to)
+    if not isinstance(vung, list) or not vung:
+        return _bo("doanh thu theo vung", "revenue_by_region tra ve rong/khong phai danh sach.")
+    tong_vung = sum(_f0(r.get("revenue")) for r in vung)
+    tong_cty = rt.revenue_by_channel(d_from, d_to)["total"]["revenue"]
+    lech = abs(tong_vung - tong_cty)
+    _kiem("thang %s: cong cac vung == tong cong ty" % ym, lech < 1,
+          "theo vung: %s | toan cong ty: %s | lech %s dong (%.4f%%)"
+          % (_tien(tong_vung), _tien(tong_cty), _tien(lech),
+             lech / tong_cty * 100 if tong_cty else 0))
+
+
+def kiem_7_top_khach_cong_lai_bang_tong():
+    """top_customers voi limit rat lon phai cong lai bang dung tong cong ty. Day la phep bat khach
+    "mo coi" (co hoa don nhung khong co trong danh muc khach) bi INNER JOIN loai bo - loi tung lam
+    mat ~2,3 ty doanh thu THAT ma khong co dau hieu bao truoc nao."""
+    print()
+    print("7. TONG TAT CA KHACH == TONG TOAN CONG TY")
+    ym, d_from, d_to = _thang_tron_gan_nhat()
+    if not ym:
+        return _bo("top khach", "Kho chua co hoa don.")
+    khach = rt.top_customers(d_from, d_to, limit=1000000)
+    if not isinstance(khach, list) or not khach:
+        return _bo("top khach", "top_customers tra ve rong.")
+    tong_khach = sum(_f0(r.get("revenue")) for r in khach)
+    tong_cty = rt.revenue_by_channel(d_from, d_to)["total"]["revenue"]
+    lech = abs(tong_khach - tong_cty)
+    _kiem("thang %s: cong %s khach == tong cong ty" % (ym, format(len(khach), ",")), lech < 1,
+          "cong khach: %s | toan cong ty: %s | lech %s dong (%.4f%%)"
+          % (_tien(tong_khach), _tien(tong_cty), _tien(lech),
+             lech / tong_cty * 100 if tong_cty else 0))
+
+
+def kiem_8_top_san_pham_cong_lai_bang_tong():
+    """top_products KHONG bu duoc tu bang nen (bang nen khong giu item_code) nen chi kiem duoc trong
+    cua so hoa don chi tiet. Trong cua so do thi tong san pham phai bang tong cong ty."""
+    print()
+    print("8. TONG TAT CA SAN PHAM == TONG TOAN CONG TY (trong cua so chi tiet)")
+    ym, d_from, d_to = _thang_tron_gan_nhat()
+    if not ym:
+        return _bo("top san pham", "Kho chua co hoa don.")
+    if d_from < rt._detail_cutoff():
+        return _bo("top san pham", "Thang %s nam ngoai cua so hoa don chi tiet - khong kiem duoc." % ym)
+    sp = rt.top_products(d_from, d_to, limit=1000000)
+    ds = sp.get("products") if isinstance(sp, dict) else sp
+    if not isinstance(ds, list) or not ds:
+        return _bo("top san pham", "top_products tra ve rong.")
+    tong_sp = sum(_f0(r.get("revenue")) for r in ds)
+    tong_cty = rt.revenue_by_channel(d_from, d_to)["total"]["revenue"]
+    lech = abs(tong_sp - tong_cty)
+    _kiem("thang %s: cong %s san pham == tong cong ty" % (ym, format(len(ds), ",")), lech < 1,
+          "cong san pham: %s | toan cong ty: %s | lech %s dong (%.4f%%)"
+          % (_tien(tong_sp), _tien(tong_cty), _tien(lech),
+             lech / tong_cty * 100 if tong_cty else 0))
+
+
+def kiem_9_so_sanh_ky_khop_voi_tra_cuu_truc_tiep():
+    """compare_periods phai cho ky A dung bang revenue_by_channel(ky A) tra cuu thang. Lech = duong
+    ong truyen tham so bi hoan doi/xe dich - loai loi KHONG the phat hien tu cau tra loi, vi ca hai
+    con so deu "trong hop ly"."""
+    print()
+    print("9. SO SANH KY: KY A == TRA CUU TRUC TIEP KY A")
+    ym, d_from, d_to = _thang_tron_gan_nhat()
+    if not ym:
+        return _bo("so sanh ky", "Kho chua co hoa don.")
+    truoc = rt._month_add(ym, -1)
+    p_from, p_to = rt._month_bounds(truoc)
+    ss = rt.compare_periods(d_from, d_to, p_from, p_to)
+    a, b = ss.get("period_a"), ss.get("period_b")
+    if not isinstance(a, dict) or not isinstance(b, dict):
+        return _bo("so sanh ky", "compare_periods tra ve hinh dang la: %s" % sorted(ss.keys()))
+
+    def _lay(x):
+        if isinstance(x.get("total"), dict):
+            return _f0(x["total"].get("revenue"))
+        return _f0(x.get("revenue"))
+
+    thang_a = rt.revenue_by_channel(d_from, d_to)["total"]["revenue"]
+    thang_b = rt.revenue_by_channel(p_from, p_to)["total"]["revenue"]
+    _kiem("ky A (%s) khop tra cuu truc tiep" % ym, abs(_lay(a) - thang_a) < 1,
+          "so sanh: %s | truc tiep: %s" % (_tien(_lay(a)), _tien(thang_a)))
+    _kiem("ky B (%s) khop tra cuu truc tiep" % truoc, abs(_lay(b) - thang_b) < 1,
+          "so sanh: %s | truc tiep: %s" % (_tien(_lay(b)), _tien(thang_b)))
+
+
+def kiem_10_cong_no_cac_cach_chia_deu_bang_tong():
+    """Cong no la cho tung sai NANG NHAT trong du an (cong thuc cu thoi 4-15 lan). Chia theo kenh va
+    chia theo vung deu phai cong lai bang tong; tong qua han khong duoc vuot tong du no."""
+    print()
+    print("10. CONG NO: CHIA THEO KENH == CHIA THEO VUNG == TONG")
+    cn = rt.receivables_overview(top_n=5)
+    if cn.get("receivable_status") == "unavailable":
+        return _bo("cong no", cn.get("receivable_warning", "khong tra cuu duoc"))
+    tong = _f0(cn.get("total_balance_end"))
+    if not tong:
+        return _bo("cong no", "Tong du no bang 0 - khong co gi de doi chieu.")
+    theo_kenh = sum(_f0(r.get("balance_end")) for r in (cn.get("by_channel") or []))
+    theo_vung = sum(_f0(r.get("balance_end")) for r in (cn.get("by_region") or []))
+    _kiem("cong theo kenh == tong du no", abs(theo_kenh - tong) < 1,
+          "theo kenh: %s | tong: %s | lech %s"
+          % (_tien(theo_kenh), _tien(tong), _tien(abs(theo_kenh - tong))))
+    _kiem("cong theo vung == tong du no", abs(theo_vung - tong) < 1,
+          "theo vung: %s | tong: %s | lech %s"
+          % (_tien(theo_vung), _tien(tong), _tien(abs(theo_vung - tong))))
+    _kiem("tong qua han khong vuot tong du no", _f0(cn.get("total_overdue")) <= tong + 1,
+          "qua han: %s | du no: %s" % (_tien(_f0(cn.get("total_overdue"))), _tien(tong)))
+
+
+def kiem_11_cay_kpi_khong_cong_lan_tang():
+    """revenue_tree co 3 tang TP -> QLV -> TDV. Bravo TU rollup san cho tang QLV, nen sales cua mot
+    QLV va tong sales cac TDV duoi no la HAI NGUON DOC LAP - doi chieu duoc.
+
+    Day la phep kiem dat gia nhat ca bo: cong lan hai tang lam so gap doi da dinh 3 lan trong du an,
+    va lan nao cau tra loi cung trong hoan toan hop ly."""
+    print()
+    print("11. CAY KPI: ROLLUP QLV CUA BRAVO == TONG TDV DUOI QUYEN")
+    cay = rt.revenue_tree()
+    if cay.get("error") or not cay.get("tree"):
+        return _bo("cay KPI", cay.get("error", "cay rong"))
+    tong_qlv = tong_tdv = 0.0
+    lech_nhieu = []
+    so_qlv = 0
+    for tp in cay["tree"]:
+        for qlv in (tp.get("qlv") or []):
+            so_qlv += 1
+            s_qlv = _f0(qlv.get("sales"))
+            s_tdv = sum(_f0(t.get("sales")) for t in (qlv.get("tdv") or []))
+            tong_qlv += s_qlv
+            tong_tdv += s_tdv
+            if s_qlv and abs(s_qlv - s_tdv) / s_qlv > 0.01:
+                lech_nhieu.append((abs(s_qlv - s_tdv),
+                                   qlv.get("name") or qlv.get("employee_code"), s_qlv, s_tdv))
+    if not so_qlv:
+        return _bo("cay KPI", "Khong co QLV nao trong cay.")
+    lech_tong = abs(tong_qlv - tong_tdv)
+    ty_le = lech_tong / tong_qlv * 100 if tong_qlv else 0
+    # Nguong 1%: rollup cua Bravo va tong chi tiet co the lech chut it do lam tron/do tre snapshot.
+    # Con neu cong lan hai tang thi se ra khoang 100%, khong the lot qua nguong nay.
+    _kiem("tong %d QLV == tong TDV duoi quyen (nguong 1%%)" % so_qlv, ty_le < 1,
+          "rollup QLV: %s | cong TDV: %s | lech %s dong (%.3f%%)"
+          % (_tien(tong_qlv), _tien(tong_tdv), _tien(lech_tong), ty_le))
+    if lech_nhieu:
+        lech_nhieu.sort(reverse=True)
+        print("         %d QLV lech >1%% giua rollup va chi tiet, nang nhat:" % len(lech_nhieu))
+        for d, ten, a, b in lech_nhieu[:5]:
+            print("           %-28s rollup %s vs cong TDV %s" % (str(ten)[:28], _tien(a), _tien(b)))
+
+
+def kiem_12_xep_hang_kpi_hai_cach_gom_bang_nhau():
+    """kpi_ranking gom theo QLV va gom theo vung phai cho cung mot tong doanh so - lech nghia la mot
+    trong hai duong dang bo sot hoac dem trung mot nhom."""
+    print()
+    print("12. XEP HANG KPI: GOM THEO QLV == GOM THEO VUNG")
+    theo_qlv = rt.kpi_ranking(group_by="qlv", limit=1000)
+    theo_vung = rt.kpi_ranking(group_by="region", limit=1000)
+    if not isinstance(theo_qlv, list) or not isinstance(theo_vung, list) or not theo_qlv:
+        return _bo("xep hang KPI", "kpi_ranking tra ve rong.")
+    khoa = None
+    for ung_vien in ("sales", "actual", "revenue"):
+        if ung_vien in theo_qlv[0]:
+            khoa = ung_vien
+            break
+    if not khoa:
+        return _bo("xep hang KPI",
+                   "Khong tim thay cot doanh so trong ket qua: %s" % sorted(theo_qlv[0].keys()))
+    a = sum(_f0(r.get(khoa)) for r in theo_qlv)
+    b = sum(_f0(r.get(khoa)) for r in theo_vung)
+    lech = abs(a - b)
+    _kiem("gom %d QLV == gom %d vung" % (len(theo_qlv), len(theo_vung)), lech < 1,
+          "theo QLV: %s | theo vung: %s | lech %s dong (%.3f%%)"
+          % (_tien(a), _tien(b), _tien(lech), lech / a * 100 if a else 0))
+
+
 def main():
     print("=" * 78)
     print("DOI CHIEU DO DUNG CUA SO - CAC TOOL MOI (khong goi API, khong dung Bravo)")
@@ -238,7 +456,11 @@ def main():
         print("  CANH BAO: kho nho bat thuong - gan nhu chac chan la ban test/rong, khong phai production.")
     for ham in (kiem_1_hai_nguon_khong_chong_lan, kiem_2_chuoi_thang_khop_mot_lan_goi,
                 kiem_3_dia_ban_cong_lai_bang_toan_cong_ty, kiem_4_nang_suat_khong_cong_lan_tang,
-                kiem_5_vong_doi_khach_co_bao_nhieu_khach_khong_mang_co):
+                kiem_5_vong_doi_khach_co_bao_nhieu_khach_khong_mang_co,
+                kiem_6_doanh_thu_theo_vung_bang_tong_cong_ty, kiem_7_top_khach_cong_lai_bang_tong,
+                kiem_8_top_san_pham_cong_lai_bang_tong, kiem_9_so_sanh_ky_khop_voi_tra_cuu_truc_tiep,
+                kiem_10_cong_no_cac_cach_chia_deu_bang_tong, kiem_11_cay_kpi_khong_cong_lan_tang,
+                kiem_12_xep_hang_kpi_hai_cach_gom_bang_nhau):
         try:
             ham()
         except Exception as e:
@@ -255,23 +477,32 @@ def main():
 
     print()
     print("=" * 78)
+    # 26/08/2026 - hai lan phai sua dong tong ket nay, ca hai deu vi no NOI QUA MUC bang chung:
+    #   lan 1: bao "MOI BAT BIEN DEU GIU" trong khi ca 5 muc deu bi bo qua tren mot kho rong;
+    #   lan 2: bao "KHONG KIEM DUOC GI: ca 5/5 muc bi bo qua" trong khi 3 phep kiem da chay va DAT -
+    #          cong thuc cu lay len(_bo_qua) lam ca tu va mau nen luon ra 100%.
+    # Nay bam vao DEM THAT: bao nhieu phep kiem chay va dat, bao nhieu lech, bao nhieu khong chay duoc.
     if _loi:
         print("CO %d CHO LECH - can dieu tra truoc khi tin so:" % len(_loi))
         for t in _loi:
             print("   - %s" % t)
-    elif not _bo_qua:
-        print("MOI BAT BIEN DEU GIU.")
     if _bo_qua:
-        print("Bo qua %d muc (khong du du lieu de kiem): %s" % (len(_bo_qua), ", ".join(_bo_qua)))
-    # 26/08/2026: TUYET DOI khong duoc bao "MOI BAT BIEN DEU GIU" khi khong kiem duoc gi. Lan chay dau
-    # tren may 24 trung kho TEST rong, ca 5 muc deu bi bo qua, va script van in dong xanh do - mot
-    # ket luan trang tren kho rong, y het loai loi ma chinh script nay sinh ra de bat.
-    if not _loi and _bo_qua:
-        print()
-        print("KHONG KIEM DUOC GI: ca %d/%d muc deu bi bo qua." % (len(_bo_qua), len(_bo_qua)))
-        print("Day KHONG phai ket qua dat - chi la khong co du lieu de kiem. Xem lai dong")
-        print("'Kho du lieu THAT dang truy van' o dau ra tren: rat co the dang tro vao ban test.")
+        print("Khong chay duoc %d muc: %s" % (len(_bo_qua), ", ".join(_bo_qua)))
+
+    print()
+    print("Da chay: %d phep kiem DAT, %d LECH, %d muc khong chay duoc."
+          % (_dat[0], len(_loi), len(_bo_qua)))
+    if not _dat[0]:
+        print("KHONG PHEP KIEM NAO CHAY DUOC - day KHONG phai ket qua dat. Xem lai dong")
+        print("'Kho du lieu THAT dang truy van' o tren: rat co the dang tro vao ban test/kho rong.")
+    elif not _loi and not _bo_qua:
+        print("MOI BAT BIEN DEU GIU.")
+    elif not _loi:
+        print("Cac phep kiem CHAY DUOC deu giu. Nhung con %d muc chua kiem - chua the ket luan"
+              " toan bo." % len(_bo_qua))
     print("=" * 78)
+    # Ma thoat khac 0 khi co cho lech HOAC con muc chua kiem duoc: "chua kiem het" khong duoc phep
+    # trong giong "da kiem xong va sach" trong CI hay trong mat nguoi doc luot.
     return 1 if (_loi or _bo_qua) else 0
 
 
