@@ -192,3 +192,32 @@ def test_tong_theo_mien_bang_tong_toan_bo(tmp_path, monkeypatch):
         a = sum(r["actual"] for r in theo_mien["rows"] if r["month"] == thang)
         b = sum(r["actual"] for r in toan_bo["rows"] if r["month"] == thang)
         assert abs(a - b) < 0.01, "Thang %s: theo mien %s != toan bo %s" % (thang, a, b)
+
+
+# ---------------------------------------------------------------------------------------
+# Canh bao khi khoang hoi vuot ra ngoai cua so hoa don chi tiet
+# ---------------------------------------------------------------------------------------
+
+def test_hoi_thang_ngoai_cua_so_chi_tiet_phai_canh_bao_ro(tmp_path, monkeypatch):
+    """geography_monthly_performance CHI doc vhoadon_otc/etc, khong cong monthly_customer_summary
+    (bang nen khong co khoa tinh). Nen thang nam truoc moc cat se ra 0 - trong khi
+    get_revenue_monthly_series tra ve so that cho chinh thang do. Cung mot thang, hai con so.
+
+    Chua sua duoc phan so lieu (phai co DNH quyet chuyen suy tinh tu danh muc khach hien tai), nhung
+    KHONG duoc de no im lang: model rat de doc 0 thanh 'dia ban do khong ban duoc gi'."""
+    _setup(tmp_path, monkeypatch)
+    # _FixedDate.today() = 2026-04-20 -> moc cat = 2025-04-01.
+    # LUU Y ve so hoc: months_back bi kep toi da 12, nen lui 12 thang tu THANG MOI NHAT khong bao gio
+    # cham qua moc cat (moc cung la 12 thang truoc hom nay). Ca that chi xay ra khi nguoi dung hoi ve
+    # mot thang CU: month_to=2025-06 lui 12 thang -> bat dau tu 2024-07, truoc moc 2025-04-01.
+    xa = rt.geography_monthly_performance(month_to="2025-06", months_back=12, dimension="city")
+    assert "canh_bao_ngoai_cua_so" in xa, "phai canh bao khi khoang hoi vuot ra ngoai cua so chi tiet"
+    assert xa["thieu_du_lieu_truoc_ngay"] == "2025-04-01"
+    assert "khong duoc doc thanh" in xa["canh_bao_ngoai_cua_so"]
+
+
+def test_hoi_trong_cua_so_thi_khong_canh_bao_thua(tmp_path, monkeypatch):
+    """Canh bao thua cung la mot dang nhieu: neu thang nao cung canh bao thi model se quen no di."""
+    _setup(tmp_path, monkeypatch)
+    gan = rt.geography_monthly_performance(month_to="2026-04", months_back=4, dimension="city")
+    assert "canh_bao_ngoai_cua_so" not in gan

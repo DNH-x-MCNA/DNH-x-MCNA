@@ -131,10 +131,20 @@ def test_loai_nhan_vien_bi_danh_dau_trung_khoi_doanh_so(tmp_path, monkeypatch):
 
 
 def test_luon_kem_canh_bao_dinh_nghia_chua_xac_nhan(tmp_path, monkeypatch):
-    """is_ro/is_ac chua duoc DNH xac nhan nghia - so lieu KHONG duoc tra ve tran khong canh bao."""
+    """is_ro/is_ac chua duoc DNH xac nhan nghia - so lieu KHONG duoc tra ve tran khong canh bao.
+
+    26/08/2026: truoc day test nay khoa DUNG CHUOI CHU "CHUA XAC NHAN VOI DNH". Khi canh bao duoc
+    viet lai cho chinh xac hon (tach muc do chac chan cua tung co dua tren du lieu that), test do
+    len mac du canh bao van day du y - tuc no dang bao ve CACH DIEN DAT chu khong bao ve NOI DUNG.
+    Nay khoa theo Y: phai noi ro DNH chua xac nhan, va phai cam ro nhan "khach hoat dong" cho is_ac
+    (con so that chi 0,6% khach nen nhan do chac chan sai)."""
     _setup(tmp_path, monkeypatch)
     r = rt.customer_lifecycle_summary(year_month="2026-07")
-    assert "CHUA XAC NHAN VOI DNH" in r["canh_bao_dinh_nghia"]
+    canh_bao = r["canh_bao_dinh_nghia"]
+    assert "DNH" in canh_bao and "XAC NHAN" in canh_bao.upper(), \
+        "canh bao phai noi ro DNH chua xac nhan nghia cac co"
+    assert "is_ac" in canh_bao and "hoat dong" in canh_bao, \
+        "canh bao phai cam ro viec goi is_ac la 'khach hoat dong'"
     assert "so_is_ro" in r["months"][0] and "so_is_ac" in r["months"][0]
     for cam in ("mua_lai", "khach_mua_lai", "khach_hoat_dong"):
         assert cam not in r["months"][0], f"khong duoc dat ten nghiep vu chua xac nhan: {cam}"

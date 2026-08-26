@@ -498,7 +498,9 @@ TEMPLATE_TOOLS = [
         "input_schema": {"type": "object", "properties": {
             "month_to": {"type": "string"}, "months_back": {"type": "integer"},
             "dimension": {"type": "string", "enum": ["area", "city", "branch", "npp", "distributor"]},
-            "limit": {"type": "integer"},
+            "limit": {"type": "integer", "description": "So DIA BAN giu lai (khong phai so dong): "
+                       "giu top N dia ban theo tong doanh thu ca cua so, KEM DU MOI THANG cua chung. "
+                       "Truong so_dia_ban_khong_hien cho biet con bao nhieu dia ban khong hien."},
         }, "required": []},
     },
     {
@@ -510,7 +512,9 @@ TEMPLATE_TOOLS = [
         "input_schema": {"type": "object", "properties": {
             "month_to": {"type": "string"}, "months_back": {"type": "integer"},
             "group_by": {"type": "string", "enum": ["employee", "manager", "area", "total"]},
-            "limit": {"type": "integer"},
+            "limit": {"type": "integer", "description": "So NHOM giu lai (khong phai so dong): giu "
+                       "top N nhom theo tong doanh so ca cua so, KEM DU MOI THANG cua chung. Truong "
+                       "so_nhom_khong_hien cho biet con bao nhieu nhom khong hien."},
         }, "required": []},
     },
     {

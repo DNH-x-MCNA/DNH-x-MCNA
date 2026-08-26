@@ -1286,12 +1286,18 @@ def _customer_flag_caveat() -> str:
         - tuc "khong co co" KHONG phai la "khong mua". Suy ra is_ro cung khong han la "mua lai" theo
         nghia thong thuong.
     Vi vay tuyet doi khong duoc trinh bay 2 con so nay nhu dinh nghia da chot."""
-    return ("CHUA XAC NHAN VOI DNH y nghia nghiep vu chinh xac cua is_ro va is_ac. Do thuc te: "
-            "is_ac chi ung voi ~44/6.859 khach (khong the la 'khach hoat dong'), va 646 khach "
-            "KHONG mang co nao van co doanh thu 1,66 ty (nen 'khong co co' khong phai la 'khong "
-            "mua'). Khi tra loi PHAI noi ro day la so dem theo co goc cua Bravo, chua co dinh nghia "
-            "nghiep vu duoc DNH xac nhan - KHONG duoc dat ten 'khach mua lai'/'khach hoat dong' nhu "
-            "the la chac chan. Rieng is_nc (khach moi trong thang) thi da dung on dinh tu truoc.")
+    return ("So dem theo CO GOC cua Bravo. Muc do chac chan KHAC NHAU giua ba co, phai noi dung muc: "
+            "(1) is_nc (khach moi trong thang) da dung on dinh tu truoc. "
+            "(2) is_ro: do 26/08/2026 tren 3 thang lien tiep cho thay is_nc + is_ro + (khong mang co "
+            "nao) BANG DUNG tong so khach moi thang, tuc hai co loai tru nhau va cung phu ~90% khach "
+            "- hop voi cach hieu 'moi / mua lai', nhung DNH VAN CHUA xac nhan chinh thuc, nen goi la "
+            "'khach mang co is_ro' thi an toan hon la khang dinh 'khach mua lai'. "
+            "(3) is_ac: KHONG duoc goi la 'khach hoat dong'. Chi 37-44 khach moi thang tren tong "
+            "~6.000 (0,6%) - khong the nao la khach hoat dong; nhan cu la suy doan tu chu viet tat, "
+            "chua ai xac nhan. Neu nguoi dung hoi ve khach hoat dong, PHAI noi ro chua co dinh nghia "
+            "duoc DNH xac nhan thay vi tra con so nay. "
+            "(4) Con ~8-10% khach KHONG mang co nao NHUNG VAN CO doanh thu - chua giai thich duoc, "
+            "khong duoc coi la 'khong mua'.")
 
 
 def customer_lifecycle_summary(year_month: str = None, months_back: int = 1,
@@ -2076,6 +2082,16 @@ def geography_monthly_performance(month_to: str = None, months_back: int = 6,
     month_from = _month_add(month_to, -(months_back - 1))
     date_from, _ = _month_bounds(month_from); _, date_to = _month_bounds(month_to)
     limit = max(1, min(int(limit or 100), 500))
+    # 26/08/2026: ham nay CHi truy van vhoadon_otc/etc, KHONG cong monthly_customer_summary nhu
+    # revenue_by_channel lam - vi bang nen khong co khoa tinh (chi co khach + nhan vien), suy tinh
+    # phai di qua danh muc khach HIEN TAI, tuc gan tinh hom nay cho doanh thu nam ngoai. Do la danh
+    # doi nghiep vu, dang cho DNH quyet.
+    # Nhung viec CHUA sua duoc khong cho phep IM LANG: neu khong bao gi, thang nam ngoai cua so chi
+    # tiet se ra 0 dong trong khi tool doanh thu tra ve so that - cung mot thang, hai con so, va
+    # model rat de doc 0 thanh "dia ban do khong ban duoc gi". Bao ra thanh mot truong rieng de model
+    # buoc phai noi lai.
+    cutoff = _detail_cutoff()
+    ngoai_cua_so = date_from < cutoff
     scope_sql, scope_params = _scope_clause(scope_area_code)
     emp_sql, emp_params = _employee_scope_clause(scope_employee_code, "v", as_of=date_to)
     suffix, suffix_params = scope_sql + emp_sql, scope_params + emp_params
@@ -2132,12 +2148,22 @@ def geography_monthly_performance(month_to: str = None, months_back: int = 6,
     # nen so lieu cua cac don vi duoc giu van dung tuong quan voi ca nuoc, khong bi tinh lai theo
     # nhom con.
     rows, so_bi_cat = _giu_top_don_vi(rows, "unit", "revenue", limit)
-    return {"month_from": month_from, "month_to": month_to, "dimension": dimension,
+    ket_qua = {"month_from": month_from, "month_to": month_to, "dimension": dimension,
             "rows": rows, "so_dia_ban_khong_hien": so_bi_cat,
             "unavailable_dimensions": ["branch", "NPP", "distributor"],
             "canh_bao": ("UNKNOWN la khach/hoa don khong noi duoc danh muc tinh. Khong duoc tu gan "
                           "vung/tinh cho nhom nay. Chi tiet dia ban chi nam trong cua so hoa don gan."),
             "data_as_of": latest_data_date()}
+    if ngoai_cua_so:
+        ket_qua["thieu_du_lieu_truoc_ngay"] = cutoff
+        ket_qua["canh_bao_ngoai_cua_so"] = (
+            f"Khoang duoc hoi bat dau tu {date_from}, TRUOC moc {cutoff} - phan truoc moc do da bi "
+            "nen thanh bang thang KHONG CO khoa tinh/mien, nen bao cao dia ban KHONG bao gom phan "
+            "do. Cac thang truoc moc se hien 0 hoac khong xuat hien: day la KHONG CO DU LIEU DIA "
+            "BAN, TUYET DOI khong duoc doc thanh 'dia ban do khong ban duoc gi'. Tong doanh thu cac "
+            "thang do van tra cuu duoc bang get_revenue_monthly_series (co gop nguon nen) - neu can "
+            "so tong thi dung tool do va noi ro la khong tach duoc theo dia ban.")
+    return ket_qua
 
 
 def workforce_productivity(month_to: str = None, months_back: int = 6,
