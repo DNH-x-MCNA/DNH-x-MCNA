@@ -122,25 +122,74 @@ model chọn đúng tool; việc này chưa được thực hiện vì vòng nà
 
 ---
 
-# Bổ sung 25/08/2026 — đã thử kiểm chứng live, bị chặn
+# Bổ sung 25/08/2026 — đã kiểm chứng live: **25/25 câu chọn đúng tool**
 
-Mục 5 ở trên nêu bước tiếp theo là **kiểm thử live để đánh giá model có chọn đúng tool không**.
-Ngày 25/08/2026 đã thử chạy nhưng **không thực hiện được**: tài khoản Anthropic hết số dư
-(`Your credit balance is too low to access the Anthropic API`) — không phải hết hạn mức tạm thời.
+Mục 5 ở trên nêu bước tiếp theo là kiểm thử live để đánh giá model có chọn đúng tool không. Việc này
+**đã làm xong ngày 25/08/2026** trên máy 24 với dữ liệu và tài khoản production.
 
-Vì vậy cần đọc toàn bộ tài liệu này với một lưu ý quan trọng:
+## Kết quả đo được
 
-**Toàn bộ đánh giá phủ câu hỏi ở trên là đối chiếu TRÊN GIẤY** (mô tả tool ↔ nội dung câu hỏi).
-322 test đơn vị chứng minh SQL của từng tool chạy đúng, nhưng **không** chứng minh model biết chọn
-đúng tool khi người dùng hỏi bằng tiếng Việt tự nhiên. **11 tool mới chưa từng được model gọi thật
-lần nào.** Đây đúng là khoảng cách đã nhiều lần gây lỗi trong dự án này (câu trả lời trông hợp lý
-nhưng gọi nhầm tool/nhầm tầng dữ liệu).
+Mẫu phân tầng 25 câu (`scripts/run_tool_routing_sample.py`), ưu tiên các câu dùng 11 tool mới:
 
-Ước lượng thô mức phủ hiện tại: khoảng **84/138 câu (61%)** trả lời được, ~22 câu còn thiếu tool
-(tập trung ở target theo SKU, chi nhánh/NPP, thiếu hàng, hàng trả — đều do **hạ tầng dữ liệu chưa
-có**, không phải thiếu công sức viết tool), ~20 câu chờ DNH cung cấp nguồn, 3 câu chặn có chủ đích.
-Con số 61% phải coi là **giới hạn trên chưa kiểm chứng**, không phải kết quả đã đo.
+| Vòng | Kết quả | Chi phí |
+|---|---|---|
+| Vòng 1 (`tool-routing-20260825-165120.json`) | 23/25 = 92% | 1,4360 USD |
+| Vòng 2, sau khi sửa mô tả tool (`tool-routing-20260825-170905.json`) | **25/25 = 100%** | 1,8539 USD |
 
-**Việc cần làm ngay khi có ngân sách API**: chạy mẫu phân tầng ~25 câu (mỗi nhóm vài câu, ưu tiên
-các câu dùng 11 tool mới), thu lại câu trả lời + tool đã gọi, để biến con số trên giấy thành số đo
-thật. Chi phí ước tính 1–2 USD.
+Tách theo vai ở vòng 1 — đây mới là con số quan trọng:
+
+| Nhóm vai | Kết quả vòng 1 | Vì sao đáng chú ý |
+|---|---|---|
+| **TP + QLV** (13 câu) | **13/13 = 100%** | Nhóm này bị `_tools_for_request()` gỡ sạch tool SQL tự do (luôn có `scope_area_code`/`scope_channel`). Chọn sai tool là **không có đường lùi**. |
+| C-level (12 câu) | 10/12 | Vẫn còn SQL tự do làm phương án dự phòng. |
+
+## Hai câu trượt ở vòng 1 và cách xử lý
+
+**S13 — trượt thật, đã sửa.** *"Địa bàn nào quy mô lớn nhưng tăng trưởng thấp?"* → model tự viết SQL
+thay vì gọi `get_geography_monthly_performance`, dù tool thừa dữ liệu để trả lời (doanh thu, tỷ trọng,
+MoM, streak theo miền/tỉnh). Nguyên nhân: mô tả tool chỉ ghi *"xep hang / diem keo giam / co hoi dia
+ban"*, không có cụm nào khớp "quy mô lớn + tăng trưởng thấp". Đã bổ sung đúng cụm đó vào mô tả
+(`faeccdf`), vòng 2 gọi đúng.
+
+Đây là câu **đáng lo nhất cả bộ**: C-level còn SQL tự do nên vẫn ra số, nhưng cùng câu đó do một TP
+hỏi thì không có gì đỡ — sẽ từ chối hoặc ra số sai. Bài học rút ra: **mô tả tool phải phủ được cách
+người dùng thật diễn đạt, không chỉ phủ được chức năng kỹ thuật của tool.**
+
+**C05 — kỳ vọng trong kịch bản đo sai, model đúng.** *"Dữ liệu doanh thu và công nợ đang cập nhật đến
+ngày nào?"* — kịch bản kỳ vọng `get_receivables_overview` + `get_revenue_by_channel`, nhưng hai tool
+đó trả về **số tiền**, không trả về ngày. Model gọi `get_receivables_history_dates`, đúng y hướng dẫn
+trong docstring của chính tool đó. Ngày dữ liệu doanh thu thì đã có sẵn trong `_dynamic_context_note()`
+nên không cần tool. Đã sửa kỳ vọng cho khớp nghiệp vụ.
+
+## Ba lần đo đầu tiên báo 4% — là lỗi thước đo, không phải lỗi model
+
+Ghi lại để không ai lặp lại: ba lần chạy đầu đều báo *"1/25 (4%) — chi phí 0,0000 USD"*, trông y hệt
+model chọn sai tool hàng loạt. Thực tế chatbot **chạy đúng ngay từ lần đầu**. Nguyên nhân:
+`run_business_evaluation.py` tính đường dẫn **đọc** log qua biến môi trường `DNH_BACKEND_DIR`, còn code
+**ghi** log (`cost_logger.py`, `query_engine.py`) dùng vị trí file của chính nó — hai bên trỏ về hai
+thư mục khác nhau nên đọc ra 0 dòng. Đã sửa ở `96c4d85` (ép lấy đường dẫn thẳng từ module đang ghi).
+
+Bài học: **khi số đo bất thường, đọc nội dung câu trả lời trước khi suy đoán nguyên nhân.** Chỉ cần
+nhìn trường `answer` là thấy ngay bảng doanh thu 12 tháng và danh sách khách im lặng đúng định dạng
+tool — đủ để loại bỏ giả thuyết "model không gọi tool" ngay lập tức.
+
+## Giới hạn của con số 25/25 — phải đọc kỹ trước khi báo cáo DNH
+
+1. **Chỉ đo ĐỊNH TUYẾN TOOL, chưa đo ĐỘ ĐÚNG CỦA SỐ.** 25/25 nghĩa là model gọi đúng tool cần gọi.
+   Việc các con số trong câu trả lời có khớp Bravo hay không là **phép kiểm riêng, chưa làm**.
+2. **25 câu, không phải 138.** Mẫu chọn theo tầng, ưu tiên 11 tool mới. Phần còn lại vẫn là đối chiếu
+   trên giấy.
+3. **Không suy ra "138/138 trả lời được".** Các nhóm ở mục 3 vẫn thiếu nguồn dữ liệu từ DNH.
+
+## Chi phí thực đo
+
+1,8539 USD / 25 câu = **0,0742 USD/câu** — là **cận trên**: 25 câu này là loại nặng nhất bộ điều hành
+(chuỗi 12 tháng, vòng đời khách, bán chéo, năng suất đội ngũ), nặng hơn hẳn câu hỏi thường ngày. Con số
+này nên dùng để soát lại trần tuần (QLV 30 / TP 60 / C-level 120) so với ngân sách, chứ không nên lấy
+làm chi phí bình quân.
+
+## Việc tiếp theo
+
+Kiểm chứng **độ đúng của số** trên các tool mới: chọn vài câu đã chạy, đối chiếu kết quả với truy vấn
+Bravo trực tiếp. Đây là loại lỗi đã nhiều lần xảy ra trong dự án (số trông hợp lý nhưng sai tầng dữ
+liệu hoặc đếm trùng TDV/QLV), và định tuyến đúng tool **không** bảo vệ được khỏi loại lỗi đó.
