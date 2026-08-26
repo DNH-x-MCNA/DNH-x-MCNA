@@ -27,6 +27,13 @@ $CHECK_INTERVAL_SEC = 30
 
 if (-not (Test-Path $LOG_DIR)) { New-Item -ItemType Directory -Path $LOG_DIR -Force | Out-Null }
 
+# 26/08/2026: dinh nghia Log() LEN TRUOC khoi mutex. Truoc day no nam sau, nen khoi mutex phai tu
+# goi Add-Content - va do la mot phan ly do cac dong log o do so sai, cut lui, khong ai doc.
+function Log($msg) {
+    $line = "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') $msg"
+    Add-Content -Path $SUPERVISOR_LOG -Value $line -Encoding utf8
+}
+
 # Chi cho phep DUNG MOT supervisor tren toan may. Task Scheduler/service/lenh tay co the vo tinh
 # khoi dong cung script nhieu lan; moi ban se sinh mot sync_scheduler rieng va tranh nhau ghi
 # warehouse.db. Named mutex duoc Windows tu dong giai phong khi process chet, ke ca Stop-Process.
@@ -44,13 +51,60 @@ try {
     exit 0
 }
 if (-not $ownsSupervisorMutex) {
-    Add-Content -Path $SUPERVISOR_LOG -Value "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') Da co run_supervisor khac dang chay - ban khoi dong trung tu thoat." -Encoding utf8
-    exit 0
-}
+    # 26/08/2026 - VI SAO KHONG CON `exit 0` IM LANG O DAY:
+    # Truoc day mat mutex la thoat 0 ngay, khong noi gi them. Hau qua that, do duoc 26/08: mot
+    # supervisor MO COI sinh luc 25/08 14:02 (ngoai cay tien trinh cua dich vu, nen Restart-Service
+    # khong giet duoc) giu mutex suot 19 tieng. Moi lan deploy trong khoang do deu dien ra nhu sau:
+    #   - `git checkout` cap nhat file tren dia DUNG;
+    #   - `Restart-Service` giet cay cua dich vu roi khoi dong ban supervisor moi;
+    #   - ban moi mat mutex -> exit 0 sau <1500ms -> Windows bao "Failed to start service";
+    #   - uvicorn cu VAN SONG, van phuc vu nguoi dung bang CODE DONG BANG tu 25/08 14:02.
+    # Nguoi deploy nhin thay "Failed to start", tuong la loi khoi dong, trong khi that ra chatbot van
+    # chay - chi la chay code cu. Ba dot deploy (faeccdf, 43546a2, c75fa93) khong he den tay nguoi
+    # dung ma khong co canh bao nao. Day la kieu hong nguy hiem nhat: bao loi SAI CHO, con cho that
+    # su hong thi im lang.
+    #
+    # Phan biet hai tinh huong khac han nhau:
+    #   - Khoi dong TAY / Task Scheduler khi da co ban chay: thoat 0 im lang la DUNG - do chinh la
+    #     muc dich cua mutex.
+    #   - Khoi dong BOI DICH VU: service manager vua giet cay cua no va khoi dong ta lam supervisor
+    #     chinh thuc. Ke dang giu mutex khi do CHAC CHAN nam ngoai tam kiem soat cua no, tuc la mo
+    #     coi. Phai ghi ro ai dang giu cong va thoat khac 0.
+    $khoiDongBoiDichVu = $false
+    try {
+        $me = Get-CimInstance Win32_Process -Filter ("ProcessId={0}" -f $PID) -ErrorAction Stop
+        $cha = Get-CimInstance Win32_Process -Filter ("ProcessId={0}" -f $me.ParentProcessId) -ErrorAction Stop
+        # Mau noi rong: NSSM tren mot so ban cai co ten nssm_x64.exe / nssm64.exe. Bat sot ten se
+        # roi ve nhanh "im lang" va bo lot dung ca ma canh bao nay sinh ra de bat.
+        if ($cha.Name -match '^(nssm.*|services)\.exe$') { $khoiDongBoiDichVu = $true }
+    } catch {
+        # Khong tra duoc tien trinh cha thi giu nguyen hanh vi cu (im lang) - tha bo sot canh bao
+        # con hon lam dich vu bao loi gia.
+    }
 
-function Log($msg) {
-    $line = "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') $msg"
-    Add-Content -Path $SUPERVISOR_LOG -Value $line -Encoding utf8
+    if (-not $khoiDongBoiDichVu) {
+        Log "Da co run_supervisor khac dang chay - ban khoi dong trung (khong phai tu dich vu) tu thoat."
+        exit 0
+    }
+
+    $moTaChuCong = "khong xac dinh duoc"
+    try {
+        $conn = Get-NetTCPConnection -LocalPort 8010 -State Listen -ErrorAction SilentlyContinue |
+                Select-Object -First 1
+        if ($conn) {
+            $chu = Get-CimInstance Win32_Process -Filter ("ProcessId={0}" -f $conn.OwningProcess) -ErrorAction SilentlyContinue
+            if ($chu) {
+                $moTaChuCong = "PID $($conn.OwningProcess), tao luc $($chu.CreationDate)"
+            }
+        }
+    } catch { }
+
+    Log "!!! DEPLOY BI NUOT: dich vu khoi dong supervisor nhung mot supervisor MO COI dang giu mutex."
+    Log "    Tien trinh dang giu cong 8010: $moTaChuCong"
+    Log "    Uvicorn do van phuc vu nguoi dung bang CODE CU - moi lan deploy tu luc no sinh ra deu VO HIEU."
+    Log "    Xu ly: Stop-Service DNH_Chatbot_Backend; giet moi powershell.exe co run_supervisor.ps1"
+    Log "    trong CommandLine va tien trinh dang giu cong 8010; kiem cong da trong; Start-Service."
+    exit 3
 }
 
 function Start-Backend {
@@ -66,7 +120,15 @@ function Start-SyncScheduler {
         -WorkingDirectory $BACKEND_DIR -WindowStyle Hidden -PassThru
 }
 
-Log "=== Supervisor khoi dong ==="
+# 26/08/2026: ghi ro DANG CHAY CODE NAO. Su co 25-26/08 keo dai 19 tieng mot phan vi khong co cach
+# nao nhin log ma biet uvicorn dang phuc vu ban code nao, tu thu muc nao - trong khi tren may co ca
+# ban production lan cac ban clone test (vd C:\dnh_chatbot_test_28a7328_20260825-140023).
+$commit = "khong doc duoc"
+try {
+    $out = & git -C $BACKEND_DIR rev-parse --short HEAD 2>$null
+    if ($LASTEXITCODE -eq 0 -and $out) { $commit = $out.Trim() }
+} catch { }
+Log "=== Supervisor khoi dong === thu muc=$BACKEND_DIR commit=$commit"
 $backendProc = Start-Backend
 Log "Backend (uvicorn :8010) started, PID=$($backendProc.Id)"
 $syncProc = Start-SyncScheduler

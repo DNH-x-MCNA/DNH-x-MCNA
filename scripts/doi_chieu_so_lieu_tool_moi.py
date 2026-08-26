@@ -22,7 +22,12 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-BACKEND = Path(os.environ.get("DNH_BACKEND_DIR", ROOT / "backend"))
+# 26/08/2026: CO Y khong dung DNH_BACKEND_DIR de chon noi nap module. Script nay nam trong repo nao
+# thi phai kiem chinh backend cua repo do - neu khong, mot bien moi truong sot lai trong phien
+# PowerShell se am tham lai script sang mot ban clone khac. Da xay ra that tren may 24: bien tro vao
+# C:\dnh_chatbot_test_28a7328_20260825-140023\backend (ban test, kho rong) nen ca 5 phep kiem deu
+# rong tuech ma bao cao van in ra dong ket luan xanh.
+BACKEND = ROOT / "backend"
 for _p in (str(BACKEND), str(ROOT)):
     if _p not in sys.path:
         sys.path.insert(0, _p)
@@ -33,8 +38,19 @@ except Exception:
     pass
 
 import report_templates as rt  # noqa: E402
+import local_warehouse as _lw  # noqa: E402
 
 _wq = rt._q  # cung ham truy van ma chinh cac tool dung - doi chieu tren cung nen du lieu
+
+# 26/08/2026: KHONG duoc tin bien moi truong DNH_BACKEND_DIR de bao "dang doi chieu kho nao". Da dinh
+# dung cai bay nay hai lan trong hai ngay:
+#   - 25/08: run_business_evaluation.py doc log theo DNH_BACKEND_DIR trong khi cost_logger.py GHI theo
+#     vi tri file cua chinh no -> bao cao "0 tool, 0 dong" ba lan lien, tuong model chon sai tool.
+#   - 26/08: chinh script nay in "Kho du lieu: C:\\dnh_chatbot_test_...\\backend" - mot ban TEST - roi
+#     bo qua ca 5 phep kiem va ket luan "MOI BAT BIEN DEU GIU". Ket luan trang, tren kho rong.
+# Nguyen tac rut ra: LUON hoi chinh module dang lam viec xem no doc file nao, dung tu suy tu bien moi
+# truong. local_warehouse.DB_PATH la duong dan THAT ma moi tool dang truy van.
+KHO_THUC_TE = Path(_lw.DB_PATH)
 
 _loi = []
 _bo_qua = []
@@ -209,7 +225,17 @@ def main():
     print("=" * 78)
     print("DOI CHIEU DO DUNG CUA SO - CAC TOOL MOI (khong goi API, khong dung Bravo)")
     print("=" * 78)
-    print("  Kho du lieu: %s" % BACKEND)
+    # In duong dan THAT ma cac tool dang truy van, kem kich thuoc - de nhin mot cai la biet co dang
+    # doi chieu tren kho rong/kho test hay khong.
+    co = KHO_THUC_TE.stat().st_size if KHO_THUC_TE.is_file() else 0
+    print("  Kho du lieu THAT dang truy van: %s" % KHO_THUC_TE)
+    print("  Kich thuoc: %s MB" % (format(co / 1024 / 1024, ",.1f") if co else "0 (KHONG TON TAI)"))
+    env = os.environ.get("DNH_BACKEND_DIR")
+    if env and Path(env).resolve() != KHO_THUC_TE.parent.resolve():
+        print("  CANH BAO: bien moi truong DNH_BACKEND_DIR=%s TRO KHAC noi kho that nam." % env)
+        print("            Da bo qua bien nay - lay theo local_warehouse.DB_PATH.")
+    if co < 1024 * 1024:
+        print("  CANH BAO: kho nho bat thuong - gan nhu chac chan la ban test/rong, khong phai production.")
     for ham in (kiem_1_hai_nguon_khong_chong_lan, kiem_2_chuoi_thang_khop_mot_lan_goi,
                 kiem_3_dia_ban_cong_lai_bang_toan_cong_ty, kiem_4_nang_suat_khong_cong_lan_tang,
                 kiem_5_vong_doi_khach_co_bao_nhieu_khach_khong_mang_co):
@@ -233,12 +259,20 @@ def main():
         print("CO %d CHO LECH - can dieu tra truoc khi tin so:" % len(_loi))
         for t in _loi:
             print("   - %s" % t)
-    else:
+    elif not _bo_qua:
         print("MOI BAT BIEN DEU GIU.")
     if _bo_qua:
         print("Bo qua %d muc (khong du du lieu de kiem): %s" % (len(_bo_qua), ", ".join(_bo_qua)))
+    # 26/08/2026: TUYET DOI khong duoc bao "MOI BAT BIEN DEU GIU" khi khong kiem duoc gi. Lan chay dau
+    # tren may 24 trung kho TEST rong, ca 5 muc deu bi bo qua, va script van in dong xanh do - mot
+    # ket luan trang tren kho rong, y het loai loi ma chinh script nay sinh ra de bat.
+    if not _loi and _bo_qua:
+        print()
+        print("KHONG KIEM DUOC GI: ca %d/%d muc deu bi bo qua." % (len(_bo_qua), len(_bo_qua)))
+        print("Day KHONG phai ket qua dat - chi la khong co du lieu de kiem. Xem lai dong")
+        print("'Kho du lieu THAT dang truy van' o dau ra tren: rat co the dang tro vao ban test.")
     print("=" * 78)
-    return 1 if _loi else 0
+    return 1 if (_loi or _bo_qua) else 0
 
 
 if __name__ == "__main__":
