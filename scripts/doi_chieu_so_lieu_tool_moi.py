@@ -439,6 +439,22 @@ def kiem_12_xep_hang_kpi_hai_cach_gom_bang_nhau():
           % (_tien(a), _tien(b), _tien(lech), lech / a * 100 if a else 0))
 
 
+CAC_PHEP_KIEM = (
+    kiem_1_hai_nguon_khong_chong_lan,
+    kiem_2_chuoi_thang_khop_mot_lan_goi,
+    kiem_3_dia_ban_cong_lai_bang_toan_cong_ty,
+    kiem_4_nang_suat_khong_cong_lan_tang,
+    kiem_5_vong_doi_khach_co_bao_nhieu_khach_khong_mang_co,
+    kiem_6_doanh_thu_theo_vung_bang_tong_cong_ty,
+    kiem_7_top_khach_cong_lai_bang_tong,
+    kiem_8_top_san_pham_cong_lai_bang_tong,
+    kiem_9_so_sanh_ky_khop_voi_tra_cuu_truc_tiep,
+    kiem_10_cong_no_cac_cach_chia_deu_bang_tong,
+    kiem_11_cay_kpi_khong_cong_lan_tang,
+    kiem_12_xep_hang_kpi_hai_cach_gom_bang_nhau,
+)
+
+
 def main():
     print("=" * 78)
     print("DOI CHIEU DO DUNG CUA SO - CAC TOOL MOI (khong goi API, khong dung Bravo)")
@@ -446,6 +462,14 @@ def main():
     # In duong dan THAT ma cac tool dang truy van, kem kich thuoc - de nhin mot cai la biet co dang
     # doi chieu tren kho rong/kho test hay khong.
     co = KHO_THUC_TE.stat().st_size if KHO_THUC_TE.is_file() else 0
+    # 26/08/2026: script phai TU KHAI BAO phien ban cua chinh no. Da bi nham 3 lan trong mot ngay
+    # theo 3 kieu khac nhau ("code nao dang chay?"), lan gan nhat: ban tren may 24 con la ban cu chi
+    # co 5 phep kiem, dau ra dung o muc 5 va in ket luan xanh - nhin thoang y het mot lan chay day du.
+    # So phep kiem la dau hieu re nhat va kho nham nhat: 5 hay 12 la thay ngay.
+    print("  Ban script: %d phep kiem | sua lan cuoi %s"
+          % (len(CAC_PHEP_KIEM),
+             __import__("datetime").datetime.fromtimestamp(
+                 Path(__file__).stat().st_mtime).strftime("%d/%m/%Y %H:%M")))
     print("  Kho du lieu THAT dang truy van: %s" % KHO_THUC_TE)
     print("  Kich thuoc: %s MB" % (format(co / 1024 / 1024, ",.1f") if co else "0 (KHONG TON TAI)"))
     env = os.environ.get("DNH_BACKEND_DIR")
@@ -454,13 +478,7 @@ def main():
         print("            Da bo qua bien nay - lay theo local_warehouse.DB_PATH.")
     if co < 1024 * 1024:
         print("  CANH BAO: kho nho bat thuong - gan nhu chac chan la ban test/rong, khong phai production.")
-    for ham in (kiem_1_hai_nguon_khong_chong_lan, kiem_2_chuoi_thang_khop_mot_lan_goi,
-                kiem_3_dia_ban_cong_lai_bang_toan_cong_ty, kiem_4_nang_suat_khong_cong_lan_tang,
-                kiem_5_vong_doi_khach_co_bao_nhieu_khach_khong_mang_co,
-                kiem_6_doanh_thu_theo_vung_bang_tong_cong_ty, kiem_7_top_khach_cong_lai_bang_tong,
-                kiem_8_top_san_pham_cong_lai_bang_tong, kiem_9_so_sanh_ky_khop_voi_tra_cuu_truc_tiep,
-                kiem_10_cong_no_cac_cach_chia_deu_bang_tong, kiem_11_cay_kpi_khong_cong_lan_tang,
-                kiem_12_xep_hang_kpi_hai_cach_gom_bang_nhau):
+    for ham in CAC_PHEP_KIEM:
         try:
             ham()
         except Exception as e:
