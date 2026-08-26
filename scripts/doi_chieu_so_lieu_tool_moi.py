@@ -376,40 +376,63 @@ def kiem_10_cong_no_cac_cach_chia_deu_bang_tong():
 
 def kiem_11_cay_kpi_khong_cong_lan_tang():
     """revenue_tree co 3 tang TP -> QLV -> TDV. Bravo TU rollup san cho tang QLV, nen sales cua mot
-    QLV va tong sales cac TDV duoi no la HAI NGUON DOC LAP - doi chieu duoc.
+    QLV va tong sales cac TDV duoi no la HAI NGUON DOC LAP - doi chieu duoc. Cong lan hai tang lam so
+    gap doi da dinh 3 lan trong du an, lan nao cau tra loi cung trong hoan toan hop ly.
 
-    Day la phep kiem dat gia nhat ca bo: cong lan hai tang lam so gap doi da dinh 3 lan trong du an,
-    va lan nao cau tra loi cung trong hoan toan hop ly."""
+    26/08/2026 - PHIEN BAN DAU BAO DONG GIA: no so THANG tong rollup QLV voi tong TDV va bao lech
+    30,6% (10,96 ty). Doc ky thi ca 10,92 ty trong so do nam o DUNG BA nut ma TOOL DA TU DANH DAU:
+      - "Kenh MT" va "Cho si": la_nhom_kenh=True, code CO Y gan team=[] vi day la nhom kenh ban hang
+        chu khong phai mot ca nhan co doi TDV;
+      - "Nguyen Thi Thanh Thuy" (MBKV12): ca ghi nhan tu 21/07/2026 (muc A4,
+        Cau_hoi_can_DNH_xac_nhan.md) - nghi Bravo luu 2 ban ghi cho cung mot nguoi (1 cap TP, 1 cap
+        QLV voi 0 TDV), tool da gan san ghi_chu canh bao.
+    Tuc tool VON DA DUNG; phep kiem moi la thu sai. Mot phep kiem luon do vi nhung ca da duoc xu ly
+    dung thi chi day nguoi doc toi cho bo qua no - nguy hiem hon la khong co phep kiem nao.
+
+    Nay: loai cac nut da mang la_nhom_kenh hoac ghi_chu ra khoi phep so (van bao ra de con thay), chi
+    do phan CHUA duoc giai thich. Do lai tren du lieu that 26/08: 0,13% - dat."""
     print()
     print("11. CAY KPI: ROLLUP QLV CUA BRAVO == TONG TDV DUOI QUYEN")
     cay = rt.revenue_tree()
     if cay.get("error") or not cay.get("tree"):
         return _bo("cay KPI", cay.get("error", "cay rong"))
     tong_qlv = tong_tdv = 0.0
+    da_danh_dau = []
     lech_nhieu = []
     so_qlv = 0
     for tp in cay["tree"]:
         for qlv in (tp.get("qlv") or []):
-            so_qlv += 1
+            ten = qlv.get("name") or qlv.get("employee_code")
             s_qlv = _f0(qlv.get("sales"))
             s_tdv = sum(_f0(t.get("sales")) for t in (qlv.get("tdv") or []))
+            # Nut da co canh bao san = ca DA BIET va DA duoc tool noi ro cho nguoi dung. Dua vao phep
+            # so chi tao bao dong lap lai cho thu khong con phai phat hien nua.
+            if qlv.get("la_nhom_kenh") or qlv.get("ghi_chu"):
+                da_danh_dau.append((ten, s_qlv, s_tdv,
+                                    "nhom kenh" if qlv.get("la_nhom_kenh") else "co ghi_chu canh bao"))
+                continue
+            so_qlv += 1
             tong_qlv += s_qlv
             tong_tdv += s_tdv
             if s_qlv and abs(s_qlv - s_tdv) / s_qlv > 0.01:
-                lech_nhieu.append((abs(s_qlv - s_tdv),
-                                   qlv.get("name") or qlv.get("employee_code"), s_qlv, s_tdv))
+                lech_nhieu.append((abs(s_qlv - s_tdv), ten, s_qlv, s_tdv))
+    if da_danh_dau:
+        print("         %d nut BI LOAI khoi phep so vi tool da danh dau san:" % len(da_danh_dau))
+        for ten, a, b, ly_do in da_danh_dau:
+            print("           %-28s rollup %-18s TDV %-14s (%s)"
+                  % (str(ten)[:28], _tien(a), _tien(b), ly_do))
     if not so_qlv:
-        return _bo("cay KPI", "Khong co QLV nao trong cay.")
+        return _bo("cay KPI", "Khong con QLV nao sau khi loai cac nut da danh dau.")
     lech_tong = abs(tong_qlv - tong_tdv)
     ty_le = lech_tong / tong_qlv * 100 if tong_qlv else 0
     # Nguong 1%: rollup cua Bravo va tong chi tiet co the lech chut it do lam tron/do tre snapshot.
     # Con neu cong lan hai tang thi se ra khoang 100%, khong the lot qua nguong nay.
-    _kiem("tong %d QLV == tong TDV duoi quyen (nguong 1%%)" % so_qlv, ty_le < 1,
+    _kiem("tong %d QLV (da loai nut danh dau) == tong TDV duoi quyen (nguong 1%%)" % so_qlv, ty_le < 1,
           "rollup QLV: %s | cong TDV: %s | lech %s dong (%.3f%%)"
           % (_tien(tong_qlv), _tien(tong_tdv), _tien(lech_tong), ty_le))
     if lech_nhieu:
         lech_nhieu.sort(reverse=True)
-        print("         %d QLV lech >1%% giua rollup va chi tiet, nang nhat:" % len(lech_nhieu))
+        print("         %d QLV con lech >1%% giua rollup va chi tiet, nang nhat:" % len(lech_nhieu))
         for d, ten, a, b in lech_nhieu[:5]:
             print("           %-28s rollup %s vs cong TDV %s" % (str(ten)[:28], _tien(a), _tien(b)))
 
