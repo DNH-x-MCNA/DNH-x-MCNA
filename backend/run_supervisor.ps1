@@ -123,12 +123,27 @@ function Start-SyncScheduler {
 # 26/08/2026: ghi ro DANG CHAY CODE NAO. Su co 25-26/08 keo dai 19 tieng mot phan vi khong co cach
 # nao nhin log ma biet uvicorn dang phuc vu ban code nao, tu thu muc nao - trong khi tren may co ca
 # ban production lan cac ban clone test (vd C:\dnh_chatbot_test_28a7328_20260825-140023).
-$commit = "khong doc duoc"
+# Ban dau cho nay chi ghi `git rev-parse --short HEAD`. SAI, va sai theo kieu gay hieu nham dung
+# luc can tin nhat: quy trinh deploy o day la `git checkout origin/master -- <file>` - ghi de FILE
+# chu KHONG dich chuyen HEAD. Do do HEAD gan nhu luon dung yen o mot commit cu (do thuc te 26/08:
+# HEAD=28a7328, lui 11 commit so voi ban vua deploy) va KHONG noi len duoc code dang chay la gi.
+# Cau hoi dung phai la: THU MUC BACKEND CO KHOP origin/master KHONG?
+$moTaCode = "khong doc duoc (git khong san sang?)"
 try {
-    $out = & git -C $BACKEND_DIR rev-parse --short HEAD 2>$null
-    if ($LASTEXITCODE -eq 0 -and $out) { $commit = $out.Trim() }
+    $head = (& git -C $BACKEND_DIR rev-parse --short HEAD 2>$null)
+    $remote = (& git -C $BACKEND_DIR rev-parse --short origin/master 2>$null)
+    if ($LASTEXITCODE -eq 0 -and $remote) {
+        $khac = @(& git -C $BACKEND_DIR diff --name-only origin/master -- . 2>$null)
+        if ($khac.Count -eq 0) {
+            $moTaCode = "backend KHOP origin/master ($remote)"
+        } else {
+            $vaiFile = ($khac | Select-Object -First 5) -join ', '
+            $moTaCode = "!!! backend LECH origin/master ($remote) o $($khac.Count) file: $vaiFile"
+        }
+        $moTaCode = "$moTaCode [HEAD=$head - khong phan anh code dang chay, xem ghi chu tren]"
+    }
 } catch { }
-Log "=== Supervisor khoi dong === thu muc=$BACKEND_DIR commit=$commit"
+Log "=== Supervisor khoi dong === thu muc=$BACKEND_DIR $moTaCode"
 $backendProc = Start-Backend
 Log "Backend (uvicorn :8010) started, PID=$($backendProc.Id)"
 $syncProc = Start-SyncScheduler
