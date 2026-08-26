@@ -2025,6 +2025,38 @@ def customer_product_coverage(as_of_date: str = None, lookback_months: int = 3,
     }
 
 
+def _giu_top_don_vi(rows, khoa_don_vi, khoa_gia_tri, limit):
+    """Cat danh sach chuoi-theo-thang bang cach GIU LAI top `limit` DON VI (tinh/mien/nhan vien/QLV)
+    va giu DU MOI THANG cua cac don vi do - thay vi cat `rows[-limit:]`.
+
+    26/08/2026 - VI SAO PHAI SUA: hai tool chuoi thang truoc day tra ve `rows[-limit:]`, tuc cat tu
+    DUOI mang da sap xep theo (thang tang dan, thu hang tot dan). Cat kieu do gay ra HAI hong cung luc,
+    deu am tham:
+      1. Mat cac thang DAU - dung thu can nhat de nhin xu huong. Cau hoi "tinh nao giam lien tiep
+         nhieu thang" nhan ve du lieu chi con vai thang cuoi.
+      2. Giu lai don vi TE NHAT, vut don vi TOT NHAT. Trong thang bi cat do dang, phan con lai la
+         duoi bang xep hang. Model goi limit=10 y muon "top 10 tinh" thi nhan dung 10 tinh BET NHAT.
+    Do quy mo that: 63 tinh x 6 thang = 378 dong > limit mac dinh 100 -> cat mat 3/4 chuoi. Voi
+    workforce_productivity group_by='employee': 281 nhan vien x 6 thang = 1.686 dong > 200 -> chi con
+    dung thang cuoi va 200 nguoi thap nhat.
+
+    11 tool khac trong file nay deu dung `[:limit]` SAU khi sap theo do quan trong - hai cho nay la
+    ngoai le lac loai, khong phai chu y thiet ke.
+
+    `limit` gio co nghia la SO DON VI giu lai (khong phai so dong). Chon top theo TONG gia tri ca cua
+    so, khong theo thang cuoi - de mot thang bat thuong khong hat mot tinh lon ra khoi bang.
+    Tra ve (rows_da_loc, so_don_vi_bi_cat) - so bi cat PHAI duoc bao ra ngoai de model noi ro cho
+    nguoi dung, dung nguyen tac "tha noi khong biet con hon giau"."""
+    tong = {}
+    for r in rows:
+        k = r.get(khoa_don_vi)
+        tong[k] = tong.get(k, 0.0) + (r.get(khoa_gia_tri) or 0.0)
+    if len(tong) <= limit:
+        return rows, 0
+    giu = {k for k, _ in sorted(tong.items(), key=lambda kv: -kv[1])[:limit]}
+    return [r for r in rows if r.get(khoa_don_vi) in giu], len(tong) - len(giu)
+
+
 def geography_monthly_performance(month_to: str = None, months_back: int = 6,
                                   dimension: str = "area", limit: int = 100,
                                   scope_area_code: str = None, scope_channel: str = None,
@@ -2096,8 +2128,13 @@ def geography_monthly_performance(month_to: str = None, months_back: int = 6,
         month_rows = sorted([r for r in rows if r["month"] == ym], key=lambda r: -r["revenue"])
         for rank, r in enumerate(month_rows, 1): r["rank"] = rank
     rows.sort(key=lambda r: (r["month"], r.get("rank", 999)))
+    # Thu hang (rank) va ty trong (share_pct) da tinh trên TOAN BO dia ban o tren, truoc khi cat -
+    # nen so lieu cua cac don vi duoc giu van dung tuong quan voi ca nuoc, khong bi tinh lai theo
+    # nhom con.
+    rows, so_bi_cat = _giu_top_don_vi(rows, "unit", "revenue", limit)
     return {"month_from": month_from, "month_to": month_to, "dimension": dimension,
-            "rows": rows[-limit:], "unavailable_dimensions": ["branch", "NPP", "distributor"],
+            "rows": rows, "so_dia_ban_khong_hien": so_bi_cat,
+            "unavailable_dimensions": ["branch", "NPP", "distributor"],
             "canh_bao": ("UNKNOWN la khach/hoa don khong noi duoc danh muc tinh. Khong duoc tu gan "
                           "vung/tinh cho nhom nay. Chi tiet dia ban chi nam trong cua so hoa don gan."),
             "data_as_of": latest_data_date()}
@@ -2187,9 +2224,10 @@ def workforce_productivity(month_to: str = None, months_back: int = 6,
             r["decline_streak_months"] = decline_streak
             rows.append(r)
     rows.sort(key=lambda r: (r["month"], -(r["actual"] or 0)))
+    rows, so_bi_cat = _giu_top_don_vi(rows, "group_code", "actual", limit)
     return {
         "month_from": month_from, "month_to": month_to, "group_by": group_by,
-        "rows": rows[-limit:],
+        "rows": rows, "so_nhom_khong_hien": so_bi_cat,
         "definition": ("Headcount = nhan vien TDV/CTV/CS co dong trong snapshot luong thang; "
                        "revenue_per_employee = tong doanh so / headcount. Decline streak chi tang "
                        "khi cac thang lien tiep deu giam."),
