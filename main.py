@@ -181,6 +181,10 @@ def send_daily_digest(dry_run=False, audience_filter=None, webhook_override=None
         region = r.get('region')
         channel = r.get('channel')
         webhook = webhook_override or (r.get('teams_webhook') or '').strip() or None
+        # 26/08/2026: truong TUY CHON, de trong thi payload y het truoc day. Dien vao thi mot Flow
+        # Power Automate duy nhat co the tu dinh tuyen theo nguoi nhan - xem ghi chu dai trong
+        # src/notifier.py::_resolve_teams_webhooks.
+        teams_recipient = (r.get('teams_recipient') or '').strip() or None
 
         try:
             metrics = get_daily_digest_metrics(region=region, channel=channel)
@@ -279,7 +283,9 @@ def send_daily_digest(dry_run=False, audience_filter=None, webhook_override=None
                 channel=channel or "OTC + ETC (gộp)",
                 region=region_label,
                 webhook_url_override=webhook,
-                sections=sections
+                sections=sections,
+                recipient=teams_recipient,
+                audience=audience
             )
             if sent:
                 print(f"[{datetime.now()}] Daily Digest cho '{audience or 'mặc định'}' đã gửi thành công.")

@@ -1140,10 +1140,15 @@ def _build_teams_adaptive_card(title, summary, severity, table_headers=None, tab
 
 def send_teams_alert(title, summary, table_headers=None, table_rows=None, severity="INFO",
                       period=None, channel=None, region=None, issue=None, webhook_url_override=None,
-                      sections=None):
+                      sections=None, recipient=None, audience=None):
     """
     Gửi tin nhắn cảnh báo qua Microsoft Teams Incoming Webhook dưới dạng Adaptive Card.
     Hỗ trợ `sections` mở rộng và tự động fit payload dưới 28KB.
+
+    recipient/audience (26/08/2026, TUỲ CHỌN): gắn thêm vào payload để MỘT Flow Power Automate duy
+    nhất có thể tự định tuyến, thay vì phải dựng một Flow riêng cho mỗi người nhận. Trong Flow đọc
+    bằng `triggerBody()?['recipient']`. Bỏ trống thì payload y hệt trước đây — 6 Flow hiện có không
+    bị ảnh hưởng, vì Flow chỉ đọc `attachments` và bỏ qua trường lạ.
     """
     webhook_url = webhook_url_override or os.getenv("TEAMS_WEBHOOK_URL")
     if not webhook_url:
@@ -1153,6 +1158,13 @@ def send_teams_alert(title, summary, table_headers=None, table_rows=None, severi
     payload = _build_teams_adaptive_card(title, summary, severity, table_headers, table_rows,
                                           period=period, channel=channel, region=region, issue=issue,
                                           sections=sections)
+    # Gắn SAU _build (đã gọi _fit_teams_payload bên trong): hàm fit cắt bớt nội dung card khi
+    # payload vượt 28KB, gắn trước thì đúng lúc card dài - tức lúc thông tin nhiều nhất - người
+    # nhận có thể bị cắt mất và tin đi lạc. Hai trường này vài chục byte, không ảnh hưởng ngưỡng.
+    if recipient:
+        payload["recipient"] = recipient
+    if audience:
+        payload["audience"] = audience
 
     try:
         data = json.dumps(payload, ensure_ascii=False).encode('utf-8')
@@ -1172,7 +1184,7 @@ def send_teams_alert(title, summary, table_headers=None, table_rows=None, severi
 
 def _resolve_teams_webhooks(region_label, channel_label):
     """
-    Suy ra danh sách webhook Teams (URL, tên audience) cần gửi cho 1 alert có region_label/
+    Suy ra danh sách webhook Teams (URL, tên audience, người nhận) cần gửi cho 1 alert có region_label/
     channel_label (nhãn hiển thị, vd "Miền Bắc"/"OTC" — xem src/alerts.py::normalize_region_label/
     normalize_channel_label), dựa trên config['report_recipients'] (Phần 3 — phân quyền theo cấp
     quản lý, nguồn DUY NHẤT dùng chung cho email/Teams/chatbot).
@@ -1188,6 +1200,11 @@ def _resolve_teams_webhooks(region_label, channel_label):
     khi nhiều audience còn trỏ chung 1 webhook (vd lúc chưa điền webhook riêng, tất cả audience
     khớp cùng rơi về đúng 1 URL mặc định -> chỉ gửi 1 lần, y hệt hành vi cũ trước khi có Phần 3).
     Nếu config chưa có report_recipients (môi trường cũ) -> trả về đúng 1 webhook mặc định.
+
+    Trả về list các bộ ba (url, audience, recipient). `recipient` lấy từ trường TUỲ CHỌN
+    `teams_recipient` của audience — để trống thì payload không có trường đó và Flow hoạt động y
+    như cũ. Điền vào thì payload kèm theo, cho phép MỘT Flow duy nhất tự định tuyến nhiều người
+    nhận thay vì phải dựng một Flow cho mỗi người.
     """
     default_webhook = os.getenv("TEAMS_WEBHOOK_URL")
     try:
@@ -1196,7 +1213,7 @@ def _resolve_teams_webhooks(region_label, channel_label):
         config = {}
     recipients = config.get('report_recipients') or []
     if not recipients:
-        return [(default_webhook, None)] if default_webhook else []
+        return [(default_webhook, None, None)] if default_webhook else []
 
     from src.region_map import REGION_NAMES_VI
     region_key_by_label = {v: k for k, v in REGION_NAMES_VI.items()}
@@ -1204,7 +1221,7 @@ def _resolve_teams_webhooks(region_label, channel_label):
     alert_channel_key = channel_label if channel_label in ("OTC", "ETC") else None
 
     matched = []
-    seen_urls = set()
+    seen = set()
     for r in recipients:
         aud_region = r.get('region')
         aud_channel = r.get('channel')
@@ -1213,10 +1230,26 @@ def _resolve_teams_webhooks(region_label, channel_label):
         if not (region_ok and channel_ok):
             continue
         url = (r.get('teams_webhook') or '').strip() or default_webhook
-        if not url or url in seen_urls:
+        if not url:
             continue
-        seen_urls.add(url)
-        matched.append((url, r.get('audience')))
+        # 26/08/2026: KHU TRUNG THEO CAP (url, nguoi_nhan), truoc day chi theo url.
+        #
+        # VI SAO PHAI DOI: cach lam hien tai la MOT Flow Power Automate cho MOI audience (6 Flow).
+        # Muon gui toi tung QLV (28 nguoi) thi phai dung 28 Flow bang tay, va moi lan nhan su thay
+        # doi lai phai vao Power Automate sua - khong mo rong noi.
+        # Huong di thay the: MOT Flow duy nhat, doc truong 'recipient' trong payload roi tu dinh
+        # tuyen. Nhung neu con khu trung theo URL thi moi audience tro chung mot Flow do se bi gop
+        # thanh MOT luot gui - chi mot nguoi nhan duoc tin, nhung nguoi con lai bien mat AM THAM.
+        # Khu trung theo cap (url, recipient) lam cach do chay duoc.
+        #
+        # TUONG THICH NGUOC: khi chua ai dien teams_recipient thi recipient=None cho tat ca, cap
+        # (url, None) khu trung y het hanh vi cu - 6 Flow hien tai khong doi mot chut nao.
+        recipient = (r.get('teams_recipient') or '').strip() or None
+        key = (url, recipient)
+        if key in seen:
+            continue
+        seen.add(key)
+        matched.append((url, r.get('audience'), recipient))
 
     return matched
 
@@ -1271,12 +1304,22 @@ def flush_critical_teams_queue():
         return
     by_webhook = {}
     for item in _pending_critical_teams_alerts:
-        for webhook_url, audience in item["webhooks"]:
-            group = by_webhook.setdefault(webhook_url, {"audience": audience, "alerts": []})
+        for webhook_url, audience, recipient in item["webhooks"]:
+            # 26/08/2026: gom theo CAP (url, nguoi_nhan), truoc day chi theo url. Cung ly do nhu o
+            # _resolve_teams_webhooks: neu nhieu audience tro chung MOT Flow dinh tuyen thi gom theo
+            # url se dồn het vao mot card va gui mot lan - cac nguoi nhan con lai mat tin AM THAM.
+            # Chua ai dien teams_recipient thi recipient=None, cap (url, None) gom y het truoc day.
+            group = by_webhook.setdefault((webhook_url, recipient),
+                                          {"audience": audience, "recipient": recipient, "alerts": []})
             group["alerts"].append(item)
     failed_item_ids = set()
-    for webhook_url, group in by_webhook.items():
+    for (webhook_url, _recipient), group in by_webhook.items():
         payload = _build_teams_consolidated_card(group["alerts"])
+        # Gan sau khi dung card, cung ly do nhu trong send_teams_alert.
+        if group.get("recipient"):
+            payload["recipient"] = group["recipient"]
+        if group.get("audience"):
+            payload["audience"] = group["audience"]
         ok = _send_with_retry(_post_teams_webhook, webhook_url, payload)
         if ok:
             print(f"[TEAMS] Da gui card gop ({len(group['alerts'])} canh bao) toi audience '{group['audience'] or 'mac dinh'}'.")
@@ -1486,10 +1529,11 @@ def send_alert_to_all_channels(alert_name, severity, summary, table_headers=None
             webhooks = _resolve_teams_webhooks(region, channel)
             if not webhooks:
                 print("[WARNING] Không có webhook Teams nào khớp (kiểm tra TEAMS_WEBHOOK_URL/.env hoặc report_recipients).")
-            for webhook_url, audience in webhooks:
+            for webhook_url, audience, recipient in webhooks:
                 teams_sent = _send_with_retry(send_teams_alert, alert_name, summary, table_headers, table_rows,
                                                severity=severity, period=period, channel=channel, region=region,
-                                               issue=issue, webhook_url_override=webhook_url)
+                                               issue=issue, webhook_url_override=webhook_url,
+                                               recipient=recipient, audience=audience)
                 if teams_sent:
                     any_sent = True
                     if audience:

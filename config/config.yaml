@@ -31,14 +31,31 @@ email:
 
 # Phân quyền theo cấp quản lý — NGUỒN DUY NHẤT định nghĩa 6 audience, dùng chung cho CẢ BA kênh:
 #   - Email báo cáo Weekly/Monthly (main.py::send_weekly_report/send_monthly_report, lặp qua
-#     danh sách này, gửi riêng từng audience). Daily digest KHÔNG đổi, vẫn gửi 1 bản chung tới
-#     email.recipient_emails ở trên.
+#     danh sách này, gửi riêng từng audience).
+#   - Daily digest (main.py::send_daily_digest) — CHỈ gửi Teams, KHÔNG gửi email. Từ 13/07/2026 đã
+#     lặp qua danh sách này và gọi get_daily_digest_metrics(region=, channel=) RIÊNG cho từng
+#     audience, gửi tới teams_webhook của chính audience đó. (Ghi chú cũ ở đây viết "Daily digest
+#     KHÔNG đổi, vẫn gửi 1 bản chung" — mô tả trạng thái TRƯỚC 13/07, đã sai từ lâu. Ngày 26/08 nó
+#     khiến người đọc kết luận nhầm là daily digest có lỗ hổng phân quyền.)
 #   - Alert Teams thời gian thực (src/notifier.py::send_alert_to_all_channels) — mỗi alert có
 #     region=/channel= sẽ gửi tới webhook của MỌI audience khớp phạm vi (xem
 #     _resolve_teams_webhooks). teams_webhook để trống ("") = CHƯA có Flow/webhook riêng cho
 #     audience này -> tạm dùng chung TEAMS_WEBHOOK_URL trong .env (vẫn 1 webhook chung như cũ,
 #     không có tác dụng phân tách thật cho tới khi điền webhook riêng). Điền URL Power Automate
 #     riêng cho từng audience vào đây khi đã dựng xong Flow tương ứng — KHÔNG cần sửa code.
+#     TRẠNG THÁI 26/08/2026: cả 6/6 audience ĐÃ có webhook riêng thật — phân tách Teams đang hoạt
+#     động đầy đủ. Phần chưa nối là EMAIL: cả 6 audience vẫn trỏ về cùng một hộp thư test, chờ DNH
+#     cấp danh sách email quản lý thật.
+#
+# teams_recipient (TUỲ CHỌN, thêm 26/08/2026): email/UPN người nhận, gắn kèm payload để MỘT Flow
+#     Power Automate duy nhất tự định tuyến — thay cho cách hiện tại là một Flow cho mỗi người nhận
+#     (6 audience = 6 Flow; muốn tới 28 QLV thì phải dựng 28 Flow bằng tay, mỗi lần đổi nhân sự lại
+#     phải vào Power Automate). Điền vào thì đổi người chỉ cần sửa file này.
+#     ĐỂ TRỐNG = giữ nguyên hành vi cũ, 6 Flow hiện tại không bị ảnh hưởng.
+#     Trong Flow đọc bằng: triggerBody()?['recipient']  (và ?['audience'] nếu cần nhãn nhóm).
+#     LƯU Ý: nhiều audience CÙNG trỏ vào một Flow định tuyến chỉ hoạt động đúng khi mỗi audience có
+#     teams_recipient RIÊNG — hệ thống khử trùng theo cặp (webhook, người nhận). Nếu trùng cả hai thì
+#     cố ý gộp làm một, tránh gửi lặp.
 #   - Chatbot (ai_agent/chatbot.py::_resolve_user_scope) — suy ra vùng/kênh hợp lệ từ chính danh
 #     sách audience này (không hard-code lại quy ước vùng/kênh ở nơi khác).
 # region: null (không lọc) hoặc "bac"/"nam"/"trung" — khớp đúng DNHChatbot._REGION_SQL_MARKERS.
