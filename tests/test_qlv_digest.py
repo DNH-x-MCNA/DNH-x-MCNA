@@ -347,9 +347,31 @@ def test_discover_qlv_tu_snapshot_khong_can_mapping_teams():
                 ]
             raise AssertionError(sql)
 
-    result = _discover_qlv_recipients(DiscoveryTools(), "2026-08-27")
+    result, skipped = _discover_qlv_recipients(DiscoveryTools(), "2026-08-27")
 
     assert [(row["employee_code"], row["region"]) for row in result] == [
         ("QLV01", "MB"), ("QLV02", "MN"),
     ]
+    assert skipped == []
     assert all(row["role"] == "qlv" and row["channel"] == "OTC" for row in result)
+
+
+def test_discover_bo_qua_nhom_kenh_is_duplicate_khong_co_ngoai_le():
+    class DiscoveryTools:
+        _KNOWN_MISFLAGGED_DUPLICATE_CODES = ("MBKV12", "TM25030101")
+
+        @staticmethod
+        def _q(sql, params):
+            if "MAX(save_date)" in sql:
+                return [{"d": "2026-08-27"}]
+            if "DISTINCT manager_code" in sql:
+                return [{"manager_code": "MN1"}, {"manager_code": "MBKV12"}]
+            return [
+                {"employee_code": "MN1", "area_code": "MN", "position_code": "QLV", "is_duplicate": 1},
+                {"employee_code": "MBKV12", "area_code": "MB", "position_code": "QLV", "is_duplicate": 1},
+            ]
+
+    result, skipped = _discover_qlv_recipients(DiscoveryTools(), "2026-08-27")
+
+    assert [row["employee_code"] for row in result] == ["MBKV12"]
+    assert skipped == [("MN1", "đơn vị/nhóm kênh (is_duplicate=1)")]

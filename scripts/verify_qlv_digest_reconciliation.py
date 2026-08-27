@@ -35,7 +35,7 @@ def _load_report_recipients() -> list[dict]:
     return config.get("report_recipients") or []
 
 
-def _discover_qlv_recipients(report_tools, as_of: str) -> list[dict]:
+def _discover_qlv_recipients(report_tools, as_of: str) -> tuple[list[dict], list[tuple[str, str]]]:
     """Tìm QLV từ snapshot KPI để kiểm tra trước khi có mapping người nhận Teams."""
     latest_rows = report_tools._q(
         "SELECT MAX(save_date) d FROM fact_tonghopkhachhang WHERE save_date<=?",
@@ -55,7 +55,7 @@ def _discover_qlv_recipients(report_tools, as_of: str) -> list[dict]:
         return []
     placeholders = ",".join("?" for _ in codes)
     identity_rows = report_tools._q(
-        "SELECT employee_code, area_code, position_code FROM dim_nhanvien "
+        "SELECT employee_code, area_code, position_code, is_duplicate FROM dim_nhanvien "
         f"WHERE employee_code IN ({placeholders})",
         tuple(codes),
     )
@@ -65,12 +65,22 @@ def _discover_qlv_recipients(report_tools, as_of: str) -> list[dict]:
         if row.get("employee_code")
     }
     recipients = []
+    skipped = []
+    known_misflagged = set(getattr(report_tools, "_KNOWN_MISFLAGGED_DUPLICATE_CODES", ()))
     for code in codes:
         identity = identities.get(code)
-        if not identity or str(identity.get("position_code") or "").strip().upper() != "QLV":
-            raise RuntimeError(
-                f"Snapshot có manager_code '{code}' nhưng không có danh mục QLV tương ứng."
-            )
+        if not identity:
+            raise RuntimeError(f"Snapshot có manager_code '{code}' nhưng không có danh mục nhân sự tương ứng.")
+        position = str(identity.get("position_code") or "").strip().upper()
+        if position != "QLV":
+            skipped.append((code, f"position_code={position or 'trống'}"))
+            continue
+        # MN1 (Kênh MT) và MN4 (Chợ sỉ) là các đơn vị/kênh rollup, không phải đội QLV cá nhân;
+        # kpi_ranking() cũng đánh dấu chúng bằng IsDuplicate=1. Hai mã thật bị gắn nhầm cờ
+        # (MBKV12/TM25030101) được report_templates khai báo ngoại lệ và vẫn phải giữ lại.
+        if int(identity.get("is_duplicate") or 0) == 1 and code not in known_misflagged:
+            skipped.append((code, "đơn vị/nhóm kênh (is_duplicate=1)"))
+            continue
         recipients.append({
             "audience": f"QLV {code} (discovery)",
             "role": "qlv",
@@ -78,7 +88,7 @@ def _discover_qlv_recipients(report_tools, as_of: str) -> list[dict]:
             "region": identity.get("area_code"),
             "channel": "OTC",
         })
-    return recipients
+    return recipients, skipped
 
 
 def _group_totals(metrics_rows: list[dict], period_key: str) -> dict[tuple[str, str], float]:
@@ -105,7 +115,9 @@ def main() -> int:
     configured_recipients = _load_report_recipients()
     if args.discover:
         try:
-            configured_recipients = _discover_qlv_recipients(tools, args.as_of)
+            configured_recipients, skipped = _discover_qlv_recipients(tools, args.as_of)
+            for code, reason in skipped:
+                print(f"INFO: bỏ qua {code} khỏi tổng QLV — {reason}.")
         except Exception as exc:
             print(f"FAIL: không tự phát hiện được QLV: {exc}")
             return 2
