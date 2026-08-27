@@ -43,7 +43,7 @@ def _discover_qlv_recipients(report_tools, as_of: str) -> tuple[list[dict], list
     )
     latest = latest_rows[0].get("d") if latest_rows else None
     if not latest:
-        return []
+        return [], []
     manager_rows = report_tools._q(
         "SELECT DISTINCT manager_code FROM fact_tonghopkhachhang "
         "WHERE save_date=? AND manager_code IS NOT NULL AND TRIM(manager_code)<>''",
@@ -52,7 +52,7 @@ def _discover_qlv_recipients(report_tools, as_of: str) -> tuple[list[dict], list
     codes = [str(row.get("manager_code") or "").strip() for row in manager_rows]
     codes = list(dict.fromkeys(code for code in codes if code))
     if not codes:
-        return []
+        return [], []
     placeholders = ",".join("?" for _ in codes)
     identity_rows = report_tools._q(
         "SELECT employee_code, area_code, position_code, is_duplicate FROM dim_nhanvien "
@@ -99,6 +99,47 @@ def _group_totals(metrics_rows: list[dict], period_key: str) -> dict[tuple[str, 
     return dict(totals)
 
 
+def _unit_revenue(report_tools, manager_code: str, area: str, date_from: str, date_to: str) -> float:
+    """Doanh số nhóm/kênh rollup (MN1/MN4), chỉ dùng để cộng đủ tổng miền khi đối chiếu."""
+    latest_rows = report_tools._q(
+        "SELECT MAX(save_date) d FROM fact_tonghopkhachhang WHERE save_date<=?",
+        (date_to,),
+    )
+    latest = latest_rows[0].get("d") if latest_rows else None
+    if not latest:
+        return 0.0
+    rows = report_tools._q(
+        "WITH latest AS ("
+        " SELECT employee_code, MAX(save_date) d FROM fact_tonghopkhachhang "
+        " WHERE save_date<=? GROUP BY employee_code) "
+        "SELECT e.employee_code, MAX(e.emp_dms_code) emp_dms_code, MAX(nv.dmsid) dmsid "
+        "FROM fact_tonghopkhachhang e JOIN latest l "
+        " ON l.employee_code=e.employee_code AND l.d=e.save_date "
+        "LEFT JOIN dim_nhanvien nv ON nv.employee_code=e.employee_code "
+        "WHERE e.manager_code=? GROUP BY e.employee_code",
+        (latest, manager_code),
+    )
+    keys = []
+    for row in rows:
+        for key in (row.get("employee_code"), row.get("emp_dms_code"), row.get("dmsid")):
+            if key and str(key).strip():
+                keys.append(str(key).strip())
+    keys = list(dict.fromkeys(keys))
+    if not keys:
+        return 0.0
+    placeholders = ",".join("?" for _ in keys)
+    result = report_tools._q(
+        "SELECT COALESCE(SUM(v.amount9),0) revenue "
+        "FROM vhoadon_otc v "
+        "LEFT JOIN dms_khachhang kh ON kh.code=v.customer_code "
+        "LEFT JOIN dim_tinhthanhpho tp ON tp.city_id=kh.city_id "
+        f"WHERE v.employee_code IN ({placeholders}) AND tp.area_code=? "
+        "AND v.doc_date BETWEEN ? AND ?",
+        tuple(keys) + (area, date_from, date_to),
+    )
+    return float(result[0].get("revenue") or 0.0) if result else 0.0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Đối chiếu tổng QLV với doanh số miền, không gửi ra ngoài")
     parser.add_argument("--as-of", default=dt.date.today().isoformat(), help="Ngày báo cáo YYYY-MM-DD")
@@ -113,6 +154,7 @@ def main() -> int:
     from src.qlv_digest import _load_report_tools  # noqa: PLC0415
     tools = _load_report_tools()
     configured_recipients = _load_report_recipients()
+    skipped: list[tuple[str, str]] = []
     if args.discover:
         try:
             configured_recipients, skipped = _discover_qlv_recipients(tools, args.as_of)
@@ -170,7 +212,24 @@ def main() -> int:
     month_by_scope = _group_totals(metrics_rows, "month_to_date_revenue")
     day = dt.date.fromisoformat(args.as_of)
     date_to = f"{day.isoformat()} 23:59:59"
-
+    unit_daily_by_scope: dict[tuple[str, str], float] = collections.defaultdict(float)
+    unit_month_by_scope: dict[tuple[str, str], float] = collections.defaultdict(float)
+    for code, reason in skipped:
+        if "is_duplicate=1" not in reason:
+            continue
+        identity = tools._q(
+            "SELECT area_code FROM dim_nhanvien WHERE employee_code=? LIMIT 1", (code,)
+        )
+        area = str(identity[0].get("area_code") or "").strip().upper() if identity else ""
+        if not area:
+            print(f"FAIL: không xác định được miền của nhóm/kênh {code}.")
+            return 1
+        unit_daily_by_scope[(area, "OTC")] += _unit_revenue(
+            tools, code, area, day.isoformat(), date_to
+        )
+        unit_month_by_scope[(area, "OTC")] += _unit_revenue(
+            tools, code, area, day.replace(day=1).isoformat(), date_to
+        )
     failures = []
     print(f"Đang đối chiếu {len(metrics_rows)} QLV tại ngày {day.isoformat()}:")
     for area, channel in sorted(daily_by_scope):
@@ -184,12 +243,14 @@ def main() -> int:
         )["total"]["revenue"]
         qlv_daily = daily_by_scope[(area, channel)]
         qlv_month = month_by_scope[(area, channel)]
-        daily_diff = qlv_daily - float(region_daily or 0.0)
-        month_diff = qlv_month - float(region_month or 0.0)
+        unit_daily = unit_daily_by_scope.get((area, channel), 0.0)
+        unit_month = unit_month_by_scope.get((area, channel), 0.0)
+        daily_diff = qlv_daily + unit_daily - float(region_daily or 0.0)
+        month_diff = qlv_month + unit_month - float(region_month or 0.0)
         status = "PASS" if max(abs(daily_diff), abs(month_diff)) <= args.tolerance_vnd else "FAIL"
         print(
-            f"  {status} {area}/{channel}: ngày lệch {daily_diff:,.0f} đ; "
-            f"lũy kế tháng lệch {month_diff:,.0f} đ"
+            f"  {status} {area}/{channel}: QLV ngày {qlv_daily:,.0f} đ + nhóm/kênh {unit_daily:,.0f} đ "
+            f"→ lệch {daily_diff:,.0f} đ; lũy kế lệch {month_diff:,.0f} đ"
         )
         if status == "FAIL":
             failures.append((area, channel, daily_diff, month_diff))
