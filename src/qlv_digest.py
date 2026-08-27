@@ -39,6 +39,11 @@ _AREA_ALIASES = {
     "MIỀN TRUNG": "MT",
     "MT": "MT",
 }
+_AREA_MARKERS = {
+    "MB": {"MB", "MB2"},
+    "MN": {"MN"},
+    "MT": {"MT"},
+}
 
 
 def _load_report_tools():
@@ -75,7 +80,7 @@ def _normalise_channel(channel: str | None) -> str:
     return value
 
 
-def _report_day(value: str | None, report_tools) -> dt.date:
+def _report_day(value: str | None) -> dt.date:
     raw = str(value or dt.date.today().isoformat())[:10]
     try:
         day = dt.date.fromisoformat(raw)
@@ -84,6 +89,33 @@ def _report_day(value: str | None, report_tools) -> dt.date:
     if day > dt.date.today():
         raise ValueError("Không được dựng báo cáo QLV cho ngày trong tương lai.")
     return day
+
+
+def _validate_qlv_identity(report_tools, employee_code: str, area: str) -> None:
+    """Kiểm tra mã cấu hình thực sự là QLV đúng miền nếu lớp kho cung cấp truy vấn nội bộ."""
+    query = getattr(report_tools, "_q", None)
+    if query is None:
+        return
+    rows = query(
+        "SELECT position_code, area_code FROM dim_nhanvien WHERE employee_code=? "
+        "ORDER BY CASE WHEN is_resigned=0 THEN 0 ELSE 1 END LIMIT 1",
+        (employee_code,),
+    )
+    if not rows:
+        raise QLVDigestScopeError(
+            f"Không tìm thấy employee_code '{employee_code}' trong danh mục nhân sự; đã dừng báo cáo."
+        )
+    position = str(rows[0].get("position_code") or "").strip().upper()
+    if position != "QLV":
+        raise QLVDigestScopeError(
+            f"employee_code '{employee_code}' không phải mã QLV (position_code={position or 'trống'})."
+        )
+    own_area = str(rows[0].get("area_code") or "").strip().upper()
+    if own_area not in _AREA_MARKERS[area]:
+        raise QLVDigestScopeError(
+            f"employee_code '{employee_code}' thuộc miền {own_area or 'trống'}, "
+            f"không khớp miền cấu hình {area}; đã dừng để tránh báo cáo nhầm đội."
+        )
 
 
 def _team_kpi_summary(kpi: dict, employee_code: str) -> dict:
@@ -126,7 +158,8 @@ def build_qlv_digest_metrics(
     area = _normalise_area(region)
     scoped_channel = _normalise_channel(channel)
     tools = report_tools or _load_report_tools()
-    day = _report_day(as_of_date, tools)
+    _validate_qlv_identity(tools, code, area)
+    day = _report_day(as_of_date)
     date_from = day.isoformat()
     date_to = f"{day.isoformat()} 23:59:59"
     month_from = day.replace(day=1).isoformat()

@@ -126,6 +126,26 @@ def test_qlv_digest_thieu_scope_thi_dung_khong_fallback(employee_code, region, e
         )
 
 
+@pytest.mark.parametrize(
+    "position,own_region,error_text",
+    [
+        ("TDV", "MB", "không phải mã QLV"),
+        ("QLV", "MN", "không khớp miền"),
+    ],
+)
+def test_qlv_digest_kiem_tra_dung_danh_tinh_va_mien(position, own_region, error_text):
+    tools = _FakeReportTools()
+    tools._q = lambda sql, params: [{"position_code": position, "area_code": own_region}]
+
+    with pytest.raises(QLVDigestScopeError, match=error_text):
+        build_qlv_digest_metrics(
+            employee_code="QLV01",
+            region="MB",
+            as_of_date="2026-08-27",
+            report_tools=tools,
+        )
+
+
 def test_noi_dung_teams_qlv_khong_co_ton_kho():
     metrics = build_qlv_digest_metrics(
         employee_code="QLV01",
