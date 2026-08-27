@@ -691,8 +691,10 @@ _MONTH_START_OF_LATEST_SNAPSHOT_SQL = (
 def get_bravo_manager_codes():
     """Tập mã nhân viên ĐANG quản lý người khác, lấy từ cột ManagerCode của FACT_TongHopKhachHang
     trong THÁNG của snapshot mới nhất (xem _MONTH_START_OF_LATEST_SNAPSHOT_SQL — KHÔNG ghim 1
-    ngày, vì DNH ghi snapshot tách theo vùng qua nhiều ngày) — KHÔNG lọc PositionCode, KHÔNG lọc
-    IsDuplicate. Đây là điểm mấu chốt: nếu lọc
+    ngày, vì DNH ghi snapshot tách theo vùng qua nhiều ngày). Mỗi nhân viên chỉ đóng góp
+    ManagerCode ở snapshot MỚI NHẤT CỦA CHÍNH HỌ; nếu đổi quản lý giữa tháng thì mã quản lý cũ
+    không được giữ lại trong tập rollup. KHÔNG lọc PositionCode, KHÔNG lọc IsDuplicate. Đây là
+    điểm mấu chốt: nếu lọc
     theo chức danh thì QLV nào có cấp dưới mang chức danh lạ sẽ KHÔNG được nhận ra là quản lý
     (xác nhận 27/07/2026: MN1 'Kênh MT' quản lý TM23100133 chức danh 'TK', MN4 'Chợ sỉ' quản lý
     TM23100153 chức danh 'CS' — lọc IN ('TDV','QLV') làm mất cả 2 QLV này khỏi tầng rollup, hụt
@@ -709,9 +711,16 @@ def get_bravo_manager_codes():
         raise RuntimeError("Không có Bravo engine (thiếu BRAVO_SQL_* trong .env)")
     with engine.connect() as conn:
         rows = conn.execute(text(f'''
-            SELECT DISTINCT [ManagerCode] FROM [FACT_TongHopKhachHang]
-            WHERE [SaveDate] >= {_MONTH_START_OF_LATEST_SNAPSHOT_SQL}
-              AND [ManagerCode] IS NOT NULL AND [ManagerCode] <> ''
+            WITH latest AS (
+                SELECT [EmployeeCode], MAX([SaveDate]) AS d
+                FROM [FACT_TongHopKhachHang]
+                WHERE [SaveDate] >= {_MONTH_START_OF_LATEST_SNAPSHOT_SQL}
+                GROUP BY [EmployeeCode]
+            )
+            SELECT DISTINCT f.[ManagerCode]
+            FROM [FACT_TongHopKhachHang] f
+            JOIN latest l ON l.[EmployeeCode] = f.[EmployeeCode] AND l.d = f.[SaveDate]
+            WHERE f.[ManagerCode] IS NOT NULL AND f.[ManagerCode] <> ''
         ''')).fetchall()
     return {r[0] for r in rows}
 

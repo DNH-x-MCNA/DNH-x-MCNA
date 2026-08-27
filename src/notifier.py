@@ -30,11 +30,17 @@ STATE_DB_PATH = os.path.join(PROJECT_ROOT, 'data', 'alerts_state.db')
 # định). Đổi logo: push file mới vào repo đó, giữ nguyên tên/đường dẫn file.
 DNH_LOGO_URL = "https://raw.githubusercontent.com/danglvmcna/dnh-assets/main/dnh_logo.png"
 _TEAMS_DETAIL_MAX_ROWS = 10
+_TEAMS_CHAT_PREFILL_MAX_CHARS = 300
 
 
 def _fit_teams_payload(card_dict, max_bytes=28000):
-    """Giới hạn dung lượng JSON payload gửi tới Teams Webhook dưới max_bytes (mặc định 28KB).
-    Nếu vượt quá dung lượng, tự động thu gọn số dòng trong các bảng Table cho đến khi vừa."""
+    """Gioi han JSON payload gui Teams duoi ``max_bytes`` (mac dinh 28 KB).
+
+    Card hien tai dung Adaptive Card 1.4 voi ``FactSet``/``TextBlock`` thay cho ``Table`` 1.5,
+    nen chi cat ``Table.rows`` se khong con tac dung. Ham nay xu ly ca payload webhook day du va
+    AdaptiveCard truc tiep, uu tien cat noi dung chi tiet truoc, giu lai dau de/tom tat/chan trang,
+    va chen ghi chu ro rang khi noi dung bi rut gon.
+    """
     if not card_dict:
         return card_dict
     import copy
@@ -46,25 +52,123 @@ def _fit_teams_payload(card_dict, max_bytes=28000):
     if _calc_bytes(card) <= max_bytes:
         return card
 
-    def _trim_tables(obj):
+    # Giu mot khoang nho cho ghi chu rut gon va cac truong dinh tuyen (recipient/audience) co the
+    # duoc gan sau khi card duoc tao. send_teams_alert/flush_critical_teams_queue van fit lai lan
+    # cuoi sau khi gan cac truong nay.
+    target_bytes = max(512, max_bytes - 512)
+    removed_items = 0
+    shortened_text = False
+
+    def _adaptive_content(payload):
+        if payload.get("type") == "AdaptiveCard":
+            return payload
+        try:
+            content = payload["attachments"][0]["content"]
+        except (KeyError, IndexError, TypeError):
+            return None
+        return content if isinstance(content, dict) else None
+
+    content = _adaptive_content(card)
+    if content is None:
+        return card
+
+    def _shorten_strings(obj, limit):
+        """Rut gon chu hien thi, khong cham vao URL/id/recipient dung de dinh tuyen."""
+        nonlocal shortened_text
         if isinstance(obj, dict):
-            if obj.get("type") == "Table" and "rows" in obj and len(obj["rows"]) > 2:
-                obj["rows"].pop()
-                return True
-            for v in obj.values():
-                if _trim_tables(v):
-                    return True
+            for key, value in obj.items():
+                if key in {"text", "title", "value", "altText"} and isinstance(value, str):
+                    if len(value) > limit:
+                        obj[key] = value[:max(1, limit - 1)].rstrip() + "…"
+                        shortened_text = True
+                else:
+                    _shorten_strings(value, limit)
         elif isinstance(obj, list):
             for item in obj:
-                if _trim_tables(item):
+                _shorten_strings(item, limit)
+
+    def _trim_nested_once(obj):
+        """Cat mot muc chi tiet sau cung; khong cat header Container khong co id."""
+        nonlocal removed_items
+        if isinstance(obj, dict):
+            if obj.get("type") == "Table" and len(obj.get("rows") or []) > 2:
+                obj["rows"].pop()
+                removed_items += 1
+                return True
+            if obj.get("type") == "FactSet" and len(obj.get("facts") or []) > 3:
+                obj["facts"].pop()
+                removed_items += 1
+                return True
+            # Cac section va tung alert trong card gop deu co id. Giu tieu de + it nhat mot dong
+            # noi dung; uu tien bo bang chi tiet/action o cuoi.
+            if obj.get("type") == "Container" and obj.get("id") and len(obj.get("items") or []) > 2:
+                obj["items"].pop()
+                removed_items += 1
+                return True
+            for value in reversed(list(obj.values())):
+                if _trim_nested_once(value):
+                    return True
+        elif isinstance(obj, list):
+            for item in reversed(obj):
+                if _trim_nested_once(item):
                     return True
         return False
 
-    attempts = 0
-    while _calc_bytes(card) > max_bytes and attempts < 100:
-        if not _trim_tables(card):
+    # Chan mot chuoi don le qua dai truoc; sau do moi cat tung dong/section.
+    _shorten_strings(content, 1200)
+    while _calc_bytes(card) > target_bytes and _trim_nested_once(content):
+        pass
+
+    body = content.get("body") if isinstance(content.get("body"), list) else []
+    # Card do cac builder cua DNH tao luon co header o dau va footer o cuoi. Khi van qua tran,
+    # bo dan cac khoi chi tiet ngay truoc footer; giu toi thieu header + mot khoi cot loi + footer.
+    while _calc_bytes(card) > target_bytes and len(body) > 3:
+        body.pop(-2)
+        removed_items += 1
+
+    actions = content.get("actions")
+    while _calc_bytes(card) > target_bytes and isinstance(actions, list) and len(actions) > 1:
+        actions.pop(0)
+        removed_items += 1
+
+    for limit in (600, 300, 120):
+        if _calc_bytes(card) <= target_bytes:
             break
-        attempts += 1
+        _shorten_strings(content, limit)
+
+    if _calc_bytes(card) > target_bytes and len(body) > 2:
+        # Truong hop cuc doan: mot khoi chi tiet don le van qua lon sau khi cat. Giu header/footer
+        # va thay phan giua bang thong bao trung thuc thay vi gui payload vuot tran.
+        removed_items += max(1, len(body) - 2)
+        body[1:-1] = []
+
+    if removed_items or shortened_text:
+        note = {
+            "type": "TextBlock",
+            "id": "payloadTruncatedNotice",
+            "text": (f"Đã ẩn {removed_items} mục chi tiết do giới hạn kích thước Microsoft Teams."
+                     if removed_items else
+                     "Một phần nội dung dài đã được rút gọn do giới hạn kích thước Microsoft Teams."),
+            "isSubtle": True,
+            "size": "Small",
+            "wrap": True,
+            "spacing": "Medium",
+        }
+        # Chen truoc footer neu co; voi card toi gian thi chen cuoi.
+        insert_at = max(1, len(body) - 1) if body else 0
+        body.insert(insert_at, note)
+
+    # Bao hiem cuoi cung: ghi chu vua them hoac mot field bat thuong khong duoc phep lam payload
+    # vuot tran. Van giu header, ghi chu rut gon va footer neu co.
+    while _calc_bytes(card) > max_bytes and len(body) > 3:
+        candidate = -2
+        if body[candidate].get("id") == "payloadTruncatedNotice" and len(body) > 3:
+            candidate = -3
+        body.pop(candidate)
+        removed_items += 1
+    if _calc_bytes(card) > max_bytes:
+        _shorten_strings(content, 60)
+
     return card
 
 
@@ -925,6 +1029,12 @@ def _chatbot_deep_link(question=None):
     """
     base = os.getenv("CHATBOT_WEB_URL", "https://dnh-bot.vercel.app").rstrip('/')
     if question:
+        # Cau hoi duoc percent-encode trong URL (chu Viet co the no 3-9 byte/ky tu). Neu alert co
+        # summary/title rat dai, rieng nut chatbot co the chiem hang chuc KB va vo tran Teams du
+        # phan noi dung card da duoc cat. 300 ky tu van du de prefill ngu canh chinh.
+        question = str(question)
+        if len(question) > _TEAMS_CHAT_PREFILL_MAX_CHARS:
+            question = question[:_TEAMS_CHAT_PREFILL_MAX_CHARS].rstrip() + "…"
         return f"{base}/?q={quote(question)}"
     return base
 
@@ -962,11 +1072,19 @@ def _build_compact_summary(table_headers, table_rows, max_rows=None):
             "isSubtle": True, "size": "Small", "wrap": True
         }] if cat_bot > 0 else [])
 
-    items = [{
-        "type": "TextBlock",
-        "text": " · ".join(str(v) for v in row),
-        "wrap": True, "size": "Small", "spacing": "None"
-    } for row in rows]
+    items = []
+    for row in rows:
+        # Khong chi noi cac gia tri tran: nguoi doc phai biet moi gia tri thuoc cot nao, nhat la
+        # cac bang Top khach hang/san pham co 3-5 cot cung deu la chu/so ngan.
+        labelled_values = []
+        for idx, value in enumerate(row):
+            header = table_headers[idx] if idx < len(table_headers) else f"Cột {idx + 1}"
+            labelled_values.append(f"{header}: {value}")
+        items.append({
+            "type": "TextBlock",
+            "text": " · ".join(labelled_values),
+            "wrap": True, "size": "Small", "spacing": "None"
+        })
     if cat_bot > 0:
         items.append({
             "type": "TextBlock", "text": "... và %d dòng khác." % cat_bot,
@@ -978,7 +1096,7 @@ def _build_compact_summary(table_headers, table_rows, max_rows=None):
 def _build_teams_adaptive_card(title, summary, severity, table_headers=None, table_rows=None,
                                 period=None, channel=None, region=None, issue=None, sections=None):
     """
-    Dùng Adaptive Card (schema 1.5) phân màu theo severity (đỏ=CRITICAL, vàng=WARNING, xanh=INFO).
+    Dùng Adaptive Card (schema 1.4) phân màu theo severity (đỏ=CRITICAL, vàng=WARNING, xanh=INFO).
     Bổ sung hỗ trợ tham số `sections` để truyền các khối nội dung mở rộng (như Warning Alerts).
     """
     style = _severity_to_card_style(severity)
@@ -1154,13 +1272,13 @@ def send_teams_alert(title, summary, table_headers=None, table_rows=None, severi
     payload = _build_teams_adaptive_card(title, summary, severity, table_headers, table_rows,
                                           period=period, channel=channel, region=region, issue=issue,
                                           sections=sections)
-    # Gắn SAU _build (đã gọi _fit_teams_payload bên trong): hàm fit cắt bớt nội dung card khi
-    # payload vượt 28KB, gắn trước thì đúng lúc card dài - tức lúc thông tin nhiều nhất - người
-    # nhận có thể bị cắt mất và tin đi lạc. Hai trường này vài chục byte, không ảnh hưởng ngưỡng.
+    # Gan truong dinh tuyen truoc lan fit CUOI de tong payload thuc gui (khong chi rieng card)
+    # chac chan nam duoi tran 28 KB. _fit_teams_payload khong cat recipient/audience.
     if recipient:
         payload["recipient"] = recipient
     if audience:
         payload["audience"] = audience
+    payload = _fit_teams_payload(payload)
 
     try:
         data = json.dumps(payload, ensure_ascii=False).encode('utf-8')
@@ -1288,7 +1406,9 @@ _pending_critical_teams_alerts = []
 def _post_teams_webhook(webhook_url, payload):
     """POST 1 payload JSON thẳng tới webhook_url — raise exception khi lỗi (để _send_with_retry
     bắt được và retry), KHÔNG tự nuốt lỗi ở đây."""
-    data = json.dumps(payload).encode('utf-8')
+    # Dung cung cach ma hoa voi _fit_teams_payload; ensure_ascii=True co the phong to chu Viet
+    # thanh \uXXXX sau khi da do kich thuoc, lam payload thuc gui vuot tran.
+    data = json.dumps(payload, ensure_ascii=False).encode('utf-8')
     req = urllib.request.Request(webhook_url.strip(), data=data, headers={'Content-Type': 'application/json'})
     with urllib.request.urlopen(req, timeout=10):
         return True
@@ -1324,6 +1444,7 @@ def flush_critical_teams_queue():
             payload["recipient"] = group["recipient"]
         if group.get("audience"):
             payload["audience"] = group["audience"]
+        payload = _fit_teams_payload(payload)
         ok = _send_with_retry(_post_teams_webhook, webhook_url, payload)
         if ok:
             print(f"[TEAMS] Da gui card gop ({len(group['alerts'])} canh bao) toi audience '{group['audience'] or 'mac dinh'}'.")
@@ -1437,7 +1558,8 @@ def _build_teams_consolidated_card(alerts):
                 "spacing": "Small"
             })
 
-        body.append({"type": "Container", "items": item_items, "spacing": "Medium", "separator": True})
+        body.append({"type": "Container", "id": f"alert_container_{i}", "items": item_items,
+                     "spacing": "Medium", "separator": True})
 
     body.append({
         "type": "TextBlock",

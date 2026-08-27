@@ -158,8 +158,48 @@ def test_bang_nhieu_cot_thanh_textblock_giu_du_so_lieu(monkeypatch):
         table_headers=["Khach hang", "Vung", "So tien"],
         table_rows=[["Cong ty A", "MB", "500tr"], ["Cong ty B", "MN", "300tr"]])
     chu = " ".join(t["text"] for t in _the_trong_body(da_gui["payload"], "TextBlock"))
-    assert "Cong ty A" in chu and "500tr" in chu
-    assert "Cong ty B" in chu and "300tr" in chu
+    assert "Khach hang: Cong ty A" in chu and "So tien: 500tr" in chu
+    assert "Khach hang: Cong ty B" in chu and "So tien: 300tr" in chu
+    assert "Vung: MB" in chu and "Vung: MN" in chu
+
+
+def test_card_don_factset_textblock_rat_dai_van_duoi_28kb(monkeypatch):
+    """Cơ chế cũ chỉ cắt Table.rows nên card 1.4 dùng TextBlock/FactSet vẫn có thể vượt 28 KB.
+    Test qua đúng đường gửi thật, kể cả recipient/audience được gắn sau khi dựng card."""
+    da_gui = _bat_payload(monkeypatch)
+    dai = "Nội dung cảnh báo rất dài " * 500
+    rows = [[dai, dai, dai, dai] for _ in range(40)]
+    ok = notifier.send_teams_alert(
+        "Cảnh báo " + dai, dai, severity="CRITICAL", webhook_url_override="https://flow",
+        table_headers=["Khách hàng", "Mã", "Vùng", "Số tiền"], table_rows=rows,
+        sections=[{"id": "chi_tiet", "title": "Chi tiết", "items": [dai] * 30}],
+        recipient="gd.mienbac@dnh.vn", audience="Miền Bắc")
+    assert ok is True
+    payload = da_gui["payload"]
+    assert len(json.dumps(payload, ensure_ascii=False).encode("utf-8")) <= 28000
+    assert _the_trong_body(payload, "TextBlock")
+    assert "payloadTruncatedNotice" in json.dumps(payload, ensure_ascii=False)
+
+
+def test_card_gop_nhieu_canh_bao_van_duoi_28kb(monkeypatch):
+    """Khóa đường card gộp riêng; đây là đường có thể phình nhanh nhất khi nhiều CRITICAL dồn lại."""
+    da_gui = {}
+    monkeypatch.setattr(notifier, "_post_teams_webhook",
+                        lambda url, payload: da_gui.setdefault("payload", payload) is payload)
+    dai = "Diễn giải cảnh báo dài " * 300
+    rows = [[dai, dai, dai, dai] for _ in range(20)]
+    monkeypatch.setattr(notifier, "_pending_critical_teams_alerts", [
+        {"alert_name": f"Cảnh báo {i} {dai}", "summary": dai, "period": "08/2026",
+         "channel": "OTC", "region": "MB", "issue": dai,
+         "table_headers": ["Khách hàng", "Mã", "Vùng", "Số tiền"], "table_rows": rows,
+         "webhooks": [("https://flow", "Miền Bắc", "gd.mienbac@dnh.vn")]}
+        for i in range(35)
+    ])
+    notifier.flush_critical_teams_queue()
+    payload = da_gui["payload"]
+    assert payload["recipient"] == "gd.mienbac@dnh.vn"
+    assert len(json.dumps(payload, ensure_ascii=False).encode("utf-8")) <= 28000
+    assert "payloadTruncatedNotice" in json.dumps(payload, ensure_ascii=False)
 
 
 def test_qua_max_rows_thi_bao_ro_con_bao_nhieu_dong_bi_cat(monkeypatch):

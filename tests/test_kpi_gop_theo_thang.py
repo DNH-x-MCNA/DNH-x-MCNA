@@ -114,8 +114,13 @@ def test_etl_reconciliation_khong_con_ghim_mot_ngay():
 # ---------------------------------------------------------------------------------------
 
 def test_alerts_manager_codes_dung_khoang_thang():
-    ham = alerts.get_bravo_manager_codes.__doc__ or ""
-    assert "THÁNG" in ham or "_MONTH_START_OF_LATEST_SNAPSHOT_SQL" in ham
+    """ManagerCode cũng phải lấy từ snapshot mới nhất của từng nhân viên. Nếu chỉ DISTINCT cả
+    tháng, một nhân viên đổi quản lý sẽ khiến cả quản lý cũ lẫn mới cùng bị coi là tầng rollup."""
+    doan = _ALERTS_SRC[_ALERTS_SRC.find("def get_bravo_manager_codes"):]
+    doan = doan[:doan.find("\ndef ", 10)]
+    assert "GROUP BY [EmployeeCode]" in doan
+    assert "JOIN latest l ON l.[EmployeeCode] = f.[EmployeeCode] AND l.d = f.[SaveDate]" in doan
+    assert "SELECT DISTINCT f.[ManagerCode]" in doan
 
 
 def test_alerts_kpi_tdv_snapshot_co_cte_latest_join_dung_ngay_tung_nguoi():
