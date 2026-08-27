@@ -140,7 +140,8 @@ def _unit_revenue(report_tools, manager_code: str, area: str, date_from: str, da
         (manager_code,),
     )
     channel_keys = list(dict.fromkeys(
-        str(row.get("dmsid")).strip() for row in identity_rows if row.get("dmsid")
+        [manager_code]
+        + [str(row.get("dmsid")).strip() for row in identity_rows if row.get("dmsid")]
     ))
     if not employee_keys and not channel_keys:
         return 0.0
