@@ -20,7 +20,12 @@ load_env()
 from src.database import get_db_engines, load_config
 from src.etl import get_daily_digest_metrics, get_weekly_digest_metrics, get_monthly_digest_metrics
 from src.notifier import build_digest_email, send_email, flush_critical_teams_queue, send_teams_alert
-from src.qlv_digest import build_qlv_digest_metrics, build_qlv_teams_content
+from src.qlv_digest import (
+    build_qlv_digest_metrics,
+    build_qlv_period_metrics,
+    build_qlv_period_teams_content,
+    build_qlv_teams_content,
+)
 from src.alerts import (
     run_alert_checks,               # bản MOCK (ERP/CRM giả lập) — chỉ dùng ở môi trường 'local'
     run_smart_business_alerts,      # cảnh báo thật: nợ quá hạn / cháy kho / KPI thấp
@@ -391,8 +396,16 @@ def _send_periodic_email_report(get_metrics_fn, period_label, report_title, dry_
     config = load_config()
     show_ops_flag = config.get('report_feature_flags', {}).get('show_operational_quality', False)
     configured_recipients = config.get('report_recipients') or []
-    # QLV chỉ được nhận Daily Digest theo đội ở send_daily_digest(). Weekly/Monthly hiện vẫn dựng
-    # theo miền/kênh, chưa có employee_code; cho QLV đi qua đây sẽ lộ số toàn miền cho một đội.
+    # QLV có luồng tuần/tháng riêng qua Teams; khi lọc đích là một QLV thì phần email toàn miền
+    # không có gì để gửi, nhưng không được báo lỗi làm hỏng kết quả của luồng Teams bên dưới.
+    if audience_filter and any(
+        r.get('audience') == audience_filter
+        and str(r.get('role') or '').strip().lower() == 'qlv'
+        for r in configured_recipients
+    ):
+        return True
+    # Đây là nhánh email tổng hợp theo miền/kênh và cố ý loại QLV. Weekly/Monthly riêng theo đội
+    # QLV đi qua _send_qlv_periodic_teams_report() bên dưới, có employee_code và scope thật.
     recipients = [
         recipient for recipient in configured_recipients
         if str(recipient.get('role') or '').strip().lower() != 'qlv'
@@ -467,11 +480,140 @@ def _send_periodic_email_report(get_metrics_fn, period_label, report_title, dry_
             overall_ok = False
     return overall_ok
 
-def send_weekly_report(dry_run=False, audience_filter=None):
-    return _send_periodic_email_report(get_weekly_digest_metrics, "Weekly", "Báo cáo tổng hợp TUẦN", dry_run=dry_run, audience_filter=audience_filter)
+def _send_qlv_periodic_teams_report(
+    period_type,
+    dry_run=False,
+    audience_filter=None,
+    webhook_override=None,
+):
+    """Gửi Weekly/Monthly riêng từng đội QLV qua Flow Teams dùng chung.
 
-def send_monthly_report(dry_run=False, audience_filter=None):
-    return _send_periodic_email_report(get_monthly_digest_metrics, "Monthly", "Báo cáo tổng hợp THÁNG", dry_run=dry_run, audience_filter=audience_filter)
+    Luồng này tách khỏi báo cáo email toàn miền để không thể vô tình đưa số liệu vùng/công ty vào
+    một tài khoản QLV. Thiếu employee_code, region, teams_recipient hoặc webhook riêng đều dừng
+    riêng người nhận đó (fail-closed).
+    """
+    config = load_config()
+    configured = config.get('report_recipients') or []
+    qlv_recipients = [
+        r for r in configured
+        if str(r.get('role') or '').strip().lower() == 'qlv'
+    ]
+    if audience_filter:
+        qlv_recipients = [r for r in qlv_recipients if r.get('audience') == audience_filter]
+        # audience_filter thuộc nhóm email cũ thì luồng QLV không có việc phải làm.
+        if not qlv_recipients:
+            return True
+    if not qlv_recipients:
+        print(f"[{datetime.now()}] Chưa cấu hình QLV cho báo cáo {period_type}; bỏ qua luồng Teams QLV.")
+        return True
+
+    period_label = "TUẦN" if period_type == "weekly" else "THÁNG"
+    overall_ok = True
+    as_of_date = datetime.now().date().isoformat()
+    for r in qlv_recipients:
+        audience = r.get('audience')
+        code = str(r.get('employee_code') or '').strip()
+        region = r.get('region')
+        channel = r.get('channel') or 'OTC'
+        recipient = str(r.get('teams_recipient') or '').strip()
+        webhook = webhook_override or str(r.get('teams_webhook') or '').strip()
+        try:
+            if not code:
+                raise ValueError("Người nhận QLV thiếu employee_code; đã dừng để không mở rộng phạm vi.")
+            if not region:
+                raise ValueError("Người nhận QLV thiếu region; đã dừng để không mở rộng phạm vi.")
+            if not recipient:
+                raise ValueError("Người nhận QLV thiếu teams_recipient; chưa thể định tuyến riêng.")
+            if not webhook:
+                raise ValueError("Người nhận QLV thiếu teams_webhook; chưa thể gửi qua Flow riêng.")
+
+            metrics = build_qlv_period_metrics(
+                employee_code=code,
+                region=region,
+                period_type=period_type,
+                channel=channel,
+                as_of_date=as_of_date,
+            )
+            headers, rows, sections = build_qlv_period_teams_content(
+                metrics,
+                format_vietnamese_money,
+            )
+            if dry_run:
+                print(f"[DRY-RUN] Dựng báo cáo QLV {period_label} thành công cho '{audience or code}'.")
+                print(f" - Employee code: {code}")
+                print(f" - Period: {metrics['period']['label']}")
+                print(f" - Recipient routing: đã cấu hình")
+                print(f" - Table Rows: {len(rows)}")
+                print(f" - Sections: {len(sections)}")
+                print(" - Inventory: không đưa vào báo cáo QLV")
+                continue
+
+            sent = send_teams_alert(
+                title=f"BÁO CÁO ĐỘI QLV {period_label} ({metrics['period']['label']}) — {audience or code}",
+                summary=(
+                    f"Doanh số, KPI, khách hàng và công nợ của riêng đội {code}. "
+                    f"{metrics.get('freshness_note') or ''}"
+                ).strip(),
+                table_headers=headers,
+                table_rows=rows,
+                severity="INFO",
+                period=metrics['date'],
+                channel=metrics['channel'],
+                # Flow/card hiển thị tên tiếng Việt; metrics giữ mã AreaCode Bravo.
+                region={
+                    "MB": "Miền Bắc",
+                    "MB2": "Miền Bắc",
+                    "MN": "Miền Nam",
+                    "MT": "Miền Trung",
+                }.get(str(metrics['area_code']).upper(), metrics['area_code']),
+                webhook_url_override=webhook,
+                sections=sections,
+                recipient=recipient,
+                audience=audience,
+            )
+            if sent:
+                print(f"[{datetime.now()}] Báo cáo QLV {period_label} cho '{audience or code}' đã gửi thành công.")
+            else:
+                print(f"[{datetime.now()}] Gửi báo cáo QLV {period_label} cho '{audience or code}' thất bại.")
+                overall_ok = False
+        except Exception as exc:
+            print(f"[{datetime.now()}] Lỗi báo cáo QLV {period_label} cho '{audience or code}': {exc}")
+            overall_ok = False
+    return overall_ok
+
+
+def send_weekly_report(dry_run=False, audience_filter=None, webhook_override=None):
+    email_ok = _send_periodic_email_report(
+        get_weekly_digest_metrics,
+        "Weekly",
+        "Báo cáo tổng hợp TUẦN",
+        dry_run=dry_run,
+        audience_filter=audience_filter,
+    )
+    qlv_ok = _send_qlv_periodic_teams_report(
+        "weekly",
+        dry_run=dry_run,
+        audience_filter=audience_filter,
+        webhook_override=webhook_override,
+    )
+    return email_ok and qlv_ok
+
+
+def send_monthly_report(dry_run=False, audience_filter=None, webhook_override=None):
+    email_ok = _send_periodic_email_report(
+        get_monthly_digest_metrics,
+        "Monthly",
+        "Báo cáo tổng hợp THÁNG",
+        dry_run=dry_run,
+        audience_filter=audience_filter,
+    )
+    qlv_ok = _send_qlv_periodic_teams_report(
+        "monthly",
+        dry_run=dry_run,
+        audience_filter=audience_filter,
+        webhook_override=webhook_override,
+    )
+    return email_ok and qlv_ok
 
 def main():
     parser = argparse.ArgumentParser(description="Pipeline ETL & Cảnh báo thời gian thực ERP/CRM")
@@ -498,10 +640,18 @@ def main():
         send_daily_digest(dry_run=args.dry_run, audience_filter=args.audience, webhook_override=args.teams_webhook_override)
         sys.exit(0)
     if args.send_weekly:
-        send_weekly_report(dry_run=args.dry_run, audience_filter=args.audience)
+        send_weekly_report(
+            dry_run=args.dry_run,
+            audience_filter=args.audience,
+            webhook_override=args.teams_webhook_override,
+        )
         sys.exit(0)
     if args.send_monthly:
-        send_monthly_report(dry_run=args.dry_run, audience_filter=args.audience)
+        send_monthly_report(
+            dry_run=args.dry_run,
+            audience_filter=args.audience,
+            webhook_override=args.teams_webhook_override,
+        )
         sys.exit(0)
 
     if args.once:

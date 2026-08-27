@@ -242,29 +242,159 @@ def build_qlv_digest_metrics(
     }
 
 
-def build_qlv_teams_content(
+def _period_window(period_type: str, day: dt.date) -> dict[str, dt.date | str]:
+    """Trả cửa sổ kỳ hiện tại và kỳ trước, đều kết thúc tại ngày ``day``.
+
+    Weekly dùng thứ Hai tới ngày chốt; monthly dùng ngày đầu tháng tới ngày chốt. Kỳ trước có
+    cùng số ngày đã trôi qua để tránh so sánh một phần tháng/tuần với cả kỳ hoàn chỉnh.
+    """
+    kind = str(period_type or "").strip().lower()
+    if kind == "weekly":
+        current_start = day - dt.timedelta(days=day.weekday())
+        previous_start = current_start - dt.timedelta(days=7)
+        elapsed_days = (day - current_start).days
+        previous_end = previous_start + dt.timedelta(days=elapsed_days)
+        label = f"Tuần {current_start:%d/%m/%Y} - {day:%d/%m/%Y}"
+    elif kind == "monthly":
+        current_start = day.replace(day=1)
+        previous_last = current_start - dt.timedelta(days=1)
+        previous_start = previous_last.replace(day=1)
+        elapsed_days = (day - current_start).days
+        previous_end = min(previous_last, previous_start + dt.timedelta(days=elapsed_days))
+        label = f"Tháng {day:%m/%Y} ({current_start:%d/%m} - {day:%d/%m/%Y})"
+    else:
+        raise QLVDigestScopeError("period_type của báo cáo QLV chỉ được là weekly hoặc monthly.")
+
+    return {
+        "period_type": kind,
+        "date_from": current_start,
+        "date_to": day,
+        "previous_date_from": previous_start,
+        "previous_date_to": previous_end,
+        "label": label,
+    }
+
+
+def build_qlv_period_metrics(
+    *,
+    employee_code: str,
+    region: str,
+    period_type: str,
+    channel: str | None = None,
+    as_of_date: str | None = None,
+    report_tools=None,
+) -> dict:
+    """Dựng báo cáo tuần/tháng riêng một đội QLV, không dùng số liệu toàn miền.
+
+    Kỳ hiện tại là từ thứ Hai/ngày đầu tháng tới ``as_of_date``. Kỳ trước có cùng số ngày đã
+    trôi qua. Hàm chỉ đọc warehouse qua lớp report tools, không gọi LLM/API và không có tồn kho.
+    """
+    code = str(employee_code or "").strip()
+    if not code:
+        raise QLVDigestScopeError(
+            "Báo cáo QLV thiếu employee_code; đã dừng để không rơi về dữ liệu toàn miền."
+        )
+
+    area = _normalise_area(region)
+    scoped_channel = _normalise_channel(channel)
+    tools = report_tools or _load_report_tools()
+    _validate_qlv_identity(tools, code, area)
+    day = _report_day(as_of_date)
+    window = _period_window(period_type, day)
+
+    def _range(start: dt.date, end: dt.date) -> tuple[str, str]:
+        return start.isoformat(), f"{end.isoformat()} 23:59:59"
+
+    current_from, current_to = _range(window["date_from"], window["date_to"])
+    previous_from, previous_to = _range(window["previous_date_from"], window["previous_date_to"])
+    scope = {
+        "scope_area_code": area,
+        "scope_channel": scoped_channel,
+        "scope_employee_code": code,
+    }
+    period_revenue = tools.revenue_by_channel(current_from, current_to, **scope)
+    previous_revenue = tools.revenue_by_channel(previous_from, previous_to, **scope)
+
+    current_total = float((period_revenue.get("total") or {}).get("revenue") or 0.0)
+    previous_total = float((previous_revenue.get("total") or {}).get("revenue") or 0.0)
+    delta = current_total - previous_total
+    comparison_pct = (delta / previous_total * 100.0) if previous_total else None
+
+    if scoped_channel == "OTC":
+        raw_kpi = tools.employee_kpi(
+            day.isoformat(),
+            limit=200,
+            order_by="pct",
+            filter="all",
+            scope_area_code=area,
+            scope_employee_code=code,
+        )
+        team_kpi = _team_kpi_summary(raw_kpi, code)
+        lifecycle = tools.customer_lifecycle_summary(
+            year_month=day.strftime("%Y-%m"),
+            months_back=1,
+            scope_area_code=area,
+            scope_employee_code=code,
+            scope_channel="OTC",
+        )
+    else:
+        team_kpi = {
+            "not_applicable": True,
+            "note": "Nguồn KPI đội và vòng đời khách hiện chỉ phủ kênh OTC.",
+            "member_count": 0,
+            "kpi_achieved_count": 0,
+            "full_target_count": 0,
+            "lowest_completion": [],
+        }
+        lifecycle = {
+            "not_applicable": True,
+            "error": "Nguồn vòng đời khách hiện chỉ phủ kênh OTC.",
+        }
+
+    debt_risk = tools.customer_revenue_debt_risk(
+        as_of_date=day.isoformat(),
+        scope_area_code=area,
+        scope_employee_code=code,
+        scope_channel=scoped_channel,
+    )
+    freshness = tools.data_freshness_note() if hasattr(tools, "data_freshness_note") else ""
+
+    return {
+        "report_type": f"qlv_team_{window['period_type']}",
+        "period_type": window["period_type"],
+        "date": day.isoformat(),
+        "month": day.strftime("%Y-%m"),
+        "employee_code": code,
+        "area_code": area,
+        "channel": scoped_channel,
+        "period": {
+            "label": window["label"],
+            "date_from": current_from,
+            "date_to": current_to,
+            "previous_date_from": previous_from,
+            "previous_date_to": previous_to,
+        },
+        "period_revenue": period_revenue,
+        "previous_period_revenue": previous_revenue,
+        "comparison": {
+            "revenue_delta": delta,
+            "revenue_pct": comparison_pct,
+        },
+        "team_kpi": team_kpi,
+        "customer_lifecycle": lifecycle,
+        "debt_risk": debt_risk,
+        "freshness_note": freshness,
+        "inventory_included": False,
+    }
+
+
+def _build_qlv_sections(
     metrics: dict,
     money_formatter: Callable[[float], str],
-) -> tuple[list[str], list[list[str]], list[dict[str, Any]]]:
-    """Chuyển dữ liệu QLV thành bảng/section dùng chung với Adaptive Card hiện tại."""
-    daily = metrics["daily_revenue"]["total"]
-    month = metrics["month_to_date_revenue"]["total"]
-    rows = [
-        ["Doanh số đội trong ngày", money_formatter(daily["revenue"])],
-        ["Số hóa đơn trong ngày", str(daily["invoices"])],
-        ["Doanh số đội lũy kế tháng", money_formatter(month["revenue"])],
-        ["Số hóa đơn lũy kế tháng", str(month["invoices"])],
-    ]
-
-    kpi = metrics.get("team_kpi") or {}
-    manager = kpi.get("manager")
-    if manager:
-        rows.append([
-            "Mức hoàn thành KPI của QLV",
-            f"{float(manager.get('pct') or 0.0):.1f}%",
-        ])
-
+) -> list[dict[str, Any]]:
+    """Dựng các section dùng chung cho Daily/Weekly/Monthly QLV."""
     sections: list[dict[str, Any]] = []
+    kpi = metrics.get("team_kpi") or {}
     if not kpi.get("not_applicable"):
         kpi_items = [
             f"• Số TDV trong đội: {kpi.get('member_count', 0)}",
@@ -303,8 +433,8 @@ def build_qlv_teams_content(
             })
 
     debt = metrics.get("debt_risk") or {}
-    debt_items = []
     customers = debt.get("customers") or []
+    debt_items = []
     if customers:
         debt_items.append(
             f"• {len(customers)} khách đồng thời có doanh thu lớn, nợ quá hạn và doanh thu giảm:"
@@ -323,5 +453,57 @@ def build_qlv_teams_content(
         "is_collapsed": False,
         "items": debt_items,
     })
+    return sections
 
-    return ["Chỉ số", "Giá trị"], rows, sections
+
+def build_qlv_teams_content(
+    metrics: dict,
+    money_formatter: Callable[[float], str],
+) -> tuple[list[str], list[list[str]], list[dict[str, Any]]]:
+    """Chuyển dữ liệu QLV thành bảng/section dùng chung với Adaptive Card hiện tại."""
+    daily = metrics["daily_revenue"]["total"]
+    month = metrics["month_to_date_revenue"]["total"]
+    rows = [
+        ["Doanh số đội trong ngày", money_formatter(daily["revenue"])],
+        ["Số hóa đơn trong ngày", str(daily["invoices"])],
+        ["Doanh số đội lũy kế tháng", money_formatter(month["revenue"])],
+        ["Số hóa đơn lũy kế tháng", str(month["invoices"])],
+    ]
+
+    kpi = metrics.get("team_kpi") or {}
+    manager = kpi.get("manager")
+    if manager:
+        rows.append([
+            "Mức hoàn thành KPI của QLV",
+            f"{float(manager.get('pct') or 0.0):.1f}%",
+        ])
+    return ["Chỉ số", "Giá trị"], rows, _build_qlv_sections(metrics, money_formatter)
+
+
+def build_qlv_period_teams_content(
+    metrics: dict,
+    money_formatter: Callable[[float], str],
+) -> tuple[list[str], list[list[str]], list[dict[str, Any]]]:
+    """Chuyển báo cáo tuần/tháng QLV thành bảng/section Adaptive Card."""
+    current = (metrics.get("period_revenue") or {}).get("total") or {}
+    comparison = metrics.get("comparison") or {}
+    pct = comparison.get("revenue_pct")
+    if pct is None:
+        comparison_text = "Chưa có doanh thu kỳ trước để tính tỷ lệ"
+    else:
+        delta = float(comparison.get("revenue_delta") or 0.0)
+        comparison_text = f"{pct:+.1f}% ({money_formatter(delta)})"
+
+    rows = [
+        ["Doanh số đội trong kỳ", money_formatter(current.get("revenue", 0))],
+        ["Số hóa đơn trong kỳ", str(current.get("invoices", 0))],
+        ["So với kỳ trước", comparison_text],
+    ]
+    manager = (metrics.get("team_kpi") or {}).get("manager")
+    if manager:
+        rows.append([
+            "Mức hoàn thành KPI của QLV",
+            f"{float(manager.get('pct') or 0.0):.1f}%",
+        ])
+
+    return ["Chỉ số", "Giá trị"], rows, _build_qlv_sections(metrics, money_formatter)

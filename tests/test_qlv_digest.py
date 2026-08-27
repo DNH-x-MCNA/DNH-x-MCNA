@@ -6,6 +6,8 @@ from scripts.verify_qlv_digest_reconciliation import _discover_qlv_recipients, _
 from src.qlv_digest import (
     QLVDigestScopeError,
     build_qlv_digest_metrics,
+    build_qlv_period_metrics,
+    build_qlv_period_teams_content,
     build_qlv_teams_content,
 )
 
@@ -166,6 +168,70 @@ def test_noi_dung_teams_qlv_khong_co_ton_kho():
     assert "khách hàng cần ưu tiên công nợ" in rendered
 
 
+@pytest.mark.parametrize("period_type,expected_from,expected_previous_from", [
+    ("weekly", "2026-08-24", "2026-08-17"),
+    ("monthly", "2026-08-01", "2026-07-01"),
+])
+def test_qlv_period_metrics_chi_dung_pham_vi_doi_va_ky_truoc(
+    period_type,
+    expected_from,
+    expected_previous_from,
+):
+    tools = _FakeReportTools()
+
+    result = build_qlv_period_metrics(
+        employee_code="QLV01",
+        region="MB",
+        channel="OTC",
+        period_type=period_type,
+        as_of_date="2026-08-27",
+        report_tools=tools,
+    )
+
+    assert result["report_type"] == f"qlv_team_{period_type}"
+    assert result["inventory_included"] is False
+    assert result["period"]["date_from"] == expected_from
+    assert result["period"]["previous_date_from"] == expected_previous_from
+    assert result["period"]["date_to"] == "2026-08-27 23:59:59"
+    assert result["period"]["previous_date_to"].endswith("23:59:59")
+
+    revenue_calls = [call for call in tools.calls if call[0] == "revenue"]
+    assert len(revenue_calls) == 2
+    assert revenue_calls[0][1] == expected_from
+    assert revenue_calls[1][1] == expected_previous_from
+    for _, _, _, scope in revenue_calls:
+        assert scope == {
+            "scope_area_code": "MB",
+            "scope_channel": "OTC",
+            "scope_employee_code": "QLV01",
+        }
+
+
+def test_noi_dung_teams_qlv_period_co_so_sanh_va_khong_co_ton_kho():
+    metrics = build_qlv_period_metrics(
+        employee_code="QLV01",
+        region="MB",
+        channel="OTC",
+        period_type="weekly",
+        as_of_date="2026-08-27",
+        report_tools=_FakeReportTools(),
+    )
+
+    headers, rows, sections = build_qlv_period_teams_content(
+        metrics,
+        lambda value: f"{value:,.0f} đ",
+    )
+    rendered = str([headers, rows, sections]).lower()
+
+    assert rows[0][0] == "Doanh số đội trong kỳ"
+    assert rows[1][0] == "Số hóa đơn trong kỳ"
+    assert rows[2][0] == "So với kỳ trước"
+    assert "tồn kho" not in rendered
+    assert "inventory" not in rendered
+    assert "tiến độ đội" in rendered
+    assert "khách hàng cần ưu tiên công nợ" in rendered
+
+
 def _fake_qlv_metrics():
     return {
         "date": "2026-08-27",
@@ -215,6 +281,82 @@ def test_send_daily_qlv_di_nhanh_rieng_va_dinh_tuyen_dung_nguoi(monkeypatch):
     assert captured["send"]["recipient"] == "nguoi-nhan-a"
     assert captured["send"]["audience"] == "QLV A"
     assert all("tồn kho" not in str(section).lower() for section in captured["send"]["sections"])
+
+
+def test_send_weekly_qlv_dung_teams_va_scope_rieng(monkeypatch):
+    monkeypatch.setattr(main, "load_config", lambda: {
+        "report_recipients": [{
+            "audience": "QLV A",
+            "role": "qlv",
+            "region": "bac",
+            "channel": "OTC",
+            "employee_code": "QLV01",
+            "teams_recipient": "nguoi-nhan-a",
+            "teams_webhook": "https://flow.example.test",
+        }],
+    })
+    monkeypatch.setattr(main, "_send_periodic_email_report", lambda *args, **kwargs: True)
+    captured = {}
+
+    monkeypatch.setattr(
+        main,
+        "build_qlv_period_metrics",
+        lambda **kwargs: {
+            "date": "2026-08-27",
+            "channel": "OTC",
+            "area_code": "MB",
+            "period": {"label": "Tuần 24/08/2026 - 27/08/2026"},
+            "period_revenue": {"total": {"revenue": 10, "invoices": 2}},
+            "previous_period_revenue": {"total": {"revenue": 8, "invoices": 1}},
+            "comparison": {"revenue_delta": 2, "revenue_pct": 25.0},
+            "team_kpi": {"manager": {"pct": 70.0}},
+            "customer_lifecycle": {"not_applicable": True},
+            "debt_risk": {"customers": []},
+            "freshness_note": "Dữ liệu mới.",
+            "inventory_included": False,
+        },
+    )
+    monkeypatch.setattr(
+        main,
+        "build_qlv_period_teams_content",
+        lambda metrics, formatter: (["Chỉ số", "Giá trị"], [["x", "y"]], []),
+    )
+    monkeypatch.setattr(
+        main,
+        "send_teams_alert",
+        lambda **kwargs: captured.setdefault("send", kwargs) or True,
+    )
+
+    assert main.send_weekly_report(dry_run=False) is True
+    assert captured["send"]["recipient"] == "nguoi-nhan-a"
+    assert captured["send"]["audience"] == "QLV A"
+    assert "BÁO CÁO ĐỘI QLV TUẦN" in captured["send"]["title"]
+
+
+def test_send_monthly_qlv_thieu_webhook_thi_fail_closed(monkeypatch):
+    monkeypatch.setattr(main, "load_config", lambda: {
+        "report_recipients": [{
+            "audience": "QLV lỗi",
+            "role": "qlv",
+            "region": "bac",
+            "channel": "OTC",
+            "employee_code": "QLV01",
+            "teams_recipient": "nguoi-nhan-a",
+        }],
+    })
+    monkeypatch.setattr(main, "_send_periodic_email_report", lambda *args, **kwargs: True)
+    monkeypatch.setattr(
+        main,
+        "build_qlv_period_metrics",
+        lambda **kwargs: pytest.fail("Không được dựng khi thiếu webhook"),
+    )
+    monkeypatch.setattr(
+        main,
+        "send_teams_alert",
+        lambda **kwargs: pytest.fail("Không được gửi khi thiếu webhook"),
+    )
+
+    assert main.send_monthly_report(dry_run=False) is False
 
 
 @pytest.mark.parametrize("missing_field", ["employee_code", "region", "teams_recipient"])
