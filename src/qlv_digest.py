@@ -11,6 +11,7 @@ dừng, tuyệt đối không lùi về báo cáo toàn miền/toàn công ty.
 from __future__ import annotations
 
 import datetime as dt
+import html
 import importlib
 import sys
 from pathlib import Path
@@ -507,3 +508,58 @@ def build_qlv_period_teams_content(
         ])
 
     return ["Chỉ số", "Giá trị"], rows, _build_qlv_sections(metrics, money_formatter)
+
+
+def build_qlv_period_email(
+    metrics: dict,
+    money_formatter: Callable[[float], str],
+) -> str:
+    """Dựng email tuần/tháng cho đúng một đội QLV.
+
+    Weekly/Monthly là báo cáo email; Teams chỉ dùng cho Daily Digest. Hàm này dùng cùng
+    metrics/sections đã khóa phạm vi đội, nhưng không tạo payload hoặc gửi Teams.
+    """
+    headers, rows, sections = build_qlv_period_teams_content(metrics, money_formatter)
+    period_type = str(metrics.get("period_type") or "weekly").lower()
+    period_label = "TUẦN" if period_type == "weekly" else "THÁNG"
+    code = html.escape(str(metrics.get("employee_code") or ""))
+    area = str(metrics.get("area_code") or "").upper()
+    area_label = {
+        "MB": "Miền Bắc",
+        "MB2": "Miền Bắc",
+        "MN": "Miền Nam",
+        "MT": "Miền Trung",
+    }.get(area, area)
+    period = metrics.get("period") or {}
+    period_text = html.escape(str(period.get("label") or metrics.get("date") or ""))
+    freshness = html.escape(str(metrics.get("freshness_note") or ""))
+
+    row_html = "".join(
+        f"<tr><th>{html.escape(str(label))}</th><td>{html.escape(str(value))}</td></tr>"
+        for label, value in rows
+    )
+    section_html = []
+    for section in sections:
+        title = html.escape(str(section.get("title") or ""))
+        items = section.get("items") or []
+        items_html = "".join(f"<li>{html.escape(str(item))}</li>" for item in items)
+        section_html.append(
+            f'<h2 style="color:#1f4a22;font-size:16px;margin:22px 0 8px;">{title}</h2>'
+            f'<ul style="margin:0;padding-left:22px;line-height:1.55;">{items_html}</ul>'
+        )
+
+    return f"""<!DOCTYPE html>
+<html><head><meta charset="utf-8"></head>
+<body style="font-family:Segoe UI,Arial,sans-serif;color:#334155;background:#f4f5f8;margin:0;padding:20px;">
+  <div style="max-width:680px;margin:auto;background:#fff;border:1px solid #dbe5d6;border-top:5px solid #337337;border-radius:12px;padding:24px;">
+    <div style="color:#1f4a22;font-size:21px;font-weight:700;">BÁO CÁO ĐỘI QLV {period_label}</div>
+    <div style="margin-top:6px;color:#475569;">{period_text} · {html.escape(area_label)} · Đội {code}</div>
+    {f'<div style="margin-top:6px;color:#64748b;font-size:13px;">{freshness}</div>' if freshness else ''}
+    <table style="width:100%;border-collapse:collapse;margin-top:20px;">
+      <thead><tr style="background:#1f4a22;color:#fff;"><th style="text-align:left;padding:9px;">Chỉ số</th><th style="text-align:left;padding:9px;">Giá trị</th></tr></thead>
+      <tbody>{row_html}</tbody>
+    </table>
+    {''.join(section_html)}
+    <div style="margin-top:24px;padding-top:12px;border-top:1px solid #e2e8f0;color:#94a3b8;font-size:12px;">Báo cáo chỉ bao gồm dữ liệu của đội {code}; không bao gồm tồn kho.</div>
+  </div>
+</body></html>"""

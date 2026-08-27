@@ -7,6 +7,7 @@ from src.qlv_digest import (
     QLVDigestScopeError,
     build_qlv_digest_metrics,
     build_qlv_period_metrics,
+    build_qlv_period_email,
     build_qlv_period_teams_content,
     build_qlv_teams_content,
 )
@@ -228,6 +229,24 @@ def test_noi_dung_teams_qlv_period_co_so_sanh_va_khong_co_ton_kho():
     assert rows[2][0] == "So với kỳ trước"
     assert "tồn kho" not in rendered
     assert "inventory" not in rendered
+
+
+def test_noi_dung_email_qlv_period_co_pham_vi_va_khong_co_teams():
+    metrics = build_qlv_period_metrics(
+        employee_code="QLV01",
+        region="MB",
+        channel="OTC",
+        period_type="weekly",
+        as_of_date="2026-08-27",
+        report_tools=_FakeReportTools(),
+    )
+
+    rendered = build_qlv_period_email(metrics, lambda value: str(value)).lower()
+
+    assert "báo cáo đội qlv tuần" in rendered
+    assert "qlv01" in rendered
+    assert "miền bắc" in rendered
+    assert "không bao gồm tồn kho" in rendered
     assert "tiến độ đội" in rendered
     assert "khách hàng cần ưu tiên công nợ" in rendered
 
@@ -283,7 +302,7 @@ def test_send_daily_qlv_di_nhanh_rieng_va_dinh_tuyen_dung_nguoi(monkeypatch):
     assert all("tồn kho" not in str(section).lower() for section in captured["send"]["sections"])
 
 
-def test_send_weekly_qlv_dung_teams_va_scope_rieng(monkeypatch):
+def test_send_weekly_qlv_dung_email_va_scope_rieng(monkeypatch):
     monkeypatch.setattr(main, "load_config", lambda: {
         "report_recipients": [{
             "audience": "QLV A",
@@ -291,8 +310,7 @@ def test_send_weekly_qlv_dung_teams_va_scope_rieng(monkeypatch):
             "region": "bac",
             "channel": "OTC",
             "employee_code": "QLV01",
-            "teams_recipient": "nguoi-nhan-a",
-            "teams_webhook": "https://flow.example.test",
+            "emails": ["qlv-a@example.test"],
         }],
     })
     monkeypatch.setattr(main, "_send_periodic_email_report", lambda *args, **kwargs: True)
@@ -318,22 +336,27 @@ def test_send_weekly_qlv_dung_teams_va_scope_rieng(monkeypatch):
     )
     monkeypatch.setattr(
         main,
-        "build_qlv_period_teams_content",
-        lambda metrics, formatter: (["Chỉ số", "Giá trị"], [["x", "y"]], []),
+        "build_qlv_period_email",
+        lambda metrics, formatter: captured.setdefault("html", "<html>QLV</html>") or "<html>QLV</html>",
     )
     monkeypatch.setattr(
         main,
-        "send_teams_alert",
-        lambda **kwargs: captured.setdefault("send", kwargs) or True,
+        "send_email",
+        lambda subject, html_content, recipient_override=None, importance=None: captured.setdefault(
+            "send", {
+                "subject": subject,
+                "html": html_content,
+                "recipients": recipient_override,
+            }
+        ) or True,
     )
 
     assert main.send_weekly_report(dry_run=False) is True
-    assert captured["send"]["recipient"] == "nguoi-nhan-a"
-    assert captured["send"]["audience"] == "QLV A"
-    assert "BÁO CÁO ĐỘI QLV TUẦN" in captured["send"]["title"]
+    assert captured["send"]["recipients"] == ["qlv-a@example.test"]
+    assert "BÁO CÁO ĐỘI QLV TUẦN" in captured["send"]["subject"]
 
 
-def test_send_monthly_qlv_thieu_webhook_thi_fail_closed(monkeypatch):
+def test_send_monthly_qlv_thieu_email_thi_fail_closed(monkeypatch):
     monkeypatch.setattr(main, "load_config", lambda: {
         "report_recipients": [{
             "audience": "QLV lỗi",
@@ -341,7 +364,6 @@ def test_send_monthly_qlv_thieu_webhook_thi_fail_closed(monkeypatch):
             "region": "bac",
             "channel": "OTC",
             "employee_code": "QLV01",
-            "teams_recipient": "nguoi-nhan-a",
         }],
     })
     monkeypatch.setattr(main, "_send_periodic_email_report", lambda *args, **kwargs: True)
@@ -350,11 +372,7 @@ def test_send_monthly_qlv_thieu_webhook_thi_fail_closed(monkeypatch):
         "build_qlv_period_metrics",
         lambda **kwargs: pytest.fail("Không được dựng khi thiếu webhook"),
     )
-    monkeypatch.setattr(
-        main,
-        "send_teams_alert",
-        lambda **kwargs: pytest.fail("Không được gửi khi thiếu webhook"),
-    )
+    monkeypatch.setattr(main, "send_email", lambda *args, **kwargs: pytest.fail("Không được gửi khi thiếu email"))
 
     assert main.send_monthly_report(dry_run=False) is False
 
@@ -471,7 +489,7 @@ def test_weekly_monthly_chi_co_qlv_thi_dung_khong_fallback_toan_quoc(monkeypatch
         "Monthly",
         "Báo cáo tháng",
         dry_run=True,
-    ) is False
+    ) is True
 
 
 def test_discover_qlv_tu_snapshot_khong_can_mapping_teams():
