@@ -929,42 +929,50 @@ def _chatbot_deep_link(question=None):
     return base
 
 
-def _build_detail_table(table_headers, table_rows, max_rows=None):
-    """Bảng Adaptive Card thật (type Table, schema 1.5) — mỗi cột dữ liệu nằm riêng 1 ô, thay
-    cho FactSet gộp các giá trị bằng " | " vào 1 dòng text (vỡ dòng khó đọc khi tên khách hàng
-    dài, như phản ánh 15/07/2026). Cột chứa tên (khách hàng/sản phẩm/nhân sự) được cấp width
-    gấp đôi các cột còn lại vì thường dài hơn nhiều."""
-    name_idx = None
-    for idx, h in enumerate(table_headers):
-        hl = h.lower()
-        if "tên" in hl or "name" in hl or "đại lý" in hl or "nhân sự" in hl:
-            name_idx = idx
-            break
+def _build_compact_summary(table_headers, table_rows, max_rows=None):
+    """26/08/2026 - THAY THE _build_detail_table (dung "type": "Table", schema 1.5). Power
+    Automate Teams connector tu choi hoac loi schema voi Table (xac nhan qua commit 217dc07 tren
+    nhanh main, 04/08/2026 - nhanh nay chua bao gio nhan ban va) va/hoac vuot gioi han payload
+    28KB. 217dc07 xu ly bang cach XOA HAN bang chi tiet, nhung cach do lam mat noi dung COT LOI
+    cua Daily Digest: main.py::_digest_table() tra ve bang 2 cot "Chi so/Gia tri" (doanh thu, so
+    hoa don, ton kho...) di qua DUNG duong table_headers/table_rows nay - xoa het thi Daily
+    Digest chi con dong tom tat rong, mat toan bo so lieu.
 
-    def _cell(text, is_header=False):
-        return {
-            "type": "TableCell",
-            "items": [{
-                "type": "TextBlock",
-                "text": str(text),
-                "wrap": True,
-                "weight": "Bolder" if is_header else "Default",
-                "size": "Small"
-            }],
-            "verticalContentAlignment": "Center"
-        }
+    Thay vao do: dung THANH PHAN NATIVE cua Adaptive Card 1.0 (khong can 1.5):
+      - Bang DUNG 2 COT (vd "Chi so | Gia tri") -> FactSet, dung cho cap ten/gia tri.
+      - Bang NHIEU COT (vd danh sach khach no qua han co ten/ma/vung/kenh/so tien) -> moi dong
+        thanh MOT TextBlock, cac cot noi bang " · ", gioi han max_rows kem dong ghi chu neu bi
+        cat bot - dung phong cach da chung minh hoat dong tot trong cac section rec_items/
+        w_items/ops_items cua Daily Digest.
 
-    rows = [{"type": "TableRow", "cells": [_cell(h, is_header=True) for h in table_headers]}]
-    for row in (table_rows[:max_rows] if max_rows else table_rows):
-        rows.append({"type": "TableRow", "cells": [_cell(v) for v in row]})
+    Tra ve LIST cac body item (khong phai 1 item duy nhat nhu ham cu) - noi truc tiep vao body,
+    khong bao trong Container rieng nua vi khong con can toggle mot thanh phan nang."""
+    if not table_headers or not table_rows:
+        return []
+    rows = table_rows[:max_rows] if max_rows else table_rows
+    cat_bot = len(table_rows) - len(rows)
 
-    return {
-        "type": "Table",
-        "columns": [{"width": 2 if i == name_idx else 1} for i in range(len(table_headers))],
-        "rows": rows,
-        "firstRowAsHeaders": False,
-        "showGridLines": True
-    }
+    if len(table_headers) == 2:
+        return [{
+            "type": "FactSet",
+            "facts": [{"title": str(r[0]), "value": str(r[1])} for r in rows],
+            "spacing": "Small"
+        }] + ([{
+            "type": "TextBlock", "text": "... và %d dòng khác." % cat_bot,
+            "isSubtle": True, "size": "Small", "wrap": True
+        }] if cat_bot > 0 else [])
+
+    items = [{
+        "type": "TextBlock",
+        "text": " · ".join(str(v) for v in row),
+        "wrap": True, "size": "Small", "spacing": "None"
+    } for row in rows]
+    if cat_bot > 0:
+        items.append({
+            "type": "TextBlock", "text": "... và %d dòng khác." % cat_bot,
+            "isSubtle": True, "size": "Small", "wrap": True
+        })
+    return items
 
 
 def _build_teams_adaptive_card(title, summary, severity, table_headers=None, table_rows=None,
@@ -1032,31 +1040,19 @@ def _build_teams_adaptive_card(title, summary, severity, table_headers=None, tab
     # Actions list
     actions = []
 
-    # Compact Table Container using Action.ToggleVisibility
-    has_details = table_headers and table_rows
-    if has_details:
+    # 26/08/2026: bo Container/Table (schema 1.5, bi Power Automate tu choi) - dung FactSet/
+    # TextBlock tuong thich 1.4 qua _build_compact_summary(). Khong con can Action.ToggleVisibility
+    # rieng vi noi dung da gon (toi da _TEAMS_DETAIL_MAX_ROWS dong), khac voi Table cu phai an bot
+    # de tranh vuot gioi han payload.
+    if table_headers and table_rows:
         total_r = len(table_rows)
         shown_r = min(total_r, _TEAMS_DETAIL_MAX_ROWS)
         body.append({
-            "type": "Container",
-            "id": "compactTableDetails",
-            "isVisible": True,
-            "spacing": "Medium",
-            "items": [
-                {
-                    "type": "TextBlock",
-                    "text": f"Chi tiết danh sách (hiển thị {shown_r}/{total_r} dòng):",
-                    "weight": "Bolder",
-                    "size": "Small"
-                },
-                _build_detail_table(table_headers, table_rows, max_rows=_TEAMS_DETAIL_MAX_ROWS)
-            ]
+            "type": "TextBlock",
+            "text": f"Chi tiết danh sách (hiển thị {shown_r}/{total_r} dòng):",
+            "weight": "Bolder", "size": "Small", "spacing": "Medium"
         })
-        actions.append({
-            "type": "Action.ToggleVisibility",
-            "title": "Thu gọn / Hiện chi tiết",
-            "targetElements": ["compactTableDetails"]
-        })
+        body.extend(_build_compact_summary(table_headers, table_rows, max_rows=_TEAMS_DETAIL_MAX_ROWS))
 
     # Render additional sections if passed
     if sections:
@@ -1120,7 +1116,7 @@ def _build_teams_adaptive_card(title, summary, severity, table_headers=None, tab
     adaptive_card = {
         "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
         "type": "AdaptiveCard",
-        "version": "1.5",
+        "version": "1.4",
         "body": body
     }
     if actions:
@@ -1174,7 +1170,15 @@ def send_teams_alert(title, summary, table_headers=None, table_rows=None, severi
             headers={'Content-Type': 'application/json'}
         )
         with urllib.request.urlopen(req, timeout=10) as response:
-            print("[TEAMS] Gui canh bao Teams (Adaptive Card) thanh cong!")
+            # 26/08/2026: ghi ro MA TRANG THAI thay vi chi noi "thanh cong". urlopen() CHI raise
+            # khi Power Automate tra ve loi HTTP ngay luc nhan webhook (schema JSON sai, URL het
+            # han...) - no KHONG thay duoc loi xay ra BEN TRONG Flow sau do (card bi Teams tu choi
+            # vi sai schema Adaptive Card, connector loi...), vi webhook trigger cua Power Automate
+            # chay bat dong bo: tra ve 202 ngay khi nhan, roi moi thuc thi Flow. Dong log nay tuc la
+            # "webhook DA NHAN", khong phai "card DA HIEN THI trong Teams". Muon xac nhan hien thi
+            # that phai nhin vao Teams hoac run history cua Flow, khong chi dua vao log nay.
+            print("[TEAMS] Webhook da nhan (HTTP %s) - Power Automate se xu ly bat dong bo, "
+                  "khong chac chan card da hien thi trong Teams." % response.status)
             return True
     except Exception as e:
         print(f"[TEAMS] Loi gui Teams: {e}")
@@ -1393,6 +1397,9 @@ def _build_teams_consolidated_card(alerts):
         item_actions = []
 
         if table_headers and table_rows:
+            # 26/08/2026: bo Container/Table (schema 1.5). Giu nguyen hanh vi AN MAC DINH (khac
+            # card don o tren) vi day la card GOP nhieu alert - hien het chi tiet moi alert cung
+            # luc de vuot payload nhanh hon nhieu so voi 1 alert/card.
             toggle_id = f"compactTable_{i}"
             total_r = len(table_rows)
             shown_r = min(total_r, _TEAMS_DETAIL_MAX_ROWS)
@@ -1403,7 +1410,7 @@ def _build_teams_consolidated_card(alerts):
                 "spacing": "Small",
                 "items": [
                     {"type": "TextBlock", "text": f"Chi tiết danh sách (hiển thị {shown_r}/{total_r} dòng):", "weight": "Bolder", "size": "Small"},
-                    _build_detail_table(table_headers, table_rows, max_rows=_TEAMS_DETAIL_MAX_ROWS)
+                    *_build_compact_summary(table_headers, table_rows, max_rows=_TEAMS_DETAIL_MAX_ROWS)
                 ]
             })
             item_actions.append({
@@ -1444,7 +1451,7 @@ def _build_teams_consolidated_card(alerts):
     adaptive_card = {
         "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
         "type": "AdaptiveCard",
-        "version": "1.5",
+        "version": "1.4",
         "body": body,
         "actions": [{
             "type": "Action.OpenUrl",

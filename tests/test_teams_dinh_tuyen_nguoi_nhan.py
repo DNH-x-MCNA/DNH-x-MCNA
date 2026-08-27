@@ -118,6 +118,7 @@ def _bat_payload(monkeypatch):
         da_gui["payload"] = json.loads(req.data.decode("utf-8"))
 
         class _Resp:
+            status = 202  # Power Automate tra ve 202 khi nhan webhook, xu ly Flow bat dong bo sau
             def __enter__(self): return self
             def __exit__(self, *a): return False
         return _Resp()
