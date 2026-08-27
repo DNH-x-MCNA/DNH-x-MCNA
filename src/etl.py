@@ -175,7 +175,8 @@ def get_daily_kpi_pace_snapshot(region=None, force_refresh=False):
         if (now - cached_ts) < _KPI_PACE_TTL:
             return cached_res
 
-    from src.alerts import _last_complete_data_day, _is_duplicate_filter_sql
+    from src.alerts import (_last_complete_data_day, _is_duplicate_filter_sql,
+                             _MONTH_START_OF_LATEST_SNAPSHOT_SQL as _month_start_sql)
     target_day = _last_complete_data_day()
     if not target_day:
         return {"target_day": None, "reds": [], "yellows": [], "greens": [], "all_rows": []}
@@ -209,10 +210,16 @@ def get_daily_kpi_pace_snapshot(region=None, force_refresh=False):
               AND h.[DocDate] >= :start AND h.[DocDate] < :end
             GROUP BY n.[EmployeeCode]
         ),
-        tdv_target AS (
-            SELECT DISTINCT [EmployeeCode], [AreaCode], [MonthSaleTarget]
+        latest AS (
+            SELECT [EmployeeCode], MAX([SaveDate]) AS d
             FROM [FACT_TongHopKhachHang]
-            WHERE [SaveDate] = (SELECT MAX([SaveDate]) FROM [FACT_TongHopKhachHang])
+            WHERE [SaveDate] >= {_month_start_sql}
+            GROUP BY [EmployeeCode]
+        ),
+        tdv_target AS (
+            SELECT DISTINCT f.[EmployeeCode], f.[AreaCode], f.[MonthSaleTarget]
+            FROM [FACT_TongHopKhachHang] f
+            JOIN latest l ON l.[EmployeeCode] = f.[EmployeeCode] AND l.d = f.[SaveDate]
         )
         SELECT n.[EmployeeCode] AS employee_code, n.[Name] AS employee_name, t.[AreaCode] AS area_code,
                t.[MonthSaleTarget] AS month_sale_target, ISNULL(dr.day_amt, 0) AS day_rev
@@ -276,15 +283,22 @@ def get_kpi_revenue_reconciliation(force_refresh=False):
     try:
         from sqlalchemy import text
         from src.database import _get_bravo_engine
+        from src.alerts import _MONTH_START_OF_LATEST_SNAPSHOT_SQL as _month_start_sql
         bravo_engine = _get_bravo_engine()
         if bravo_engine:
             with bravo_engine.connect() as conn:
-                row = conn.execute(text('''
-                    SELECT SUM(amt) FROM (
-                        SELECT [CustomerCode], MAX([Amount_Cus]) AS amt
+                row = conn.execute(text(f'''
+                    WITH latest AS (
+                        SELECT [CustomerCode], MAX([SaveDate]) AS d
                         FROM [FACT_TongHopKhachHang]
-                        WHERE [SaveDate] = (SELECT MAX([SaveDate]) FROM [FACT_TongHopKhachHang])
+                        WHERE [SaveDate] >= {_month_start_sql}
                         GROUP BY [CustomerCode]
+                    )
+                    SELECT SUM(amt) FROM (
+                        SELECT f.[CustomerCode], MAX(f.[Amount_Cus]) AS amt
+                        FROM [FACT_TongHopKhachHang] f
+                        JOIN latest l ON l.[CustomerCode] = f.[CustomerCode] AND l.d = f.[SaveDate]
+                        GROUP BY f.[CustomerCode]
                     ) x
                 ''')).fetchone()
                 kpi_total = float(row[0]) if row and row[0] is not None else 0.0

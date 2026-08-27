@@ -663,9 +663,36 @@ def _is_duplicate_filter_sql(alias="n"):
             f"OR {prefix}[EmployeeCode] IN ({codes}))")
 
 
+# 26/08/2026 - mang tu commit 470e3bd (29/07/2026, nhanh `main`) sang `master`. GOP THEO THANG
+# thay vi ghim vao MOT SaveDate.
+#
+# Vi sao: DNH KHONG ghi snapshot thang thanh mot lan ma tach nhieu ngay theo vung. Xac nhan thuc
+# te 29/07/2026 - thang 7 co 2 snapshot, moi cai chi chua mot phan vung:
+#     SaveDate 2026-07-27 -> MB (102 NV) + MN (48 NV), KHONG co MT
+#     SaveDate 2026-07-28 -> CHI co MT (34 NV)
+# Ghim vao MAX(SaveDate) nhu truoc => ngay 29/07 chi thay MT, bao "toan doi 48,7%" trong khi thuc
+# chat la rieng Mien Trung - hut MB 30,78 ty va MN 13,19 ty. So trong tron trinh, tu tin, va sai
+# ca mot bac do lon. Cac thang da dong (31/05, 30/06...) chi co 1 snapshot tron ven nen loi nay
+# chi lo giua thang.
+#
+# NGUY HIEM NHAT: khong co canh bao nao khi do. Vung bien mat hoan toan khoi ket qua thi khong co
+# dong nao de doi chieu - so ra tron trinh va tu tin.
+#
+# Cach gop: lay moi dong TU DAU THANG cua snapshot moi nhat tro di, roi moi nhan vien lay
+# SaveDate moi nhat cua CHINH ho. Kiem chung 29/07/2026: tong chi tieu ra dung 50.967.586.921d
+# (MB 30.781.764.408 - MN 13.185.822.513 - MT 7.000.000.000) - khop tung dong voi gia tri da
+# verify truoc do, va khoi phuc du ca 3 mien.
+_MONTH_START_OF_LATEST_SNAPSHOT_SQL = (
+    "(SELECT DATEFROMPARTS(YEAR(MAX([SaveDate])), MONTH(MAX([SaveDate])), 1) "
+    "FROM [FACT_TongHopKhachHang])"
+)
+
+
 def get_bravo_manager_codes():
-    """Tập mã nhân viên ĐANG quản lý người khác, lấy từ cột ManagerCode của FACT_TongHopKhachHang tại
-    snapshot mới nhất — KHÔNG lọc PositionCode, KHÔNG lọc IsDuplicate. Đây là điểm mấu chốt: nếu lọc
+    """Tập mã nhân viên ĐANG quản lý người khác, lấy từ cột ManagerCode của FACT_TongHopKhachHang
+    trong THÁNG của snapshot mới nhất (xem _MONTH_START_OF_LATEST_SNAPSHOT_SQL — KHÔNG ghim 1
+    ngày, vì DNH ghi snapshot tách theo vùng qua nhiều ngày) — KHÔNG lọc PositionCode, KHÔNG lọc
+    IsDuplicate. Đây là điểm mấu chốt: nếu lọc
     theo chức danh thì QLV nào có cấp dưới mang chức danh lạ sẽ KHÔNG được nhận ra là quản lý
     (xác nhận 27/07/2026: MN1 'Kênh MT' quản lý TM23100133 chức danh 'TK', MN4 'Chợ sỉ' quản lý
     TM23100153 chức danh 'CS' — lọc IN ('TDV','QLV') làm mất cả 2 QLV này khỏi tầng rollup, hụt
@@ -681,9 +708,9 @@ def get_bravo_manager_codes():
     if engine is None:
         raise RuntimeError("Không có Bravo engine (thiếu BRAVO_SQL_* trong .env)")
     with engine.connect() as conn:
-        rows = conn.execute(text('''
+        rows = conn.execute(text(f'''
             SELECT DISTINCT [ManagerCode] FROM [FACT_TongHopKhachHang]
-            WHERE [SaveDate] = (SELECT MAX([SaveDate]) FROM [FACT_TongHopKhachHang])
+            WHERE [SaveDate] >= {_MONTH_START_OF_LATEST_SNAPSHOT_SQL}
               AND [ManagerCode] IS NOT NULL AND [ManagerCode] <> ''
         ''')).fetchall()
     return {r[0] for r in rows}
@@ -721,16 +748,22 @@ def get_bravo_kpi_tdv_snapshot(position_codes=('TDV',), include_duplicates=False
         raise RuntimeError("Không có Bravo engine (thiếu BRAVO_SQL_* trong .env)")
     placeholders = ",".join(f"'{p}'" for p in position_codes)
     sql = text(f'''
-        WITH tdv_actual AS (
-            SELECT [EmployeeCode], SUM([Amount_Cus]) AS TotalActual
+        WITH latest AS (
+            SELECT [EmployeeCode], MAX([SaveDate]) AS d
             FROM [FACT_TongHopKhachHang]
-            WHERE [SaveDate] = (SELECT MAX([SaveDate]) FROM [FACT_TongHopKhachHang])
+            WHERE [SaveDate] >= {_MONTH_START_OF_LATEST_SNAPSHOT_SQL}
             GROUP BY [EmployeeCode]
         ),
+        tdv_actual AS (
+            SELECT f.[EmployeeCode], SUM(f.[Amount_Cus]) AS TotalActual
+            FROM [FACT_TongHopKhachHang] f
+            JOIN latest l ON l.[EmployeeCode] = f.[EmployeeCode] AND l.d = f.[SaveDate]
+            GROUP BY f.[EmployeeCode]
+        ),
         tdv_target AS (
-            SELECT DISTINCT [EmployeeCode], [AreaCode], [MonthSaleTarget], [ManagerCode]
-            FROM [FACT_TongHopKhachHang]
-            WHERE [SaveDate] = (SELECT MAX([SaveDate]) FROM [FACT_TongHopKhachHang])
+            SELECT DISTINCT f.[EmployeeCode], f.[AreaCode], f.[MonthSaleTarget], f.[ManagerCode]
+            FROM [FACT_TongHopKhachHang] f
+            JOIN latest l ON l.[EmployeeCode] = f.[EmployeeCode] AND l.d = f.[SaveDate]
         )
         SELECT n.[EmployeeCode] AS employee_code, n.[Name] AS employee_name, t.[AreaCode] AS area_code,
                n.[PositionCode] AS position_code, t.[ManagerCode] AS manager_code,
@@ -2382,10 +2415,16 @@ def check_daily_kpi_pace_alert():
                       AND h.[DocDate] = :target_day
                     GROUP BY n.[EmployeeCode]
                 ),
-                tdv_target AS (
-                    SELECT DISTINCT [EmployeeCode], [AreaCode], [MonthSaleTarget]
+                latest AS (
+                    SELECT [EmployeeCode], MAX([SaveDate]) AS d
                     FROM [FACT_TongHopKhachHang]
-                    WHERE [SaveDate] = (SELECT MAX([SaveDate]) FROM [FACT_TongHopKhachHang])
+                    WHERE [SaveDate] >= {_MONTH_START_OF_LATEST_SNAPSHOT_SQL}
+                    GROUP BY [EmployeeCode]
+                ),
+                tdv_target AS (
+                    SELECT DISTINCT f.[EmployeeCode], f.[AreaCode], f.[MonthSaleTarget]
+                    FROM [FACT_TongHopKhachHang] f
+                    JOIN latest l ON l.[EmployeeCode] = f.[EmployeeCode] AND l.d = f.[SaveDate]
                 )
                 SELECT n.[EmployeeCode] AS employee_code, n.[Name] AS employee_name, t.[AreaCode] AS area_code,
                        t.[MonthSaleTarget] AS month_sale_target, ISNULL(ds.day_rev, 0) AS day_rev
@@ -2544,10 +2583,16 @@ def check_kpi_milestone_drop_alert():
             tdv_sql = text('''
                 WITH tdv_periods AS (''' + " UNION ALL ".join(union_blocks) + '''
                 ),
-                tdv_target AS (
-                    SELECT DISTINCT [EmployeeCode], [AreaCode], [MonthSaleTarget]
+                latest AS (
+                    SELECT [EmployeeCode], MAX([SaveDate]) AS d
                     FROM [FACT_TongHopKhachHang]
-                    WHERE [SaveDate] = (SELECT MAX([SaveDate]) FROM [FACT_TongHopKhachHang])
+                    WHERE [SaveDate] >= {_MONTH_START_OF_LATEST_SNAPSHOT_SQL}
+                    GROUP BY [EmployeeCode]
+                ),
+                tdv_target AS (
+                    SELECT DISTINCT f.[EmployeeCode], f.[AreaCode], f.[MonthSaleTarget]
+                    FROM [FACT_TongHopKhachHang] f
+                    JOIN latest l ON l.[EmployeeCode] = f.[EmployeeCode] AND l.d = f.[SaveDate]
                 )
                 SELECT n.[EmployeeCode] AS employee_code, n.[Name] AS employee_name, t.[AreaCode] AS area_code,
                        tp.period_idx, tp.rev
