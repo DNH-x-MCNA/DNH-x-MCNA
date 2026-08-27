@@ -128,7 +128,8 @@ def _region_scope_revenue(
     customer_table = "dms_khachhang" if normalized == "OTC" else "dmssx_khachhang"
     clauses = [
         "EXISTS (SELECT 1 FROM dim_nhanvien nv "
-        "WHERE nv.dmsid=v.employee_code AND nv.position_code='TDV')"
+        "WHERE nv.dmsid=v.employee_code AND nv.position_code='TDV' "
+        "AND nv.end_date IS NULL AND COALESCE(nv.is_resigned,0)<>1)"
     ]
     params: list[str] = []
     own = sorted({_normalise(value) for value in (self_managed_dms or set()) if _normalise(value)})

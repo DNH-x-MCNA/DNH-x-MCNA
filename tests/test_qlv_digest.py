@@ -408,6 +408,8 @@ def test_region_scope_revenue_chi_gom_tdv_va_qlv_tu_quan_ly():
         def _q(sql, params):
             if "COALESCE(SUM(v.amount9)" in sql:
                 assert "nv.position_code='TDV'" in sql
+                assert "nv.end_date IS NULL" in sql
+                assert "COALESCE(nv.is_resigned,0)<>1" in sql
                 assert "v.employee_code IN" in sql
                 return [{"revenue": 123456.0}]
             raise AssertionError(sql)
