@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Đối chiếu tổng doanh số các QLV đã cấu hình với doanh số toàn miền.
+"""Đối chiếu tổng doanh số các QLV đã cấu hình với doanh số tầng TDV trong miền.
 
 Chỉ đọc ``warehouse.db``; không gọi LLM/API và không gửi Teams/email. Chạy sau khi điền đủ danh
 sách QLV trong ``config/config.yaml`` và trước khi bật lịch gửi thật::
@@ -28,6 +28,10 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from src.qlv_digest import build_qlv_digest_metrics  # noqa: E402
+
+
+def _normalise(value) -> str:
+    return str(value or "").strip()
 
 
 def _load_report_recipients() -> list[dict]:
@@ -103,75 +107,50 @@ def _group_totals(metrics_rows: list[dict], period_key: str) -> dict[tuple[str, 
     return dict(totals)
 
 
-def _unit_revenue(report_tools, manager_code: str, area: str, date_from: str, date_to: str) -> float:
-    """Doanh số nhóm/kênh rollup (MN1/MN4), chỉ dùng để cộng đủ tổng miền khi đối chiếu.
+def _region_scope_revenue(
+    report_tools,
+    area: str,
+    channel: str,
+    date_from: str,
+    date_to: str,
+    self_managed_dms: set[str] | None = None,
+) -> float:
+    """Doanh thu vùng trong đúng phạm vi mà digest QLV có thể cộng.
 
-    Bravo ghi nhóm/kênh đặc biệt qua ``vhoadon_otc.channel_code`` (dmsid của bản ghi
-    ``dim_nhanvien``), trong khi nhân viên trực thuộc vẫn ghi qua ``employee_code``. Phải
-    xét cả hai cột trong cùng một điều kiện OR để không bỏ sót kênh và cũng không đếm đôi.
+    Digest QLV dùng đội TDV trực tiếp; vì vậy tổng đối chiếu phải loại CS/CTV/TK và các nhóm/kênh
+    rollup. Ngoại lệ duy nhất là DMSId của QLV tự quản lý đã được xác minh (hiện MBKV12), vì
+    ``_get_team_dms_ids`` chủ động đưa giao dịch của chính QLV đó vào digest.
     """
-    latest_rows = report_tools._q(
-        "SELECT MAX(save_date) d FROM fact_tonghopkhachhang WHERE save_date<=?",
-        (date_to,),
-    )
-    latest = latest_rows[0].get("d") if latest_rows else None
-    if not latest:
-        return 0.0
-    rows = report_tools._q(
-        "WITH latest AS ("
-        " SELECT employee_code, MAX(save_date) d FROM fact_tonghopkhachhang "
-        " WHERE save_date<=? GROUP BY employee_code) "
-        "SELECT e.employee_code, MAX(e.emp_dms_code) emp_dms_code, MAX(nv.dmsid) dmsid "
-        "FROM fact_tonghopkhachhang e JOIN latest l "
-        " ON l.employee_code=e.employee_code AND l.d=e.save_date "
-        "LEFT JOIN dim_nhanvien nv ON nv.employee_code=e.employee_code "
-        "WHERE e.manager_code=? GROUP BY e.employee_code",
-        (latest, manager_code),
-    )
-    employee_keys = []
-    for row in rows:
-        for key in (row.get("employee_code"), row.get("emp_dms_code"), row.get("dmsid")):
-            if key and str(key).strip():
-                employee_keys.append(str(key).strip())
-    employee_keys = list(dict.fromkeys(employee_keys))
-    identity_rows = report_tools._q(
-        "SELECT dmsid FROM dim_nhanvien WHERE employee_code=? AND dmsid IS NOT NULL "
-        "AND TRIM(dmsid)<>''",
-        (manager_code,),
-    )
-    channel_keys = list(dict.fromkeys(
-        [manager_code]
-        + [str(row.get("dmsid")).strip() for row in identity_rows if row.get("dmsid")]
-    ))
-    if not employee_keys and not channel_keys:
-        return 0.0
-    employee_clause = ""
-    employee_params: tuple = ()
-    if employee_keys:
-        placeholders = ",".join("?" for _ in employee_keys)
-        employee_clause = f"v.employee_code IN ({placeholders})"
-        employee_params = tuple(employee_keys)
-    channel_clause = ""
-    channel_params: tuple = ()
-    if channel_keys:
-        placeholders = ",".join("?" for _ in channel_keys)
-        channel_clause = f"v.channel_code IN ({placeholders})"
-        channel_params = tuple(channel_keys)
-    source_clause = " OR ".join(part for part in (employee_clause, channel_clause) if part)
+    normalized = str(channel or "OTC").strip().upper()
+    if normalized not in {"OTC", "ETC"}:
+        raise ValueError(f"Kênh không hợp lệ: {channel}")
+    table = "vhoadon_otc" if normalized == "OTC" else "vhoadon_etc"
+    customer_table = "dms_khachhang" if normalized == "OTC" else "dmssx_khachhang"
+    clauses = [
+        "EXISTS (SELECT 1 FROM dim_nhanvien nv "
+        "WHERE nv.dmsid=v.employee_code AND nv.position_code='TDV')"
+    ]
+    params: list[str] = []
+    own = sorted({_normalise(value) for value in (self_managed_dms or set()) if _normalise(value)})
+    if own:
+        placeholders = ",".join("?" for _ in own)
+        clauses.append(f"v.employee_code IN ({placeholders})")
+        params.extend(own)
     result = report_tools._q(
-        "SELECT COALESCE(SUM(v.amount9),0) revenue "
-        "FROM vhoadon_otc v "
-        "LEFT JOIN dms_khachhang kh ON kh.code=v.customer_code "
+        f"SELECT COALESCE(SUM(v.amount9),0) revenue FROM {table} v "
+        f"LEFT JOIN {customer_table} kh ON kh.code=v.customer_code "
         "LEFT JOIN dim_tinhthanhpho tp ON tp.city_id=kh.city_id "
-        f"WHERE ({source_clause}) AND tp.area_code=? "
+        f"WHERE tp.area_code=? AND ({' OR '.join(clauses)}) "
         "AND v.doc_date BETWEEN ? AND ?",
-        employee_params + channel_params + (area, date_from, date_to),
+        (area, *params, date_from, date_to),
     )
     return float(result[0].get("revenue") or 0.0) if result else 0.0
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Đối chiếu tổng QLV với doanh số miền, không gửi ra ngoài")
+    parser = argparse.ArgumentParser(
+        description="Đối chiếu tổng QLV với doanh số TDV cùng miền, không gửi ra ngoài"
+    )
     parser.add_argument("--as-of", default=dt.date.today().isoformat(), help="Ngày báo cáo YYYY-MM-DD")
     parser.add_argument("--tolerance-vnd", type=float, default=1.0, help="Sai số tối đa cho phép")
     parser.add_argument(
@@ -242,53 +221,54 @@ def main() -> int:
     month_by_scope = _group_totals(metrics_rows, "month_to_date_revenue")
     day = dt.date.fromisoformat(args.as_of)
     date_to = f"{day.isoformat()} 23:59:59"
-    unit_daily_by_scope: dict[tuple[str, str], float] = collections.defaultdict(float)
-    unit_month_by_scope: dict[tuple[str, str], float] = collections.defaultdict(float)
-    for code, reason in skipped:
-        if "is_duplicate=1" not in reason:
-            continue
-        identity = tools._q(
-            "SELECT area_code FROM dim_nhanvien WHERE employee_code=? LIMIT 1", (code,)
+    self_managed_by_scope: dict[tuple[str, str], set[str]] = collections.defaultdict(set)
+    verified_self_managed = set(getattr(tools, "_VERIFIED_SELF_MANAGED_QLV_CODES", ()))
+    for recipient in recipients:
+        code = str(recipient.get("employee_code") or "").strip()
+        area = str(recipient.get("region") or "").strip().upper()
+        channel = str(recipient.get("channel") or "OTC").strip().upper()
+        identity_rows = tools._q(
+            "SELECT dmsid,position_code FROM dim_nhanvien "
+            "WHERE employee_code=? AND dmsid IS NOT NULL AND TRIM(dmsid)<>''",
+            (code,),
         )
-        area = str(identity[0].get("area_code") or "").strip().upper() if identity else ""
-        if not area:
-            print(f"FAIL: không xác định được miền của nhóm/kênh {code}.")
-            return 1
-        unit_daily_by_scope[(area, "OTC")] += _unit_revenue(
-            tools, code, area, day.isoformat(), date_to
-        )
-        unit_month_by_scope[(area, "OTC")] += _unit_revenue(
-            tools, code, area, day.replace(day=1).isoformat(), date_to
-        )
+        for identity in identity_rows:
+            if (
+                code in verified_self_managed
+                and str(identity.get("position_code") or "").strip().upper() == "QLV"
+            ):
+                self_managed_by_scope[(area, channel)].add(str(identity["dmsid"]).strip())
     failures = []
     print(f"Đang đối chiếu {len(metrics_rows)} QLV tại ngày {day.isoformat()}:")
     for area, channel in sorted(daily_by_scope):
-        region_daily = tools.revenue_by_channel(
-            day.isoformat(), date_to,
-            scope_area_code=area, scope_channel=channel,
-        )["total"]["revenue"]
-        region_month = tools.revenue_by_channel(
-            day.replace(day=1).isoformat(), date_to,
-            scope_area_code=area, scope_channel=channel,
-        )["total"]["revenue"]
+        region_daily = _region_scope_revenue(
+            tools, area, channel, day.isoformat(), date_to,
+            self_managed_by_scope.get((area, channel), set()),
+        )
+        region_month = _region_scope_revenue(
+            tools, area, channel, day.replace(day=1).isoformat(), date_to,
+            self_managed_by_scope.get((area, channel), set()),
+        )
         qlv_daily = daily_by_scope[(area, channel)]
         qlv_month = month_by_scope[(area, channel)]
-        unit_daily = unit_daily_by_scope.get((area, channel), 0.0)
-        unit_month = unit_month_by_scope.get((area, channel), 0.0)
-        daily_diff = qlv_daily + unit_daily - float(region_daily or 0.0)
-        month_diff = qlv_month + unit_month - float(region_month or 0.0)
+        daily_diff = qlv_daily - region_daily
+        month_diff = qlv_month - region_month
         status = "PASS" if max(abs(daily_diff), abs(month_diff)) <= args.tolerance_vnd else "FAIL"
         print(
-            f"  {status} {area}/{channel}: QLV ngày {qlv_daily:,.0f} đ + nhóm/kênh {unit_daily:,.0f} đ "
-            f"→ lệch {daily_diff:,.0f} đ; lũy kế lệch {month_diff:,.0f} đ"
+            f"  {status} {area}/{channel}: QLV (TDV) ngày {qlv_daily:,.0f} đ / "
+            f"miền cùng tầng {region_daily:,.0f} đ → lệch {daily_diff:,.0f} đ; "
+            f"lũy kế lệch {month_diff:,.0f} đ"
         )
         if status == "FAIL":
             failures.append((area, channel, daily_diff, month_diff))
 
     if failures:
-        print("FAIL: tổng các đội chưa khớp số miền; kiểm tra QLV thiếu, mã lặp hoặc ManagerCode Bravo.")
+        print(
+            "FAIL: tổng các đội chưa khớp doanh số tầng TDV; kiểm tra QLV thiếu, mã lặp "
+            "hoặc ManagerCode Bravo."
+        )
         return 1
-    print("PASS: tổng các QLV khớp số miền cho cả ngày và lũy kế tháng.")
+    print("PASS: tổng các QLV khớp doanh số tầng TDV trong miền cho cả ngày và lũy kế tháng.")
     return 0
 
 

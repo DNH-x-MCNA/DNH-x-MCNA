@@ -2,7 +2,7 @@
 import pytest
 
 import main
-from scripts.verify_qlv_digest_reconciliation import _discover_qlv_recipients, _unit_revenue
+from scripts.verify_qlv_digest_reconciliation import _discover_qlv_recipients, _region_scope_revenue
 from src.qlv_digest import (
     QLVDigestScopeError,
     build_qlv_digest_metrics,
@@ -400,23 +400,18 @@ def test_discover_bo_qua_nhom_kenh_is_duplicate_khong_co_ngoai_le():
     assert skipped == [("MN1", "đơn vị/nhóm kênh (is_duplicate=1)")]
 
 
-def test_unit_revenue_dung_ca_employee_code_va_channel_code():
+def test_region_scope_revenue_chi_gom_tdv_va_qlv_tu_quan_ly():
     class DiscoveryTools:
+        _VERIFIED_SELF_MANAGED_QLV_CODES = ("MBKV12",)
+
         @staticmethod
         def _q(sql, params):
-            if "SELECT MAX(save_date) d" in sql:
-                return [{"d": "2026-08-27"}]
-            if "WITH latest AS" in sql:
-                return [{"employee_code": "TK01", "emp_dms_code": "TK01_DMS", "dmsid": "TK01_DMS"}]
-            if "SELECT dmsid FROM dim_nhanvien" in sql:
-                return [{"dmsid": "CHANNEL_MN1"}]
             if "COALESCE(SUM(v.amount9)" in sql:
+                assert "nv.position_code='TDV'" in sql
                 assert "v.employee_code IN" in sql
-                assert "v.channel_code IN" in sql
-                assert " OR " in sql
                 return [{"revenue": 123456.0}]
             raise AssertionError(sql)
 
-    assert _unit_revenue(
-        DiscoveryTools(), "MN1", "MN", "2026-08-01", "2026-08-27 23:59:59"
+    assert _region_scope_revenue(
+        DiscoveryTools(), "MB", "OTC", "2026-08-01", "2026-08-27 23:59:59", {"ASM11"}
     ) == 123456.0
