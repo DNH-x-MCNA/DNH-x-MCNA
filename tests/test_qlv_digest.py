@@ -336,9 +336,9 @@ def test_discover_qlv_tu_snapshot_khong_can_mapping_teams():
     class DiscoveryTools:
         @staticmethod
         def _q(sql, params):
-            if "MAX(save_date)" in sql:
+            if "SELECT MAX(save_date) d" in sql:
                 return [{"d": "2026-08-27"}]
-            if "DISTINCT manager_code" in sql:
+            if "SELECT DISTINCT f.manager_code" in sql:
                 return [{"manager_code": "QLV01"}, {"manager_code": "QLV02"}]
             if "FROM dim_nhanvien" in sql:
                 return [
@@ -356,15 +356,38 @@ def test_discover_qlv_tu_snapshot_khong_can_mapping_teams():
     assert all(row["role"] == "qlv" and row["channel"] == "OTC" for row in result)
 
 
+def test_discover_qlv_lay_manager_tu_snapshot_moi_nhat_cua_tung_nhan_vien():
+    calls = []
+
+    class DiscoveryTools:
+        @staticmethod
+        def _q(sql, params):
+            calls.append((sql, params))
+            if "SELECT MAX(save_date) d" in sql:
+                return [{"d": "2026-08-27"}]
+            if "SELECT DISTINCT f.manager_code" in sql:
+                assert params == ("2026-08-27",)
+                return [{"manager_code": "MBKV1"}]
+            if "FROM dim_nhanvien" in sql:
+                return [{"employee_code": "MBKV1", "area_code": "MB", "position_code": "QLV"}]
+            raise AssertionError(sql)
+
+    result, skipped = _discover_qlv_recipients(DiscoveryTools(), "2026-08-27")
+
+    assert [row["employee_code"] for row in result] == ["MBKV1"]
+    assert skipped == []
+    assert any("GROUP BY employee_code" in sql for sql, _ in calls)
+
+
 def test_discover_bo_qua_nhom_kenh_is_duplicate_khong_co_ngoai_le():
     class DiscoveryTools:
         _KNOWN_MISFLAGGED_DUPLICATE_CODES = ("MBKV12", "TM25030101")
 
         @staticmethod
         def _q(sql, params):
-            if "MAX(save_date)" in sql:
+            if "SELECT MAX(save_date) d" in sql:
                 return [{"d": "2026-08-27"}]
-            if "DISTINCT manager_code" in sql:
+            if "SELECT DISTINCT f.manager_code" in sql:
                 return [{"manager_code": "MN1"}, {"manager_code": "MBKV12"}]
             return [
                 {"employee_code": "MN1", "area_code": "MN", "position_code": "QLV", "is_duplicate": 1},

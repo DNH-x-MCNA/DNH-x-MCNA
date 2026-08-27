@@ -45,9 +45,13 @@ def _discover_qlv_recipients(report_tools, as_of: str) -> tuple[list[dict], list
     if not latest:
         return [], []
     manager_rows = report_tools._q(
-        "SELECT DISTINCT manager_code FROM fact_tonghopkhachhang "
-        "WHERE save_date=? AND manager_code IS NOT NULL AND TRIM(manager_code)<>''",
-        (latest,),
+        "WITH latest AS ("
+        " SELECT employee_code, MAX(save_date) d FROM fact_tonghopkhachhang "
+        " WHERE save_date<=? GROUP BY employee_code) "
+        "SELECT DISTINCT f.manager_code FROM fact_tonghopkhachhang f "
+        "JOIN latest l ON l.employee_code=f.employee_code AND l.d=f.save_date "
+        "WHERE f.manager_code IS NOT NULL AND TRIM(f.manager_code)<>''",
+        (as_of,),
     )
     codes = [str(row.get("manager_code") or "").strip() for row in manager_rows]
     codes = list(dict.fromkeys(code for code in codes if code))
