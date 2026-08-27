@@ -20,6 +20,7 @@ load_env()
 from src.database import get_db_engines, load_config
 from src.etl import get_daily_digest_metrics, get_weekly_digest_metrics, get_monthly_digest_metrics
 from src.notifier import build_digest_email, send_email, flush_critical_teams_queue, send_teams_alert
+from src.qlv_digest import build_qlv_digest_metrics, build_qlv_teams_content
 from src.alerts import (
     run_alert_checks,               # bản MOCK (ERP/CRM giả lập) — chỉ dùng ở môi trường 'local'
     run_smart_business_alerts,      # cảnh báo thật: nợ quá hạn / cháy kho / KPI thấp
@@ -180,6 +181,8 @@ def send_daily_digest(dry_run=False, audience_filter=None, webhook_override=None
         audience = r.get('audience')
         region = r.get('region')
         channel = r.get('channel')
+        role = str(r.get('role') or '').strip().lower()
+        employee_code = str(r.get('employee_code') or '').strip()
         webhook = webhook_override or (r.get('teams_webhook') or '').strip() or None
         # 26/08/2026: truong TUY CHON, de trong thi payload y het truoc day. Dien vao thi mot Flow
         # Power Automate duy nhat co the tu dinh tuyen theo nguoi nhan - xem ghi chu dai trong
@@ -187,6 +190,77 @@ def send_daily_digest(dry_run=False, audience_filter=None, webhook_override=None
         teams_recipient = (r.get('teams_recipient') or '').strip() or None
 
         try:
+            if employee_code and role != "qlv":
+                raise ValueError(
+                    "Người nhận có employee_code nhưng role không phải qlv; đã dừng để tránh chạy nhánh toàn miền."
+                )
+            if role == "qlv":
+                # Báo cáo chứa dữ liệu đúng một đội, vì vậy thiếu mã đội hoặc đích định tuyến là
+                # lỗi cấu hình phải dừng. Không dùng fallback toàn miền/toàn quốc của nhánh cũ.
+                if not employee_code:
+                    raise ValueError(
+                        "Người nhận QLV thiếu employee_code; đã dừng để không gửi dữ liệu ngoài đội."
+                    )
+                if not region:
+                    raise ValueError(
+                        "Người nhận QLV thiếu region; đã dừng để không mở rộng phạm vi báo cáo."
+                    )
+                if not teams_recipient:
+                    raise ValueError(
+                        "Người nhận QLV thiếu teams_recipient; chưa thể định tuyến báo cáo riêng."
+                    )
+
+                qlv_metrics = build_qlv_digest_metrics(
+                    employee_code=employee_code,
+                    region=region,
+                    channel=channel,
+                )
+                headers, rows, sections = build_qlv_teams_content(
+                    qlv_metrics,
+                    format_vietnamese_money,
+                )
+                region_label = REGION_NAMES_VI.get(region, region)
+                title = (
+                    f"BÁO CÁO ĐỘI QLV HÀNG NGÀY ({qlv_metrics['date']})"
+                    + (f" — {audience}" if audience else "")
+                )
+                freshness = qlv_metrics.get('freshness_note') or ""
+                summary = (
+                    f"Doanh số, KPI, khách hàng và công nợ của riêng đội {employee_code}. "
+                    f"{freshness}"
+                ).strip()
+
+                if dry_run:
+                    print(f"[DRY-RUN] Dựng Daily Digest QLV thành công cho '{audience or employee_code}'.")
+                    print(f" - Employee code: {employee_code}")
+                    print(f" - Recipient routing: đã cấu hình")
+                    print(f" - Title: {title}")
+                    print(f" - Table Rows: {len(rows)}")
+                    print(f" - Sections: {len(sections)}")
+                    print(" - Inventory: không đưa vào báo cáo QLV")
+                    continue
+
+                sent = send_teams_alert(
+                    title=title,
+                    summary=summary,
+                    table_headers=headers,
+                    table_rows=rows,
+                    severity="INFO",
+                    period=qlv_metrics['date'],
+                    channel=qlv_metrics['channel'],
+                    region=region_label,
+                    webhook_url_override=webhook,
+                    sections=sections,
+                    recipient=teams_recipient,
+                    audience=audience,
+                )
+                if sent:
+                    print(f"[{datetime.now()}] Daily Digest QLV cho '{audience or employee_code}' đã gửi thành công.")
+                else:
+                    print(f"[{datetime.now()}] Gửi Daily Digest QLV cho '{audience or employee_code}' thất bại.")
+                    overall_ok = False
+                continue
+
             metrics = get_daily_digest_metrics(region=region, channel=channel)
             headers, rows = _digest_table(metrics)
             region_label = REGION_NAMES_VI.get(region, region) if region else "Toàn quốc"
@@ -316,10 +390,21 @@ def _send_periodic_email_report(get_metrics_fn, period_label, report_title, dry_
     # X" trong email) thay vi tu bia cong thuc gop moi.
     config = load_config()
     show_ops_flag = config.get('report_feature_flags', {}).get('show_operational_quality', False)
-    recipients = config.get('report_recipients') or []
+    configured_recipients = config.get('report_recipients') or []
+    # QLV chỉ được nhận Daily Digest theo đội ở send_daily_digest(). Weekly/Monthly hiện vẫn dựng
+    # theo miền/kênh, chưa có employee_code; cho QLV đi qua đây sẽ lộ số toàn miền cho một đội.
+    recipients = [
+        recipient for recipient in configured_recipients
+        if str(recipient.get('role') or '').strip().lower() != 'qlv'
+        and not str(recipient.get('employee_code') or '').strip()
+    ]
     if not recipients:
-        print(f"[{datetime.now()}] Chưa cấu hình report_recipients — gửi {report_title} bản không lọc (hành vi cũ).")
-        recipients = [{"audience": None, "region": None, "channel": None, "emails": None}]
+        if not configured_recipients:
+            print(f"[{datetime.now()}] Chưa cấu hình report_recipients — gửi {report_title} bản không lọc (hành vi cũ).")
+            recipients = [{"audience": None, "region": None, "channel": None, "emails": None}]
+        else:
+            print(f"[{datetime.now()}] Không có người nhận {report_title} hợp lệ ngoài QLV.")
+            return False
 
     if audience_filter:
         recipients = [r for r in recipients if r.get('audience') == audience_filter]

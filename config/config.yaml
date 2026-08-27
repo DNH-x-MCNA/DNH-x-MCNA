@@ -62,6 +62,24 @@ email:
 # channel: null (không lọc) hoặc "OTC"/"ETC".
 # emails: CHƯA có email thật cho từng manager — tạm route tất cả về 1 địa chỉ hiện có, điền
 # email thật vào đây khi có, KHÔNG cần sửa code (main.py/src/etl.py đã đọc thẳng danh sách này).
+#
+# Báo cáo RIÊNG cho từng QLV (Daily Digest qua một Flow Teams dùng chung) thêm bốn trường bắt buộc:
+#   role: "qlv"
+#   employee_code: mã nhân viên QLV trên Bravo (vd TM.../MBKV...; KHÔNG phải username)
+#   region: miền phụ trách của QLV
+#   teams_recipient: địa chỉ/định danh người nhận để Flow định tuyến đúng người
+# Thiếu một trong employee_code/region/teams_recipient thì main.py cố ý DỪNG riêng người nhận đó;
+# tuyệt đối không fallback sang số toàn miền. Không thêm mục tồn kho vào báo cáo QLV vì tồn kho
+# không được gán theo đội. Chỉ kích hoạt người nhận thật sau khi dry-run và đối chiếu mã nhân viên.
+# Ví dụ cấu trúc (để comment, không gửi thật):
+#   - audience: "QLV - Họ tên"
+#     role: "qlv"
+#     employee_code: "MA_NHAN_VIEN"
+#     region: "bac"
+#     channel: "OTC"
+#     emails: []
+#     teams_recipient: "DIA_CHI_DINH_TUYEN"
+#     teams_webhook: "WEBHOOK_FLOW_DUNG_CHUNG"
 report_recipients:
   - audience: "C-Level (Toàn quốc)"
     region: null

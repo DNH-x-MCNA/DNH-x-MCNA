@@ -106,6 +106,32 @@ def test_trung_ca_flow_lan_nguoi_nhan_thi_van_gop(monkeypatch):
     assert len(ket) == 1, "cung Flow, cung nguoi nhan -> mot luot"
 
 
+def test_alert_theo_mien_khong_gui_cho_qlv_vi_chua_co_scope_doi(monkeypatch):
+    """Thêm QLV vào report_recipients không được biến alert toàn miền thành tin riêng của đội."""
+    _dat_audience(monkeypatch, [
+        {"audience": "C-Level", "region": None, "channel": None,
+         "teams_webhook": "https://flow-clevel"},
+        {"audience": "QLV A", "role": "qlv", "region": "bac", "channel": "OTC",
+         "employee_code": "QLV01", "teams_webhook": "https://flow-dinh-tuyen",
+         "teams_recipient": "qlv.a@dnh.vn"},
+    ])
+
+    ket = notifier._resolve_teams_webhooks("Miền Bắc", "OTC")
+
+    assert ket == [("https://flow-clevel", "C-Level", None)]
+
+
+def test_alert_cung_khong_gui_khi_qlv_quen_truong_role(monkeypatch):
+    """employee_code là dấu hiệu dữ liệu theo đội; thiếu role phải fail-closed, không được lọt alert."""
+    _dat_audience(monkeypatch, [{
+        "audience": "QLV quên role", "region": "bac", "channel": "OTC",
+        "employee_code": "QLV01", "teams_webhook": "https://flow-dinh-tuyen",
+        "teams_recipient": "qlv.a@dnh.vn",
+    }])
+
+    assert notifier._resolve_teams_webhooks("Miền Bắc", "OTC") == []
+
+
 # ---------------------------------------------------------------------------------------
 # Payload
 # ---------------------------------------------------------------------------------------

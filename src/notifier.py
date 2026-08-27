@@ -1345,6 +1345,12 @@ def _resolve_teams_webhooks(region_label, channel_label):
     matched = []
     seen = set()
     for r in recipients:
+        # QLV chỉ được nhận báo cáo đã khóa theo employee_code ở main.py::send_daily_digest.
+        # Alert tại đây mới chỉ có region/channel, không có phạm vi đội; gửi nó cho QLV sẽ làm lộ
+        # dữ liệu toàn miền. Khi alert có scope đội thật thì phải mở bằng một nhánh riêng có test.
+        if (str(r.get('role') or '').strip().lower() == 'qlv'
+                or str(r.get('employee_code') or '').strip()):
+            continue
         aud_region = r.get('region')
         aud_channel = r.get('channel')
         region_ok = (not aud_region) or (aud_region == alert_region_key)
