@@ -104,7 +104,12 @@ def _group_totals(metrics_rows: list[dict], period_key: str) -> dict[tuple[str, 
 
 
 def _unit_revenue(report_tools, manager_code: str, area: str, date_from: str, date_to: str) -> float:
-    """Doanh số nhóm/kênh rollup (MN1/MN4), chỉ dùng để cộng đủ tổng miền khi đối chiếu."""
+    """Doanh số nhóm/kênh rollup (MN1/MN4), chỉ dùng để cộng đủ tổng miền khi đối chiếu.
+
+    Bravo ghi nhóm/kênh đặc biệt qua ``vhoadon_otc.channel_code`` (dmsid của bản ghi
+    ``dim_nhanvien``), trong khi nhân viên trực thuộc vẫn ghi qua ``employee_code``. Phải
+    xét cả hai cột trong cùng một điều kiện OR để không bỏ sót kênh và cũng không đếm đôi.
+    """
     latest_rows = report_tools._q(
         "SELECT MAX(save_date) d FROM fact_tonghopkhachhang WHERE save_date<=?",
         (date_to,),
@@ -123,23 +128,43 @@ def _unit_revenue(report_tools, manager_code: str, area: str, date_from: str, da
         "WHERE e.manager_code=? GROUP BY e.employee_code",
         (latest, manager_code),
     )
-    keys = []
+    employee_keys = []
     for row in rows:
         for key in (row.get("employee_code"), row.get("emp_dms_code"), row.get("dmsid")):
             if key and str(key).strip():
-                keys.append(str(key).strip())
-    keys = list(dict.fromkeys(keys))
-    if not keys:
+                employee_keys.append(str(key).strip())
+    employee_keys = list(dict.fromkeys(employee_keys))
+    identity_rows = report_tools._q(
+        "SELECT dmsid FROM dim_nhanvien WHERE employee_code=? AND dmsid IS NOT NULL "
+        "AND TRIM(dmsid)<>''",
+        (manager_code,),
+    )
+    channel_keys = list(dict.fromkeys(
+        str(row.get("dmsid")).strip() for row in identity_rows if row.get("dmsid")
+    ))
+    if not employee_keys and not channel_keys:
         return 0.0
-    placeholders = ",".join("?" for _ in keys)
+    employee_clause = ""
+    employee_params: tuple = ()
+    if employee_keys:
+        placeholders = ",".join("?" for _ in employee_keys)
+        employee_clause = f"v.employee_code IN ({placeholders})"
+        employee_params = tuple(employee_keys)
+    channel_clause = ""
+    channel_params: tuple = ()
+    if channel_keys:
+        placeholders = ",".join("?" for _ in channel_keys)
+        channel_clause = f"v.channel_code IN ({placeholders})"
+        channel_params = tuple(channel_keys)
+    source_clause = " OR ".join(part for part in (employee_clause, channel_clause) if part)
     result = report_tools._q(
         "SELECT COALESCE(SUM(v.amount9),0) revenue "
         "FROM vhoadon_otc v "
         "LEFT JOIN dms_khachhang kh ON kh.code=v.customer_code "
         "LEFT JOIN dim_tinhthanhpho tp ON tp.city_id=kh.city_id "
-        f"WHERE v.employee_code IN ({placeholders}) AND tp.area_code=? "
+        f"WHERE ({source_clause}) AND tp.area_code=? "
         "AND v.doc_date BETWEEN ? AND ?",
-        tuple(keys) + (area, date_from, date_to),
+        employee_params + channel_params + (area, date_from, date_to),
     )
     return float(result[0].get("revenue") or 0.0) if result else 0.0
 
