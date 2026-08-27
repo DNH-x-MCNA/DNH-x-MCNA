@@ -2,6 +2,7 @@
 import pytest
 
 import main
+from scripts.verify_qlv_digest_reconciliation import _discover_qlv_recipients
 from src.qlv_digest import (
     QLVDigestScopeError,
     build_qlv_digest_metrics,
@@ -329,3 +330,26 @@ def test_weekly_monthly_chi_co_qlv_thi_dung_khong_fallback_toan_quoc(monkeypatch
         "Báo cáo tháng",
         dry_run=True,
     ) is False
+
+
+def test_discover_qlv_tu_snapshot_khong_can_mapping_teams():
+    class DiscoveryTools:
+        @staticmethod
+        def _q(sql, params):
+            if "MAX(save_date)" in sql:
+                return [{"d": "2026-08-27"}]
+            if "DISTINCT manager_code" in sql:
+                return [{"manager_code": "QLV01"}, {"manager_code": "QLV02"}]
+            if "FROM dim_nhanvien" in sql:
+                return [
+                    {"employee_code": "QLV01", "area_code": "MB", "position_code": "QLV"},
+                    {"employee_code": "QLV02", "area_code": "MN", "position_code": "QLV"},
+                ]
+            raise AssertionError(sql)
+
+    result = _discover_qlv_recipients(DiscoveryTools(), "2026-08-27")
+
+    assert [(row["employee_code"], row["region"]) for row in result] == [
+        ("QLV01", "MB"), ("QLV02", "MN"),
+    ]
+    assert all(row["role"] == "qlv" and row["channel"] == "OTC" for row in result)
