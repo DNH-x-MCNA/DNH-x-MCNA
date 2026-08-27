@@ -631,7 +631,8 @@ def revenue_by_region(date_from: str, date_to: str, scope_area_code: str = None,
 #   V15  - dat 25% doanh so thang vao ngay 15        (moc giua ky, KHONG phai % ca thang)
 #   V22  - 55% doanh so thang + ty le target >=75/80%
 #   V25  - >=70% tinh den ngay 25 (the he QD 0429)
-#   ASO  - theo SO LUONG khach hang hoat dong (MB 40, MT 35, MN 25) - KHONG phai %
+#   ASO  - theo SO LUONG khach hang hoat dong (MB 40, MT 35, MN 25) - KHONG phai %;
+#          KHONG ap dung cho CS (Cho si) va TK (kenh MT), hai vai tro nay dung is_ac.
 #   QB/YB- thuong quy >=80% quy, thuong nam >=75% nam
 # Chua ke LUONG CO BAN: tu 60% tro len van huong 100% LCB, duoi 60% moi bi cat theo ty le.
 # => Nguoi duoi 65% VAN CO THE duoc V15/ASO va VAN huong du luong co ban. TUYET DOI khong dien dat
@@ -652,6 +653,18 @@ BONUS_THRESHOLD_MGR = 70         # QLV va cac vai tro quan ly/kenh - cong thuong
 KPI_ACHIEVED_THRESHOLD = 80      # DAT KPI - moc danh gia hieu qua, CHUNG cho moi vai tro
 KPI_FULL_TARGET = 100            # "dat chi tieu" dung nghia den - khong lien quan 2 moc tren
 KPI_WARN_THRESHOLD = 50          # duoi nguong nay coi la "nguy hiem" (do), giua 2 nguong la "trung binh" (vang)
+
+# 27/08/2026: DNH chot lai pham vi chi tieu khach hang hoat dong.
+#   CS = Cho si (chao si/wholesale), TK = Truong kenh MT (Modern Trade)
+# Hai vai tro nay dung co is_ac/Active Customer; KHONG dung ASO. ASO la khoan rieng cua
+# cac vai tro con lai khi nguon tinh luong co ghi nhan. Giu quy tac o mot noi de cac bao cao
+# luong/detail/ranking va phep doi chieu khong tu hieu moi ham mot kieu.
+_IS_AC_POSITIONS = frozenset(("CS", "TK"))
+
+
+def _uses_is_ac(position_code: str = None) -> bool:
+    """True neu vai tro dung co is_ac (CS/Cho si hoac TK/Kenh MT), khong dung ASO."""
+    return str(position_code or "").strip().upper() in _IS_AC_POSITIONS
 
 # 23/07/2026 - PORT tu repo bao cao D:\DNH (src/alerts.py::_KNOWN_MISFLAGGED_DUPLICATE_CODES +
 # _is_duplicate_filter_sql). 2 nhan vien THAT, dang lam viec binh thuong, bi Bravo gan nham co
@@ -1280,24 +1293,28 @@ def _customer_flag_caveat() -> str:
     Do thuc te thang 7/2026 (thang tron ven, tang nhan vien): is_ro=5.607 khach / 30,69 ty;
     KHONG mang co nao=646 khach / 1,66 ty; is_nc=606 khach / 1,16 ty; is_ac=44 khach.
     Hai diem KHONG khop voi cach hieu thong thuong:
-      - is_ac chi 44/6.859 khach nen KHONG THE la "khach hoat dong" nhu schema_context.py dang ghi
-        (nhan do nhieu kha nang la suy doan tu chu viet tat AC = Active Customer, chua ai xac nhan).
+      - is_ac chi 44/6.859 khach trong snapshot OTC. DNH da xac nhan pham vi ngay 27/08/2026:
+        day la co danh cho CS (Cho si) va TK (kenh MT), khong phai mot phep dem ASO cho TDV/QLV.
       - 646 khach khong mang co nao NHUNG VAN CO doanh thu 1,66 ty (646/646 dong deu co amount_ct>0)
         - tuc "khong co co" KHONG phai la "khong mua". Suy ra is_ro cung khong han la "mua lai" theo
         nghia thong thuong.
-    Vi vay tuyet doi khong duoc trinh bay 2 con so nay nhu dinh nghia da chot."""
+    Quy tac pham vi moi 27/08/2026: is_ac la co danh cho CS (Cho si) va TK (kenh MT),
+    khong phai co ASO. Vi vay so_is_ac chi duoc doc tren dong thuoc mot trong hai vai tro nay;
+    khong duoc suy dien TDV/QLV co is_ac thanh ASO hoac nguoc lai. Ten "Active Customer" da duoc
+    xac nhan, nhung cach dem van phai noi ro la co goc Bravo, khong tu dong dong nghia voi toan bo
+    khach dang mua."""
     return ("So dem theo CO GOC cua Bravo. DNH da xac nhan ten viet tat ngay 26/08/2026: "
             "NC = New Customer (khach moi), RO = Re-Order (khach dat lai hang), AC = Active Customer. "
             "Muc do TIN CAY khi tra loi thi VAN khac nhau, phai noi dung muc: "
             "(1) is_nc va is_ro dung on dinh - do 3 thang lien tiep cho thay is_nc + is_ro + (khong "
             "mang co nao) BANG DUNG tong so khach moi thang, tuc hai co loai tru nhau va cung phu "
             "~90% khach, khop voi nghia moi/dat lai. "
-            "(2) is_ac: ten la 'Active Customer' nhung CON SO khong hanh xu nhu phep dem khach dang "
-            "hoat dong - chi 37-44 khach moi thang tren tong ~6.000 (0,6%), trong khi ~80% khach co "
-            "is_ro tuc VAN DANG MUA. Suy ra is_ac danh dau mot trang thai HEP hon nhieu, tieu chi "
-            "chua duoc lam ro. Duoc goi ten 'khach hoat dong (co is_ac)', nhung KHONG duoc dung con "
-            "so nay tra loi 'cong ty co bao nhieu khach dang hoat dong'; muon dem khach con mua thi "
-            "dung is_ro hoac dem tu hoa don. "
+            "(2) is_ac: DNH xac nhan ngay 27/08/2026 day la co danh cho CS (Cho si) va TK (kenh MT), "
+            "khong phai ASO. Khi dong da co is_ac thi khong duoc gan them ASO; voi CS/TK chi bao cao "
+            "Active Customer. Con so is_ac lich su chi 37-44 khach/thang tren ~6.000 (0,6%) trong "
+            "snapshot OTC co the hep hon so khach dang mua, nen "
+            "van phai noi ro day la so co goc Bravo, khong dung no de suy ra toan bo khach dang hoat dong; "
+            "muon dem khach con mua thi dung is_ro hoac dem tu hoa don. "
             "(3) Con ~8-10% khach KHONG mang co nao NHUNG VAN CO doanh thu - chua giai thich duoc, "
             "khong duoc coi la 'khong mua'.")
 
@@ -1313,11 +1330,11 @@ def customer_lifecycle_summary(year_month: str = None, months_back: int = 1,
     year_month: 'YYYY-MM' thang cuoi (mac dinh: thang co snapshot moi nhat).
     months_back: so thang tra ve tinh ca thang cuoi (mac dinh 1, toi da 12).
 
-    QUAN TRONG - doc _customer_flag_caveat(): chi rieng "khach moi" (is_nc) la nhan da on dinh; hai
-    co con lai CHUA duoc DNH xac nhan nghia nghiep vu nen tra ve duoi ten trung tinh (so_is_ro/
-    so_is_ac) kem canh bao, KHONG dat ten 'mua lai'/'hoat dong'.
+    QUAN TRONG - doc _customer_flag_caveat(): chi rieng "khach moi" (is_nc) la nhan da on dinh;
+    so_is_ro/so_is_ac van tra ve duoi ten co goc. is_ac chi ap dung cho CS (Cho si) va TK (kenh MT),
+    khong phai ASO; khong dat nhan ASO cho mot dong da co is_ac.
 
-    Moi con so deu la COUNT(DISTINCT customer_code) tren TANG NHAN VIEN (TDV/CTV/CS) - bat buoc, vi
+    Moi con so deu la COUNT(DISTINCT customer_code) tren TANG NHAN VIEN (TDV/CTV/CS) cua nguon OTC - bat buoc, vi
     bang co ca dong rollup QLV chong len dong TDV (xem ghi chu o _EMPLOYEE_TIER_POSITIONS)."""
     # FACT_TongHopKhachHang noi qua DIM_NhanVien, ma danh muc nay chi phu nhan vien OTC (xem
     # docs/data_dictionary.md muc 8.2). Khong duoc tra so OTC cho tai khoan ETC roi gan nhan nhu
@@ -1353,7 +1370,9 @@ def customer_lifecycle_summary(year_month: str = None, months_back: int = 1,
         sql = (f"SELECT COUNT(DISTINCT f.customer_code) tong_khach, "
                f"COUNT(DISTINCT CASE WHEN f.is_nc=1 THEN f.customer_code END) khach_moi, "
                f"COUNT(DISTINCT CASE WHEN f.is_ro=1 THEN f.customer_code END) so_is_ro, "
-               f"COUNT(DISTINCT CASE WHEN f.is_ac=1 THEN f.customer_code END) so_is_ac, "
+               f"COUNT(DISTINCT CASE WHEN f.is_ac=1 "
+               f"AND UPPER(COALESCE(nv.position_code,'')) IN ('CS','TK') "
+               f"THEN f.customer_code END) so_is_ac, "
                # BAY SQLite (do thuc te 24/08/2026): is_nc/is_ro luu kieu TEXT ('0'/'1') du schema
                # khai INTEGER. So sanh THANG "f.is_nc=1" van dung vi SQLite ap affinity cua COT len
                # gia tri. Nhung COALESCE(f.is_nc,0) la BIEU THUC - bieu thuc KHONG co affinity, nen
@@ -4856,12 +4875,40 @@ def salary_bonus_policy(bonus_type: str = "v25", as_of_date: str = None,
                         area_code: str = None, position_code: str = None,
                         scope_area_code: str = None, scope_employee_code: str = None,
                         scope_role: str = None) -> dict:
-    """Quy tac + bac tien cua V15/V22/V25/ASO, doc tu DIM_BacThuong va doi chieu so da chot."""
+    """Quy tac + bac tien cua V15/V22/V25/ASO, doc tu DIM_BacThuong va doi chieu so da chot.
+
+    Quy tac nghiep vu 27/08/2026: CS (Cho si) va TK (kenh MT) dung is_ac/Active Customer,
+    khong co ASO. Vi vay truy van chinh sach ASO cho hai vai tro nay phai tra ve
+    ``not_applicable`` thay vi doc nham bac ASO chung.
+    """
     bonus = str(bonus_type or "v25").strip().upper()
     if bonus not in {"V15", "V22", "V25", "ASO"}:
         raise ValueError("bonus_type chi nhan V15, V22, V25 hoac ASO.")
     if scope_area_code:
         area_code = scope_area_code
+
+    normalized_position = str(position_code or "").strip().upper()
+    if bonus == "ASO" and _uses_is_ac(normalized_position):
+        return {
+            "bonus_type": bonus,
+            "position_code": normalized_position,
+            "not_applicable": True,
+            "policy_as_of": None,
+            "actual_snapshot_date": None,
+            "formula": (
+                "ASO khong ap dung cho CS (Cho si) va TK (kenh MT). Hai vai tro nay dung co "
+                "is_ac/Active Customer; mot ban ghi da co is_ac thi khong duoc gan hoac cong ASO."
+            ),
+            "procedure_loads_v25_rules": None,
+            "implementation_warning": None,
+            "rule_actual_mismatch_count": 0,
+            "rule_actual_mismatches": [],
+            "terminology_note": (
+                "CS/TK dung chi tieu Active Customer (is_ac), khong phai chi tieu/khoan thuong ASO."
+            ),
+            "rule_count": 0,
+            "rules": [],
+        }
 
     if as_of_date:
         raw = str(as_of_date).strip()
@@ -4891,9 +4938,9 @@ def salary_bonus_policy(bonus_type: str = "v25", as_of_date: str = None,
     if area_code:
         where += " AND AreaCode=:area_code"
         params["area_code"] = area_code
-    if position_code:
+    if normalized_position:
         where += " AND PositionCode=:position_code"
-        params["position_code"] = str(position_code).upper()
+        params["position_code"] = normalized_position
 
     rule_rows = _q_bravo(f"""
         SELECT CriterialCode, TypeCode, AreaCode, PositionCode, Description,
@@ -4937,9 +4984,9 @@ def salary_bonus_policy(bonus_type: str = "v25", as_of_date: str = None,
         if area_code:
             actual_where += " AND f.AreaCode=:actual_area_code"
             actual_params["actual_area_code"] = area_code
-        if position_code:
+        if normalized_position:
             actual_where += " AND f.PositionCode=:actual_position_code"
-            actual_params["actual_position_code"] = str(position_code).upper()
+            actual_params["actual_position_code"] = normalized_position
         if scope_employee_code:
             allowed_codes = [scope_employee_code]
             allowed_codes += [x.get("employee_code") for x in _team_of_qlv(scope_employee_code, snapshot_date)
@@ -5178,6 +5225,10 @@ def salary_achievement_summary(save_date: str = None, scope_area_code: str = Non
     Tra ve so luong dat dieu kien va ty le % tren tong so nhan vien thuoc pham vi.
     Phan quyen: scope_employee_code gioi han ve doi cua QLV.
 
+    Quy tac 27/08/2026: CS (Cho si) va TK (kenh MT) dung is_ac/Active Customer, khong co ASO.
+    Vi vay ASO chi dem tren cac vi tri khac CS/TK; khong de mot dong ASO bi gan nham cho
+    nguoi da co co is_ac.
+
     19/08/2026: SUA loi dinh dang ma - truoc day dung _employee_scope_clause() (qua
     _get_team_dms_ids(), tra ve DMSId dung de loc BANG HOA DON vhoadon_otc/etc), nhung
     fact_thongketinhluong.employee_code duoc dong bo tu CHINH EmployeeCode tho cua Bravo (xem
@@ -5212,7 +5263,11 @@ def salary_achievement_summary(save_date: str = None, scope_area_code: str = Non
         SUM(CASE WHEN f.v15_bonus > 0 THEN 1 ELSE 0 END) as v15_achieved,
         SUM(CASE WHEN f.v22_bonus > 0 THEN 1 ELSE 0 END) as v22_achieved,
         SUM(CASE WHEN f.v25_bonus > 0 THEN 1 ELSE 0 END) as v25_achieved,
-        SUM(CASE WHEN f.aso_bonus > 0 THEN 1 ELSE 0 END) as aso_achieved
+        SUM(CASE WHEN f.aso_bonus > 0
+                      AND UPPER(COALESCE(f.position_code,'')) NOT IN ('CS','TK')
+                 THEN 1 ELSE 0 END) as aso_achieved,
+        SUM(CASE WHEN UPPER(COALESCE(f.position_code,'')) IN ('CS','TK')
+                 THEN 1 ELSE 0 END) as is_ac_position_count
         FROM fact_thongketinhluong f
         WHERE f.save_date=? {cond_sql}
         """
@@ -5234,7 +5289,12 @@ def salary_achievement_summary(save_date: str = None, scope_area_code: str = Non
         "v25_achieved_pct": round(r["v25_achieved"] / total * 100, 1) if total else 0,
         "aso_achieved_count": r["aso_achieved"],
         "aso_achieved_pct": round(r["aso_achieved"] / total * 100, 1) if total else 0,
-        "note": "So luong nhan vien dat cac moc thuong V15, V22, V25 va ASO tren tong so nhan vien (dua tren du lieu co phat sinh tien thuong V15/V22/V25/ASO > 0)."
+        "is_ac_position_count": int(r["is_ac_position_count"] or 0),
+        "note": (
+            "So luong nhan vien dat cac moc thuong V15, V22, V25 va ASO tren tong so nhan vien "
+            "(dua tren du lieu co phat sinh tien thuong > 0). ASO chi ap dung cho vi tri khac CS/TK; "
+            "CS (Cho si) va TK (kenh MT) dung co is_ac/Active Customer, khong cong ASO."
+        )
     }
 
 
@@ -5250,6 +5310,11 @@ def salary_detail(employee_code: str = None, save_date: str = None,
     KHONG PHAI bang tra Level->LCB). Ket qua tra ve la THUONG KINH DOANH (thuong danh muc DM1/2/3,
     thuong tien do V15/V22/V25, thuong ASO) + PHU CAP (an ca/xang xe/dien thoai) - CHUA PHAI Tong thu
     nhap day du (con thieu LCB). TUYET DOI KHONG duoc noi day la "tong luong" hay "thu nhap day du".
+
+    QUY TAC CHI TIEU KHACH HANG 27/08/2026: CS (Cho si) va TK (kenh MT) dung co
+    is_ac/Active Customer, KHONG co ASO. Neu nguon luong co ghi aso_* o mot dong CS/TK,
+    van phai coi ASO la khong ap dung va khong cong vao total_bonus; chi tra ve chi so Active
+    Customer cho hai vai tro nay. Cac vai tro con lai moi hien ASO khi nguon co du lieu.
 
     PHAN QUYEN: employee_code mac dinh la CHINH NGUOI DANG HOI (server ep qua scope_employee_code,
     xem _SELF_SCOPED_TEMPLATES) - AI KHONG duoc tu chon xem nguoi khac tru khi la C-Level/QLV xem
@@ -5366,12 +5431,29 @@ def _salary_detail_one(employee_code: str = None, save_date: str = None,
     r = row[0]
 
     dm_bonus = _f(r["dm_bonus"])
-    aso_bonus = _f(r["aso_bonus"])
+    position_code = str(r["position_code"] or "").strip().upper()
+    uses_is_ac = _uses_is_ac(position_code)
+    raw_aso_bonus = _f(r["aso_bonus"])
+    # CS/TK khong co ASO theo nghiep vu. Tra None thay vi 0 de UI/model khong nham
+    # day la mot khoan ASO that; total_bonus loai khoan nay ra hoan toan.
+    aso_bonus = None if uses_is_ac else raw_aso_bonus
     v15_bonus = _f(r["v15_bonus"])
     v22_bonus = _f(r["v22_bonus"])
     v25_bonus = _f(r["v25_bonus"])
     allowance = _f(r["lunch_amount"]) + _f(r["transport_amount"]) + _f(r["phone_amount"])
-    total_bonus = dm_bonus + aso_bonus + v15_bonus + v22_bonus + v25_bonus
+    total_bonus = dm_bonus + (0.0 if uses_is_ac else raw_aso_bonus) + v15_bonus + v22_bonus + v25_bonus
+
+    active_customer = {
+        "quantity": _f(r["active_cus_quantity"]),
+        "target": _f(r["active_cus_target"]),
+        "percent": _f(r["active_cus_percent"]),
+    }
+    aso_indicator = {
+        "quantity": _f(r["aso_quantity"]),
+        "target": _f(r["active_cus_target"]),
+        "percent": _f(r["aso_percent"]),
+        "bonus": raw_aso_bonus,
+    }
 
     threshold = _bonus_threshold(r["position_code"])
     pct = _f(r["month_sale_percent"]) * 100
@@ -5379,6 +5461,9 @@ def _salary_detail_one(employee_code: str = None, save_date: str = None,
         "employee_code": r["employee_code"], "employee_name": r["employee_name"],
         "position_code": r["position_code"], "area_code": r["area_code"], "save_date": fdate,
         "snapshot_status": "closed_period",
+        "customer_activity_metric": "is_ac" if uses_is_ac else "aso",
+        "is_ac_applicable": uses_is_ac,
+        "aso_applicable": not uses_is_ac,
         "month_sale_amount": _f(r["month_sale_amount"]), "month_sale_target": _f(r["month_sale_target"]),
         "month_sale_percent": pct, "bonus_threshold_pct": threshold,
         "meets_bonus_threshold": pct >= threshold,
@@ -5399,7 +5484,17 @@ def _salary_detail_one(employee_code: str = None, save_date: str = None,
             "reorder_customer": {"quantity": _f(r["reorder_cus_quantity"]), "target": _f(r["reorder_cus_target"]), "percent": _f(r["reorder_percent"])},
             "new_customer": {"quantity": _f(r["new_cus_quantity"]), "target": _f(r["new_cus_target"]), "percent": _f(r["new_cus_percent"])},
             "call": {"quantity": _f(r["call_quantity"]), "target": _f(r["call_target"]), "percent": _f(r["call_percent"])},
+            # Chi mot trong hai chi so duoc ap dung theo vai tro: CS/TK -> Active Customer;
+            # cac vai tro khac -> ASO. De None o nhanh khong ap dung de tranh hien thi nham ca hai.
+            "active_customer": active_customer if uses_is_ac else None,
+            "aso": aso_indicator if not uses_is_ac else None,
         },
+        "business_rule_note": (
+            "CS (Cho si) va TK (kenh MT) dung co is_ac/Active Customer; ASO khong ap dung."
+            if uses_is_ac else
+            "ASO la chi tieu/khoan thuong cua vai tro nay; neu co is_ac trong du lieu khach hang "
+            "thi khong duoc cong dong do vao ASO."
+        ),
         "warning": ("CHUA GOM LUONG CO BAN (LCB): so lieu nay CHI la Thuong kinh doanh + Phu cap, KHONG "
                     "PHAI tong thu nhap day du. LCB tinh theo Level (dua tren Target thang) hien CHUA co "
                     "trong du lieu dong bo - can bao nguoi dung lien he ke toan/HR de biet LCB chinh xac."),
@@ -5413,9 +5508,13 @@ def salary_ranking(year_month: str = None, area_code: str = None, position_code:
     """Xep hang TOP N nhan vien co THUONG CAO NHAT (hoac thuong V15, V22, V25, ASO, Thuong danh muc DM)
     trong ky/thang.
 
+    Quy tac 27/08/2026: CS (Cho si) va TK (kenh MT) dung is_ac/Active Customer, khong co ASO.
+    Khi xep tong thuong, ASO bi loai khoi hai vi tri nay; khi xep rieng ASO, hai vi tri nay
+    bi loai khoi tap xep hang va truy van rieng CS/TK tra ve ``not_applicable``.
+
     year_month: Thang can xem (YYYY-MM hoac YYYY-MM-DD, mac dinh: snapshot gan nhat da chot luong).
     area_code: Loc theo vung MB/MT/MN (mac dinh: toan cong ty).
-    position_code: Loc theo chuc danh TDV/QLV/TP (mac dinh: tat ca).
+    position_code: Loc theo chuc danh TDV/QLV/TP/CS/TK (mac dinh: tat ca).
     bonus_type: 'total' (Tong thuong KD), 'v15', 'v22', 'v25', 'aso', 'dm' (Thuong danh muc DM1+DM2+DM3).
     limit: So luong nhan vien tra ve trong bang xep hang (mac dinh 30, toi da 100).
     scope_area_code: Ep gioi han vung theo phan quyen tai khoan.
@@ -5431,6 +5530,8 @@ def salary_ranking(year_month: str = None, area_code: str = None, position_code:
     """
     if scope_area_code:
         area_code = scope_area_code
+    if position_code:
+        position_code = str(position_code).strip().upper()
 
     limit = min(max(int(limit or 30), 1), 100)
 
@@ -5446,7 +5547,11 @@ def salary_ranking(year_month: str = None, area_code: str = None, position_code:
     if not fdate:
         return {"error": "Chua co snapshot thong ke tinh luong CUOI KY da chot cho ky nay."}
 
-    order_col = "(COALESCE(dm_bonus,0) + COALESCE(v15_bonus,0) + COALESCE(v22_bonus,0) + COALESCE(v25_bonus,0) + COALESCE(aso_bonus,0))"
+    aso_component = (
+        "CASE WHEN UPPER(COALESCE(position_code,'')) IN ('CS','TK') THEN 0 "
+        "ELSE COALESCE(aso_bonus,0) END"
+    )
+    order_col = f"(COALESCE(dm_bonus,0) + COALESCE(v15_bonus,0) + COALESCE(v22_bonus,0) + COALESCE(v25_bonus,0) + {aso_component})"
     btype = str(bonus_type or "total").lower()
     if btype == "v15":
         order_col = "COALESCE(v15_bonus,0)"
@@ -5455,7 +5560,20 @@ def salary_ranking(year_month: str = None, area_code: str = None, position_code:
     elif btype == "v25":
         order_col = "COALESCE(v25_bonus,0)"
     elif btype == "aso":
-        order_col = "COALESCE(aso_bonus,0)"
+        normalized_position = str(position_code or "").strip().upper()
+        if normalized_position in _IS_AC_POSITIONS:
+            return {
+                "bonus_type": btype,
+                "position_code": normalized_position,
+                "not_applicable": True,
+                "count": 0,
+                "ranking": [],
+                "warning": (
+                    "ASO khong ap dung cho CS (Cho si) va TK (kenh MT); hai vai tro nay dung "
+                    "co is_ac/Active Customer."
+                ),
+            }
+        order_col = aso_component
     elif btype in ("dm", "danh_muc"):
         order_col = "COALESCE(dm_bonus,0)"
 
@@ -5469,6 +5587,9 @@ def salary_ranking(year_month: str = None, area_code: str = None, position_code:
     if position_code:
         where_clauses.append("position_code = ?")
         params.append(position_code)
+    elif btype == "aso":
+        # Khong de cac dong CS/TK (khong co ASO) chen vao bang xep hang ASO voi gia tri 0.
+        where_clauses.append("UPPER(COALESCE(position_code,'')) NOT IN ('CS','TK')")
 
     if scope_employee_code:
         where_clauses.append("(employee_code = ? OR manager_code = ?)")
@@ -5479,8 +5600,10 @@ def salary_ranking(year_month: str = None, area_code: str = None, position_code:
         SELECT employee_code, employee_name, area_code, position_code, save_date,
                month_sale_amount, month_sale_target, month_sale_percent,
                dm_bonus, v15_bonus, v22_bonus, v25_bonus, aso_bonus,
+               active_cus_quantity, active_cus_target, active_cus_percent,
+               aso_quantity, aso_percent,
                (COALESCE(lunch_amount,0) + COALESCE(transport_amount,0) + COALESCE(phone_amount,0)) allowance,
-               (COALESCE(dm_bonus,0) + COALESCE(v15_bonus,0) + COALESCE(v22_bonus,0) + COALESCE(v25_bonus,0) + COALESCE(aso_bonus,0)) total_bonus
+               (COALESCE(dm_bonus,0) + COALESCE(v15_bonus,0) + COALESCE(v22_bonus,0) + COALESCE(v25_bonus,0) + {aso_component}) total_bonus
         FROM fact_thongketinhluong
         {where_sql}
         ORDER BY {order_col} DESC
@@ -5493,6 +5616,8 @@ def salary_ranking(year_month: str = None, area_code: str = None, position_code:
     for idx, r in enumerate(rows, 1):
         pct = _f(r["month_sale_percent"]) * 100
         threshold = _bonus_threshold(r["position_code"])
+        uses_is_ac = _uses_is_ac(r["position_code"])
+        raw_aso_bonus = _f(r["aso_bonus"])
         ranking.append({
             "rank": idx,
             "employee_code": r["employee_code"],
@@ -5507,7 +5632,21 @@ def salary_ranking(year_month: str = None, area_code: str = None, position_code:
             "v15_bonus": _f(r["v15_bonus"]),
             "v22_bonus": _f(r["v22_bonus"]),
             "v25_bonus": _f(r["v25_bonus"]),
-            "aso_bonus": _f(r["aso_bonus"]),
+            "customer_activity_metric": "is_ac" if uses_is_ac else "aso",
+            "is_ac_applicable": uses_is_ac,
+            "aso_applicable": not uses_is_ac,
+            "aso_bonus": None if uses_is_ac else raw_aso_bonus,
+            "active_customer": ({
+                "quantity": _f(r["active_cus_quantity"]),
+                "target": _f(r["active_cus_target"]),
+                "percent": _f(r["active_cus_percent"]),
+            } if uses_is_ac else None),
+            "aso": ({
+                "quantity": _f(r["aso_quantity"]),
+                "target": _f(r["active_cus_target"]),
+                "percent": _f(r["aso_percent"]),
+                "bonus": raw_aso_bonus,
+            } if not uses_is_ac else None),
             "allowance": _f(r["allowance"]),
             "total_bonus": _f(r["total_bonus"]),
         })

@@ -124,8 +124,10 @@ CREATE INDEX IF NOT EXISTS idx_tralai_docdate ON brvsx_tralai(doc_date);
 -- docs/ra_soat_dong_bo_bang_kpi.md ben repo D:\DNH.
 --   year_sale_target : chi tieu NAM, DA cong don san - dung de tra loi cau luy ke nam, truoc day
 --                      hoan toan khong tra loi duoc.
---   is_ro / is_ac    : co khach MUA LAI / khach HOAT DONG. Truoc day chatbot phai SUY DIEN "khong
---                      phai khach moi thi la mua lai" -> tra 6.002 trong khi so that la 5.373.
+--   is_ro / is_ac    : co khach MUA LAI / co Active Customer. DNH chot 27/08/2026: is_ac danh cho
+--                      CS (Cho si) va TK (kenh MT), KHONG phai ASO; dong da co is_ac khong duoc gan
+--                      hoac cong them ASO. Truoc day chatbot phai SUY DIEN "khong phai khach moi thi
+--                      la mua lai" -> tra 6.002 trong khi so that la 5.373.
 --   max_customer_ord_amount : don hang lon nhat cua khach do trong ky.
 --   emp_dms_code     : ma nhan vien theo dinh dang HOA DON - noi thang KPI <-> hoa don tho, khong
 --                      phai vong qua dim_nhanvien.

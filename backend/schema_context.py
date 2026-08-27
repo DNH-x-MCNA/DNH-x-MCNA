@@ -146,14 +146,12 @@ fact_tonghopkhachhang: 1 dong = 1 (nhan vien, khach hang, ngay snapshot). Cot: e
       Do 3 thang lien tiep, du lieu that: is_nc + is_ro + (khong mang co nao) = DUNG BANG tong so
       khach, khong du khong thieu thang nao (06/2026: 752+4.757+462=5.971; 07/2026: 605+5.579+643=
       6.827; 08/2026: 521+4.846+623=5.990). Khop voi nghia re-order,
-    is_ac = ACTIVE CUSTOMER (khach hoat dong) - XAC NHAN 26/08/2026 ve TEN GOI. NHUNG con so thi
-      KHONG hanh xu nhu mot phep dem "khach dang hoat dong" thong thuong: chi 37-44 khach moi thang
-      tren tong ~6.000 (0,6%), trong khi ~80% khach co is_ro (dat lai hang) - tuc phan lon khach VAN
-      DANG MUA nhung khong mang co nay. Suy ra is_ac dem mot trang thai HEP hon nhieu (chua ro tieu
-      chi). Vi vay: duoc goi ten la "khach hoat dong (co is_ac)", nhung TUYET DOI khong dung con so
-      nay tra loi "cong ty co bao nhieu khach dang hoat dong" - phai noi ro day la co is_ac cua
-      Bravo voi tieu chi chua duoc lam ro, va neu nguoi dung muon dem khach con mua thi dung is_ro
-      hoac dem tu hoa don,
+    is_ac = ACTIVE CUSTOMER (khach hoat dong) - DNH chot 27/08/2026 day la co danh cho CS (Cho si)
+      va TK (kenh MT/Modern Trade). is_ac KHONG phai ASO: ban ghi da co is_ac thi khong duoc gan
+      hoac cong them ASO. Trong bao cao luong, CS/TK chi dung active_cus_*/is_ac; ASO chi hien o
+      cac vai tro khac khi nguon co ghi nhan. Con so is_ac trong snapshot OTC van co the hep hon
+      tong khach dang mua, nen phai noi ro day la co goc Bravo, khong dung no suy ra toan bo khach
+      dang hoat dong; neu muon dem khach con mua thi dung is_ro hoac dem tu hoa don,
     max_customer_ord_amount (don hang lon nhat cua khach do trong ky),
     emp_dms_code (ma nhan vien theo dinh dang HOA DON - noi thang sang vhoadon_otc.employee_code ma
       khong phai vong qua dim_nhanvien),

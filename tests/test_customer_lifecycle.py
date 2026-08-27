@@ -163,6 +163,25 @@ def test_loc_theo_vung_va_theo_doi_qlv(tmp_path, monkeypatch):
     assert team["tong_khach"] == 3, "chi khach cua doi QLV1 (TDV1), khong thay KH50 cua TDV2"
 
 
+def test_is_ac_chi_dem_cs_tk_khong_gan_nham_cho_tdv(tmp_path, monkeypatch):
+    """27/08/2026: is_ac la co cua CS/Cho si va TK/kenh MT, khong phai co ASO cua TDV."""
+    db_path = _setup(tmp_path, monkeypatch)
+    conn = sqlite3.connect(db_path)
+    conn.execute("INSERT INTO dim_nhanvien VALUES ('CS1','Cho si Mot',0,'CS','MB','CS-D1',NULL,NULL,0,NULL)")
+    conn.execute("INSERT INTO fact_tonghopkhachhang VALUES "
+                 "('CS1','KHCS',400,1000000,'2026-07-31','0','QLV1',0,400,'0','1',0,'CS1')")
+    # Co is_ac tren dong TDV la du lieu khong hop le theo quy tac moi; phep dem phai fail-closed
+    # va chi nhan dong thuoc CS/TK.
+    conn.execute("INSERT INTO fact_tonghopkhachhang VALUES "
+                 "('TDV1','KHTDV',500,1000000,'2026-07-31','0','QLV1',0,500,'0','1',0,'TDV1')")
+    conn.commit()
+    conn.close()
+
+    month = rt.customer_lifecycle_summary(year_month="2026-07")["months"][0]
+
+    assert month["so_is_ac"] == 1
+
+
 def test_chuoi_nhieu_thang_va_thang_thieu_snapshot(tmp_path, monkeypatch):
     _setup(tmp_path, monkeypatch)
     r = rt.customer_lifecycle_summary(year_month="2026-07", months_back=3)

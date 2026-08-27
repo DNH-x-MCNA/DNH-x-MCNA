@@ -335,6 +335,97 @@ def test_salary_achievement_summary_qlv_scope_khop_dung_du_lieu_that(tmp_path, m
     assert result["v15_achieved_count"] == 1
 
 
+def test_cs_va_tk_dung_is_ac_khong_co_aso_trong_salary_detail(tmp_path, monkeypatch):
+    """27/08/2026: CS (Cho si) va TK (kenh MT) dung Active Customer/is_ac.
+    Neu nguon vo tinh co aso_bonus, bao cao van phai fail-closed: khong hien ASO va
+    khong cong ASO vao tong thuong."""
+    db_path = tmp_path / "warehouse.db"
+    _make_db(db_path)
+    conn = sqlite3.connect(db_path)
+    _insert(conn, employee_code="CS01", employee_name="Cho si A", position_code="CS",
+            area_code="MB", save_date="2026-07-31", v25_percent=0.9,
+            dm_bonus=1_000_000, aso_bonus=99_000_000,
+            active_cus_quantity=12, active_cus_target=40, active_cus_percent=0.30,
+            aso_quantity=99, aso_percent=2.475,
+            v15_bonus=100_000, v22_bonus=200_000, v25_bonus=300_000)
+    _insert(conn, employee_code="TK01", employee_name="Kenh MT A", position_code="TK",
+            area_code="MB", save_date="2026-07-31", v25_percent=0.9,
+            dm_bonus=2_000_000, aso_bonus=88_000_000,
+            active_cus_quantity=8, active_cus_target=20, active_cus_percent=0.40,
+            aso_quantity=88, aso_percent=4.4)
+    conn.commit()
+    conn.close()
+    monkeypatch.setattr(local_warehouse, "DB_PATH", str(db_path))
+
+    result = rt.salary_detail(employee_code="CS01", scope_employee_code="CS01", scope_role="c_level")
+
+    assert "error" not in result
+    assert result["customer_activity_metric"] == "is_ac"
+    assert result["is_ac_applicable"] is True
+    assert result["aso_applicable"] is False
+    assert result["aso_bonus"] is None
+    assert result["total_bonus"] == 1_000_000 + 100_000 + 200_000 + 300_000
+    assert result["kpi_indicators"]["active_customer"] == {
+        "quantity": 12.0, "target": 40.0, "percent": 0.30,
+    }
+    assert result["kpi_indicators"]["aso"] is None
+
+
+def test_salary_ranking_loai_aso_cs_tk_va_khong_cong_aso_vao_total(tmp_path, monkeypatch):
+    """ASO ranking khong duoc tra CS/TK; total ranking cung khong de ASO bi cong nham."""
+    db_path = tmp_path / "warehouse.db"
+    _make_db(db_path)
+    conn = sqlite3.connect(db_path)
+    _insert(conn, employee_code="CS01", employee_name="Cho si A", position_code="CS",
+            area_code="MB", save_date="2026-07-31", v25_percent=0.9,
+            dm_bonus=1_000_000, aso_bonus=99_000_000,
+            active_cus_quantity=12, active_cus_target=40, active_cus_percent=0.30)
+    _insert(conn, employee_code="TDV01", employee_name="TDV A", position_code="TDV",
+            area_code="MB", save_date="2026-07-31", v25_percent=0.9,
+            dm_bonus=2_000_000, aso_bonus=5_000_000)
+    conn.commit()
+    conn.close()
+    monkeypatch.setattr(local_warehouse, "DB_PATH", str(db_path))
+
+    aso = rt.salary_ranking(position_code="CS", bonus_type="aso")
+    assert aso["not_applicable"] is True and aso["ranking"] == []
+
+    total = rt.salary_ranking(bonus_type="total")
+    cs = next(row for row in total["ranking"] if row["employee_code"] == "CS01")
+    tdv = next(row for row in total["ranking"] if row["employee_code"] == "TDV01")
+    assert cs["aso_bonus"] is None
+    assert cs["total_bonus"] == 1_000_000
+    assert tdv["total_bonus"] == 7_000_000
+
+
+def test_salary_achievement_summary_khong_dem_aso_cho_cs_tk(tmp_path, monkeypatch):
+    """ASO achievement chi tinh vi tri khong phai CS/TK; dong CS/TK duoc ghi nhan la nhom is_ac."""
+    db_path = tmp_path / "warehouse.db"
+    _make_db(db_path)
+    conn = sqlite3.connect(db_path)
+    _insert(conn, employee_code="CS01", employee_name="Cho si A", position_code="CS",
+            area_code="MB", save_date="2026-07-31", v25_percent=0.9, aso_bonus=99_000_000)
+    _insert(conn, employee_code="TDV01", employee_name="TDV A", position_code="TDV",
+            area_code="MB", save_date="2026-07-31", v25_percent=0.9, aso_bonus=5_000_000)
+    conn.commit()
+    conn.close()
+    monkeypatch.setattr(local_warehouse, "DB_PATH", str(db_path))
+
+    result = rt.salary_achievement_summary(save_date="2026-07-31")
+
+    assert result["aso_achieved_count"] == 1
+    assert result["is_ac_position_count"] == 1
+
+
+def test_salary_bonus_policy_aso_cs_tk_tra_not_applicable():
+    result = rt.salary_bonus_policy(bonus_type="aso", position_code="tk")
+
+    assert result["not_applicable"] is True
+    assert result["position_code"] == "TK"
+    assert result["rule_count"] == 0
+    assert "is_ac" in result["formula"]
+
+
 # ---------------------------------------------------------------- salary_bonus_policy (Bravo live)
 
 def test_salary_bonus_policy_bonus_type_khong_hop_le_bi_tu_choi():

@@ -386,10 +386,12 @@ TEMPLATE_TOOLS = [
                         "doanh thu'. BAT BUOC: khi tra loi PHAI doc va nhac lai truong 'canh_bao_dinh_"
                         "nghia'. DNH xac nhan 26/08/2026: NC = New Customer, RO = Re-Order (dat lai "
                         "hang), AC = Active Customer. is_nc va is_ro dung on dinh, goi thang la 'khach "
-                        "moi' / 'khach dat lai hang'. RIENG is_ac: ten la Active Customer nhung con so "
-                        "chi 37-44 khach/thang tren ~6.000 (0,6%) trong khi ~80% khach co is_ro tuc VAN "
-                        "DANG MUA - nen KHONG duoc dung con so nay tra loi 'cong ty co bao nhieu khach "
-                        "dang hoat dong'; muon dem khach con mua thi dung is_ro hoac dem tu hoa don. "
+                        "moi' / 'khach dat lai hang'. RIENG is_ac: DNH chot 27/08/2026 la co Active Customer "
+                        "danh cho CS (Cho si) va TK (kenh MT/Modern Trade), KHONG phai ASO. Dong da co is_ac "
+                        "thi khong duoc gan hoac cong them ASO; bao cao luong CS/TK dung active customer, "
+                        "cac vai tro khac moi dung ASO khi nguon co ghi nhan. Khong dung con so is_ac de ket "
+                        "luan toan bo khach dang hoat dong; neu nguoi dung hoi khach dang mua thi dung is_ro "
+                        "hoac dem tu hoa don. "
                         "Con ~8-10% khach khong mang co nao van co doanh thu, KHONG duoc coi la 'khong "
                         "mua'. Neu nguoi dung hoi ve khach NGUNG MUA thi dung "
                         "get_customers_silent (dua tren hoa don that, chac chan hon). Nguon nay hien "
@@ -880,8 +882,10 @@ TEMPLATE_TOOLS = [
                        "dung tool nay khi hoi 'V25 duoc tinh nhu the nao', 'cac bac tien V15/V22/V25', "
                        "'cong thuc thuong ASO', 'vi sao dat ty le ma thuong bang 0', hoac cau hoi mo ho "
                        "kieu 'V25 cua tung ASO'. GOI DUNG 1 LAN; KHONG search catalog/query SQL thu cong. "
-                       "Tool tu phan biet: ASO trong du lieu DNH la CHI TIEU/KHOAN THUONG khach hang "
-                       "hoat dong, khong phai chuc danh. Tool con kiem tra chenh lech giua bang quy tac, "
+                       "QUY TAC NGOAI LE: CS (Cho si) va TK (kenh MT) dung co is_ac/Active Customer, "
+                       "KHONG co ASO; neu da co is_ac thi khong gan/cong ASO. ASO trong du lieu DNH la "
+                       "CHI TIEU/KHOAN THUONG khach hang hoat dong cua cac vai tro con lai, khong phai chuc danh. "
+                       "Tool con kiem tra chenh lech giua bang quy tac, "
                        "stored procedure va so V25Bonus da luu; neu co chenh lech PHAI noi ro, KHONG tu "
                        "tinh de/ghi de so da chot cua SQL Server.",
         "input_schema": {
@@ -919,6 +923,8 @@ TEMPLATE_TOOLS = [
         "name": "get_salary_achievement_summary",
         "description": "Bao cao tong hop/thong ke so luong nhan vien dat cac moc thuong tien do (V15, V22, V25) va ASO tren toan cong ty hoac toan doi cua QLV. "
                        "Dung khi nguoi dung hoi 'co bao nhieu nguoi dat V15', 'tong hop V22 toan quoc/toan doi', 'thong ke ASO', v.v. "
+                       "ASO chi ap dung cho vi tri khac CS (Cho si) va TK (kenh MT); CS/TK dung co is_ac/Active Customer, "
+                       "khong duoc cong ASO vao cung mot dong. "
                        "Phan quyen: neu nguoi hoi la C-Level se thay toan bo, neu la QLV se tu dong bi gioi han ve doi cua minh. "
                        "Ve dieu kien ap dung V15/V22/V25 theo vai tro va quy tac snapshot CUOI KY (KHONG phai tien do "
                        "thang hien tai) - xem chi tiet o mo ta tool get_salary_detail, ap dung giong het o day.",
@@ -945,6 +951,9 @@ TEMPLATE_TOOLS = [
                         "quoc, hieu luc tu 28/07/2026) - dung khi nguoi dung hoi 'thuong thang nay cua "
                         "toi/cua [ten] bao nhieu', 'V15/V22/V25/ASO cua [ten]', 'thuong danh muc/tien do "
                         "cua toi', 'ket qua KPI luong cua toi'. "
+                        "QUY TAC IS_AC/ASO: CS (Cho si) va TK (kenh MT/Modern Trade) dung co is_ac/Active Customer, "
+                        "KHONG co ASO. Neu mot dong da co is_ac thi khong duoc hien thi hoac cong ASO; hai vai tro nay "
+                        "chi doc active customer. Cac vai tro khac moi dung ASO khi nguon luong co ghi nhan. "
                         "QUAN TRONG VE HIEU LUC: V15, V22 chi ap dung cho TDV. V25 chi ap dung cho Truong phong, Quan ly vung, Cho si, Kenh MT. "
                         "He thong chi luu snapshot luong CUOI KY (vd 30/06, 31/07). Neu user hoi tien do giua thang (vd 25/07), tool se tra ve cua "
                         "thang truoc do (30/06). KHI TRA LOI PHAI KET LUAN/NOI RO diem nay: 'He thong chi chot luong cuoi ky, day la ket qua luong thang truoc da chot, khong phai tien do thang nay'. "
@@ -981,7 +990,9 @@ TEMPLATE_TOOLS = [
                         "trong ky/thang. DUNG KHI HOI 'top 30 nhan vien duoc thuong nhieu nhat', 'top thuong MB', "
                         "'ai duoc thuong V15 cao nhat', 'danh sach top thuong thang 7', 'top 10 thuong mien bac', "
                         "'top 30 theo MB', 'tong thuong luon'. "
-                        "Tra ve bang xep hang day du (thuong total, V15, V22, V25, ASO, allowance, % target) "
+                        "Tra ve bang xep hang day du (thuong total, V15, V22, V25, ASO, allowance, % target). "
+                        "QUY TAC: CS (Cho si) va TK (kenh MT) dung is_ac/Active Customer, khong co ASO; "
+                        "tong thuong cua hai vai tro khong cong ASO, va xep hang rieng ASO khong bao gom CS/TK. "
                         "chay sieu toc trong 0.01 giay. TUYET DOI KHONG dung SQL ad-hoc hoac tool khac cho nhu cau nay.",
         "input_schema": {
             "type": "object",
@@ -1241,6 +1252,10 @@ QUAN TRONG VE CHON TOOL:
 - CACH TINH/BAC TIEN V15/V22/V25/ASO: BAT BUOC goi get_salary_bonus_policy DUNG 1 LAN. Neu tool phat
   hien bang quy tac, stored procedure va so da chot khong khop, PHAI neu ro chenh lech va van phan
   biet 'so SQL Server da chot' voi 'so theo bang quy tac'; KHONG tu sua so thay ke toan/DNH.
+- QUY TAC IS_AC/ASO DNH XAC NHAN 27/08/2026: CS (Cho si) va TK (kenh MT/Modern Trade) dung co
+  is_ac/Active Customer, KHONG co ASO. Neu dong du lieu da co is_ac thi tuyet doi khong gan, hien thi
+  hoac cong them ASO cho dong do. Khi tra bao cao CS/TK, dung chi so Active Customer; chi dung ASO
+  cho cac vai tro khac khi nguon tinh luong co ghi nhan.
 - DOI CHIEU DM1/DM2/DM3-TOTALPOINT, KIEM TRA LCB, CHAT LUONG SNAPSHOT LUONG: BAT BUOC goi
   get_salary_data_quality DUNG 1 LAN voi check_type tuong ung; KHONG tu doc prompt roi ket luan va
   KHONG search catalog/query SQL thu cong.
@@ -1291,7 +1306,8 @@ QUAN TRONG VE CHON TOOL:
     - KHONG bao gio in ten truong ky thuat ra cho nguoi dung (vd dung viet "count_full_target = 0").
       Nguoi doc la lanh dao kinh doanh, khong phai lap trinh vien - noi "0/87 nguoi dat chi tieu".
   ⚠️ 65%/70% CHI la cong cua THUONG NHOM HANG (DM1/DM2/DM3). DNH con it nhat 5 ho thuong khac, moc
-  khac va tra theo CHI SO KHAC: V15/V22/V25 (tien do theo cac moc ngay), ASO (khach hang hoat dong),
+  khac va tra theo CHI SO KHAC: V15/V22/V25 (tien do theo cac moc ngay), ASO (khach hang hoat dong;
+  chi ap dung cho vai tro khong phai CS/TK),
   thuong quy va thuong nam. Bac, nguong va hieu luc cu the PHAI doc bang get_salary_bonus_policy,
   KHONG dung mot con so viet san trong prompt cho moi ky/vai tro. Luong co ban: tu 60% tro len
   van huong 100%, duoi 60% moi bi cat ty le. => Nguoi duoi 65% VAN CO THE duoc V15/ASO va VAN huong

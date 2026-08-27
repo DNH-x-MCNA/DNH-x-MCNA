@@ -131,6 +131,10 @@ diễn thêm).
 
 ### 3.3. Thưởng khách hàng hoạt động (ASO) — công thức giống, NGƯỠNG SỐ khác hẳn theo vùng
 
+**Cập nhật nghiệp vụ 27/08/2026:** ASO không áp dụng cho CS (Chợ sỉ) và TK (kênh MT/Modern
+Trade). Hai vai trò này dùng cờ/chỉ số **IsAC — Active Customer**; bản ghi đã có IsAC thì không
+được gán hoặc cộng thêm ASO.
+
 Điều kiện chung: Doanh số thực đạt/Target ≥60%, và "khách hàng hoạt động" = khách có phát sinh doanh
 số ≥500.000đ/đơn (Miền Bắc ghi "/tháng", Nam/Trung ghi "/đơn" — nguyên văn theo từng bản, có thể là
 khác biệt soạn thảo, chưa xác nhận có chủ đích khác nhau hay không).

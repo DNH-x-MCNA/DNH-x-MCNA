@@ -296,6 +296,8 @@ def sync_fact_tonghopkhachhang(days=90):
     23/07/2026: them ManagerCode - cot THAT tu Bravo xac dinh "TDV nay bao cao truc tiep len QLV nao",
     dung de thay the suy luan qua ma khu vuc (kem chinh xac hon, xem local_warehouse.py::SCHEMA).
     31/07/2026: them 6 cot (YearSaleTarget, Amount_Cus, IsRO, IsAC, MaxCustomerOrdAmount, EmpDMSCode).
+    27/08/2026: DNH chot IsAC la co Active Customer cho CS (Cho si) va TK (kenh MT), khong phai
+    ASO; dong da co IsAC khong duoc gan/cong them ASO o cac bao cao luong.
     Bang goc ben Bravo co 27 cot, truoc do kho chi keo 7 - 20 cot con lai deu phu du lieu 100% chu
     khong rong. Y nghia tung cot va ly do chon: xem local_warehouse.py::SCHEMA phan bang nay.
     Chi phi khong dang ke: kho chi giu 90 ngay ~ 3 ky x 13.000 dong.

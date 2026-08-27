@@ -105,6 +105,8 @@ MCNA đã bổ sung tạm bảng **"Doanh số ETC theo nhân viên"** (chỉ c�
 
 **Quan trọng — 65%/70% KHÔNG phải "ngưỡng được thưởng" nói chung:** đó chỉ là cổng của **thưởng nhóm hàng**. Chính sách DNH còn nhiều khoản thưởng khác với mốc riêng, tra theo chỉ số khác: thưởng tiến độ V15/V22/V25, thưởng khách hàng hoạt động ASO (tính theo **số lượng khách**, không phải %), thưởng quý, thưởng năm; chưa kể **lương cơ bản từ 60% trở lên vẫn hưởng 100%**. Vì vậy một người dưới 65% **vẫn có thể** được các khoản kia và vẫn đủ lương cơ bản — hệ thống đã được sửa để **không bao giờ** nói ai đó "không được thưởng" chỉ vì dưới mốc nhóm hàng.
 
+**Cập nhật nghiệp vụ 27/08/2026:** cờ `IsAC`/Active Customer dành cho **CS (Chợ sỉ)** và **TK (kênh MT/Modern Trade)**. Dòng đã có `IsAC` thì **không có ASO**; báo cáo CS/TK phải dùng chỉ số Active Customer và không cộng ASO.
+
 **Có hai thế hệ chính sách cùng tồn tại**, và ban đầu MCNA phát hiện chúng cho ra ngưỡng TDV khác nhau:
 
 | Nguồn | Ngưỡng thưởng nhóm hàng cho TDV | Ghi chú |

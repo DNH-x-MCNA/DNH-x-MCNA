@@ -141,12 +141,12 @@ Bộ câu hỏi này do phía DNH đặt ra làm tiêu chí nghiệm thu diện 
 
 ### 6.1 Hai câu hỏi nghiệp vụ — chặn nhóm câu về khách hàng
 
-1. **Cột `IsAC` trong `FACT_TongHopKhachHang` nghĩa là gì?**
-   Đã xác nhận viết tắt là *Active Customer*, nhưng số liệu 3 tháng liên tiếp cho thấy chỉ
-   **37–44 khách/tháng trên tổng ~6.000 (0,6%)** mang cờ này, trong khi **~80% khách vẫn đang mua**
-   (có cờ `IsRO`). Hai điều đó không thể cùng đúng nếu hiểu `IsAC` là "khách đang hoạt động".
-   → **Cần biết tiêu chí gán cờ.** Hiện chatbot buộc phải từ chối câu *"công ty có bao nhiêu khách
-   đang hoạt động"* thay vì trả con số 44 gây hiểu nhầm.
+1. **Cột `IsAC` trong `FACT_TongHopKhachHang` — ĐÃ CHỐT 27/08/2026**
+   `IsAC` là cờ *Active Customer* dành cho **CS (Chợ sỉ)** và **TK (kênh MT/Modern Trade)**.
+   Đây không phải ASO: một dòng đã có `IsAC` thì không được gán hoặc cộng thêm ASO. Báo cáo CS/TK
+   dùng chỉ số Active Customer; ASO chỉ áp dụng cho các vai trò khác khi nguồn lương ghi nhận.
+   Số liệu lịch sử chỉ **37–44 khách/tháng (~0,6%)**, nên vẫn phải ghi rõ đây là số cờ gốc Bravo,
+   không tự diễn giải thành toàn bộ khách đang mua.
 
 2. **Nhóm 8–10% khách (460–640 khách/tháng) không mang cả `IsNC` lẫn `IsRO` nhưng vẫn phát sinh
    doanh thu** — họ là ai?
