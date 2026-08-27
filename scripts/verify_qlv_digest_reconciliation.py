@@ -35,6 +35,52 @@ def _load_report_recipients() -> list[dict]:
     return config.get("report_recipients") or []
 
 
+def _discover_qlv_recipients(report_tools, as_of: str) -> list[dict]:
+    """Tìm QLV từ snapshot KPI để kiểm tra trước khi có mapping người nhận Teams."""
+    latest_rows = report_tools._q(
+        "SELECT MAX(save_date) d FROM fact_tonghopkhachhang WHERE save_date<=?",
+        (as_of,),
+    )
+    latest = latest_rows[0].get("d") if latest_rows else None
+    if not latest:
+        return []
+    manager_rows = report_tools._q(
+        "SELECT DISTINCT manager_code FROM fact_tonghopkhachhang "
+        "WHERE save_date=? AND manager_code IS NOT NULL AND TRIM(manager_code)<>''",
+        (latest,),
+    )
+    codes = [str(row.get("manager_code") or "").strip() for row in manager_rows]
+    codes = list(dict.fromkeys(code for code in codes if code))
+    if not codes:
+        return []
+    placeholders = ",".join("?" for _ in codes)
+    identity_rows = report_tools._q(
+        "SELECT employee_code, area_code, position_code FROM dim_nhanvien "
+        f"WHERE employee_code IN ({placeholders})",
+        tuple(codes),
+    )
+    identities = {
+        str(row.get("employee_code") or "").strip(): row
+        for row in identity_rows
+        if row.get("employee_code")
+    }
+    recipients = []
+    for code in codes:
+        identity = identities.get(code)
+        if not identity or str(identity.get("position_code") or "").strip().upper() != "QLV":
+            raise RuntimeError(
+                f"Snapshot có manager_code '{code}' nhưng không có danh mục QLV tương ứng."
+            )
+        recipients.append({
+            "audience": f"QLV {code} (discovery)",
+            "role": "qlv",
+            "employee_code": code,
+            "region": identity.get("area_code"),
+            "channel": "OTC",
+        })
+    return recipients
+
+
 def _group_totals(metrics_rows: list[dict], period_key: str) -> dict[tuple[str, str], float]:
     totals: dict[tuple[str, str], float] = collections.defaultdict(float)
     for metrics in metrics_rows:
@@ -47,9 +93,22 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Đối chiếu tổng QLV với doanh số miền, không gửi ra ngoài")
     parser.add_argument("--as-of", default=dt.date.today().isoformat(), help="Ngày báo cáo YYYY-MM-DD")
     parser.add_argument("--tolerance-vnd", type=float, default=1.0, help="Sai số tối đa cho phép")
+    parser.add_argument(
+        "--discover",
+        action="store_true",
+        help="Tự tìm QLV từ snapshot warehouse, dùng trước khi config có mapping người nhận",
+    )
     args = parser.parse_args()
 
+    from src.qlv_digest import _load_report_tools  # noqa: PLC0415
+    tools = _load_report_tools()
     configured_recipients = _load_report_recipients()
+    if args.discover:
+        try:
+            configured_recipients = _discover_qlv_recipients(tools, args.as_of)
+        except Exception as exc:
+            print(f"FAIL: không tự phát hiện được QLV: {exc}")
+            return 2
     misclassified = [
         recipient.get("audience") or "(không tên)"
         for recipient in configured_recipients
@@ -78,17 +137,23 @@ def main() -> int:
         return 2
 
     metrics_rows = []
+    build_failures = []
     for recipient in recipients:
-        metrics_rows.append(build_qlv_digest_metrics(
-            employee_code=recipient["employee_code"],
-            region=recipient.get("region"),
-            channel=recipient.get("channel"),
-            as_of_date=args.as_of,
-        ))
+        try:
+            metrics_rows.append(build_qlv_digest_metrics(
+                employee_code=recipient["employee_code"],
+                region=recipient.get("region"),
+                channel=recipient.get("channel"),
+                as_of_date=args.as_of,
+                report_tools=tools,
+            ))
+        except Exception as exc:
+            build_failures.append((recipient.get("employee_code"), str(exc)))
+    if build_failures:
+        for code, error in build_failures:
+            print(f"FAIL: {code}: {error}")
+        return 1
 
-    # Lấy module đã được xác minh đúng đường dẫn từ chính hàm dựng digest.
-    from src.qlv_digest import _load_report_tools  # noqa: PLC0415
-    tools = _load_report_tools()
     daily_by_scope = _group_totals(metrics_rows, "daily_revenue")
     month_by_scope = _group_totals(metrics_rows, "month_to_date_revenue")
     day = dt.date.fromisoformat(args.as_of)
