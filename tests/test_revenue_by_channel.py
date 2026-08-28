@@ -75,3 +75,44 @@ def test_scope_channel_otc_khong_tra_du_lieu_etc(tmp_path, monkeypatch):
     assert result["etc"]["revenue"] == 0.0
     assert result["etc"]["invoices"] == 0
     assert "channel_scope" in result
+
+
+def test_scope_channel_etc_khong_tra_du_lieu_otc(tmp_path, monkeypatch):
+    """Hoi quy bao mat 28/08/2026: nhanh ETC tung van cong ca OTC vao tong.
+
+    Day la loi doi xung voi nhanh OTC: code cu chi bo ETC khi scope=OTC, nhung khong bo OTC khi
+    scope=ETC. Tai khoan gioi han ETC vi vay nhin thay doanh thu OTC qua get_revenue_by_channel va
+    moi tool tong hop goi lai ham nay.
+    """
+    db_path = tmp_path / "warehouse.db"
+    _make_db(db_path)
+    monkeypatch.setattr(local_warehouse, "DB_PATH", str(db_path))
+    monkeypatch.setattr(rt.dt, "date", _FixedDate)
+
+    result = rt.revenue_by_channel(date_from="2026-07-01", date_to="2026-07-31", scope_channel="ETC")
+
+    assert result["otc"] == {"revenue": 0.0, "invoices": 0}
+    assert result["etc"] == {"revenue": 2_000_000, "invoices": 1}
+    assert result["total"] == {"revenue": 2_000_000, "invoices": 1}
+    assert "ETC" in result["channel_scope"]
+
+
+def test_scope_channel_etc_khong_ro_otc_tu_du_lieu_lich_su_da_nen(tmp_path, monkeypatch):
+    """Scope phai ap dung ca monthly_customer_summary, khong chi hoa don chi tiet 12 thang gan nhat."""
+    db_path = tmp_path / "warehouse.db"
+    _make_db(db_path)
+    conn = sqlite3.connect(db_path)
+    conn.execute("INSERT INTO monthly_customer_summary VALUES (?,?,?,?,?,?)",
+                 ("2025-07", "OTC", "KH01", "NV01", 9_000_000, 9))
+    conn.execute("INSERT INTO monthly_customer_summary VALUES (?,?,?,?,?,?)",
+                 ("2025-07", "ETC", "KH02", "NV02", 4_000_000, 4))
+    conn.commit()
+    conn.close()
+    monkeypatch.setattr(local_warehouse, "DB_PATH", str(db_path))
+    monkeypatch.setattr(rt.dt, "date", _FixedDate)
+
+    result = rt.revenue_by_channel(date_from="2025-07-01", date_to="2025-07-31", scope_channel="ETC")
+
+    assert result["otc"] == {"revenue": 0.0, "invoices": 0}
+    assert result["etc"] == {"revenue": 4_000_000, "invoices": 4}
+    assert result["total"] == {"revenue": 4_000_000, "invoices": 4}

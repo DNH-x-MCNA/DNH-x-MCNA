@@ -103,6 +103,47 @@ def test_scope_channel_otc_tu_choi_khach_thuan_etc(tmp_path, monkeypatch):
     assert "error" in result
 
 
+def test_scope_channel_etc_redact_khach_2_kenh_khong_lo_so_otc(tmp_path, monkeypatch):
+    db_path = tmp_path / "warehouse.db"
+    _make_db(db_path)
+    conn = sqlite3.connect(db_path)
+    conn.execute("INSERT INTO dms_khachhang VALUES ('KH01','Khach A',1,100,NULL,'GT')")
+    conn.execute("INSERT INTO vhoadon_otc VALUES "
+                "('2026-07-10','KH01','SP01',1000000,10,100000,'HD1',1,'NV01','2026-07-10','ASM01')")
+    conn.execute("INSERT INTO vhoadon_etc VALUES "
+                "('2026-07-10','KH01','SP01',2000000,20,100000,'HD2',1,'NV02','2026-07-10')")
+    conn.commit()
+    conn.close()
+    monkeypatch.setattr(local_warehouse, "DB_PATH", str(db_path))
+
+    result = rt.customer_detail(customer_code="KH01", date_from="2026-07-01", date_to="2026-07-31",
+                                scope_channel="ETC")
+
+    assert "error" not in result
+    assert result["revenue"] == 2_000_000
+    assert result["orders"] == 1
+    assert result["channel"] == "ETC"
+    assert "channel_scope" in result
+
+
+def test_scope_channel_etc_tu_choi_khach_thuan_otc(tmp_path, monkeypatch):
+    db_path = tmp_path / "warehouse.db"
+    _make_db(db_path)
+    conn = sqlite3.connect(db_path)
+    conn.execute("INSERT INTO dms_khachhang VALUES ('KH01','Khach OTC',1,100,NULL,'GT')")
+    conn.execute("INSERT INTO vhoadon_otc VALUES "
+                "('2026-07-10','KH01','SP01',1000000,10,100000,'HD1',1,'NV01','2026-07-10','ASM01')")
+    conn.commit()
+    conn.close()
+    monkeypatch.setattr(local_warehouse, "DB_PATH", str(db_path))
+
+    result = rt.customer_detail(customer_code="KH01", date_from="2026-07-01", date_to="2026-07-31",
+                                scope_channel="ETC")
+
+    assert "error" in result
+    assert "OTC" in result["error"]
+
+
 def test_scope_area_code_tu_choi_khach_ngoai_vung(tmp_path, monkeypatch):
     db_path = tmp_path / "warehouse.db"
     _make_db(db_path)

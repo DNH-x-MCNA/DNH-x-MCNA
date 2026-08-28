@@ -137,3 +137,39 @@ def test_check_order_timing_qlv_chi_thay_doi_minh(tmp_path, monkeypatch):
     codes = {r["employee_code"] for r in result["result"]["summary_by_employee"]}
     assert "TDV01" in codes
     assert "TDVKHAC_DMS" not in codes and "TDV_KHAC" not in codes
+
+
+def test_check_order_timing_scope_etc_khong_doc_don_otc(tmp_path, monkeypatch):
+    """Hoi quy 28/08/2026: code cu luon khoi tao UNION bang OTC, ke ca khi scope=ETC."""
+    db_path = tmp_path / "warehouse.db"
+    _make_min_db(db_path)
+    conn = sqlite3.connect(db_path)
+    conn.executescript(
+        """
+        CREATE TABLE vhoadon_otc (doc_date TEXT, customer_code TEXT, item_code TEXT,
+            amount9 REAL, quantity REAL, unit_price REAL, stt TEXT, city_id INTEGER,
+            employee_code TEXT, created_at TEXT, channel_code TEXT);
+        CREATE TABLE vhoadon_etc (doc_date TEXT, customer_code TEXT, item_code TEXT,
+            amount9 REAL, quantity REAL, unit_price REAL, stt TEXT, city_id INTEGER,
+            employee_code TEXT, created_at TEXT);
+        """
+    )
+    conn.execute("INSERT INTO dim_nhanvien VALUES "
+                 "('OTC01','Nhan vien OTC',0,'TDV','MB','OTC_DMS',NULL,NULL,0,NULL)")
+    conn.execute("INSERT INTO dim_nhanvien VALUES "
+                 "('ETC01','Nhan vien ETC',0,'TDV','MB','ETC_DMS',NULL,NULL,0,NULL)")
+    conn.execute("INSERT INTO vhoadon_otc VALUES "
+                 "('2026-07-10','KH01','SP01',900000,9,100000,'HD-O',1,'OTC_DMS','2026-07-15','ASM01')")
+    conn.execute("INSERT INTO vhoadon_etc VALUES "
+                 "('2026-07-10','KH02','SP01',500000,5,100000,'HD-E',1,'ETC_DMS','2026-07-15')")
+    conn.commit()
+    conn.close()
+    monkeypatch.setattr(local_warehouse, "DB_PATH", str(db_path))
+
+    result = rt.order_timing_check(
+        "2026-07-01", "2026-07-31", scope_channel="ETC",
+    )
+
+    assert result["total_flagged"] == 1
+    assert result["top_detail"][0]["employee_code"] == "ETC01"
+    assert result["top_detail"][0]["amount9"] == 500_000

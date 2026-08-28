@@ -316,10 +316,13 @@ def revenue_by_channel(date_from: str, date_to: str, scope_area_code: str = None
     emp_sql, emp_params = _employee_scope_clause(scope_employee_code, "v", as_of=date_to)
     scope_sql += emp_sql
     scope_params += emp_params
-    join_o = _otc_area_join("v", scope_area_code)
-    o = _q(f"SELECT COALESCE(SUM(v.amount9),0) rev, COUNT(DISTINCT v.stt) hd FROM vhoadon_otc v {join_o} "
-           f"WHERE v.doc_date BETWEEN ? AND ?{scope_sql}", (date_from, date_to) + scope_params)[0]
-    otc_rev, otc_hd = _f(o["rev"]), int(o["hd"])
+    if scope_channel == "ETC":
+        otc_rev, otc_hd = 0.0, 0
+    else:
+        join_o = _otc_area_join("v", scope_area_code)
+        o = _q(f"SELECT COALESCE(SUM(v.amount9),0) rev, COUNT(DISTINCT v.stt) hd FROM vhoadon_otc v {join_o} "
+               f"WHERE v.doc_date BETWEEN ? AND ?{scope_sql}", (date_from, date_to) + scope_params)[0]
+        otc_rev, otc_hd = _f(o["rev"]), int(o["hd"])
     if scope_channel == "OTC":
         etc_rev, etc_hd = 0.0, 0
     else:
@@ -334,14 +337,15 @@ def revenue_by_channel(date_from: str, date_to: str, scope_area_code: str = None
     if date_from < cutoff:
         summary_to = min(date_to, cutoff)
         ym_from, ym_to = date_from[:7], summary_to[:7]
-        msc_o, msc_o_params = _monthly_summary_scope_clause(scope_area_code, "OTC")
-        msc_emp_sql, msc_emp_params = _employee_scope_clause(scope_employee_code, "m", as_of=date_to)
-        msc_o += msc_emp_sql
-        msc_o_params += msc_emp_params
-        so = _q(f"SELECT COALESCE(SUM(m.revenue),0) rev, COALESCE(SUM(m.invoice_count),0) hd "
-                f"FROM monthly_customer_summary m WHERE m.channel='OTC' AND m.year_month BETWEEN ? AND ?{msc_o}",
-                (ym_from, ym_to) + msc_o_params)[0]
-        otc_rev += _f(so["rev"]); otc_hd += int(so["hd"] or 0)
+        if scope_channel != "ETC":
+            msc_o, msc_o_params = _monthly_summary_scope_clause(scope_area_code, "OTC")
+            msc_emp_sql, msc_emp_params = _employee_scope_clause(scope_employee_code, "m", as_of=date_to)
+            msc_o += msc_emp_sql
+            msc_o_params += msc_emp_params
+            so = _q(f"SELECT COALESCE(SUM(m.revenue),0) rev, COALESCE(SUM(m.invoice_count),0) hd "
+                    f"FROM monthly_customer_summary m WHERE m.channel='OTC' AND m.year_month BETWEEN ? AND ?{msc_o}",
+                    (ym_from, ym_to) + msc_o_params)[0]
+            otc_rev += _f(so["rev"]); otc_hd += int(so["hd"] or 0)
         if scope_channel != "OTC":
             msc_e, msc_e_params = _monthly_summary_scope_clause(scope_area_code, "ETC")
             msc_emp_sql, msc_emp_params = _employee_scope_clause(scope_employee_code, "m", as_of=date_to)
@@ -3202,7 +3206,9 @@ def customer_detail(customer_code: str, date_from: str, date_to: str, scope_area
     real_otc_hd, real_etc_hd = int(o["hd"]), int(e["hd"])
     if scope_channel == "OTC" and real_otc_hd == 0 and real_etc_hd > 0:
         return {"error": f"Ban khong co quyen xem khach hang nay - day la khach hang kenh ETC, tai khoan cua ban chi duoc xem kenh {scope_channel}."}
-    otc_rev, otc_hd = _f(o["rev"]), real_otc_hd
+    if scope_channel == "ETC" and real_etc_hd == 0 and real_otc_hd > 0:
+        return {"error": f"Ban khong co quyen xem khach hang nay - day la khach hang kenh OTC, tai khoan cua ban chi duoc xem kenh {scope_channel}."}
+    otc_rev, otc_hd = (0.0, 0) if scope_channel == "ETC" else (_f(o["rev"]), real_otc_hd)
     etc_rev, etc_hd = (0.0, 0) if scope_channel == "OTC" else (_f(e["rev"]), real_etc_hd)
 
     if otc_hd and etc_hd:
@@ -3280,10 +3286,13 @@ def order_timing_check(date_from: str, date_to: str, threshold_days: int = 2, li
     emp_sql, emp_params = _employee_scope_clause(scope_employee_code, "v", as_of=date_to)
     scope_sql += emp_sql
     scope_params += emp_params
-    join_o = _otc_area_join("v", scope_area_code)
-    parts = [f"""SELECT v.doc_date, v.created_at, v.customer_code, v.employee_code, v.amount9, v.stt
-            FROM vhoadon_otc v {join_o} WHERE v.doc_date BETWEEN ? AND ? AND v.created_at IS NOT NULL{scope_sql}"""]
-    part_params = [(date_from, date_to) + scope_params]
+    parts = []
+    part_params = []
+    if scope_channel != "ETC":
+        join_o = _otc_area_join("v", scope_area_code)
+        parts.append(f"""SELECT v.doc_date, v.created_at, v.customer_code, v.employee_code, v.amount9, v.stt
+                FROM vhoadon_otc v {join_o} WHERE v.doc_date BETWEEN ? AND ? AND v.created_at IS NOT NULL{scope_sql}""")
+        part_params.append((date_from, date_to) + scope_params)
     if scope_channel != "OTC":
         join_e = _etc_area_join("v", scope_area_code)
         parts.append(f"""SELECT v.doc_date, v.created_at, v.customer_code, v.employee_code, v.amount9, v.stt
