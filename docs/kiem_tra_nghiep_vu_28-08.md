@@ -18,12 +18,14 @@
 ## Bằng chứng kiểm thử
 
 - Trọng điểm: **23 passed**.
-- Toàn hệ thống: **415 passed, 1 deselected**.
+- Toàn hệ thống sau vòng đóng coverage: **424 passed, 1 deselected**.
 - Kiểm tra cú pháp và `git diff --check`: đạt. Cảnh báo `PermissionError` khi pytest dọn thư mục
   tạm trên Windows xuất hiện sau khi test đã hoàn tất, không phải lỗi kiểm thử.
-- Đối chiếu tĩnh tên hàm trong test: **37/40 công cụ** đã có test trực tiếp. Ba công cụ còn lại là
-  `get_audit_log`, `get_employee_directory`, `get_receivables_history_dates` — đều là tra cứu hỗ
-  trợ, xếp sau ba nghiệp vụ số liệu vừa được khóa.
+- Đối chiếu tĩnh tên hàm trong test: **40/40 công cụ** đã có test trực tiếp. Vòng cuối bổ sung test
+  cho `get_audit_log`, `get_employee_directory`, `get_receivables_history_dates`: tài khoản thường
+  không thể tự nâng quyền xem chi phí người khác; scope vùng ghi đè bộ lọc nhân viên do AI truyền;
+  ngày snapshot công nợ được khử trùng, sắp mới nhất trước. Tham số `limit` của cả ba công cụ được
+  chặn trong khoảng 1–100 để giá trị âm không làm trả toàn bộ lịch sử ngoài ý muốn.
 
 ## Email QLV
 

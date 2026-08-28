@@ -1032,6 +1032,7 @@ def employee_directory(search: str = None, position_code: str = None, area_code:
     = None vi bang do khong luu thong tin nay."""
     if scope_area_code:
         area_code = scope_area_code
+    limit = max(1, min(int(limit or 30), 100))
     sql = """SELECT n.employee_code employee_code, n.dmsid dmsid, n.name name,
                     n.position_code position_code, c.description position_label, n.area_code area_code,
                     n.is_duplicate is_duplicate
@@ -3099,8 +3100,9 @@ def receivables_history_dates(limit: int = 30) -> dict:
     21/08/2026: bang lich su MOI duoc them (xem sync_fact_congno trong sync_warehouse.py) - CHI co
     du lieu TU NGAY BAT DAU GHI TRO DI, KHONG co lich su cong no truoc do (khac han doanh thu co du
     lieu nhieu nam). PHAI noi ro dieu nay neu danh sach ngay con it/moi bat dau."""
+    limit = max(1, min(int(limit or 30), 100))
     rows = _q("SELECT DISTINCT snapshot_date FROM fact_congno_khachhang_history "
-              "ORDER BY snapshot_date DESC LIMIT ?", (int(limit or 30),))
+              "ORDER BY snapshot_date DESC LIMIT ?", (limit,))
     dates = [r["snapshot_date"] for r in rows]
     return {"so_ngay_co_du_lieu": len(dates), "cac_ngay": dates,
             "ghi_chu": ("He thong bat dau luu lich su cong no tu 21/08/2026 - CHUA co du lieu cong "
@@ -4197,6 +4199,8 @@ def audit_log_summary(days: int = 7, limit: int = 30, username: str = None, targ
     Neu tai khoan la C-Level hoac Admin: cho phep xem CHI PHI TOAN CONG TY hoac loc theo target_username.
     Neu tai khoan la QLV/TDV: chi duoc xem lich su va chi phi CUA CHINH NGUOI DANG HOI."""
     import json
+
+    limit = max(1, min(int(limit or 30), 100))
 
     # 28/07/2026: CHI dua vao scope_role - gia tri nay duoc call_template EP tu server (tu user["role"]
     # da xac thuc), AI khong the dua vao.
