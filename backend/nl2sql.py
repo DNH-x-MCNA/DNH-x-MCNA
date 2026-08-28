@@ -205,14 +205,18 @@ TEMPLATE_TOOLS = [
     {
         "name": "get_top_products",
         "description": "Top N san pham theo doanh thu trong 1 khoang ngay (da tu dong loai hang khuyen mai khoi so luong). "
-                        "UU TIEN dung tool nay cho moi cau hoi ve san pham ban chay/top san pham. Tu dong tra ve top san pham cua rieng doi QLV neu duoc hoi.",
+                        "UU TIEN dung tool nay cho moi cau hoi ve san pham ban chay/top san pham. "
+                        "Neu nguoi dung yeu cau tach/so sanh top san pham OTC va ETC, BAT BUOC goi tool HAI LAN "
+                        "voi cung khoang ngay va limit: mot lan channel=OTC, mot lan channel=ETC; KHONG dung "
+                        "channel=ALL vi ALL gop doanh thu hai kenh theo cung ma san pham. Tu dong tra ve top san "
+                        "pham cua rieng doi QLV neu duoc hoi.",
         "input_schema": {
             "type": "object",
             "properties": {
                 "date_from": {"type": "string", "description": "YYYY-MM-DD"},
                 "date_to": {"type": "string", "description": "YYYY-MM-DD"},
                 "limit": {"type": "integer", "description": "So luong top can lay, mac dinh 10"},
-                "channel": {"type": "string", "enum": ["OTC", "ETC", "ALL"], "description": "Kenh, mac dinh ALL (ca 2 kenh)"},
+                "channel": {"type": "string", "enum": ["OTC", "ETC", "ALL"], "description": "Kenh, mac dinh channel=ALL (gop ca 2 kenh). Khi tach/so sanh OTC va ETC, goi rieng channel=OTC va channel=ETC; khong dung channel=ALL."},
             },
             "required": ["date_from", "date_to"],
         },
@@ -1270,6 +1274,10 @@ QUAN TRONG VE CHON TOOL:
   lai da duoc con nguoi nhap san van la du lieu thuc te co the tra cuu; khong duoc bien no thanh du bao.
 - Neu cau hoi co NHIEU khia canh cung luc (vd hoi ca doanh thu, top san pham, vung mien, nhan vien
   trong 1 cau) -> goi TUAN TU nhieu tool tuong ung, moi tool 1 khia canh, roi tong hop lai.
+- TOP SAN PHAM THEO KENH: neu nguoi dung yeu cau tach hoac so sanh top san pham OTC va ETC, BAT BUOC
+  goi get_top_products HAI LAN voi cung khoang ngay/limit: mot lan channel=OTC va mot lan channel=ETC.
+  KHONG dung channel=ALL trong truong hop nay, vi ALL gop doanh thu hai kenh cua cung ma san pham va
+  khong con hai bang xep hang doc lap. Cau tra loi phai ghi ro bang OTC va bang ETC rieng.
 - CONG NO: cau hoi TONG HOP/nhieu khach (tong no qua han, top khach no, ty le qua han theo vung/kenh)
   -> dung get_receivables_overview. Cong no cua 1 khach cu the -> get_customer_detail. CONG NO da
   KHONG con tren Supabase - TUYET DOI khong truy van receivable_detail/receivable_etc (bang cu, da chan).

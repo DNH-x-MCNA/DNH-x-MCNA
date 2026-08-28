@@ -12,6 +12,7 @@ import {
   IconKey, IconCheck, IconMessage,
 } from "./icons";
 import { useModal } from "./useModal";
+import { ROLE_LABELS } from "./roleLabels";
 
 // Tỷ giá USD -> VND cho các số chi phí AI hiển thị ở frontend. Phải khớp với
 // backend/pricing.py::USD_TO_VND_RATE — backend trả sẵn *_vnd cho phần lớn số liệu, riêng phần
@@ -396,17 +397,6 @@ type AuditDashboardData = {
   logs: QueryLogItem[];
 };
 
-
-// 06/08/2026: DNH xac nhan "Giam doc Mien" = "Truong phong" = "Truong kenh" = "Giam doc Kenh" deu la
-// MOT chuc vu (role `regional_director`, tuong ung position_code 'TP' trong dim_nhanvien). Nhan phai
-// nhac ca 2 cach goi pho bien nhat de nguoi dung tu nhan ra minh - truoc day 4 cho viet 4 kieu khac
-// nhau (co cho con ghi nham "Giam doc Vung"). Moi noi hien thi role PHAI dung map nay, dung tu che.
-const ROLE_LABELS: Record<string, string> = {
-  admin_ops: "Admin Vận Hành (Hệ thống)",
-  c_level: "Tổng Giám Đốc (C-Level)",
-  regional_director: "Giám đốc Miền / Kênh (Trưởng phòng)",
-  qlv: "Quản lý Vùng (QLV)",
-};
 
 // Style rieng cho tung the Markdown trong bong bong chat cua bot (bang, in dam, danh sach...)
 const markdownComponents = {

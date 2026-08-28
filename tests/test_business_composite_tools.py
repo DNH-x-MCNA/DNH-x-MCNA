@@ -134,6 +134,30 @@ def test_composite_business_tools_are_exposed_to_model():
     } <= names
 
 
+def test_top_products_channel_comparison_requires_two_separate_calls():
+    tool = next(tool for tool in nl2sql.TEMPLATE_TOOLS if tool["name"] == "get_top_products")
+    description = tool["description"]
+    channel_description = tool["input_schema"]["properties"]["channel"]["description"]
+    system_prompt = nl2sql._static_system_prompt()
+
+    for text in (description, channel_description, system_prompt):
+        assert "channel=OTC" in text
+        assert "channel=ETC" in text
+        assert "channel=ALL" in text
+
+    calls = [
+        SimpleNamespace(
+            id="otc", name="get_top_products",
+            input={"date_from": "2026-08-01", "date_to": "2026-08-28", "limit": 10, "channel": "OTC"},
+        ),
+        SimpleNamespace(
+            id="etc", name="get_top_products",
+            input={"date_from": "2026-08-01", "date_to": "2026-08-28", "limit": 10, "channel": "ETC"},
+        ),
+    ]
+    assert nl2sql._merge_bulk_tool_calls(calls) == set()
+
+
 def test_promotion_data_quality_is_one_scoped_query(monkeypatch):
     captured = []
 

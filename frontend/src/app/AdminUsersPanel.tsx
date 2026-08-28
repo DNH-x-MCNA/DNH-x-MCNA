@@ -7,6 +7,7 @@ import {
   IconSettings, IconMail, IconSearch,
 } from "./icons";
 import { useModal } from "./useModal";
+import { getRoleLabel, ROLE_LABELS } from "./roleLabels";
 
 interface UserItem {
   id: number;
@@ -422,7 +423,7 @@ export default function AdminUsersPanel({ authToken, onClose }: AdminUsersPanelP
                           )}
                         </td>
                         <td className="p-3 text-slate-600">
-                          <div><span className="font-semibold">Role:</span> {u.role}</div>
+                          <div><span className="font-semibold">Vai trò:</span> {getRoleLabel(u.role)}</div>
                           {u.scope_value && <div><span className="font-semibold">Vùng:</span> {u.scope_value}</div>}
                           {u.scope_channel && <div><span className="font-semibold">Kênh:</span> {u.scope_channel}</div>}
                           {u.employee_code && <div><span className="font-semibold">Mã NV:</span> {u.employee_code}</div>}
@@ -602,10 +603,10 @@ export default function AdminUsersPanel({ authToken, onClose }: AdminUsersPanelP
                   onChange={(e) => setRole(e.target.value)}
                   className="w-full p-2 bg-slate-800 border border-slate-700 rounded text-xs text-white focus:outline-none focus:border-blue-500"
                 >
-                  <option value="qlv">Quản lý Vùng (QLV)</option>
-                  <option value="regional_director">Giám đốc Miền / Kênh (Trưởng phòng)</option>
-                  <option value="c_level">Tổng Giám Đốc (C-Level)</option>
-                  <option value="admin_ops">Admin Vận Hành (Hệ thống)</option>
+                  <option value="qlv">{ROLE_LABELS.qlv}</option>
+                  <option value="regional_director">{ROLE_LABELS.regional_director}</option>
+                  <option value="c_level">{ROLE_LABELS.c_level}</option>
+                  <option value="admin_ops">{ROLE_LABELS.admin_ops}</option>
                 </select>
               </div>
 
@@ -770,10 +771,10 @@ export default function AdminUsersPanel({ authToken, onClose }: AdminUsersPanelP
                       onChange={(e) => setNewRole(e.target.value)}
                       className="w-full p-2.5 border border-slate-300 rounded-lg text-xs focus:outline-none focus:border-blue-600"
                     >
-                      <option value="qlv">Quản lý Vùng (QLV)</option>
-                      <option value="regional_director">Giám đốc Miền / Kênh (Trưởng phòng)</option>
-                      <option value="c_level">Tổng Giám Đốc (C-Level)</option>
-                      <option value="admin_ops">Admin Vận Hành (Hệ thống)</option>
+                      <option value="qlv">{ROLE_LABELS.qlv}</option>
+                      <option value="regional_director">{ROLE_LABELS.regional_director}</option>
+                      <option value="c_level">{ROLE_LABELS.c_level}</option>
+                      <option value="admin_ops">{ROLE_LABELS.admin_ops}</option>
                     </select>
                   </div>
 
