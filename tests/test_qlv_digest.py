@@ -249,6 +249,9 @@ def test_noi_dung_email_qlv_period_co_pham_vi_va_khong_co_teams():
     assert "không bao gồm tồn kho" in rendered
     assert "tiến độ đội" in rendered
     assert "khách hàng cần ưu tiên công nợ" in rendered
+    assert "<li>•" not in rendered
+    assert "<li>-" not in rendered
+    assert '<li style="margin-left:18px;">nhân viên 2: 45.0%</li>' in rendered
 
 
 def _fake_qlv_metrics():

@@ -542,7 +542,18 @@ def build_qlv_period_email(
     for section in sections:
         title = html.escape(str(section.get("title") or ""))
         items = section.get("items") or []
-        items_html = "".join(f"<li>{html.escape(str(item))}</li>" for item in items)
+        email_items = []
+        for item in items:
+            raw_item = str(item)
+            clean_item = raw_item.lstrip()
+            is_nested = clean_item.startswith("-")
+            if clean_item.startswith(("•", "-")):
+                clean_item = clean_item[1:].lstrip()
+            nested_style = ' style="margin-left:18px;"' if is_nested else ""
+            email_items.append(
+                f"<li{nested_style}>{html.escape(clean_item)}</li>"
+            )
+        items_html = "".join(email_items)
         section_html.append(
             f'<h2 style="color:#1f4a22;font-size:16px;margin:22px 0 8px;">{title}</h2>'
             f'<ul style="margin:0;padding-left:22px;line-height:1.55;">{items_html}</ul>'
