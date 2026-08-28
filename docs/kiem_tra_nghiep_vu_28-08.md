@@ -38,8 +38,9 @@ mail server riêng nên còn phải chốt một trong các đường tích hợ
 ## Bước triển khai an toàn trên máy 24
 
 1. Fetch đúng commit của nhánh sửa và chạy toàn bộ pytest khi đã gỡ các biến API.
-2. Chạy ba test đọc dữ liệu thật với một tài khoản/scope ETC:
-   doanh thu tổng hợp, chi tiết một khách hai kênh và kiểm tra thời điểm đơn.
+2. Chạy `python scripts/verify_etc_channel_scope.py`. Script đọc dữ liệu thật nhưng không gọi API,
+   không gửi tin và không ghi database; nó kiểm tra doanh thu tổng hợp, chi tiết khách hai kênh và
+   thời điểm đơn với scope ETC.
 3. Chỉ fast-forward production sau khi cả ba kết quả không chứa số OTC.
 4. Backup database/cấu hình, khởi động lại đúng một bộ supervisor, kiểm tra `/health`.
 5. Smoke test một tài khoản ETC trên giao diện trước khi kết thúc triển khai.
