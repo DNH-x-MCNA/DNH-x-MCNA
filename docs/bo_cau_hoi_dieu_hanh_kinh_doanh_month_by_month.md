@@ -65,7 +65,7 @@ thái đơn/hóa đơn.
 
 ### B. Chất lượng doanh thu và lợi nhuận
 
-13. **C13** — Doanh thu gộp, chiết khấu, khuyến mãi, hàng trả và doanh thu thuần từng tháng là bao nhiêu? — [SQL: S10](./bo_cau_hoi_dieu_hanh_kinh_doanh_sql_check.md)
+13. **C13** — Doanh thu gộp, chiết khấu, khuyến mãi, hàng trả và doanh thu thuần từng tháng là bao nhiêu? — [SQL: S87](./bo_cau_hoi_dieu_hanh_kinh_doanh_sql_check.md)
 14. **C14** — Lợi nhuận gộp và biên lợi nhuận gộp theo tháng, kênh, miền và nhóm sản phẩm thay đổi thế nào? — [SQL: S10](./bo_cau_hoi_dieu_hanh_kinh_doanh_sql_check.md)
 15. **C15** — Kênh/miền/sản phẩm nào tăng doanh thu nhưng giảm biên lợi nhuận; nguyên nhân do giá, chiết khấu, giá vốn hay cơ cấu? — [SQL: S10](./bo_cau_hoi_dieu_hanh_kinh_doanh_sql_check.md)
 16. **C16** — Giá bán thực tế bình quân của từng SKU thay đổi MoM/YoY ra sao; SKU nào có dấu hiệu giảm giá hoặc xói mòn giá? — [SQL: S11](./bo_cau_hoi_dieu_hanh_kinh_doanh_sql_check.md)

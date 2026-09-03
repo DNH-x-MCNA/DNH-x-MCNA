@@ -12,6 +12,13 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Archived/generated trees are not part of the production app.
+    "_deprecated/**",
+    "bao-cao-canh-bao/**",
+    "frontend/**",
+    ".tmp-codex-*/**",
+    "handoff_private/**",
+    "outputs/**",
   ]),
 ]);
 

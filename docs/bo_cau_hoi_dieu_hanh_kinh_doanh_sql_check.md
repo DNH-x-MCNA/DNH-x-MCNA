@@ -49,6 +49,7 @@ tempdb, không ghi vào dữ liệu DNH.
     SELECT s.Channel, s.DocDate, s.OrderKey, s.Stt, s.CustomerCode, s.ItemCode,
            CONVERT(varchar(50), s.GroupCode) GroupCode, s.BranchCode, s.DistributorCode,
            s.EmpDMSCode, s.Quantity, s.UnitPrice, s.Amount9, s.DocCode, s.DMSId,
+           s.DiscountRate,
            tp.CityName,
            CASE WHEN tp.AreaCode IN ('MB','MB1','MB2') THEN 'MB'
                 WHEN tp.AreaCode IN ('MT','MN') THEN tp.AreaCode
@@ -58,14 +59,14 @@ tempdb, không ghi vào dữ liệu DNH.
         SELECT 'OTC' Channel, DocDate, CONCAT('OTC|', Stt) OrderKey, Stt,
                CustomerCode, ItemCode, CONVERT(varchar(50), GroupCode) GroupCode,
                BranchCode, DistributorCode,
-               EmpDMSCode, Quantity, UnitPrice, Amount9, DocCode, DMSId
+               EmpDMSCode, Quantity, UnitPrice, Amount9, DocCode, DMSId, DiscountRate
         FROM dbo.vHoaDonTotal
         WHERE DocDate >= @FromDate AND DocDate < @ToDate
         UNION ALL
         SELECT 'ETC', DocDate, CONCAT('ETC|', Stt), Stt,
                CustomerCode, ItemCode, CONVERT(varchar(50), GroupCode) GroupCode,
                BranchCode, DistributorCode,
-               EmpDMSCode, Quantity, UnitPrice, Amount9, DocCode, DMSId
+               EmpDMSCode, Quantity, UnitPrice, Amount9, DocCode, DMSId, DiscountRate
         FROM dbo.vHoaDonETCTotal
         WHERE DocDate >= @FromDate AND DocDate < @ToDate
     ) s
@@ -271,19 +272,58 @@ Chỉ cộng tầng nhân viên tuyến dưới để tránh trùng roll-up. Tar
     FROM #sales WHERE DocDate>=@MonthStart AND DocDate<@MonthEnd
     GROUP BY Channel,AreaCode ORDER BY ReturnAdjustment;
 
-### S10 — Kiểm tra nguồn chiết khấu, giá vốn, lợi nhuận — BLOCKED
+### S10 — Kiểm tra nguồn giá vốn, lợi nhuận — BLOCKED
 
-Không tính lợi nhuận trước khi DNH chốt mapping cột.
+Chỉ còn chặn phần **lợi nhuận** (C14, C15, C19). Phần chiết khấu/doanh thu gộp/doanh thu thuần đã
+tách sang `S87` — xem lý do ở đó, cột `DiscountRate` có thật, không cần chờ DNH cho phần này nữa.
+
+Kiểm cột lần đầu (03/09/2026) tìm thấy `OriginalUnitCost`/`UnitCost` (numeric) trên `BRV_TheKho`,
+`BRVSX_TheKho`, `BRVSX_TonKhoDK` — nhưng đó là **giá vốn tồn kho** (snapshot định giá kho, cùng nguồn
+đã dùng cho A3 — giá trị tồn kho), không phải giá vốn hàng bán tại thời điểm xuất hóa đơn. Không có
+cột giá vốn nào trên `vHoaDonTotal`/`vHoaDonETCTotal`. Dùng giá vốn tồn kho làm giá vốn hàng bán có
+nguy cơ sai lệch nếu giá nhập biến động theo thời gian (thiên lệch biên lợi nhuận theo xu hướng giá,
+không phải theo hiệu quả bán hàng thật) — đây là quyết định nghiệp vụ, không tự chọn thay DNH.
 
     SELECT o.name ObjectName,c.name ColumnName,t.name DataType
     FROM sys.objects o JOIN sys.columns c ON c.object_id=o.object_id
     JOIN sys.types t ON t.user_type_id=c.user_type_id
     WHERE o.schema_id=SCHEMA_ID('dbo')
       AND (c.name LIKE '%Cost%' OR c.name LIKE '%GiaVon%' OR c.name LIKE '%Profit%'
-        OR c.name LIKE '%LoiNhuan%' OR c.name LIKE '%Discount%' OR c.name LIKE '%ChietKhau%')
+        OR c.name LIKE '%LoiNhuan%')
     ORDER BY o.name,c.column_id;
 
-### S11 — Xu hướng giá bán thực tế theo SKU — READY
+### S87 — Doanh thu gộp, chiết khấu, hàng trả và doanh thu thuần — PARTIAL
+
+Cho câu hỏi "doanh thu gộp, chiết khấu, khuyến mãi, hàng trả và doanh thu thuần từng tháng". Xác nhận
+thật trên Bravo 03/09/2026: `Amount9 = UnitPrice × Quantity` (giá GỘP, chưa trừ chiết khấu) — mẫu
+`UnitPrice=54.285,71 × Quantity=60 = 3.257.142,86 ≈ Amount9=3.257.143`; thử `Amount9/(1-DiscountRate)`
+KHÔNG khớp, nên `Amount9` không phải giá đã trừ chiết khấu. Công thức đúng:
+
+- Doanh thu gộp = `Amount9` (dòng có `UnitPrice>0`, theo nguyên tắc pass/fail số 5)
+- Chiết khấu = `Amount9 × DiscountRate`
+- Hàng trả/điều chỉnh = `Amount9<0 OR DocCode='HC'` (nhất quán với S09)
+- Doanh thu thuần = tổng `Amount9` mọi dòng (đã tự trừ hàng trả) trừ tổng chiết khấu
+
+**PARTIAL — phần khuyến mãi**: catalog có hệ khuyến mãi thật (`DMS_CTKM`, `DMS_CTKMOnTop1/2/3`,
+`DMS_DonHangCTKM`, cột `KMAmount` trên bảng đơn hàng BRV) nhưng **chưa nối vào** — `S12` đã cảnh báo
+một đơn có thể thuộc nhiều chương trình CTKM cùng lúc, cộng ngang theo dòng hóa đơn sẽ đúp. Cần dựng
+riêng và đối chiếu tổng trước khi coi khuyến mãi là số đáng tin.
+
+    SELECT DATEFROMPARTS(YEAR(DocDate),MONTH(DocDate),1) MonthStart,Channel,
+           SUM(CASE WHEN Amount9>0 THEN Amount9 ELSE 0 END) DoanhThuGop,
+           SUM(CASE WHEN Amount9>0 THEN Amount9*ISNULL(DiscountRate,0) ELSE 0 END) ChietKhau,
+           SUM(CASE WHEN Amount9<0 OR DocCode='HC' THEN Amount9 ELSE 0 END) HangTraDieuChinh,
+           SUM(Amount9)
+             - SUM(CASE WHEN Amount9>0 THEN Amount9*ISNULL(DiscountRate,0) ELSE 0 END) DoanhThuThuan
+    FROM #sales
+    GROUP BY DATEFROMPARTS(YEAR(DocDate),MONTH(DocDate),1),Channel
+    ORDER BY MonthStart,Channel;
+
+### S11 — Xu hướng giá bán thực tế theo SKU và SKU nào xói mòn giá — READY
+
+Xác nhận thật trên Bravo 03/09/2026: công thức `RealizedPrice = SUM(Amount9)/SUM(Quantity đã bán,
+UnitPrice>0)` khớp tuyệt đối với chatbot đã trả cho SKU 81350000001 kênh ETC (T6: 10.026,79≈10.027;
+T7: 10.000,00; T8: 9.465,20≈9.465) — công thức đúng, không cần sửa.
 
     SELECT DATEFROMPARTS(YEAR(DocDate),MONTH(DocDate),1) MonthStart,Channel,ItemCode,
            SUM(Amount9) Revenue,SUM(CASE WHEN UnitPrice>0 THEN Quantity ELSE 0 END) PaidQty,
@@ -292,9 +332,70 @@ Không tính lợi nhuận trước khi DNH chốt mapping cột.
     GROUP BY DATEFROMPARTS(YEAR(DocDate),MONTH(DocDate),1),Channel,ItemCode
     ORDER BY ItemCode,MonthStart;
 
+Câu C16 còn hỏi "SKU nào xói mòn giá" — bảng trên là nguyên liệu thô, không trả lời trực tiếp. SQL
+dưới đây trả THẲNG danh sách SKU có giá giảm trong cửa sổ 3 tháng gần nhất, phân biệt xói mòn LIÊN
+TỤC (mọi tháng đều giảm) và KHÔNG LIÊN TỤC (giảm ròng nhưng có tháng hồi phục xen giữa — dạng chữ V) —
+cùng cách phân loại chatbot đã dùng khi trả lời trực tiếp người dùng.
+
+    WITH m AS (
+      SELECT DATEFROMPARTS(YEAR(DocDate),MONTH(DocDate),1) MonthStart,Channel,ItemCode,
+             SUM(Amount9)/NULLIF(SUM(CASE WHEN UnitPrice>0 THEN Quantity ELSE 0 END),0) RealizedPrice
+      FROM #sales WHERE UnitPrice>0
+      GROUP BY DATEFROMPARTS(YEAR(DocDate),MONTH(DocDate),1),Channel,ItemCode
+      HAVING SUM(CASE WHEN UnitPrice>0 THEN Quantity ELSE 0 END)>0
+    ), win AS (
+      SELECT *,
+        CASE WHEN RealizedPrice<LAG(RealizedPrice) OVER(PARTITION BY Channel,ItemCode ORDER BY MonthStart)
+             THEN 1 ELSE 0 END IsDown,
+        FIRST_VALUE(RealizedPrice) OVER(PARTITION BY Channel,ItemCode ORDER BY MonthStart
+          ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) FirstPrice,
+        LAST_VALUE(RealizedPrice) OVER(PARTITION BY Channel,ItemCode ORDER BY MonthStart
+          ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) LastPrice,
+        COUNT(*) OVER(PARTITION BY Channel,ItemCode) MonthsInWindow
+      FROM m WHERE MonthStart>=DATEADD(month,-2,@MonthStart) AND MonthStart<=@MonthStart
+    ), g AS (
+      SELECT *,ROW_NUMBER() OVER(PARTITION BY Channel,ItemCode ORDER BY MonthStart)
+               -ROW_NUMBER() OVER(PARTITION BY Channel,ItemCode,IsDown ORDER BY MonthStart) Grp
+      FROM win WHERE IsDown=1
+    ), streak AS (
+      SELECT Channel,ItemCode,MAX(cnt) MaxDownStreak
+      FROM (SELECT Channel,ItemCode,Grp,COUNT(*) cnt FROM g GROUP BY Channel,ItemCode,Grp) x
+      GROUP BY Channel,ItemCode
+    ), agg AS (
+      SELECT DISTINCT Channel,ItemCode,FirstPrice,LastPrice,MonthsInWindow FROM win
+    )
+    SELECT a.Channel,a.ItemCode,a.MonthsInWindow,a.FirstPrice,a.LastPrice,
+           a.LastPrice-a.FirstPrice PriceDelta,
+           100.0*(a.LastPrice-a.FirstPrice)/NULLIF(a.FirstPrice,0) PriceChangePct,
+           ISNULL(s.MaxDownStreak,0) MaxDownStreak,
+           CASE WHEN ISNULL(s.MaxDownStreak,0)>=a.MonthsInWindow-1 THEN 'XOI_MON_LIEN_TUC'
+                ELSE 'XOI_MON_KHONG_LIEN_TUC' END XoiMonFlag
+    FROM agg a LEFT JOIN streak s ON s.Channel=a.Channel AND s.ItemCode=a.ItemCode
+    WHERE a.MonthsInWindow>=2 AND a.LastPrice<a.FirstPrice
+    ORDER BY PriceChangePct;
+
 ### S12 — Hiệu quả khuyến mãi gắn đơn — PARTIAL
 
-AssociatedRevenue không được cộng ngang vì một đơn có thể có nhiều CTKM.
+`AssociatedRevenue` không được cộng ngang vì một đơn có thể thuộc nhiều CTKM cùng lúc.
+
+**Phải tách bạch bốn con số, không được rút gọn thành "số đơn" và "số khách".** `LEFT JOIN` sang hóa
+đơn nghĩa là có đơn gắn CTKM nhưng chưa/không xuất hóa đơn — trong khi `AssociatedRevenue` chỉ cộng
+phần đã xuất. Lấy `Revenue / Orders` sai mẫu số; phải dùng `Orders_DaXuatHD`.
+
+UAT trực tiếp 03/09/2026 bắt được lỗi thật nhờ chỗ này: với `Q1.2026_BPNGAM_10_TQ` tháng 01/2026,
+số thật là **382 đơn / 313 đơn đã xuất HĐ / 333 khách / 309 khách đã xuất HĐ**, doanh thu
+2.964.639.197 → bình quân/đơn đã xuất HĐ = **9,47 triệu**. Chatbot trả "Số đơn (đã xuất hóa đơn) =
+309" và "DT bình quân/đơn = 9,6 triệu" — tức lấy **số KHÁCH đã xuất HĐ** rồi gọi là **số ĐƠN**, và
+chia doanh thu cho mẫu số sai. Bản thân tool `promotion_effectiveness` trả đúng 313; sai lệch phát
+sinh ở khâu trình bày, không phải ở tool.
+
+Lưu ý khi đối chiếu: **không dùng quy tắc "đơn phải ≥ khách" để bắt lỗi.** `Orders_DaXuatHD` đếm trên
+tập đơn đã xuất hóa đơn, còn `Customers` đếm trên TOÀN BỘ đơn gắn CTKM, nên 313 < 333 là hoàn toàn
+hợp lệ. Chỉ được kết luận bằng cách so trực tiếp từng con số với checker này.
+
+**Tên chương trình bị trùng giữa các kỳ** (`T9.2025_BPNGAM_10_TQ`, `Q4.2025_BPNGAM_10_TQ`,
+`Q1.2026_BPNGAM_10_TQ` đều tên "Bổ phế Ngậm mua 10 tặng 01"). Luôn hiển thị kèm `Code` và `MonthEnd`;
+gộp theo `Name` là trộn lẫn các đợt khác nhau.
 
     WITH po AS (
       SELECT x.ProgId,x.OrderId,MAX(h.CustomerCode) CustomerCode,MAX(h.DocDate) DocDate
@@ -304,12 +405,21 @@ AssociatedRevenue không được cộng ngang vì một đơn có thể có nhi
       SELECT TRY_CONVERT(int,DMSId) OrderId,SUM(Amount9) Revenue
       FROM #sales WHERE TRY_CONVERT(int,DMSId) IS NOT NULL GROUP BY TRY_CONVERT(int,DMSId)
     )
-    SELECT EOMONTH(po.DocDate) MonthEnd,p.Code,p.Name,COUNT(*) Orders,
-           COUNT(DISTINCT po.CustomerCode) Customers,SUM(ISNULL(inv.Revenue,0)) AssociatedRevenue
+    SELECT EOMONTH(po.DocDate) MonthEnd,p.Code,p.Name,
+           COUNT(*) Orders,
+           COUNT(inv.OrderId) Orders_DaXuatHD,
+           COUNT(DISTINCT po.CustomerCode) Customers,
+           COUNT(DISTINCT CASE WHEN inv.OrderId IS NOT NULL
+                               THEN po.CustomerCode END) Customers_DaXuatHD,
+           SUM(ISNULL(inv.Revenue,0)) AssociatedRevenue,
+           SUM(ISNULL(inv.Revenue,0))/NULLIF(COUNT(inv.OrderId),0) RevenuePerOrder
     FROM po JOIN dbo.DMS_CTKM p ON p.Id=po.ProgId LEFT JOIN inv ON inv.OrderId=po.OrderId
-    GROUP BY EOMONTH(po.DocDate),p.Code,p.Name;
+    GROUP BY EOMONTH(po.DocDate),p.Code,p.Name
+    ORDER BY AssociatedRevenue DESC;
 
-### S13 — Like-for-like growth trên cùng tập khách — DERIVED
+### S13 — Like-for-like tách khỏi tăng trưởng do mở mới — DERIVED
+
+Chỉ số LFL theo năm, trên tập khách có doanh thu ở CẢ hai kỳ:
 
     WITH c AS (
       SELECT CustomerCode,
@@ -321,6 +431,51 @@ AssociatedRevenue không được cộng ngang vì một đơn có thể có nhi
     SELECT SUM(Cur) CurRevenue,SUM(PY) PYRevenue,
            100.0*(SUM(Cur)-SUM(PY))/NULLIF(SUM(PY),0) LikeForLikeYoYPct
     FROM c WHERE Cur<>0 AND PY<>0;
+
+Câu C20 hỏi **tách** tăng trưởng LFL khỏi tăng trưởng do mở mới — một con số % ở trên không trả lời
+được. SQL dưới đây phân rã biến động thành các cấu phần cộng lại đúng bằng tổng, kèm số khách mỗi
+nhóm. Cửa sổ là 3 tháng gần nhất so 3 tháng liền trước (với `@MonthStart='2026-08-01'` là T6–T8 so
+T3–T5), trùng cách chatbot đang trình bày để đối chiếu được trực tiếp.
+
+Định nghĩa LFL ở đây **rộng hơn** truy vấn trên: gồm mọi khách có doanh thu kỳ trước, kể cả khách đã
+về 0 ở kỳ này — nên phần rời bỏ nằm TRONG cấu phần LFL và được tách ra làm dòng con để nhìn rõ. Nhờ
+vậy `LFL + Mở mới = Tăng trưởng tổng` khít tuyệt đối, không có phần dư (dòng kiểm tra luôn = 0).
+
+**Chưa khớp với chatbot ở cấu phần LFL — cần đối chiếu định nghĩa trước khi kết luận ai đúng.** Bản
+chạy 03/09/2026 (T6–T8 so T3–T5): ba con số tổng khớp tuyệt đối (217,56 / 226,84 / -9,28 tỷ), số
+khách mỗi nhóm lệch không đáng kể (12.020 vs 12.014; 3.049 vs 3.046; 2.996 vs 2.995), nhưng LFL của
+chatbot là **-37,40 tỷ** kèm một khoản **"phần dư chưa phân loại" +2,87 tỷ**, còn ở đây LFL là
+**-34,49 tỷ** và không có phần dư. Đã loại hai giả thuyết: giao dịch thiếu mã khách = **0 dòng**;
+hàng trả/điều chỉnh cả kỳ chỉ **-502 triệu**, không đủ giải thích 2,87 tỷ. Nguồn gốc khoản dư đó
+chưa tái tạo được từ dữ liệu thô — phải xem `audit_log` của phiên hỏi C20 để biết chatbot phân loại
+theo tiêu chí nào. **Không dùng chênh lệch này làm căn cứ kết luận chatbot sai khi chưa làm rõ.**
+
+    WITH w AS (
+      SELECT CustomerCode,
+        SUM(CASE WHEN DocDate>=DATEADD(month,-3,@MonthEnd)
+                  AND DocDate<@MonthEnd THEN Amount9 ELSE 0 END) Cur,
+        SUM(CASE WHEN DocDate>=DATEADD(month,-6,@MonthEnd)
+                  AND DocDate<DATEADD(month,-3,@MonthEnd) THEN Amount9 ELSE 0 END) Pre
+      FROM #sales GROUP BY CustomerCode
+    ), agg AS (
+      SELECT SUM(Cur) CurAll,SUM(Pre) PreAll,
+             SUM(CASE WHEN Pre<>0 THEN Cur-Pre ELSE 0 END) LFLDelta,
+             COUNT(CASE WHEN Pre<>0 THEN 1 END) LFLCustomers,
+             SUM(CASE WHEN Pre<>0 AND Cur=0 THEN -Pre ELSE 0 END) ChurnDelta,
+             COUNT(CASE WHEN Pre<>0 AND Cur=0 THEN 1 END) ChurnCustomers,
+             SUM(CASE WHEN Pre=0 THEN Cur ELSE 0 END) NewDelta,
+             COUNT(CASE WHEN Pre=0 AND Cur<>0 THEN 1 END) NewCustomers
+      FROM w
+    )
+    SELECT 1 Thu_Tu,'Doanh thu ky nay (3 thang)' CauPhan,CurAll GiaTri,NULL SoKhach FROM agg
+    UNION ALL SELECT 2,'Doanh thu ky truoc (3 thang lien truoc)',PreAll,NULL FROM agg
+    UNION ALL SELECT 3,'Tang truong tong',CurAll-PreAll,NULL FROM agg
+    UNION ALL SELECT 4,'Like-for-like (khach co DT ky truoc)',LFLDelta,LFLCustomers FROM agg
+    UNION ALL SELECT 5,'  trong do: khach roi bo han (ve 0)',ChurnDelta,ChurnCustomers FROM agg
+    UNION ALL SELECT 6,'Tang truong tu khach mo moi',NewDelta,NewCustomers FROM agg
+    UNION ALL SELECT 7,'Kiem tra: LFL + Mo moi - Tang truong tong',
+                      LFLDelta+NewDelta-(CurAll-PreAll),NULL FROM agg
+    ORDER BY Thu_Tu;
 
 ### S14 — Xếp hạng, quy mô và streak địa bàn — READY
 
@@ -338,7 +493,25 @@ AssociatedRevenue không được cộng ngang vì một đơn có thể có nhi
     FROM #sales GROUP BY EOMONTH(DocDate),AreaCode,CityName,BranchCode
     ORDER BY MonthEnd,Revenue DESC;
 
-### S15 — Năng suất NPP/chi nhánh — READY
+### S15 — Năng suất chi nhánh nội bộ (KHÔNG phải NPP) — PARTIAL
+
+**Không có chiều nhà phân phối trong dữ liệu.** Kiểm thật 03/09/2026 trên cả hai view hóa đơn, kỳ
+12 tháng: `DistributorCode` chỉ có **3 giá trị** trong toàn bộ dữ liệu (`OTC1`, `OTC`, `ETC`) — đó là
+nhãn kênh, không phải danh tính NPP. `BranchCode` chỉ có **4 giá trị** (`A01`, `B02`, `B03`, `B04`) —
+là chi nhánh kho **nội bộ của DNH**, không phải kho của NPP bên ngoài. Không dòng nào trống.
+
+Vì vậy checker này **chỉ trả lời được phần "chi nhánh nội bộ"**, KHÔNG trả lời được:
+- "NPP nào doanh thu giảm" — không có danh tính NPP để tách;
+- "NPP nào tồn kho tăng" — tồn kho theo kho nội bộ, không theo NPP;
+- "NPP nào nợ xấu" — công nợ tra theo khách hàng hoặc vùng/kênh, không có trường NPP.
+
+**Chatbot từ chối C25/M29 với đúng lý do này là HÀNH VI ĐÚNG, phải chấm ĐẠT** theo quy tắc ở
+`huong_dan_ban_giao_uat.md` (câu thiếu nguồn tính đạt khi nói rõ giới hạn, không suy đoán). Trước
+03/09/2026 checker này gắn nhãn READY — nếu tester đối chiếu bảng dưới, sẽ chấm SAI cho một câu trả
+lời đúng.
+
+Cột này cũng **chưa được đồng bộ xuống kho local** (`vhoadon_otc`/`vhoadon_etc` trong `warehouse.db`
+không có `branch_code`/`distributor_code`), nên chatbot không nhìn thấy kể cả phần chi nhánh nội bộ.
 
     SELECT EOMONTH(DocDate) MonthEnd,BranchCode,DistributorCode,Channel,
            SUM(Amount9) Revenue,COUNT(DISTINCT OrderKey) Orders,
@@ -377,7 +550,99 @@ nhân viên/vùng trong hóa đơn theo tháng.
     FROM #sales GROUP BY CustomerCode,EOMONTH(DocDate)
     HAVING COUNT(DISTINCT EmpDMSCode)>1 OR COUNT(DISTINCT AreaCode)>1;
 
+Truy vấn trên phục vụ **C28** (loại ảnh hưởng của chuyển khách/chuyển nhân viên). Nó KHÔNG trả lời
+**C27** — câu này hỏi có dịch chuyển doanh thu bất thường giữa kênh/miền/chi nhánh/nhân viên qua các
+tháng hay không. SQL dưới đây trả thẳng danh sách biến động bất thường trên cả bốn chiều, xếp theo
+mức tiền, để không phải tự dò bảng MoM.
+
+Ngưỡng đề xuất: biến động ≥ 25% **và** ≥ 1 tỷ đồng — hai điều kiện cùng lúc để loại vừa nhiễu phần
+trăm của đơn vị nhỏ, vừa dao động nhỏ của đơn vị lớn. **Ngưỡng này do MCNA đặt, cần DNH chốt.**
+
+    WITH d AS (
+      SELECT 'KENH' Chieu,Channel DonVi,EOMONTH(DocDate) MonthEnd,SUM(Amount9) Revenue
+      FROM #sales GROUP BY Channel,EOMONTH(DocDate)
+      UNION ALL
+      SELECT 'MIEN',AreaCode,EOMONTH(DocDate),SUM(Amount9)
+      FROM #sales GROUP BY AreaCode,EOMONTH(DocDate)
+      UNION ALL
+      SELECT 'CHI_NHANH',BranchCode,EOMONTH(DocDate),SUM(Amount9)
+      FROM #sales GROUP BY BranchCode,EOMONTH(DocDate)
+      UNION ALL
+      SELECT 'NHAN_VIEN',EmpDMSCode,EOMONTH(DocDate),SUM(Amount9)
+      FROM #sales WHERE EmpDMSCode IS NOT NULL AND LTRIM(RTRIM(EmpDMSCode))<>''
+      GROUP BY EmpDMSCode,EOMONTH(DocDate)
+    ), m AS (
+      SELECT *,LAG(Revenue) OVER(PARTITION BY Chieu,DonVi ORDER BY MonthEnd) PrevRevenue
+      FROM d
+    )
+    SELECT Chieu,DonVi,MonthEnd,PrevRevenue,Revenue,
+           Revenue-PrevRevenue Delta,
+           100.0*(Revenue-PrevRevenue)/NULLIF(ABS(PrevRevenue),0) MoMPct
+    FROM m
+    WHERE PrevRevenue IS NOT NULL
+      AND ABS(Revenue-PrevRevenue)>=1000000000
+      AND ABS(100.0*(Revenue-PrevRevenue)/NULLIF(ABS(PrevRevenue),0))>=25
+    ORDER BY ABS(Revenue-PrevRevenue) DESC;
+
+Cho **C28** ("loại ảnh hưởng đổi địa bàn/chuyển NV/chuyển khách thì tăng trưởng thực còn bao nhiêu").
+Cách làm phòng thủ được: **không** cố nặn ra một con số đã "loại sạch mọi ảnh hưởng" — mà đo tăng
+trưởng trên **nhóm khách hoàn toàn không bị xáo trộn** (cùng một mã nhân viên và cùng một vùng ở cả
+hai kỳ), rồi tách riêng phần bị loại kèm quy mô tiền để người đọc biết đã bỏ ra bao nhiêu.
+
+**Giới hạn phải nói rõ khi trình bày:** catalog không có bảng lịch sử phân công, nên cách này KHÔNG
+xử lý được trường hợp nhân viên/QLV nghỉ mà chưa có người kế nhiệm — khách của họ sẽ rơi vào nhóm
+"bị xáo trộn" hoặc nhóm rời bỏ chứ không quy được về đơn vị cũ. Chatbot từ chối đưa một con số duy
+nhất cho C28 là **hành vi đúng**; bảng dưới là mức chi tiết cao nhất mà dữ liệu hiện có cho phép.
+
+    WITH per AS (
+      SELECT CustomerCode,EmpDMSCode,AreaCode,Amount9,
+             CASE WHEN DocDate>=DATEADD(month,-3,@MonthEnd) THEN 'CUR' ELSE 'PRE' END Ky
+      FROM #sales
+      WHERE DocDate>=DATEADD(month,-6,@MonthEnd) AND DocDate<@MonthEnd
+    ), agg AS (
+      SELECT CustomerCode,Ky,SUM(Amount9) Rev,
+             MIN(EmpDMSCode) EmpMin,MAX(EmpDMSCode) EmpMax,
+             MIN(AreaCode) AreaMin,MAX(AreaCode) AreaMax
+      FROM per GROUP BY CustomerCode,Ky
+    ), piv AS (
+      SELECT CustomerCode,
+        SUM(CASE WHEN Ky='CUR' THEN Rev ELSE 0 END) Cur,
+        SUM(CASE WHEN Ky='PRE' THEN Rev ELSE 0 END) Pre,
+        MAX(CASE WHEN Ky='CUR' THEN EmpMin END) EmpCurMin,
+        MAX(CASE WHEN Ky='CUR' THEN EmpMax END) EmpCurMax,
+        MAX(CASE WHEN Ky='PRE' THEN EmpMin END) EmpPreMin,
+        MAX(CASE WHEN Ky='PRE' THEN EmpMax END) EmpPreMax,
+        MAX(CASE WHEN Ky='CUR' THEN AreaMin END) AreaCurMin,
+        MAX(CASE WHEN Ky='CUR' THEN AreaMax END) AreaCurMax,
+        MAX(CASE WHEN Ky='PRE' THEN AreaMin END) AreaPreMin,
+        MAX(CASE WHEN Ky='PRE' THEN AreaMax END) AreaPreMax
+      FROM agg GROUP BY CustomerCode
+    ), phanloai AS (
+      SELECT *,
+        CASE
+          WHEN Pre=0 OR Cur=0 THEN 'LOAI_moi_hoac_roi_bo'
+          WHEN EmpCurMin=EmpCurMax AND EmpPreMin=EmpPreMax AND EmpCurMin=EmpPreMin
+           AND AreaCurMin=AreaCurMax AND AreaPreMin=AreaPreMax AND AreaCurMin=AreaPreMin
+            THEN 'ON_DINH_khong_xao_tron'
+          ELSE 'LOAI_doi_NV_hoac_dia_ban'
+        END Nhom
+      FROM piv
+    )
+    SELECT Nhom,COUNT(*) SoKhach,SUM(Pre) DoanhThuKyTruoc,SUM(Cur) DoanhThuKyNay,
+           SUM(Cur)-SUM(Pre) Delta,
+           100.0*(SUM(Cur)-SUM(Pre))/NULLIF(SUM(Pre),0) TangTruongPct
+    FROM phanloai GROUP BY Nhom
+    ORDER BY Nhom;
+
 ### S18 — Khách mới, mua lại, hoạt động — READY
+
+> ⚠️ **KHÔNG được cộng các dòng của truy vấn thứ nhất để ra tổng công ty.** Mỗi dòng là
+> `COUNT(DISTINCT CustomerCode)` trong phạm vi (tháng × vùng × QLV); một khách xuất hiện ở nhiều
+> nhóm sẽ bị đếm nhiều lần. Muốn tổng thì dùng truy vấn thứ hai.
+>
+> Đo thật 03/09/2026, T8/2026: khách mới **distinct toàn công ty = 627**, nhưng nếu cộng các nhóm sẽ
+> ra số lớn hơn nhiều — riêng nhóm `ManagerCode IS NULL` đã là 587 khách, mà 572 trong số đó ĐỒNG
+> THỜI có dòng gắn QLV. Cộng ngang là đếm trùng gần như toàn bộ.
 
     WITH snaps AS (
       SELECT EOMONTH(SaveDate) MonthEnd,MAX(SaveDate) SaveDate
@@ -392,6 +657,37 @@ nhân viên/vùng trong hóa đơn theo tháng.
     WHERE (@AreaCode IS NULL OR f.AreaCode=@AreaCode)
       AND (@ManagerCode IS NULL OR f.ManagerCode=@ManagerCode)
     GROUP BY EOMONTH(f.SaveDate),f.AreaCode,f.ManagerCode;
+
+Tổng đúng theo tháng cho **C29** — đếm distinct một lần trên toàn công ty, kèm cột chẩn đoán cho biết
+bao nhiêu khách chỉ có dòng `ManagerCode` rỗng (nhóm dễ bị bỏ sót khi trình bày theo QLV):
+
+    WITH snaps AS (
+      SELECT EOMONTH(SaveDate) MonthEnd,MAX(SaveDate) SaveDate
+      FROM dbo.FACT_TongHopKhachHang
+      WHERE SaveDate>=@FromDate AND SaveDate<@ToDate GROUP BY EOMONTH(SaveDate)
+    ), f AS (
+      SELECT EOMONTH(f.SaveDate) MonthEnd,f.ManagerCode,f.CustomerCode,f.IsNC,f.IsRO,f.IsAC
+      FROM dbo.FACT_TongHopKhachHang f JOIN snaps s ON s.SaveDate=f.SaveDate
+      WHERE (@AreaCode IS NULL OR f.AreaCode=@AreaCode)
+    )
+    SELECT MonthEnd,
+      COUNT(DISTINCT CustomerCode) TongKhach,
+      COUNT(DISTINCT CASE WHEN IsNC=1 THEN CustomerCode END) KhachMoi,
+      COUNT(DISTINCT CASE WHEN IsRO=1 THEN CustomerCode END) KhachMuaLai,
+      COUNT(DISTINCT CASE WHEN IsAC=1 THEN CustomerCode END) KhachAC,
+      COUNT(DISTINCT CASE WHEN IsNC=1 AND ManagerCode IS NOT NULL
+                          THEN CustomerCode END) KhachMoi_CoQLV,
+      COUNT(DISTINCT CASE WHEN IsNC=1 THEN CustomerCode END)
+        - COUNT(DISTINCT CASE WHEN IsNC=1 AND ManagerCode IS NOT NULL
+                              THEN CustomerCode END) KhachMoi_BoSotNeuLocQLV
+    FROM f GROUP BY MonthEnd ORDER BY MonthEnd;
+
+Cột cuối là mức chênh nếu chỉ lấy khách có QLV: T8/2026 là **627 − 612 = 15 khách (2,4%)**. Bản chạy
+UAT 03/09 cho thấy chatbot báo đúng **612** — tức đang lọc bỏ khách chưa gắn QLV. Chênh nhỏ nhưng
+phải nói rõ, vì đây là chỉ số đếm khách, không phải ước lượng.
+
+Cờ `IsAC` chỉ dành cho CS (Chợ sỉ) và TK (kênh MT) theo DNH chốt 27/08/2026 — `KhachAC` KHÔNG phải
+"khách hoạt động" của toàn công ty, không được dùng thay cho `TongKhach`.
 
 ### S19 — Cohort giữ chân khách — DERIVED
 
@@ -409,6 +705,65 @@ Cohort mặc định là tháng có hóa đơn đầu tiên; nếu DNH định n
     GROUP BY f.CohortMonth,DATEDIFF(month,f.CohortMonth,a.ActiveMonth)
     ORDER BY f.CohortMonth,AgeMonth;
 
+Truy vấn trên là đường cong thô, chưa trả lời C30 — câu này hỏi **tỷ lệ** giữ chân tại đúng mốc
+1/3/6/12 tháng, **tách theo kênh và miền**. SQL dưới đây trả thẳng bảng đó.
+
+**Cohort đầu cửa sổ bị kiểm duyệt trái, phải loại khi đọc kết quả.** `MIN(DocDate)` chỉ nhìn được
+trong phạm vi `#sales`, nên mọi khách đã mua từ trước `@FromDate` đều bị dồn vào tháng đầu tiên và
+trông như "khách mới". Bản chạy tay của người dùng cho cohort đầu tiên **7.820 khách** ở tuổi 0,
+trong khi các cohort thật chỉ vài trăm — chênh hơn 20 lần. Cột `GhiChu` đánh dấu dòng này.
+
+Cohort chưa đủ tuổi trả `NULL` chứ **không trả 0** — 0 sẽ bị đọc nhầm thành "mất sạch khách".
+
+**Chênh định nghĩa với chatbot — chờ DNH chốt A10, không chấm sai bên nào.** Checker này lấy cohort =
+tháng có hóa đơn đầu tiên quan sát được (proxy, đúng như nhãn DERIVED). Chatbot dùng cờ `IsNC` —
+định nghĩa "khách mở mới" chính thức của DNH. Hai cách cho quy mô cohort rất khác nhau: T10/2025 kênh
+OTC ra **2.433 khách** theo cách này, còn chatbot báo **341**. Chừng nào A10 chưa chốt thì **tỷ lệ giữ
+chân của hai bên không so trực tiếp được** — phải thống nhất nguồn cohort trước. Nếu DNH chốt dùng
+`IsNC`, thay CTE `f` bằng truy vấn lấy tháng đầu tiên có `IsNC=1` trong `FACT_TongHopKhachHang`.
+
+    WITH f AS (
+      SELECT CustomerCode,MIN(DATEFROMPARTS(YEAR(DocDate),MONTH(DocDate),1)) CohortMonth
+      FROM #sales GROUP BY CustomerCode
+    ), dim AS (
+      SELECT f.CustomerCode,f.CohortMonth,MIN(s.Channel) Channel,MIN(s.AreaCode) AreaCode
+      FROM f JOIN #sales s ON s.CustomerCode=f.CustomerCode
+        AND DATEFROMPARTS(YEAR(s.DocDate),MONTH(s.DocDate),1)=f.CohortMonth
+      GROUP BY f.CustomerCode,f.CohortMonth
+    ), a AS (
+      SELECT DISTINCT CustomerCode,DATEFROMPARTS(YEAR(DocDate),MONTH(DocDate),1) ActiveMonth
+      FROM #sales
+    ), r AS (
+      SELECT d.CohortMonth,d.Channel,d.AreaCode,d.CustomerCode,
+             DATEDIFF(month,d.CohortMonth,a.ActiveMonth) AgeMonth
+      FROM dim d JOIN a ON a.CustomerCode=d.CustomerCode AND a.ActiveMonth>=d.CohortMonth
+    ), sz AS (
+      SELECT CohortMonth,Channel,AreaCode,COUNT(*) CohortSize FROM dim
+      GROUP BY CohortMonth,Channel,AreaCode
+    ), ret AS (
+      SELECT CohortMonth,Channel,AreaCode,
+        COUNT(DISTINCT CASE WHEN AgeMonth=1 THEN CustomerCode END) R1,
+        COUNT(DISTINCT CASE WHEN AgeMonth=3 THEN CustomerCode END) R3,
+        COUNT(DISTINCT CASE WHEN AgeMonth=6 THEN CustomerCode END) R6,
+        COUNT(DISTINCT CASE WHEN AgeMonth=12 THEN CustomerCode END) R12
+      FROM r GROUP BY CohortMonth,Channel,AreaCode
+    ), m AS (SELECT MAX(ActiveMonth) LastMonth,MIN(ActiveMonth) FirstMonth FROM a)
+    SELECT s.CohortMonth,s.Channel,s.AreaCode,s.CohortSize,
+      CASE WHEN DATEDIFF(month,s.CohortMonth,m.LastMonth)>=1
+           THEN 100.0*t.R1/NULLIF(s.CohortSize,0) END GiuChan_1Thang,
+      CASE WHEN DATEDIFF(month,s.CohortMonth,m.LastMonth)>=3
+           THEN 100.0*t.R3/NULLIF(s.CohortSize,0) END GiuChan_3Thang,
+      CASE WHEN DATEDIFF(month,s.CohortMonth,m.LastMonth)>=6
+           THEN 100.0*t.R6/NULLIF(s.CohortSize,0) END GiuChan_6Thang,
+      CASE WHEN DATEDIFF(month,s.CohortMonth,m.LastMonth)>=12
+           THEN 100.0*t.R12/NULLIF(s.CohortSize,0) END GiuChan_12Thang,
+      CASE WHEN s.CohortMonth=m.FirstMonth THEN 'KIEM_DUYET_TRAI_khong_dung'
+           ELSE 'OK' END GhiChu
+    FROM sz s
+    JOIN ret t ON t.CohortMonth=s.CohortMonth AND t.Channel=s.Channel AND t.AreaCode=s.AreaCode
+    CROSS JOIN m
+    ORDER BY s.CohortMonth,s.Channel,s.AreaCode;
+
 ### S20 — Luồng khách và khách tăng/giảm mạnh — READY
 
     WITH c AS (
@@ -423,7 +778,103 @@ Cohort mặc định là tháng có hóa đơn đầu tiên; nếu DNH định n
                 WHEN Cur>Prev THEN 'GROWING' ELSE 'DECLINING' END Movement
     FROM c WHERE Cur<>Prev ORDER BY ABS(Cur-Prev) DESC;
 
-### S21 — Đóng góp tăng/giảm theo nhóm/SKU — READY
+Truy vấn trên phục vụ **M21/V19** (top khách, ai tăng/giảm mạnh). Nó **không** trả lời **C31** — câu
+này hỏi tổng doanh thu MẤT từ khách ngừng mua so với doanh thu TĂNG THÊM từ khách mới/tái kích hoạt,
+theo từng tháng. Bảng trên vừa chỉ có một cặp tháng, vừa cắt `TOP (100)` nên cộng lại không ra tổng.
+
+Lưới khách × tháng ở dưới là bắt buộc: khách vắng mặt một tháng thì không có dòng trong `#sales`, nếu
+dùng `LAG` trực tiếp sẽ so nhầm với tháng gần nhất CÓ giao dịch chứ không phải tháng liền trước — đúng
+nhóm khách ngừng mua lại bị bỏ sót.
+
+**Cả checker lẫn chatbot đều đang dùng định nghĩa tạm — chờ DNH chốt câu B3 (ngưỡng khách ngừng
+mua).** Đối chiếu T6/2026:
+
+| | Chatbot | Checker |
+|---|---:|---:|
+| Doanh thu mất | -10,27 tỷ | -14,71 tỷ |
+| Doanh thu thêm | +3,30 tỷ | +15,27 tỷ |
+| Tỷ lệ bù đắp | 32% | 104% |
+
+- **Chatbot lệch bất đối xứng**: tự ghi là chỉ lấy "khách mới xuất hiện **lần đầu**" và cắt tối đa
+  200 khách/nhóm/tháng. C31 hỏi "khách mới **/tái kích hoạt**" — loại nhóm tái kích hoạt khỏi vế tăng
+  thêm trong khi vế mất vẫn tính đủ sẽ kéo tỷ lệ bù đắp xuống thấp giả tạo. Kết luận "chỉ bù được 1/3"
+  từ đó **không dùng được**.
+- **Checker trước đây cũng lệch**: coi vắng mặt ĐÚNG MỘT THÁNG đã là "ngừng mua", nên khách mua cách
+  tháng nhảy qua lại giữa hai nhóm và thổi phồng cả hai vế.
+
+Vì B3 chưa chốt, SQL dưới đây **tính sẵn ba ngưỡng cạnh nhau** (`_N1`, `_N2`, `_N3` = im lặng 1, 2
+hoặc 3 tháng liên tiếp) thay vì tự chọn một con số. Định nghĩa đối xứng ở cả hai vế: "ngừng mua" là
+im lặng đủ N tháng sau khi có doanh thu, "mới/tái kích hoạt" là có doanh thu sau khi im lặng đủ N
+tháng. Cả ba ngưỡng tính trên cùng một tập tháng (`P3 IS NOT NULL`) để so được với nhau.
+
+**Đây là bảng để DNH chốt B3**: nhìn ba cột `TyLeBuDap_N1/N2/N3` sẽ thấy kết luận "mất khách có được
+bù không" nhạy đến mức nào với ngưỡng. Giữa năm ngưỡng đổi là kết luận đổi hẳn (T3/2026: 118,9% ở N1
+nhưng 40,6% ở N2). Chốt xong thì bỏ hai ngưỡng còn lại và sửa chatbot về cùng ngưỡng đó.
+
+**Nhưng sai lệch của chatbot KHÔNG phải do khác ngưỡng** — bản chạy 03/09 cho thấy nó nằm thấp hơn
+toàn bộ dải ba ngưỡng ở cả ba tháng:
+
+| Tháng | Chatbot | N1 | N2 | N3 |
+|---|---:|---:|---:|---:|
+| T6/2026 | 32% | 103,8% | 82,9% | 69,0% |
+| T7/2026 | 37% | 127,6% | 112,9% | 91,8% |
+| T8/2026 | 40% | 116,4% | 119,7% | 137,2% |
+
+Chọn ngưỡng nào cũng không ra 32–40%. Nguyên nhân là việc loại nhóm tái kích hoạt khỏi vế tăng thêm
+(bất đối xứng), không phải bất đồng định nghĩa churn. **Đây là lỗi phải sửa, không phải điểm chờ
+DNH.**
+
+    WITH cm AS (
+      SELECT CustomerCode,DATEFROMPARTS(YEAR(DocDate),MONTH(DocDate),1) MonthStart,
+             SUM(Amount9) Rev
+      FROM #sales GROUP BY CustomerCode,DATEFROMPARTS(YEAR(DocDate),MONTH(DocDate),1)
+    ), months AS (SELECT DISTINCT MonthStart FROM cm
+    ), grid AS (
+      SELECT c.CustomerCode,m.MonthStart,ISNULL(x.Rev,0) Rev
+      FROM (SELECT DISTINCT CustomerCode FROM cm) c
+      CROSS JOIN months m
+      LEFT JOIN cm x ON x.CustomerCode=c.CustomerCode AND x.MonthStart=m.MonthStart
+    ), mv AS (
+      SELECT CustomerCode,MonthStart,Rev,
+             LAG(Rev,1) OVER(PARTITION BY CustomerCode ORDER BY MonthStart) P1,
+             LAG(Rev,2) OVER(PARTITION BY CustomerCode ORDER BY MonthStart) P2,
+             LAG(Rev,3) OVER(PARTITION BY CustomerCode ORDER BY MonthStart) P3
+      FROM grid
+    )
+    SELECT MonthStart,
+      SUM(CASE WHEN Rev=0 AND P1>0 THEN P1 ELSE 0 END) Mat_N1,
+      SUM(CASE WHEN Rev>0 AND P1=0 THEN Rev ELSE 0 END) Them_N1,
+      100.0*SUM(CASE WHEN Rev>0 AND P1=0 THEN Rev ELSE 0 END)
+        /NULLIF(SUM(CASE WHEN Rev=0 AND P1>0 THEN P1 ELSE 0 END),0) TyLeBuDap_N1,
+      SUM(CASE WHEN Rev=0 AND P1=0 AND P2>0 THEN P2 ELSE 0 END) Mat_N2,
+      SUM(CASE WHEN Rev>0 AND P1=0 AND P2=0 THEN Rev ELSE 0 END) Them_N2,
+      100.0*SUM(CASE WHEN Rev>0 AND P1=0 AND P2=0 THEN Rev ELSE 0 END)
+        /NULLIF(SUM(CASE WHEN Rev=0 AND P1=0 AND P2>0 THEN P2 ELSE 0 END),0) TyLeBuDap_N2,
+      SUM(CASE WHEN Rev=0 AND P1=0 AND P2=0 AND P3>0 THEN P3 ELSE 0 END) Mat_N3,
+      SUM(CASE WHEN Rev>0 AND P1=0 AND P2=0 AND P3=0 THEN Rev ELSE 0 END) Them_N3,
+      100.0*SUM(CASE WHEN Rev>0 AND P1=0 AND P2=0 AND P3=0 THEN Rev ELSE 0 END)
+        /NULLIF(SUM(CASE WHEN Rev=0 AND P1=0 AND P2=0 AND P3>0 THEN P3 ELSE 0 END),0) TyLeBuDap_N3
+    FROM mv
+    WHERE P3 IS NOT NULL
+    GROUP BY MonthStart ORDER BY MonthStart;
+
+### S21 — Đóng góp tăng/giảm theo SKU (cột nhóm KHÔNG tin được) — PARTIAL
+
+**Phần SKU dùng được; phần "nhóm sản phẩm" thì KHÔNG.** Kiểm thật 03/09/2026, kỳ 12 tháng:
+`GroupCode` trên hai view hóa đơn là **hai hệ mã khác nhau, và bên OTC không phải nhóm sản phẩm**:
+
+| Kênh | Giá trị | Thực chất |
+|---|---|---|
+| OTC | `DM1`, `DM2`, `DM3` — chỉ 3 giá trị, 55 SKU | **Bậc thưởng nhóm hàng** trong chính sách lương (xem `DIM_BacThuong`), không phải phân loại sản phẩm |
+| ETC | `0`,`1`,`2`,`3`,`4` — 257 SKU | Mã số khác hệ, không cùng nghĩa với OTC |
+
+Gộp theo `GroupCode` rồi gọi là "nhóm sản phẩm" sẽ cho ra bảng trông hợp lý nhưng **trộn bậc thưởng
+với mã số vô nghĩa** — đúng loại bẫy như `S15` (NPP). Hai view còn khác cả kiểu dữ liệu (`int` vs
+`varchar`), nên `#sales` phải `CONVERT(varchar(50), GroupCode)` mới union được.
+
+Vì vậy với C33/M31/V29, **chỉ dùng cột `ItemCode`**; muốn trả lời theo nhóm sản phẩm thật thì phải
+được DNH cấp danh mục ngành hàng và khoá nối vào mặt hàng. Chatbot từ chối phần "nhóm sản phẩm" hoặc
+chỉ trả lời theo SKU là **hành vi đúng**.
 
     WITH p AS (
       SELECT GroupCode,ItemCode,
@@ -435,7 +886,7 @@ Cohort mặc định là tháng có hóa đơn đầu tiên; nếu DNH định n
            100.0*(Cur-Prev)/NULLIF(SUM(Cur-Prev) OVER(),0) ContributionPct
     FROM p ORDER BY Delta DESC;
 
-### S22 — Sản phẩm mới theo tháng bán đầu tiên — DERIVED
+### S22 — Sản phẩm mới: doanh thu và độ phủ theo tuổi — DERIVED
 
     WITH f AS (
       SELECT ItemCode,MIN(DocDate) FirstSaleDate FROM #sales GROUP BY ItemCode
@@ -445,6 +896,52 @@ Cohort mặc định là tháng có hóa đơn đầu tiên; nếu DNH định n
     FROM f JOIN #sales s ON s.ItemCode=f.ItemCode
       AND s.DocDate>=f.FirstSaleDate AND s.DocDate<DATEADD(month,6,f.FirstSaleDate)
     GROUP BY EOMONTH(f.FirstSaleDate),s.ItemCode;
+
+Truy vấn trên **không** trả lời C34 ("doanh thu SP mới sau 1/3/6/12 tháng so KH; độ phủ khách hàng"):
+gộp cả 6 tháng vào một con số nên không tách được theo tuổi, và cửa sổ 6 tháng thì không bao giờ ra
+được mốc 12 tháng. SQL dưới đây trả đúng dạng bảng theo tuổi, kèm số khách để đo độ phủ.
+
+**Kiểm duyệt trái — phải loại tháng đầu cửa sổ.** `MIN(DocDate)` chỉ nhìn trong `#sales`, nên mọi mặt
+hàng đã bán từ trước `@FromDate` đều bị dồn vào tháng đầu và trông như "sản phẩm mới". Bản chạy tay
+của người dùng cho `LaunchMonth` đầu tiên có mã đạt **11.626 khách / 117 tỷ** — không thể là hàng mới
+ra mắt. Cột `GhiChu` đánh dấu các dòng này.
+
+**Phần "so KH" (so kế hoạch) chưa làm được**: catalog chỉ có `DIM_TargetSanPhamETC` (chỉ tiêu sản
+phẩm **kênh ETC**), không có kế hoạch doanh thu cho sản phẩm mới ở kênh OTC. Cần DNH cấp nguồn kế
+hoạch ra mắt sản phẩm thì mới ghép được cột so sánh — không suy ra từ dữ liệu bán.
+
+    WITH f AS (
+      SELECT ItemCode,MIN(DATEFROMPARTS(YEAR(DocDate),MONTH(DocDate),1)) LaunchMonth
+      FROM #sales GROUP BY ItemCode
+    ), sm AS (
+      SELECT ItemCode,DATEFROMPARTS(YEAR(DocDate),MONTH(DocDate),1) MonthStart,
+             SUM(Amount9) Rev,COUNT(DISTINCT CustomerCode) Cus
+      FROM #sales GROUP BY ItemCode,DATEFROMPARTS(YEAR(DocDate),MONTH(DocDate),1)
+    ), a AS (
+      SELECT f.LaunchMonth,f.ItemCode,
+             DATEDIFF(month,f.LaunchMonth,sm.MonthStart) AgeMonth,sm.Rev,sm.Cus
+      FROM f JOIN sm ON sm.ItemCode=f.ItemCode AND sm.MonthStart>=f.LaunchMonth
+    ), m AS (SELECT MIN(MonthStart) FirstMonth,MAX(MonthStart) LastMonth FROM sm)
+    SELECT a.LaunchMonth,a.ItemCode,
+      DATEDIFF(month,a.LaunchMonth,m.LastMonth) TuoiToiDaDatDuoc,
+      MAX(CASE WHEN a.AgeMonth=0  THEN a.Rev END) DT_Tuoi0,
+      MAX(CASE WHEN a.AgeMonth=0  THEN a.Cus END) Khach_Tuoi0,
+      MAX(CASE WHEN a.AgeMonth=1  THEN a.Rev END) DT_Tuoi1,
+      MAX(CASE WHEN a.AgeMonth=1  THEN a.Cus END) Khach_Tuoi1,
+      MAX(CASE WHEN a.AgeMonth=3  THEN a.Rev END) DT_Tuoi3,
+      MAX(CASE WHEN a.AgeMonth=3  THEN a.Cus END) Khach_Tuoi3,
+      MAX(CASE WHEN a.AgeMonth=6  THEN a.Rev END) DT_Tuoi6,
+      MAX(CASE WHEN a.AgeMonth=6  THEN a.Cus END) Khach_Tuoi6,
+      MAX(CASE WHEN a.AgeMonth=12 THEN a.Rev END) DT_Tuoi12,
+      MAX(CASE WHEN a.AgeMonth=12 THEN a.Cus END) Khach_Tuoi12,
+      CASE WHEN a.LaunchMonth=m.FirstMonth THEN 'KIEM_DUYET_TRAI_khong_dung'
+           ELSE 'OK' END GhiChu
+    FROM a CROSS JOIN m
+    GROUP BY a.LaunchMonth,a.ItemCode,m.FirstMonth,m.LastMonth
+    ORDER BY a.LaunchMonth,MAX(CASE WHEN a.AgeMonth=0 THEN a.Rev END) DESC;
+
+Ô trống ở cột tuổi nghĩa là **tháng đó không phát sinh bán**, không phải chưa đủ tuổi — dùng
+`TuoiToiDaDatDuoc` để biết mốc nào đã đánh giá được.
 
 ### S23 — Phụ thuộc và độ phủ SKU — DERIVED
 
@@ -469,11 +966,14 @@ scripts/business_stress_suite.py và kho local fact_congno_khachhang.
       @_DocDate2=@AsOfDate,@_Period1=7,@_Period2=15,
       @_RepType=1,@_IsPrepaymentInclude=1;
 
-    -- Trên kho local sau khi sync:
+    -- !!! KHO LOCAL (warehouse.db, SQLite) - KHONG chay tren Bravo:
+    --     Bravo se bao "Invalid object name 'fact_congno_khachhang'".
     SELECT sales_channel,SUM(balance_end) Balance,SUM(total_overdue) Overdue,
            100.0*SUM(total_overdue)/NULLIF(SUM(balance_end),0) OverduePct
     FROM fact_congno_khachhang GROUP BY sales_channel;
 
+    -- !!! KHO LOCAL (warehouse.db, SQLite) - KHONG chay tren Bravo:
+    --     Bravo se bao "Invalid object name 'fact_congno_khachhang'".
     WITH c AS (
       SELECT customer_code,SUM(total_overdue) Overdue
       FROM fact_congno_khachhang GROUP BY customer_code
@@ -487,6 +987,8 @@ scripts/business_stress_suite.py và kho local fact_congno_khachhang.
 
 ### S25 — Lịch sử công nợ theo tháng — BLOCKED_HISTORY
 
+    -- !!! KHO LOCAL (warehouse.db, SQLite) - KHONG chay tren Bravo:
+    --     Bravo se bao "Invalid object name 'fact_congno_khachhang'".
     SELECT MIN(snapshot_date) FirstSnapshot,MAX(snapshot_date) LastSnapshot,
            COUNT(DISTINCT snapshot_date) SnapshotCount
     FROM fact_congno_khachhang;
@@ -499,6 +1001,8 @@ snapshot cũ bằng snapshot mới.
 Chạy trên kho local có attach/mart doanh thu tháng. Nếu chưa có mart doanh thu, dùng S20 xuất danh
 sách giảm mua rồi JOIN theo customer_code ngoài SQL.
 
+    -- !!! KHO LOCAL (warehouse.db, SQLite) - KHONG chay tren Bravo:
+    --     Bravo se bao "Invalid object name 'fact_congno_khachhang'".
     SELECT TOP (100) d.customer_code,SUM(d.balance_end) Balance,
            SUM(d.total_overdue) Overdue,r.recent_revenue,r.prior_revenue,
            r.recent_revenue-r.prior_revenue RevenueDelta
@@ -510,15 +1014,69 @@ sách giảm mua rồi JOIN theo customer_code ngoài SQL.
 
 ### S27 — Tồn kho snapshot — READY_CURRENT
 
+> ⚠️ **Giá trị tồn thiếu trên diện rộng — không được cộng thành "tổng giá trị tồn kho".** Đo thật
+> 03/09/2026 trên `BRV_TonKhoDK` (`IsActive=1`): **B03 (Miền Trung) có 132 mặt hàng, 9.014.691 đơn vị
+> nhưng giá trị = 0 đồng**. B02 còn 614 dòng và B04 còn 585 dòng có số lượng > 0 mà `Amount = 0`.
+> Nghĩa là con số ~6,26 tỷ đang bị **thiếu hụt ở cả ba chi nhánh**, không riêng Miền Trung. Đây đúng
+> câu **A3** đang chờ DNH chốt nguồn giá. Chỉ dùng cột số lượng cho tới khi có nguồn giá.
+>
+> C41 hỏi "thay đổi thế nào **theo tháng**" — `BRV_TonKhoDK` chỉ là snapshot hiện tại, không có lịch
+> sử tồn theo tháng. Chatbot nói rõ giới hạn này là **đúng**, phải chấm ĐẠT.
+
     SELECT k.BranchCode,p.Code ItemCode,MAX(p.Name) ProductName,
-           SUM(t.Quantity) Quantity,SUM(t.Amount) InventoryValue
+           SUM(t.Quantity) Quantity,SUM(t.Amount) InventoryValue,
+           SUM(CASE WHEN ISNULL(t.Amount,0)=0 AND t.Quantity>0 THEN 1 ELSE 0 END) DongThieuGia
     FROM dbo.BRV_TonKhoDK t
     LEFT JOIN dbo.BRV_Kho k ON k.Id=t.WarehouseId
     LEFT JOIN dbo.BRV_SanPham p ON p.Id=t.ItemId
     WHERE t.IsActive=1
     GROUP BY k.BranchCode,p.Code ORDER BY InventoryValue DESC;
 
-### S28 — Lịch sử tồn, cận date và chậm luân chuyển — PARTIAL
+Số tháng tồn, chậm luân chuyển và stock-out — phần C41 hỏi mà bảng trên chưa trả lời:
+
+    WITH ton AS (
+      SELECT p.Code ItemCode,MAX(p.Name) ProductName,SUM(t.Quantity) Qty,SUM(t.Amount) Amount
+      FROM dbo.BRV_TonKhoDK t
+      LEFT JOIN dbo.BRV_SanPham p ON p.Id=t.ItemId
+      WHERE t.IsActive=1 GROUP BY p.Code
+    ), ban AS (
+      SELECT ItemCode,
+             SUM(CASE WHEN UnitPrice>0 THEN Quantity ELSE 0 END)/3.0 QtyPerMonth,
+             SUM(Amount9) Revenue3M,MAX(DocDate) LastSaleDate
+      FROM #sales WHERE DocDate>=DATEADD(month,-3,@MonthEnd) AND DocDate<@MonthEnd
+      GROUP BY ItemCode
+    )
+    SELECT ISNULL(ton.ItemCode,ban.ItemCode) ItemCode,ton.ProductName,
+           ISNULL(ton.Qty,0) TonHienTai,ISNULL(ton.Amount,0) GiaTriTon,
+           ISNULL(ban.QtyPerMonth,0) BanBinhQuanThang,
+           ton.Qty/NULLIF(ban.QtyPerMonth,0) SoThangTon,
+           ban.LastSaleDate,
+           CASE WHEN ton.ItemCode IS NULL AND ban.QtyPerMonth>0 THEN 'STOCK_OUT_van_dang_ban'
+                WHEN ISNULL(ton.Qty,0)=0 AND ban.QtyPerMonth>0 THEN 'STOCK_OUT_van_dang_ban'
+                WHEN ISNULL(ban.QtyPerMonth,0)=0 AND ton.Qty>0 THEN 'TON_KHONG_BAN_3_THANG'
+                WHEN ton.Qty/NULLIF(ban.QtyPerMonth,0)>6 THEN 'CHAM_LUAN_CHUYEN'
+                ELSE 'BINH_THUONG' END TrangThai
+    FROM ton FULL OUTER JOIN ban ON ban.ItemCode=ton.ItemCode
+    WHERE (ISNULL(ton.Qty,0)=0 AND ISNULL(ban.QtyPerMonth,0)>0)
+       OR (ISNULL(ban.QtyPerMonth,0)=0 AND ISNULL(ton.Qty,0)>0)
+       OR ton.Qty/NULLIF(ban.QtyPerMonth,0)>6
+    ORDER BY TrangThai,ISNULL(ton.Qty,0) DESC;
+
+Điều kiện lọc phải loại mặt hàng **vừa không tồn vừa không bán** — chúng không phải vấn đề gì, chỉ là
+mã cũ nằm trong danh mục. Bản đầu để lọt và gắn nhãn `BINH_THUONG`, gây nhiễu.
+
+⚠️ **Giá trị tồn còn bị ÂM ở một số mã** dù số lượng dương — bản chạy 03/09/2026: `74260010030` tồn
+11.048.336 đơn vị nhưng `GiaTriTon = -413.425`; `34140000270` tồn 9.285.200 nhưng `-889.778`. Cộng
+với chuyện 1.477 dòng có số lượng mà giá bằng 0, cột `Amount` của `BRV_TonKhoDK` **không dùng làm giá
+trị tồn kho được** cho tới khi DNH chốt nguồn giá (câu A3).
+
+### S28 — Cận date và chậm luân chuyển — PARTIAL
+
+Bản trước 03/09/2026 chỉ có script dò cột và kết luận "catalog chưa có ExpiryDate chuẩn". **Kết luận
+đó sai** — chính output của script dò cho thấy `BRV_Lot.ExpiryDate` và `BRVSX_Lot.ExpiryDate` đều tồn
+tại kiểu `date`. Kiểm thật 03/09/2026: `BRV_Lot` có 3.678/3.740 dòng ghi hạn, `BRVSX_Lot` có
+20.738/21.580. Nối `BRV_TonKhoDKLot` với `BRV_Lot` theo khóa kép `(ItemLotCode, ItemId)` đạt **1.599
+/1.599 dòng — phủ 100%**, trong đó **824 dòng cận date dưới 6 tháng**. Câu M40/V39 trả lời được.
 
     SELECT o.name ObjectName,c.name ColumnName,t.name DataType
     FROM sys.objects o JOIN sys.columns c ON c.object_id=o.object_id
@@ -527,7 +1085,51 @@ sách giảm mua rồi JOIN theo customer_code ngoài SQL.
       AND (c.name LIKE '%Date%' OR c.name LIKE '%Expiry%' OR c.name LIKE '%Han%')
     ORDER BY o.name,c.column_id;
 
-BRV_TonKhoDK là snapshot, BRV/BRVSX_TonKhoDKLot có lô nhưng catalog chưa có ExpiryDate chuẩn.
+Danh sách lô cần xử lý — cận date hoặc chậm luân chuyển:
+
+    WITH ton AS (
+      SELECT t.BranchCode,t.ItemId,t.ItemLotCode,SUM(t.Quantity) Qty,
+             MIN(l.ExpiryDate) ExpiryDate
+      FROM dbo.BRV_TonKhoDKLot t
+      LEFT JOIN dbo.BRV_Lot l ON l.ItemLotCode=t.ItemLotCode AND l.ItemId=t.ItemId
+      WHERE t.IsActive=1 AND t.Quantity>0
+      GROUP BY t.BranchCode,t.ItemId,t.ItemLotCode
+    ), ban AS (
+      SELECT ItemCode,SUM(CASE WHEN UnitPrice>0 THEN Quantity ELSE 0 END)/3.0 QtyPerMonth
+      FROM #sales WHERE DocDate>=DATEADD(month,-3,@MonthEnd) AND DocDate<@MonthEnd
+      GROUP BY ItemCode
+    ), x AS (
+      SELECT ton.BranchCode,p.Code ItemCode,MAX(p.Name) ProductName,ton.ItemLotCode,
+             ton.Qty,ton.ExpiryDate,MAX(ban.QtyPerMonth) QtyPerMonth
+      FROM ton
+      LEFT JOIN dbo.BRV_SanPham p ON p.Id=ton.ItemId
+      LEFT JOIN ban ON ban.ItemCode=p.Code
+      GROUP BY ton.BranchCode,p.Code,ton.ItemLotCode,ton.Qty,ton.ExpiryDate
+    )
+    SELECT BranchCode,ItemCode,ProductName,ItemLotCode,Qty,ExpiryDate,
+           DATEDIFF(day,@AsOfDate,ExpiryDate) SoNgayConHan,
+           CASE WHEN ExpiryDate IS NULL THEN 'KHONG_CO_HAN'
+                WHEN ExpiryDate<@AsOfDate THEN 'DA_HET_HAN'
+                WHEN ExpiryDate<DATEADD(month,3,@AsOfDate) THEN 'CAN_DATE_DUOI_3_THANG'
+                WHEN ExpiryDate<DATEADD(month,6,@AsOfDate) THEN 'CAN_DATE_3_6_THANG'
+                ELSE 'CON_HAN' END NhomHan,
+           QtyPerMonth,Qty/NULLIF(QtyPerMonth,0) SoThangTon,
+           CASE WHEN ISNULL(QtyPerMonth,0)=0 THEN 'KHONG_BAN_3_THANG_GAN_NHAT'
+                WHEN Qty/NULLIF(QtyPerMonth,0)>6 THEN 'CHAM_LUAN_CHUYEN'
+                ELSE 'BINH_THUONG' END NhomLuanChuyen
+    FROM x
+    WHERE ExpiryDate<DATEADD(month,6,@AsOfDate)
+       OR ISNULL(QtyPerMonth,0)=0
+       OR Qty/NULLIF(QtyPerMonth,0)>6
+    ORDER BY CASE WHEN ExpiryDate<@AsOfDate THEN 0
+                  WHEN ExpiryDate<DATEADD(month,3,@AsOfDate) THEN 1 ELSE 2 END,
+             Qty DESC;
+
+**PARTIAL vì hai lý do còn lại:**
+- Không quy ra tiền được cho toàn bộ tồn — xem ghi chú giá trị tồn ở `S27`.
+- `BRVSX_Lot` có hạn dùng sai định dạng (`MIN(ExpiryDate)` ra **1029-10-16**, gõ nhầm năm). Truy vấn
+  trên chỉ dùng `BRV_Lot`; nếu mở rộng sang `BRVSX_` phải lọc năm hợp lệ trước.
+- Ngưỡng 6 tháng tồn cho "chậm luân chuyển" là đề xuất của MCNA, cần DNH chốt.
 
 ### S29 — Hợp đồng/kế hoạch thầu ETC — PARTIAL
 
@@ -543,7 +1145,31 @@ BRV_TonKhoDK là snapshot, BRV/BRVSX_TonKhoDKLot có lô nhưng catalog chưa c�
     WHERE o.name LIKE '%Contract%' OR o.name LIKE '%HopDong%' OR o.name LIKE '%TargetETC%'
     ORDER BY o.name,c.column_id;
 
-Chưa được gọi là tỷ lệ trúng thầu nếu chưa map trạng thái tham gia/trúng/thua.
+**Không có dữ liệu đấu thầu trong Bravo — đã kiểm hết catalog 03/09/2026.** Tìm mọi đối tượng
+(`USER_TABLE`/`VIEW`) khớp `%Thau%`, `%Tender%`, `%Bid%`, `%HopDong%` chỉ ra **4 đối tượng, tất cả
+đều là hợp đồng đã ký**: `vHopDongETC`, `DMSSX_HopDongHdr`, `DMSSX_HopDongCt`, `FACT_DuDKHopDongETC`.
+Không có bảng nào ghi kế hoạch thầu, giá trị tham gia, hay kết quả trúng/trượt.
+
+`StatusId` **không** phân biệt trúng/trượt: chỉ có 2 giá trị trên 8.607 hợp đồng (1: 1.834 HĐ,
+2: 6.773 HĐ). Hợp đồng là thứ đã KÝ — không suy ngược ra được gói nào đã dự mà trượt.
+
+Vì vậy **chatbot từ chối C43/M41 là hành vi đúng**: giá trị tham gia thầu, giá trị trúng và tỷ lệ
+trúng đều không có nguồn. Muốn trả lời phải được DNH cấp dữ liệu đấu thầu (nhiều khả năng đang nằm ở
+file Excel của bộ phận thầu, chưa đồng bộ vào Bravo).
+
+⚠️ **Hai hợp đồng có giá trị sai lệch nghiêm trọng, phải loại trước khi cộng bất kỳ tổng nào:**
+
+| ContractId | DocNo | AmountBefVat | Ghi chú |
+|---|---|---:|---|
+| 115627 | `225/HĐKT-NH` | 2.952.380.952.390.000 | 2,95 **triệu tỷ** trên đúng 1 dòng |
+| 112468 | `38/NH-TTYTKRP-GL` | 56.934.879.059.072 | 56,9 nghìn tỷ trên 4 dòng |
+
+Hợp đồng bình thường nằm trong khoảng 2–50 tỷ. Hai dòng này chiếm gần như toàn bộ con số tổng
+3 triệu tỷ, rõ ràng là lỗi nhập liệu. Cả hai hết hạn từ 2022–2023 nên **không lọt vào `S86`** (đã lọc
+`FromDate>=@FromDate`), nhưng bất kỳ truy vấn nào không lọc kỳ sẽ bị bóp méo.
+
+`AmountBefVat` là giá trị **theo dòng** (kiểm HĐ 119349: 148 dòng, 33 giá trị khác nhau), không phải
+giá trị header lặp lại — nên `SUM` theo `Id0` là đúng.
 
 ### S30 — KPI theo tháng — READY
 
@@ -559,6 +1185,64 @@ Chưa được gọi là tỷ lệ trúng thầu nếu chưa map trạng thái t
     FROM b WHERE SnapshotRank=1
       AND (@AreaCode IS NULL OR AreaCode=@AreaCode)
     GROUP BY EOMONTH(SaveDate),AreaCode,PositionCode;
+
+Bảng trên trả **% hoàn thành của tổng doanh thu** — đó KHÔNG phải điều C45 hỏi. C45 hỏi **tỷ lệ NHÂN
+SỰ** đạt từng mốc, tức đếm người rồi chia, không phải cộng tiền rồi chia. Hai chỉ số này lệch nhau
+rất xa: một đội có vài người vượt xa chỉ tiêu vẫn ra "tổng đạt 100%" trong khi phần lớn nhân sự dưới
+mốc.
+
+Chỉ đếm người **có target > 0**. Đo thật T8/2026: 209 bản ghi thì 17 có target NULL hoặc 0 — giữ lại
+sẽ kéo tỷ lệ xuống sai vì họ không có mốc để so.
+
+    WITH b AS (
+      SELECT *,DENSE_RANK() OVER(
+        PARTITION BY EOMONTH(SaveDate), EmployeeCode ORDER BY SaveDate DESC) SnapshotRank
+      FROM dbo.FACT_ThongKeTinhLuong
+      WHERE SaveDate>=@FromDate AND SaveDate<@ToDate
+    ), k AS (
+      SELECT EOMONTH(SaveDate) MonthEnd,AreaCode,PositionCode,EmployeeCode,
+             MonthSalePercent_R,
+             CASE WHEN PositionCode='TDV' THEN 0.65 ELSE 0.70 END Gate
+      FROM b
+      WHERE SnapshotRank=1 AND MonthSaleTarget>0
+        AND (@AreaCode IS NULL OR AreaCode=@AreaCode)
+    )
+    SELECT MonthEnd,AreaCode,PositionCode,
+      COUNT(*) TongNguoiCoTarget,
+      SUM(CASE WHEN MonthSalePercent_R>=Gate THEN 1 ELSE 0 END) DatCongThuongNhomHang,
+      100.0*SUM(CASE WHEN MonthSalePercent_R>=Gate THEN 1 ELSE 0 END)/COUNT(*) PctCongThuong,
+      SUM(CASE WHEN MonthSalePercent_R>=0.8 THEN 1 ELSE 0 END) Dat80,
+      100.0*SUM(CASE WHEN MonthSalePercent_R>=0.8 THEN 1 ELSE 0 END)/COUNT(*) Pct80,
+      SUM(CASE WHEN MonthSalePercent_R>=1.0 THEN 1 ELSE 0 END) DatChiTieu100,
+      100.0*SUM(CASE WHEN MonthSalePercent_R>=1.0 THEN 1 ELSE 0 END)/COUNT(*) Pct100,
+      SUM(CASE WHEN MonthSalePercent_R>=1.2 THEN 1 ELSE 0 END) Vuot120,
+      100.0*SUM(CASE WHEN MonthSalePercent_R>=1.2 THEN 1 ELSE 0 END)/COUNT(*) Pct120
+    FROM k GROUP BY MonthEnd,AreaCode,PositionCode
+    ORDER BY MonthEnd,AreaCode,PositionCode;
+
+**Cổng 65%/70% không phải "đạt KPI"** — đó là mốc bắt đầu được thưởng nhóm hàng (TDV 65%, các vị trí
+khác 70%, theo QĐ 0107/2026 và QĐ 0429/.25). "Đạt chỉ tiêu" là ≥100%. Đừng gộp hai khái niệm.
+
+**Nguồn này chỉ phủ kênh OTC** — chưa có KPI cá nhân cho ETC (câu A5 chờ DNH). Ngoài ra 9 bản ghi có
+tên dạng "QLV ..." nhưng `PositionCode='TDV'` (T8/2026), cùng loại nghi vấn với `MBKV12` ở câu A4.
+
+**Lệch mẫu số với chatbot — cần chốt "nhân sự được tính" gồm ai.** Đối chiếu T8/2026:
+
+| Chức danh | Chatbot | Checker (Bravo) |
+|---|---|---|
+| TDV | **146** người · 122 · 66 · 30 · 11 | **158** người · 122 · 66 · 30 · 11 |
+| QLV | 19 · 14 · 9 · 4 · 0 | 21 · 16 · 11 · 5 · 1 |
+| CS | 3 | 4 |
+| CTV | 2 | 3 |
+
+**Tử số TDV khớp tuyệt đối cả bốn mốc** — tức hai bên tính cùng một cách, chỉ khác tập người được
+đếm. Chatbot lấy tổng 171 người, checker lấy 192 (mọi bản ghi có `MonthSaleTarget>0`), chênh 21
+người. Vì 12 TDV bị loại đều nằm dưới mọi mốc nên tỷ lệ qua cổng đội lên **83,6%** thay vì **77,2%** —
+chênh 6,4 điểm chỉ do mẫu số.
+
+Không kết luận bên nào sai khi chưa biết chatbot lọc theo tiêu chí gì. Nếu 21 người đó thật sự không
+thuộc lực lượng bán OTC thì chatbot đúng; nếu họ là nhân sự thật chỉ đang dưới chuẩn thì loại ra là
+làm đẹp số. **Cần xem `audit_log` phiên hỏi C45, hoặc DNH chốt định nghĩa "nhân sự được tính".**
 
 ### S31 — Phân tầng KPI và chuỗi dưới chuẩn — READY
 
@@ -617,6 +1301,48 @@ Cần FACT_PhatSinhNhanVien được chốt để điều chỉnh chính xác v�
 
 Chỉ tính bonus/revenue; bonus/profit bị chặn cho tới khi S10 có mapping giá vốn/lợi nhuận.
 
+> ⚠️ **KHÔNG cộng cột `Revenue` của bảng trên qua các chức danh.** Tầng quản lý là rollup của tầng
+> nhân viên nên doanh thu bị lặp: bản chạy T8/2026 cho `QLV` và `TP` của Miền Bắc cùng đúng một con số
+> 28.469.978.376. Cộng tất cả chức danh ra 155,9 tỷ trong khi doanh thu thật của lực lượng bán chỉ
+> **48,9 tỷ** — đội gấp hơn 3 lần.
+>
+> **Thưởng thì ngược lại: KHÔNG bị trùng** (mỗi người một khoản riêng), nên tổng thưởng 1.060.518.990
+> là đúng. Vì vậy tỷ lệ chi phí thưởng phải lấy **tổng thưởng mọi chức danh chia cho doanh thu tầng
+> nhân viên**: `1.060.518.990 / 48.922.979.422` = **2,168%**. Lấy nhầm mẫu số 155,9 tỷ sẽ ra 0,680%,
+> thấp hơn thực tế hơn 3 lần.
+
+Tỷ lệ chi phí thưởng ở cấp công ty, tính đúng mẫu số:
+
+    WITH b AS (
+      SELECT *,DENSE_RANK() OVER(
+        PARTITION BY EOMONTH(SaveDate), EmployeeCode ORDER BY SaveDate DESC) SnapshotRank
+      FROM dbo.FACT_ThongKeTinhLuong
+      WHERE SaveDate>=@FromDate AND SaveDate<@ToDate
+    ), k AS (
+      SELECT EOMONTH(SaveDate) MonthEnd,PositionCode,MonthSaleAmount,
+             ISNULL(DMBonus,0)+ISNULL(V15Bonus,0)+ISNULL(V22Bonus,0)
+            +ISNULL(V25Bonus,0)+ISNULL(ASOBonus,0) Bonus
+      FROM b WHERE SnapshotRank=1
+        AND (@AreaCode IS NULL OR AreaCode=@AreaCode)
+    )
+    SELECT MonthEnd,
+      SUM(CASE WHEN PositionCode IN ('TDV','CTV','CS','TK')
+               THEN MonthSaleAmount ELSE 0 END) DoanhThuTangNhanVien,
+      SUM(Bonus) TongThuongMoiChucDanh,
+      SUM(CASE WHEN PositionCode IN ('TDV','CTV','CS','TK') THEN Bonus ELSE 0 END) ThuongTangNhanVien,
+      SUM(CASE WHEN PositionCode NOT IN ('TDV','CTV','CS','TK') THEN Bonus ELSE 0 END) ThuongTangQuanLy,
+      100.0*SUM(Bonus)/NULLIF(SUM(CASE WHEN PositionCode IN ('TDV','CTV','CS','TK')
+                                       THEN MonthSaleAmount ELSE 0 END),0) TyLeThuongTrenDoanhThuPct
+    FROM k GROUP BY MonthEnd ORDER BY MonthEnd;
+
+**Chatbot từ chối C48 với hai lý do, chỉ một lý do là hạn chế dữ liệu thật:**
+- *Lợi nhuận không có nguồn* — **đúng**, cùng gốc với `S10` (không có giá vốn hàng bán). Phần "thưởng
+  trên lợi nhuận" của C48 không trả lời được.
+- *Không có công cụ tổng hợp thưởng toàn công ty* (chỉ có tool xếp hạng TOP 100 nên bỏ sót ~106 người)
+  — đây là **thiếu công cụ, không phải thiếu dữ liệu**. Truy vấn trên tính được tổng ngay từ Bravo.
+  Chatbot thà từ chối còn hơn cộng TOP 100 rồi gọi là tổng — quyết định đúng, nhưng khoảng trống này
+  vá được bằng cách bổ sung tool tổng hợp.
+
 ### S34 — Viếng thăm, tuyến và tỷ lệ có đơn — READY
 
     WITH v AS (
@@ -633,6 +1359,53 @@ Chỉ tính bonus/revenue; bonus/profit bị chặn cho tới khi S10 có mappin
     FROM v LEFT JOIN o ON o.DocDate=v.DocDate AND o.EmpDMSCode=v.EmpDMSCode
       AND o.CustomerCode=v.CustomerCode
     GROUP BY EOMONTH(v.DocDate),v.EmpDMSCode;
+
+> 🔴 **Dữ liệu viếng thăm CÓ THẬT trên Bravo nhưng CHƯA đồng bộ xuống kho chatbot — đây là khoảng
+> trống ETL, không phải thiếu nguồn.** Kiểm 03/09/2026: `dbo.DMS_DiTuyen` có **1.785.213 dòng**, 451
+> nhân viên, 37.853 khách, trải từ **06/06/2022 đến 03/09/2026 (hôm nay)**. Trong `warehouse.db` thì
+> **không có bảng nào** về tuyến/viếng thăm (đã quét cả 24 bảng).
+>
+> Vì vậy chatbot từ chối C49 là **hợp lý với quyền truy cập của nó**, nhưng hai lý do nó đưa ra đều
+> sai: (1) nói đã tìm trong "catalog SQL Server Bravo" mà không thấy — bảng nằm ngay đó; (2) suy đoán
+> "dữ liệu từ app DMS/SFA riêng" — không phải, nó ở trong chính Bravo.
+>
+> Bảng còn có `IsPlaned` (viếng thăm theo tuyến hay ngoài tuyến) và `ArriveTime`/`LeaveTime`
+> (check-in/check-out) — tức **cả bốn chỉ số C49 hỏi đều tính được**, kể cả độ phủ tuyến mà chatbot
+> nói là không có. Đồng bộ bảng này xuống kho là mở khoá được nguyên nhóm câu hỏi.
+
+Đủ bốn chỉ số C49 — độ phủ tuyến, lượt viếng thăm, tỷ lệ có đơn, doanh thu mỗi lượt:
+
+    WITH v AS (
+      SELECT DocDate,EmpDMSCode,CustomerCode,IsPlaned
+      FROM dbo.DMS_DiTuyen WHERE DocDate>=@FromDate AND DocDate<@ToDate
+    ), o AS (
+      SELECT DISTINCT DocDate,DMSEmpId1 EmpDMSCode,CustomerCode
+      FROM dbo.DMS_DonHangHdr WHERE DocDate>=@FromDate AND DocDate<@ToDate
+    ), rev AS (
+      SELECT EOMONTH(DocDate) MonthEnd,EmpDMSCode,SUM(Amount9) Revenue
+      FROM #sales GROUP BY EOMONTH(DocDate),EmpDMSCode
+    )
+    SELECT EOMONTH(v.DocDate) MonthEnd,v.EmpDMSCode,
+      COUNT(*) LuotVieng,
+      COUNT(DISTINCT v.CustomerCode) KhachDuocVieng,
+      SUM(CASE WHEN v.IsPlaned=1 THEN 1 ELSE 0 END) LuotTheoTuyen,
+      100.0*SUM(CASE WHEN v.IsPlaned=1 THEN 1 ELSE 0 END)/NULLIF(COUNT(*),0) TyLeTheoTuyenPct,
+      SUM(CASE WHEN o.CustomerCode IS NOT NULL THEN 1 ELSE 0 END) LuotCoDon,
+      100.0*SUM(CASE WHEN o.CustomerCode IS NOT NULL THEN 1 ELSE 0 END)
+        /NULLIF(COUNT(*),0) TyLeCoDonPct,
+      MAX(rev.Revenue) DoanhThuThang,
+      MAX(rev.Revenue)/NULLIF(COUNT(*),0) DoanhThuMoiLuotVieng
+    FROM v
+    LEFT JOIN o ON o.DocDate=v.DocDate AND o.EmpDMSCode=v.EmpDMSCode
+      AND o.CustomerCode=v.CustomerCode
+    LEFT JOIN rev ON rev.MonthEnd=EOMONTH(v.DocDate) AND rev.EmpDMSCode=v.EmpDMSCode
+    GROUP BY EOMONTH(v.DocDate),v.EmpDMSCode
+    ORDER BY MonthEnd DESC,TyLeCoDonPct;
+
+**Tỷ lệ có đơn ở đây là cận dưới, không phải con số tuyệt đối.** Phép nối đòi khớp đồng thời cả ba:
+cùng ngày, cùng nhân viên, cùng khách. Đơn đặt sau buổi thăm vài ngày sẽ không được tính, nên chỉ số
+này thấp hơn thực tế. Muốn đo đúng phải chốt với DNH khoảng thời gian hợp lệ giữa lượt thăm và đơn
+(ví dụ trong 3 ngày) — đây là điểm cần thêm vào nhóm câu hỏi nghiệp vụ.
 
 ### S35 — Input run-rate/dự báo và mức thiếu target — PARTIAL
 
@@ -673,9 +1446,42 @@ Chỉ tính bonus/revenue; bonus/profit bị chặn cho tới khi S10 có mappin
     UNION ALL SELECT 'KPI_CUSTOMER',MAX(SaveDate),MAX(CreatedAt) FROM dbo.FACT_TongHopKhachHang
     UNION ALL SELECT 'KPI_SALARY',MAX(SaveDate),MAX(CreatedAt) FROM dbo.FACT_ThongKeTinhLuong
     UNION ALL SELECT 'PROMOTION',MAX(h.DocDate),MAX(x.SyncAt)
-      FROM dbo.DMS_DonHangCTKM x LEFT JOIN dbo.DMS_DonHangHdr h ON h.Id=x.OrderId;
+      FROM dbo.DMS_DonHangCTKM x LEFT JOIN dbo.DMS_DonHangHdr h ON h.Id=x.OrderId
+    UNION ALL SELECT 'VIENG_THAM',MAX(DocDate),MAX(SyncAt) FROM dbo.DMS_DiTuyen;
+
+> 🔴 **Đồng bộ khuyến mãi đã DỪNG từ 09/01/2026 — phát hiện 03/09/2026, tức đứng yên 8 tháng.**
+> Bảng liên kết `DMS_DonHangCTKM` có `MAX(SyncAt)` và `MAX(DocDate)` đều là 09/01/2026, trong khi mọi
+> nguồn khác đều cập nhật tới hôm nay. Đếm đơn gắn CTKM theo tháng cho thấy rõ điểm gãy:
+>
+> | Tháng | Đơn gắn CTKM |
+> |---|---:|
+> | 09–12/2025 | 12.447 – 13.545 mỗi tháng |
+> | 01/2026 | **2.042** (dừng giữa tháng) |
+> | 02/2026 trở đi | **0** |
+>
+> Hệ quả: **C18, M35, V34 chỉ trả lời được tới đầu 01/2026**, không có dữ liệu khuyến mãi cho 8 tháng
+> gần nhất. Mọi câu hỏi "chương trình nào hiệu quả" cho kỳ 2026 sẽ rỗng. Đây là **sự cố vận hành cần
+> khôi phục sync**, không phải giới hạn thiết kế — và là lý do chính khiến checker này tồn tại.
+
+Truy vấn trên đã bổ sung dòng `VIENG_THAM`: `DMS_DiTuyen` cập nhật tới hôm nay trên Bravo (xem `S34`),
+nên đối chiếu freshness sẽ lộ ngay việc bảng này chưa được đưa xuống kho local.
+
+**Chatbot báo "không lấy được mốc khuyến mãi do timeout"** — checker lấy được bình thường, nên đó là
+vấn đề phía công cụ chứ không phải nguồn. Nhưng kết quả cuối cùng vẫn đúng hướng: mốc khuyến mãi thật
+sự có vấn đề, chỉ khác nguyên nhân.
 
 ### S38 — Chất lượng mapping, target và snapshot — READY
+
+> ⚠️ **Cột `MissingManager` của truy vấn đầu là dương tính giả gần như hoàn toàn.** Đo T8/2026 trên
+> `FACT_ThongKeTinhLuong`: tầng nhân viên (TDV/CTV/CS/TK, 183 người) có **0 người thiếu quản lý**;
+> toàn bộ 26 ca "thiếu" đều là **chính các quản lý** (TP/QLV/PP) — không có cấp trên trong trường đó
+> là đúng cấu trúc, không phải lỗi mapping. Phải tách tầng trước khi đếm, nếu không sẽ báo động giả
+> mỗi tháng.
+>
+> **Snapshot tháng đang chạy dở cũng gây hiểu nhầm.** Ngày 03/09/2026 `FACT_TongHopKhachHang` mới có
+> **16 nhân viên** (sync tháng 9 vừa bắt đầu) so với 186 của tháng 8 trọn vẹn. Chatbot báo "6 nhân sự
+> thiếu quản lý" chính là 6/16 của snapshot dở dang — đúng số học nhưng đọc thành 6/200 thì sai hẳn
+> quy mô. Luôn đối chiếu cột `Employees` trước khi diễn giải các cột lỗi.
 
     WITH snaps AS (
       SELECT EOMONTH(SaveDate) MonthEnd,MAX(SaveDate) SaveDate
@@ -692,6 +1498,63 @@ Chỉ tính bonus/revenue; bonus/profit bị chặn cho tới khi S10 có mappin
       AND ISNULL(n.IsDuplicate,0)=0
     JOIN snaps s ON s.SaveDate=f.SaveDate
     GROUP BY EOMONTH(f.SaveDate);
+
+Đếm đúng theo tầng — chỉ tầng nhân viên mới coi thiếu quản lý là lỗi:
+
+    WITH b AS (
+      SELECT *,DENSE_RANK() OVER(
+        PARTITION BY EOMONTH(SaveDate), EmployeeCode ORDER BY SaveDate DESC) SnapshotRank
+      FROM dbo.FACT_ThongKeTinhLuong
+      WHERE SaveDate>=@FromDate AND SaveDate<@ToDate
+    )
+    SELECT EOMONTH(SaveDate) MonthEnd,
+      CASE WHEN PositionCode IN ('TDV','CTV','CS','TK') THEN 'Tang nhan vien'
+           ELSE 'Tang quan ly' END Tang,
+      COUNT(*) SoNguoi,
+      SUM(CASE WHEN ManagerCode IS NULL OR ManagerCode='' THEN 1 ELSE 0 END) ThieuQuanLy,
+      SUM(CASE WHEN MonthSaleTarget IS NULL OR MonthSaleTarget<=0 THEN 1 ELSE 0 END) ThieuTarget,
+      SUM(CASE WHEN (MonthSaleTarget IS NULL OR MonthSaleTarget<=0)
+                AND MonthSaleAmount>0 THEN 1 ELSE 0 END) CoDoanhSoMaThieuTarget
+    FROM b WHERE SnapshotRank=1
+      AND (@AreaCode IS NULL OR AreaCode=@AreaCode)
+    GROUP BY EOMONTH(SaveDate),
+      CASE WHEN PositionCode IN ('TDV','CTV','CS','TK') THEN 'Tang nhan vien' ELSE 'Tang quan ly' END
+    ORDER BY MonthEnd DESC,Tang;
+
+Danh sách TỪNG NGƯỜI có vấn đề — C54 và V17 hỏi "nhân viên nào", nên phải có mã kèm **tên**:
+
+    WITH b AS (
+      SELECT *,DENSE_RANK() OVER(
+        PARTITION BY EOMONTH(SaveDate), EmployeeCode ORDER BY SaveDate DESC) SnapshotRank
+      FROM dbo.FACT_ThongKeTinhLuong
+      WHERE SaveDate>=@FromDate AND SaveDate<@ToDate
+    )
+    SELECT EOMONTH(b.SaveDate) MonthEnd,b.EmployeeCode,b.EmployeeName,b.PositionCode,
+           b.AreaCode,b.ManagerCode,b.MonthSaleAmount,b.MonthSaleTarget,
+           CASE WHEN b.MonthSaleAmount>0 THEN 'CO_DOANH_SO_NHUNG_THIEU_TARGET'
+                WHEN b.EmployeeName LIKE N'%QLV%' THEN 'NGHI_TRUNG_BAN_GHI_QLV'
+                WHEN b.EmployeeCode LIKE 'TRONGTDV%' THEN 'VI_TRI_TRONG'
+                ELSE 'THIEU_TARGET' END LoaiVanDe,
+           n.IsDuplicate
+    FROM b LEFT JOIN dbo.DIM_NhanVien n ON n.EmployeeCode=b.EmployeeCode
+    WHERE b.SnapshotRank=1
+      AND b.PositionCode IN ('TDV','CTV','CS','TK')
+      AND ((b.ManagerCode IS NULL OR b.ManagerCode='')
+           OR b.MonthSaleTarget IS NULL OR b.MonthSaleTarget<=0)
+      AND (@AreaCode IS NULL OR b.AreaCode=@AreaCode)
+    ORDER BY MonthEnd DESC,LoaiVanDe,b.EmployeeCode;
+
+**Ba nhóm lộ ra khi chạy T8/2026 (17 người), rất khác nhau về mức nghiêm trọng:**
+
+- **10 bản ghi trùng của chính QLV** — `.QLV5 Vũ Anh Hiếu (QLV)`, `ASM03 Nguyễn Văn Danh (QLV)`,
+  `DNH00601 Vũ Xuân Phong (QLV)`… Cùng người đã có mặt ở tầng quản lý (`MBKV9`, `TM23100148`,
+  `TM25010129`…) nhưng lại có thêm một bản ghi `PositionCode='TDV'`, doanh số 0, không target. Đây
+  đúng loại nghi vấn `MBKV12` ở câu **A4**. Vài mã còn có dấu chấm cuối (`TM24050201.`,
+  `TM25030101.`) — dấu hiệu nhân bản mã.
+- **4 vị trí trống** (`TRONGTDV2/4/5/6`) đặt tên theo QLV đang gánh. `TRONGTDV2` có doanh số
+  19.729.100 nhưng không target.
+- **3 TDV thật sự thiếu target**: `TM25010167`, `TM25090401`, `TM26060104`; riêng `TM25031901`
+  (Nguyễn Quốc Chiến) có doanh số 4.180.953 mà không có chỉ tiêu — đây là ca cần xử lý sớm nhất.
 
 ### S39 — Hiệu suất nhân viên/đội theo tháng — READY
 
@@ -812,24 +1675,87 @@ bản một lần cho từng khách ứng viên.
 
 ### S44 — Hiệu suất khách hàng theo nhân viên — READY
 
+Bản trước 03/09/2026 có ba lỗi, đã sửa cả ba — ghi lại để không tái phạm:
+
+1. **Gọi `IsAC` là `ActiveCustomers`.** `IsAC` chỉ dành cho CS (Chợ sỉ) và TK (kênh MT) theo DNH chốt
+   27/08/2026, nên với TDV nó bằng 0 — bản chạy cũ có `ActiveCustomers=0` ở hầu hết dòng và
+   `RevenuePerActiveCustomer` rỗng theo. Đây đúng lỗi đã sửa trong chatbot ngày 26/08 (`02c3e0c`);
+   để nguyên trong bộ đáp án thì đáp án lại mâu thuẫn với chính chatbot đã vá.
+2. **Trộn hai tầng QLV và TDV trong cùng một bảng.** Bản cũ cho `MN1` (QLV) và `TM23100133` (TDV dưới
+   quyền) cùng doanh thu 4.713.095.264 — cộng ngang là gấp đôi. Nay lọc đúng tầng nhân viên.
+3. **Không trả lời câu hỏi V14** ("ai có nhiều khách phụ trách nhưng tỷ lệ khách mua thấp") — bản cũ
+   chỉ xếp theo doanh thu giảm dần, người đọc phải tự dò 2.280 dòng.
+
+"Khách có mua" đo bằng `Amount_CT>0`, không dùng cờ `IsAC`.
+
     WITH snaps AS (
       SELECT EOMONTH(SaveDate) MonthEnd,MAX(SaveDate) SaveDate
       FROM dbo.FACT_TongHopKhachHang
       WHERE SaveDate>=@FromDate AND SaveDate<@ToDate GROUP BY EOMONTH(SaveDate)
     ), x AS (
       SELECT EOMONTH(f.SaveDate) MonthEnd,f.EmployeeCode,f.ManagerCode,
+             MAX(n.PositionCode) PositionCode,
              COUNT(DISTINCT f.CustomerCode) AssignedCustomers,
-             COUNT(DISTINCT CASE WHEN f.IsAC=1 THEN f.CustomerCode END) ActiveCustomers,
+             COUNT(DISTINCT CASE WHEN f.Amount_CT>0 THEN f.CustomerCode END) PurchasingCustomers,
              COUNT(DISTINCT CASE WHEN f.IsNC=1 THEN f.CustomerCode END) NewCustomers,
              COUNT(DISTINCT CASE WHEN f.IsRO=1 THEN f.CustomerCode END) ReorderCustomers,
+             COUNT(DISTINCT CASE WHEN f.IsAC=1 THEN f.CustomerCode END) IsAC_ChiCS_TK,
              SUM(f.Amount_CT) Revenue
-      FROM dbo.FACT_TongHopKhachHang f JOIN snaps s ON s.SaveDate=f.SaveDate
-      WHERE 1=1
+      FROM dbo.FACT_TongHopKhachHang f
+      JOIN snaps s ON s.SaveDate=f.SaveDate
+      JOIN dbo.DIM_NhanVien n ON n.EmployeeCode=f.EmployeeCode
+      WHERE n.PositionCode IN ('TDV','CTV','CS','TK')
         AND (@ManagerCode IS NULL OR f.ManagerCode=@ManagerCode)
       GROUP BY EOMONTH(f.SaveDate),f.EmployeeCode,f.ManagerCode
+    ), r AS (
+      SELECT *,100.0*PurchasingCustomers/NULLIF(AssignedCustomers,0) TyLeKhachMuaPct,
+             Revenue/NULLIF(PurchasingCustomers,0) RevenuePerPurchasingCustomer,
+             PERCENTILE_CONT(0.5) WITHIN GROUP(ORDER BY AssignedCustomers)
+               OVER(PARTITION BY MonthEnd) MedianAssigned
+      FROM x
     )
-    SELECT *,Revenue/NULLIF(ActiveCustomers,0) RevenuePerActiveCustomer
-    FROM x ORDER BY MonthEnd,Revenue DESC;
+    SELECT MonthEnd,EmployeeCode,ManagerCode,PositionCode,
+           AssignedCustomers CustomersInSnapshot,
+           PurchasingCustomers,TyLeKhachMuaPct,NewCustomers,ReorderCustomers,
+           IsAC_ChiCS_TK,Revenue,RevenuePerPurchasingCustomer
+    FROM r
+    ORDER BY MonthEnd DESC,Revenue DESC;
+
+⚠️ Cột `CustomersInSnapshot` ở trên **không phải "khách phụ trách"** — `FACT_TongHopKhachHang` chỉ
+chứa khách ĐÃ phát sinh, nên tỷ lệ mua tính từ nó luôn xấp xỉ 100% và không phân biệt được ai. Đo
+thật T8/2026: 165 nhân viên, thấp nhất **96,4%**, trung bình **99,9%**, **không một ai** dưới 90%.
+Đừng dùng cột này để trả lời V14.
+
+Danh sách khách phụ trách thật nằm ở `DMS_KhachHang.EmpDMSCode1` (`IsActive=1`). Dùng nguồn đó thì
+chỉ số mới có ý nghĩa — cùng tháng 8/2026: 161 nhân viên, từ **0%** đến **100%**, trung bình
+**31,8%**, có **142 người dưới 50%**; tổng khách được phân công 25.336 so với khoảng 7.000 khách phát
+sinh mỗi tháng.
+
+**Giới hạn**: `DMS_KhachHang` là danh sách hiện tại, không có lịch sử phân công, nên chỉ tính đúng
+cho kỳ gần nhất — không truy ngược các tháng trước.
+
+    WITH book AS (
+      SELECT EmpDMSCode1 EmpDMS,COUNT(DISTINCT Code) KhachPhanCong
+      FROM dbo.DMS_KhachHang
+      WHERE EmpDMSCode1 IS NOT NULL AND LTRIM(RTRIM(EmpDMSCode1))<>'' AND IsActive=1
+      GROUP BY EmpDMSCode1
+    ), mua AS (
+      SELECT k.EmpDMSCode1 EmpDMS,COUNT(DISTINCT s.CustomerCode) KhachCoMua,
+             SUM(s.Amount9) DoanhThu
+      FROM #sales s JOIN dbo.DMS_KhachHang k ON k.Code=s.CustomerCode
+      WHERE s.DocDate>=@MonthStart AND s.DocDate<@MonthEnd
+      GROUP BY k.EmpDMSCode1
+    )
+    SELECT n.EmployeeCode,n.Name EmployeeName,n.PositionCode,n.AreaCode,
+           b.KhachPhanCong,ISNULL(m.KhachCoMua,0) KhachCoMua,
+           100.0*ISNULL(m.KhachCoMua,0)/NULLIF(b.KhachPhanCong,0) TyLeKhachMuaPct,
+           ISNULL(m.DoanhThu,0) DoanhThu,
+           b.KhachPhanCong-ISNULL(m.KhachCoMua,0) KhachChuaMua
+    FROM book b
+    LEFT JOIN mua m ON m.EmpDMS=b.EmpDMS
+    LEFT JOIN dbo.DIM_NhanVien n ON n.DMSId=b.EmpDMS
+    WHERE (@ManagerCode IS NULL OR n.ManagerAreaCode=@ManagerCode)
+    ORDER BY b.KhachPhanCong DESC,TyLeKhachMuaPct;
 
 ### S45 — Thu tiền, DSO và cam kết thu — BLOCKED_HISTORY
 
@@ -2231,7 +3157,7 @@ Số hợp đồng bị loại vì không đo được, để con số đó nhì
 | C10 | Tỷ trọng OTC/ETC thay đổi thế nào qua từng tháng; sự thay đổi cơ cấu làm tăng hay giảm tốc độ tăng trưởng chung? | S08 | READY |
 | C11 | Doanh thu đang phụ thuộc vào top 10 khách hàng, top 10 sản phẩm và top 3 miền/vùng ở mức nào; xu hướng tập trung tăng hay giảm? | S70 | READY |
 | C12 | Nếu loại các giao dịch bất thường, đơn lớn đột biến, trả hàng và điều chỉnh, tăng trưởng cốt lõi từng tháng còn bao nhiêu? | S09 | READY |
-| C13 | Doanh thu gộp, chiết khấu, khuyến mãi, hàng trả và doanh thu thuần từng tháng là bao nhiêu? | S10 | BLOCKED |
+| C13 | Doanh thu gộp, chiết khấu, khuyến mãi, hàng trả và doanh thu thuần từng tháng là bao nhiêu? | S87 | PARTIAL |
 | C14 | Lợi nhuận gộp và biên lợi nhuận gộp theo tháng, kênh, miền và nhóm sản phẩm thay đổi thế nào? | S10 | BLOCKED |
 | C15 | Kênh/miền/sản phẩm nào tăng doanh thu nhưng giảm biên lợi nhuận; nguyên nhân do giá, chiết khấu, giá vốn hay cơ cấu? | S10 | BLOCKED |
 | C16 | Giá bán thực tế bình quân của từng SKU thay đổi MoM/YoY ra sao; SKU nào có dấu hiệu giảm giá hoặc xói mòn giá? | S11 | READY |
@@ -2243,7 +3169,7 @@ Số hợp đồng bị loại vì không đo được, để con số đó nhì
 | C22 | Đơn vị nào tăng trưởng liên tục 3/6 tháng; đơn vị nào giảm liên tục 3/6 tháng? | S49 | READY |
 | C23 | Địa bàn nào có quy mô lớn nhưng tăng trưởng thấp; địa bàn nào quy mô nhỏ nhưng đang tăng nhanh? | S50 | READY |
 | C24 | Tỉnh/vùng nào có độ phủ khách hàng thấp so với các địa bàn tương đồng; cơ hội trắng nằm ở đâu? | S51 | READY |
-| C25 | Năng suất mỗi NPP/chi nhánh theo tháng là bao nhiêu; NPP nào doanh thu giảm, tồn kho tăng hoặc công nợ xấu đi? | S15 | READY |
+| C25 | Năng suất mỗi NPP/chi nhánh theo tháng là bao nhiêu; NPP nào doanh thu giảm, tồn kho tăng hoặc công nợ xấu đi? | S15 | PARTIAL |
 | C26 | Khách mua đồng thời OTC và ETC đóng góp bao nhiêu doanh thu/công nợ; xu hướng mua chéo kênh ra sao? | S16 | READY |
 | C27 | Có sự dịch chuyển doanh thu bất thường giữa kênh, miền, chi nhánh hoặc mã nhân viên qua các tháng không? | S17 | PARTIAL |
 | C28 | Nếu loại ảnh hưởng của thay đổi địa bàn, chuyển nhân viên và chuyển khách, tăng trưởng thực của từng đơn vị còn bao nhiêu? | S17 | PARTIAL |
@@ -2251,7 +3177,7 @@ Số hợp đồng bị loại vì không đo được, để con số đó nhì
 | C30 | Tỷ lệ giữ chân khách theo cohort tháng mở mới sau 1/3/6/12 tháng là bao nhiêu, theo kênh và miền? | S19 | DERIVED |
 | C31 | Doanh thu mất đi từ khách ngừng mua và doanh thu tăng thêm từ khách mới/tái kích hoạt bù được bao nhiêu? | S20 | READY |
 | C32 | Top khách hàng tăng/giảm mạnh nhất từng tháng là ai; thay đổi đó ảnh hưởng bao nhiêu đến toàn công ty? | S71 | READY |
-| C33 | Nhóm sản phẩm/SKU nào là động lực tăng trưởng, nhóm nào kéo giảm tăng trưởng và nhóm nào mất thị phần nội bộ? | S21 | READY |
+| C33 | Nhóm sản phẩm/SKU nào là động lực tăng trưởng, nhóm nào kéo giảm tăng trưởng và nhóm nào mất thị phần nội bộ? | S21 | PARTIAL |
 | C34 | Doanh thu sản phẩm mới sau 1/3/6/12 tháng ra mắt đạt bao nhiêu so kế hoạch; độ phủ khách hàng ra sao? | S22 | DERIVED |
 | C35 | Mức độ phụ thuộc vào sản phẩm chủ lực qua từng tháng; nếu top 1/top 5 giảm 20% thì doanh thu bị ảnh hưởng bao nhiêu? | S23 | DERIVED |
 | C36 | SKU nào có độ phủ khách hàng tăng nhưng doanh thu/khách giảm, hoặc doanh thu tăng nhưng độ phủ co lại? | S73 | DERIVED |
@@ -2301,9 +3227,9 @@ Số hợp đồng bị loại vì không đo được, để con số đó nhì
 | M26 | Khách hàng nào có share-of-wallet nội bộ thấp: doanh thu lớn nhưng chỉ mua một nhóm sản phẩm? | S23 | DERIVED |
 | M27 | Tỉnh/huyện nào có ít khách hoạt động, ít đơn hoặc doanh thu/khách thấp hơn chuẩn miền? | S53 | READY |
 | M28 | Tỷ lệ khách không gán TDV, sai vùng hoặc thiếu thông tin DMS theo tháng là bao nhiêu? | S38 | READY |
-| M29 | NPP/chi nhánh nào có tăng trưởng khách hàng tốt nhưng công nợ hoặc tồn kho xấu đi? | S15 | READY |
+| M29 | NPP/chi nhánh nào có tăng trưởng khách hàng tốt nhưng công nợ hoặc tồn kho xấu đi? | S15 | PARTIAL |
 | M30 | Danh sách 20 khách hàng ưu tiên cần giữ, thu hồi, tái kích hoạt hoặc mở rộng trong tháng tới là ai? | S48 | DERIVED |
-| M31 | Nhóm sản phẩm/SKU nào đóng góp nhiều nhất vào tăng/giảm của miền/kênh theo tháng? | S21 | READY |
+| M31 | Nhóm sản phẩm/SKU nào đóng góp nhiều nhất vào tăng/giảm của miền/kênh theo tháng? | S21 | PARTIAL |
 | M32 | SKU chiến lược đạt bao nhiêu % target tại từng vùng; vùng nào có khoảng trống độ phủ lớn nhất? | S46 | PARTIAL |
 | M33 | SKU nào doanh thu giảm do ít khách mua, ít đơn, giảm lượng/đơn hay giảm giá bán? | S72 | READY |
 | M34 | Sản phẩm mới đạt độ phủ và doanh thu sau 1/3/6 tháng thế nào tại từng vùng? | S22 | DERIVED |
@@ -2345,7 +3271,7 @@ Số hợp đồng bị loại vì không đo được, để con số đó nhì
 | V26 | Khách nào mua ít hơn các khách tương đồng cùng tỉnh/phân khúc? | S63 | READY |
 | V27 | Khách nào chưa gán TDV, sai mã, sai tỉnh/vùng hoặc không có tên trong DMS? | S75 | READY |
 | V28 | Danh sách khách ưu tiên tuần này theo bốn mục tiêu: giữ khách lớn, tái kích hoạt, thu nợ và bán chéo? | S83 | PARTIAL |
-| V29 | Top/bottom sản phẩm từng tháng của đội; SKU nào làm tăng/giảm doanh số nhiều nhất? | S21 | READY |
+| V29 | Top/bottom sản phẩm từng tháng của đội; SKU nào làm tăng/giảm doanh số nhiều nhất? | S21 | PARTIAL |
 | V30 | SKU trọng tâm đạt bao nhiêu % target theo từng TDV và khách hàng; khoảng thiếu bao nhiêu? | S46 | PARTIAL |
 | V31 | Sản phẩm nào nhiều khách mua nhưng lượng/đơn thấp; sản phẩm nào ít khách nhưng AOV cao? | S23 | DERIVED |
 | V32 | Cặp sản phẩm nào thường mua cùng; khách nào phù hợp bán combo nhưng chưa mua? | S74 | DERIVED |

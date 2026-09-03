@@ -154,7 +154,7 @@ Bốn ca dưới đây **không phải thiếu công sức phát triển**. Chú
 
 | Ca | Câu hỏi | Thiếu gì |
 |---|---|---|
-| **14/08 · `truongphongmb`** | *"Top 20 nhà phân phối theo doanh thu tháng 7, tách theo kênh?"*<br>→ chatbot trả về **khách hàng** thay vì nhà phân phối. Người dùng ghi: *"trả về danh sách khách hàng thay vì nhà phân phối (DistributorCode)"* | Hoá đơn **không có khoá NPP/chi nhánh** |
+| **14/08 · `truongphongmb`** | *"Top 20 nhà phân phối theo doanh thu tháng 7, tách theo kênh?"*<br>→ chatbot trả về **khách hàng** thay vì nhà phân phối. Người dùng ghi: *"trả về danh sách khách hàng thay vì nhà phân phối (DistributorCode)"* | Hoá đơn **có** cột `BranchCode`/`DistributorCode` nhưng **không mang danh tính NPP** — kiểm 03/09/2026: `DistributorCode` chỉ 3 giá trị (`OTC1`/`OTC`/`ETC`, là nhãn kênh), `BranchCode` chỉ 4 giá trị (chi nhánh kho nội bộ DNH). Không có chiều nhà phân phối để xếp hạng. Muốn trả lời phải được DNH cấp danh mục NPP và khoá nối vào hoá đơn |
 | **17/08 · `dnh`** | *"Nhóm sản phẩm nào đóng góp doanh thu lớn nhất và có bao nhiêu mã hàng bán ra?"* | `brv_sanpham.group_code` **không phủ hết** mã hàng đã bán; chưa có danh mục ngành hàng có tên rõ ràng |
 | **25/08 · `vui.hoangthi`** | *"Đánh giá tình hình thị trường TP.HCM tuần 17–22/8, chỉ ra khuyến nghị"* | Báo cáo địa bàn **chỉ có theo THÁNG**, không tách doanh thu theo tỉnh theo TUẦN |
 | **25/08 · `vui.hoangthi`** | *"Khả năng phát triển khách hàng lẻ của TDV Thương?"* | Chưa có công cụ đếm khách mới/khách lẻ theo **từng nhân viên cá nhân** (hiện chỉ có theo đội QLV) |

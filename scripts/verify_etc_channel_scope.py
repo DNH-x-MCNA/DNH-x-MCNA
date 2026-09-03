@@ -7,6 +7,7 @@ Khong goi LLM/API, khong gui Teams/email va khong ghi vao database. Chay tu root
 from __future__ import annotations
 
 import datetime as dt
+import argparse
 import json
 import os
 import sys
@@ -37,7 +38,41 @@ def _month_bounds(as_of: str) -> tuple[str, str]:
     return value.replace(day=1).isoformat(), value.isoformat()
 
 
-def main() -> int:
+def _print_human(payload: dict) -> None:
+    print("=" * 72)
+    print("KIỂM TRA PHÂN QUYỀN KÊNH ETC (chỉ đọc, không gọi API, không gửi dữ liệu)")
+    print("=" * 72)
+    period = payload["period"]
+    print("Kỳ kiểm tra: %s đến %s" % (period["date_from"], period["date_to"]))
+    if payload.get("legacy_employee_schema_bypassed_for_identity_only"):
+        print("Lưu ý: kho hiện tại thiếu cột nhận diện nhân viên mới; chỉ bỏ qua bước gắn tên trong smoke test.")
+    labels = {
+        "revenue_by_channel": "Doanh thu ETC không lộ số OTC",
+        "customer_detail_mixed_channel": "Chi tiết khách hai kênh chỉ trả phần ETC",
+        "customer_detail_pure_otc_denied": "Khách thuần OTC bị từ chối đúng với tài khoản ETC",
+        "order_timing": "Cảnh báo thời gian đơn chỉ đếm dữ liệu ETC",
+    }
+    for check in payload["checks"]:
+        name = labels.get(check["check"], check["check"])
+        details = []
+        if "etc_revenue" in check:
+            details.append("doanh thu ETC %sđ" % format(float(check["etc_revenue"]), ",.0f"))
+        if "etc_invoices" in check:
+            details.append("%s hóa đơn" % format(int(check["etc_invoices"]), ","))
+        if "etc_flagged" in check:
+            details.append("%s đơn bị gắn cờ" % format(int(check["etc_flagged"]), ","))
+        suffix = " — " + "; ".join(details) if details else ""
+        print("[ĐẠT] %s%s" % (name, suffix))
+    print()
+    print("KẾT LUẬN: ĐẠT — phạm vi kênh ETC giữ đúng trong các phép kiểm đã chạy.")
+
+
+def main(argv=None) -> int:
+    parser = argparse.ArgumentParser(description="Kiểm tra read-only phân quyền kênh ETC")
+    parser.add_argument("--json", action="store_true", help="In JSON cho hệ thống tự động")
+    args = parser.parse_args(argv)
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     as_of = rt.latest_data_date()
     if not as_of:
         raise RuntimeError("Kho local chua co ngay du lieu moi nhat.")
@@ -149,13 +184,17 @@ def main() -> int:
         "matches_direct_etc_count": True,
     })
 
-    print(json.dumps({
+    payload = {
         "mode": "READ_ONLY_NO_API_NO_SEND",
         "legacy_employee_schema_bypassed_for_identity_only": legacy_employee_schema,
         "period": {"date_from": date_from, "date_to": date_to},
         "checks": checks,
         "result": "PASS",
-    }, ensure_ascii=False, indent=2))
+    }
+    if args.json:
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+    else:
+        _print_human(payload)
     return 0
 
 
@@ -163,5 +202,8 @@ if __name__ == "__main__":
     try:
         raise SystemExit(main())
     except Exception as exc:
-        print(json.dumps({"result": "FAIL", "error": str(exc)}, ensure_ascii=False, indent=2))
-        raise
+        if "--json" in sys.argv:
+            print(json.dumps({"result": "FAIL", "error": str(exc)}, ensure_ascii=False, indent=2))
+        else:
+            print("KẾT LUẬN: KHÔNG ĐẠT — %s" % exc)
+        raise SystemExit(1) from None
