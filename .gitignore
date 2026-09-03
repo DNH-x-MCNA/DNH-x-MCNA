@@ -97,6 +97,7 @@ config/sql_catalog_policy.local.json
 .understand-anything/
 /nssm_log.txt
 /results/
+/.tmp-codex-*/
 
 # Báo cáo đối chiếu sinh từ dữ liệu vận hành thật; giữ local, không đưa dữ liệu
 # nhân viên/khách hàng/doanh thu/công nợ vào Git.
@@ -104,8 +105,11 @@ config/sql_catalog_policy.local.json
 /docs/dap_an_bo_cau_hoi_dieu_hanh.md
 /docs/dap_an_kiem_lai_*.md
 /docs/doi_chieu_snapshot_vs_hoadon.md
+/docs/doi_chieu_snapshot_vs_hoadon_bo_trung_lap.md
 /docs/doi_chieu_bo_trung_lap.md
 /docs/kiem_lai_*.md
+/docs/bao_cao_S27_S30.md
+/docs/dap_an_S27_S30.md
 
 # Gói bàn giao UAT có kết quả chạy thật; chỉ lưu local và gửi qua kênh nội bộ.
 /handoff_private/

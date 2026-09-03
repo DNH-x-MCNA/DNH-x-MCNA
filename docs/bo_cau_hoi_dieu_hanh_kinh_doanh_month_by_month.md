@@ -102,14 +102,14 @@ thái đơn/hóa đơn.
 38. **C38** — Thu tiền trong tháng so với doanh thu và kế hoạch thu tiền là bao nhiêu; DSO và vòng quay công nợ thay đổi ra sao? — [SQL: S45](./bo_cau_hoi_dieu_hanh_kinh_doanh_sql_check.md)
 39. **C39** — Khách nào đồng thời doanh thu giảm, nợ quá hạn tăng và tuổi nợ xấu đi qua 2–3 tháng? — [SQL: S26](./bo_cau_hoi_dieu_hanh_kinh_doanh_sql_check.md)
 40. **C40** — Top khách nợ chiếm bao nhiêu phần trăm tổng nợ; rủi ro tập trung công nợ tăng hay giảm? — [SQL: S24](./bo_cau_hoi_dieu_hanh_kinh_doanh_sql_check.md)
-41. **C41** — Giá trị tồn kho, số tháng tồn, hàng chậm luân chuyển, stock-out và hàng cận date thay đổi thế nào theo tháng? — [SQL: S28](./bo_cau_hoi_dieu_hanh_kinh_doanh_sql_check.md)
+41. **C41** — Giá trị tồn kho, số tháng tồn, hàng chậm luân chuyển, stock-out và hàng cận date thay đổi thế nào theo tháng? — [SQL: S27](./bo_cau_hoi_dieu_hanh_kinh_doanh_sql_check.md)
 42. **C42** — SKU nào mất doanh số do thiếu hàng; SKU nào tồn cao trong khi doanh số giảm liên tục? — [SQL: S47](./bo_cau_hoi_dieu_hanh_kinh_doanh_sql_check.md)
 43. **C43** — Kế hoạch thầu ETC, giá trị tham gia, giá trị trúng, tỷ lệ trúng và doanh thu thực hiện theo tháng/quý là bao nhiêu? — [SQL: S29](./bo_cau_hoi_dieu_hanh_kinh_doanh_sql_check.md)
 44. **C44** — Hợp đồng ETC nào thực hiện chậm, còn giá trị lớn chưa giải ngân, sắp hết hạn hoặc phát sinh công nợ quá hạn? — [SQL: S86](./bo_cau_hoi_dieu_hanh_kinh_doanh_sql_check.md)
 
 ### F. Tổ chức bán hàng, dự báo và điều hành
 
-45. **C45** — Tỷ lệ nhân sự đạt 65/70%, 80%, 100% và 120% KPI từng tháng theo kênh/miền/chức danh là bao nhiêu? — [SQL: S31](./bo_cau_hoi_dieu_hanh_kinh_doanh_sql_check.md)
+45. **C45** — Tỷ lệ nhân sự đạt 65/70%, 80%, 100% và 120% KPI từng tháng theo kênh/miền/chức danh là bao nhiêu? — [SQL: S30](./bo_cau_hoi_dieu_hanh_kinh_doanh_sql_check.md)
 46. **C46** — Năng suất doanh thu trên đầu người và trên quản lý thay đổi thế nào; đơn vị nào tăng headcount nhưng năng suất giảm? — [SQL: S32](./bo_cau_hoi_dieu_hanh_kinh_doanh_sql_check.md)
 47. **C47** — Cá nhân/đội nào dưới 80% liên tiếp 3 tháng hoặc biến động mạnh; khoảng hụt doanh thu là bao nhiêu? — [SQL: S64](./bo_cau_hoi_dieu_hanh_kinh_doanh_sql_check.md)
 48. **C48** — Chi phí thưởng kinh doanh trên doanh thu/lợi nhuận theo tháng là bao nhiêu; cơ chế thưởng có tương quan với tăng trưởng bền vững không? — [SQL: S33](./bo_cau_hoi_dieu_hanh_kinh_doanh_sql_check.md)

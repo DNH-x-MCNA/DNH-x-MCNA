@@ -511,6 +511,9 @@ def _ghi_dap_an_theo_cau_hoi(bao_cao: dict, cau_hoi: "list[dict]", duong_dan: st
 
 
 def main() -> int:
+    # May van hanh Windows co the mac dinh CP1252; help/bao cao co tieng Viet phai in duoc.
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--thang", help="Thang can doi chung, dang YYYY-MM (mac dinh: theo tai lieu)")
     ap.add_argument("--tu-ngay", help="Ghi de @FromDate, dang YYYY-MM-DD")
@@ -606,7 +609,13 @@ def main() -> int:
         "ket_qua": [],
     }
 
-    raw = engine.raw_connection()
+    try:
+        raw = engine.raw_connection()
+    except Exception as loi:
+        raise SystemExit(
+            "Không kết nối được Bravo. Kiểm tra VPN/mạng hoặc trạng thái máy 24 rồi chạy lại. "
+            "Chi tiết: %s" % str(loi)[:300]
+        ) from None
     try:
         cur = raw.cursor()
         kiem_chi_doc(tao_sales, "block #sales muc 2")

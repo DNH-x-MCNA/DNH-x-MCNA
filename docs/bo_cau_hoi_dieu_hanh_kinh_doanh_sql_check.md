@@ -88,24 +88,67 @@ thêm điều kiện scope vào từng checker.
 
 ## 3. Thư viện checker SQL
 
-### S01 — Doanh thu tháng, MoM, YoY và YTD — PARTIAL
+### S01 — Doanh thu tháng, MoM, YoY và CAGR 24 tháng — READY
 
-**PARTIAL phần YoY/CAGR**: lớp `#sales` mặc định hiện chỉ lấy 12 tháng (`@FromDate=2025-09-01`),
-chưa đủ 24 tháng để coi YoY/CAGR là đáp án chuẩn. Muốn nghiệm thu phần này phải chạy lại với
-`@FromDate` lùi đủ 24 tháng và xác nhận dữ liệu nguồn có đủ kỳ.
+Checker này **không dùng `#sales`**. `#sales` bị chặn bởi `@FromDate` chung (mặc định 12 tháng), mà
+đổi tham số đó thì kéo theo 38 câu khác đổi đáp án — không đáng để phục vụ 2 câu. Vì vậy S01 tự đọc
+thẳng hai view hóa đơn với cửa sổ 24 tháng neo vào `@ToDate`.
 
-    WITH m AS (
+Bravo có dữ liệu hóa đơn từ **28/06/2022** (50 tháng, xác nhận 03/09/2026), nên 24 tháng là đủ thật
+chứ không phải giả định.
+
+Số đơn dùng khóa `Channel + Stt` theo nguyên tắc pass/fail số 4.
+
+    WITH hd AS (
+      SELECT 'OTC' Channel,DocDate,CONCAT('OTC|',Stt) OrderKey,CustomerCode,Amount9
+      FROM dbo.vHoaDonTotal
+      WHERE DocDate>=DATEADD(month,-24,@ToDate) AND DocDate<@ToDate
+      UNION ALL
+      SELECT 'ETC',DocDate,CONCAT('ETC|',Stt),CustomerCode,Amount9
+      FROM dbo.vHoaDonETCTotal
+      WHERE DocDate>=DATEADD(month,-24,@ToDate) AND DocDate<@ToDate
+    ), m AS (
       SELECT DATEFROMPARTS(YEAR(DocDate),MONTH(DocDate),1) MonthStart,Channel,
              SUM(Amount9) Revenue,COUNT(DISTINCT OrderKey) Orders,
              COUNT(DISTINCT CustomerCode) ActiveCustomers
-      FROM #sales GROUP BY DATEFROMPARTS(YEAR(DocDate),MONTH(DocDate),1),Channel
+      FROM hd GROUP BY DATEFROMPARTS(YEAR(DocDate),MONTH(DocDate),1),Channel
+      UNION ALL
+      SELECT DATEFROMPARTS(YEAR(DocDate),MONTH(DocDate),1),'TOAN_CONG_TY',
+             SUM(Amount9),COUNT(DISTINCT OrderKey),COUNT(DISTINCT CustomerCode)
+      FROM hd GROUP BY DATEFROMPARTS(YEAR(DocDate),MONTH(DocDate),1)
     )
     SELECT MonthStart,Channel,Revenue,Orders,ActiveCustomers,
            Revenue-LAG(Revenue) OVER(PARTITION BY Channel ORDER BY MonthStart) MoMDelta,
            100.0*(Revenue-LAG(Revenue) OVER(PARTITION BY Channel ORDER BY MonthStart))
              /NULLIF(LAG(Revenue) OVER(PARTITION BY Channel ORDER BY MonthStart),0) MoMPct,
-           Revenue-LAG(Revenue,12) OVER(PARTITION BY Channel ORDER BY MonthStart) YoYDelta
-    FROM m ORDER BY MonthStart,Channel;
+           Revenue-LAG(Revenue,12) OVER(PARTITION BY Channel ORDER BY MonthStart) YoYDelta,
+           100.0*(Revenue-LAG(Revenue,12) OVER(PARTITION BY Channel ORDER BY MonthStart))
+             /NULLIF(LAG(Revenue,12) OVER(PARTITION BY Channel ORDER BY MonthStart),0) YoYPct
+    FROM m ORDER BY Channel,MonthStart;
+
+Nhịp tăng trưởng cả kỳ (CAGR quy năm) — so 12 tháng gần nhất với 12 tháng liền trước:
+
+    WITH hd AS (
+      SELECT 'OTC' Channel,DocDate,Amount9 FROM dbo.vHoaDonTotal
+      WHERE DocDate>=DATEADD(month,-24,@ToDate) AND DocDate<@ToDate
+      UNION ALL
+      SELECT 'ETC',DocDate,Amount9 FROM dbo.vHoaDonETCTotal
+      WHERE DocDate>=DATEADD(month,-24,@ToDate) AND DocDate<@ToDate
+    ), k AS (
+      SELECT Channel,
+             SUM(CASE WHEN DocDate>=DATEADD(month,-12,@ToDate) THEN Amount9 ELSE 0 END) Nam1,
+             SUM(CASE WHEN DocDate< DATEADD(month,-12,@ToDate) THEN Amount9 ELSE 0 END) Nam0
+      FROM hd GROUP BY Channel
+      UNION ALL
+      SELECT 'TOAN_CONG_TY',
+             SUM(CASE WHEN DocDate>=DATEADD(month,-12,@ToDate) THEN Amount9 ELSE 0 END),
+             SUM(CASE WHEN DocDate< DATEADD(month,-12,@ToDate) THEN Amount9 ELSE 0 END)
+      FROM hd
+    )
+    SELECT Channel,Nam0 Revenue12ThangTruoc,Nam1 Revenue12ThangGanNhat,
+           Nam1-Nam0 Delta,
+           100.0*(Nam1-Nam0)/NULLIF(Nam0,0) GrowthPct
+    FROM k ORDER BY Channel;
 
 ### S02 — Thực hiện so target tháng/YTD — PARTIAL
 
@@ -2176,7 +2219,7 @@ Số hợp đồng bị loại vì không đo được, để con số đó nhì
 
 | Câu | Nội dung | Checker | Trạng thái |
 |---|---|---|---|
-| C01 | Doanh thu thuần từng tháng 24 tháng gần nhất của toàn công ty, OTC và ETC là bao nhiêu; MoM, YoY và CAGR/nhịp tăng trưởng thế nào? | S01 | PARTIAL |
+| C01 | Doanh thu thuần từng tháng 24 tháng gần nhất của toàn công ty, OTC và ETC là bao nhiêu; MoM, YoY và CAGR/nhịp tăng trưởng thế nào? | S01 | READY |
 | C02 | Mỗi tháng đạt bao nhiêu phần trăm kế hoạch; thiếu/vượt bao nhiêu tiền theo toàn công ty, kênh và miền? | S02 | PARTIAL |
 | C03 | Lũy kế YTD thực hiện so kế hoạch và cùng kỳ năm trước thế nào; cần bình quân bao nhiêu mỗi tháng còn lại để đạt kế hoạch năm? | S79 | PARTIAL |
 | C04 | Run-rate tháng hiện tại đang hướng tới mức nào; kênh/miền nào tạo rủi ro hụt kế hoạch cuối tháng? | S03 | DERIVED |
@@ -2216,11 +2259,11 @@ Số hợp đồng bị loại vì không đo được, để con số đó nhì
 | C38 | Thu tiền trong tháng so với doanh thu và kế hoạch thu tiền là bao nhiêu; DSO và vòng quay công nợ thay đổi ra sao? | S45 | BLOCKED_HISTORY |
 | C39 | Khách nào đồng thời doanh thu giảm, nợ quá hạn tăng và tuổi nợ xấu đi qua 2–3 tháng? | S26 | PARTIAL |
 | C40 | Top khách nợ chiếm bao nhiêu phần trăm tổng nợ; rủi ro tập trung công nợ tăng hay giảm? | S24 | READY_CURRENT |
-| C41 | Giá trị tồn kho, số tháng tồn, hàng chậm luân chuyển, stock-out và hàng cận date thay đổi thế nào theo tháng? | S28 | PARTIAL |
+| C41 | Giá trị tồn kho, số tháng tồn, hàng chậm luân chuyển, stock-out và hàng cận date thay đổi thế nào theo tháng? | S27 | READY_CURRENT |
 | C42 | SKU nào mất doanh số do thiếu hàng; SKU nào tồn cao trong khi doanh số giảm liên tục? | S47 | DERIVED |
 | C43 | Kế hoạch thầu ETC, giá trị tham gia, giá trị trúng, tỷ lệ trúng và doanh thu thực hiện theo tháng/quý là bao nhiêu? | S29 | PARTIAL |
 | C44 | Hợp đồng ETC nào thực hiện chậm, còn giá trị lớn chưa giải ngân, sắp hết hạn hoặc phát sinh công nợ quá hạn? | S86 | PARTIAL |
-| C45 | Tỷ lệ nhân sự đạt 65/70%, 80%, 100% và 120% KPI từng tháng theo kênh/miền/chức danh là bao nhiêu? | S31 | READY |
+| C45 | Tỷ lệ nhân sự đạt 65/70%, 80%, 100% và 120% KPI từng tháng theo kênh/miền/chức danh là bao nhiêu? | S30 | READY |
 | C46 | Năng suất doanh thu trên đầu người và trên quản lý thay đổi thế nào; đơn vị nào tăng headcount nhưng năng suất giảm? | S32 | PARTIAL |
 | C47 | Cá nhân/đội nào dưới 80% liên tiếp 3 tháng hoặc biến động mạnh; khoảng hụt doanh thu là bao nhiêu? | S64 | READY |
 | C48 | Chi phí thưởng kinh doanh trên doanh thu/lợi nhuận theo tháng là bao nhiêu; cơ chế thưởng có tương quan với tăng trưởng bền vững không? | S33 | PARTIAL |
@@ -2230,7 +2273,7 @@ Số hợp đồng bị loại vì không đo được, để con số đó nhì
 | C52 | Mỗi kênh/miền cam kết hành động gì để đóng gap; chủ sở hữu, hạn hoàn thành và kết quả tháng sau ra sao? | S36 | BLOCKED |
 | C53 | Số liệu doanh thu, KPI, công nợ, tồn kho, khuyến mãi và lương đang chốt đến tháng/ngày nào; nguồn nào chưa đồng bộ? | S37 | READY |
 | C54 | Chỉ tiêu nào có dấu hiệu sai do trùng tầng quản lý, thiếu mapping, thay đổi mã, thiếu target hoặc snapshot chưa chốt? | S38 | READY |
-| M01 | Doanh thu từng tháng của miền/kênh tôi so kế hoạch, tháng trước, cùng kỳ và YTD thế nào? | S01 | PARTIAL |
+| M01 | Doanh thu từng tháng của miền/kênh tôi so kế hoạch, tháng trước, cùng kỳ và YTD thế nào? | S01 | READY |
 | M02 | Gap tới kế hoạch tháng/quý còn bao nhiêu; mỗi vùng cần đóng góp thêm bao nhiêu? | S43 | PARTIAL |
 | M03 | Vùng nào đóng góp nhiều nhất vào tăng/giảm của miền/kênh tháng này? | S04 | DERIVED |
 | M04 | Xếp hạng các vùng theo doanh thu, tăng trưởng, % kế hoạch, lợi nhuận và công nợ; thứ hạng thay đổi ra sao 6 tháng qua? | S14 | READY |

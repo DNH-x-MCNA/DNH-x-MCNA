@@ -14,10 +14,14 @@ Không gửi `.env`, API key, chuỗi kết nối, database hoặc log có thôn
 
 ## 2. Baseline kiểm thử
 
-- Ngày chốt dữ liệu: **28/08/2026**.
-- Lớp bán hàng đối chiếu: **366.725 dòng**.
+- Ngày chốt dữ liệu: **31/08/2026**.
+- Lớp bán hàng đối chiếu: **368.226 dòng**.
 - 86 checker: **80 chạy được**, **1 chạy một phần**, **1 cần kho local**, **4 bị khóa đúng chủ đích**.
-- Trong 138 câu: **61 câu đủ nguồn và chạy được**, **1 câu chỉ có số hiện tại**, **65 câu cần chốt công thức hoặc thiếu một phần**, **11 câu thiếu nguồn/lịch sử**.
+- Trong 138 câu: **63 câu đủ nguồn**, **2 câu chỉ có số hiện tại**, **62 câu cần chốt công thức
+  hoặc thiếu một phần**, **11 câu thiếu nguồn/lịch sử**.
+
+> S01 mở rộng đủ 24 tháng đã chạy thành công trên Bravo: 72 dòng theo tháng và 3 dòng tăng trưởng.
+> C01/M01 đã chuyển sang “Đủ nguồn”; file đáp án tổng 138 câu đã được sinh lại ngày 03/09/2026.
 
 “SQL chạy được” chỉ là bằng chứng kỹ thuật, không thay cho kết luận UAT.
 

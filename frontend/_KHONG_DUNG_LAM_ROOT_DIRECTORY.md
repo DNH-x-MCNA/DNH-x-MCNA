@@ -42,3 +42,30 @@ biết đang deploy project nào. File `.vercel/` là file cục bộ của máy
 Chốt lại một bản duy nhất: hoặc xoá `frontend/` khỏi git (giữ `.vercel/` cục bộ trên máy 24 để
 supervisor vẫn chạy được), hoặc gộp hẳn hai bản. Để hai bản song song lâu dài sẽ tiếp tục phân kỳ
 âm thầm — đúng loại lỗi đã tốn 2 ngày xử lý tuần này.
+
+## ⚠️ Cập nhật 03/09/2026 — rủi ro đã xảy ra thật, không còn là dự đoán
+
+Khuyến nghị trên đã **quá hạn 3 tuần**. Trong lúc đó, commit `516525b` (28/08/2026) — sửa
+`AdminUsersPanel.tsx` để hiện đúng nhãn "Trưởng phòng" thay vì mã `regional_director` — đã
+**ghi cùng một bản vá vào cả `src/app/` lẫn `frontend/src/app/`**. Đúng kiểu "phân kỳ âm thầm"
+văn bản này cảnh báo từ 12/08, ngoại trừ nó không âm thầm: ai/công cụ nào sửa bug đều đang phải
+tốn công sửa **hai lần**, và một lần quên đồng bộ là `frontend/` lại chứa lỗi đã vá ở `src/app/`.
+
+Diff hiện tại (03/09) cho thấy `frontend/src/app/` đã **thiếu hẳn** so với `src/app/`:
+`roleLabels.ts`, `TableExport.tsx`, `icons.tsx`, `useModal.ts`, `api/_proxy.ts`, `api/queries/` —
+không tồn tại trong bản `frontend/`. Nghĩa là ngay cả nỗ lực đồng bộ song song cũng không theo kịp.
+
+**Việc này chỉ dừng khi xoá khỏi git**, không phải khi nhắc thêm một dòng cảnh báo. Đây là quyết
+định cần xác nhận trước khi thực hiện (không tự xoá khi chưa hỏi — xem
+`docs/backlog_tu_phan_hoi_nguoi_dung.md` và lịch sử trùng lặp trong dự án). Lệnh an toàn đề xuất
+khi được duyệt — chỉ xoá phần **git-tracked**, không đụng `.vercel/project.json` (file cục bộ,
+không nằm trong git, `cloudflared_supervisor.ps1` trên máy 24 vẫn cần nguyên vị trí đó):
+
+```
+git rm -r frontend/src frontend/README.md frontend/package.json frontend/next.config.* \
+  frontend/tsconfig.json frontend/tailwind.config.* frontend/postcss.config.*
+git commit -m "chore: xoa ban Next.js trung lap trong frontend/, giu file .vercel cuc bo tren may 24"
+```
+
+Kiểm bằng `git status` trước khi commit để chắc không xoá nhầm gì ngoài dự kiến — cấu trúc thư mục
+`frontend/` có thể đã đổi từ lúc viết lệnh này.

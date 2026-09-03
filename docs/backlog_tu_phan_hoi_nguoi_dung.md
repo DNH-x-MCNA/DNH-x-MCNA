@@ -127,10 +127,23 @@ Hai cách cho ra tổng khác nhau. **Phải hỏi DNH dùng cách nào**, rồi
 Chốt xong thì ghi vào `schema_context.py` để đường SQL tự do và đường công cụ không dạy model hai
 điều trái ngược — đúng bài học từ vụ `IsAC` ngày 26/08.
 
-### 3. Role trưởng phòng không hiện trong bảng quản lý tài khoản
+### 3. ✅ Role trưởng phòng không hiện trong bảng quản lý tài khoản — ĐÃ SỬA
 
 Cùng phản hồi 14/08 ở trên: *"Role trưởng phòng không hiện trong bảng qltk"*.
-Chưa điều tra. Nghi ở panel quản trị (`src/app/AdminUsersPanel.tsx`) chứ không phải ở dữ liệu.
+
+**Điều tra 03/09/2026**: không phải dòng bị ẩn, cũng không phải lỗi dữ liệu — `list_users()`
+(`backend/auth.py`) trả về mọi tài khoản không lọc theo role, và `GET /admin/users` không lọc thêm.
+Bản panel đang chạy tại thời điểm phản hồi (commit `c40f792`, `src/app/AdminUsersPanel.tsx`) hiển
+thị **nguyên mã tiếng Anh**: `<span>Role:</span> {u.role}` — tài khoản `regional_director` hiện ra
+là chữ `regional_director`, không có chỗ nào ghi chữ "Trưởng phòng" để người dùng tìm thấy.
+
+**Đã sửa tại `516525b` (28/08/2026)**: thêm `src/app/roleLabels.ts` làm nguồn nhãn duy nhất, đổi
+bảng sang `<span>Vai trò:</span> {getRoleLabel(u.role)}` — `regional_director` nay hiện đúng
+"Giám đốc Miền / Kênh (Trưởng phòng)". Dropdown tạo/sửa tài khoản đã có `regional_director` từ
+04/08 (`0884a4c`, `5189ca0`), chỉ riêng bảng hiển thị là còn thiếu nhãn — nay đã đồng bộ.
+
+Đã xác nhận production build từ `src/app/` (không phải hai cây trùng lặp `frontend/` hay
+`bao-cao-canh-bao/`), nên bản vá này đã có hiệu lực trên live site.
 
 ---
 

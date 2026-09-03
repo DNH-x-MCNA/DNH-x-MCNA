@@ -170,6 +170,9 @@ def test_is_ac_chi_dem_cs_tk_khong_gan_nham_cho_tdv(tmp_path, monkeypatch):
     conn.execute("INSERT INTO dim_nhanvien VALUES ('CS1','Cho si Mot',0,'CS','MB','CS-D1',NULL,NULL,0,NULL)")
     conn.execute("INSERT INTO fact_tonghopkhachhang VALUES "
                  "('CS1','KHCS',400,1000000,'2026-07-31','0','QLV1',0,400,'0','1',0,'CS1')")
+    conn.execute("INSERT INTO dim_nhanvien VALUES ('TK1','Kenh MT Mot',0,'TK','MB','TK-D1',NULL,NULL,0,NULL)")
+    conn.execute("INSERT INTO fact_tonghopkhachhang VALUES "
+                 "('TK1','KHTK',300,1000000,'2026-07-31','0','QLV1',0,300,'0','1',0,'TK1')")
     # Co is_ac tren dong TDV la du lieu khong hop le theo quy tac moi; phep dem phai fail-closed
     # va chi nhan dong thuoc CS/TK.
     conn.execute("INSERT INTO fact_tonghopkhachhang VALUES "
@@ -179,7 +182,7 @@ def test_is_ac_chi_dem_cs_tk_khong_gan_nham_cho_tdv(tmp_path, monkeypatch):
 
     month = rt.customer_lifecycle_summary(year_month="2026-07")["months"][0]
 
-    assert month["so_is_ac"] == 1
+    assert month["so_is_ac"] == 2
 
 
 def test_chuoi_nhieu_thang_va_thang_thieu_snapshot(tmp_path, monkeypatch):

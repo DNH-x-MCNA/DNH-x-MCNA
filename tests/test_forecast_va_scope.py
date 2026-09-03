@@ -176,8 +176,9 @@ def test_gioi_han_theo_doi_KHONG_con_bao_dong_gia(kho):
     """Tong cua doi (2 TDV) khac han tong toan cong ty (co them nguoi ngoai doi gap 3 lan).
     Phep tu-doi-chieu phai so DOI voi DOI, khong duoc so DOI voi TOAN CONG TY."""
     thang = _ym_add(dt.date.today().strftime("%Y-%m"), -1)
+    _, den_ngay = rt._month_bounds(thang)
     p = rt.call_template("get_revenue_by_region",
-                         {"date_from": f"{thang}-01", "date_to": f"{thang}-28"},
+                         {"date_from": f"{thang}-01", "date_to": den_ngay},
                          scope_employee_code=QLV_CODE, scope_role="qlv")
     assert p["ok"], p.get("error")
     canh_bao = " ".join(p.get("canh_bao") or [])
@@ -190,8 +191,9 @@ def test_khong_gioi_han_thi_van_con_phep_tu_doi_chieu(kho):
     """Ban va KHONG duoc lam mat phep tu-doi-chieu o pham vi toan cong ty - do van la luoi an toan
     that (bat truong hop JOIN am tham lam roi du lieu)."""
     thang = _ym_add(dt.date.today().strftime("%Y-%m"), -1)
+    _, den_ngay = rt._month_bounds(thang)
     p = rt.call_template("get_revenue_by_region",
-                         {"date_from": f"{thang}-01", "date_to": f"{thang}-28"},
+                         {"date_from": f"{thang}-01", "date_to": den_ngay},
                          scope_role="c_level")
     assert p["ok"], p.get("error")
     assert not (p.get("canh_bao") or []), "Du lieu gia vay khong lech, khong duoc canh bao gi"
@@ -200,8 +202,10 @@ def test_khong_gioi_han_thi_van_con_phep_tu_doi_chieu(kho):
 def test_pham_vi_doi_chi_gom_doanh_thu_cua_doi(kho):
     """Chan lo du lieu: nguoi ngoai doi co doanh thu gap 3 lan ca doi, khong duoc lot vao."""
     thang = _ym_add(dt.date.today().strftime("%Y-%m"), -1)
-    doi = rt.revenue_by_channel(f"{thang}-01", f"{thang}-28 23:59:59", scope_employee_code=QLV_CODE)
-    ca_cong_ty = rt.revenue_by_channel(f"{thang}-01", f"{thang}-28 23:59:59")
+    _, den_ngay = rt._month_bounds(thang)
+    den_ngay += " 23:59:59"
+    doi = rt.revenue_by_channel(f"{thang}-01", den_ngay, scope_employee_code=QLV_CODE)
+    ca_cong_ty = rt.revenue_by_channel(f"{thang}-01", den_ngay)
     assert doi["otc"]["revenue"] == pytest.approx(1_000_000_000.0)
     assert ca_cong_ty["otc"]["revenue"] == pytest.approx(4_000_000_000.0)
 

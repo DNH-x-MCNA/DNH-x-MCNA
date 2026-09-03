@@ -462,6 +462,154 @@ def kiem_12_xep_hang_kpi_hai_cach_gom_bang_nhau():
           % (_tien(a), _tien(b), _tien(lech), lech / a * 100 if a else 0))
 
 
+def _mau_dau_tien(sql, params=()):
+    """Lấy một giá trị mẫu; thiếu bảng/cột thì trả None để checker ghi BỎ, không giả vờ đạt."""
+    try:
+        rows = _wq(sql, params)
+        return next(iter(dict(rows[0]).values())) if rows else None
+    except Exception:
+        return None
+
+
+def _ly_do_khong_co_payload(result):
+    """Trả lý do nếu tool chưa tạo được kết quả có thể kiểm trên kho hiện tại.
+
+    Một dict chỉ có warning/note không được tính là đã kiểm. Kết quả số 0 vẫn hợp lệ nếu tool có
+    mốc dữ liệu/snapshot rõ ràng; còn list rỗng thì phải BỎ vì không có dòng nào để đối chiếu.
+    """
+    if result is None:
+        return "tool tra ve None"
+    if isinstance(result, list):
+        return None if result else "danh sach rong"
+    if not isinstance(result, dict):
+        return "sai kieu ket qua: %s" % type(result).__name__
+    if result.get("error"):
+        return str(result["error"])
+    if result.get("not_applicable"):
+        return str(result.get("reason") or result.get("warning") or "khong ap dung")
+    for key in ("receivable_status", "status", "data_status"):
+        if str(result.get(key, "")).lower() in {"unavailable", "not_available", "missing"}:
+            return str(result.get("warning") or result.get("receivable_warning") or result[key])
+    # Dữ liệu có thể nằm trong list/dict lồng nhau hoặc là các tổng số. Không dùng chuỗi ghi chú
+    # làm bằng chứng vì một tool chỉ trả lời "không có dữ liệu" vẫn có rất nhiều text.
+    def co_du_lieu(value):
+        if isinstance(value, list):
+            return bool(value)
+        if isinstance(value, dict):
+            return any(co_du_lieu(v) for v in value.values())
+        if isinstance(value, (int, float)):
+            return value != 0
+        return False
+    if co_du_lieu(result):
+        return None
+    # Một số báo cáo chất lượng hợp lệ có toàn bộ bộ đếm = 0. Chỉ chấp nhận nếu có mốc snapshot
+    # thật; như vậy không biến một dict rỗng/ghi chú thành kết luận xanh.
+    if any(result.get(k) for k in ("snapshot_date", "as_of_date", "date_from", "month", "year_month")):
+        return None
+    return "khong co dong/tong so hay moc snapshot de doi chieu"
+
+
+def _tool_cases_40():
+    """Một ca smoke/contract cho đúng 40 tool nghiệp vụ, toàn bộ chỉ đọc kho local."""
+    ym, d_from, d_to = _thang_tron_gan_nhat()
+    if not ym:
+        ym, d_from, d_to = "2026-07", "2026-07-01", "2026-07-31"
+    p_ym = rt._month_add(ym, -1)
+    p_from, p_to = rt._month_bounds(p_ym)
+    customer = (_mau_dau_tien(
+        "SELECT customer_code FROM vhoadon_otc WHERE doc_date BETWEEN ? AND ? "
+        "AND customer_code IS NOT NULL LIMIT 1", (d_from, d_to)) or "KHONG_CO_MAU")
+    employee = (_mau_dau_tien(
+        "SELECT employee_code FROM dim_nhanvien WHERE employee_code IS NOT NULL "
+        "AND position_code IN ('TDV','CTV','CS') LIMIT 1") or "KHONG_CO_MAU")
+    debt_dates = []
+    try:
+        debt_dates = [r["d"] for r in _wq(
+            "SELECT DISTINCT snapshot_date d FROM fact_congno_khachhang "
+            "WHERE snapshot_date IS NOT NULL ORDER BY d DESC LIMIT 2")]
+    except Exception:
+        pass
+    debt_a = debt_dates[0] if debt_dates else d_to
+    debt_b = debt_dates[1] if len(debt_dates) > 1 else p_to
+
+    return {
+        "get_revenue_by_channel": ({"date_from": d_from, "date_to": d_to}, dict),
+        "get_top_products": ({"date_from": d_from, "date_to": d_to, "limit": 10}, list),
+        "get_top_customers": ({"date_from": d_from, "date_to": d_to, "limit": 10}, list),
+        "get_revenue_by_region": ({"date_from": d_from, "date_to": d_to}, list),
+        "get_revenue_ytd_cumulative": ({"year_month_to": ym}, dict),
+        "get_revenue_monthly_series": ({"month_to": ym, "months_back": 3, "include_yoy": False}, dict),
+        "get_customer_lifecycle_summary": ({"year_month": ym, "months_back": 1}, dict),
+        "get_customers_silent": ({"as_of_date": d_to, "limit": 10}, dict),
+        "get_customer_cohort_retention": ({"month_to": ym, "months_back": 3}, dict),
+        "get_customer_movement": ({"month": ym, "limit": 10}, dict),
+        "get_kpi_gap_run_rate": ({"as_of_date": d_to, "limit": 10}, dict),
+        "get_cross_sell_opportunities": ({"as_of_date": d_to, "pair_limit": 5, "opportunity_limit": 10}, dict),
+        "get_customer_product_coverage": ({"as_of_date": d_to, "limit": 10}, dict),
+        "get_geography_monthly_performance": ({"month_to": ym, "months_back": 3, "limit": 20}, dict),
+        "get_workforce_productivity": ({"month_to": ym, "months_back": 3, "limit": 20}, dict),
+        "get_operational_data_quality": ({"as_of_date": d_to, "sample_limit": 10}, dict),
+        "get_employee_kpi": ({"as_of_date": d_to, "limit": 10}, dict),
+        "get_employee_daily_kpi": ({"employee_code": employee, "year_month": ym}, dict),
+        "compare_periods": ({"date_from_a": d_from, "date_to_a": d_to,
+                             "date_from_b": p_from, "date_to_b": p_to}, dict),
+        "get_customer_detail": ({"customer_code": customer, "date_from": d_from, "date_to": d_to}, dict),
+        "get_employee_directory": ({"limit": 10}, list),
+        "check_order_timing": ({"date_from": d_from, "date_to": d_to, "limit": 10}, dict),
+        "get_inventory_by_region": ({}, list),
+        "get_inventory_expiry_report": ({"limit": 10}, dict),
+        "get_qlv_change_history": ({}, list),
+        "get_revenue_tree": ({"as_of_date": d_to}, dict),
+        "get_kpi_ranking": ({"as_of_date": d_to, "limit": 20}, list),
+        "get_revenue_reconciliation": ({"as_of_date": d_to}, dict),
+        "get_receivables_overview": ({"top_n": 10}, dict),
+        "get_receivables_period_compare": ({"snapshot_date_a": debt_a, "snapshot_date_b": debt_b}, dict),
+        "get_receivables_history_dates": ({"limit": 10}, dict),
+        "get_customer_revenue_debt_risk": ({"as_of_date": d_to, "limit": 10}, dict),
+        "get_audit_log": ({"days": 30, "limit": 10, "scope_role": "c_level"}, dict),
+        "get_promotion_effectiveness": ({"date_from": d_from, "date_to": d_to, "limit": 10}, dict),
+        "get_promotion_data_quality": ({}, dict),
+        "get_salary_bonus_policy": ({"bonus_type": "v25", "as_of_date": d_to, "scope_role": "c_level"}, dict),
+        "get_salary_data_quality": ({"check_type": "dm_reconciliation", "year_month": ym,
+                                     "scope_role": "c_level"}, dict),
+        "get_salary_detail": ({"employee_code": employee, "scope_role": "c_level"}, dict),
+        "get_salary_achievement_summary": ({"save_date": d_to, "scope_role": "c_level"}, dict),
+        "get_salary_ranking": ({"year_month": ym, "limit": 10, "scope_role": "c_level"}, dict),
+    }
+
+
+def kiem_13_phu_du_40_tool_nghiep_vu():
+    print()
+    print("13. SMOKE/CONTRACT CHO TOAN BO 40 TOOL NGHIEP VU")
+    cases = _tool_cases_40()
+    registered = set(rt.TEMPLATES)
+    configured = set(cases)
+    _kiem("catalog ca kiem phu dung 40/40 tool", len(cases) == 40 and configured == registered,
+          "configured=%d | registered=%d | thieu=%s | thua=%s"
+          % (len(cases), len(registered), sorted(registered - configured), sorted(configured - registered)))
+    for name in sorted(registered):
+        kwargs, expected_type = cases[name]
+        try:
+            result = rt.TEMPLATES[name](**kwargs)
+        except Exception as exc:
+            # Kho dev duoc phep nho hon kho production. Thieu schema la gioi han cua noi chay,
+            # khong phai tool tra sai; ghi BO de van bat buoc chay lai tren may 24.
+            if "no such column" in str(exc) or "no such table" in str(exc):
+                _bo(name, "Kho o day thieu bang/cot (%s) - chay lai tren may co du lieu that." % exc)
+                continue
+            _kiem("%s: goi duoc khong vo" % name, False, str(exc))
+            continue
+        if not isinstance(result, expected_type):
+            _kiem("%s: dung kieu ket qua" % name, False,
+                  "mong %s, nhan %s" % (expected_type.__name__, type(result).__name__))
+            continue
+        ly_do = _ly_do_khong_co_payload(result)
+        if ly_do:
+            _bo(name, ly_do)
+            continue
+        _kiem("%s: co payload de doi chieu" % name, True)
+
+
 CAC_PHEP_KIEM = (
     kiem_1_hai_nguon_khong_chong_lan,
     kiem_2_chuoi_thang_khop_mot_lan_goi,
@@ -475,6 +623,7 @@ CAC_PHEP_KIEM = (
     kiem_10_cong_no_cac_cach_chia_deu_bang_tong,
     kiem_11_cay_kpi_khong_cong_lan_tang,
     kiem_12_xep_hang_kpi_hai_cach_gom_bang_nhau,
+    kiem_13_phu_du_40_tool_nghiep_vu,
 )
 
 
@@ -489,8 +638,8 @@ def main():
     # theo 3 kieu khac nhau ("code nao dang chay?"), lan gan nhat: ban tren may 24 con la ban cu chi
     # co 5 phep kiem, dau ra dung o muc 5 va in ket luan xanh - nhin thoang y het mot lan chay day du.
     # So phep kiem la dau hieu re nhat va kho nham nhat: 5 hay 12 la thay ngay.
-    print("  Ban script: %d phep kiem | sua lan cuoi %s"
-          % (len(CAC_PHEP_KIEM),
+    print("  Ban script: %d nhom kiem, phu %d tool | sua lan cuoi %s"
+          % (len(CAC_PHEP_KIEM), len(_tool_cases_40()),
              __import__("datetime").datetime.fromtimestamp(
                  Path(__file__).stat().st_mtime).strftime("%d/%m/%Y %H:%M")))
     print("  Kho du lieu THAT dang truy van: %s" % KHO_THUC_TE)

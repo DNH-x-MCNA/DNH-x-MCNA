@@ -1289,7 +1289,17 @@ def revenue_monthly_series(month_to: str = None, months_back: int = 12, include_
 # NHAN VIEN. Luon loc tang nhan vien va COUNT(DISTINCT customer_code)"). Do thuc te 24/08/2026 tren
 # snapshot that: dung SUM(is_nc) cho ra 174 trong khi so khach THAT chi 92 - sai gap 1,89 lan, vi
 # bang nay co CA dong TDV lan dong rollup QLV chong len nhau (2.258 dong / 1.131 khach that).
-_EMPLOYEE_TIER_POSITIONS = ("TDV", "CTV", "CS")
+#
+# 03/09/2026 - them "TK" vao danh sach nay. TK/CS mang cap hanh chinh "QLV" (xem
+# docs/chuc_vu_ma_position_code.md), nhung day KHONG dong nghia voi rollup trong bang nay:
+# _rollup_tier_codes() da tung canh bao position_code sai nhan cho cap duoi cua Kenh MT/Cho si,
+# nen phai kiem THAT bang manager_code chu khong suy tu ten chuc danh. Da kiem tren warehouse
+# local: nguoi duy nhat mang position_code='TK' (TM23100133) tu bao cao len 'MN1' va KHONG co
+# dong FACT nao khac mang manager_code=TM23100133 - tuc co ay la LA/individual contributor,
+# giong het CS, khong phai diem rollup. Truoc khi sua, so_is_ac do thieu TK: 21 thay vi 22 (dung).
+# Loai TK khoi danh sach nay tung lam customer_lifecycle_summary() bo qua CA BON cot dem
+# (tong_khach, khach_moi, so_is_ro, so_is_ac) cho dong TK, khong chi rieng so_is_ac.
+_EMPLOYEE_TIER_POSITIONS = ("TDV", "CTV", "CS", "TK")
 
 
 def _customer_flag_caveat() -> str:
