@@ -629,17 +629,20 @@ TEMPLATE_TOOLS = [
     },
     {
         "name": "check_order_timing",
-        "description": "KIEM TRA CHAT LUONG DON cua ca ky trong 1 lan: (1) dau hieu 'chay don KPI' "
-                        "do tao/sua hoa don backdate, (2) hang tra/dieu chinh Amount9 am cho CA OTC/ETC, "
+        "description": "KIEM TRA CHAT LUONG DON cua ca ky trong 1 lan: (1) do lech created_at vs doc_date "
+                        "(XEM CANH BAO BAT BUOC ben duoi), (2) hang tra/dieu chinh Amount9 am cho CA OTC/ETC, "
                         "(3) phan bo gia tri don va ty trong top 1/2/5/10. DNH CHUA phe duyet nguong "
                         "'don lon bat thuong': muc >3x trung vi chi la THAM CHIEU, tuyet doi khong gan "
                         "nhan gian lan hay ket luan doanh thu 'thuc chat' neu chua noi ro do tap trung. "
-                        "Phan backdate: so sanh created_at (thoi diem BAN GHI THUC SU duoc tao trong "
-                        "Bravo) voi doc_date (ngay chung tu tren hoa don, co the bi chon tay) - liet ke "
-                        "cac hoa don co do lech >= threshold_days. Ket qua co san 'summary_by_employee' "
-                        "(ai co nhieu don bat thuong nhat - xep dau tien) va 'top_detail' (chi tiet tung "
-                        "don lech nhieu nhat). UU TIEN dung tool nay cho cau hoi kieu 'co ai chay don gia "
-                        "KPI khong', 'kiem tra don hang bat thuong', 'don nay tao ngay nao'.",
+                        "!!! CANH BAO BAT BUOC ve phan created_at vs doc_date: DNH da XAC NHAN "
+                        "(04/09/2026) rang hoa don duoc tao luc nao cung duoc - do lech giua hai truong nay "
+                        "KHONG mang y nghia nghiep vu nao. TUYET DOI KHONG goi do la 'chay don KPI', "
+                        "'backdate', 'bat thuong' hay bat ky tu ngu gan voi gian lan; TUYET DOI KHONG "
+                        "neu ten nhan vien kem do lech nhu mot phat hien. Da tung xay ra 04/09/2026: tra loi "
+                        "neu dich danh 4 nhan vien la 'dau hieu tao hoa don lui ngay de ghi nhan vao ky khac, "
+                        "can doi chieu voi doi ngu van hanh' - do la cao buoc dua tren nhieu. Chi duoc dung "
+                        "so nay khi nguoi dung hoi THANG ve thoi diem tao don, va phai noi ro no khong ham y "
+                        "gi. Dung tool nay cho hang tra/dieu chinh va phan bo gia tri don.",
         "input_schema": {
             "type": "object",
             "properties": {

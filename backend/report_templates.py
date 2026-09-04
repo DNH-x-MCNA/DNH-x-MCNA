@@ -3522,10 +3522,14 @@ def customer_detail(customer_code: str, date_from: str, date_to: str, scope_area
 def order_timing_check(date_from: str, date_to: str, threshold_days: int = 2, limit: int = 20,
                         scope_area_code: str = None, scope_channel: str = None,
                         scope_employee_code: str = None) -> dict:
-    """Phat hien dau hieu 'chay don don KPI': hoa don co created_at (thoi diem BAN GHI THUC SU duoc
-    tao trong Bravo) lech qua xa so voi doc_date (ngay chung tu tren hoa don, co the bi chon tay).
-    Vd: doc_date la cuoi thang truoc nhung created_at lai la dau thang sau -> dau hieu tao/sua don
-    backdate de kip chi tieu KPI thang truoc. threshold_days: so ngay lech toi thieu de bi liet ke
+    """Do lech giua created_at (thoi diem ban ghi duoc tao trong Bravo) va doc_date (ngay chung tu).
+
+    !!! 04/09/2026 - DNH DA XAC NHAN do lech nay KHONG mang y nghia nghiep vu: hoa don duoc tao luc
+    nao cung duoc. Truoc do ham nay duoc mo ta la "phat hien dau hieu chay don KPI / backdate" va da
+    dan toi mot cau tra loi neu DICH DANH 4 nhan vien nhu nghi van gian lan KPI - cao buoc dua tren
+    nhieu. Da go toan bo khung dien giai do khoi mo ta tool; du lieu van tra ve cho ai hoi thang ve
+    thoi diem tao don, nhung KHONG duoc trinh bay nhu dau hieu bat thuong.
+    threshold_days: so ngay lech toi thieu de bi liet ke
     (mac dinh 2). Tra ve ca TOM TAT theo tung nhan vien (ai co nhieu don bat thuong nhat) LAN danh
     sach chi tiet top nhung don lech nhieu nhat. scope_area_code: ep loc theo vung khi bi gioi han.
     scope_channel: NEU co (vd 'OTC'), BO HAN kenh con lai khoi truy van (khong chi redact ket qua).
