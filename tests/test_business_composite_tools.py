@@ -61,7 +61,7 @@ def test_promotion_effectiveness_does_not_fallback_to_invoice_note(monkeypatch):
     assert len(calls) == 1, "Nguon thieu thi khong duoc chay query thay the sai nghia"
 
 
-def test_v25_policy_flags_rule_procedure_and_actual_mismatch(monkeypatch):
+def test_v25_tu_07_2026_la_doi_co_che_khong_phai_mismatch(monkeypatch):
     monkeypatch.setattr(rt, "_q", lambda sql, params=(): [{"d": "2026-07-31"}])
 
     def fake_bravo(sql, params=None):
@@ -75,29 +75,19 @@ def test_v25_policy_flags_rule_procedure_and_actual_mismatch(monkeypatch):
                 "Earn2": None, "EarnMax": None, "CheckASO": None,
                 "CheckTargetEmp": None, "ASOCusCondType": None,
             }]
-        if "FROM dbo.FACT_ThongKeTinhLuong f" in sql:
-            return [{
-                "EmployeeCode": "QLV01", "EmployeeName": "Nguyen Van A",
-                "AreaCode": "MN", "PositionCode": "QLV", "SaveDate": "2026-07-31",
-                "V25Date": "2026-07-27", "V25Amount": 735_600_000,
-                "MonthSaleTarget": 1_000_000_000, "V25Percent_R": 0.7356,
-                "V25Bonus": 0,
-            }]
-        if "OBJECT_DEFINITION" in sql:
-            return [{"Definition": (
-                "SELECT TypeCode INTO #KPICt FROM dbo.DIM_BacThuong "
-                "WHERE TypeCode IN ('V15','V22','ASO'); "
-                "IF OBJECT_ID('Tempdb..#LongKPICt') IS NOT NULL DROP TABLE #LongKPICt"
-            )}]
         raise AssertionError(sql)
 
     monkeypatch.setattr(rt, "_q_bravo", fake_bravo)
     result = rt.salary_bonus_policy("v25")
 
-    assert result["procedure_loads_v25_rules"] is False
-    assert result["rule_actual_mismatch_count"] == 1
-    assert result["rule_actual_mismatches"][0]["v25_percent"] == 73.56
-    assert "#KPICt" in result["implementation_warning"]
+    assert result["mechanism_status"] == "INACTIVE_FROM_2026_07_REPLACED_BY_V15_V22"
+    assert result["procedure_loads_v25_rules"] is None
+    assert result["rule_actual_mismatch_count"] == 0
+    assert result["rule_actual_mismatches"] == []
+    assert result["implementation_warning"] is None
+    assert result["rule_count"] == 0
+    assert result["inactive_rule_rows_count"] == 1
+    assert "KHONG PHAI loi tinh luong" in result["formula"]
 
 
 def test_customer_revenue_debt_risk_is_one_composite_query(monkeypatch):
@@ -238,6 +228,21 @@ def test_high_risk_intents_force_their_single_verified_tool():
     assert nl2sql._required_tool_for_question(
         "Có ai V25Bonus đã lưu bằng 0 dù nằm trong bậc thưởng không?"
     ) == "get_salary_bonus_policy"
+    assert nl2sql._required_tool_for_question(
+        "Loại đơn hàng lớn bất thường và hàng trả; kết quả thực chất của đội"
+    ) == "check_order_timing"
+    assert nl2sql._required_tool_for_question(
+        "So 3 tháng gần nhất, tháng này đội giảm ở khách/đơn/sản lượng hay giá trị đơn"
+    ) == "get_geography_monthly_performance"
+    assert nl2sql._required_tool_for_question(
+        "DT đội đến từ bao nhiêu khách/đơn; AOV và tần suất mua thay đổi"
+    ) == "get_customer_product_coverage"
+    assert nl2sql._required_tool_for_question(
+        "Còn thiếu bao nhiêu để đạt 65%, 80%, 100%; mỗi ngày cần bán bao nhiêu"
+    ) == "get_kpi_gap_run_rate"
+    assert nl2sql._required_tool_for_question(
+        "Thưởng/phụ cấp từng người thay đổi; điểm không khớp KPI/chính sách của cả đội"
+    ) == "get_salary_ranking"
 
 
 def test_ask_sends_forced_tool_choice_only_on_first_round(monkeypatch):

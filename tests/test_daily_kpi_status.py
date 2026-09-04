@@ -83,3 +83,23 @@ def test_employee_daily_kpi_dem_dung_so_ngay_do_vang_xanh(tmp_path, monkeypatch)
     by_date = {d["date"]: d for d in result["days"]}
     assert by_date["2026-01-05"]["status"] == "\U0001F7E1 V\xe0ng"
     assert by_date["2026-01-06"]["status"] == "\U0001F7E2 Xanh"
+
+
+def test_bulk_daily_kpi_giu_du_moi_nhan_vien_nhung_khong_phinh_payload(tmp_path, monkeypatch):
+    db_path = tmp_path / "warehouse.db"
+    _make_db(db_path)
+    con = sqlite3.connect(db_path)
+    con.execute("INSERT INTO dim_nhanvien VALUES ('NV02','Nguyen Van B',0,'TDV','MB','NV02')")
+    con.execute("INSERT INTO fact_tonghopkhachhang VALUES ('NV02',1000000,'2026-01-15')")
+    con.execute("INSERT INTO vhoadon_otc VALUES ('2026-01-07','NV02',60000)")
+    con.commit(); con.close()
+    monkeypatch.setattr(local_warehouse, "DB_PATH", str(db_path))
+
+    result = report_templates.employee_daily_kpi("NV01,NV02", "2026-01")
+
+    assert result["requested_count"] == result["count"] == 2
+    assert {r["employee_name"] for r in result["employees"]} == {"Nguyen Van A", "Nguyen Van B"}
+    assert all("days" not in r for r in result["employees"])
+    assert result["team_daily_summary"]["count_yellow"] >= 1
+    assert len(result["team_daily_summary"]["top_revenue_dates"]) == 5
+    assert result["errors"] == []

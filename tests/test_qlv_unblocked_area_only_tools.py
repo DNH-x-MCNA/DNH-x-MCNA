@@ -118,6 +118,10 @@ def test_check_order_timing_qlv_chi_thay_doi_minh(tmp_path, monkeypatch):
                 "('TDV01','KH01',1000000,2000000,'2026-07-15',0,'QLV01')")
     conn.execute("INSERT INTO vhoadon_otc VALUES "
                 "('2026-07-10','KH01','SP01',500000,5,100000,'HD1',1,'TDV01_DMS','2026-07-15','ASM01')")
+    # Hang tra/dieu chinh OTC cung nam trong view hoa don tong; created_at cung ngay nen KHONG bi
+    # nham thanh backdate, nhung bat buoc phai xuat hien trong khoi returns.
+    conn.execute("INSERT INTO vhoadon_otc VALUES "
+                "('2026-07-11','KH01','SP01',-100000,-1,100000,'HD-TRA',1,'TDV01_DMS','2026-07-11','ASM01')")
     # TDV_KHAC (doi khac) - cung co don backdate, nhung KHONG duoc lot vao khi QLV01 hoi.
     conn.execute("INSERT INTO dim_nhanvien VALUES "
                 "('TDV_KHAC','Nhan vien doi khac',0,'TDV','MB','TDVKHAC_DMS',NULL,NULL,0,NULL)")
@@ -137,6 +141,13 @@ def test_check_order_timing_qlv_chi_thay_doi_minh(tmp_path, monkeypatch):
     codes = {r["employee_code"] for r in result["result"]["summary_by_employee"]}
     assert "TDV01" in codes
     assert "TDVKHAC_DMS" not in codes and "TDV_KHAC" not in codes
+    quality = result["result"]
+    assert quality["order_value_distribution"]["orders"] == 2
+    assert quality["order_value_distribution"]["reference_over_3x_median"]["status"] == \
+        "CHI_LA_THAM_CHIEU_CHUA_DUOC_DNH_PHE_DUYET"
+    assert quality["returns"]["orders_with_negative_lines"] == 1
+    assert quality["returns"]["negative_amount"] == -100000
+    assert quality["pham_vi_du_lieu"]["loai"] == "DOI_CUA_QLV"
 
 
 def test_check_order_timing_scope_etc_khong_doc_don_otc(tmp_path, monkeypatch):

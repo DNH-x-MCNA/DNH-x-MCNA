@@ -165,6 +165,24 @@ LLM_CALL_TIMEOUT_SECONDS = _timeout_env("CHAT_LLM_TIMEOUT_SECONDS", 45, REQUEST_
 def _required_tool_for_question(question: str) -> str | None:
     """Ep tool cho cac intent co mot duong du lieu duy nhat, tranh do catalog nhieu vong."""
     q = " ".join((question or "").lower().split())
+    is_team = any(word in q for word in ("đội", "doi toi", "đội tôi", "toàn đội", "tong doi"))
+
+    # Cac intent UAT cua QLV da tung chon sai/roi du lieu khi model tu ghep 4-12 tool. Ep DUONG
+    # BAO CAO DA CO SAN ngay tu vong dau; cac vong sau van duoc phep goi them neu cau hoi co nhieu ve.
+    if is_team and any(word in q for word in ("hàng trả", "hang tra", "đơn lớn", "don lon",
+                                               "bất thường", "bat thuong", "chạy đơn", "chay don")):
+        return "check_order_timing"
+    if any(word in q for word in ("còn thiếu", "con thieu", "mỗi ngày cần", "moi ngay can")) and any(
+            threshold in q for threshold in ("65", "70", "80", "100", "120", "kpi")):
+        return "get_kpi_gap_run_rate"
+    metric_words = ("khách", "khach", "đơn", "don", "aov", "tần suất", "tan suat",
+                    "sản lượng", "san luong", "giá trị đơn", "gia tri don")
+    if is_team and any(word in q for word in ("3 tháng", "ba tháng", "3 thang", "ba thang")) \
+            and any(word in q for word in metric_words):
+        return "get_geography_monthly_performance"
+    if is_team and (any(word in q for word in metric_words) or
+                    any(word in q for word in ("đóng góp", "dong gop"))):
+        return "get_customer_product_coverage"
     is_promo = any(word in q for word in ("khuyến mãi", "khuyen mai", "ctkm"))
     if is_promo and any(marker in q for marker in (
         "đến ngày nào", "den ngay nao", "mất đơn", "mat don", "mất mã chương trình",
@@ -182,6 +200,13 @@ def _required_tool_for_question(question: str) -> str | None:
                     "dòng đầu", "dong dau", "giữa tháng rỗng", "giua thang rong",
                 ))):
             return "get_salary_data_quality"
+        if any(marker in q for marker in (
+            "từng người", "tung nguoi", "cả đội", "ca doi", "toàn đội", "toan doi",
+            "thay đổi", "thay doi", "phụ cấp", "phu cap",
+        )):
+            # Mot bang compact cho ca doi, co san ky truoc + delta. Tranh 8 lenh salary_detail
+            # lam vuot tool-loop va cat payload giua danh sach.
+            return "get_salary_ranking"
         if "v25" in q and any(marker in q for marker in (
             "bậc", "bac", "v25bonus", "bằng 0", "bang 0", "công thức", "cong thuc",
         )):
@@ -311,7 +336,9 @@ TEMPLATE_TOOLS = [
                         "(4% = 100% cua ngay). Ket qua co san 'days' (danh sach tung ngay T2-T6 trong thang, "
                         "moi ngay co 'status': 🔴 Do <2.5%, 🟡 Vang 2.5%-3.5%, 🟢 Xanh >3.5% - LUON dung "
                         "nguyen status nay, khong tu tinh nguong khac) va dem san count_red/count_yellow/"
-                        "count_green. 'month_pct_of_target' la % TONG CA THANG (thuc te/target*100, cach "
+                        "count_green. Co the truyen NHIEU ma TDV cach nhau bang dau phay de xem ca doi "
+                        "trong 1 lan: ket qua bulk tra employees TOM TAT DU TUNG NGUOI (kem ngay 0/do/vang/xanh) "
+                        "va team_days cua TOAN DOI; KHONG goi lai rieng tung nguoi. 'month_pct_of_target' la % TONG CA THANG (thuc te/target*100, cach "
                         "tinh CU, KHONG lien quan gi 4%/ngay va KHONG co mau) - chi dung khi hoi tong ket "
                         "cuoi thang. KHONG dung tool nay cho ma khu vuc/quan ly vung (MBKV*, ASM*, cac ma "
                         "khong xuat hien truc tiep tren hoa don) - truong hop do dung get_employee_kpi thay the.",
@@ -367,7 +394,10 @@ TEMPLATE_TOOLS = [
                         "tung thang', 'thang qua thang', 'xu huong may thang qua', 'thang nao tang/giam manh "
                         "nhat', 'trung binh truot 3/6 thang', 'bien dong doanh thu qua cac thang'. CHi CAN GOI "
                         "DUNG 1 LAN cho ca chuoi - TUYET DOI KHONG goi get_revenue_by_channel nhieu lan cho "
-                        "tung thang (se an het han muc goi tool va van thieu MoM/YoY). KHAC get_revenue_by_"
+                        "tung thang (se an het han muc goi tool va van thieu MoM/YoY). Với QLV, neu "
+                        "team_membership_basis.older_periods_use=CURRENT_TEAM_MEMBERSHIP thi BAT BUOC "
+                        "ghi ro: 'tinh theo doi hien tai, thanh phan doi ky do co the khac'; KHONG mot "
+                        "vai noi he thong khong tinh duoc con vai khac lai coi roster hien tai la roster lich su. KHAC get_revenue_by_"
                         "channel (chi 1 con so TONG cho ca khoang) va compare_periods (dung 2 khoang). Thang "
                         "nao nam ngoai pham vi du lieu se co 'khong_co_du_lieu': true va revenue=None - PHAI "
                         "noi ro voi nguoi dung la thang do CHUA CO DU LIEU, TUYET DOI KHONG trinh bay thanh "
@@ -486,7 +516,12 @@ TEMPLATE_TOOLS = [
     {
         "name": "get_customer_product_coverage",
         "description": "DO PHU/BENCHMARK NOI BO theo khach, san pham hoac nhan vien: doanh thu, don, "
-                       "so SKU, so khach, AOV va chenh lech voi ky truoc cung do dai. Dung cho khach "
+                       "so SKU, so khach, san luong, AOV, tan suat va chenh lech voi ky truoc. BAT BUOC "
+                       "dung mode='employee', lookback_months=1 cho cau hoi DOI den tu bao nhieu khach/don, "
+                       "AOV/tan suat thay doi, hoac NV nao dong gop tang/giam. Ket qua scope_totals da dem "
+                       "KHACH DUY NHAT cua ca doi; KHONG cong so khach tung TDV. Ky 1 thang duoc can theo "
+                       "cung ngay trong thang truoc (01-04/09 vs 01-04/08), va rows GIU CA nhan vien ky "
+                       "hien tai bang 0 - khong duoc bo qua. largest_increase/largest_decrease da tinh san. Dung cho khach "
                        "mua it SKU, tan suat/AOV giam, NV co nhieu khach nhung mua thap, san pham nhieu "
                        "khach nhung luong/don thap. Benchmark chi trong DUNG pham vi tai khoan, KHONG "
                        "phai market share/share-of-wallet ngoai DNH va KHONG tu ket luan nhu cau.",
@@ -498,8 +533,12 @@ TEMPLATE_TOOLS = [
     },
     {
         "name": "get_geography_monthly_performance",
-        "description": "HIỆU SUAT DIA BAN theo thang: doanh thu, don, khach, MoM, ty trong, thu hang "
+        "description": "HIEU SUAT THEO THANG: doanh thu, don, KHACH DUY NHAT, san luong ban that, AOV, "
+                       "tan suat don/khach, MoM, ty trong, thu hang "
                        "va streak tang/giam theo MIEN hoac TINH. Dung cho xep hang/diem keo giam/co hoi "
+                       "dia ban; voi tai khoan QLV, dimension='area' + months_back=3 cung tra dung chuoi "
+                       "3 thang cua RIENG DOI da bi ep scope, nen BAT BUOC dung cho cau 'so 3 thang gan "
+                       "nhat doi giam o khach/don/san luong/AOV'. "
                        "dia ban, ke ca cau hoi dang 'dia ban QUY MO LON nhung TANG TRUONG THAP' "
                        "(doi chieu cot revenue/ty trong voi cot MoM - KHONG can viet SQL tay). Kho local CHUA co khoa chi nhanh/NPP/distributor; neu hoi chieu do tool "
                        "tra not_applicable, PHAI noi ro, KHONG tu suy tu tinh/vung.",
@@ -590,8 +629,12 @@ TEMPLATE_TOOLS = [
     },
     {
         "name": "check_order_timing",
-        "description": "Phat hien dau hieu 'chay don don KPI' (tao/sua hoa don backdate gan cuoi ky "
-                        "de kip chi tieu): so sanh created_at (thoi diem BAN GHI THUC SU duoc tao trong "
+        "description": "KIEM TRA CHAT LUONG DON cua ca ky trong 1 lan: (1) dau hieu 'chay don KPI' "
+                        "do tao/sua hoa don backdate, (2) hang tra/dieu chinh Amount9 am cho CA OTC/ETC, "
+                        "(3) phan bo gia tri don va ty trong top 1/2/5/10. DNH CHUA phe duyet nguong "
+                        "'don lon bat thuong': muc >3x trung vi chi la THAM CHIEU, tuyet doi khong gan "
+                        "nhan gian lan hay ket luan doanh thu 'thuc chat' neu chua noi ro do tap trung. "
+                        "Phan backdate: so sanh created_at (thoi diem BAN GHI THUC SU duoc tao trong "
                         "Bravo) voi doc_date (ngay chung tu tren hoa don, co the bi chon tay) - liet ke "
                         "cac hoa don co do lech >= threshold_days. Ket qua co san 'summary_by_employee' "
                         "(ai co nhieu don bat thuong nhat - xep dau tien) va 'top_detail' (chi tiet tung "
@@ -889,9 +932,11 @@ TEMPLATE_TOOLS = [
                        "QUY TAC NGOAI LE: CS (Cho si) va TK (kenh MT) dung co is_ac/Active Customer, "
                        "KHONG co ASO; neu da co is_ac thi khong gan/cong ASO. ASO trong du lieu DNH la "
                        "CHI TIEU/KHOAN THUONG khach hang hoat dong cua cac vai tro con lai, khong phai chuc danh. "
-                       "Tool con kiem tra chenh lech giua bang quy tac, "
-                       "stored procedure va so V25Bonus da luu; neu co chenh lech PHAI noi ro, KHONG tu "
-                       "tinh de/ghi de so da chot cua SQL Server.",
+                       "QUY TAC BAT BUOC: V25 dung han tu 07/2026 va duoc thay bang V15/V22; V25Bonus=0 "
+                       "trong ky 07/2026 tro di la DUNG CO CHE, KHONG PHAI loi thu tuc va TUYET DOI KHONG "
+                       "de nghi bu thuong/truy linh. Cac dong V25 con trong DIM_BacThuong co the la cau hinh "
+                       "lich su ton du. Tool chi kiem tra mismatch V25 cho ky den het 06/2026; neu co chenh "
+                       "lech thi cung chi goi la CAN KE TOAN/IT XAC NHAN, khong tu ghi de so da chot.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -990,11 +1035,16 @@ TEMPLATE_TOOLS = [
     },
     {
         "name": "get_salary_ranking",
-        "description": "Xep hang TOP N nhan vien co THUONG CAO NHAT (hoac thuong V15, V22, V25, ASO, Thuong danh muc DM) "
+        "description": "Bang THUONG/PHU CAP TUNG NGUOI trong doi hoac xep hang TOP N (V15, V22, V25, ASO, Thuong danh muc DM) "
                         "trong ky/thang. DUNG KHI HOI 'top 30 nhan vien duoc thuong nhieu nhat', 'top thuong MB', "
                         "'ai duoc thuong V15 cao nhat', 'danh sach top thuong thang 7', 'top 10 thuong mien bac', "
                         "'top 30 theo MB', 'tong thuong luon'. "
-                        "Tra ve bang xep hang day du (thuong total, V15, V22, V25, ASO, allowance, % target). "
+                        "Tra ve bang day du trong MOT LAN (thuong total, V15, V22, V25, ASO, allowance, % target), "
+                        "kem previous_* va *_delta cua KY CHOT LIEN TRUOC de tra loi 'thay doi'. KHONG goi "
+                        "get_salary_detail tung nguoi khi hoi ca doi. Neu hoi them diem KHONG KHOP CHINH SACH, "
+                        "sau bang nay goi get_salary_bonus_policy dung loai thuong can doi chieu; mismatch chi "
+                        "la canh bao can ke toan/IT xac nhan, khong tu ket luan se duoc bu tien. RIENG ky tu "
+                        "07/2026: V25=0 la DUNG vi DNH da thay V25 bang V15/V22, khong duoc goi la mismatch. "
                         "QUY TAC: CS (Cho si) va TK (kenh MT) dung is_ac/Active Customer, khong co ASO; "
                         "tong thuong cua hai vai tro khong cong ASO, va xep hang rieng ASO khong bao gom CS/TK. "
                         "chay sieu toc trong 0.01 giay. TUYET DOI KHONG dung SQL ad-hoc hoac tool khac cho nhu cau nay.",
@@ -1247,6 +1297,20 @@ QUAN TRONG VE CHON TOOL:
   get_audit_log, get_promotion_effectiveness, get_promotion_data_quality,
   get_salary_bonus_policy, get_salary_data_quality, get_salary_detail,
   get_salary_achievement_summary).
+- PHAM VI LA DU LIEU BAT BUOC, KHONG PHAI LOI VAN: neu payload co pham_vi_du_lieu.loai=DOI_CUA_QLV
+  thi MOI con so trong payload la cua RIENG DOI do. TUYET DOI KHONG goi no la "toan vung", "toan
+  mien" hay "toan cong ty", ke ca khi ma vung cung xuat hien. Neu tool YTD tra 9,82 ty cho tai khoan
+  QLV thi do van la YTD CUA DOI, khong duoc doi nhan thanh YTD cua mien.
+- Khi so sanh thang dang chay voi thang truoc, PHAI cung do dai theo diem trong chu ky: 01-N thang
+  nay so 01-N thang truoc. KHONG so MTD voi ca thang truoc; KHONG so 01-04 voi 28-31 thang truoc.
+- KHONG tu ket luan "khong phu thuoc vai don lon" chi vi so don/AOV cung tang. Muon ket luan do tap
+  trung PHAI doc order_value_distribution (top share). Nguong >3x trung vi chi la THAM CHIEU chua
+  duoc DNH phe duyet, khong duoc gan nhan gian lan.
+- SO KHACH MUA THAT CUA DOI trong mot ky: BAT BUOC doc get_customer_product_coverage.scope_totals
+  .current.customers (COUNT DISTINCT ma khach tren hoa don sau khi da loc DU doi). KHONG cong cot
+  customers cua tung TDV, KHONG dung employee_kpi.new_customers, va KHONG dung cac co is_nc/is_ro/
+  is_ac thay cho tong khach mua. Day la so dem that, khong duoc goi la "uoc tinh". Neu ket qua khac
+  mot bao cao cu, uu tien scope_totals va kiem tra canh_bao phan giai DMSId.
 - HIEU QUA CTKM: BAT BUOC goi get_promotion_effectiveness DUNG 1 LAN. KHONG duoc GROUP BY cot CTKM
   tren vHoaDon/vHoaDonTotal: cot do la ghi chu tu do, co the chua ten nguoi va so dien thoai. Doanh
   thu chuong trinh phai noi qua DMS_DonHangCTKM -> DMS_CTKM. Neu tool bao nguon lien ket chi den mot
@@ -1531,8 +1595,9 @@ def _dynamic_context_note(question: str = "", session_id: str = "", scope_area_c
             f'lieu doanh thu/ton kho tong hop thong thuong. '
             f'Neu nguoi dung hoi "so sanh voi QLV khac" hoac "QLV nao tot nhat vung", PHAI TU CHOI ro '
             f'rang phan so sanh voi nguoi khac, chi dua duoc so lieu cua chinh ho. '
-            f'Mot so bao cao (vd check_order_timing) bi CHAN han voi tai khoan nay - neu tool tra ve loi '
-            f'noi vay thi giai thich lai cho nguoi dung, dung tim cach lach bang tool khac.'
+            f'Bao cao check_order_timing DA ep gioi han dung doi va duoc phep dung cho QLV; ket qua con '
+            f'co hang tra va do tap trung don hang. Neu mot bao cao KHAC tra ve loi phan quyen thi giai '
+            f'thich lai cho nguoi dung, dung tim cach lach bang tool khac.'
         )
     if scope_channel:
         parts.append(

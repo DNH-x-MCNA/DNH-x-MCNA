@@ -45,8 +45,15 @@ def _make_db(path):
             kenh_bh TEXT);
         CREATE TABLE monthly_customer_summary (year_month TEXT, channel TEXT, customer_code TEXT,
             employee_code TEXT, revenue REAL, invoice_count INTEGER);
+        CREATE TABLE dim_nhanvien (employee_code TEXT, name TEXT, position_code TEXT,
+            area_code TEXT, dmsid TEXT, is_duplicate INTEGER);
+        CREATE TABLE fact_tonghopkhachhang (employee_code TEXT, manager_code TEXT,
+            save_date TEXT, emp_dms_code TEXT);
         """
     )
+    conn.execute("INSERT INTO dim_nhanvien VALUES ('NV01','Nhan vien 1','TDV','MB','NV01',0)")
+    conn.execute("INSERT INTO dim_nhanvien VALUES ('Q1','Quan ly 1','QLV','MB','Q1',0)")
+    conn.execute("INSERT INTO fact_tonghopkhachhang VALUES ('NV01','Q1','2026-07-31','NV01')")
     # Chi tiet: 3 thang lien tiep, doanh thu tang dan de MoM co dau ro rang.
     for day, amount, stt in (("2026-05-10", 1_000_000, "HD5"),
                               ("2026-06-10", 2_000_000, "HD6"),
@@ -108,6 +115,27 @@ def test_yoy_tinh_duoc_tu_thang_cung_ky_nam_truoc_o_bang_da_nen(tmp_path, monkey
     assert r["so_thang"] == 1, "chi duoc TRA VE thang duoc hoi, 12 thang lay them chi de tinh YoY"
     assert thang7["yoy_delta"] == 3_500_000 - 1_750_000
     assert thang7["yoy_pct"] == 100.0
+
+
+def test_yoy_cap_doi_ky_cu_ghi_ro_dung_thanh_phan_doi_hien_tai(tmp_path, monkeypatch):
+    _setup(tmp_path, monkeypatch)
+    r = rt.revenue_monthly_series(
+        month_to="2026-07", months_back=1, include_yoy=True,
+        scope_employee_code="Q1",
+    )
+
+    basis = r["team_membership_basis"]
+    assert basis["exact_history_from"] == "2026-07-31"
+    assert basis["older_periods_use"] == "CURRENT_TEAM_MEMBERSHIP"
+    assert "thanh phan doi tai ky lich su co the khac" in basis["warning"]
+    # Loc pham vi doi Q1 = chi NV01. Hoa don ETC 500k thang 7 la cua NV02 (NGOAI doi) nen PHAI bi
+    # loai: ky nay 3,0tr (khong phai 3,5tr nhu test khong loc pham vi), ky truoc 1,75tr cua NV01
+    # trong bang da nen -> (3,0-1,75)/1,75 = 71,43%. Neu ra 100% tuc la doanh thu nguoi NGOAI doi
+    # dang bi tinh vao doi.
+    thang = r["months"][0]
+    assert thang["revenue"] == 3_000_000, "doanh thu ETC cua NV02 (ngoai doi) khong duoc tinh vao"
+    assert thang["yoy_delta"] == 3_000_000 - 1_750_000
+    assert round(thang["yoy_pct"], 2) == 71.43
 
 
 def test_thang_ngoai_pham_vi_du_lieu_tra_None_KHONG_PHAI_0(tmp_path, monkeypatch):

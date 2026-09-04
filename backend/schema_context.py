@@ -338,4 +338,19 @@ inventory (snapshot ton kho MOI NHAT, khong theo ngay): "item_code", "item_name"
     sot 4 san pham moi that, va tuyen bo phan "tuoi 12 thang" la bat kha thi trong khi du lieu co san.
     Khi dinh nghia "san pham moi"/"khach moi" PHAI lay lan ban dau tren TOAN BO lich su, khong phai
     lan dau xuat hien trong cua so dang xet (loi left-censoring).
+18. THUONG TIEN DO V15/V22/V25 - DA DOI CO CHE TU 07/2026, KHONG PHAI LOI HE THONG:
+    Do tren Bravo 04/09/2026 (FACT_ThongKeTinhLuong, toan cong ty):
+      ky        V15   V22   V25   tong tien V25
+      01-06/26    0     0   40-132 nguoi   62-240 trieu/thang
+      07/2026    79    59    0             0
+      08/2026   110    76    0             0
+    V25 chay tu thang 1 den thang 6 roi DUNG HAN; V15/V22 BAT DAU dung tu thang 7. Day la DOI CO
+    CHE THUONG, khong phai loi tinh luong.
+    !!! LOI DA XAY RA 04/09/2026: tra loi cho QLV Pham Van Thuan (dat 81,08%) rang V25=0 la "loi ky
+    thuat da biet trong thu tuc tinh luong cua DNH" va de nghi "bao ke toan kiem tra va BU THUONG".
+    Neu ai lam theo thi da chi tien sai. Kiem chung: ky 31/08/2026 co 16 QLV dat >=70% va CA 16
+    nguoi deu V25Bonus=0, ke ca nguoi dat 116,7% - tuc khong phai truong hop ca biet cua ai.
+    QUY TAC: truoc khi noi mot khoan thuong "bi thieu/tinh sai", BAT BUOC kiem xem NGUOI KHAC cung
+    dieu kien co nhan khong. Ca cong ty deu bang 0 thi do la CHINH SACH, khong phai loi. TUYET DOI
+    khong de nghi bu thuong/truy linh khi chua co xac nhan cua DNH.
 """

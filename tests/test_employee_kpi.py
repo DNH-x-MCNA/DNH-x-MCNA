@@ -59,6 +59,10 @@ def test_ba_moc_doc_lap_khong_gop_nham(tmp_path, monkeypatch):
     # TOI MUC THUONG (65% TDV / 70% QLV): A (65>=65) va C (105>=65) dat; B (69<70) CHUA dat du 69>65.
     assert result["count_above_target"] == 2
     assert result["count_below_target"] == 1
+    counts = {r["threshold_pct"]: r["count"] for r in result["threshold_summary"]}
+    # threshold_summary la phep dem theo MOC SO hoc ma nguoi dung hoi; B=69% van >=65%.
+    # count_above_target o tren moi la cong thuong THEO VAI TRO (B la QLV nen can 70%).
+    assert counts == {65: 3, 70: 1, 80: 1, 100: 1, 120: 0}
 
 
 def test_nguong_thuong_phan_biet_dung_theo_vai_tro(tmp_path, monkeypatch):

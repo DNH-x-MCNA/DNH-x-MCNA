@@ -197,6 +197,30 @@ def test_goi_hang_loat_nhieu_ma_1_loi_khong_lam_hong_ca_lo(tmp_path, monkeypatch
     assert "error" in bad
 
 
+def test_goi_hang_loat_tra_payload_gon_va_khong_cat_mat_nguoi(tmp_path, monkeypatch):
+    db_path = tmp_path / "warehouse.db"
+    _make_db(db_path)
+    conn = sqlite3.connect(db_path)
+    for index in range(8):
+        code = f"TDV{index:02d}"
+        _insert(conn, employee_code=code, employee_name=f"Nhan vien {index}", position_code="TDV",
+                manager_code="QLV01", save_date="2026-08-31", month_sale_percent=0.8,
+                dm_bonus=100_000 + index, v25_percent=0.8, v25_bonus=50_000,
+                lunch_amount=20_000, transport_amount=30_000, phone_amount=40_000)
+    conn.commit(); conn.close()
+    monkeypatch.setattr(local_warehouse, "DB_PATH", str(db_path))
+
+    codes = ",".join(f"TDV{index:02d}" for index in range(8))
+    result = rt.salary_detail(employee_code=codes, scope_employee_code="QLV01", scope_role="qlv")
+
+    assert result["requested_count"] == result["count"] == result["success_count"] == 8
+    assert result["errors"] == []
+    assert len(result["employees"]) == 8
+    assert all("kpi_indicators" not in row and "dm_breakdown" not in row
+               for row in result["employees"])
+    assert len(__import__("json").dumps(result, ensure_ascii=False)) < 6000
+
+
 def test_get_salary_ranking_da_dang_ky_trong_employee_scoped_templates():
     """19/08/2026 (thuc te): truoc khi sua, 'get_salary_ranking' nam trong _PERSON_LEVEL_TEMPLATES
     nhung KHONG nam trong _EMPLOYEE_SCOPED_TEMPLATES nhu 3 tool anh em cung domain (get_salary_detail/
@@ -216,6 +240,8 @@ def test_salary_ranking_qlv_scope_chi_thay_doi_minh_va_chinh_minh(tmp_path, monk
             manager_code="QLV01", save_date="2026-07-31", v25_percent=0.9, dm_bonus=500_000)
     _insert(conn, employee_code="TDV_KHAC", employee_name="Nhan vien doi khac", position_code="TDV",
             manager_code="QLV_KHAC", save_date="2026-07-31", v25_percent=0.9, dm_bonus=9_999_999)
+    _insert(conn, employee_code="TRONGTDV6", employee_name="QLV A (vi tri trong)", position_code="TDV",
+            manager_code="QLV01", save_date="2026-07-31", v25_percent=0.9, dm_bonus=8_888_888)
     conn.commit()
     conn.close()
     monkeypatch.setattr(local_warehouse, "DB_PATH", str(db_path))
@@ -225,6 +251,29 @@ def test_salary_ranking_qlv_scope_chi_thay_doi_minh_va_chinh_minh(tmp_path, monk
 
     assert codes == {"QLV01", "TDV01"}
     assert "TDV_KHAC" not in codes
+    assert "TRONGTDV6" not in codes
+
+
+def test_salary_ranking_co_ky_truoc_va_delta(tmp_path, monkeypatch):
+    db_path = tmp_path / "warehouse.db"
+    _make_db(db_path)
+    conn = sqlite3.connect(db_path)
+    _insert(conn, employee_code="QLV01", employee_name="Quan ly A", position_code="QLV",
+            save_date="2026-07-31", v25_percent=0.7, month_sale_percent=0.7,
+            dm_bonus=1_000_000, lunch_amount=100_000)
+    _insert(conn, employee_code="QLV01", employee_name="Quan ly A", position_code="QLV",
+            save_date="2026-08-31", v25_percent=0.8, month_sale_percent=0.8,
+            dm_bonus=1_500_000, lunch_amount=150_000)
+    conn.commit(); conn.close()
+    monkeypatch.setattr(local_warehouse, "DB_PATH", str(db_path))
+
+    result = rt.salary_ranking(year_month="2026-08", scope_employee_code="QLV01")
+
+    row = result["ranking"][0]
+    assert result["previous_save_date"] == "2026-07-31"
+    assert row["previous_month_sale_percent"] == 70.0
+    assert row["total_bonus_delta"] == 500_000
+    assert row["allowance_delta"] == 50_000
 
 
 def test_call_template_ep_dung_scope_cho_qlv_khong_con_lo_hay_bi_chan(tmp_path, monkeypatch):
@@ -436,7 +485,7 @@ def test_salary_bonus_policy_bonus_type_khong_hop_le_bi_tu_choi():
         pass
 
 
-def test_salary_bonus_policy_gom_dung_bac_va_bao_dung_ca_mismatch(tmp_path, monkeypatch):
+def test_salary_bonus_policy_v25_tu_07_khong_bao_sai_loi_he_thong(tmp_path, monkeypatch):
     """salary_bonus_policy() tron 2 nguon: _q() (local SQLite, chi de tim NGAY snapshot da chot)
     va _q_bravo() (SQL Server live that, DIM_BacThuong + FACT_ThongKeTinhLuong). Gia lap _q_bravo
     theo NOI DUNG SQL de tra dung loai du lieu cho tung truy van."""
@@ -449,14 +498,6 @@ def test_salary_bonus_policy_gom_dung_bac_va_bao_dung_ca_mismatch(tmp_path, monk
     monkeypatch.setattr(local_warehouse, "DB_PATH", str(db_path))
 
     def fake_q_bravo(sql, params=None):
-        if "FROM dbo.FACT_ThongKeTinhLuong" in sql:
-            # 1 nguoi dat bac (V25Percent_R=0.8 >= 75%) nhung V25Bonus da luu = 0 - dung ca "mismatch".
-            # Kiem tra TRUOC nhanh DIM_BacThuong ben duoi: cau SQL nay CUNG chua chu "DIM_BacThuong"
-            # (trong menh de EXISTS con) nen phai khop FROM chinh truoc, khong duoc chi tim chuoi con.
-            return [{"EmployeeCode": "TDV01", "EmployeeName": "A", "AreaCode": "MB",
-                     "PositionCode": "TDV", "SaveDate": "2026-07-31", "V25Date": "2026-07-25",
-                     "V25Amount": 8_000_000, "MonthSaleTarget": 10_000_000,
-                     "V25Percent_R": 0.8, "V25Bonus": 0}]
         if "DIM_BacThuong" in sql and "OBJECT_DEFINITION" not in sql:
             # 2 bac (65-75%, 75%+) cho CUNG 1 nhom (MB, TDV, "Thuong nhom hang")
             return [
@@ -471,19 +512,17 @@ def test_salary_bonus_policy_gom_dung_bac_va_bao_dung_ca_mismatch(tmp_path, monk
                  "Earn1": 1_000_000, "Earn2": None, "EarnMax": None,
                  "CheckASO": 0, "CheckTargetEmp": 0, "ASOCusCondType": None},
             ]
-        if "OBJECT_DEFINITION" in sql:
-            return [{"Definition": "...INTO #KPICt... 'V25' ...#LONGKPICT..."}]
-        return []
+        raise AssertionError(sql)
 
     monkeypatch.setattr(rt, "_q_bravo", fake_q_bravo)
 
     result = rt.salary_bonus_policy(bonus_type="v25", as_of_date="2026-07-31", area_code="MB", position_code="TDV")
 
     assert result["bonus_type"] == "V25"
-    assert len(result["rules"]) == 1  # 1 nhom (MB, TDV, "Thuong nhom hang")
-    assert len(result["rules"][0]["bands"]) == 2  # 2 bac trong nhom do
-    assert result["procedure_loads_v25_rules"] is True
-    assert result["rule_actual_mismatch_count"] == 1
-    assert result["rule_actual_mismatches"][0]["employee_code"] == "TDV01"
-    assert result["rule_actual_mismatches"][0]["stored_v25_bonus"] == 0
-    assert "V25Bonus da luu bang 0" in result["implementation_warning"]
+    assert result["mechanism_status"] == "INACTIVE_FROM_2026_07_REPLACED_BY_V15_V22"
+    assert result["rules"] == []
+    assert result["rule_count"] == 0
+    assert result["inactive_rule_rows_count"] == 2
+    assert result["procedure_loads_v25_rules"] is None
+    assert result["rule_actual_mismatch_count"] == 0
+    assert result["implementation_warning"] is None

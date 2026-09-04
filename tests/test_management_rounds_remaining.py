@@ -197,6 +197,75 @@ def test_coverage_benchmark_khach_va_san_pham(tmp_path, monkeypatch):
     assert pb["quantity_per_order"] == 1
 
 
+def test_coverage_mtd_doi_chieu_cung_ngay_va_giu_nguoi_ky_nay_bang_0(tmp_path, monkeypatch):
+    _setup(tmp_path, monkeypatch)
+    result = rt.customer_product_coverage(
+        as_of_date="2026-04-20", lookback_months=1, mode="employee",
+        scope_area_code="MB", scope_employee_code="Q1",
+    )
+
+    assert result["current_period"] == {"from": "2026-04-01", "to": "2026-04-20"}
+    assert result["previous_period"] == {"from": "2026-03-01", "to": "2026-03-20"}
+    by = {r["code"]: r for r in result["rows"]}
+    assert by["T2"]["revenue"] == 0
+    assert by["T2"]["previous_revenue"] == 500
+    assert result["largest_decrease"]["code"] == "T2"
+    assert result["scope_totals"]["current"]["customers"] == 2
+    assert result["scope_totals"]["previous"]["customers"] == 2
+    assert result["scope_totals"]["current"]["frequency"] == 1.5
+    assert "COUNT(DISTINCT customer_code)" in result["customer_count_definition"]
+
+
+def test_scope_doi_fallback_emp_dms_code_khi_dim_dmsid_bi_rong(tmp_path, monkeypatch):
+    db_path = _setup(tmp_path, monkeypatch)
+    con = sqlite3.connect(db_path)
+    con.execute("UPDATE dim_nhanvien SET dmsid=NULL WHERE employee_code IN ('T1','T2')")
+    con.execute("UPDATE fact_tonghopkhachhang SET emp_dms_code='D1' WHERE employee_code='T1'")
+    con.execute("UPDATE fact_tonghopkhachhang SET emp_dms_code='D2' WHERE employee_code='T2'")
+    con.commit(); con.close()
+
+    assert set(rt._get_team_dms_ids("Q1", "2026-04-15")) == {"D1", "D2"}
+    assert rt._resolve_employee_identity("T1")["dmsid"] == "D1"
+
+    geography = rt.geography_monthly_performance(
+        month_to="2026-04", months_back=1, dimension="city",
+        scope_area_code="MB", scope_employee_code="Q1",
+    )
+    assert len(geography["rows"]) == 1
+    assert geography["rows"][0]["unit"] == "Ha Noi"
+    assert geography["rows"][0]["customers"] == 2
+    assert geography["rows"][0]["share_pct"] == 100.0
+
+
+def test_geography_monthly_co_san_luong_aov_tan_suat_cho_chuoi_3_thang(tmp_path, monkeypatch):
+    _setup(tmp_path, monkeypatch)
+    result = rt.geography_monthly_performance(
+        month_to="2026-04", months_back=3, dimension="area",
+        scope_area_code="MB", scope_employee_code="Q1",
+    )
+
+    assert [r["month"] for r in result["rows"]] == ["2026-02", "2026-03", "2026-04"]
+    apr = result["rows"][-1]
+    assert apr["paid_quantity"] == 4
+    assert apr["invoices"] == 3
+    assert apr["customers"] == 2
+    assert apr["aov"] == apr["revenue"] / 3
+    assert apr["orders_per_customer"] == 1.5
+    assert "COUNT(DISTINCT customer_code)" in result["customer_count_definition"]
+
+
+def test_kpi_gap_tra_san_so_nguoi_theo_tung_moc(tmp_path, monkeypatch):
+    _setup(tmp_path, monkeypatch)
+    result = rt.kpi_gap_run_rate(
+        as_of_date="2026-04-15", group_by="employee",
+        scope_area_code="MB", scope_employee_code="Q1",
+    )
+
+    counts = {row["threshold_pct"]: row["count"] for row in result["threshold_summary"]}
+    assert counts == {65: 0, 70: 0, 80: 0, 100: 0, 120: 0}
+    assert all(row["total_with_target"] == 2 for row in result["threshold_summary"])
+
+
 def test_geography_scope_mb_khong_lo_mn(tmp_path, monkeypatch):
     db_path = _setup(tmp_path, monkeypatch)
     # C1 xuat hien ca OTC va ETC trong cung thang: customer count sau khi gop kenh van phai DISTINCT.
