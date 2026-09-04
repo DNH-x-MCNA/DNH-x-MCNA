@@ -610,6 +610,107 @@ def kiem_13_phu_du_40_tool_nghiep_vu():
         _kiem("%s: co payload de doi chieu" % name, True)
 
 
+def kiem_14_moi_QLV_phan_giai_du_doi():
+    """Doi cua QLV duoc xac dinh hai buoc: (1) _team_of_qlv() dem TDV tu manager_code, (2)
+    _get_team_dms_ids() doi tung nguoi sang DMSId de loc hoa don. Neu buoc 2 rot mat nguoi thi MOI
+    bao cao doanh thu/don/khach cua QLV do bi HUT dung phan cua ho - va truoc 04/09/2026 chuyen do
+    xay ra IM LANG.
+
+    Do that 04/09/2026 (QLV TM25010183): 10 TDV nhung chi 2 nguoi phan giai duoc DMSId, nen doanh
+    thu T1-T5/2026 chi ra ~22% so that (thang 1 bao 487,4tr / that 2.026,0tr - dung bang tong cua
+    dung 2 nguoi do, khop ca 5 thang). T6-T8 van dung vi di duong khac (snapshot KPI khoa theo
+    employee_code, khong can DMSId) - nen bang so nhin RAT hop ly va khong ai nghi."""
+    print()
+    print("14. MOI QLV PHAN GIAI DU DOI (buoc employee_code -> DMSId khong duoc rot nguoi)")
+    qlv = _wq("SELECT DISTINCT manager_code c FROM fact_tonghopkhachhang "
+              "WHERE manager_code IS NOT NULL AND TRIM(manager_code)<>''")
+    codes = [r["c"] for r in qlv]
+    if not codes:
+        _bo("moi QLV phan giai du doi", "kho khong co manager_code nao de kiem")
+        return
+    hut = []
+    for ma in codes:
+        try:
+            team = rt._team_of_qlv(ma)
+            n_cay = len([t for t in team if t.get("employee_code")])
+            if not n_cay:
+                continue
+            n_dms = len(rt._get_team_dms_ids(ma))
+        except Exception:
+            continue  # QLV khong xac dinh duoc doi da co duong bao loi rieng
+        if n_dms < n_cay:
+            hut.append((ma, n_cay, n_dms))
+    if hut:
+        chi_tiet = chr(10).join(
+            "%s: cay to chuc %d TDV nhung chi phan giai %d DMSId (hut %d nguoi)"
+            % (m, a, b, a - b) for m, a, b in hut)
+        _kiem("%d QLV: phan giai du doi" % len(codes), False,
+              "%d/%d QLV bi hut nguoi - doanh thu doi cua ho dang THIEU:" + chr(10) + "%s"
+              % (len(hut), len(codes), chi_tiet))
+    else:
+        _kiem("%d QLV: phan giai du doi" % len(codes), True)
+
+
+def kiem_15_ton_kho_chi_mot_nam_tai_chinh():
+    """BRV_TonKhoDK/DKLot la ton DAU KY THEO TUNG NAM TAI CHINH - Bravo giu nhieu nam song song.
+    Bao cao PHAI loc nam moi nhat; cong don la dem trung cung mot lo hang nhieu lan.
+
+    Do that 04/09/2026 truoc khi sua: B04 bao 28.777.307 don vi trong khi nam 2026 chi co
+    10.612.893 (cong ca 3 nam 2024+2025+2026). Nguy hiem nhat la 668 "lo da het han" voi 7,67 trieu
+    don vi - loc nam 2026 thi KHONG CO lo nao het han; toan bo la ton dau ky nam cu da ban het tu
+    lau. Neu ai lam theo canh bao do se di thanh ly hang KHONG TON TAI."""
+    print()
+    print("15. TON KHO CHI LAY MOT NAM TAI CHINH (khong cong don nhieu nam)")
+    for bang, cot in (("brv_tonkhodk", "fiscal_year"), ("brv_tonkhodklot", "year")):
+        try:
+            nams = _wq("SELECT %s y, SUM(quantity) sl FROM %s WHERE %s IS NOT NULL "
+                       "GROUP BY %s ORDER BY %s" % (cot, bang, cot, cot, cot))
+        except Exception as e:
+            _bo("%s: co cot %s" % (bang, cot),
+                "kho chua co cot nam (%s) - chay lai sync_warehouse.py" % str(e)[:60])
+            continue
+        if not nams:
+            _bo("%s: co du lieu nam" % bang, "bang rong hoac %s toan NULL" % cot)
+            continue
+        moi_nhat = max(_f0(r["y"]) for r in nams)
+        sl_moi = sum(_f0(r["sl"]) for r in nams if _f0(r["y"]) == moi_nhat)
+        sl_tat = sum(_f0(r["sl"]) for r in nams)
+        _kiem("%s: co tach nam (%d nam trong bang)" % (bang, len(nams)), len(nams) >= 1)
+        if len(nams) > 1:
+            _kiem("%s: nam moi nhat (%d) < tong cong don" % (bang, int(moi_nhat)), sl_moi < sl_tat,
+                  "Neu bang nhau tuc chi con 1 nam - khong con kiem duoc viec cong don.")
+
+    try:
+        vung = rt.inventory_by_region()
+    except Exception as e:
+        _bo("inventory_by_region chay duoc", str(e)[:80])
+        return
+    if not vung:
+        # Kho rong -> KHONG duoc ket luan "khong con canh bao": do la ket luan trang, dung loai
+        # chinh file nay canh bao o dau (26/08: bo qua 5 phep kiem roi in "MOI BAT BIEN DEU GIU").
+        _bo("inventory_by_region: khong con canh bao thieu cot nam",
+            "bang ton kho rong - khong co dong nao de kiem")
+        return
+    canh_bao = [r for r in vung if r.get("canh_bao")]
+    if canh_bao:
+        _kiem("inventory_by_region: khong con canh bao thieu cot nam", False,
+              "Kho chua dong bo cot nam -> bao cao dang co the cong don nhieu nam.")
+    else:
+        _kiem("inventory_by_region: khong con canh bao thieu cot nam", True)
+    for r in vung:
+        tong_ca_nam = _wq("SELECT COALESCE(SUM(t.quantity),0) v FROM brv_tonkhodk t "
+                          "LEFT JOIN brv_kho k ON k.id_code=t.warehouse_id "
+                          "WHERE t.is_active=1 AND k.branch_code=?", (r["area_code"],))
+        cong_don = _f0(tong_ca_nam[0]["v"]) if tong_ca_nam else 0.0
+        bao_cao = _f0(r.get("tong_so_luong"))
+        if cong_don > bao_cao:
+            _kiem("%s: bao cao KHONG cong don nhieu nam" % r["area_code"], True)
+        elif cong_don and abs(cong_don - bao_cao) < 1:
+            _kiem("%s: bao cao KHONG cong don nhieu nam" % r["area_code"], False,
+                  "Bao cao %s = tong CA CAC NAM %s -> dang dem trung lo hang."
+                  % (_tien(bao_cao), _tien(cong_don)))
+
+
 CAC_PHEP_KIEM = (
     kiem_1_hai_nguon_khong_chong_lan,
     kiem_2_chuoi_thang_khop_mot_lan_goi,
@@ -624,6 +725,8 @@ CAC_PHEP_KIEM = (
     kiem_11_cay_kpi_khong_cong_lan_tang,
     kiem_12_xep_hang_kpi_hai_cach_gom_bang_nhau,
     kiem_13_phu_du_40_tool_nghiep_vu,
+    kiem_14_moi_QLV_phan_giai_du_doi,
+    kiem_15_ton_kho_chi_mot_nam_tai_chinh,
 )
 
 
