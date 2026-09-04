@@ -3610,7 +3610,11 @@ def order_timing_check(date_from: str, date_to: str, threshold_days: int = 2, li
 
 
 _AREA_TO_BRANCH = {"MB": "B02", "MT": "B03", "MN": "B04"}
-_BRANCH_LABEL = {"B01": "Sản xuất", "B02": "Kinh doanh Miền Bắc",
+# 04/09/2026: B01 truoc day ghi la "San xuat" - TRUNG TEN voi he kho BRVSX (he_thong='SAN_XUAT').
+# Sau khi dong bo them he kho san xuat that, mot cau tra loi hien ra: muc "He kho Kinh doanh" co dong
+# "San xuat/Tru so (B01)" nam ngay tren muc "He kho San xuat" - hai thu khac han nhau cung mot ten,
+# nguoi doc rat de hieu B01 la mot phan cua he san xuat. B01 la kho tai TRU SO thuoc he KINH DOANH.
+_BRANCH_LABEL = {"B01": "Trụ sở (hệ kinh doanh)", "B02": "Kinh doanh Miền Bắc",
                  "B03": "Kinh doanh Miền Trung", "B04": "Kinh doanh Miền Nam"}
 
 

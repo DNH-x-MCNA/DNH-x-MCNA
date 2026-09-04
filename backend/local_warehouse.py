@@ -297,6 +297,11 @@ def get_conn() -> sqlite3.Connection:
 # chua duoc --full lai sau khi SCHEMA doi).
 _COLUMN_MIGRATIONS = {
     "vhoadon_otc": [("channel_code", "TEXT")],
+    # Mot so warehouse.db cu tao bang nay truc tiep tu ten cot Bravo (AreaCode/ChannelCode/DocDate).
+    # Schema moi dung snake_case va tao index tren doc_date; CREATE TABLE IF NOT EXISTS khong doi
+    # cau truc bang cu, nen service/sync se chet ngay luc khoi dong neu khong them ba cot nay truoc.
+    # Cot Amount khong them lai vi SQLite coi Amount/amount la cung mot ten (khong phan biet hoa thuong).
+    "dim_targetvungmien": [("area_code", "TEXT"), ("channel_code", "TEXT"), ("doc_date", "TEXT")],
     "dim_nhanvien": [("is_duplicate", "INTEGER"), ("dmsid", "TEXT"),
                       ("start_date", "TEXT"), ("end_date", "TEXT"),
                       ("is_resigned", "INTEGER"), ("manager_area_code", "TEXT")],
