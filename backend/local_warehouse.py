@@ -105,6 +105,14 @@ CREATE INDEX IF NOT EXISTS idx_tk_item ON brv_tonkhodk(item_id);
 -- brv_tonkhodklot (nguon Bravo: BRV_TonKhoDKLot) = TON KHO theo TUNG LO (khac brv_tonkhodk la tong
 -- theo kho, khong tach lo). item_lot_code + item_id la khoa noi voi brv_lot de biet ngay het han.
 CREATE TABLE IF NOT EXISTS brv_tonkhodklot (branch_code TEXT, warehouse_id INTEGER, item_id INTEGER, item_lot_code TEXT, quantity REAL, is_active INTEGER, year INTEGER);
+-- 04/09/2026: HE KHO SAN XUAT, TACH HAN voi brv_* o tren. Kiem chung tren Bravo: BRV_Kho va
+-- BRVSX_Kho KHONG trung mot Id nao, va cap (kho, mat hang) nam 2026 trung 0 - nen cong hai he
+-- KHONG the dem trung. Truoc khi co bang nay chatbot chi thay 5,38 ty tren tong ~235 ty (2%).
+CREATE TABLE IF NOT EXISTS brvsx_kho (id_code INTEGER, branch_code TEXT, code TEXT, name TEXT);
+CREATE INDEX IF NOT EXISTS idx_sxkho_id ON brvsx_kho(id_code);
+CREATE TABLE IF NOT EXISTS brvsx_tonkhodk (branch_code TEXT, warehouse_id INTEGER, item_id INTEGER, quantity REAL, amount REAL, is_active INTEGER, year INTEGER);
+CREATE INDEX IF NOT EXISTS idx_sxtk_warehouse ON brvsx_tonkhodk(warehouse_id);
+CREATE INDEX IF NOT EXISTS idx_sxtk_year ON brvsx_tonkhodk(year);
 CREATE INDEX IF NOT EXISTS idx_tkl_item ON brv_tonkhodklot(item_id);
 CREATE INDEX IF NOT EXISTS idx_tkl_lotcode ON brv_tonkhodklot(item_lot_code);
 CREATE INDEX IF NOT EXISTS idx_tkl_warehouse ON brv_tonkhodklot(warehouse_id);

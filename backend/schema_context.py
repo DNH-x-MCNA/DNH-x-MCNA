@@ -206,9 +206,8 @@ brv_tonkhodk: TON KHO DAU KY THEO TUNG NAM TAI CHINH (cot fiscal_year) - **KHONG
   (2024/2025/2026); PHAI loc fiscal_year = nam moi nhat, neu khong se cong don ca 3 nam va dem
   trung cung mot lo hang toi 3 lan. Ban ghi nam moi nhat duoc chot dau nam (vd 21/01/2026) va
   KHONG cap nhat trong nam - khi tra loi PHAI noi ro day la anh chup dau nam, khong duoc goi la
-  'ton kho hien tai'. He kho SAN XUAT (BRVSX_TonKhoDK, ~229 ty nam 2026) CHUA duoc dong bo vao
-  kho local - nghia la con so o day chi phan anh ~3% gia tri ton kho toan cong ty, PHAI neu ro
-  gioi han nay thay vi trinh bay nhu tong ton kho. THAY THE nguon Supabase cu
+  'ton kho hien tai'. Bang nay CHI la kho KINH DOANH (B01-B04, ~5,4 ty nam 2026); kho SAN XUAT
+  nam o brvsx_tonkhodk (~229,8 ty) - xem ngay duoi. THAY THE nguon Supabase cu
   (bang "inventory" ben Supabase co cot "warehouse" nhung 100% NULL, KHONG dung de loc vung duoc -
   DA XAC NHAN LOI, tuyet doi khong dung Supabase cho cau hoi ton kho THEO VUNG nua, chi con Bravo/kho
   local nay moi co du lieu vung dung). Cot: warehouse_id (JOIN brv_kho.id_code de biet vung/ten kho),
@@ -218,6 +217,19 @@ brv_tonkhodk: TON KHO DAU KY THEO TUNG NAM TAI CHINH (cot fiscal_year) - **KHONG
   Neu vung nao ra 0d thi noi ro la thieu du lieu o bang nay, khong suy rong ra ca Bravo), is_active (LUON loc =1, dong is_active=0 la ban ghi cu/khong con hieu luc).
   Muon hoi "ton kho vung X": JOIN ca 3 bang (brv_tonkhodk + brv_kho + brv_sanpham), GROUP BY
   k.branch_code, loc WHERE k.branch_code='B0x' VA t.is_active=1.
+
+brvsx_tonkhodk + brvsx_kho: HE KHO SAN XUAT - dong bo tu 04/09/2026. TACH HAN voi brv_tonkhodk
+  (kho kinh doanh): kiem chung tren Bravo KHONG trung mot Id kho nao, cap (kho, mat hang) nam
+  2026 trung 0 dong - nen cong hai he KHONG dem trung. Quy mo rat khac nhau: kinh doanh ~5,4 ty
+  / san xuat ~229,8 ty (nam 2026), tuc kho san xuat chiem ~98% gia tri ton kho cong ty. Truoc
+  khi co bang nay chatbot bao 5,4 ty NHU LA ton kho toan cong ty - sai 43 lan.
+  Cot: id_code/warehouse_id (khoa noi, JOIN brvsx_kho.id_code), branch_code (rong hoac 'A01'),
+  quantity, amount (CO day du UnitCost/Amount, khac brv_tonkhodk nhieu dong =0), year (LUON loc
+  nam moi nhat, cung ly do nhu brv_tonkhodk).
+  get_inventory_by_region() da tra ve CA HAI he, moi dong co co `he_thong` = 'KINH_DOANH' hoac
+  'SAN_XUAT'. KHI TRA LOI: neu ro hai he rieng, KHONG gop mu thanh mot con so; va vi kho san
+  xuat khong thuoc vung MB/MT/MN nao nen no KHONG hien voi tai khoan bi gioi han vung (giong
+  B01) - luc do phai noi ro con so dang xem chi la kho kinh doanh trong vung.
 
 fact_congno_khachhang: CONG NO theo khach hang, snapshot TUC THOI tu bao cao cong no GOC cua DNH (SP
   usp_DeptAccDueDate_GetData) - day la NGUON DUNG DUY NHAT cho cong no, dong bo dinh ky. MOT DONG =

@@ -3712,10 +3712,43 @@ def inventory_by_region(area_code: str = None, scope_area_code: str = None) -> l
         r["tong_so_luong"] = _f(r["tong_so_luong"])
         r["tong_gia_tri"] = _f(r["tong_gia_tri"])
         r["nam_tai_chinh"] = nam_moi_nhat
+        r["he_thong"] = "KINH_DOANH"
         if nam_moi_nhat is None:
             r["canh_bao"] = ("Kho chua dong bo cot fiscal_year - so lieu nay co the dang CONG DON "
                              "nhieu nam tai chinh (dem trung). Can chay lai sync_warehouse.py "
                              "truoc khi dung con so nay.")
+
+    # 04/09/2026: THEM HE KHO SAN XUAT. Truoc do ham nay chi doc brv_tonkhodk (kho kinh doanh
+    # B01-B04, nam 2026 chi 5,38 ty) va chatbot trinh bay con so do NHU LA ton kho toan cong ty -
+    # trong khi kho san xuat co 229,80 ty, tuc dang bao 2% su that. Hai he TACH HAN (kiem chung tren
+    # Bravo: khong trung mot Id kho nao, cap (kho, mat hang) nam 2026 trung 0) nen cong duoc, nhung
+    # van tra ve RIENG DONG voi co he_thong - de nguoi doc thay ro dau la kho ban hang, dau la kho
+    # san xuat, thay vi gop mu thanh mot con so.
+    # Kho san xuat KHONG thuoc vung MB/MT/MN nao (BranchCode rong hoac 'A01') nen an voi tai khoan
+    # bi gioi han vung - cung quy tac dang ap cho B01, xem docstring o tren.
+    if not area_code and not scope_area_code:
+        nam_sx = _nam_moi_nhat("brvsx_tonkhodk", "year")
+        try:
+            sql_sx = ("SELECT COALESCE(NULLIF(TRIM(k.branch_code),''),'SX') area_code,"
+                      "COUNT(DISTINCT t.item_id) so_mat_hang, SUM(t.quantity) tong_so_luong,"
+                      "SUM(t.amount) tong_gia_tri FROM brvsx_tonkhodk t "
+                      "LEFT JOIN brvsx_kho k ON k.id_code = t.warehouse_id WHERE t.is_active = 1")
+            ps = []
+            if nam_sx is not None:
+                sql_sx += " AND t.year = ?"; ps.append(nam_sx)
+            sql_sx += " GROUP BY COALESCE(NULLIF(TRIM(k.branch_code),''),'SX') ORDER BY 1"
+            for r in _q(sql_sx, tuple(ps)):
+                r["area_label"] = "San xuat" if r["area_code"] == "SX" else "San xuat - %s" % r["area_code"]
+                r["tong_so_luong"] = _f(r["tong_so_luong"])
+                r["tong_gia_tri"] = _f(r["tong_gia_tri"])
+                r["nam_tai_chinh"] = nam_sx
+                r["he_thong"] = "SAN_XUAT"
+                rows.append(r)
+        except Exception:
+            # Kho cu chua co bang BRVSX - tra ve phan kinh doanh kem canh bao thay vi sap bao cao.
+            for r in rows:
+                r.setdefault("canh_bao", "Kho chua dong bo he kho SAN XUAT (brvsx_tonkhodk) - con so "
+                                         "nay CHI la kho kinh doanh, khong phai ton kho toan cong ty.")
     return rows
 
 

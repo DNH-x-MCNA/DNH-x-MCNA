@@ -236,6 +236,14 @@ SMALL_TABLES = [
     # san pham khac nhau (xac nhan tren Bravo THAT 13/08/2026, xem local_warehouse.py::SCHEMA).
     ("BRV_Lot", "brv_lot", "ItemLotCode, ItemId, MfgDate, ExpiryDate, IsActive",
      "item_lot_code,item_id,mfg_date,expiry_date,is_active"),
+    # 04/09/2026: HE KHO SAN XUAT. BRV_* o tren chi la kho KINH DOANH (B01-B04) - do nam 2026 chi
+    # 5,38 ty, trong khi kho san xuat co 229,80 ty. Chatbot truoc day bao 5,38 ty nhu the la toan
+    # bo ton kho cong ty (2% su that). Hai he TACH HAN: BRV_Kho va BRVSX_Kho khong trung Id nao,
+    # cap (kho, mat hang) nam 2026 trung 0 - cong hai he khong the dem trung.
+    ("BRVSX_Kho", "brvsx_kho", "Id, BranchCode, Code, Name", "id_code,branch_code,code,name"),
+    ("BRVSX_TonKhoDK", "brvsx_tonkhodk",
+     "BranchCode, WarehouseId, ItemId, Quantity, Amount, IsActive, Year",
+     "branch_code,warehouse_id,item_id,quantity,amount,is_active,year"),
 ]
 
 
