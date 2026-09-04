@@ -83,13 +83,13 @@ thái đơn/hóa đơn.
 25. **C25** — Năng suất mỗi NPP/chi nhánh theo tháng là bao nhiêu; NPP nào doanh thu giảm, tồn kho tăng hoặc công nợ xấu đi? — [SQL: S15](./bo_cau_hoi_dieu_hanh_kinh_doanh_sql_check.md)
 26. **C26** — Khách mua đồng thời OTC và ETC đóng góp bao nhiêu doanh thu/công nợ; xu hướng mua chéo kênh ra sao? — [SQL: S16](./bo_cau_hoi_dieu_hanh_kinh_doanh_sql_check.md)
 27. **C27** — Có sự dịch chuyển doanh thu bất thường giữa kênh, miền, chi nhánh hoặc mã nhân viên qua các tháng không? — [SQL: S17](./bo_cau_hoi_dieu_hanh_kinh_doanh_sql_check.md)
-28. **C28** — Nếu loại ảnh hưởng của thay đổi địa bàn, chuyển nhân viên và chuyển khách, tăng trưởng thực của từng đơn vị còn bao nhiêu? — [SQL: S17](./bo_cau_hoi_dieu_hanh_kinh_doanh_sql_check.md)
+28. **C28** — Nếu loại ảnh hưởng của thay đổi địa bàn, chuyển nhân viên và chuyển khách, tăng trưởng thực của từng đơn vị còn bao nhiêu? — [SQL: S91](./bo_cau_hoi_dieu_hanh_kinh_doanh_sql_check.md)
 
 ### D. Khách hàng và danh mục sản phẩm
 
 29. **C29** — Số khách hoạt động, khách mới, khách mua lại, khách tái kích hoạt và khách ngừng mua từng tháng là bao nhiêu? — [SQL: S18](./bo_cau_hoi_dieu_hanh_kinh_doanh_sql_check.md)
 30. **C30** — Tỷ lệ giữ chân khách theo cohort tháng mở mới sau 1/3/6/12 tháng là bao nhiêu, theo kênh và miền? — [SQL: S19](./bo_cau_hoi_dieu_hanh_kinh_doanh_sql_check.md)
-31. **C31** — Doanh thu mất đi từ khách ngừng mua và doanh thu tăng thêm từ khách mới/tái kích hoạt bù được bao nhiêu? — [SQL: S20](./bo_cau_hoi_dieu_hanh_kinh_doanh_sql_check.md)
+31. **C31** — Doanh thu mất đi từ khách ngừng mua và doanh thu tăng thêm từ khách mới/tái kích hoạt bù được bao nhiêu? — [SQL: S90](./bo_cau_hoi_dieu_hanh_kinh_doanh_sql_check.md)
 32. **C32** — Top khách hàng tăng/giảm mạnh nhất từng tháng là ai; thay đổi đó ảnh hưởng bao nhiêu đến toàn công ty? — [SQL: S71](./bo_cau_hoi_dieu_hanh_kinh_doanh_sql_check.md)
 33. **C33** — Nhóm sản phẩm/SKU nào là động lực tăng trưởng, nhóm nào kéo giảm tăng trưởng và nhóm nào mất thị phần nội bộ? — [SQL: S21](./bo_cau_hoi_dieu_hanh_kinh_doanh_sql_check.md)
 34. **C34** — Doanh thu sản phẩm mới sau 1/3/6/12 tháng ra mắt đạt bao nhiêu so kế hoạch; độ phủ khách hàng ra sao? — [SQL: S22](./bo_cau_hoi_dieu_hanh_kinh_doanh_sql_check.md)
@@ -131,7 +131,7 @@ thái đơn/hóa đơn.
 5. **M05** — Vùng nào dưới 80% kế hoạch liên tiếp; tổng hụt doanh thu tích lũy là bao nhiêu? — [SQL: S58](./bo_cau_hoi_dieu_hanh_kinh_doanh_sql_check.md)
 6. **M06** — Doanh thu ngày/tuần trong tháng đang chạy nhanh hay chậm hơn nhịp cần thiết để đạt target? — [SQL: S03](./bo_cau_hoi_dieu_hanh_kinh_doanh_sql_check.md)
 7. **M07** — Số khách mua, số đơn, AOV và tần suất mua của miền/kênh thay đổi thế nào qua từng tháng? — [SQL: S07](./bo_cau_hoi_dieu_hanh_kinh_doanh_sql_check.md)
-8. **M08** — Tăng trưởng hiện tại đến từ mở mới khách hàng hay tăng mua trên khách hàng hiện hữu? — [SQL: S18](./bo_cau_hoi_dieu_hanh_kinh_doanh_sql_check.md)
+8. **M08** — Tăng trưởng hiện tại đến từ mở mới khách hàng hay tăng mua trên khách hàng hiện hữu? — [SQL: S90](./bo_cau_hoi_dieu_hanh_kinh_doanh_sql_check.md)
 9. **M09** — Đơn hàng/hóa đơn bất thường nào làm biến động kết quả tháng; nếu loại chúng thì kết quả còn bao nhiêu? — [SQL: S09](./bo_cau_hoi_dieu_hanh_kinh_doanh_sql_check.md)
 10. **M10** — Tỉnh/chi nhánh/NPP nào đang kéo giảm kết quả và cần ưu tiên can thiệp? — [SQL: S52](./bo_cau_hoi_dieu_hanh_kinh_doanh_sql_check.md)
 
@@ -151,11 +151,11 @@ thái đơn/hóa đơn.
 ### C. Khách hàng và địa bàn
 
 21. **M21** — Top khách hàng theo doanh thu từng tháng; khách nào tăng/giảm mạnh và QLV nào phụ trách? — [SQL: S20](./bo_cau_hoi_dieu_hanh_kinh_doanh_sql_check.md)
-22. **M22** — Khách lớn nào ngừng mua, giảm mua hoặc kéo dài chu kỳ mua so với lịch sử? — [SQL: S40](./bo_cau_hoi_dieu_hanh_kinh_doanh_sql_check.md)
+22. **M22** — Khách lớn nào ngừng mua, giảm mua hoặc kéo dài chu kỳ mua so với lịch sử? — [SQL: S88](./bo_cau_hoi_dieu_hanh_kinh_doanh_sql_check.md)
 23. **M23** — Số khách mới, tái kích hoạt, mua lại và ngừng mua của từng vùng; tỷ lệ giữ chân sau 3/6 tháng? — [SQL: S67](./bo_cau_hoi_dieu_hanh_kinh_doanh_sql_check.md)
-24. **M24** — Vùng nào mở nhiều khách mới nhưng doanh thu/khách và tỷ lệ mua lại thấp? — [SQL: S19](./bo_cau_hoi_dieu_hanh_kinh_doanh_sql_check.md)
-25. **M25** — Khách nào có tiềm năng bán chéo nhóm sản phẩm do đang mua ít SKU hơn nhóm khách tương đồng? — [SQL: S41](./bo_cau_hoi_dieu_hanh_kinh_doanh_sql_check.md)
-26. **M26** — Khách hàng nào có share-of-wallet nội bộ thấp: doanh thu lớn nhưng chỉ mua một nhóm sản phẩm? — [SQL: S23](./bo_cau_hoi_dieu_hanh_kinh_doanh_sql_check.md)
+24. **M24** — Vùng nào mở nhiều khách mới nhưng doanh thu/khách và tỷ lệ mua lại thấp? — [SQL: S92](./bo_cau_hoi_dieu_hanh_kinh_doanh_sql_check.md)
+25. **M25** — Khách nào có tiềm năng bán chéo nhóm sản phẩm do đang mua ít SKU hơn nhóm khách tương đồng? — [SQL: S89](./bo_cau_hoi_dieu_hanh_kinh_doanh_sql_check.md)
+26. **M26** — Khách hàng nào có share-of-wallet nội bộ thấp: doanh thu lớn nhưng chỉ mua một nhóm sản phẩm? — [SQL: S89](./bo_cau_hoi_dieu_hanh_kinh_doanh_sql_check.md)
 27. **M27** — Tỉnh/huyện nào có ít khách hoạt động, ít đơn hoặc doanh thu/khách thấp hơn chuẩn miền? — [SQL: S53](./bo_cau_hoi_dieu_hanh_kinh_doanh_sql_check.md)
 28. **M28** — Tỷ lệ khách không gán TDV, sai vùng hoặc thiếu thông tin DMS theo tháng là bao nhiêu? — [SQL: S38](./bo_cau_hoi_dieu_hanh_kinh_doanh_sql_check.md)
 29. **M29** — NPP/chi nhánh nào có tăng trưởng khách hàng tốt nhưng công nợ hoặc tồn kho xấu đi? — [SQL: S15](./bo_cau_hoi_dieu_hanh_kinh_doanh_sql_check.md)

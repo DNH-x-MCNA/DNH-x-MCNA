@@ -40,12 +40,18 @@ Không gửi `.env`, API key, chuỗi kết nối, database hoặc log có thôn
 > dấu trùng.
 
 > 🔴 **Cảnh báo cho người chấm — C18, M35, V34, C53 (khuyến mãi):** đồng bộ CTKM đã **dừng từ
-> 09/01/2026**, tức đứng yên 8 tháng tính tới 03/09/2026. Đơn gắn CTKM từ 12.400–13.500/tháng
-> (09–12/2025) tụt còn 2.042 trong 01/2026 rồi **bằng 0** từ 02/2026. Vì vậy mọi câu hỏi hiệu quả
-> khuyến mãi cho kỳ 2026 **không có dữ liệu** — chatbot trả lời cho kỳ 2025 là đúng, đừng chấm trượt
-> vì "số cũ". Ở C53, chatbot báo không lấy được mốc khuyến mãi do timeout: kết luận đúng hướng nhưng
-> sai nguyên nhân — checker lấy mốc bình thường, vấn đề nằm ở sync đã chết. **Cần khôi phục sync
-> trước khi UAT nhóm khuyến mãi.**
+> 09/01/2026**, đứng yên gần 8 tháng. Đơn gắn CTKM từ 12.400–13.500/tháng (09–12/2025) tụt còn 2.042
+> trong 01/2026 rồi **bằng 0** từ 02/2026. Mọi câu hỏi hiệu quả khuyến mãi cho kỳ 2026 **không có dữ
+> liệu** — chatbot trả lời cho kỳ 2025 là đúng, đừng chấm trượt vì "số cũ".
+>
+> **Đính chính 04/09:** trước đó tài liệu này ghi C18 là lỗi chatbot (dán nhãn số khách thành số đơn).
+> **Sai.** Gọi thẳng tool cho thấy nó trả về `invoiced_orders=309` và bình quân 9,57tr — chatbot hiển
+> thị đúng y nguyên. Chênh với truy vấn đối chứng (313) là do tool tự cắt kỳ tại mốc sync 09/01, còn
+> truy vấn lấy cả tháng. **C18 không phải lỗi chatbot; chấm ĐẠT.**
+>
+> Ở C53, chatbot báo không lấy được mốc khuyến mãi do timeout: kết luận đúng hướng nhưng sai nguyên
+> nhân — checker lấy mốc bình thường, vấn đề nằm ở sync đã chết. **Cần khôi phục sync trước khi UAT
+> nhóm khuyến mãi.**
 
 > **Cảnh báo cho người chấm — C49, V16 (phủ tuyến/viếng thăm):** chatbot từ chối vì kho nó truy cập
 > không có dữ liệu viếng thăm — **đúng với quyền truy cập của nó**, chấm ĐẠT. Nhưng lý do nó nêu là
@@ -90,7 +96,13 @@ Không gửi `.env`, API key, chuỗi kết nối, database hoặc log có thôn
 > **Cảnh báo cho người chấm — C29, M08, V22 (vòng đời khách):** các dòng của truy vấn thứ nhất trong
 > `S18` là `COUNT(DISTINCT)` theo (tháng × vùng × QLV) — **cộng lại là đếm trùng**, phải dùng truy vấn
 > tổng thứ hai. Đo trên Bravo T8/2026: khách mới thật **627**, chatbot báo **612** (đúng bằng nhóm có
-> QLV) — thiếu 15 khách chưa gắn QLV, khoảng 2,4%. Chênh nhỏ nhưng là chỉ số đếm nên phải ghi nhận.
+> QLV) — chênh 15 khách, khoảng 2,4%.
+>
+> **Đính chính 04/09: chưa đủ căn cứ kết luận chatbot sai.** Con số 627 lấy từ **Bravo**, còn chatbot
+> đọc `warehouse.db` trên máy 24 — hai nguồn khác nhau, có thể lệch hợp lệ. Việc 612 trùng đúng nhóm
+> "có QLV" là gợi ý mạnh nhưng không phải bằng chứng. Muốn chốt phải gọi
+> `get_customer_lifecycle_summary` trên kho production rồi so. (Không gọi được từ máy dev: kho dev
+> thiếu cột `is_duplicate` vì snapshot cuối là 06/08.)
 > Riêng việc chatbot báo "T4, T5/2026 không có dữ liệu": **chưa kết luận được** — kho dev có đủ hai
 > tháng này, nhưng bản dev đã cũ (snapshot cuối 06/08 so với Bravo 28/08), phải kiểm trên kho
 > production của máy 24 mới kết luận.

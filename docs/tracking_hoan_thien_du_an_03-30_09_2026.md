@@ -39,14 +39,14 @@ cho mọi vai (cache chiếm 71% chi phí). Không vá lẻ từng cái.
 | 1 | Mô tả `get_top_products`: câu hỏi so sánh hai kênh phải gọi tool hai lần, mỗi lần một `channel` | `backend/report_templates.py` | Ca `dnh` 14/08 |
 | 2 | Định nghĩa "tuần trong tháng" — chốt tạm tuần lịch thứ Hai nếu 10/09 chưa có phản hồi DNH | `backend/schema_context.py` | Câu A9 nhóm A |
 | 3 | Free-SQL bỏ qua join `city_id → area_code`, viết thẳng `c.area_code` lên `dms_khachhang`/`dmssx_khachhang` (cột không tồn tại); retry lặp lại đúng lỗi 8 lần không tự sửa | `backend/schema_context.py` + vòng retry free-SQL | UAT trực tiếp 03/09 — câu C02 hỏng hoàn toàn, ghi nhận không hài lòng |
-| 4 | CTKM: phải dùng NGUYÊN `invoiced_orders` và `average_revenue_per_invoiced_order` do tool trả, không tự tính lại. Tool trả đúng 313 đơn / 9,47tr nhưng chatbot hiển thị 309 đơn / 9,6tr — 309 chính là **số khách** đã xuất HĐ bị gọi thành **số đơn** | Mô tả `get_promotion_effectiveness` trong `backend/nl2sql.py` | UAT trực tiếp 03/09 — câu C18 |
 | 7 | Thiếu công cụ **tổng hợp** thưởng toàn công ty: chỉ có tool xếp hạng TOP 100 nên chatbot phải từ chối C48 (bỏ sót ~106/209 người). Dữ liệu có sẵn trên Bravo, chỉ thiếu tool cộng tổng. Chatbot từ chối là đúng, nhưng nên vá khoảng trống | `backend/report_templates.py` — thêm tool tổng hợp thưởng theo tháng/vùng/chức danh | UAT trực tiếp 03/09 — câu C48 |
 | 6 | C31: khi hỏi "khách mới/tái kích hoạt bù được bao nhiêu", vế tăng thêm phải gồm **cả khách tái kích hoạt**, không chỉ khách xuất hiện lần đầu. Hiện loại bất đối xứng nên tỷ lệ bù đắp ra 32–40% trong khi thực tế 69–137% ở mọi ngưỡng churn — kết luận ngược hẳn | Mô tả tool luồng khách trong `backend/nl2sql.py` | UAT trực tiếp 03/09 — câu C31, mức High |
 | 5 | CTKM: luôn hiển thị `program_code` và kỳ kèm tên chương trình. Nhiều chương trình trùng tên khác kỳ (`T9.2025_BPNGAM_10_TQ`, `Q4.2025_BPNGAM_10_TQ`, `Q1.2026_BPNGAM_10_TQ` đều là "Bổ phế Ngậm mua 10 tặng 01") — thiếu mã/kỳ thì câu trả lời không kiểm chứng được | Mô tả `get_promotion_effectiveness` trong `backend/nl2sql.py` | UAT trực tiếp 03/09 — câu C18 |
 
-> Mục 4 cần đối chiếu `audit_log` của phiên hỏi C18 để biết 309 đến từ lệnh nào (tool trả 313, nên
-> con số này phải phát sinh ở một lượt gọi khác). Chưa xác định được cơ chế thì chỉ siết mô tả tool,
-> không kết luận nguyên nhân.
+> **Đã gỡ mục 4 (CTKM dán nhãn sai) ngày 04/09** — kiểm lại bằng cách gọi thẳng
+> `promotion_effectiveness` cho thấy tool trả `invoiced_orders=309`, đúng bằng con số chatbot hiển
+> thị. Không có lỗi dán nhãn. Chênh 313 trong đối chứng ban đầu là do khác cửa sổ thời gian (tool cắt
+> tại mốc sync 09/01). Bài học: đừng kết luận từ replication SQL mà chưa gọi chính tool đó.
 
 ## 🔴 Sự cố vận hành phát hiện 03/09/2026 — job đồng bộ CTKM đã chết
 

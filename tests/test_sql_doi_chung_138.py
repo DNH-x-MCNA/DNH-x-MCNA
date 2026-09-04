@@ -3,11 +3,11 @@ import re
 from scripts import chay_sql_doi_chung_138 as bo_sql
 
 
-def test_catalog_phu_du_138_cau_va_87_checker():
+def test_catalog_phu_du_138_cau_va_92_checker():
     noi_dung = bo_sql.doc_tai_lieu()
     checker = bo_sql.lay_checker(noi_dung)
     mapping = bo_sql.lay_mapping(noi_dung)
-    assert len(checker) == 87
+    assert len(checker) == 92
     assert len(bo_sql.lay_cau_hoi(noi_dung)) == 138
     assert sum(map(len, mapping.values())) == 138
     assert {item["ma"] for item in checker} == set(mapping), "Không được còn checker mồ côi"
