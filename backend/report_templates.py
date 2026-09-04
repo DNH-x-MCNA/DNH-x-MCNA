@@ -4051,6 +4051,38 @@ def _fact_latest_date() -> str:
     return r[0]["d"] if r and r[0]["d"] else None
 
 
+def _fdate_roster(fdate: str = None) -> str:
+    """Ngay snapshot dung de xac dinh DANH SACH DOI (ai bao cao len ai) - KHAC voi ngay dung de doc
+    SO LIEU cua mot ky.
+
+    04/09/2026 - LOI NANG: fact_tonghopkhachhang la 1 dong/(nhan vien x khach hang), nen nhan vien
+    CHUA BAN GI trong ky thi KHONG CO DONG NAO. Snapshot giua thang vi the KHONG phai danh sach doi
+    - no la "danh sach nguoi da ban". Do that snapshot 04/09 (ngay thu 4 cua thang): toan cong ty chi
+    con 47/186 nhan vien va 15/21 QLV; rieng doi TM25010183 co 10 TDV trong ca ba snapshot cuoi thang
+    6/7/8 nhung chi con 2 TDV o snapshot 04/09.
+    Hau qua da do duoc: cac ky KHONG co snapshot rieng (T1-T5/2026) roi ve snapshot moi nhat = ban
+    co lai nay -> doanh thu doi chi ra ~22% so that, dung bang tong cua 2 nguoi con sot. T6-T8 dung
+    vi co snapshot cuoi thang cua chinh ky do.
+
+    Vi vay danh sach doi LUON lay tu snapshot CUOI THANG gan nhat (thang da tron), khong bao gio lay
+    snapshot giua thang. Neu chua co thang nao tron thi danh moi lay ngay moi nhat va chap nhan."""
+    ngay = _fact_date_le(fdate) if fdate else _fact_latest_date()
+    if not ngay:
+        return ngay
+    ngay = str(ngay)
+    # "Thang da tron" = thang cua snapshot do da co snapshot ngay CUOI CUNG cua no. Kiem bang cach
+    # so voi ngay cuoi thang that su, khong dua vao quy uoc "ngay >= 28" (thang 2 chi co 28-29 ngay,
+    # va DNH co the chot vao ngay khac).
+    y, m = int(ngay[:4]), int(ngay[5:7])
+    cuoi = "%04d-%02d-%02d" % (y, m, _last_day_of_month(y, m))
+    if ngay >= cuoi:
+        return ngay
+    r = _q("SELECT MAX(save_date) d FROM fact_tonghopkhachhang "
+           "WHERE substr(save_date,1,7)<?", (ngay[:7],))
+    truoc = r[0]["d"] if r and r[0]["d"] else None
+    return truoc or ngay
+
+
 def _team_of_qlv(qlv_employee_code: str, fdate: str = None) -> list:
     """TDV bao cao TRUC TIEP len 1 QLV, xac dinh qua manager_code THAT tu Bravo
     (FACT_TongHopKhachHang.ManagerCode, dong bo 23/07/2026 - xem local_warehouse.py::SCHEMA).
@@ -4063,8 +4095,23 @@ def _team_of_qlv(qlv_employee_code: str, fdate: str = None) -> list:
     dinh "doi" giong het nhau.
     org_hierarchy.py (zone-based) VAN con dung rieng cho qlv_change_history() - do la lich su AI TUNG
     phu trach 1 khu vuc theo thoi gian, ban chat khac voi "doi hien tai bao cao len ai"."""
-    if fdate is None:
-        fdate = _fact_latest_date()
+    # 04/09/2026: lay HOP cua hai moc thay vi mot moc.
+    #   - moc THANG DA TRON  : giu du nguoi chua ban gi trong ky nay (chong co lai danh sach doi)
+    #   - moc MOI NHAT       : giu NGUOI MOI VAO chua co trong anh chup thang truoc
+    # Chi lay moc tron thi bo sot nguoi moi (do duoc: kiem_11 lech tu 0,831% len 1,713%); chi lay
+    # moc moi nhat thi dinh dung bay co lai da gay loi M01. Hop hai moc giu duoc ca hai.
+    moc_tron = _fdate_roster(fdate)
+    moc_moi = _fact_date_le(fdate) if fdate else _fact_latest_date()
+    cac_moc = [d for d in dict.fromkeys([moc_tron, moc_moi]) if d]
+    if len(cac_moc) > 1:
+        phan = " UNION ".join(
+            f"SELECT DISTINCT e.employee_code, nv.name FROM fact_tonghopkhachhang e "
+            f"JOIN {_MONTH_LATEST_SUBQ} l ON l.employee_code=e.employee_code AND l.d=e.save_date "
+            f"LEFT JOIN dim_nhanvien nv ON nv.employee_code=e.employee_code "
+            f"WHERE e.manager_code=? AND nv.position_code='TDV'" for _ in cac_moc)
+        tham = tuple(x for d in cac_moc for x in (d, d, qlv_employee_code))
+        return _q(phan, tham)
+    fdate = moc_tron
     if not fdate:
         return []
     return _q(

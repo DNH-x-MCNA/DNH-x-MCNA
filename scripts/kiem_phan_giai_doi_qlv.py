@@ -52,6 +52,24 @@ def main():
             continue
         codes = [t["employee_code"] for t in team if t.get("employee_code")]
         print(f"  Cay to chuc  : {len(codes)} TDV  {codes}")
+        # 04/09/2026: buoc 1 cung co the rot nguoi. fact_tonghopkhachhang la 1 dong/(NV x khach)
+        # nen snapshot GIUA THANG chi chua nguoi DA BAN - danh sach doi co lai, va buoc 2 khong the
+        # phat hien vi ca hai ve deu bi cat bang nhau. _team_of_qlv() gio tu chot ve thang DA TRON;
+        # dong duoi in ra de thay ro no da tranh duoc bay gi.
+        try:
+            moi_nhat, roster = rt._fact_latest_date(), rt._fdate_roster()
+            if roster and moi_nhat and roster != moi_nhat:
+                from local_warehouse import get_conn as _gc
+                c = _gc().cursor()
+                n_giua = c.execute(
+                    "SELECT COUNT(DISTINCT employee_code) FROM fact_tonghopkhachhang "
+                    "WHERE manager_code=? AND save_date=?", (qlv, moi_nhat)).fetchone()[0]
+                print(f"  Moc danh sach: {roster} (thang da tron), KHONG dung {moi_nhat} (giua thang)")
+                if n_giua < len(codes):
+                    print(f"                 neu lay moc giua thang chi con {n_giua}/{len(codes)} TDV"
+                          f" -> da tranh duoc bay co lai danh sach doi")
+        except Exception as e:
+            print(f"  (khong kiem duoc moc danh sach: {type(e).__name__})")
         token = rt._tool_warnings.set([])
         try:
             ids = rt._get_team_dms_ids(qlv)
