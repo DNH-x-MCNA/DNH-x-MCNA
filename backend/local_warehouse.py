@@ -20,9 +20,9 @@ SCHEMA = r"""
 -- employee_code la nguoi ban thuc su) - dung de nhan dien cac "kenh dac biet" nhu Modern Trade (Long
 -- Chau, Pharmacity...) duoc ghi nhan qua ban ghi "nhan vien ao" trong dim_nhanvien (vd DMSId='ASM01',
 -- Name='Kênh MT') - xem revenue_by_region() cho cach tach doanh thu kenh nay.
--- created_at = CreatedAt tren Bravo (thoi diem BAN GHI THUC SU duoc tao trong he thong, KHAC voi
--- doc_date la ngay chung tu tren hoa don - co the bi chon/sua tay). Dung de phat hien "chay don don
--- KPI": tao hang loat hoa don CreatedAt dồn vao 1 ngay (thuong cuoi ky) nhung DocDate rai rac truoc do.
+-- created_at = CreatedAt tren Bravo: thoi diem TAO DON, KHONG PHAI thoi diem xac nhan don.
+-- DNH xac nhan 04/09/2026 do lech created_at-doc_date KHONG mang y nghia nghiep vu; KHONG dung de
+-- suy dien backdate, bat thuong, gian lan hay "chay don KPI".
 CREATE TABLE IF NOT EXISTS vhoadon_otc (
     doc_date TEXT NOT NULL, customer_code TEXT, item_code TEXT,
     amount9 REAL, quantity REAL, unit_price REAL, stt TEXT, city_id INTEGER, employee_code TEXT,
@@ -210,7 +210,7 @@ CREATE INDEX IF NOT EXISTS idx_ftl_manager ON fact_thongketinhluong(manager_code
 -- created_at/stt tung dong) de giam dung luong luu tru va giam rui ro lo du lieu chi tiet hoa don qua
 -- khu (xem sync_warehouse.py::_compress_old_months()). 12 thang gan nhat van giu nguyen chi tiet trong
 -- vhoadon_otc/vhoadon_etc nhu cu - CHI phan cu hon moi bi nen. Vi vay top_products/check_order_timing
--- (can item_code/created_at tung dong) KHONG the chay dung cho khoang ngay nam ngoai 12 thang gan nhat.
+-- (can item_code hoac stt/Amount9 tung dong) KHONG the chay dung cho khoang ngoai 12 thang gan nhat.
 CREATE TABLE IF NOT EXISTS monthly_customer_summary (
     year_month TEXT NOT NULL,   -- 'YYYY-MM'
     channel TEXT NOT NULL,      -- 'OTC' hoac 'ETC'

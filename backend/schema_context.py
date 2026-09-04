@@ -53,9 +53,9 @@ vhoadon_otc (moi dong la 1 dong hoa don chi tiet, kenh OTC - nha thuoc/nha phan 
   xem QUY TAC TRA LOI ben duoi ve khi nao can/khong can nhac den nhom nay voi nguoi dung,
   employee_code (ma NHAN VIEN BAN HANG CA NHAN gan voi hoa don nay, vd 'tungtx' - CHI co gia tri cho
   nhan vien ca nhan, ma khu vuc/quan ly vung nhu MBKV*/ASM* KHONG xuat hien o day),
-  created_at (text 'YYYY-MM-DD HH:MM:SS' - thoi diem BAN GHI THUC SU duoc tao trong Bravo, KHAC voi
-  doc_date la ngay chung tu ghi tren hoa don (co the bi chon tay/backdate). So sanh 2 cot nay de phat
-  hien "chay don don KPI" - xem tool check_order_timing).
+  created_at (text 'YYYY-MM-DD HH:MM:SS' - thoi diem TAO DON trong Bravo, KHONG PHAI thoi diem xac
+  nhan don). DNH xac nhan 04/09/2026: do lech created_at-doc_date KHONG mang y nghia nghiep vu;
+  KHONG dung de suy dien backdate, bat thuong, gian lan hay "chay don KPI".
 
 vhoadon_etc: doanh thu kenh ETC (benh vien). Dong bo tu vHoaDonETCTotal (KHONG PHAI vHoaDonETC - cung
   ly do nhu OTC, nguon cu thieu dong dieu chinh/hoan). Cau truc GIONG vhoadon_otc (cung KHONG dung

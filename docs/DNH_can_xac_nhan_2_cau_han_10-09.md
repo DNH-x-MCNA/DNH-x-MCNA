@@ -111,7 +111,8 @@ tạo ra một thước đo DNH không dùng.
 
 ## Ngoài Nhóm A — một điểm DNH đã xác nhận ngày 04/09
 
-Thời điểm tạo hóa đơn (`CreatedAt`) so với ngày chứng từ (`DocDate`) **không mang ý nghĩa nghiệp vụ**
-— hóa đơn tạo lúc nào cũng được. MCNA đã **gỡ toàn bộ** phần diễn giải độ lệch này thành "dấu hiệu
+Thời điểm tạo đơn (`CreatedAt`, không phải thời điểm xác nhận đơn) so với ngày chứng từ (`DocDate`)
+**không mang ý nghĩa nghiệp vụ** — đơn có thể được tạo vào bất kỳ thời điểm nào. MCNA đã **gỡ toàn
+bộ** phần diễn giải độ lệch này thành "dấu hiệu
 chạy đơn KPI" khỏi hệ thống, vì nó từng dẫn tới một câu trả lời nêu đích danh 4 nhân viên như nghi
 vấn gian lận — cáo buộc dựa trên nhiễu. Cảm ơn DNH đã làm rõ sớm.

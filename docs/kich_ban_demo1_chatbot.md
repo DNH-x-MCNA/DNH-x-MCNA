@@ -450,7 +450,7 @@ KPI, bỏ qua toàn bộ nhóm doanh thu/khách hàng/tồn kho. Cơ chế fail-
 | ~~X1~~ | ~~Khách hàng [mã] còn nợ bao nhiêu, quá hạn bao nhiêu?~~ | ✅ **HẾT RỦI RO 27/07** — đã port SP gốc, 2 hệ thống cùng nguồn (xem R-B) | **Đã chuyển sang demo chính thức**, xem mục 5 | ✅ |
 | X2 | Hiện có bao nhiêu hàng tồn kho chết? | Thiếu nguồn giá vốn → giá trị tồn luôn = 0 | **Né.** Nếu khách hỏi: nói thẳng đang chờ DNH xác nhận nguồn giá | ⬜ |
 | X3 | Doanh thu kênh MT tháng này? | MT = Modern Trade hay Miền Trung | Thử xem chatbot **có hỏi lại không**. Tự đoán = phải sửa | ⬜ |
-| X4 | Có ai chạy đơn dồn cuối tháng không? | `check_order_timing` **nêu đích danh nhân viên** | Nhạy cảm — **không demo trước đông người** | ⬜ |
+| X4 | Có ai chạy đơn dồn cuối tháng không? | Không được suy diễn từ `CreatedAt`–`DocDate`; `CreatedAt` là thời điểm tạo đơn, không phải xác nhận đơn | Trả rõ chỉ số này không áp dụng; chỉ trình bày hàng trả và phân bố giá trị đơn nếu người dùng cần | ⬜ |
 | X5 | Doanh số ETC theo từng nhân viên? | Chatbot **không có tool** cho mục này → sẽ tự ghép SQL hoặc trả thiếu | Né; mục này chỉ trình qua báo cáo email | ⬜ |
 | **X6** | 🎯 **TDV nào không được thưởng tháng này?** | Câu bẫy — dễ khiến chatbot kết luận sai về tiền lương người thật nếu chỉ nhìn 1 chỉ số | Phải từ chối kết luận, chỉ nói đúng phạm vi "chưa tới mức thưởng nhóm hàng" | ✅ **ĐẠT** — kiểm tối 23/07, xem mục 6 |
 

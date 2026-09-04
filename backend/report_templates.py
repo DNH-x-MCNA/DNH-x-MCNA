@@ -173,11 +173,11 @@ def data_freshness_note() -> str:
     return f"Du lieu cap nhat den ngay {latest_data_date()}."
 
 # Hoa don CU HON 12 THANG duoc nen thanh KH x thang trong monthly_customer_summary (khong con
-# item_code/quantity/unit_price/created_at/stt tung dong) - xem sync_warehouse.py::DETAIL_WINDOW_MONTHS/
+# item_code/quantity/unit_price/stt tung dong) - xem sync_warehouse.py::DETAIL_WINDOW_MONTHS/
 # _detail_cutoff_date(). Cac ham chi can TONG doanh thu/so hoa don (revenue_by_channel, top_customers,
 # revenue_by_region, compare_periods qua revenue_by_channel) UNION them nguon nen nay khi khoang ngay
 # duoc hoi vuot qua 12 thang gan nhat, de van ra dung so cho ca giai doan xa (vd "so voi cung ky nam
-# ngoai"). Cac ham can CHI TIET tung dong (top_products: item_code; check_order_timing: created_at)
+# ngoai"). Cac ham can CHI TIET tung dong (top_products: item_code; check_order_timing: stt/Amount9)
 # KHONG the bu duoc bang nguon nen - xem canh bao rieng trong 2 ham do.
 
 def _detail_cutoff() -> str:
@@ -3522,86 +3522,31 @@ def customer_detail(customer_code: str, date_from: str, date_to: str, scope_area
 def order_timing_check(date_from: str, date_to: str, threshold_days: int = 2, limit: int = 20,
                         scope_area_code: str = None, scope_channel: str = None,
                         scope_employee_code: str = None) -> dict:
-    """Do lech giua created_at (thoi diem ban ghi duoc tao trong Bravo) va doc_date (ngay chung tu).
+    """Kiem tra hang tra/dieu chinh va phan bo gia tri don trong ky.
 
-    !!! 04/09/2026 - DNH DA XAC NHAN do lech nay KHONG mang y nghia nghiep vu: hoa don duoc tao luc
-    nao cung duoc. Truoc do ham nay duoc mo ta la "phat hien dau hieu chay don KPI / backdate" va da
-    dan toi mot cau tra loi neu DICH DANH 4 nhan vien nhu nghi van gian lan KPI - cao buoc dua tren
-    nhieu. Da go toan bo khung dien giai do khoi mo ta tool; du lieu van tra ve cho ai hoi thang ve
-    thoi diem tao don, nhung KHONG duoc trinh bay nhu dau hieu bat thuong.
-    threshold_days: so ngay lech toi thieu de bi liet ke
-    (mac dinh 2). Tra ve ca TOM TAT theo tung nhan vien (ai co nhieu don bat thuong nhat) LAN danh
-    sach chi tiet top nhung don lech nhieu nhat. scope_area_code: ep loc theo vung khi bi gioi han.
-    scope_channel: NEU co (vd 'OTC'), BO HAN kenh con lai khoi truy van (khong chi redact ket qua).
-
-    19/08/2026: THEM scope_employee_code - ham nay tra ve TOM TAT THEO TUNG NHAN VIEN (nghi van
-    "chay don don KPI"), du lieu nhay cam/gan nhu to cao ca nhan nen truoc day bi fail-closed chan
-    HOAN TOAN voi tai khoan QLV (dung, vi chua ho tro gioi han theo doi). Dung
-    _employee_scope_clause() (alias "v" - dung DMSId, KHOP dinh dang employee_code THAT tren
-    vhoadon_otc/etc, KHAC voi loi dinh dang tung xay ra o salary_achievement_summary vi do la bang
-    HOA DON, khong phai bang luong)."""
+    ``created_at`` la THOI DIEM TAO DON, khong phai thoi diem xac nhan don. DNH xac nhan ngay
+    04/09/2026 rang do lech giua ``created_at`` va ``doc_date`` khong mang y nghia nghiep vu, nen
+    ham nay khong truy van, xep hang hay neu ten nhan vien theo do lech do. Hai tham so
+    ``threshold_days`` va ``limit`` duoc giu de tuong thich API cu, nhung khong anh huong ket qua.
+    ``scope_channel`` va ``scope_employee_code`` van ep pham vi ngay trong truy van du lieu don."""
     scope_sql, scope_params = _scope_clause(scope_area_code)
     emp_sql, emp_params = _employee_scope_clause(scope_employee_code, "v", as_of=date_to)
     scope_sql += emp_sql
     scope_params += emp_params
-    parts = []
-    part_params = []
-    if scope_channel != "ETC":
-        join_o = _otc_area_join("v", scope_area_code)
-        parts.append(f"""SELECT 'OTC' channel,v.doc_date,v.created_at,v.customer_code,v.employee_code,v.amount9,v.stt
-                FROM vhoadon_otc v {join_o} WHERE v.doc_date BETWEEN ? AND ? AND v.created_at IS NOT NULL{scope_sql}""")
-        part_params.append((date_from, date_to) + scope_params)
-    if scope_channel != "OTC":
-        join_e = _etc_area_join("v", scope_area_code)
-        parts.append(f"""SELECT 'ETC' channel,v.doc_date,v.created_at,v.customer_code,v.employee_code,v.amount9,v.stt
-            FROM vhoadon_etc v {join_e} WHERE v.doc_date BETWEEN ? AND ? AND v.created_at IS NOT NULL{scope_sql}""")
-        part_params.append((date_from, date_to) + scope_params)
-    sql = f"""
-        SELECT channel,doc_date,MAX(created_at) created_at,customer_code,employee_code,
-               SUM(amount9) amount9,stt,
-               CAST(julianday(MAX(created_at)) - julianday(doc_date) AS INTEGER) AS lech_ngay
-        FROM ({" UNION ALL ".join(parts)}) raw
-        GROUP BY channel,doc_date,customer_code,employee_code,stt
-        HAVING ABS(CAST(julianday(MAX(created_at)) - julianday(doc_date) AS INTEGER)) >= ?
-        ORDER BY ABS(lech_ngay) DESC
-    """
-    params = tuple(p for pp in part_params for p in pp) + (threshold_days,)
-    rows = _q(sql, params)
-
-    for r in rows:
-        r["amount9"] = _f(r["amount9"])
-        # Bao cao chong gian lan: LAY TEN DU is_duplicate=1 (khac cac tool khac) - muc dich la minh
-        # bach danh tinh, khong nen an ten chi vi 1 co du lieu khong lien quan.
-        # r["employee_code"] o day la gia tri THO tren hoa don = DMSId (KHONG PHAI EmployeeCode -
-        # da xac minh 17/07/2026, xem ghi chu trong employee_daily_kpi()) - tra qua
-        # _resolve_employee_identity() (thu dim_nhanvien truoc, roi dmssx_nhanvien - xac nhan
-        # 20/07/2026 mot nhom nhan vien chi co o bang do), sau do gan lai employee_code THAT.
-        ident = _resolve_employee_identity(r["employee_code"])
-        r["employee_name"] = ident["name"]
-        r["position_code"] = ident["position_code"]
-        if ident["name"]:
-            r["employee_code"] = ident["code"]
-
-    by_employee = {}
-    for r in rows:
-        key = r["employee_code"] or "(khong xac dinh)"
-        if key not in by_employee:
-            by_employee[key] = {"employee_code": key, "employee_name": r["employee_name"],
-                                 "position_code": r["position_code"], "count": 0, "total_amount": 0.0}
-        by_employee[key]["count"] += 1
-        by_employee[key]["total_amount"] += r["amount9"]
-    summary = sorted(by_employee.values(), key=lambda x: -x["count"])
-
     result = {
         "date_from": date_from, "date_to": date_to, "threshold_days": threshold_days,
-        "total_flagged": len(rows),
-        "summary_by_employee": summary,
-        "top_detail": rows[:limit],
+        "created_at_doc_date_check": {
+            "status": "NOT_APPLICABLE",
+            "definition": "CreatedAt la thoi diem tao don, khong phai thoi diem xac nhan don.",
+            "reason": ("DNH xac nhan ngay 04/09/2026: do lech CreatedAt-DocDate khong mang y "
+                       "nghia nghiep vu va khong duoc dung de suy dien bat thuong hay KPI."),
+        },
+        "total_flagged": 0,
+        "summary_by_employee": [],
+        "top_detail": [],
         "data_as_of": latest_data_date(),
     }
-    # Cung mot lan goi phai tra du phan "don lon + hang tra + backdate". Truoc day tool chi co
-    # backdate, khien model noi sai rang OTC khong co nguon hang tra va tu ket luan toan bo doanh thu
-    # la "thuc chat" ma chua he soi do tap trung don hang. vhoadon_otc GIU cac dong Amount9 am.
+    # Cung mot lan goi tra du phan hang tra va phan bo gia tri don. vhoadon_otc GIU cac dong Amount9 am.
     quality_parts, quality_params = [], []
     if scope_channel != "ETC":
         join_o = _otc_area_join("v", scope_area_code)
@@ -3651,13 +3596,13 @@ def order_timing_check(date_from: str, date_to: str, threshold_days: int = 2, li
                     "phan bo/top share va tham chieu >3x trung vi; KHONG ket luan gian lan/chay don "
                     "chi tu gia tri don."),
     }
-    # Du lieu cu hon 12 thang da bi NEN thanh KH x thang (khong con created_at tung dong) - tool nay
-    # KHONG the phat hien "chay don don KPI" cho giai doan cu hon, phai bao ro thay vi am tham thieu.
+    # Du lieu cu hon 12 thang da bi NEN thanh KH x thang (khong con stt/Amount9 tung dong), nen phan
+    # hang tra va phan bo gia tri don chi dai dien cho phan nam trong cua so chi tiet.
     cutoff = _detail_cutoff()
     if date_from < cutoff:
-        result["warning"] = (f"Cau hoi vuot qua cua so 12 thang gan nhat (truoc {cutoff}) - du lieu "
-                              f"created_at tung hoa don cho giai doan cu hon KHONG con duoc luu (da nen "
-                              f"thanh tong theo khach hang/thang). Ket qua tren CHI kiem tra duoc tu "
+        result["warning"] = (f"Cau hoi vuot qua cua so 12 thang gan nhat (truoc {cutoff}) - chi tiet "
+                              f"tung don cho giai doan cu hon KHONG con duoc luu (da nen thanh tong theo "
+                              f"khach hang/thang). Hang tra va phan bo gia tri don CHI kiem tra duoc tu "
                               f"{max(date_from, cutoff)} tro di, KHONG dai dien cho toan bo khoang thoi "
                               f"gian da hoi.")
         result["date_from_actually_used"] = max(date_from, cutoff)
@@ -6411,10 +6356,7 @@ _EMPLOYEE_SCOPED_TEMPLATES = {
     "get_salary_detail", "get_salary_achievement_summary", "get_salary_bonus_policy",
     "get_salary_data_quality",
     "get_salary_ranking",
-    # 19/08/2026: THEM check_order_timing - tra ve tom tat theo tung nhan vien (nghi van "chay don
-    # don KPI"), truoc day KHONG nam trong tap nay nen QLV bi fail-closed chan hoan toan (dung y
-    # dinh, vi tool nay THAT SU nhay cam theo ca nhan) - gio da them scope_employee_code + loc dung
-    # qua _employee_scope_clause() nen mo duoc, QLV chi thay tom tat cua doi minh.
+    # check_order_timing can scope_employee_code de hang tra/phan bo gia tri don cua QLV chi gom doi minh.
     "check_order_timing",
 }
 

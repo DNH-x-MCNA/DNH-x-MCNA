@@ -9,8 +9,10 @@ với 4 tập phân quyền (`_PERSON_LEVEL_TEMPLATES`, `_EMPLOYEE_SCOPED_TEMPLA
 - 4 tool phân loại sai (không có dữ liệu cá nhân, `scope_area_code` đã đủ): `get_inventory_by_region`,
   `get_receivables_overview`, `get_qlv_change_history`, `get_revenue_reconciliation` — đã gỡ khỏi
   `_PERSON_LEVEL_TEMPLATES` (commit `afc8c65`).
-- 1 tool đúng là nhạy cảm cá nhân nhưng thiếu code hỗ trợ: `check_order_timing` (tóm tắt "nghi vấn
-  chạy đơn dồn KPI" theo từng người) — đã thêm `scope_employee_code` (commit `e3ba10c`).
+- `check_order_timing` vẫn dùng `scope_employee_code` để giới hạn hàng trả/phân bố giá trị đơn theo
+  đúng đội. Phần so `CreatedAt`–`DocDate` và tóm tắt cá nhân đã bị vô hiệu hóa ngày 04/09/2026 sau
+  khi DNH xác nhận `CreatedAt` chỉ là thời điểm tạo đơn, không phải thời điểm xác nhận và độ lệch
+  không mang ý nghĩa nghiệp vụ.
 
 Cả 6 lỗi (5 tool trên + `get_salary_ranking`) đều xác nhận bằng git-stash: FAIL trên code cũ (bị
 chặn hoặc rò rỉ), PASS trên code mới. Đây là phần việc của Ngày 23 ("Test QLV... 0 rò rỉ") làm sớm

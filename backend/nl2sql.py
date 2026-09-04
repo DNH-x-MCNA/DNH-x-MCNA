@@ -629,27 +629,22 @@ TEMPLATE_TOOLS = [
     },
     {
         "name": "check_order_timing",
-        "description": "KIEM TRA CHAT LUONG DON cua ca ky trong 1 lan: (1) do lech created_at vs doc_date "
-                        "(XEM CANH BAO BAT BUOC ben duoi), (2) hang tra/dieu chinh Amount9 am cho CA OTC/ETC, "
-                        "(3) phan bo gia tri don va ty trong top 1/2/5/10. DNH CHUA phe duyet nguong "
+        "description": "KIEM TRA CHAT LUONG DON cua ca ky trong 1 lan: (1) hang tra/dieu chinh Amount9 "
+                        "am cho CA OTC/ETC, (2) phan bo gia tri don va ty trong top 1/2/5/10. "
+                        "DNH CHUA phe duyet nguong "
                         "'don lon bat thuong': muc >3x trung vi chi la THAM CHIEU, tuyet doi khong gan "
                         "nhan gian lan hay ket luan doanh thu 'thuc chat' neu chua noi ro do tap trung. "
-                        "!!! CANH BAO BAT BUOC ve phan created_at vs doc_date: DNH da XAC NHAN "
-                        "(04/09/2026) rang hoa don duoc tao luc nao cung duoc - do lech giua hai truong nay "
-                        "KHONG mang y nghia nghiep vu nao. TUYET DOI KHONG goi do la 'chay don KPI', "
-                        "'backdate', 'bat thuong' hay bat ky tu ngu gan voi gian lan; TUYET DOI KHONG "
-                        "neu ten nhan vien kem do lech nhu mot phat hien. Da tung xay ra 04/09/2026: tra loi "
-                        "neu dich danh 4 nhan vien la 'dau hieu tao hoa don lui ngay de ghi nhan vao ky khac, "
-                        "can doi chieu voi doi ngu van hanh' - do la cao buoc dua tren nhieu. Chi duoc dung "
-                        "so nay khi nguoi dung hoi THANG ve thoi diem tao don, va phai noi ro no khong ham y "
-                        "gi. Dung tool nay cho hang tra/dieu chinh va phan bo gia tri don.",
+                        "CreatedAt la THOI DIEM TAO DON, KHONG phai thoi diem xac nhan don. DNH da xac nhan "
+                        "(04/09/2026) do lech CreatedAt-DocDate KHONG mang y nghia nghiep vu; tool KHONG "
+                        "kiem tra hay liet ke do lech nay. Tuyet doi khong suy dien 'chay don KPI', backdate, "
+                        "bat thuong/gian lan, va khong neu ten nhan vien tu do lech hai moc ngay.",
         "input_schema": {
             "type": "object",
             "properties": {
                 "date_from": {"type": "string", "description": "YYYY-MM-DD, dau ky can kiem tra (thuong la ca thang can soi)"},
                 "date_to": {"type": "string", "description": "YYYY-MM-DD, cuoi ky can kiem tra"},
-                "threshold_days": {"type": "integer", "description": "So ngay lech toi thieu de bi liet ke la bat thuong, mac dinh 2"},
-                "limit": {"type": "integer", "description": "So luong chi tiet toi da tra ve trong top_detail, mac dinh 20"},
+                "threshold_days": {"type": "integer", "description": "Tham so cu, giu tuong thich API; hien khong su dung"},
+                "limit": {"type": "integer", "description": "Tham so cu, giu tuong thich API; hien khong su dung"},
             },
             "required": ["date_from", "date_to"],
         },
@@ -1288,8 +1283,8 @@ QUAN TRONG VE CHON TOOL:
   thuat ben trong.
 - Neu cau hoi thuoc cac nhom bao cao chuan: doanh thu theo kenh, top san pham, top khach hang, doanh thu
   theo vung mien, KPI/doanh so nhan vien (tong quan/thang), KPI THEO NGAY 1 nhan vien ca nhan, SO SANH
-  2 khoang thoi gian, CHI TIET 1 khach hang cu the, TRA CUU ma/ten/vai tro nhan vien, KIEM TRA don hang
-  bat thuong/chay don KPI, TON KHO THEO VUNG, TON KHO SAP/DA HET HAN SU DUNG THEO LO, LICH SU DOI QLV,
+  2 khoang thoi gian, CHI TIET 1 khach hang cu the, TRA CUU ma/ten/vai tro nhan vien, KIEM TRA hang
+  tra/phan bo gia tri don, TON KHO THEO VUNG, TON KHO SAP/DA HET HAN SU DUNG THEO LO, LICH SU DOI QLV,
   CAY DOANH THU/KPI TP-QLV-TDV, XEP HANG KPI, DOI CHIEU doanh thu tu tren xuong vs cong don tu duoi len,
   LICH SU TRUY VAN/CHI PHI AI cua chinh nguoi dang hoi, HIEU QUA CHUONG TRINH KHUYEN MAI, QUY TAC/BAC
   TIEN V15-V22-V25-ASO, THUONG KINH DOANH/PHU CAP thang cua 1 nhan vien -> BAT BUOC dung tool tuong ung

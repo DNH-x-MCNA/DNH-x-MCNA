@@ -41,8 +41,8 @@ N_RECENT_DAYS = 45  # so ngay gan nhat can refresh moi lan chay incremental (du 
 def _sqlite_val(v):
     """SQLite khong ho tro Decimal/date/datetime truc tiep - chuyen ve float/str.
     LUU Y: phai kiem tra datetime TRUOC date (datetime la subclass cua date) - datetime GIU NGUYEN
-    ca gio:phut:giay (can cho created_at de phat hien "chay don don KPI"), chi date thuan moi cat con
-    YYYY-MM-DD."""
+    ca gio:phut:giay (CreatedAt la thoi diem TAO DON; khong phai thoi diem xac nhan va khong dung de
+    suy dien KPI/bat thuong), chi date thuan moi cat con YYYY-MM-DD."""
     if isinstance(v, decimal.Decimal):
         return float(v)
     if isinstance(v, dt.datetime):

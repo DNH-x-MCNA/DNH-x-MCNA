@@ -94,10 +94,7 @@ def test_get_receivables_overview_van_dung_dung_scope_area_code(tmp_path, monkey
 
 
 def test_check_order_timing_qlv_chi_thay_doi_minh(tmp_path, monkeypatch):
-    """19/08/2026: check_order_timing() THAT SU nhay cam theo ca nhan (nghi van chay don don KPI)
-    nen KHAC 4 tool tren - khong go chan bang cach bo khoi _PERSON_LEVEL_TEMPLATES, ma THEM
-    scope_employee_code + dang ky vao _EMPLOYEE_SCOPED_TEMPLATES de QLV van goi duoc nhung CHI
-    thay tom tat cua doi minh."""
+    """QLV chi thay hang tra/phan bo gia tri don cua doi minh; CreatedAt-DocDate bi vo hieu hoa."""
     db_path = tmp_path / "warehouse.db"
     _make_min_db(db_path)
     conn = sqlite3.connect(db_path)
@@ -111,18 +108,17 @@ def test_check_order_timing_qlv_chi_thay_doi_minh(tmp_path, monkeypatch):
             employee_code TEXT, created_at TEXT);
         """
     )
-    # TDV01 (doi QLV01) - don backdate lech 5 ngay -> bi flag.
+    # TDV01 (doi QLV01) - CreatedAt lech 5 ngay nhung KHONG duoc flag.
     conn.execute("INSERT INTO dim_nhanvien VALUES "
                 "('TDV01','Nhan vien doi',0,'TDV','MB','TDV01_DMS',NULL,NULL,0,NULL)")
     conn.execute("INSERT INTO fact_tonghopkhachhang VALUES "
                 "('TDV01','KH01',1000000,2000000,'2026-07-15',0,'QLV01')")
     conn.execute("INSERT INTO vhoadon_otc VALUES "
                 "('2026-07-10','KH01','SP01',500000,5,100000,'HD1',1,'TDV01_DMS','2026-07-15','ASM01')")
-    # Hang tra/dieu chinh OTC cung nam trong view hoa don tong; created_at cung ngay nen KHONG bi
-    # nham thanh backdate, nhung bat buoc phai xuat hien trong khoi returns.
+    # Hang tra/dieu chinh OTC bat buoc xuat hien trong khoi returns.
     conn.execute("INSERT INTO vhoadon_otc VALUES "
                 "('2026-07-11','KH01','SP01',-100000,-1,100000,'HD-TRA',1,'TDV01_DMS','2026-07-11','ASM01')")
-    # TDV_KHAC (doi khac) - cung co don backdate, nhung KHONG duoc lot vao khi QLV01 hoi.
+    # TDV_KHAC (doi khac) khong duoc lot vao khi QLV01 hoi.
     conn.execute("INSERT INTO dim_nhanvien VALUES "
                 "('TDV_KHAC','Nhan vien doi khac',0,'TDV','MB','TDVKHAC_DMS',NULL,NULL,0,NULL)")
     conn.execute("INSERT INTO fact_tonghopkhachhang VALUES "
@@ -138,10 +134,12 @@ def test_check_order_timing_qlv_chi_thay_doi_minh(tmp_path, monkeypatch):
                               scope_role="qlv", scope_employee_code="QLV01")
 
     assert result.get("ok") is True, f"van con bi chan: {result}"
-    codes = {r["employee_code"] for r in result["result"]["summary_by_employee"]}
-    assert "TDV01" in codes
-    assert "TDVKHAC_DMS" not in codes and "TDV_KHAC" not in codes
     quality = result["result"]
+    assert quality["created_at_doc_date_check"]["status"] == "NOT_APPLICABLE"
+    assert "thoi diem tao don" in quality["created_at_doc_date_check"]["definition"]
+    assert quality["total_flagged"] == 0
+    assert quality["summary_by_employee"] == []
+    assert quality["top_detail"] == []
     assert quality["order_value_distribution"]["orders"] == 2
     assert quality["order_value_distribution"]["reference_over_3x_median"]["status"] == \
         "CHI_LA_THAM_CHIEU_CHUA_DUOC_DNH_PHE_DUYET"
@@ -181,6 +179,8 @@ def test_check_order_timing_scope_etc_khong_doc_don_otc(tmp_path, monkeypatch):
         "2026-07-01", "2026-07-31", scope_channel="ETC",
     )
 
-    assert result["total_flagged"] == 1
-    assert result["top_detail"][0]["employee_code"] == "ETC01"
-    assert result["top_detail"][0]["amount9"] == 500_000
+    assert result["created_at_doc_date_check"]["status"] == "NOT_APPLICABLE"
+    assert result["total_flagged"] == 0
+    assert result["top_detail"] == []
+    assert result["order_value_distribution"]["orders"] == 1
+    assert result["order_value_distribution"]["revenue"] == 500_000
