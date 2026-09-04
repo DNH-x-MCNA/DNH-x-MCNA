@@ -85,8 +85,14 @@ dim_targetvungmien: target doanh thu OTC theo vung/thang. Cot: area_code, channe
 fact_kehoachtongetc: target tong ETC theo thang. Cot: doc_date (ngay dau thang), amount, item_group.
 !!! % HOAN THANH CHI TIEU NHIEU KENH: (1) Kiem MAX(doc_date) tung kenh, (2) So sanh tren khoang thang CHUNG, (3) KHONG goi tong vai thang la chi tieu nam hay gop % 2 kenh co mau so khac ky.
 dmssx_khachhang: code (ma khach hang ETC), name, city_id (dung join vung mien cho ETC), id_code (Id
-  noi bo DMS, khac code), kenh_bh (kenh ban hang dang text). KHONG co cot NV phu trach (ETC khong co
-  truong nay tren Bravo - chi biet NV thuc te ban hang qua vhoadon_etc.employee_code).
+  noi bo DMS, khac code), kenh_bh (kenh ban hang dang text). KHONG co cot NV DUOC GAN phu trach (khac
+  dms_khachhang.emp_code ben OTC). **CHI RIENG bang danh muc khach nay thieu cot do** - TUYET DOI
+  KHONG suy rong thanh 'ETC khong gan nhan vien': hoa don ETC (vhoadon_etc.employee_code, dong bo
+  tu vHoaDonETCTotal.EmpDMSCode) CO du 100% va co 34 NV ban ETC (do 04/09/2026), nen MOI phan tich
+  doanh thu/tang truong ETC theo nhan vien deu LAM DUOC. Da 2 lan tra loi sai vi suy rong cau nay
+  (04/09/2026): noi 'ETC khong co truong NV phu trach tren hoa don' va 'ETC khong co co che giao
+  chi tieu ca nhan' - ca hai deu SAI. Neu thieu du lieu thi noi ro thieu O BANG NAO, khong ket
+  luan ca kenh.
 dms_khachhang: code (ma khach hang OTC), name, city_id (NGUON DUNG DE XAC DINH VUNG MIEN cho OTC -
   dang tin cay hon city_id tren vhoadon_otc, xem ghi chu o vhoadon_otc phia tren),
   id_code (Id noi bo DMS, khac code), emp_code (ma NV DUOC GAN phu trach khach hang nay - khac
@@ -195,13 +201,21 @@ brv_kho: danh muc KHO trong Bravo (co hang chuc kho vat ly/dai ly khac nhau). Co
   bo, dung join voi brv_tonkhodk.warehouse_id), branch_code (**day la truong quyet dinh VUNG MIEN cho
   ton kho**: B01=San xuat/tru so chinh, B02=Kinh doanh Mien Bac, B03=Kinh doanh Mien Trung, B04=Kinh
   doanh Mien Nam - xac nhan voi DA ben Bravo 15/07/2026), code, name (ten kho cu the, vd 'Kho WHI91').
-brv_tonkhodk: TON KHO THAT tinh den hien tai (snapshot, khong theo ngay) - THAY THE nguon Supabase cu
+brv_tonkhodk: TON KHO DAU KY THEO TUNG NAM TAI CHINH (cot fiscal_year) - **KHONG phai ton kho hien
+  tai**, va **KHONG PHAI toan bo ton kho cong ty**. Bravo giu ban ghi dau ky cua NHIEU nam
+  (2024/2025/2026); PHAI loc fiscal_year = nam moi nhat, neu khong se cong don ca 3 nam va dem
+  trung cung mot lo hang toi 3 lan. Ban ghi nam moi nhat duoc chot dau nam (vd 21/01/2026) va
+  KHONG cap nhat trong nam - khi tra loi PHAI noi ro day la anh chup dau nam, khong duoc goi la
+  'ton kho hien tai'. He kho SAN XUAT (BRVSX_TonKhoDK, ~229 ty nam 2026) CHUA duoc dong bo vao
+  kho local - nghia la con so o day chi phan anh ~3% gia tri ton kho toan cong ty, PHAI neu ro
+  gioi han nay thay vi trinh bay nhu tong ton kho. THAY THE nguon Supabase cu
   (bang "inventory" ben Supabase co cot "warehouse" nhung 100% NULL, KHONG dung de loc vung duoc -
   DA XAC NHAN LOI, tuyet doi khong dung Supabase cho cau hoi ton kho THEO VUNG nua, chi con Bravo/kho
   local nay moi co du lieu vung dung). Cot: warehouse_id (JOIN brv_kho.id_code de biet vung/ten kho),
   item_id (JOIN brv_sanpham.id_code de biet ten/ma san pham), quantity (so luong ton), amount (gia
-  tri ton tien - LUU Y mot so vung/kho co the =0 du quantity>0, day la han che du lieu that tu Bravo,
-  khong phai loi dong bo), is_active (LUON loc =1, dong is_active=0 la ban ghi cu/khong con hieu luc).
+  tri ton tien - nhieu dong =0 du quantity>0, PHAN LON nam o cac nam tai chinh cu; **khong duoc
+  ket luan 'Bravo khong ghi gia tri'** vi he kho san xuat BRVSX_TonKhoDK co day du UnitCost/Amount.
+  Neu vung nao ra 0d thi noi ro la thieu du lieu o bang nay, khong suy rong ra ca Bravo), is_active (LUON loc =1, dong is_active=0 la ban ghi cu/khong con hieu luc).
   Muon hoi "ton kho vung X": JOIN ca 3 bang (brv_tonkhodk + brv_kho + brv_sanpham), GROUP BY
   k.branch_code, loc WHERE k.branch_code='B0x' VA t.is_active=1.
 
@@ -297,4 +311,31 @@ inventory (snapshot ton kho MOI NHAT, khong theo ngay): "item_code", "item_name"
        mau so (tong doanh thu cong ty) PHAI cung KY va cung NGUON/PHAM VI (vd ca hai cung tinh gop
        OTC+ETC, hoac ca hai cung chi OTC) - KHONG duoc lay tu so tu 1 truy van co pham vi khac mau
        so (vd tu so chi OTC nhung mau so gom ca ETC se lam ty le % bi sai/thoi phong).
+15. PHAN RA TANG TRUONG (khach hien huu / khach moi / khach roi bo): ba phan PHAI cong lai DUNG
+    BANG muc tang truong tong, phan du BANG 0. Neu con khoan "chua phan loai" hoac phai giai thich
+    "chenh do cach phan bo" thi PHEP TINH DA SAI - dung lai, KHONG duoc dua ket luan.
+    !!! LOI DA XAY RA 04/09/2026: bao LFL ky truoc 228,05 ty trong khi TONG ky truoc chi 226,84 ty
+    (tap con lon hon tap cha - vo ly). Nguyen nhan: lay LFL theo dinh nghia RONG (gom ca khach ve 0)
+    roi VAN tru them dong khach roi bo -> TRU KHACH ROI BO HAI LAN, ra -37,40 ty thay vi -13,73 ty
+    (sai 2,7 lan) va ket luan sai hoan toan ve suc khoe tep khach hien huu.
+    TU KIEM BAT BUOC truoc khi tra loi: (a) moi nhom con co <= tong khong? (b) cong ba nhom co ra
+    dung tang truong tong khong? Chua kiem het thi khong duoc ket luan.
+16. TY LE GIU CHAN THEO COHORT: "giu chan thang N" la DIEM-THOI-DIEM (co mua DUNG thang do), KHONG
+    PHAI ty le con lai luy ke. TUYET DOI KHONG doc "giu chan thang 1 = 40%" thanh "mat 60% khach
+    ngay sau lan mua dau" - khach nghi 1 thang roi mua lai VAN LA khach dang hoat dong.
+    !!! LOI DA XAY RA 04/09/2026: ket luan "mat luon ~61-65% ngay sau lan mua dau" trong khi thuc te
+    chi 20,9% khong bao gio quay lai (79,1% co mua lai). Dau hieu tu bac bo nam ngay trong bang:
+    cohort 2026-04 di tu 32,8% (thang 1) LEN 42,9% (thang 3) - duong roi rung khong the TANG.
+    Muon noi ve ty le roi bo thi phai tinh RIENG "khach khong mua lai BAT KY thang nao sau do",
+    khong duoc suy tu con so diem-thoi-diem. Va khi so trung binh giua cac moc tuoi, PHAI so tren
+    CUNG TAP COHORT (moc 6 thang chi co cohort cu nhat - so voi moc 1 thang tinh tren toan bo cohort
+    la tron hai tap khac nhau).
+17. TRUOC KHI NOI "KHO KHONG CO DU LIEU TRUOC NGAY X" hoac "khong du lich su de tra loi": BAT BUOC
+    kiem lai bang MIN(doc_date) tren chinh bang dang dung. Xem them muc 10 - kho co lich su tu ~2022.
+    !!! LOI DA XAY RA 04/09/2026: khang dinh "kho hoa don chi bat dau tu 03/09/2025, khong co lich su
+    xa hon nhu mot so tai lieu mo ta" roi CAT BO du lieu dua tren khang dinh do. Hau qua: 2/5 "san
+    pham moi" trong bang thuc chat da ban tu 11/2024 (mot ma da co 5,24 ty doanh thu truoc do), bo
+    sot 4 san pham moi that, va tuyen bo phan "tuoi 12 thang" la bat kha thi trong khi du lieu co san.
+    Khi dinh nghia "san pham moi"/"khach moi" PHAI lay lan ban dau tren TOAN BO lich su, khong phai
+    lan dau xuat hien trong cua so dang xet (loi left-censoring).
 """

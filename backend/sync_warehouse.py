@@ -223,15 +223,15 @@ SMALL_TABLES = [
     # B04=Kinh doanh Mien Nam (xac nhan voi DA ben Bravo 15/07/2026) - join TonKhoDK.WarehouseId ->
     # BRV_Kho.Id de biet vung, roi ItemId -> brv_sanpham.id_code de biet ten san pham.
     ("BRV_Kho", "brv_kho", "Id, BranchCode, Code, Name", "id_code,branch_code,code,name"),
-    ("BRV_TonKhoDK", "brv_tonkhodk", "WarehouseId, ItemId, Quantity, Amount, IsActive",
-     "warehouse_id,item_id,quantity,amount,is_active"),
+    ("BRV_TonKhoDK", "brv_tonkhodk", "WarehouseId, ItemId, Quantity, Amount, IsActive, FiscalYear",
+     "warehouse_id,item_id,quantity,amount,is_active,fiscal_year"),
     # 13/08/2026: TON KHO THEO LO + HAN SU DUNG - xac nhan qua doi chieu voi file Excel "Bao cao ton
     # kho thanh pham" DNH cung cap (sheet "Ton kho theo lo date") - brv_tonkhodk o tren CHI co tong
     # theo kho, KHONG tach lo/han su dung. Quy mo NHO (~1.6K dong TonKhoDKLot, ~3.7K dong Lot - kiem
     # tra 13/08/2026), dung an toan chung co che RELOAD TOAN BO nhu cac bang nho khac o day.
     ("BRV_TonKhoDKLot", "brv_tonkhodklot",
-     "BranchCode, WarehouseId, ItemId, ItemLotCode, Quantity, IsActive",
-     "branch_code,warehouse_id,item_id,item_lot_code,quantity,is_active"),
+     "BranchCode, WarehouseId, ItemId, ItemLotCode, Quantity, IsActive, Year",
+     "branch_code,warehouse_id,item_id,item_lot_code,quantity,is_active,year"),
     # Khoa (item_lot_code, item_id) - KHONG dung item_lot_code rieng le, co the trung ma lo giua cac
     # san pham khac nhau (xac nhan tren Bravo THAT 13/08/2026, xem local_warehouse.py::SCHEMA).
     ("BRV_Lot", "brv_lot", "ItemLotCode, ItemId, MfgDate, ExpiryDate, IsActive",

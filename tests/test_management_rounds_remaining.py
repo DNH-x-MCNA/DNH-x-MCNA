@@ -150,9 +150,13 @@ def test_gap_run_rate_qlv_chi_thay_doi_minh(tmp_path, monkeypatch):
                             scope_area_code="MB", scope_employee_code="Q1")
     assert {x["employee_code"] for x in r["rows"]} == {"T1", "T2"}
     t1 = next(x for x in r["rows"] if x["employee_code"] == "T1")
-    assert t1["gap_80"] == 200
-    assert t1["gap_100"] == 400
-    assert t1["linear_run_rate"] == 1200
+    # 04/09/2026: kpi_gap_run_rate doi nen tu fact_tonghopkhachhang (1 dong/(NV x khach), nhan vien
+    # khong duoc giao khach nao thi VO HINH) sang fact_thongketinhluong (1 dong/nhan vien). Fixture
+    # co y de 2 bang lech nhau: T1 co actual=600 ben bang cu, actual=300 ben bang moi. Cac ky vong
+    # duoi day theo NGUON MOI - gap_80 = 1000*0.8-300, gap_100 = 1000-300, run-rate = 300/15*30.
+    assert t1["gap_80"] == 500
+    assert t1["gap_100"] == 700
+    assert t1["linear_run_rate"] == 600
 
     team_total = rt.kpi_gap_run_rate(as_of_date="2026-04-15", group_by="total",
                                      scope_area_code="MB", scope_employee_code="Q1")

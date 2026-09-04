@@ -93,7 +93,7 @@ CREATE INDEX IF NOT EXISTS idx_bsp_idcode ON brv_sanpham(id_code);
 -- brv_tonkhodk.item_id -> brv_sanpham.id_code de biet ten san pham.
 CREATE TABLE IF NOT EXISTS brv_kho (id_code INTEGER, branch_code TEXT, code TEXT, name TEXT);
 CREATE INDEX IF NOT EXISTS idx_bkho_idcode ON brv_kho(id_code);
-CREATE TABLE IF NOT EXISTS brv_tonkhodk (warehouse_id INTEGER, item_id INTEGER, quantity REAL, amount REAL, is_active INTEGER);
+CREATE TABLE IF NOT EXISTS brv_tonkhodk (warehouse_id INTEGER, item_id INTEGER, quantity REAL, amount REAL, is_active INTEGER, fiscal_year INTEGER);
 CREATE INDEX IF NOT EXISTS idx_tk_warehouse ON brv_tonkhodk(warehouse_id);
 CREATE INDEX IF NOT EXISTS idx_tk_item ON brv_tonkhodk(item_id);
 
@@ -104,7 +104,7 @@ CREATE INDEX IF NOT EXISTS idx_tk_item ON brv_tonkhodk(item_id);
 --
 -- brv_tonkhodklot (nguon Bravo: BRV_TonKhoDKLot) = TON KHO theo TUNG LO (khac brv_tonkhodk la tong
 -- theo kho, khong tach lo). item_lot_code + item_id la khoa noi voi brv_lot de biet ngay het han.
-CREATE TABLE IF NOT EXISTS brv_tonkhodklot (branch_code TEXT, warehouse_id INTEGER, item_id INTEGER, item_lot_code TEXT, quantity REAL, is_active INTEGER);
+CREATE TABLE IF NOT EXISTS brv_tonkhodklot (branch_code TEXT, warehouse_id INTEGER, item_id INTEGER, item_lot_code TEXT, quantity REAL, is_active INTEGER, year INTEGER);
 CREATE INDEX IF NOT EXISTS idx_tkl_item ON brv_tonkhodklot(item_id);
 CREATE INDEX IF NOT EXISTS idx_tkl_lotcode ON brv_tonkhodklot(item_lot_code);
 CREATE INDEX IF NOT EXISTS idx_tkl_warehouse ON brv_tonkhodklot(warehouse_id);
@@ -293,6 +293,12 @@ _COLUMN_MIGRATIONS = {
                       ("start_date", "TEXT"), ("end_date", "TEXT"),
                       ("is_resigned", "INTEGER"), ("manager_area_code", "TEXT")],
     "brv_sanpham": [("id_code", "INTEGER")],
+    # 04/09/2026: BRV_TonKhoDK/DKLot la TON DAU KY THEO TUNG NAM TAI CHINH, khong phai ton hien
+    # tai. Truoc day khong dong bo cot nam -> moi truy van cong don CA 3 nam (2024+2025+2026),
+    # dem trung cung mot lo hang toi 3 lan va sinh ra 668 "lo het han" thuc chat la ton dau ky nam
+    # cu da ban het tu lau. PHAI loc theo nam moi nhat.
+    "brv_tonkhodk": [("fiscal_year", "INTEGER")],
+    "brv_tonkhodklot": [("year", "INTEGER")],
     "fact_tonghopkhachhang": [("manager_code", "TEXT"), ("year_sale_target", "REAL"),
                                ("amount_cus", "REAL"), ("is_ro", "INTEGER"), ("is_ac", "INTEGER"),
                                ("max_customer_ord_amount", "REAL"), ("emp_dms_code", "TEXT")],

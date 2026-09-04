@@ -1787,14 +1787,22 @@ def kpi_gap_run_rate(as_of_date: str = None, group_by: str = "employee", limit: 
 
     rows = []
     if group_by == "employee":
-        sql = ("SELECT f.employee_code,nv.name,nv.position_code,nv.area_code,MAX(f.manager_code) manager_code,"
-               "SUM(COALESCE(f.amount_ct,0)) actual,MAX(COALESCE(f.month_sale_target,0)) target "
-               "FROM fact_tonghopkhachhang f LEFT JOIN dim_nhanvien nv ON nv.employee_code=f.employee_code "
-               "WHERE f.save_date=? AND nv.position_code IN ('TDV','CTV','CS') "
-               f"AND {_not_duplicate_sql('nv')}")
+        # 04/09/2026 - LOI MAU SO DA SUA: truoc day lay nen tu fact_tonghopkhachhang (1 dong/(NV x
+        # khach hang)). Nhan vien KHONG duoc giao khach nao thi KHONG co dong nao -> vo hinh voi moi
+        # cach gop tu duoi len (chinh loi da duoc ghi nhan trong kpi_ranking cho tang vung). Hau qua:
+        # 29 TDV bien mat khoi mau so ngay 31/08/2026 va HO DEU DUOI NGUONG, nen moi ty le deu bi
+        # thoi phong (TDV dat >=80%: bao 45% trong khi that la 38%; rieng MN bao 81% vs that 57%).
+        # fact_thongketinhluong la snapshot 1 DONG/NHAN VIEN nen mau so day du. GIU NGUYEN loc chuc
+        # danh TDV/CTV/CS: dong QLV la ROLLUP cua TDV, tron vao se dem gap doi (lat cat song song).
+        sql = ("SELECT f.employee_code,COALESCE(f.employee_name,nv.name) name,f.position_code,"
+               "f.area_code,MAX(f.manager_code) manager_code,"
+               "MAX(COALESCE(f.month_sale_amount,0)) actual,MAX(COALESCE(f.month_sale_target,0)) target "
+               "FROM fact_thongketinhluong f LEFT JOIN dim_nhanvien nv ON nv.employee_code=f.employee_code "
+               "WHERE f.save_date=? AND UPPER(COALESCE(f.position_code,'')) IN ('TDV','CTV','CS') "
+               f"AND (nv.employee_code IS NULL OR {_not_duplicate_sql('nv')})")
         params = [fdate]
         if scope_area_code:
-            sql += " AND nv.area_code=?"; params.append(scope_area_code)
+            sql += " AND f.area_code=?"; params.append(scope_area_code)
         if scope_employee_code:
             team = _team_of_qlv(scope_employee_code, fdate)
             codes = [r["employee_code"] for r in team]
@@ -1802,7 +1810,7 @@ def kpi_gap_run_rate(as_of_date: str = None, group_by: str = "employee", limit: 
                 raise KhongXacDinhDuocDoi(f"Khong xac dinh duoc doi cua {scope_employee_code}.")
             sql += f" AND f.employee_code IN ({','.join(['?'] * len(codes))})"
             params.extend(codes)
-        sql += " GROUP BY f.employee_code,nv.name,nv.position_code,nv.area_code"
+        sql += " GROUP BY f.employee_code,COALESCE(f.employee_name,nv.name),f.position_code,f.area_code"
         rows = _q(sql, tuple(params))
         for r in rows:
             r["group_code"] = r["employee_code"]
@@ -3369,6 +3377,17 @@ _BRANCH_LABEL = {"B01": "Sản xuất", "B02": "Kinh doanh Miền Bắc",
                  "B03": "Kinh doanh Miền Trung", "B04": "Kinh doanh Miền Nam"}
 
 
+def _nam_moi_nhat(table: str, col: str):
+    """MAX(col) tren bang ton kho, tra None neu kho CU chua co cot do (chua chay migration).
+    Bao cao ton kho khong duoc SAP vi thieu cot - thay vao do tra None de ham goi tu canh bao
+    rang so lieu co the dang cong don nhieu nam tai chinh."""
+    try:
+        r = _q(f"SELECT MAX({col}) y FROM {table} WHERE {col} IS NOT NULL")
+    except Exception:
+        return None
+    return r[0]["y"] if r and r[0]["y"] is not None else None
+
+
 def inventory_by_region(area_code: str = None, scope_area_code: str = None) -> list:
     """Ton kho (so luong + gia tri) theo vung, tu Bravo qua brv_tonkhodk/brv_kho/brv_sanpham - THAY
     THE nguon Supabase cu (bang inventory co cot warehouse nhung 100% NULL, khong loc vung duoc).
@@ -3378,11 +3397,19 @@ def inventory_by_region(area_code: str = None, scope_area_code: str = None) -> l
     if scope_area_code:
         area_code = scope_area_code
     branch_filter = _AREA_TO_BRANCH.get(area_code) if area_code else None
+    # 04/09/2026 - LOI NANG DA SUA: brv_tonkhodk la TON DAU KY THEO NAM TAI CHINH (Bravo giu ca
+    # 2024/2025/2026), KHONG phai ton hien tai. Truoc day khong loc nam -> cong don ca 3 nam, dem
+    # trung cung mot lo hang toi 3 lan (vd B04 bao 28,78 trieu don vi trong khi nam 2026 chi co
+    # 10,61 trieu). LUON loc nam moi nhat.
+    nam_moi_nhat = _nam_moi_nhat("brv_tonkhodk", "fiscal_year")
     sql = """SELECT k.branch_code area_code, COUNT(DISTINCT t.item_id) so_mat_hang,
                     SUM(t.quantity) tong_so_luong, SUM(t.amount) tong_gia_tri
              FROM brv_tonkhodk t LEFT JOIN brv_kho k ON k.id_code = t.warehouse_id
              WHERE t.is_active = 1"""
     params = []
+    if nam_moi_nhat is not None:
+        sql += " AND t.fiscal_year = ?"
+        params.append(nam_moi_nhat)
     if branch_filter:
         sql += " AND k.branch_code = ?"
         params.append(branch_filter)
@@ -3396,6 +3423,11 @@ def inventory_by_region(area_code: str = None, scope_area_code: str = None) -> l
         r["area_label"] = _BRANCH_LABEL.get(r["area_code"], r["area_code"])
         r["tong_so_luong"] = _f(r["tong_so_luong"])
         r["tong_gia_tri"] = _f(r["tong_gia_tri"])
+        r["nam_tai_chinh"] = nam_moi_nhat
+        if nam_moi_nhat is None:
+            r["canh_bao"] = ("Kho chua dong bo cot fiscal_year - so lieu nay co the dang CONG DON "
+                             "nhieu nam tai chinh (dem trung). Can chay lai sync_warehouse.py "
+                             "truoc khi dung con so nay.")
     return rows
 
 
@@ -3484,7 +3516,14 @@ def inventory_expiry_report(area_code: str = None, max_bucket: str = None, limit
              LEFT JOIN brv_sanpham sp ON sp.id_code = t.item_id
              LEFT JOIN brv_kho k ON k.id_code = t.warehouse_id
              WHERE t.is_active = 1 AND t.quantity > 0"""
+    # 04/09/2026 - LOI NANG DA SUA: cung ly do inventory_by_region. Khong loc nam thi ton dau ky
+    # nam 2024/2025 (hang da ban het tu lau) van bi tinh, sinh ra 668 "lo da het han" voi 7,67 trieu
+    # don vi - hoan toan la lo ma. Loc nam 2026: 0 lo het han.
+    nam_lot_moi = _nam_moi_nhat("brv_tonkhodklot", "year")
     params = []
+    if nam_lot_moi is not None:
+        sql += " AND t.year = ?"
+        params.append(nam_lot_moi)
     if branch_filter:
         sql += " AND t.branch_code = ?"
         params.append(branch_filter)
