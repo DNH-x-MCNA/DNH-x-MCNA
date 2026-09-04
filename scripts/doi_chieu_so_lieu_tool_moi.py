@@ -723,6 +723,54 @@ def kiem_15_ton_kho_chi_mot_nam_tai_chinh():
                   % (_tien(bao_cao), _tien(cong_don)))
 
 
+def kiem_16_so_khach_khop_giua_cac_tool():
+    """MOI tool bao "so khach" PHAI dem KHACH DUY NHAT tren cung mot ky - khong duoc cong so khach
+    cua tung nhan vien/tung dia ban lai (mot khach nhieu nguoi cham se bi dem nhieu lan).
+
+    Do that 04/09/2026 (doi QLV TM25010183, thang 8): mot cau tra loi bao 153 khach va goi do la so
+    "dem that", cau khac bao ~580 va goi la "uoc tinh" - NGUOC hoan toan. Bravo xac nhan 580 dung.
+    Hau qua keo theo: DT/khach bi tinh sai gan 4 lan (12,38tr thay vi 3,26tr).
+
+    Phep kiem: so khach tool bao cho mot thang PHAI bang so khach dem thang tu bang hoa don. Hai
+    duong di khac han nhau nen day la doi chieu that, khong phai tu kiem vong tron."""
+    print()
+    print("16. SO KHACH: TOOL BAO == DEM THANG TU BANG HOA DON (khach duy nhat)")
+    try:
+        bc = rt.geography_monthly_performance(months_back=2, limit=200)
+    except Exception as e:
+        return _bo("so khach khop giua cac tool", str(e)[:80])
+    rows = bc.get("rows") or []
+    if not rows:
+        return _bo("so khach khop giua cac tool", "khong co dong nao de doi chieu")
+    thangs = sorted({r.get("month") for r in rows if r.get("month")})
+    if not thangs:
+        return _bo("so khach khop giua cac tool", "khong xac dinh duoc thang")
+    for thang in thangs:
+        tool = len({r.get("unit") for r in rows if r.get("month") == thang})  # so dia ban, chi de log
+        tong_tool = sum(int(r.get("customers") or 0) for r in rows if r.get("month") == thang)
+        try:
+            that = _wq(
+                "SELECT COUNT(DISTINCT customer_code) n FROM ("
+                "  SELECT customer_code FROM vhoadon_otc WHERE substr(doc_date,1,7)=?"
+                "  UNION SELECT customer_code FROM vhoadon_etc WHERE substr(doc_date,1,7)=?) x",
+                (thang, thang))
+        except Exception as e:
+            _bo("%s: dem khach tu bang hoa don" % thang, str(e)[:60])
+            continue
+        n_that = int(that[0]["n"] or 0) if that else 0
+        if not n_that:
+            _bo("%s: so khach khop" % thang, "thang nay khong co hoa don trong kho")
+            continue
+        # Cong so khach cua tung dia ban SE >= so khach duy nhat (khach mua o nhieu dia ban bi dem
+        # lai). Bat khi vuot qua 5% - duoi muc do la trung lap tu nhien, tren la dau hieu dem sai.
+        vuot = (tong_tool - n_that) / n_that * 100 if n_that else 0
+        _kiem("%s: cong so khach %d dia ban khong vuot qua 5%% so khach duy nhat" % (thang, tool),
+              vuot <= 5,
+              ("cong theo dia ban: %s | khach duy nhat that: %s | vuot %.1f%%"
+               % (format(tong_tool, ","), format(n_that, ","), vuot)) + chr(10)
+              + "Vuot nhieu = dang CONG so khach tung don vi thay vi dem duy nhat.")
+
+
 CAC_PHEP_KIEM = (
     kiem_1_hai_nguon_khong_chong_lan,
     kiem_2_chuoi_thang_khop_mot_lan_goi,
@@ -739,6 +787,7 @@ CAC_PHEP_KIEM = (
     kiem_13_phu_du_40_tool_nghiep_vu,
     kiem_14_moi_QLV_phan_giai_du_doi,
     kiem_15_ton_kho_chi_mot_nam_tai_chinh,
+    kiem_16_so_khach_khop_giua_cac_tool,
 )
 
 
