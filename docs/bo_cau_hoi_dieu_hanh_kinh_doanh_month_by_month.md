@@ -188,7 +188,7 @@ thái đơn/hóa đơn.
 1. **V01** — Đội tôi đạt bao nhiêu doanh số và bao nhiêu % target tháng; MoM, YoY và YTD thế nào? — [SQL: S43](./bo_cau_hoi_dieu_hanh_kinh_doanh_sql_check.md)
 2. **V02** — Còn thiếu bao nhiêu để đạt 65/70%, 80%, 100% và 120%; mỗi ngày còn lại cần bán bao nhiêu? — [SQL: S59](./bo_cau_hoi_dieu_hanh_kinh_doanh_sql_check.md)
 3. **V03** — Doanh số từng ngày/tuần đang cao hay thấp hơn nhịp cần thiết; ngày nào không có phát sinh? — [SQL: S03](./bo_cau_hoi_dieu_hanh_kinh_doanh_sql_check.md)
-4. **V04** — Nhân viên nào đóng góp nhiều nhất vào tăng/giảm doanh số đội tháng này? — [SQL: S39](./bo_cau_hoi_dieu_hanh_kinh_doanh_sql_check.md)
+4. **V04** — Nhân viên nào đóng góp nhiều nhất vào tăng/giảm doanh số đội tháng này? — [SQL: S57](./bo_cau_hoi_dieu_hanh_kinh_doanh_sql_check.md)
 5. **V05** — Nếu loại đơn hàng lớn bất thường và hàng trả, kết quả thực chất của đội là bao nhiêu? — [SQL: S09](./bo_cau_hoi_dieu_hanh_kinh_doanh_sql_check.md)
 6. **V06** — Doanh thu đội đến từ bao nhiêu khách, bao nhiêu đơn; AOV và tần suất mua thay đổi thế nào? — [SQL: S07](./bo_cau_hoi_dieu_hanh_kinh_doanh_sql_check.md)
 7. **V07** — So với 3 tháng gần nhất, tháng này đội giảm ở số khách, số đơn, sản lượng hay giá trị đơn? — [SQL: S05](./bo_cau_hoi_dieu_hanh_kinh_doanh_sql_check.md)
@@ -200,7 +200,7 @@ thái đơn/hóa đơn.
 
 11. **V11** — Doanh số, target và % hoàn thành từng TDV theo tháng; xếp hạng và xu hướng 3/6 tháng? — [SQL: S56](./bo_cau_hoi_dieu_hanh_kinh_doanh_sql_check.md)
 12. **V12** — Ai dưới 65/70%, dưới 80%, đạt 100% hoặc vượt 120%; mỗi người còn thiếu bao nhiêu tiền? — [SQL: S31](./bo_cau_hoi_dieu_hanh_kinh_doanh_sql_check.md)
-13. **V13** — Ai giảm liên tiếp 2–3 tháng; nguyên nhân nằm ở khách mất, ít đơn, ít SKU hay giá trị đơn giảm? — [SQL: S57](./bo_cau_hoi_dieu_hanh_kinh_doanh_sql_check.md)
+13. **V13** — Ai giảm liên tiếp 2–3 tháng; nguyên nhân nằm ở khách mất, ít đơn, ít SKU hay giá trị đơn giảm? — [SQL: S55](./bo_cau_hoi_dieu_hanh_kinh_doanh_sql_check.md)
 14. **V14** — Ai có nhiều khách phụ trách nhưng tỷ lệ khách mua thấp; ai có ít khách nhưng doanh thu/khách cao? — [SQL: S44](./bo_cau_hoi_dieu_hanh_kinh_doanh_sql_check.md)
 15. **V15** — Ai mở nhiều khách mới nhưng tỷ lệ mua lại thấp; ai tái kích hoạt khách tốt nhất? — [SQL: S61](./bo_cau_hoi_dieu_hanh_kinh_doanh_sql_check.md)
 16. **V16** — Ai có ngày làm việc/đi tuyến nhưng không phát sinh đơn; tỷ lệ viếng thăm có đơn là bao nhiêu? — [SQL: S34](./bo_cau_hoi_dieu_hanh_kinh_doanh_sql_check.md)

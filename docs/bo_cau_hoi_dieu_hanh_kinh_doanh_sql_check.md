@@ -2176,6 +2176,9 @@ Gộp snapshot theo từng nhân viên trong tháng (xem quy ước ở mục 1)
 
 ### S55 — Nhân viên giảm liên tiếp và nguyên nhân — READY
 
+Dùng cho **M16** (cấp quản lý) và **V13** (cấp đội) — cùng một câu hỏi ở hai tầng.
+**Không dùng cho V04** — V04 hỏi *đóng góp vào biến động của đội*, xem S57.
+
 Cho câu hỏi "nhân viên nào giảm liên tiếp 2–3 tháng; do mất khách, ít đơn hay giảm giá trị đơn".
 Ghép streak (từ bảng lương) với ba chỉ số nguyên nhân (từ hóa đơn) trong cùng một kết quả.
 
@@ -2211,7 +2214,8 @@ Ghép streak (từ bảng lương) với ba chỉ số nguyên nhân (từ hóa 
            c.Customers,c.Orders,c.AOV,c.SKUs,
            c.Customers-LAG(c.Customers) OVER(PARTITION BY s.EmployeeCode ORDER BY c.MonthEnd) CustomerDelta,
            c.Orders-LAG(c.Orders) OVER(PARTITION BY s.EmployeeCode ORDER BY c.MonthEnd) OrderDelta,
-           c.AOV-LAG(c.AOV) OVER(PARTITION BY s.EmployeeCode ORDER BY c.MonthEnd) AOVDelta
+           c.AOV-LAG(c.AOV) OVER(PARTITION BY s.EmployeeCode ORDER BY c.MonthEnd) AOVDelta,
+           c.SKUs-LAG(c.SKUs) OVER(PARTITION BY s.EmployeeCode ORDER BY c.MonthEnd) SKUDelta
     FROM streak s
     LEFT JOIN dbo.DIM_NhanVien n ON n.EmployeeCode=s.EmployeeCode
     LEFT JOIN cause c ON c.EmpDMSCode=n.DMSId AND c.MonthEnd=s.LastMonth
@@ -2246,6 +2250,8 @@ bình trượt.
     FROM e ORDER BY EmployeeCode,MonthEnd;
 
 ### S57 — Đóng góp của nhân viên vào tăng/giảm doanh số đội — READY
+
+Dùng cho **V04**. **Không dùng cho V13** — V13 hỏi *ai giảm liên tiếp và vì sao*, xem S55.
 
 Cho câu hỏi "nhân viên nào đóng góp nhiều nhất vào tăng/giảm doanh số đội tháng này". Trả về mức
 đóng góp tuyệt đối VÀ tỷ trọng trong biến động của đội.
@@ -3658,7 +3664,7 @@ Câu trả lời khẳng định có vùng mở nhiều mà chất lượng th�
 | V01 | Đội tôi đạt bao nhiêu doanh số và bao nhiêu % target tháng; MoM, YoY và YTD thế nào? | S43 | PARTIAL |
 | V02 | Còn thiếu bao nhiêu để đạt 65/70%, 80%, 100% và 120%; mỗi ngày còn lại cần bán bao nhiêu? | S59 | PARTIAL |
 | V03 | Doanh số từng ngày/tuần đang cao hay thấp hơn nhịp cần thiết; ngày nào không có phát sinh? | S03 | DERIVED |
-| V04 | Nhân viên nào đóng góp nhiều nhất vào tăng/giảm doanh số đội tháng này? | S39 | READY |
+| V04 | Nhân viên nào đóng góp nhiều nhất vào tăng/giảm doanh số đội tháng này? | S57 | READY |
 | V05 | Nếu loại đơn hàng lớn bất thường và hàng trả, kết quả thực chất của đội là bao nhiêu? | S09 | READY |
 | V06 | Doanh thu đội đến từ bao nhiêu khách, bao nhiêu đơn; AOV và tần suất mua thay đổi thế nào? | S07 | READY |
 | V07 | So với 3 tháng gần nhất, tháng này đội giảm ở số khách, số đơn, sản lượng hay giá trị đơn? | S05 | DERIVED |
@@ -3667,7 +3673,7 @@ Câu trả lời khẳng định có vùng mở nhiều mà chất lượng th�
 | V10 | Hôm nay/tuần này cần ưu tiên khách hàng, sản phẩm và nhân viên nào để đóng gap lớn nhất? | S84 | READY |
 | V11 | Doanh số, target và % hoàn thành từng TDV theo tháng; xếp hạng và xu hướng 3/6 tháng? | S56 | READY |
 | V12 | Ai dưới 65/70%, dưới 80%, đạt 100% hoặc vượt 120%; mỗi người còn thiếu bao nhiêu tiền? | S31 | READY |
-| V13 | Ai giảm liên tiếp 2–3 tháng; nguyên nhân nằm ở khách mất, ít đơn, ít SKU hay giá trị đơn giảm? | S57 | READY |
+| V13 | Ai giảm liên tiếp 2–3 tháng; nguyên nhân nằm ở khách mất, ít đơn, ít SKU hay giá trị đơn giảm? | S55 | READY |
 | V14 | Ai có nhiều khách phụ trách nhưng tỷ lệ khách mua thấp; ai có ít khách nhưng doanh thu/khách cao? | S44 | READY |
 | V15 | Ai mở nhiều khách mới nhưng tỷ lệ mua lại thấp; ai tái kích hoạt khách tốt nhất? | S61 | READY |
 | V16 | Ai có ngày làm việc/đi tuyến nhưng không phát sinh đơn; tỷ lệ viếng thăm có đơn là bao nhiêu? | S34 | READY |
