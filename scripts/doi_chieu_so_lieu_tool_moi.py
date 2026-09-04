@@ -411,6 +411,18 @@ def kiem_11_cay_kpi_khong_cong_lan_tang():
                 da_danh_dau.append((ten, s_qlv, s_tdv,
                                     "nhom kenh" if qlv.get("la_nhom_kenh") else "co ghi_chu canh bao"))
                 continue
+            # 04/09/2026 - KHONG dua vao co la_nhom_kenh nua: co do suy tu is_duplicate nen DA HOI
+            # QUY (do 04/09: "Kenh MT" va "Cho si" deu ra la_nhom_kenh=False vi da nam trong
+            # _KNOWN_MISFLAGGED_DUPLICATE_CODES). Dieu kien BAN CHAT la "khong co TDV nao duoi quyen"
+            # -> khong phai diem rollup, khong co gi de doi chieu. Loc theo ban chat thi khong the
+            # hong theo co.
+            if not (qlv.get("tdv") or []):
+                da_danh_dau.append((ten, s_qlv, s_tdv, "khong co TDV duoi quyen"))
+                continue
+            # 04/09: DA THU cong them "chi tieu tu than" cua QLV vao ve phai - SAI. Do lai cho thay
+            # fact_tonghopkhachhang gom theo employee_code cua QLV ra DUNG BANG rollup (Bravo ghi
+            # san dong cho ca doi duoi ma QLV), nen cong them la nhan doi ve phai. Rollup == tong TDV
+            # moi la dung; toan bo 4,481% cua ban truoc nam o hai nut KHONG CO TDV da loc o tren.
             so_qlv += 1
             tong_qlv += s_qlv
             tong_tdv += s_tdv
@@ -427,7 +439,7 @@ def kiem_11_cay_kpi_khong_cong_lan_tang():
     ty_le = lech_tong / tong_qlv * 100 if tong_qlv else 0
     # Nguong 1%: rollup cua Bravo va tong chi tiet co the lech chut it do lam tron/do tre snapshot.
     # Con neu cong lan hai tang thi se ra khoang 100%, khong the lot qua nguong nay.
-    _kiem("tong %d QLV (da loai nut danh dau) == tong TDV duoi quyen (nguong 1%%)" % so_qlv, ty_le < 1,
+    _kiem("tong %d QLV (da loai nut khong co TDV) == tong TDV duoi quyen (nguong 1%%)" % so_qlv, ty_le < 1,
           "rollup QLV: %s | cong TDV: %s | lech %s dong (%.3f%%)"
           % (_tien(tong_qlv), _tien(tong_tdv), _tien(lech_tong), ty_le))
     if lech_nhieu:
