@@ -308,6 +308,31 @@ def test_operational_quality_bat_mapping_loi_va_noi_ro_phan_chua_co(tmp_path, mo
     assert scoped["checks"]["invoice_mapping"]["OTC"]["future_dated_lines"] == 0
 
 
+def test_quality_dau_thang_dem_ca_nguoi_mat_snapshot_va_nguoi_moi(tmp_path, monkeypatch):
+    path = _setup(tmp_path, monkeypatch)
+    with sqlite3.connect(path) as conn:
+        conn.execute("UPDATE fact_tonghopkhachhang SET save_date='2026-04-30'")
+        conn.execute("INSERT INTO dim_nhanvien (employee_code,name,position_code,area_code,is_duplicate) "
+                     "VALUES ('NEW','Nhan vien moi','TDV','MB',0)")
+        conn.executemany("INSERT INTO fact_tonghopkhachhang "
+                         "(employee_code,customer_code,amount_ct,month_sale_target,save_date,manager_code) "
+                         "VALUES (?,?,?,?,?,?)", [
+            ('T1','C1',50,1000,'2026-05-02','Q1'),
+            ('NEW','CN',20,0,'2026-05-02','Q1'),
+        ])
+    result = rt.operational_data_quality(as_of_date='2026-05-02')
+    check = result['checks']['kpi_employee_mapping']
+    # 6 nguoi thang 4 (ke ca MISSING khong co dim) + NEW, khong chi 2 nguoi da ban thang 5.
+    assert check['employees'] == 7
+    assert check['missing_current_snapshot'] == 5
+    assert check['missing_target'] == 6
+    scoped = rt.operational_data_quality(as_of_date='2026-05-02', scope_employee_code='Q1')
+    assert scoped['checks']['kpi_employee_mapping']['employees'] == 3  # T1/T2/NEW
+    assert scoped['samples']['missing_current_snapshot'] == ['T2']
+    assert set(scoped['samples']['missing_target']) == {'T2', 'NEW'}
+    assert scoped['checks']['kpi_employee_mapping']['missing_manager'] == 0
+
+
 def test_call_template_ep_du_ca_ba_scope_cho_tool_moi(tmp_path, monkeypatch):
     _setup(tmp_path, monkeypatch)
     r = rt.call_template("get_geography_monthly_performance",

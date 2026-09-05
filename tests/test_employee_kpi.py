@@ -114,3 +114,61 @@ def test_position_code_loc_dung(tmp_path, monkeypatch):
 
     assert result["total_employees"] == 1
     assert result["rows"][0]["employee_code"] == "B"
+
+
+def test_roster_dau_thang_giu_nguoi_chua_ban_va_nguoi_moi_nhung_khong_muon_target(tmp_path, monkeypatch):
+    path = tmp_path / "warehouse.db"
+    _make_db(path)
+    with sqlite3.connect(path) as conn:
+        conn.execute("UPDATE fact_tonghopkhachhang SET manager_code='B' WHERE employee_code IN ('A','C')")
+        conn.executemany("INSERT INTO dim_nhanvien VALUES (?,?,?,?,?,?)", [
+            ('NEW', 'Nhan vien moi', 0, 'TDV', 'MB', 'NEW'),
+            ('OTHER', 'Doi khac', 0, 'TDV', 'MN', 'OTHER'),
+        ])
+        conn.executemany("INSERT INTO fact_tonghopkhachhang VALUES (?,?,?,?,?,?,?)", [
+            ('A', 'KH1', 50, 1000, '2026-08-02', 0, 'B'),
+            ('NEW', 'KH5', 100, 1000, '2026-08-02', 1, 'B'),
+            ('OTHER', 'KH6', 200, 1000, '2026-08-02', 0, 'Q-OTHER'),
+        ])
+    monkeypatch.setattr(local_warehouse, "DB_PATH", str(path))
+
+    token = rt._tool_warnings.set([])
+    try:
+        result = rt.employee_kpi('2026-08-02', position_code='TDV', scope_employee_code='B')
+        warnings = rt._tool_warnings.get()
+    finally:
+        rt._tool_warnings.reset(token)
+    # Roster mong doi doc lap: A/C da co tu thang truoc + NEW. Khong lo B/OTHER/D vao doi TDV.
+    assert result['roster_employees'] == 3
+    assert result['total_employees'] == 2
+    assert {r['employee_code'] for r in result['rows']} == {'A', 'NEW'}
+    assert sum(r['sales'] for r in result['rows']) == 150
+    assert result['count_full_target'] == 0  # C vuot 100% thang truoc khong duoc mang sang.
+    assert result['missing_current_snapshot_count'] == result['unassessed_count'] == 1
+    assert result['unassessed_rows'] == [
+        {'employee_code': 'C', 'name': 'Nhan vien C', 'reason': 'missing_current_snapshot',
+         'sales': None, 'pct': None}
+    ]
+    assert any('KHONG duoc ket luan' in warning for warning in warnings)
+
+    all_rows = rt.employee_kpi('2026-08-02', scope_area_code='MB')
+    assert all_rows['roster_employees'] == 5  # A/B/C/D + NEW, OTHER thuoc MN.
+    assert all_rows['unassessed_count'] == 3
+
+
+def test_missing_target_visible_and_unassessed_list_declares_truncation(tmp_path, monkeypatch):
+    path = tmp_path / 'warehouse.db'
+    _make_db(path)
+    monkeypatch.setattr(local_warehouse, 'DB_PATH', str(path))
+    result = rt.employee_kpi('2026-07-31', limit=1)
+    assert result['roster_employees'] == 4
+    assert result['total_employees'] == 3
+    assert result['missing_current_snapshot_count'] == 0
+    assert result['unassessed_rows'][0]['reason'] == 'missing_target'
+    assert result['unassessed_rows'][0]['sales'] == 300000
+    with sqlite3.connect(path) as conn:
+        conn.execute("UPDATE fact_tonghopkhachhang SET month_sale_target=0 WHERE employee_code='B'")
+    result = rt.employee_kpi('2026-07-31', limit=1)
+    assert result['unassessed_count'] == 2
+    assert len(result['unassessed_rows']) == 1
+    assert result['unassessed_rows_truncated'] is True

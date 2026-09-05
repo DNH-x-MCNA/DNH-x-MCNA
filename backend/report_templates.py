@@ -809,16 +809,23 @@ def employee_kpi(as_of_date: str, limit: int = 10, order_by: str = "sales", filt
     fdate = fdate_r[0]["d"] if fdate_r else None
     if fdate is None:
         return {"as_of": None, "total_employees": 0, "count_below_target": 0, "count_above_target": 0, "rows": []}
-    sql = f"""SELECT nv.name name, e.employee_code employee_code,
+    roster_sql, roster_params = _roster_employee_sql(fdate)
+    sql = f"""WITH roster AS ({roster_sql}), metrics AS (
+                 SELECT e.employee_code, SUM(e.amount_ct) sales,
+                        MAX(e.month_sale_target) target, SUM(e.is_nc) new_customers,
+                        MAX(e.save_date) metric_snapshot
+                 FROM fact_tonghopkhachhang e
+                 JOIN {_MONTH_LATEST_SUBQ} l ON l.employee_code=e.employee_code AND l.d=e.save_date
+                 GROUP BY e.employee_code
+             ) SELECT nv.name name, e.employee_code employee_code,
                     nv.position_code position_code, cv.description position_label,
-                    SUM(e.amount_ct) sales, MAX(e.month_sale_target) target,
-                    SUM(e.is_nc) new_customers
-             FROM fact_tonghopkhachhang e
-             JOIN {_MONTH_LATEST_SUBQ} l ON l.employee_code=e.employee_code AND l.d=e.save_date
+                    m.sales, m.target, m.new_customers, m.metric_snapshot
+             FROM roster e
+             LEFT JOIN metrics m ON m.employee_code=e.employee_code
              LEFT JOIN dim_nhanvien nv ON nv.employee_code=e.employee_code
              LEFT JOIN dim_chucvu cv ON cv.position_code=nv.position_code
              WHERE {_not_duplicate_sql('nv')}"""
-    params = [fdate, fdate]
+    params = [*roster_params, fdate, fdate]
     if position_code:
         sql += " AND nv.position_code=?"
         params.append(position_code)
@@ -844,9 +851,19 @@ def employee_kpi(as_of_date: str, limit: int = 10, order_by: str = "sales", filt
         allowed = [scope_employee_code] + [t["employee_code"] for t in team]
         sql += f" AND e.employee_code IN ({','.join(['?'] * len(allowed))})"
         params.extend(allowed)
-    sql += """ GROUP BY nv.name, e.employee_code, nv.position_code, cv.description
-               HAVING MAX(e.month_sale_target)>0"""
-    rows = _q(sql, tuple(params))
+    roster = _q(sql, tuple(params))
+    rows = [r for r in roster if _f(r["target"]) > 0]
+    unassessed = [
+        {"employee_code": r["employee_code"], "name": r["name"],
+         "reason": "missing_current_snapshot" if r["metric_snapshot"] is None else "missing_target",
+         "sales": None if r["metric_snapshot"] is None else _f(r["sales"]),
+         "pct": None}
+        for r in roster if _f(r["target"]) <= 0
+    ]
+    if unassessed:
+        _warn(f"Danh sach doi ghi nhan {len(roster)} nguoi; chi {len(rows)} nguoi co chi tieu du "
+              f"de danh gia KPI ky {fdate[:7]}. {len(unassessed)} nguoi chua du du lieu, "
+              "KHONG duoc ket luan ho dat 0%/khong dat KPI hay lay target thang truoc thay the.")
     for r in rows:
         r["sales"] = _f(r["sales"]); r["target"] = _f(r["target"])
         r["pct"] = (r["sales"] / r["target"] * 100) if r["target"] else 0.0
@@ -877,6 +894,11 @@ def employee_kpi(as_of_date: str, limit: int = 10, order_by: str = "sales", filt
         for threshold in (65, 70, 80, 100, 120)
     ]
     return {"as_of": fdate, "total_employees": len(rows),
+            "roster_employees": len(roster), "unassessed_count": len(unassessed),
+            "missing_current_snapshot_count": sum(r["metric_snapshot"] is None for r in roster),
+            "roster_snapshots": _roster_snapshot_dates(fdate),
+            "unassessed_rows": unassessed[:max(1, limit)],
+            "unassessed_rows_truncated": len(unassessed) > max(1, limit),
             # count_below/above_target = so nguoi DUOI/DAT MUC HUONG THUONG doanh so (65% hoac 70%
             # tuy vai tro). Ten cu giu nguyen de khong pha cac cho dang goi, nhung Y NGHIA la "muc
             # huong thuong", KHONG phai "dat chi tieu".
@@ -2556,11 +2578,16 @@ def operational_data_quality(as_of_date: str = None, sample_limit: int = 30,
     if not scope_channel or scope_channel.upper() == "OTC":
         fdate = _fact_date_le(as_of_date)
         if fdate:
-            sql = ("SELECT f.employee_code,MAX(f.manager_code) manager_code,"
-                   "MAX(COALESCE(f.month_sale_target,0)) target,nv.employee_code dim_code,"
-                   "nv.is_duplicate,nv.area_code FROM fact_tonghopkhachhang f "
-                   "LEFT JOIN dim_nhanvien nv ON nv.employee_code=f.employee_code WHERE f.save_date=?")
-            params = [fdate]
+            roster_sql, roster_params = _roster_employee_sql(fdate)
+            sql = (f"WITH roster AS ({roster_sql}), metrics AS ("
+                   "SELECT e.employee_code,MAX(e.month_sale_target) target,MAX(e.save_date) metric_snapshot "
+                   f"FROM fact_tonghopkhachhang e JOIN {_MONTH_LATEST_SUBQ} l "
+                   "ON l.employee_code=e.employee_code AND l.d=e.save_date GROUP BY e.employee_code) "
+                   "SELECT f.employee_code,f.manager_code,m.target,m.metric_snapshot,nv.employee_code dim_code,"
+                   "nv.is_duplicate,nv.area_code FROM roster f "
+                   "LEFT JOIN metrics m ON m.employee_code=f.employee_code "
+                   "LEFT JOIN dim_nhanvien nv ON nv.employee_code=f.employee_code WHERE 1=1")
+            params = [*roster_params, fdate, fdate]
             if scope_area_code:
                 sql += " AND nv.area_code=?"; params.append(scope_area_code)
             if scope_employee_code:
@@ -2568,21 +2595,26 @@ def operational_data_quality(as_of_date: str = None, sample_limit: int = 30,
                 codes = [r["employee_code"] for r in team]
                 sql += f" AND f.employee_code IN ({','.join(['?'] * len(codes))})"
                 params.extend(codes)
-            sql += " GROUP BY f.employee_code,nv.employee_code,nv.is_duplicate,nv.area_code"
             employees = _q(sql, tuple(params))
             missing_manager = [r["employee_code"] for r in employees if not (r["manager_code"] or "").strip()]
             missing_target = [r["employee_code"] for r in employees if _f(r["target"]) <= 0]
+            missing_snapshot = [r["employee_code"] for r in employees if r["metric_snapshot"] is None]
             missing_dim = [r["employee_code"] for r in employees if not r["dim_code"]]
             duplicates = [r["employee_code"] for r in employees if int(r["is_duplicate"] or 0) == 1
                           and r["employee_code"] not in _KNOWN_MISFLAGGED_DUPLICATE_CODES]
             result["checks"]["kpi_employee_mapping"] = {
                 "snapshot": fdate, "employees": len(employees),
+                "roster_snapshots": _roster_snapshot_dates(fdate),
+                "missing_current_snapshot": len(missing_snapshot),
                 "missing_manager": len(missing_manager), "missing_target": len(missing_target),
                 "missing_employee_dim": len(missing_dim), "duplicate_codes": len(duplicates),
+                "note": "missing_target gom ca nguoi chua co dong KPI trong ky. Chua du du lieu "
+                        "khong dong nghia voi 0% KPI hay da xac nhan chua giao chi tieu.",
             }
             result["samples"].update({
                 "missing_manager": missing_manager[:sample_limit],
                 "missing_target": missing_target[:sample_limit],
+                "missing_current_snapshot": missing_snapshot[:sample_limit],
                 "missing_employee_dim": missing_dim[:sample_limit],
                 "duplicate_codes": duplicates[:sample_limit],
             })
@@ -4080,6 +4112,29 @@ def _roster_snapshot_dates(fdate: str = None) -> list:
     return [d for d in dict.fromkeys([moc_tron, moc_moi]) if d]
 
 
+def _roster_employee_sql(fdate: str) -> tuple:
+    """Roster hop ky tron + ky moi, moi NV mot dong; quan ly lay theo moc moi nhat cua NV.
+
+    Chi cung cap danh tinh/quan he. Tuyet doi khong mang target/doanh so ky cu sang ky moi.
+    """
+    queries, params = [], []
+    for moc in _roster_snapshot_dates(fdate):
+        queries.append(
+            "SELECT e.employee_code, MAX(e.manager_code) manager_code, e.save_date roster_snapshot "
+            f"FROM fact_tonghopkhachhang e JOIN {_MONTH_LATEST_SUBQ} l "
+            "ON l.employee_code=e.employee_code AND l.d=e.save_date "
+            "GROUP BY e.employee_code,e.save_date"
+        )
+        params.extend([moc, moc])
+    if not queries:
+        return "SELECT NULL employee_code,NULL manager_code,NULL roster_snapshot WHERE 0", ()
+    return (
+        "SELECT employee_code,manager_code,roster_snapshot FROM ("
+        "SELECT r.*,ROW_NUMBER() OVER (PARTITION BY employee_code ORDER BY roster_snapshot DESC) rn "
+        f"FROM ({' UNION ALL '.join(queries)}) r) WHERE rn=1", tuple(params)
+    )
+
+
 def _team_of_qlv(qlv_employee_code: str, fdate: str = None) -> list:
     """TDV bao cao TRUC TIEP len 1 QLV, xac dinh qua manager_code THAT tu Bravo
     (FACT_TongHopKhachHang.ManagerCode, dong bo 23/07/2026 - xem local_warehouse.py::SCHEMA).
@@ -4365,18 +4420,45 @@ def kpi_ranking(group_by: str = "qlv", as_of_date: str = None, limit: int = 20,
     trong than ham va _warn_region_target_mismatch()."""
     requested_as_of = as_of_date or str(dt.date.today())
     latest_available = _fact_date_le(requested_as_of)
-    # Ranking can target day du. Snapshot giua thang la danh sach "nguoi da ban", va dau thang DNH
-    # co the chua nap target cho bat ky ai. Dung ky thang da tron gan nhat de khong tra bang rong/sai
-    # mau so; roster van lay HOP ky tron + moc moi nhat qua _rollup_tier_codes(latest_available).
-    fdate = _fdate_roster(requested_as_of)
+    fdate = latest_available
     if not fdate:
         return []
+    managers = _rollup_tier_codes(latest_available)
+    if not managers:
+        _warn("Khong xac dinh duoc tang quan ly (manager_code rong). KHONG du so lieu de xep hang KPI.")
+        return []
+    ph = ",".join("?" for _ in managers)
+    coverage_sql = (
+        "SELECT nv.employee_code,MAX(f.month_sale_target) target FROM dim_nhanvien nv "
+        f"LEFT JOIN {_MONTH_LATEST_SUBQ} l ON l.employee_code=nv.employee_code "
+        "LEFT JOIN fact_tonghopkhachhang f ON f.employee_code=l.employee_code AND f.save_date=l.d "
+        f"WHERE nv.employee_code IN ({ph})"
+    )
+    coverage_params = list(managers)
+    if scope_area_code:
+        coverage_sql += " AND nv.area_code=?"
+        coverage_params.append(scope_area_code)
+    if scope_employee_code and group_by != "region":
+        coverage_sql += " AND nv.employee_code=?"
+        coverage_params.append(scope_employee_code)
+    coverage_sql += " GROUP BY nv.employee_code"
+    coverage = _q(coverage_sql, (fdate, fdate, *coverage_params))
+    # Chi lui ve ky tron khi CHUA AI trong pham vi co target. Neu da co target giua thang thi
+    # giu so lieu ky dang hoi; roster ky tron chi giup tim nguoi, khong doi ky cua doanh so.
+    if coverage and not any(_f(r["target"]) > 0 for r in coverage):
+        fdate = _fdate_roster(requested_as_of)
+        coverage = _q(coverage_sql, (fdate, fdate, *coverage_params))
     if latest_available and str(latest_available) != str(fdate):
         _warn(
             f"Xep hang KPI dang dung ky day du gan nhat {fdate}, khong dung snapshot giua thang "
             f"{latest_available} vi snapshot giua thang chi co nguoi da phat sinh ban hang va co "
             "the chua du target."
         )
+    unavailable = sum(_f(r["target"]) <= 0 for r in coverage)
+    if unavailable:
+        _warn(f"{unavailable}/{len(coverage)} ma quan ly trong roster chua du snapshot/target ky "
+              f"{fdate[:7]}; bang xep hang chi tinh cac ma co target. KHONG coi nguoi thieu du lieu "
+              "la dat 0% hay khong dat KPI.")
 
     if group_by == "region":
         # QUAN TRONG: phai gom ve 1 dong/nhan vien TRUOC (SUM(amount_ct), MAX(target) - target lap
@@ -4433,7 +4515,7 @@ def kpi_ranking(group_by: str = "qlv", as_of_date: str = None, limit: int = 20,
                         FROM fact_tonghopkhachhang f
                         JOIN {_MONTH_LATEST_SUBQ} l
                           ON l.employee_code=f.employee_code AND l.d=f.save_date
-                        GROUP BY f.employee_code) e
+                        GROUP BY f.employee_code HAVING MAX(f.month_sale_target)>0) e
                   JOIN dim_nhanvien nv ON nv.employee_code=e.employee_code
                   WHERE e.employee_code IN ({ph})"""
         params = [fdate, fdate] + managers
@@ -4443,6 +4525,7 @@ def kpi_ranking(group_by: str = "qlv", as_of_date: str = None, limit: int = 20,
         sql += " GROUP BY nv.area_code"
         rows = _q(sql, tuple(params))
         for r in rows:
+            r["as_of"] = fdate
             r["sales"] = _f(r["sales"]); r["target"] = _f(r["target"])
             r["pct"] = (r["sales"] / r["target"] * 100) if r["target"] else 0.0
             # Dong TONG HOP theo VUNG cham theo moc DAT KPI 80% - 1 vung khong phai 1 con nguoi nen
@@ -4488,7 +4571,7 @@ def kpi_ranking(group_by: str = "qlv", as_of_date: str = None, limit: int = 20,
         # vd MN1 'Kenh MT' (Modern Trade - Long Chau/Pharmacity...), MN4 'Cho si'.
         is_unit = (int(qlv["dup"] or 0) == 1
                    and qlv["employee_code"] not in _KNOWN_MISFLAGGED_DUPLICATE_CODES)
-        row = {"employee_code": qlv["employee_code"], "name": qlv["name"],
+        row = {"as_of": fdate, "employee_code": qlv["employee_code"], "name": qlv["name"],
                "area_code": qlv["area_code"], **kpi, "la_nhom_kenh": is_unit}
         if is_unit:
             row["ghi_chu"] = (f"'{qlv['name']}' la NHOM/KENH ban hang (khong phai mot ca nhan) - khi "

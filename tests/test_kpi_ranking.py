@@ -199,3 +199,29 @@ def test_dau_thang_dung_ky_tron_va_hop_roster_de_khong_tra_rong(tmp_path, monkey
     assert {r["area_code"] for r in regions} == {"MB", "MN"}
     assert {"QLV1", "MN1", "QLV-MOI"} <= set(rt._rollup_tier_codes("2026-09-04"))
     assert any(SAVE_DATE in warning and "snapshot giua thang" in warning for warning in warnings)
+    assert {r['as_of'] for r in qlvs + regions} == {SAVE_DATE}
+
+
+def test_giua_thang_co_target_thi_giu_ky_hien_tai_va_bao_nguoi_chua_du_du_lieu(tmp_path, monkeypatch):
+    path = tmp_path / 'warehouse.db'
+    _make_db(path)
+    with sqlite3.connect(path) as conn:
+        # QLV1 da co KPI ky moi, MN1 chi co doanh so nhung chua co target.
+        conn.executemany('INSERT INTO fact_tonghopkhachhang VALUES (?,?,?,?,?,?,?)', [
+            ('QLV1','ROLL1',30,100,'2026-08-02',0,None),
+            ('MN1','ROLL2',50,0,'2026-08-02',0,None),
+        ])
+    monkeypatch.setattr(local_warehouse, 'DB_PATH', str(path))
+    token = rt._tool_warnings.set([])
+    try:
+        qlvs = rt.kpi_ranking('qlv', '2026-08-02', limit=100)
+        regions = rt.kpi_ranking('region', '2026-08-02', limit=100)
+        warnings = rt._tool_warnings.get()
+    finally:
+        rt._tool_warnings.reset(token)
+    assert [r['employee_code'] for r in qlvs] == ['QLV1']
+    assert {r['as_of'] for r in qlvs + regions} == {'2026-08-02'}
+    # 30 la doanh so ky moi da biet doc lap; khong the xanh neu ca hai ve cung lay nham thang cu.
+    assert sum(r['sales'] for r in qlvs) == sum(r['sales'] for r in regions) == 30
+    assert qlvs[0]['pct'] == 30
+    assert any('chua du snapshot/target' in warning for warning in warnings)

@@ -299,7 +299,11 @@ TEMPLATE_TOOLS = [
     },
     {
         "name": "get_employee_kpi",
-        "description": "KPI nhan vien tu snapshot gan nhat <= as_of_date. Tra ve total_employees + 3 muc do "
+        "description": "KPI nhan vien tu snapshot gan nhat <= as_of_date. total_employees chi dem nguoi "
+                        "co target de danh gia; roster_employees la so nguoi trong roster hop ky tron + ky moi. "
+                        "unassessed_count/unassessed_rows la nguoi thieu snapshot/target ky dang hoi: PHAI noi ro "
+                        "chua du du lieu, KHONG gan ho 0% hay khong dat KPI, KHONG lay target ky cu thay the. "
+                        "Tra ve 3 muc do "
                         "rieng: count_full_target (dat chi tieu), count_kpi_achieved (dat KPI), "
                         "count_above_target/count_below_target (toi muc thuong nhom hang) - dinh nghia/nguong "
                         "day du cua 3 muc nay va y nghia mau status da co o system prompt, KHONG tu suy dien "
@@ -796,7 +800,10 @@ TEMPLATE_TOOLS = [
     {
         "name": "get_kpi_ranking",
         "description": "Xep hang % dat KPI, TOT NHAT truoc - dung khi hoi 'QLV nao dat KPI tot/kem "
-                        "nhat', 'xep hang cac vung theo KPI', 'so sanh KPI giua cac QLV/vung'.",
+                        "nhat', 'xep hang cac vung theo KPI', 'so sanh KPI giua cac QLV/vung'. "
+                        "Doc as_of tren ket qua va canh bao: neu ky moi chua co target, tool tra ky tron "
+                        "gan nhat de tham khao; PHAI ghi dung thang do, khong goi la KPI thang hien tai. "
+                        "Nguoi chua du snapshot/target duoc canh bao, khong coi la 0% KPI.",
         "input_schema": {
             "type": "object",
             "properties": {

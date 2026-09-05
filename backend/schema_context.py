@@ -144,6 +144,12 @@ fact_tonghopkhachhang: 1 dong = 1 (nhan vien, khach hang, ngay snapshot). Cot: e
   tren), save_date (ngay snapshot - dung MAX(save_date) <= ngay can xem de lay snapshot gan nhat),
   is_nc (=1 neu la KH moi trong thang). CHI CO ~90 NGAY GAN NHAT trong kho local (lich su xa hon
   khong dong bo vi it gia tri cho KPI hien tai).
+  CANH BAO DANH SACH NHAN SU DAU THANG: nguoi chua phat sinh ban hang co the KHONG CO DONG trong
+  snapshot ky moi. De xac dinh danh sach nguoi/doi, phai HOP roster ky thang da tron gan nhat voi
+  roster moi nhat <= ngay can xem (giu ca nguoi chua ban va nguoi moi vao); moi NV chi dem mot lan.
+  So lieu doanh so/target VAN lay dung ky dang hoi, KHONG mang target hay doanh so ky cu sang ky moi.
+  Nguoi thieu snapshot/target ky hien tai la CHUA DU DU LIEU danh gia, khong phai dat 0%/khong dat KPI.
+  Uu tien get_employee_kpi/get_kpi_ranking; luon noi ro ky snapshot ma tool thuc su tra ve.
   Cot moi tu 31/07/2026:
     year_sale_target - !!! year_sale_target: CHUA XAC NHAN KY NAO. KHONG dung de tra loi "chi tieu NAM". Noi ro he thong chua xac nhan. Dung MAX.
     is_ro = RE-ORDER (khach DAT LAI HANG trong thang) - XAC NHAN 26/08/2026. DUNG COT NAY cho cau
