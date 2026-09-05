@@ -4069,6 +4069,17 @@ def _fdate_roster(fdate: str = None) -> str:
     return truoc or ngay
 
 
+def _roster_snapshot_dates(fdate: str = None) -> list:
+    """Hai moc can HOP khi dung FACT de xac dinh DANH SACH NGUOI.
+
+    Moc thang da tron giu nguoi chua ban trong thang moi; moc moi nhat giu nguoi moi vao. Ham nay
+    chi dung cho roster, KHONG tu y tron so KPI cua hai ky.
+    """
+    moc_tron = _fdate_roster(fdate)
+    moc_moi = _fact_date_le(fdate) if fdate else _fact_latest_date()
+    return [d for d in dict.fromkeys([moc_tron, moc_moi]) if d]
+
+
 def _team_of_qlv(qlv_employee_code: str, fdate: str = None) -> list:
     """TDV bao cao TRUC TIEP len 1 QLV, xac dinh qua manager_code THAT tu Bravo
     (FACT_TongHopKhachHang.ManagerCode, dong bo 23/07/2026 - xem local_warehouse.py::SCHEMA).
@@ -4086,9 +4097,7 @@ def _team_of_qlv(qlv_employee_code: str, fdate: str = None) -> list:
     #   - moc MOI NHAT       : giu NGUOI MOI VAO chua co trong anh chup thang truoc
     # Chi lay moc tron thi bo sot nguoi moi (do duoc: kiem_11 lech tu 0,831% len 1,713%); chi lay
     # moc moi nhat thi dinh dung bay co lai da gay loi M01. Hop hai moc giu duoc ca hai.
-    moc_tron = _fdate_roster(fdate)
-    moc_moi = _fact_date_le(fdate) if fdate else _fact_latest_date()
-    cac_moc = [d for d in dict.fromkeys([moc_tron, moc_moi]) if d]
+    cac_moc = _roster_snapshot_dates(fdate)
     if len(cac_moc) > 1:
         phan = " UNION ".join(
             f"SELECT DISTINCT e.employee_code, nv.name FROM fact_tonghopkhachhang e "
@@ -4097,7 +4106,7 @@ def _team_of_qlv(qlv_employee_code: str, fdate: str = None) -> list:
             f"WHERE e.manager_code=? AND nv.position_code='TDV'" for _ in cac_moc)
         tham = tuple(x for d in cac_moc for x in (d, d, qlv_employee_code))
         return _q(phan, tham)
-    fdate = moc_tron
+    fdate = cac_moc[0] if cac_moc else None
     if not fdate:
         return []
     return _q(
@@ -4274,10 +4283,22 @@ def _rollup_tier_codes(fdate: str) -> list:
     cong tay danh sach QLV phai ra dung tong vung. Cung quy tac voi bao cao email ben D:/DNH
     (src/alerts.py::get_bravo_manager_codes) de 2 he thong khong bao gio lech.
     """
-    return [m["manager_code"] for m in _q(
-        "SELECT DISTINCT manager_code FROM fact_tonghopkhachhang "
-        "WHERE save_date<=? AND substr(save_date,1,7)=substr(?,1,7) "
-        "AND manager_code IS NOT NULL AND manager_code<>''", (fdate, fdate))]
+    cac_moc = _roster_snapshot_dates(fdate)
+    if not cac_moc:
+        return []
+    # Moi moc chi lay ban ghi moi nhat cua TUNG nhan vien trong thang do. HOP cac moc de tranh ca
+    # hai bay: snapshot moi nhat bo nguoi chua ban; chi snapshot tron bo nguoi moi vao.
+    queries = []
+    params = []
+    for moc in cac_moc:
+        queries.append(
+            f"SELECT DISTINCT e.manager_code FROM fact_tonghopkhachhang e "
+            f"JOIN {_MONTH_LATEST_SUBQ} l ON l.employee_code=e.employee_code AND l.d=e.save_date "
+            "WHERE e.manager_code IS NOT NULL AND e.manager_code<>''"
+        )
+        params.extend([moc, moc])
+    rows = _q(" UNION ".join(queries), tuple(params))
+    return [m["manager_code"] for m in rows]
 
 
 def _warn_region_target_mismatch(rows: list, fdate: str, tolerance_pct: float = 0.5) -> None:
@@ -4342,11 +4363,20 @@ def kpi_ranking(group_by: str = "qlv", as_of_date: str = None, limit: int = 20,
     chinh ho) - KHOP TUYET DOI voi bao cao goc "Tien do doanh so thang theo NVKD" cua DNH va bang
     chi tieu vung DIM_TargetVungMien. KHONG cong them tang TDV vao (se gap doi). Xem ghi chu chi tiet
     trong than ham va _warn_region_target_mismatch()."""
-    fdate_r = _q("SELECT MAX(save_date) d FROM fact_tonghopkhachhang WHERE save_date<=?",
-                 (as_of_date or str(dt.date.today()),))
-    fdate = fdate_r[0]["d"] if fdate_r else None
+    requested_as_of = as_of_date or str(dt.date.today())
+    latest_available = _fact_date_le(requested_as_of)
+    # Ranking can target day du. Snapshot giua thang la danh sach "nguoi da ban", va dau thang DNH
+    # co the chua nap target cho bat ky ai. Dung ky thang da tron gan nhat de khong tra bang rong/sai
+    # mau so; roster van lay HOP ky tron + moc moi nhat qua _rollup_tier_codes(latest_available).
+    fdate = _fdate_roster(requested_as_of)
     if not fdate:
         return []
+    if latest_available and str(latest_available) != str(fdate):
+        _warn(
+            f"Xep hang KPI dang dung ky day du gan nhat {fdate}, khong dung snapshot giua thang "
+            f"{latest_available} vi snapshot giua thang chi co nguoi da phat sinh ban hang va co "
+            "the chua du target."
+        )
 
     if group_by == "region":
         # QUAN TRONG: phai gom ve 1 dong/nhan vien TRUOC (SUM(amount_ct), MAX(target) - target lap
@@ -4378,7 +4408,7 @@ def kpi_ranking(group_by: str = "qlv", as_of_date: str = None, limit: int = 20,
         #     1,5 ty, MBKV12 5,28 ty, TM25030101 Lac Ngoc Sam 0,935 ty). Danh sach mien tru tay
         #     _KNOWN_MISFLAGGED_DUPLICATE_CODES chi liet ke duoc 2/4 - va se lai thieu khi DNH them
         #     kenh moi. Gop theo manager_code khong phu thuoc nhan nen khong con phai va tiep.
-        managers = _rollup_tier_codes(fdate)
+        managers = _rollup_tier_codes(latest_available or fdate)
         if not managers:
             _warn("Khong xac dinh duoc tang quan ly (manager_code rong) nen KHONG tinh duoc KPI theo "
                   "vung. PHAI noi ro la chua tra cuu duoc, KHONG duoc tra ve 0 nhu the la khong dat.")
@@ -4432,7 +4462,7 @@ def kpi_ranking(group_by: str = "qlv", as_of_date: str = None, limit: int = 20,
     # NHOM/KENH chu khong phai ca nhan, de khong ai hieu nham dang xep hang mot con nguoi.
     # CO Y khong loc end_date/is_resigned nua: pham vi phai TRUNG KHIT nhanh 'region', them bat ky
     # dieu kien nao chi co o day se lam 2 con so lech nhau tro lai.
-    managers = _rollup_tier_codes(fdate)
+    managers = _rollup_tier_codes(latest_available or fdate)
     if not managers:
         _warn("Khong xac dinh duoc tang quan ly (manager_code rong) nen KHONG xep hang duoc QLV. "
               "PHAI noi ro la chua tra cuu duoc, KHONG tra ve danh sach rong nhu the la khong co ai.")

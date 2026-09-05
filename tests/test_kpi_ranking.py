@@ -166,3 +166,36 @@ def test_khong_co_tang_quan_ly_thi_bao_ro_khong_tra_rong_am_tham(tmp_path, monke
     assert rows == []
     assert warnings, "phai canh bao khi khong xac dinh duoc tang quan ly"
     assert "KHONG" in warnings[0]
+
+
+def test_dau_thang_dung_ky_tron_va_hop_roster_de_khong_tra_rong(tmp_path, monkeypatch):
+    """04/09/2026: snapshot dau thang chi con nguoi da ban; ranking phai dung ky tron gan nhat."""
+    db_path = tmp_path / "warehouse.db"
+    _make_db(db_path)
+    conn = sqlite3.connect(db_path)
+    # Thang moi chi QLV1 co cap duoi phat sinh. MN1 va cap duoi chua ban nen bien mat khoi snapshot.
+    conn.execute("INSERT INTO fact_tonghopkhachhang VALUES "
+                 "('TDV1','KH-MOI',10,0,'2026-09-04',0,'QLV1')")
+    # Nguoi moi vao can duoc roster nhan dien, du chua co KPI o ky tron truoc de vao bang xep hang.
+    conn.execute("INSERT INTO dim_nhanvien VALUES "
+                 "('QLV-MOI','Quan ly moi',0,'QLV','MB','QLV-MOI')")
+    conn.execute("INSERT INTO dim_nhanvien VALUES "
+                 "('TDV-MOI','Nhan vien moi',0,'TDV','MB','TDV-MOI')")
+    conn.execute("INSERT INTO fact_tonghopkhachhang VALUES "
+                 "('TDV-MOI','KH-MOI-2',5,0,'2026-09-04',0,'QLV-MOI')")
+    conn.commit()
+    conn.close()
+    monkeypatch.setattr(local_warehouse, "DB_PATH", str(db_path))
+
+    token = rt._tool_warnings.set([])
+    try:
+        qlvs = rt.kpi_ranking(group_by="qlv", as_of_date="2026-09-04", limit=100)
+        regions = rt.kpi_ranking(group_by="region", as_of_date="2026-09-04", limit=100)
+        warnings = rt._tool_warnings.get()
+    finally:
+        rt._tool_warnings.reset(token)
+
+    assert {r["employee_code"] for r in qlvs} == {"QLV1", "MN1"}
+    assert {r["area_code"] for r in regions} == {"MB", "MN"}
+    assert {"QLV1", "MN1", "QLV-MOI"} <= set(rt._rollup_tier_codes("2026-09-04"))
+    assert any(SAVE_DATE in warning and "snapshot giua thang" in warning for warning in warnings)
