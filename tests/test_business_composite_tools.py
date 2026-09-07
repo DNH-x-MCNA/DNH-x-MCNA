@@ -122,6 +122,9 @@ def test_composite_business_tools_are_exposed_to_model():
         "get_salary_data_quality",
         "get_customer_revenue_debt_risk",
     } <= names
+    salary_tool = next(tool for tool in nl2sql.TEMPLATE_TOOLS
+                       if tool["name"] == "get_salary_achievement_summary")
+    assert "chi phi thuong/doanh thu" in salary_tool["description"].lower()
 
 
 def test_top_products_channel_comparison_requires_two_separate_calls():

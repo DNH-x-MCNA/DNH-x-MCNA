@@ -122,6 +122,20 @@ def test_missing_warehouse_schema_returns_live_catalog_fallback(monkeypatch):
     assert "khong truy cap" in payload["next_action"]
 
 
+def test_c02_area_code_error_returns_correct_join_hint(monkeypatch):
+    """C02 UAT: model tung lap lai c.area_code 8 lan, trong khi area_code nam o dim_tinhthanhpho."""
+    monkeypatch.setattr(nl2sql, "search_sql_catalog", lambda *a, **kw: {"matches": []})
+
+    payload = nl2sql._raw_query_payload(
+        {"ok": False, "error": "sqlite3.OperationalError: no such column: c.area_code"},
+        "local",
+        "Moi thang dat bao nhieu % ke hoach theo kenh va mien?",
+    )
+
+    assert "tp.area_code" in payload["query_correction"]
+    assert "LEFT JOIN" in payload["query_correction"]
+
+
 @pytest.mark.parametrize("sql", [
     "SELECT * INTO dbo.CopyTable FROM dbo.vHoaDonTotal",
     "SELECT TOP 1 * FROM dbo.DIM_Pass",

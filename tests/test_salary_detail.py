@@ -466,6 +466,39 @@ def test_salary_achievement_summary_khong_dem_aso_cho_cs_tk(tmp_path, monkeypatc
     assert result["is_ac_position_count"] == 1
 
 
+def test_salary_cost_summary_khong_nhan_doi_doanh_thu_qlv_va_loai_aso_cs_tk(tmp_path, monkeypatch):
+    """C48 UAT 07/09: tu so co thuong ca QLV, mau so CHI co doanh thu cap ban hang. Cong doanh
+    thu QLV rollup se lam ty le thuong/doanh thu nho gia tao; ASO cua CS/TK cung khong duoc cong."""
+    db_path = tmp_path / "warehouse.db"
+    _make_db(db_path)
+    conn = sqlite3.connect(db_path)
+    _insert(conn, employee_code="TDV01", employee_name="TDV A", position_code="TDV",
+            manager_code="QLV01", save_date="2026-07-31", v25_percent=0.8,
+            month_sale_amount=100_000_000, dm_bonus=10_000_000)
+    _insert(conn, employee_code="CS01", employee_name="Cho si A", position_code="CS",
+            manager_code="QLV01", save_date="2026-07-31", v25_percent=0.8,
+            month_sale_amount=100_000_000, dm_bonus=5_000_000, aso_bonus=99_000_000)
+    _insert(conn, employee_code="QLV01", employee_name="Quan ly", position_code="QLV",
+            save_date="2026-07-31", v25_percent=0.8,
+            month_sale_amount=200_000_000, dm_bonus=20_000_000)
+    conn.commit()
+    conn.close()
+    monkeypatch.setattr(local_warehouse, "DB_PATH", str(db_path))
+
+    result = rt._salary_cost_summary(month_from="2026-07", month_to="2026-07",
+                                     scope_employee_code="QLV01", scope_role="qlv")
+
+    assert result["period"] == {"from_month": "2026-07", "to_month": "2026-07"}
+    row = result["months"][0]
+    assert row["total_employees"] == 3
+    assert row["employee_tier_sales"] == 200_000_000
+    assert row["employee_tier_bonus"] == 15_000_000
+    assert row["management_bonus"] == 20_000_000
+    assert row["total_bonus"] == 35_000_000
+    assert row["bonus_to_sales_pct"] == 17.5
+    assert row["profit_data_available"] is False
+
+
 def test_salary_bonus_policy_aso_cs_tk_tra_not_applicable():
     result = rt.salary_bonus_policy(bonus_type="aso", position_code="tk")
 

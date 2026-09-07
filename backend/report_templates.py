@@ -1915,22 +1915,39 @@ def customer_movement(month: str = None, history_months: int = 6,
             "employee_code": emp, "channels": sorted(c["channels"]), "areas": sorted(c["areas"]),
         })
     detail.sort(key=lambda x: abs(x["delta"]), reverse=True)
-    detail = detail[:limit]
 
-    counts = {}
-    for r in detail:
-        counts[r["movement"]] = counts.get(r["movement"], 0) + 1
-    added = sum(r["current_revenue"] for r in detail
-                if r["movement"] in {"NEW_OR_FIRST_OBSERVED", "REACTIVATED"})
-    lost = sum(r["previous_revenue"] for r in detail if r["movement"] == "STOPPED")
+    # 07/09/2026 (C31 UAT): limit chi de gioi han danh sach khach de model khong bi cat payload.
+    # Neu tinh "khach moi/tai kich hoat bu duoc bao nhieu" SAU khi cat top-N, mot khach lon co the
+    # lam ket luan ve ca doi dao chieu. Tong ket phai tinh tren TOAN BO tap khach truoc, con top-N
+    # chi dung de giai thich cac dong dang hien thi.
+    def _movement_summary(rows):
+        counts = {}
+        for row in rows:
+            counts[row["movement"]] = counts.get(row["movement"], 0) + 1
+        added = sum(row["current_revenue"] for row in rows
+                    if row["movement"] in {"NEW_OR_FIRST_OBSERVED", "REACTIVATED"})
+        lost = sum(row["previous_revenue"] for row in rows if row["movement"] == "STOPPED")
+        return {
+            "customer_count_considered": len(rows),
+            "counts": counts,
+            "added_revenue": added,
+            "lost_previous_revenue": lost,
+            "net_offset": added - lost,
+            "compensation_pct_of_lost_revenue": round(added / lost * 100, 1) if lost else None,
+        }
+
+    summary_all = _movement_summary(detail)
+    returned_detail = detail[:limit]
     return {
         "month": month, "previous_month": prev_month, "history_from": start,
-        "summary_on_returned_top_rows": {"counts": counts, "added_revenue": added,
-                                          "lost_previous_revenue": lost, "net_offset": added - lost},
-        "customers": detail,
+        "summary_all_customers": summary_all,
+        "summary_on_returned_top_rows": _movement_summary(returned_detail),
+        "customers": returned_detail,
         "canh_bao": ("NEW_OR_FIRST_OBSERVED chi co nghia la lan dau THAY trong cua so du lieu dang co; "
                       "khong duoc khang dinh la khach moi trong doi neu kho thieu lich su truoc do. "
-                      "Summary chi tong tren cac dong tra ve sau limit, khong phai tong toan bo neu bi cat."),
+                      "Khi hoi tong doanh thu them/mat hoac ty le bu doanh thu, BAT BUOC dung "
+                      "summary_all_customers; summary_on_returned_top_rows chi mo ta cac dong top-N "
+                      "dang hien thi, khong dai dien cho toan bo tap khach."),
         "data_as_of": latest_data_date(),
     }
 
@@ -5724,8 +5741,9 @@ def _closed_salary_date_filter(alias: str, value: str = None) -> tuple[str, tupl
     return clause + f" AND {prefix}save_date<=?", (cutoff,)
 
 
-def salary_achievement_summary(save_date: str = None, scope_area_code: str = None,
-                               scope_employee_code: str = None, scope_role: str = None) -> dict:
+def salary_achievement_summary(save_date: str = None, month_from: str = None, month_to: str = None,
+                               scope_area_code: str = None, scope_employee_code: str = None,
+                               scope_role: str = None) -> dict:
     """Tong hop so luong nhan vien dat cac moc thuong tien do (V15, V22, V25) va ASO.
     Tra ve so luong dat dieu kien va ty le % tren tong so nhan vien thuoc pham vi.
     Phan quyen: scope_employee_code gioi han ve doi cua QLV.
@@ -5782,7 +5800,7 @@ def salary_achievement_summary(save_date: str = None, scope_area_code: str = Non
         
     r = row[0]
     total = r["total_emp"]
-    return {
+    result = {
         "save_date": fdate,
         "snapshot_status": "closed_period",
         "total_employees": total,
@@ -5800,6 +5818,134 @@ def salary_achievement_summary(save_date: str = None, scope_area_code: str = Non
             "(dua tren du lieu co phat sinh tien thuong > 0). ASO chi ap dung cho vi tri khac CS/TK; "
             "CS (Cho si) va TK (kenh MT) dung co is_ac/Active Customer, khong cong ASO."
         )
+    }
+    # C48 UAT 07/09: dung chung tool luong da co thay vi mo them tool moi (bo 40 phep doi chieu
+    # phai bao phu toan bo tool dang ky). Neu user chi dinh snapshot thi giu dung mot ky; neu khong
+    # chi dinh ky, helper tra 12 thang da chot de cau hoi "theo thang" khong bi rut thanh 1 diem.
+    cost_from = month_from or (str(fdate)[:7] if save_date else None)
+    cost_to = month_to or (str(fdate)[:7] if save_date else None)
+    result["cost_summary"] = _salary_cost_summary(
+        month_from=cost_from, month_to=cost_to,
+        scope_area_code=scope_area_code, scope_employee_code=scope_employee_code,
+        scope_role=scope_role,
+    )
+    return result
+
+
+def _salary_cost_summary(month_from: str = None, month_to: str = None,
+                         scope_area_code: str = None, scope_employee_code: str = None,
+                         scope_role: str = None) -> dict:
+    """Chi phi thuong kinh doanh/doanh thu theo thang, khong nhan doi doanh thu cap quan ly.
+
+    Mau so doanh thu CHI gom TDV/CTV/CS/TK. Doanh thu cua QLV/TP la rollup cua doi; cong no vao
+    mau so se nhan doi va lam ty le thuong/doanh thu sai. Tu so van gom thuong cua ca doi ngu
+    (DM + V15 + V22 + V25 + ASO hop le); ASO cua CS/TK bi loai theo quy tac 27/08/2026.
+    Loi nhuan va quan he nhan qua voi tang truong khong co trong kho, nen tool chi tra ve None thay
+    vi suy dien "hieu qua" tu ty le chi phi.
+    """
+    def _month(value: str, field: str) -> str:
+        raw = str(value or "").strip()[:7]
+        try:
+            dt.date.fromisoformat(raw + "-01")
+        except ValueError as exc:
+            raise ValueError(f"{field} phai theo dinh dang YYYY-MM.") from exc
+        return raw
+
+    if scope_employee_code:
+        emp_sql = " AND (f.employee_code=? OR f.manager_code=?)"
+        emp_params = (scope_employee_code, scope_employee_code)
+    else:
+        emp_sql, emp_params = "", ()
+    area_sql = " AND f.area_code=?" if scope_area_code else ""
+    area_params = (scope_area_code,) if scope_area_code else ()
+    scope_sql, scope_params = emp_sql + area_sql, emp_params + area_params
+
+    if month_to:
+        to_month = _month(month_to, "month_to")
+    else:
+        latest = _q(
+            "SELECT MAX(substr(f.save_date,1,7)) month FROM fact_thongketinhluong f "
+            "WHERE f.save_date=date(f.save_date,'start of month','+1 month','-1 day') "
+            f"{scope_sql} AND f.v25_percent IS NOT NULL",
+            scope_params,
+        )
+        if not latest or not latest[0]["month"]:
+            latest = _q(
+                "SELECT MAX(substr(f.save_date,1,7)) month FROM fact_thongketinhluong f "
+                "WHERE f.save_date=date(f.save_date,'start of month','+1 month','-1 day') "
+                f"{scope_sql}", scope_params,
+            )
+        to_month = latest[0]["month"] if latest and latest[0]["month"] else None
+    if not to_month:
+        return {"error": "Chua co snapshot thuong/luong CUOI KY da chot trong pham vi cua ban."}
+
+    # Chi ro mot thang thi tra dung mot thang; khong chi ro ky thi tra 12 ky da chot gan nhat de
+    # nguoi dung co the xem xu huong, nhung khong goi day la tuong quan/nhan qua.
+    from_month = _month(month_from, "month_from") if month_from else (
+        to_month if month_to else _month_add(to_month, -11)
+    )
+    if from_month > to_month:
+        return {"error": "month_from khong duoc sau month_to."}
+
+    bonus_expr = (
+        "COALESCE(f.dm_bonus,0)+COALESCE(f.v15_bonus,0)+COALESCE(f.v22_bonus,0)+"
+        "COALESCE(f.v25_bonus,0)+CASE WHEN UPPER(COALESCE(f.position_code,'')) IN ('CS','TK') "
+        "THEN 0 ELSE COALESCE(f.aso_bonus,0) END"
+    )
+    tier_predicate = "UPPER(COALESCE(f.position_code,'')) IN ('TDV','CTV','CS','TK')"
+    sql = f"""
+        WITH latest_employee_snapshot AS (
+            SELECT f.*,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY f.employee_code, substr(f.save_date,1,7)
+                       ORDER BY CASE WHEN f.v25_percent IS NOT NULL THEN 1 ELSE 0 END DESC,
+                                f.save_date DESC
+                   ) AS snapshot_rank
+            FROM fact_thongketinhluong f
+            WHERE f.save_date=date(f.save_date,'start of month','+1 month','-1 day')
+              AND substr(f.save_date,1,7) BETWEEN ? AND ? {scope_sql}
+        )
+        SELECT substr(f.save_date,1,7) month,
+               COUNT(*) total_employees,
+               SUM({bonus_expr}) total_bonus,
+               SUM(CASE WHEN {tier_predicate} THEN {bonus_expr} ELSE 0 END) employee_tier_bonus,
+               SUM(CASE WHEN NOT ({tier_predicate}) THEN {bonus_expr} ELSE 0 END) management_bonus,
+               SUM(CASE WHEN {tier_predicate} THEN COALESCE(f.month_sale_amount,0) ELSE 0 END) employee_tier_sales
+        FROM latest_employee_snapshot f
+        WHERE snapshot_rank=1
+        GROUP BY substr(f.save_date,1,7)
+        ORDER BY month
+    """
+    rows = _q(sql, (from_month, to_month) + scope_params)
+    if not rows:
+        return {"error": "Khong co snapshot luong da chot trong khoang thang da chon."}
+
+    months = []
+    for row in rows:
+        sales = _f(row["employee_tier_sales"])
+        total_bonus = _f(row["total_bonus"])
+        months.append({
+            "month": row["month"],
+            "total_employees": int(row["total_employees"] or 0),
+            "total_bonus": total_bonus,
+            "employee_tier_bonus": _f(row["employee_tier_bonus"]),
+            "management_bonus": _f(row["management_bonus"]),
+            "employee_tier_sales": sales,
+            "bonus_to_sales_pct": round(total_bonus / sales * 100, 3) if sales else None,
+            "profit_data_available": False,
+        })
+    return {
+        "period": {"from_month": from_month, "to_month": to_month},
+        "months": months,
+        "formula": {
+            "numerator": "DM + V15 + V22 + V25 + ASO (ASO loai CS/TK)",
+            "denominator": "Doanh thu TDV/CTV/CS/TK; khong cong doanh thu rollup cua cap quan ly",
+        },
+        "limitations": (
+            "Kho khong co loi nhuan/gross margin va khong du co so de ket luan co che thuong gay ra "
+            "tang truong ben vung. Chi duoc bao cao ty le chi phi thuong/doanh thu va xu huong quan sat."
+        ),
+        "snapshot_status": "closed_period",
     }
 
 

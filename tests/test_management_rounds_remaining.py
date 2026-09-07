@@ -144,6 +144,25 @@ def test_customer_movement_phan_loai_new_reactivated_stopped(tmp_path, monkeypat
     assert by["C2"]["movement"] == "STOPPED"
 
 
+def test_customer_movement_tong_bu_doanh_thu_tinh_tren_toan_bo_khach_truoc_khi_cat_top_n(tmp_path, monkeypatch):
+    """C31 UAT 07/09: top-N la de doc danh sach, khong duoc lam sai tong khach moi/tai kich hoat
+    bu duoc bao nhieu doanh thu khach dung mua. Fixture co C3 moi +400, C4 tai kich hoat +600 va
+    C2 dung mua -500; limit=1 chi hien C4 nen tong top-N khac tong toan bo co chu y."""
+    _setup(tmp_path, monkeypatch)
+    result = rt.customer_movement(month="2026-04", history_months=4, limit=1)
+
+    all_rows = result["summary_all_customers"]
+    top_rows = result["summary_on_returned_top_rows"]
+    # Co ca khach ORPHAN +50 trong fixture de test data-quality, van phai nam trong tong pham vi.
+    assert all_rows["customer_count_considered"] == 5
+    assert all_rows["added_revenue"] == 1_050
+    assert all_rows["lost_previous_revenue"] == 500
+    assert all_rows["compensation_pct_of_lost_revenue"] == 210.0
+    assert top_rows["customer_count_considered"] == 1
+    assert top_rows["added_revenue"] == 600
+    assert top_rows["lost_previous_revenue"] == 0
+
+
 def test_gap_run_rate_qlv_chi_thay_doi_minh(tmp_path, monkeypatch):
     _setup(tmp_path, monkeypatch)
     r = rt.kpi_gap_run_rate(as_of_date="2026-04-15", group_by="employee",

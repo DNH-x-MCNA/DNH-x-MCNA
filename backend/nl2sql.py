@@ -486,7 +486,9 @@ TEMPLATE_TOOLS = [
                        "REACTIVATED, STOPPED, GROWING, DECLINING; kem doanh thu, delta, so don, co don "
                        "lap lai va NV phu trach. BAT BUOC dung cho khach moi co lap don, tai kich hoat, "
                        "khach ngung/tang/giam va doanh thu them-mat. NEW_OR_FIRST_OBSERVED chi la lan dau "
-                       "thay trong cua so kho, KHONG tu goi chac chan la khach moi trong doi.",
+                       "thay trong cua so kho, KHONG tu goi chac chan la khach moi trong doi. Khi hoi "
+                       "tong doanh thu them/mat hay ty le bu doanh thu, BAT BUOC dung "
+                       "summary_all_customers; summary_on_returned_top_rows chi la top-N de minh hoa.",
         "input_schema": {"type": "object", "properties": {
             "month": {"type": "string", "description": "YYYY-MM."},
             "history_months": {"type": "integer", "description": "Cua so nhan biet tai kich hoat, mac dinh 6."},
@@ -906,7 +908,9 @@ TEMPLATE_TOOLS = [
                        "da tung tao ket qua sai. Tool dung lien ket DMS_DonHangCTKM -> DMS_CTKM that, "
                        "tu kiem tra moc du lieu va mac dinh chon thang DAY DU gan nhat neu user khong "
                        "noi ky. associated_revenue la doanh thu gan voi don co CTKM, KHONG duoc cong "
-                       "cac dong hoac goi la ROI/uplift vi mot don co the dung nhieu CTKM.",
+                       "cac dong hoac goi la ROI/uplift vi mot don co the dung nhieu CTKM. Khi tra loi "
+                       "BAT BUOC hien ca program_code, program_name va period tu payload; khong duoc "
+                       "chi viet ten chuong trinh hoac bo moc du lieu.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -977,6 +981,10 @@ TEMPLATE_TOOLS = [
         "name": "get_salary_achievement_summary",
         "description": "Bao cao tong hop/thong ke so luong nhan vien dat cac moc thuong tien do (V15, V22, V25) va ASO tren toan cong ty hoac toan doi cua QLV. "
                        "Dung khi nguoi dung hoi 'co bao nhieu nguoi dat V15', 'tong hop V22 toan quoc/toan doi', 'thong ke ASO', v.v. "
+                       "CUNG dung cho 'chi phi thuong/doanh thu' va 'thuong chiem bao nhieu % doanh so': "
+                       "payload cost_summary co tong thuong va ty le theo thang, mau so CHI gom TDV/CTV/CS/TK "
+                       "de khong nhan doi doanh thu rollup cap quan ly. KHONG co loi nhuan/gross margin va "
+                       "KHONG duoc ket luan nhan qua hay tang truong ben vung. "
                        "ASO chi ap dung cho vi tri khac CS (Cho si) va TK (kenh MT); CS/TK dung co is_ac/Active Customer, "
                        "khong duoc cong ASO vao cung mot dong. "
                        "Phan quyen: neu nguoi hoi la C-Level se thay toan bo, neu la QLV se tu dong bi gioi han ve doi cua minh. "
@@ -989,6 +997,8 @@ TEMPLATE_TOOLS = [
                     "type": "string",
                     "description": "Thang can tra cuu (YYYY-MM). Neu de trong se lay ky luong gan nhat.",
                 },
+                "month_from": {"type": "string", "description": "YYYY-MM; ky dau cho cost_summary. De ca hai moc trong thi tra 12 thang da chot gan nhat."},
+                "month_to": {"type": "string", "description": "YYYY-MM; ky cuoi cho cost_summary."},
                 "scope_area_code": {
                     "type": "string",
                     "description": "Ma vung mien can tra cuu (MB, MT, MN, ...). Khong bat buoc.",
@@ -1235,6 +1245,16 @@ def _raw_query_payload(result: dict, db: str, question: str) -> dict:
 
     payload = {"error": result.get("error", "Loi truy van khong xac dinh")}
     error_lower = payload["error"].lower()
+    # C02 UAT: c.area_code da bi model lap lai nhieu lan du schema khong co cot nay. Day khong phai
+    # loi thieu bang/can fallback SQL Server; phai sua JOIN ngay trong warehouse: invoice -> customer
+    # -> city_id -> dim_tinhthanhpho.area_code. Gui huong dan cu the de vong tiep theo khong thu lai
+    # cung mot SQL sai roi cat ket qua tra loi.
+    if db == "local" and "no such column: c.area_code" in error_lower:
+        payload["query_correction"] = (
+            "Khong lap lai truy van nay. dms_khachhang/dmssx_khachhang khong co area_code: "
+            "LEFT JOIN khach theo customer_code, sau do LEFT JOIN dim_tinhthanhpho theo city_id va "
+            "dung tp.area_code. Giu LEFT JOIN de khong lam mat khach mo coi."
+        )
     if db == "local" and any(marker in error_lower for marker in _SCHEMA_COVERAGE_ERROR_MARKERS):
         try:
             payload["sql_server_catalog_fallback"] = search_sql_catalog(
@@ -1319,7 +1339,8 @@ QUAN TRONG VE CHON TOOL:
 - HIEU QUA CTKM: BAT BUOC goi get_promotion_effectiveness DUNG 1 LAN. KHONG duoc GROUP BY cot CTKM
   tren vHoaDon/vHoaDonTotal: cot do la ghi chu tu do, co the chua ten nguoi va so dien thoai. Doanh
   thu chuong trinh phai noi qua DMS_DonHangCTKM -> DMS_CTKM. Neu tool bao nguon lien ket chi den mot
-  moc cu, noi ro moc do; KHONG lay ghi chu hoa don thay the va KHONG suy dien phan thieu.
+  moc cu, noi ro moc do; KHONG lay ghi chu hoa don thay the va KHONG suy dien phan thieu. Khi trinh bay
+  tung CTKM, BAT BUOC ghi ro program_code, program_name va period do tool tra ve.
 - CHAT LUONG/DO PHU CTKM (moc du lieu, link mat don/mat ma chuong trinh): BAT BUOC goi
   get_promotion_data_quality DUNG 1 LAN; KHONG search catalog/query SQL thu cong.
 - CACH TINH/BAC TIEN V15/V22/V25/ASO: BAT BUOC goi get_salary_bonus_policy DUNG 1 LAN. Neu tool phat
@@ -1329,6 +1350,13 @@ QUAN TRONG VE CHON TOOL:
   is_ac/Active Customer, KHONG co ASO. Neu dong du lieu da co is_ac thi tuyet doi khong gan, hien thi
   hoac cong them ASO cho dong do. Khi tra bao cao CS/TK, dung chi so Active Customer; chi dung ASO
   cho cac vai tro khac khi nguon tinh luong co ghi nhan.
+- CHI PHI THUONG/DOANH THU: BAT BUOC goi get_salary_achievement_summary va dung cost_summary.
+  Dung total_bonus va employee_tier_sales trong CUNG dong thang; mau so chi gom TDV/CTV/CS/TK de
+  tranh nhan doi doanh thu rollup cap quan ly. Kho khong co loi nhuan/gross margin: KHONG duoc tu
+  ket luan ve loi nhuan, tuong quan hay tang truong ben vung.
+- LUONG KHACH: Khi hoi tong doanh thu khach moi/tai kich hoat bu duoc bao nhieu doanh thu khach
+  dung mua, BAT BUOC dung summary_all_customers cua get_customer_movement. Top-N chi dung de liet ke
+  vi du, khong duoc suy ra tong cua ca doi.
 - DOI CHIEU DM1/DM2/DM3-TOTALPOINT, KIEM TRA LCB, CHAT LUONG SNAPSHOT LUONG: BAT BUOC goi
   get_salary_data_quality DUNG 1 LAN voi check_type tuong ung; KHONG tu doc prompt roi ket luan va
   KHONG search catalog/query SQL thu cong.
