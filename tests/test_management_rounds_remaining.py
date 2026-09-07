@@ -344,6 +344,23 @@ def test_workforce_productivity_headcount_va_streak(tmp_path, monkeypatch):
     assert apr["revenue_per_employee"] == 300
 
 
+def test_workforce_productivity_chot_snapshot_rieng_tung_nv_khong_mat_target(tmp_path, monkeypatch):
+    _setup(tmp_path, monkeypatch)
+    con = sqlite3.connect(local_warehouse.DB_PATH)
+    # Bravo co the chot tung mien/NV o ngay khac nhau trong cung thang. T2 khong co dong
+    # o ngay MAX cua ca thang, nhung van phai duoc giu voi target thang 7.
+    con.executemany("INSERT INTO fact_thongketinhluong VALUES (?,?,?,?,?,?,?,?,?)", [
+        ("T1", "TDV 1", "TDV", "MB", "Q1", "2026-07-31", 700, 1000, 70),
+        ("T2", "TDV 2", "TDV", "MB", "Q1", "2026-07-28", 500, 2000, 25),
+    ])
+    con.commit(); con.close()
+    result = rt.workforce_productivity(month_to="2026-07", months_back=1,
+                                       group_by="employee", scope_area_code="MB")
+    by = {row["group_code"]: row for row in result["rows"]}
+    assert by["T1"]["target"] == 1000
+    assert by["T2"]["target"] == 2000
+
+
 def test_operational_quality_bat_mapping_loi_va_noi_ro_phan_chua_co(tmp_path, monkeypatch):
     db_path = _setup(tmp_path, monkeypatch)
     con = sqlite3.connect(db_path)

@@ -314,6 +314,8 @@ def test_m_role_questions_start_from_their_verified_report_not_free_sql():
         "Khách cần dừng/bóp bán vì nợ xấu; DT nguy cơ ảnh hưởng bao nhiêu": "get_customer_revenue_debt_risk",
         "ETC: kế hoạch thầu, tỷ lệ trúng, DT thực hiện, thu tiền từng tháng theo vùng/khách": "get_geography_monthly_performance",
         "Với vùng dưới KH: 3 nguyên nhân định lượng, 3 hành động, owner, deadline": "get_operational_data_quality",
+        "Hôm nay/tuần này cần ưu tiên khách hàng, sản phẩm và nhân viên nào để đóng gap lớn nhất": "get_customer_product_coverage",
+        "Doanh số, target và % hoàn thành từng TDV theo tháng; xếp hạng và xu hướng 3/6 tháng": "get_workforce_productivity",
     }
     for question, tool in expected.items():
         assert nl2sql._required_tool_for_question(question) == tool, question

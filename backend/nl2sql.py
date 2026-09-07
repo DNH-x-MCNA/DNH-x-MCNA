@@ -206,6 +206,9 @@ def _required_tool_for_question(question: str) -> str | None:
         "quy mo lon", "tang truong thap", "co hoi trang",
     )):
         return "get_geography_monthly_performance"
+    if any(marker in q for marker in ("uu tien", "dong gap", "can uu tien")) and any(
+            marker in q for marker in ("khach hang", "san pham", "nhan vien", "tdv")):
+        return "get_customer_product_coverage"
     if any(marker in q for marker in ("ke hoach thau", "ty le trung thau", "gia tri trung thau")):
         # Kho chua co ke hoach/tender; bao cao dia ban ETC chi cung cap phan doanh thu thuc hien
         # con co the kiem chung va buoc chatbot neu ro cac chi tieu thau/thu tien la thieu nguon.
@@ -258,6 +261,10 @@ def _required_tool_for_question(question: str) -> str | None:
         # C08: phai bat dau bang chuoi thang, de tool tu danh dau thang khong du du lieu
         # thay vi model tu suy dien tinh mua vu tu vai ngay/1-2 thang hien co.
         return "get_revenue_monthly_series"
+    if any(marker in q for marker in ("theo thang", "3/6 thang", "3 thang", "6 thang", "xu huong")) \
+            and any(marker in q for marker in ("tdv", "nhan vien")) \
+            and any(marker in q for marker in ("target", "% hoan thanh", "xep hang", "doanh so")):
+        return "get_workforce_productivity"
     if any(marker in q for marker in (
         "theo tung thang", "qua tung thang", "xu huong tap trung",
         "3/6 thang", "6 thang", "24 thang",
@@ -658,6 +665,9 @@ TEMPLATE_TOOLS = [
         "name": "get_customer_product_coverage",
         "description": "DO PHU/BENCHMARK NOI BO theo khach, san pham hoac nhan vien: doanh thu, don, "
                        "so SKU, so khach, san luong, AOV, tan suat va chenh lech voi ky truoc. BAT BUOC "
+                       "Voi cau V10/S84 'uu tien khach hang, san pham va nhan vien de dong gap', dung "
+                       "mode='priority': tool tra rieng customer_actions/product_actions/employee_actions "
+                       "va rows tong hop; gap KH/SP la binh quan 3 thang tron truoc tru MTD, gap NV la target-actual. "
                        "dung mode='employee', lookback_months=1 cho cau hoi DOI den tu bao nhieu khach/don, "
                        "AOV/tan suat thay doi, hoac NV nao dong gop tang/giam. Ket qua scope_totals da dem "
                        "KHACH DUY NHAT cua ca doi; KHONG cong so khach tung TDV. Ky 1 thang duoc can theo "
@@ -670,7 +680,7 @@ TEMPLATE_TOOLS = [
                        "phan tich xoi mon gia; day la doanh thu thuan tren don vi ban co gia, khong phai bang gia niem yet.",
         "input_schema": {"type": "object", "properties": {
             "as_of_date": {"type": "string"}, "lookback_months": {"type": "integer"},
-            "mode": {"type": "string", "enum": ["customer", "product", "employee"]},
+            "mode": {"type": "string", "enum": ["customer", "product", "employee", "priority"]},
             "limit": {"type": "integer"},
         }, "required": []},
     },

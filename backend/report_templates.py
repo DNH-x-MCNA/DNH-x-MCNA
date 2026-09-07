@@ -2354,9 +2354,14 @@ def customer_product_coverage(as_of_date: str = None, lookback_months: int = 3,
                               mode: str = "customer", limit: int = 100,
                               scope_area_code: str = None, scope_channel: str = None,
                               scope_employee_code: str = None) -> dict:
-    """Do phu va benchmark noi bo theo khach/san pham/nhan vien, co so sanh ky truoc cung do dai."""
+    """Do phu/benchmark noi bo; mode=priority tra ba danh sach dong gap theo S84."""
+    if mode == "priority":
+        return priority_gap_actions(as_of_date=as_of_date, limit=limit,
+                                    scope_area_code=scope_area_code,
+                                    scope_channel=scope_channel,
+                                    scope_employee_code=scope_employee_code)
     if mode not in {"customer", "product", "employee"}:
-        return {"error": "mode chi nhan customer/product/employee."}
+        return {"error": "mode chi nhan customer/product/employee/priority."}
     as_of_date = (as_of_date or latest_data_date())[:10]
     lookback_months = max(1, min(int(lookback_months or 3), 12))
     limit = max(1, min(int(limit or 100), 500))
@@ -2775,12 +2780,17 @@ def workforce_productivity(month_to: str = None, months_back: int = 6,
     months_back = max(1, min(int(months_back or 6), 12))
     month_from = _month_add(month_to, -(months_back - 1))
     limit = max(1, min(int(limit or 200), 1000))
-    sql = ("WITH snaps AS (SELECT substr(save_date,1,7) month,MAX(save_date) d "
-           "FROM fact_thongketinhluong WHERE substr(save_date,1,7) BETWEEN ? AND ? GROUP BY month) "
+    # Snapshot luong/KPI duoc ghi lech ngay giua cac mien va co the lech ngay giua tung NV.
+    # Ghim MAX(save_date) theo rieng thang se lam mat nhan vien/target cua ngay chot som hon
+    # (loi V11/S56: doanh so van thay o snapshot ca nhan nhung target thang 7 bi rong).
+    sql = ("WITH snaps AS (SELECT employee_code,substr(save_date,1,7) month,MAX(save_date) d "
+           "FROM fact_thongketinhluong WHERE substr(save_date,1,7) BETWEEN ? AND ? "
+           "GROUP BY employee_code,substr(save_date,1,7)) "
            "SELECT substr(f.save_date,1,7) month,f.save_date,f.employee_code,f.employee_name,"
            "f.position_code,f.area_code,f.manager_code,COALESCE(f.month_sale_amount,0) actual,"
            "COALESCE(f.month_sale_target,0) target,f.month_sale_percent,nv.start_date "
-           "FROM fact_thongketinhluong f JOIN snaps s ON s.d=f.save_date "
+           "FROM fact_thongketinhluong f JOIN snaps s ON s.employee_code=f.employee_code "
+           "AND s.month=substr(f.save_date,1,7) AND s.d=f.save_date "
            "LEFT JOIN dim_nhanvien nv ON nv.employee_code=f.employee_code "
            f"WHERE f.position_code IN ({_tier_ph()})")
     params = [month_from, month_to, *_EMPLOYEE_TIER_POSITIONS]
@@ -2852,6 +2862,115 @@ def workforce_productivity(month_to: str = None, months_back: int = 6,
             "Ngay vao lam lay tu dim_nhanvien; dong thieu start_date co avg_tenure_months=None va khong duoc suy dien.",
         ],
         "pham_vi_kenh": "OTC", "data_as_of": latest_data_date(),
+    }
+
+
+def priority_gap_actions(as_of_date: str = None, limit: int = 20,
+                         scope_area_code: str = None, scope_channel: str = None,
+                         scope_employee_code: str = None) -> dict:
+    """Ba danh sach uu tien dong gap: khach hang, san pham va nhan vien.
+
+    Gap khach/san pham = binh quan doanh thu 3 thang tron truoc tru doanh thu MTD ky dang xem.
+    Gap nhan vien = target thang - doanh so thang tu snapshot luong/KPI.
+    """
+    as_of_date = (as_of_date or latest_data_date())[:10]
+    limit = max(1, min(int(limit or 20), 100))
+    month_start = f"{as_of_date[:7]}-01"
+    prior_start = f"{_month_add(as_of_date[:7], -3)}-01"
+    scope_sql, scope_params = _scope_clause(scope_area_code)
+    emp_sql, emp_params = _employee_scope_clause(scope_employee_code, "v", as_of=as_of_date)
+    suffix, suffix_params = scope_sql + emp_sql, scope_params + emp_params
+    parts, params = [], []
+    if scope_channel != "ETC":
+        parts.append(
+            "SELECT v.doc_date,v.customer_code,v.item_code,v.amount9 revenue "
+            "FROM vhoadon_otc v " + _otc_area_join("v", scope_area_code) +
+            f" WHERE v.doc_date BETWEEN ? AND ?{suffix}")
+        params.extend((prior_start, as_of_date) + suffix_params)
+    if scope_channel != "OTC":
+        parts.append(
+            "SELECT v.doc_date,v.customer_code,v.item_code,v.amount9 revenue "
+            "FROM vhoadon_etc v " + _etc_area_join("v", scope_area_code) +
+            f" WHERE v.doc_date BETWEEN ? AND ?{suffix}")
+        params.extend((prior_start, as_of_date) + suffix_params)
+
+    def dimension_gap(column: str) -> list:
+        if not parts:
+            return []
+        raw = _q(
+            "WITH x AS (" + " UNION ALL ".join(parts) + ") "
+            f"SELECT {column} code,"
+            "SUM(CASE WHEN doc_date < ? THEN revenue ELSE 0 END)/3.0 prior_avg,"
+            "SUM(CASE WHEN doc_date >= ? THEN revenue ELSE 0 END) current_revenue "
+            "FROM x GROUP BY " + column,
+            tuple(params) + (month_start, month_start),
+        )
+        out = []
+        for row in raw:
+            code = row.get("code")
+            if not code or not str(code).strip():
+                continue
+            prior_avg = _f(row.get("prior_avg")); current = _f(row.get("current_revenue"))
+            gap = prior_avg - current
+            if gap > 0:
+                out.append({"code": code, "gap": gap, "baseline_3m_avg": prior_avg,
+                            "current_revenue": current})
+        out.sort(key=lambda row: (-row["gap"], row["code"]))
+        return out[:limit]
+
+    customer_actions = dimension_gap("customer_code")
+    product_actions = dimension_gap("item_code")
+    if customer_actions:
+        names = _customer_names([r["code"] for r in customer_actions])
+        for row in customer_actions:
+            row["name"] = names.get(row["code"]) or row["code"]
+    if product_actions:
+        ph = ",".join("?" for _ in product_actions)
+        names = {r["code"]: r["name"] for r in _q(
+            f"SELECT code,name FROM brv_sanpham WHERE code IN ({ph})",
+            tuple(r["code"] for r in product_actions))}
+        for row in product_actions:
+            row["name"] = names.get(row["code"]) or row["code"]
+
+    employee_actions = []
+    fdate = _fact_date_le(as_of_date)
+    if fdate:
+        employee_codes = None
+        if scope_employee_code:
+            employee_codes = [r["employee_code"] for r in _team_of_qlv(scope_employee_code, fdate)]
+            if not employee_codes:
+                raise KhongXacDinhDuocDoi(f"Khong xac dinh duoc doi cua {scope_employee_code}.")
+        snaps = ("SELECT employee_code,MAX(save_date) d FROM fact_thongketinhluong "
+                 "WHERE save_date<=? AND substr(save_date,1,7)=? GROUP BY employee_code")
+        sql = ("WITH s AS (" + snaps + ") SELECT f.employee_code code,"
+               "COALESCE(f.employee_name,nv.name) name,f.month_sale_amount actual,f.month_sale_target target "
+               "FROM fact_thongketinhluong f JOIN s ON s.employee_code=f.employee_code AND s.d=f.save_date "
+               "LEFT JOIN dim_nhanvien nv ON nv.employee_code=f.employee_code "
+               f"WHERE UPPER(COALESCE(f.position_code,'')) IN ({_tier_ph()})")
+        p = [fdate, as_of_date[:7], *_EMPLOYEE_TIER_POSITIONS]
+        if scope_area_code:
+            sql += " AND f.area_code=?"; p.append(scope_area_code)
+        if employee_codes:
+            sql += f" AND f.employee_code IN ({','.join('?' for _ in employee_codes)})"; p.extend(employee_codes)
+        for row in _q(sql, tuple(p)):
+            target, actual = _f(row.get("target")), _f(row.get("actual"))
+            if target > actual:
+                employee_actions.append({"code": row["code"], "name": row["name"] or row["code"],
+                                         "gap": target - actual, "target": target, "actual": actual})
+        employee_actions.sort(key=lambda row: (-row["gap"], row["code"]))
+        employee_actions = employee_actions[:limit]
+
+    combined = ([{"dimension": "KHACH_HANG", **r} for r in customer_actions] +
+                [{"dimension": "SAN_PHAM", **r} for r in product_actions] +
+                [{"dimension": "NHAN_VIEN", **r} for r in employee_actions])
+    return {
+        "as_of": as_of_date, "month_start": month_start,
+        "prior_window": {"from": prior_start, "to": _month_add(as_of_date[:7], -1)},
+        "customer_actions": customer_actions, "product_actions": product_actions,
+        "employee_actions": employee_actions, "rows": combined,
+        "definition": "Gap KH/SP = binh quan 3 thang tron truoc - doanh thu MTD; gap NV = target - actual snapshot luong.",
+        "warning": "Danh sach uu tien la xep hang theo gap quan sat duoc, khong phai cam ket nhu cau hay du bao.",
+        "data_as_of": latest_data_date(),
     }
 
 
