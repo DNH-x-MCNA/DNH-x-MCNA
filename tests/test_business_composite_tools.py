@@ -369,6 +369,39 @@ def test_ask_sends_forced_tool_choice_only_on_first_round(monkeypatch):
     assert "tool_choice" not in seen[1]
 
 
+def test_regional_director_skips_forced_salary_tool_that_is_not_advertised(monkeypatch):
+    seen = []
+
+    class FakeMessages:
+        def create(self, **kwargs):
+            seen.append(kwargs)
+            return SimpleNamespace(
+                content=[SimpleNamespace(type="text", text="Chỉ có thể đối chiếu KPI/doanh thu.")],
+                usage=SimpleNamespace(),
+            )
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setattr(nl2sql, "LLM_BASE_URL", "")
+    monkeypatch.setattr(
+        nl2sql.anthropic, "Anthropic",
+        lambda api_key: SimpleNamespace(messages=FakeMessages()),
+    )
+    monkeypatch.setattr(nl2sql, "load_history", lambda *args, **kwargs: [])
+    monkeypatch.setattr(nl2sql, "append_message", lambda *args, **kwargs: None)
+    monkeypatch.setattr(nl2sql, "set_query_state", lambda *args, **kwargs: None)
+    monkeypatch.setattr(nl2sql, "compute_and_log_cost", lambda *args, **kwargs: None)
+    monkeypatch.setattr(nl2sql, "latest_data_date", lambda: "2026-09-07")
+
+    nl2sql.ask(
+        "Thưởng/KPI đội có khớp doanh số và chính sách; bất thường cần kiểm tra",
+        session_id="regional-m20", scope_area_code="MB", scope_role="regional_director",
+    )
+
+    names = {tool["name"] for tool in seen[0]["tools"]}
+    assert "get_salary_ranking" not in names
+    assert "tool_choice" not in seen[0]
+
+
 def test_new_quality_tools_keep_qlv_scope_fail_closed(monkeypatch):
     seen = {}
 

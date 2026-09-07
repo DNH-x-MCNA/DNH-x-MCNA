@@ -409,6 +409,14 @@ def test_revenue_reconciliation_khong_tu_goi_coverage_thap_la_binh_thuong(tmp_pa
     assert 'KHONG dong nghia voi so zone thieu QLV' in result['note']
 
 
+def test_kpi_snapshot_qlv_phan_biet_dung_moc_70_phan_tram(tmp_path, monkeypatch):
+    _setup(tmp_path, monkeypatch)
+    result = rt._kpi_snapshot('Q1', '2026-04-20', 'QLV')
+
+    assert result['threshold'] == 70
+    assert result['meets_bonus_threshold'] is False
+
+
 def test_call_template_ep_du_ca_ba_scope_cho_tool_moi(tmp_path, monkeypatch):
     _setup(tmp_path, monkeypatch)
     r = rt.call_template("get_geography_monthly_performance",

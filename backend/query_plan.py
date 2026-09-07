@@ -512,15 +512,22 @@ class QueryPlan:
     def finalize_answer(self, answer: str) -> str:
         if self.status not in {"partial", "failed"}:
             return answer
-        if "phan chua the kiem chung" in _plain(answer):
-            return answer
         missing = [step for step in self.steps if step.status in {"failed", "partial", "skipped"}]
         if not missing:
             return answer
+        conclusion_guard = (
+            "**Giới hạn kết luận:** Vì còn phần chưa kiểm chứng, chưa thể kết luận toàn diện rằng "
+            "không có bất thường hoặc mọi số liệu đã khớp; chỉ các phần có nguồn hoàn tất mới được xem là đã đối chiếu."
+        )
+        if "gioi han ket luan" in _plain(answer):
+            return answer
+        if "phan chua the kiem chung" in _plain(answer):
+            return "\n".join([answer.rstrip(), "", conclusion_guard]).strip()
         lines = [answer.rstrip(), "", "### Phần chưa thể kiểm chứng"]
         for step in missing[:6]:
             lines.append(f"- {step.title}: {step.error or 'chưa đủ dữ liệu nguồn.'}")
         lines.append("- Không suy đoán số cho các phần trên.")
+        lines.extend(["", conclusion_guard])
         return "\n".join(lines).strip()
 
     def timeout_answer(self) -> str:

@@ -230,6 +230,16 @@ def test_failed_source_produces_structured_partial_answer_without_guessing():
     assert "### Phần chưa thể kiểm chứng" in answer
     assert "SIMULATED_SOURCE_FAILURE" in answer
     assert "Không suy đoán số" in answer
+    assert "Giới hạn kết luận" in answer
+
+
+def test_partial_answer_co_san_phan_chua_kiem_chung_van_bi_chen_hang_rao_ket_luan():
+    plan = _plan("So sánh doanh thu và công nợ tháng 7/2026", query_id="existing-footer")
+    plan.finalize(limit_reached=True)
+    answer = plan.finalize_answer("### Phần chưa thể kiểm chứng\n- Công nợ: chưa có nguồn.")
+
+    assert "Giới hạn kết luận" in answer
+    assert "không có bất thường" in answer
 
 
 def test_request_timeout_is_measured_from_plan_start():

@@ -202,6 +202,17 @@ def test_channel_scope_filters_advertised_tools_and_unknown_role_gets_none():
     assert nl2sql._tools_for_request(scope_role="tp") == []
 
 
+def test_regional_director_khong_duoc_quang_cao_tool_luong_ca_nhan():
+    names = {
+        tool["name"] for tool in nl2sql._tools_for_request(
+            scope_area_code="MB", scope_role="regional_director"
+        )
+    }
+    assert not (names & rt._SALARY_SENSITIVE_TEMPLATES)
+    assert "get_kpi_ranking" in names
+    assert "get_revenue_reconciliation" in names
+
+
 def test_channel_policy_is_enforced_again_at_execution(monkeypatch):
     seen = {}
 

@@ -4347,8 +4347,10 @@ def _kpi_snapshot(employee_code: str, fdate: str, position_code: str = None):
     sales = _f(r[0]["sales"]) if r else 0.0
     target = _f(r[0]["target"]) if r else 0.0
     pct = (sales / target * 100) if target else 0.0
+    bonus_threshold = _bonus_threshold(position_code)
     return {"sales": sales, "target": target, "pct": pct,
-            "threshold": _bonus_threshold(position_code),      # cong thuong nhom hang (65/70)
+            "threshold": bonus_threshold,                       # cong thuong nhom hang (65/70)
+            "meets_bonus_threshold": pct >= bonus_threshold,
             "kpi_threshold": KPI_ACHIEVED_THRESHOLD,           # dat KPI (80, chung moi vai tro)
             "meets_kpi": pct >= KPI_ACHIEVED_THRESHOLD,
             "status": _kpi_status(pct, position_code)}

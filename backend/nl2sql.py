@@ -947,7 +947,9 @@ TEMPLATE_TOOLS = [
                         "nhat', 'xep hang cac vung theo KPI', 'so sanh KPI giua cac QLV/vung'. "
                         "Doc as_of tren ket qua va canh bao: neu ky moi chua co target, tool tra ky tron "
                         "gan nhat de tham khao; PHAI ghi dung thang do, khong goi la KPI thang hien tai. "
-                        "Nguoi chua du snapshot/target duoc canh bao, khong coi la 0% KPI.",
+                        "Nguoi chua du snapshot/target duoc canh bao, khong coi la 0% KPI. Moi dong QLV "
+                        "co threshold=70 va meets_bonus_threshold da tinh san: pct<70 (vd 67,6%) BAT BUOC "
+                        "la chua toi muc thuong nhom hang, khong duoc gan dau dat/sat moc.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -1339,6 +1341,13 @@ ALL_TOOLS = (
 # mang tools (Anthropic cache theo kieu "prefix": danh dau 1 block = cache moi thu TINH DEN block do).
 ALL_TOOLS_CACHED = ALL_TOOLS[:-1] + [{**ALL_TOOLS[-1], "cache_control": {"type": "ephemeral", "ttl": "1h"}}]
 
+# Trung voi _SALARY_SENSITIVE_TEMPLATES ben report_templates.py. Dat o day de lop quang cao tool
+# co the an truoc khi model thu goi; call_template() van giu kiem tra fail-closed doc lap.
+_SALARY_SENSITIVE_TEMPLATE_NAMES = {
+    "get_salary_bonus_policy", "get_salary_data_quality", "get_salary_detail",
+    "get_salary_achievement_summary", "get_salary_ranking",
+}
+
 
 def _cache_tools(tools: list[dict]) -> list[dict]:
     if not tools:
@@ -1365,6 +1374,11 @@ def _tools_for_request(scope_area_code: str = None, scope_channel: str = None,
                 tool["name"], scope_channel, scope_employee_code
             )
         ]
+    # Bao cao luong la du lieu ca nhan nhay cam. regional_director da bi chan fail-closed o
+    # call_template(), nen khong duoc quang cao cac tool nay cho model de no thu lap 5 lan, cham
+    # gioi han tool va bo sot phan doanh thu/KPI cua cung cau hoi (M20 UAT 07/09).
+    if scope_role == "regional_director":
+        tools = [tool for tool in tools if tool["name"] not in _SALARY_SENSITIVE_TEMPLATE_NAMES]
     return ALL_TOOLS_CACHED if tools is ALL_TOOLS else _cache_tools(tools)
 
 
@@ -1452,6 +1466,11 @@ QUAN TRONG VE CHON TOOL:
   "count_full_target = 0", "[tien ich] resolve_relative_date(...)". VD DUNG: "toi co the tra cuu chi
   tiet tung khach hang de xem ai phu trach". Mo ta viec lam bang ngon ngu nghiep vu, giau het ten ky
   thuat ben trong.
+- KET LUAN PHAI GIOI HAN THEO BANG CHUNG: neu bat ky phan cot loi ma nguoi dung hoi (vd doanh thu,
+  KPI, thuong) chua kiem chung duoc vi thieu quyen, loi nguon, bi bo qua hay cham gioi han truy van,
+  PHAI noi ro "chua the ket luan toan dien". TUYET DOI khong viet "khong phat hien bat thuong",
+  "da khop" hay "binh thuong" cho TOAN BO cau hoi khi con phan chua kiem chung. Chi ket luan trong
+  pham vi tung phan da co bang chung.
 - Neu cau hoi thuoc cac nhom bao cao chuan: doanh thu theo kenh, top san pham, top khach hang, doanh thu
   theo vung mien, KPI/doanh so nhan vien (tong quan/thang), KPI THEO NGAY 1 nhan vien ca nhan, SO SANH
   2 khoang thoi gian, CHI TIET 1 khach hang cu the, TRA CUU ma/ten/vai tro nhan vien, KIEM TRA hang
@@ -1709,7 +1728,7 @@ def _response_text(response) -> str:
 
 def _dynamic_context_note(question: str = "", session_id: str = "", scope_area_code: str = None,
                            scope_employee_code: str = None, scope_channel: str = None,
-                           username: str = None) -> str:
+                           username: str = None, scope_role: str = None) -> str:
     """Phan DONG cua system prompt (ngay du lieu + ngu canh doi theo tung cau hoi) - tach rieng khoi
     phan tinh de KHONG lam vo cache (kho local dong bo lai moi 15-30 phut, glossary/query-state doi
     theo tung cau hoi nen KHONG the cache chung voi schema/rules tinh)."""
@@ -1743,6 +1762,13 @@ def _dynamic_context_note(question: str = "", session_id: str = "", scope_area_c
             f'MOI cau tra loi co so lieu (ke ca khi nguoi dung KHONG hoi ro vung) PHAI ghi ro dang "(vung '
             f'{scope_area_code})" ngay canh con so - de nguoi dung luon biet day la so lieu da bi gioi han '
             f'vung, khong phai so lieu toan quoc/vung khac.'
+        )
+    if scope_role == "regional_director":
+        parts.append(
+            "TAI KHOAN GIAM DOC MIEN/KENH KHONG CO QUYEN xem luong/thuong ca nhan chi tiet. "
+            "Cac bao cao luong da duoc an khoi danh sach tra cuu; khong thu goi lai bang cach khac. "
+            "Neu cau hoi gom ca thuong va KPI/doanh thu, chi tra phan KPI/doanh thu co bang chung va "
+            "ket luan ro rang rang chua the doi chieu thuong thuc chi/toan dien."
         )
     if scope_employee_code:
         parts.append(
@@ -1919,7 +1945,7 @@ def ask(question: str, session_id: str = "default", username: str = None, scope_
     system_blocks = [
         {"type": "text", "text": _static_system_prompt(), "cache_control": {"type": "ephemeral", "ttl": "1h"}},
         {"type": "text", "text": (_dynamic_context_note(
-            question, session_id, scope_area_code, scope_employee_code, scope_channel, username
+            question, session_id, scope_area_code, scope_employee_code, scope_channel, username, scope_role
         ) + "\n\n" + query_plan.prompt_note())},
     ]
 
@@ -1945,7 +1971,9 @@ def ask(question: str, session_id: str = "default", username: str = None, scope_
             "extra_headers": _CACHE_BETA_HEADERS,
             "timeout": max(1.0, min(LLM_CALL_TIMEOUT_SECONDS, query_plan.remaining_seconds())),
         }
-        if round_index == 0 and required_tool:
+        if round_index == 0 and required_tool and any(
+            tool["name"] == required_tool for tool in tools_for_request
+        ):
             request_kwargs["tool_choice"] = {"type": "tool", "name": required_tool}
         resp = client.messages.create(**request_kwargs)
         compute_and_log_cost(resp.usage, MODEL, question, session_id, username)
@@ -2293,7 +2321,7 @@ def ask_stream(question: str, session_id: str = "default", username: str = None,
     system_blocks = [
         {"type": "text", "text": _static_system_prompt(), "cache_control": {"type": "ephemeral", "ttl": "1h"}},
         {"type": "text", "text": (_dynamic_context_note(
-            question, session_id, scope_area_code, scope_employee_code, scope_channel, username
+            question, session_id, scope_area_code, scope_employee_code, scope_channel, username, scope_role
         ) + "\n\n" + query_plan.prompt_note())},
     ]
 
@@ -2316,7 +2344,9 @@ def ask_stream(question: str, session_id: str = "default", username: str = None,
             "extra_headers": _CACHE_BETA_HEADERS,
             "timeout": max(1.0, min(LLM_CALL_TIMEOUT_SECONDS, query_plan.remaining_seconds())),
         }
-        if round_i == 0 and required_tool:
+        if round_i == 0 and required_tool and any(
+            tool["name"] == required_tool for tool in tools_for_request
+        ):
             request_kwargs["tool_choice"] = {"type": "tool", "name": required_tool}
         with client.messages.stream(**request_kwargs) as stream:
             for _event in stream:
