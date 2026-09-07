@@ -476,3 +476,45 @@ def test_call_template_ep_du_ca_ba_scope_cho_tool_moi(tmp_path, monkeypatch):
                          scope_area_code="MB", scope_employee_code="Q1", scope_channel="OTC")
     assert r["ok"] is True
     assert {x["unit"] for x in r["result"]["rows"]} == {"Ha Noi"}
+
+
+def test_s83_tach_bon_muc_tieu_khach_thay_vi_tra_gap_chung(tmp_path, monkeypatch):
+    _setup(tmp_path, monkeypatch)
+
+    result = rt.customer_product_coverage(as_of_date="2026-04-20", limit=20,
+                                          mode="four_customer_priorities")
+
+    assert result["period_definition"].startswith("MTD")
+    assert "retention_actions" in result
+    assert "reactivation_actions" in result
+    assert "collection_actions" in result
+    assert "cross_sell_actions" in result
+    assert any(row["customer_code"] == "C4" for row in result["reactivation_actions"])
+    assert any(row["customer_code"] == "C2" for row in result["cross_sell_actions"])
+    assert all(row["matched_target_count"] >= 1 for row in result["rows"])
+
+
+def test_s21_tra_top_bottom_sku_tung_thang_va_danh_dau_mtd(tmp_path, monkeypatch):
+    _setup(tmp_path, monkeypatch)
+
+    result = rt.customer_product_coverage(as_of_date="2026-04-20", lookback_months=2, limit=2,
+                                          mode="product_monthly")
+
+    march, april = result["months"]
+    assert march["month"] == "2026-03"
+    assert april["month"] == "2026-04"
+    assert march["top_products"][0]["item_code"] == "A"
+    assert march["bottom_products"][0]["item_code"] == "B"
+    assert april["period_complete"] is False
+    assert april["largest_increase"] == []
+    assert "thang dang chay" in result["warning"].lower()
+
+
+def test_s46_khong_bia_target_theo_sku_khi_nguon_chua_co_mau_so(tmp_path, monkeypatch):
+    _setup(tmp_path, monkeypatch)
+
+    result = rt.customer_product_coverage(as_of_date="2026-04-20", mode="sku_target")
+
+    assert result["status"] == "SOURCE_GAP_NO_SKU_TARGET_VALUE"
+    assert "target_by_customer_sku" in result["can_not_calculate"]
+    assert "% hoan thanh" in result["safe_next_report"]

@@ -180,6 +180,10 @@ def _required_tool_for_question(question: str) -> str | None:
         return "get_revenue_ytd_cumulative"
     if any(marker in q for marker in ("cohort", "giu chan sau", "ty le giu chan")):
         return "get_customer_cohort_retention"
+    # V28/S83 phai nam TRUOC nhanh tai kich hoat chung: cau nay ket hop bon muc tieu, khong phai
+    # chi mot danh sach khach tai kich hoat.
+    if "danh sach khach" in q and any(marker in q for marker in ("giu khach", "tai kich hoat", "thu no", "ban cheo")):
+        return "get_customer_product_coverage"
     if any(marker in q for marker in (
         "tai kich hoat", "ngung mua", "tang truong den tu mo moi", "doanh thu mat",
         "bu duoc bao nhieu", "khach lon nao ngung", "keo dai chu ky mua",
@@ -199,6 +203,16 @@ def _required_tool_for_question(question: str) -> str | None:
     # benchmark noi bo, khong phai bao cao tong hop theo tinh.
     if ("khach tuong dong" in q or "khach nao mua it hon" in q or
             ("tuong dong" in q and "phan khuc" in q and "khach" in q)):
+        return "get_customer_product_coverage"
+    # V29/S21: top/bottom SKU TUNG THANG khac voi coverage cua mot cua so hien tai.
+    if any(marker in q for marker in ("top/bottom", "top bottom", "top va bottom")) and \
+            any(marker in q for marker in ("san pham", "sku")) and \
+            any(marker in q for marker in ("tung thang", "theo thang", "từng tháng")):
+        return "get_customer_product_coverage"
+    # V30/S46: phai goi duong bao cao co canh bao mau so target theo SKU dang thieu; khong de model
+    # lay target doanh so tong cua TDV roi gan nham thanh target cua tung SKU/khach.
+    if any(marker in q for marker in ("sku trong tam", "sku trọng tâm", "sku chien luoc")) and \
+            any(marker in q for marker in ("target", "% target", "phan tram target", "khoang thieu")):
         return "get_customer_product_coverage"
     # V24: so sanh TUNG KHACH giua hai cua so 3 thang ve don/AOV/SKU. Khong de model tu
     # chon bao cao dia ban chi vi cau co nhac den "tinh".
@@ -697,7 +711,8 @@ TEMPLATE_TOOLS = [
                        "phan tich xoi mon gia; day la doanh thu thuan tren don vi ban co gia, khong phai bang gia niem yet.",
         "input_schema": {"type": "object", "properties": {
             "as_of_date": {"type": "string"}, "lookback_months": {"type": "integer"},
-            "mode": {"type": "string", "enum": ["customer", "customer_peer", "product", "employee", "priority"]},
+            "mode": {"type": "string", "enum": ["customer", "customer_peer", "product", "employee", "priority", "four_customer_priorities", "product_monthly", "sku_target"],
+                     "description": "V28/S83: four_customer_priorities (4 danh sach giu khach/tai kich hoat/thu no/ban cheo). V29/S21: product_monthly (top/bottom SKU tung thang va dong gop MoM). V30/S46: sku_target (kiem tra target theo SKU; bao lo nguon, khong tu suy dien %)."},
             "limit": {"type": "integer"},
         }, "required": []},
     },
