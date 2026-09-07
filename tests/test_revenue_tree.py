@@ -166,9 +166,12 @@ def test_team_of_qlv_bao_gom_ca_ctv(tmp_path, monkeypatch):
     assert "TDV_MN" in codes
     assert "CTV_MN" in codes
     assert len(codes) == 2
+    assert next(t for t in team if t["employee_code"] == "CTV_MN")["position_code"] == "CTV"
 
     res = rt.revenue_tree(as_of_date=SAVE_DATE, area_code="MN")
     tp = next(t for t in res["tree"] if t["employee_code"] == "TP_MN")
     qlv = next(q for q in tp["qlv"] if q["employee_code"] == "QLV_MN")
     assert qlv["tdv_count"] == 2
+    ctv = next(t for t in qlv["tdv"] if t["employee_code"] == "CTV_MN")
+    assert ctv["threshold"] == 70
 

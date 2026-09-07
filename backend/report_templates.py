@@ -4666,7 +4666,7 @@ def _roster_employee_sql(fdate: str) -> tuple:
 
 
 def _team_of_qlv(qlv_employee_code: str, fdate: str = None) -> list:
-    """TDV bao cao TRUC TIEP len 1 QLV, xac dinh qua manager_code THAT tu Bravo
+    """Nhan vien ban hang bao cao TRUC TIEP len 1 QLV, xac dinh qua manager_code THAT tu Bravo
     (FACT_TongHopKhachHang.ManagerCode, dong bo 23/07/2026 - xem local_warehouse.py::SCHEMA).
     THAY THE org_hierarchy.team_of_qlv() (suy luan qua ma khu vuc) cho MOI cho can biet "doi cua 1
     QLV de gioi han quyen xem/tong hop KPI" - suy luan zone KEM CHINH XAC hon nhieu (~30% khu vuc
@@ -4685,7 +4685,7 @@ def _team_of_qlv(qlv_employee_code: str, fdate: str = None) -> list:
     cac_moc = _roster_snapshot_dates(fdate)
     if len(cac_moc) > 1:
         phan = " UNION ".join(
-            f"SELECT DISTINCT e.employee_code, nv.name FROM fact_tonghopkhachhang e "
+            f"SELECT DISTINCT e.employee_code, nv.name, nv.position_code FROM fact_tonghopkhachhang e "
             f"JOIN {_MONTH_LATEST_SUBQ} l ON l.employee_code=e.employee_code AND l.d=e.save_date "
             f"LEFT JOIN dim_nhanvien nv ON nv.employee_code=e.employee_code "
             f"WHERE e.manager_code=? AND nv.position_code IN ('TDV', 'CTV')" for _ in cac_moc)
@@ -4695,7 +4695,7 @@ def _team_of_qlv(qlv_employee_code: str, fdate: str = None) -> list:
     if not fdate:
         return []
     return _q(
-        f"SELECT DISTINCT e.employee_code, nv.name FROM fact_tonghopkhachhang e "
+        f"SELECT DISTINCT e.employee_code, nv.name, nv.position_code FROM fact_tonghopkhachhang e "
         f"JOIN {_MONTH_LATEST_SUBQ} l ON l.employee_code=e.employee_code AND l.d=e.save_date "
         f"LEFT JOIN dim_nhanvien nv ON nv.employee_code=e.employee_code "
         f"WHERE e.manager_code=? AND nv.position_code IN ('TDV', 'CTV')", (fdate, fdate, qlv_employee_code))
@@ -4825,8 +4825,9 @@ def revenue_tree(as_of_date: str = None, area_code: str = None, scope_area_code:
             team = [] if is_unit else _team_of_qlv(qlv["employee_code"], fdate)
             tdv_list = []
             for t in team:
-                # _team_of_qlv da loc san position_code='TDV' nen o day chac chan la TDV (nguong 65%).
-                t_kpi = _kpi_snapshot(t["employee_code"], fdate, "TDV")
+                # Doi co the co TDV hoac CTV. CTV dung nguong thuong quan ly 70%, khong duoc
+                # gan cung TDV (65%) chi vi bang cay chua hien rieng cot vai tro.
+                t_kpi = _kpi_snapshot(t["employee_code"], fdate, t.get("position_code") or "TDV")
                 tdv_list.append({"employee_code": t["employee_code"], "name": t["name"], **t_kpi})
             qlv_entry = {"employee_code": qlv["employee_code"], "name": qlv["name"], **q_kpi,
                          "tdv_count": len(tdv_list), "tdv": tdv_list, "la_nhom_kenh": is_unit}
