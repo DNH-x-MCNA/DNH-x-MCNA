@@ -3085,16 +3085,45 @@ def four_customer_priorities(as_of_date: str = None, limit: int = 20,
     as_of_date = (as_of_date or latest_data_date())[:10]
     limit = max(1, min(int(limit or 20), 100))
 
-    # 1. Giu khach lon: chi lay khach co doanh thu MTD thap hon binh quan 3 thang truoc.
-    gap = priority_gap_actions(as_of_date=as_of_date, limit=100,
-                               scope_area_code=scope_area_code, scope_channel=scope_channel,
-                               scope_employee_code=scope_employee_code)
-    retention = [
-        {"customer_code": r["code"], "customer_name": r.get("name") or r["code"],
-         "baseline_3m_avg": r["baseline_3m_avg"], "current_revenue": r["current_revenue"],
-         "revenue_gap": r["gap"], "criterion": "Doanh thu MTD thap hon binh quan 3 thang truoc."}
-        for r in gap.get("customer_actions", [])
-    ][:limit]
+    # 1. Giu khach lon: phai dat ca hai dieu kien: MTD giam va baseline >= binh quan TOAN BO
+    # khach co mua trong 3 thang truoc. Khong lay top gap chung cua S84 roi goi tat ca la "khach lon".
+    month_start = f"{as_of_date[:7]}-01"
+    prior_start = f"{_month_add(as_of_date[:7], -3)}-01"
+    scope_sql, scope_params = _scope_clause(scope_area_code)
+    emp_sql, emp_params = _employee_scope_clause(scope_employee_code, "v", as_of=as_of_date)
+    suffix, suffix_params = scope_sql + emp_sql, scope_params + emp_params
+    retention_parts, retention_params = [], []
+    if scope_channel != "ETC":
+        retention_parts.append("SELECT v.doc_date,v.customer_code,v.amount9 revenue FROM vhoadon_otc v " +
+                               _otc_area_join("v", scope_area_code) +
+                               f" WHERE v.doc_date BETWEEN ? AND ?{suffix}")
+        retention_params.extend((prior_start, as_of_date) + suffix_params)
+    if scope_channel != "OTC":
+        retention_parts.append("SELECT v.doc_date,v.customer_code,v.amount9 revenue FROM vhoadon_etc v " +
+                               _etc_area_join("v", scope_area_code) +
+                               f" WHERE v.doc_date BETWEEN ? AND ?{suffix}")
+        retention_params.extend((prior_start, as_of_date) + suffix_params)
+    retention = []
+    if retention_parts:
+        retention_rows = _q(
+            "WITH lines AS (" + " UNION ALL ".join(retention_parts) + "), per_customer AS ("
+            "SELECT customer_code,SUM(CASE WHEN doc_date<? THEN revenue ELSE 0 END)/3.0 baseline_3m_avg,"
+            "SUM(CASE WHEN doc_date>=? THEN revenue ELSE 0 END) current_revenue "
+            "FROM lines WHERE customer_code IS NOT NULL AND TRIM(customer_code)<>'' GROUP BY customer_code"
+            "), benchmark AS (SELECT AVG(baseline_3m_avg) avg_baseline_3m FROM per_customer "
+            "WHERE baseline_3m_avg>0) SELECT p.customer_code,p.baseline_3m_avg,p.current_revenue,"
+            "p.baseline_3m_avg-p.current_revenue revenue_gap,b.avg_baseline_3m FROM per_customer p "
+            "CROSS JOIN benchmark b WHERE p.baseline_3m_avg>=b.avg_baseline_3m "
+            "AND p.current_revenue<p.baseline_3m_avg ORDER BY revenue_gap DESC,p.customer_code LIMIT ?",
+            tuple(retention_params + [month_start, month_start, limit]))
+        retention_names = _customer_names([r["customer_code"] for r in retention_rows])
+        retention = [{
+            "customer_code": r["customer_code"],
+            "customer_name": retention_names.get(r["customer_code"]) or r["customer_code"],
+            "baseline_3m_avg": _f(r["baseline_3m_avg"]), "current_revenue": _f(r["current_revenue"]),
+            "revenue_gap": _f(r["revenue_gap"]), "scope_avg_baseline_3m": _f(r["avg_baseline_3m"]),
+            "criterion": "MTD thap hon baseline va baseline >= binh quan 3 thang cua toan bo khach trong pham vi.",
+        } for r in retention_rows]
 
     # 2. Tai kich hoat: phan loai tu luong khach, khong suy dien tu mot thang doanh thu am/0.
     movement = customer_movement(month=as_of_date[:7], history_months=12,
