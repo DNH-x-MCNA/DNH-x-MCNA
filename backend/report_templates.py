@@ -4404,6 +4404,118 @@ def customer_detail(customer_code: str, date_from: str, date_to: str, scope_area
     return result
 
 
+def _order_fulfillment_exceptions(date_from: str, date_to: str, threshold_days: int,
+                                  scope_area_code: str = None, scope_channel: str = None,
+                                  scope_employee_code: str = None) -> dict:
+    """Doi chieu don DMS OTC voi hoa don Bravo, dung dung tap nguon cua S42.
+
+    Phan hang tra trong kho local va phan don DMS chua/tre hoa don la HAI phep kiem tra
+    khac nhau. Khong duoc lay ``CreatedAt`` thay cho ngay xac nhan, vi DNH da xac nhan
+    CreatedAt chi la thoi diem tao don (04/09/2026).
+    """
+    if scope_channel == "ETC":
+        return {
+            "status": "NOT_APPLICABLE",
+            "source": "DMS_DonHangHdr + vHoaDonTotal (OTC)",
+            "reason": "Nguon DMS_DonHangHdr dung de doi chieu don-hoa don nay thuoc kenh OTC; tai khoan chi duoc xem ETC.",
+            "rows": [],
+        }
+
+    try:
+        report_to = dt.date.fromisoformat(str(date_to))
+    except ValueError:
+        return {
+            "status": "INVALID_PERIOD", "rows": [],
+            "reason": "date_to phai co dang YYYY-MM-DD de doi chieu don DMS voi hoa don.",
+        }
+
+    params = {
+        "date_from": str(date_from),
+        "date_to_exclusive": report_to + dt.timedelta(days=1),
+        "lag_threshold": max(0, int(threshold_days or 0)),
+    }
+    scope_joins = ""
+    scope_where = ""
+    if scope_area_code:
+        scope_joins += (" LEFT JOIN dbo.DMS_KhachHang kh ON kh.Code=h.CustomerCode "
+                        " LEFT JOIN dbo.DIM_TinhThanhPho tp ON tp.CityId=kh.CityId ")
+        scope_where += " AND tp.AreaCode=:scope_area_code"
+        params["scope_area_code"] = scope_area_code
+    if scope_employee_code:
+        try:
+            dms_ids = _get_team_dms_ids(scope_employee_code, str(date_to))
+        except Exception as exc:
+            return {
+                "status": "SCOPE_UNAVAILABLE", "rows": [],
+                "reason": f"Khong xac dinh duoc DMSId cua doi de doi chieu don: {exc}",
+            }
+        placeholders = []
+        for idx, dms_id in enumerate(dms_ids):
+            key = f"employee_dms_{idx}"
+            params[key] = dms_id
+            placeholders.append(f":{key}")
+        if not placeholders:
+            return {
+                "status": "SCOPE_UNAVAILABLE", "rows": [],
+                "reason": "Khong co DMSId duoc phan quyen de doi chieu don.",
+            }
+        joined = ",".join(placeholders)
+        scope_where += f" AND (h.DMSEmpId1 IN ({joined}) OR h.DMSEmpId2 IN ({joined}))"
+
+    try:
+        rows = _q_bravo(f"""
+            SELECT TOP (200)
+                   h.Id AS OrderId, h.DocDate AS OrderDate, h.CustomerCode,
+                   h.DMSEmpId1, h.StatusId, h.StatusDescription, h.IsSync,
+                   MIN(v.DocDate) AS InvoiceDate,
+                   DATEDIFF(day, h.DocDate, MIN(v.DocDate)) AS LagDays
+            FROM dbo.DMS_DonHangHdr h
+            {scope_joins}
+            LEFT JOIN dbo.vHoaDonTotal v ON TRY_CONVERT(int, v.DMSId)=h.Id
+            WHERE h.DocDate>=:date_from AND h.DocDate<:date_to_exclusive {scope_where}
+            GROUP BY h.Id,h.DocDate,h.CustomerCode,h.DMSEmpId1,
+                     h.StatusId,h.StatusDescription,h.IsSync
+            HAVING MIN(v.DocDate) IS NULL
+                OR ABS(DATEDIFF(day, h.DocDate, MIN(v.DocDate)))>=:lag_threshold
+            ORDER BY h.DocDate, h.Id
+        """, params)
+    except Exception as exc:
+        # Bao cao hang tra/phan bo gia tri don trong kho local van dung duoc neu VPN/Bravo dang loi.
+        return {
+            "status": "SOURCE_UNAVAILABLE", "source": "DMS_DonHangHdr + vHoaDonTotal (OTC)",
+            "rows": [], "reason": f"Khong doc duoc nguon don DMS de doi chieu: {exc}",
+        }
+
+    def _iso(value):
+        return value.isoformat() if isinstance(value, (dt.date, dt.datetime)) else (str(value) if value else None)
+
+    details = []
+    for row in rows:
+        invoice_date = row.get("InvoiceDate")
+        details.append({
+            "order_id": row.get("OrderId"),
+            "order_date": _iso(row.get("OrderDate")),
+            "customer_code": row.get("CustomerCode"),
+            "employee_dms_id": row.get("DMSEmpId1"),
+            "status_id": row.get("StatusId"),
+            "status_description": row.get("StatusDescription"),
+            "is_sync": row.get("IsSync"),
+            "invoice_date": _iso(invoice_date),
+            "invoice_lag_days": int(row["LagDays"]) if row.get("LagDays") is not None else None,
+            "exception_reason": ("CHUA_TIM_THAY_HOA_DON" if invoice_date is None
+                                 else "CHENH_LECH_NGAY_DON_HOA_DON"),
+        })
+    return {
+        "status": "OK", "source": "DMS_DonHangHdr + vHoaDonTotal (OTC)",
+        "date_from": str(date_from), "date_to": str(date_to),
+        "lag_threshold_days": params["lag_threshold"], "total_returned": len(details),
+        "rows": details,
+        "definition": ("Chua/tre hoa don = doi chieu ngay don DMS voi ngay hoa don dau tien. "
+                       "CreatedAt khong duoc dung vi chi la thoi diem tao don."),
+        "limit_note": "Toi da 200 dong theo truy van chuan S42; neu can can xu ly them, hay chia nho ky.",
+    }
+
+
 def order_timing_check(date_from: str, date_to: str, threshold_days: int = 2, limit: int = 20,
                         scope_area_code: str = None, scope_channel: str = None,
                         scope_employee_code: str = None) -> dict:
@@ -4411,10 +4523,11 @@ def order_timing_check(date_from: str, date_to: str, threshold_days: int = 2, li
 
     ``created_at`` la THOI DIEM TAO DON, khong phai thoi diem xac nhan don. DNH xac nhan ngay
     04/09/2026 rang do lech giua ``created_at`` va ``doc_date`` khong mang y nghia nghiep vu, nen
-    ham nay khong truy van, xep hang hay neu ten nhan vien theo do lech do. Hai tham so
-    ``threshold_days`` duoc giu de tuong thich API cu, nhung khong anh huong ket qua. ``limit`` gioi
-    han so dong chi tiet bat thuong hien ra; tong so dong co trong ``total_flagged`` khong bi cat.
-    ``scope_channel`` va ``scope_employee_code`` van ep pham vi ngay trong truy van du lieu don."""
+    ham nay khong truy van, xep hang hay neu ten nhan vien theo do lech do. Ket qua tach ro hai phan:
+    ``top_detail`` la hang tra/dieu chinh va phan bo gia tri tu hoa don local; con
+    ``order_fulfillment_exceptions`` doi chieu dung DMS_DonHangHdr voi vHoaDonTotal cho cac don
+    chua/tre hoa don. ``limit`` gioi han so dong chi tiet hang tra/gia tri don; tong so dong co trong
+    ``total_flagged`` khong bi cat. ``scope_channel`` va ``scope_employee_code`` ep pham vi o ca hai phan."""
     scope_sql, scope_params = _scope_clause(scope_area_code)
     emp_sql, emp_params = _employee_scope_clause(scope_employee_code, "v", as_of=date_to)
     scope_sql += emp_sql
@@ -4432,6 +4545,8 @@ def order_timing_check(date_from: str, date_to: str, threshold_days: int = 2, li
         "top_detail": [],
         "data_as_of": latest_data_date(),
     }
+    result["order_fulfillment_exceptions"] = _order_fulfillment_exceptions(
+        date_from, date_to, threshold_days, scope_area_code, scope_channel, scope_employee_code)
     # Cung mot lan goi tra du phan hang tra va phan bo gia tri don. vhoadon_otc GIU cac dong Amount9 am.
     quality_parts, quality_params = [], []
     if scope_channel != "ETC":

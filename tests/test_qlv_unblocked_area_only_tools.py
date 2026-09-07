@@ -10,6 +10,7 @@ bat dung loai loi (fail-closed o TANG PHAN QUYEN, khac voi loi/thieu du lieu o T
 import os
 import sqlite3
 import sys
+import datetime as dt
 
 BACKEND = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "backend")
 if BACKEND not in sys.path:
@@ -128,6 +129,7 @@ def test_check_order_timing_qlv_chi_thay_doi_minh(tmp_path, monkeypatch):
     conn.commit()
     conn.close()
     monkeypatch.setattr(local_warehouse, "DB_PATH", str(db_path))
+    monkeypatch.setattr(rt, "_q_bravo", lambda sql, params=None: [])
 
     result = rt.call_template("check_order_timing",
                               {"date_from": "2026-07-01", "date_to": "2026-07-31"},
@@ -194,3 +196,32 @@ def test_check_order_timing_scope_etc_khong_doc_don_otc(tmp_path, monkeypatch):
     assert result["top_detail"] == []
     assert result["order_value_distribution"]["orders"] == 1
     assert result["order_value_distribution"]["revenue"] == 500_000
+
+
+def test_check_order_timing_tra_dung_don_dms_chua_hoa_don(monkeypatch):
+    """S42 phai dung don DMS, khong lay danh sach hang tra Amount9 am thay the."""
+    captured = {}
+
+    def fake_q_bravo(sql, params=None):
+        captured["sql"] = sql
+        captured["params"] = params
+        return [{
+            "OrderId": 12345, "OrderDate": dt.date(2026, 8, 15), "CustomerCode": "KH01",
+            "DMSEmpId1": "TDV01", "StatusId": 2, "StatusDescription": "Da xac nhan",
+            "IsSync": 1, "InvoiceDate": None, "LagDays": None,
+        }]
+
+    monkeypatch.setattr(rt, "_q_bravo", fake_q_bravo)
+    result = rt._order_fulfillment_exceptions("2026-08-01", "2026-08-31", 2)
+
+    assert "DMS_DonHangHdr" in captured["sql"]
+    assert "vHoaDonTotal" in captured["sql"]
+    assert "CreatedAt" not in captured["sql"]
+    assert captured["params"]["lag_threshold"] == 2
+    assert result["status"] == "OK"
+    assert result["rows"] == [{
+        "order_id": 12345, "order_date": "2026-08-15", "customer_code": "KH01",
+        "employee_dms_id": "TDV01", "status_id": 2, "status_description": "Da xac nhan",
+        "is_sync": 1, "invoice_date": None, "invoice_lag_days": None,
+        "exception_reason": "CHUA_TIM_THAY_HOA_DON",
+    }]
