@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect, useMemo, useCallback } from "react";
 import {
   IconShield, IconPlus, IconClose, IconUsers, IconShieldLock, IconRefresh,
   IconClipboard, IconClock, IconCheck, IconLock, IconUnlock, IconKey,
@@ -32,6 +32,19 @@ interface AdminUsersPanelProps {
   onClose: () => void;
 }
 
+interface SecurityLogItem {
+  ts?: string;
+  username?: string;
+  user_name?: string;
+  question?: string;
+  sql?: string;
+  status?: string;
+}
+
+function errorMessage(error: unknown, fallback: string): string {
+  return error instanceof Error ? error.message : fallback;
+}
+
 // Phan loai theo tien to `sql` ma backend da ghi (<auth:...>/<admin:...>) - dung hon la doan tu
 // khoa tren `question` (isPasswordChange/isLogin/isReset ben duoi) vi khong phu thuoc emoji/cau chu.
 const SEC_EVENT_CATEGORIES: { value: string; label: string; match: (sql: string) => boolean }[] = [
@@ -48,7 +61,7 @@ const SEC_EVENT_CATEGORIES: { value: string; label: string; match: (sql: string)
 export default function AdminUsersPanel({ authToken, currentRole, onClose }: AdminUsersPanelProps) {
   const [users, setUsers] = useState<UserItem[]>([]);
   const [filterStatus, setFilterStatus] = useState<string>("");
-  const [loading, setLoading] = useState<boolean>(false);
+  const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
   const [selectedUser, setSelectedUser] = useState<UserItem | null>(null);
   const [showCreateModal, setShowCreateModal] = useState<boolean>(false);
@@ -79,7 +92,7 @@ export default function AdminUsersPanel({ authToken, currentRole, onClose }: Adm
 
   // Active Tab state inside Admin Users Panel
   const [activeTab, setActiveTab] = useState<"users" | "security">("users");
-  const [securityLogs, setSecurityLogs] = useState<any[]>([]);
+  const [securityLogs, setSecurityLogs] = useState<SecurityLogItem[]>([]);
   const [logsLoading, setLogsLoading] = useState<boolean>(false);
   // Bo loc phia client cho tab Nhat ky bao mat (03/08/2026 -> 06/08/2026: them tim kiem/loc theo
   // su kien/ngay) - khong can goi lai backend, 90 ngay du lieu da tai san co du de loc tai cho.
@@ -87,7 +100,7 @@ export default function AdminUsersPanel({ authToken, currentRole, onClose }: Adm
   const [secEventFilter, setSecEventFilter] = useState<string>("all");
   const [secDateFilter, setSecDateFilter] = useState<string>("");
 
-  const fetchSecurityLogs = async () => {
+  const fetchSecurityLogs = useCallback(async () => {
     setLogsLoading(true);
     try {
       const res = await fetch("/api/audit-logs?days=90", {
@@ -95,7 +108,7 @@ export default function AdminUsersPanel({ authToken, currentRole, onClose }: Adm
       });
       const data = await res.json();
       if (res.ok && data.logs) {
-        const sec = data.logs.filter((l: any) => {
+        const sec = data.logs.filter((l: SecurityLogItem) => {
           const q = (l.question || "").toLowerCase();
           const sql = (l.sql || "").toLowerCase();
           return (
@@ -112,23 +125,23 @@ export default function AdminUsersPanel({ authToken, currentRole, onClose }: Adm
         });
         setSecurityLogs(sec);
       }
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error("Lỗi tải nhật ký bảo mật:", err);
     } finally {
       setLogsLoading(false);
     }
-  };
+  }, [authToken]);
 
   useEffect(() => {
-    if (activeTab === "security") {
-      fetchSecurityLogs();
-    }
-  }, [activeTab]);
+    if (activeTab !== "security") return;
+    const timer = window.setTimeout(() => void fetchSecurityLogs(), 0);
+    return () => window.clearTimeout(timer);
+  }, [activeTab, fetchSecurityLogs]);
 
   const filteredSecurityLogs = useMemo(() => {
     const cat = SEC_EVENT_CATEGORIES.find((c) => c.value === secEventFilter) || SEC_EVENT_CATEGORIES[0];
     const q = secSearch.trim().toLowerCase();
-    return securityLogs.filter((log: any) => {
+    return securityLogs.filter((log) => {
       if (!cat.match(log.sql || "")) return false;
       if (secDateFilter && (log.ts || "").slice(0, 10) !== secDateFilter) return false;
       if (q) {
@@ -141,7 +154,7 @@ export default function AdminUsersPanel({ authToken, currentRole, onClose }: Adm
 
   const secFiltersActive = secEventFilter !== "all" || Boolean(secDateFilter) || Boolean(secSearch.trim());
 
-  const fetchUsers = async () => {
+  const fetchUsers = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
@@ -152,16 +165,17 @@ export default function AdminUsersPanel({ authToken, currentRole, onClose }: Adm
       const data = await res.json();
       if (!res.ok) throw new Error(data.detail || "Không thể tải danh sách tài khoản");
       setUsers(data);
-    } catch (err: any) {
-      setError(err.message);
+    } catch (err: unknown) {
+      setError(errorMessage(err, "Không thể tải danh sách tài khoản"));
     } finally {
       setLoading(false);
     }
-  };
+  }, [authToken, filterStatus]);
 
   useEffect(() => {
-    fetchUsers();
-  }, [filterStatus]);
+    const timer = window.setTimeout(() => void fetchUsers(), 0);
+    return () => window.clearTimeout(timer);
+  }, [fetchUsers]);
 
   const handleApprove = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -189,8 +203,8 @@ export default function AdminUsersPanel({ authToken, currentRole, onClose }: Adm
 
       setSelectedUser(null);
       fetchUsers();
-    } catch (err: any) {
-      setActionError(err.message);
+    } catch (err: unknown) {
+      setActionError(errorMessage(err, "Phê duyệt thất bại"));
     } finally {
       setActionLoading(false);
     }
@@ -238,8 +252,8 @@ export default function AdminUsersPanel({ authToken, currentRole, onClose }: Adm
       setNewScopeValue("");
       setNewScopeChannel("");
       fetchUsers();
-    } catch (err: any) {
-      setCreateMsg({ text: err.message, type: "error" });
+    } catch (err: unknown) {
+      setCreateMsg({ text: errorMessage(err, "Tạo tài khoản thất bại"), type: "error" });
     } finally {
       setActionLoading(false);
     }
@@ -255,8 +269,8 @@ export default function AdminUsersPanel({ authToken, currentRole, onClose }: Adm
       const data = await res.json();
       if (!res.ok) throw new Error(data.detail || "Thao tác thất bại");
       fetchUsers();
-    } catch (err: any) {
-      setActionError(err.message);
+    } catch (err: unknown) {
+      setActionError(errorMessage(err, "Thao tác thất bại"));
     }
   };
 
@@ -635,7 +649,7 @@ export default function AdminUsersPanel({ authToken, currentRole, onClose }: Adm
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {filteredSecurityLogs.map((log: any, idx: number) => {
+                  {filteredSecurityLogs.map((log, idx: number) => {
                     const isError = log.status === "error";
                     const qText = log.question || "";
                     const isPasswordChange = qText.includes("Đổi mật khẩu");

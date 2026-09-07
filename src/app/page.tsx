@@ -2541,8 +2541,11 @@ export default function Home() {
                     setChangePwdOpen(false);
                     setMessages([]);
                   }, 1000);
-                } catch (err: any) {
-                  setPwdChangeMsg({ text: err.message, type: "error" });
+                } catch (err: unknown) {
+                  setPwdChangeMsg({
+                    text: err instanceof Error ? err.message : "Đổi mật khẩu thất bại",
+                    type: "error",
+                  });
                 } finally {
                   setPwdChangeSubmitting(false);
                 }

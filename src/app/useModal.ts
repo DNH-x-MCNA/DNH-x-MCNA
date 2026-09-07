@@ -25,7 +25,10 @@ export function useModal(active: boolean, onClose: () => void) {
   // re-render, tao onClose moi, kich hoat lai effect va CUOP FOCUS ve phan tu focusable dau tien
   // (thuong la nut dong "X") ngay giua luc dang go - bug thuc te da gap 05/08/2026.
   const onCloseRef = useRef(onClose);
-  onCloseRef.current = onClose;
+
+  useEffect(() => {
+    onCloseRef.current = onClose;
+  }, [onClose]);
 
   useEffect(() => {
     if (!active) return;
@@ -64,7 +67,6 @@ export function useModal(active: boolean, onClose: () => void) {
       document.body.style.overflow = prevOverflow;
       previousFocusRef.current?.focus?.();
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active]);
 
   return containerRef;
