@@ -287,6 +287,38 @@ def test_high_risk_intents_force_their_single_verified_tool():
     ) == "get_salary_ranking"
 
 
+def test_m_role_questions_start_from_their_verified_report_not_free_sql():
+    # Regression pack for the M01-M44 regional-management sheet.  These questions used to
+    # fall through to ad-hoc SQL, or (M20) mistook the word "bất thường" for order timing.
+    expected = {
+        "Gap tới KH tháng/quý còn bao nhiêu; mỗi vùng cần đóng góp thêm bao nhiêu": "get_kpi_gap_run_rate",
+        "Doanh thu ngày/tuần đang chạy nhanh/chậm hơn nhịp cần thiết": "get_kpi_gap_run_rate",
+        "Số khách/đơn/AOV/tần suất mua miền/kênh thay đổi qua từng tháng": "get_geography_monthly_performance",
+        "Đơn/hóa đơn bất thường làm biến động kết quả tháng; loại đi còn bao nhiêu": "check_order_timing",
+        "Tỉnh/chi nhánh/NPP nào kéo giảm kết quả và cần ưu tiên can thiệp": "get_geography_monthly_performance",
+        "Doanh số/target/%hoàn thành từng TDV trong đội theo tháng; ai cải thiện/suy giảm nhất": "get_employee_kpi",
+        "Đội đạt 100%/80%/qua cổng 65-70%/dưới cổng; xu hướng 3 tháng": "get_employee_kpi",
+        "Số NV dưới 80%; phần hụt tập trung ở ai": "get_employee_kpi",
+        "NV giảm doanh số liên tiếp 3 tháng; do mất khách/giảm tần suất/giảm giá trị đơn": "get_workforce_productivity",
+        "NV mới đạt ramp-up sau 1/2/3/6 tháng so chuẩn cùng vai trò": "get_workforce_productivity",
+        "Địa bàn trống, NV nghỉ/chuyển vùng, khách chưa gán ảnh hưởng bao nhiêu DT": "get_operational_data_quality",
+        "Thưởng/KPI đội có khớp doanh số và chính sách; bất thường cần kiểm tra": "get_salary_ranking",
+        "Top khách hàng theo DT từng tháng; khách tăng/giảm mạnh, TDV phụ trách": "get_top_customers",
+        "Mở nhiều khách mới nhưng DT/khách và tỷ lệ mua lại thấp": "get_customer_movement",
+        "Tỉnh/huyện ít khách hoạt động/ít đơn/DT-khách thấp hơn chuẩn miền": "get_geography_monthly_performance",
+        "NPP/chi nhánh tăng khách tốt nhưng công nợ/tồn kho xấu đi": "get_geography_monthly_performance",
+        "SKU chiến lược đạt %KH tại vùng; khoảng trống độ phủ lớn nhất": "get_customer_product_coverage",
+        "SP mới đạt độ phủ/DT sau 1/3/6 tháng tại vùng": "get_customer_product_coverage",
+        "Tỷ lệ trả hàng/chiết khấu/hàng tặng trên DT của từng vùng thay đổi": "check_order_timing",
+        "Tổng nợ/quá hạn/DSO/thu tiền từng vùng-QLV qua từng tháng; đơn vị xấu nhanh nhất": "get_receivables_overview",
+        "Khách cần dừng/bóp bán vì nợ xấu; DT nguy cơ ảnh hưởng bao nhiêu": "get_customer_revenue_debt_risk",
+        "ETC: kế hoạch thầu, tỷ lệ trúng, DT thực hiện, thu tiền từng tháng theo vùng/khách": "get_geography_monthly_performance",
+        "Với vùng dưới KH: 3 nguyên nhân định lượng, 3 hành động, owner, deadline": "get_operational_data_quality",
+    }
+    for question, tool in expected.items():
+        assert nl2sql._required_tool_for_question(question) == tool, question
+
+
 def test_ask_sends_forced_tool_choice_only_on_first_round(monkeypatch):
     seen = []
 

@@ -184,10 +184,32 @@ def _required_tool_for_question(question: str) -> str | None:
         "tai kich hoat", "ngung mua", "tang truong den tu mo moi", "doanh thu mat",
         "bu duoc bao nhieu", "khach lon nao ngung", "keo dai chu ky mua",
         "like-for-like", "like for like", "tang truong huu co", "tang mua tren khach hien huu",
+        "mo nhieu khach moi",
     )):
         return "get_customer_movement"
+    if any(marker in q for marker in ("top khach hang", "top 10 khach", "khach tang/giam manh")):
+        return "get_top_customers"
     if any(marker in q for marker in ("khach im lang", "im lang 30", "im lang 60", "im lang 90")):
         return "get_customers_silent"
+    if any(marker in q for marker in (
+        "dia ban trong", "nv nghi", "chuyen vung", "khach chua gan",
+    )):
+        return "get_operational_data_quality"
+    if ("tung thang" in q or "qua tung thang" in q) and any(
+            marker in q for marker in ("so khach", "khach/", "don/", "aov", "tan suat")):
+        # M07: can chuoi khach/don/AOV theo dia ban, khong phai bang coverage cua mot cap ky.
+        return "get_geography_monthly_performance"
+    # Dia ban phai uu tien truoc cac tu khoa "it don"/"doanh thu/khach" ben duoi.
+    # Neu khong M27 se bi dua vao bao cao coverage theo san pham thay vi so sanh tinh/huyen.
+    if any(marker in q for marker in (
+        "tinh nao", "tinh/", "chi nhanh", "npp", "dia ban", "vung nao dong gop", "xep hang vung",
+        "quy mo lon", "tang truong thap", "co hoi trang",
+    )):
+        return "get_geography_monthly_performance"
+    if any(marker in q for marker in ("ke hoach thau", "ty le trung thau", "gia tri trung thau")):
+        # Kho chua co ke hoach/tender; bao cao dia ban ETC chi cung cap phan doanh thu thuc hien
+        # con co the kiem chung va buoc chatbot neu ro cac chi tieu thau/thu tien la thieu nguon.
+        return "get_geography_monthly_performance"
     if any(marker in q for marker in (
         "xoi mon gia", "gia ban thuc te", "giam gia ban", "do it khach", "it don",
         "giam luong", "luong/don", "doanh thu/khach", "mua it sku", "share-of-wallet noi bo",
@@ -201,21 +223,37 @@ def _required_tool_for_question(question: str) -> str | None:
     if any(marker in q for marker in (
         "thieu target", "thieu manager", "thieu quan ly", "trung ma", "sai mapping",
         "khach chua gan", "thieu dms", "snapshot chua chot", "ngoai le chua xu ly",
+        "owner, deadline", "owner deadline", "hanh dong, owner",
     )):
         return "get_operational_data_quality"
+    if any(marker in q for marker in (
+        "tong no", "no qua han", "dso", "thu tien", "no xau", "bop ban", "thu hoi",
+    )):
+        if any(marker in q for marker in ("khach can", "khach vua", "doanh thu nguy co", "bop ban")):
+            return "get_customer_revenue_debt_risk"
+        return "get_receivables_overview"
     if any(marker in q for marker in ("gia tri ton kho", "so thang ton", "stock-out", "thieu hang")):
         return "get_inventory_by_region"
     if any(marker in q for marker in ("can date", "cham luan chuyen", "ton cao", "dung nhap")):
         return "get_inventory_expiry_report"
     if any(marker in q for marker in (
-        "tinh nao", "dia ban", "vung nao dong gop", "xep hang vung", "quy mo lon",
+        "tinh nao", "tinh/", "chi nhanh", "npp", "dia ban", "vung nao dong gop", "xep hang vung", "quy mo lon",
         "tang truong thap", "co hoi trang",
     )):
         return "get_geography_monthly_performance"
     if any(marker in q for marker in (
-        "nang suat", "span of control", "giam lien tiep 3 thang", "headcount",
+        "nang suat", "span of control", "giam lien tiep 3 thang", "giam doanh so lien tiep",
+        "headcount", "ramp-up", "ramp up",
     )):
         return "get_workforce_productivity"
+    if any(marker in q for marker in ("gap toi kh", "duoi 80% kh", "moi ngay can dong gop",
+                                       "ngay/tuan dang chay", "nhip can thiet")):
+        return "get_kpi_gap_run_rate"
+    if any(marker in q for marker in (
+        "tdv trong doi", "doanh so/target", "dat 100%", "qua cong 65", "duoi cong",
+        "so nv duoi 80",
+    )):
+        return "get_employee_kpi"
     if "mua vu" in q:
         # C08: phai bat dau bang chuoi thang, de tool tu danh dau thang khong du du lieu
         # thay vi model tu suy dien tinh mua vu tu vai ngay/1-2 thang hien co.
@@ -235,11 +273,15 @@ def _required_tool_for_question(question: str) -> str | None:
     if "hang tra" in q or "dieu chinh don" in q:
         # C13: Amount9 am phai di qua bao cao don, khong suy tu doanh thu tong hop.
         return "check_order_timing"
+    if any(marker in q for marker in ("don/hoa don bat thuong", "don bat thuong", "hoa don bat thuong",
+                                       "ty le tra hang", "hang tang tren dt")):
+        return "check_order_timing"
 
     # Cac intent UAT cua QLV da tung chon sai/roi du lieu khi model tu ghep 4-12 tool. Ep DUONG
     # BAO CAO DA CO SAN ngay tu vong dau; cac vong sau van duoc phep goi them neu cau hoi co nhieu ve.
-    if is_team and any(word in q for word in ("hàng trả", "hang tra", "đơn lớn", "don lon",
-                                               "bất thường", "bat thuong", "chạy đơn", "chay don")):
+    if is_team and not any(word in q for word in ("thuong", "kpi", "chinh sach")) and any(
+            word in q for word in ("hàng trả", "hang tra", "đơn lớn", "don lon",
+                                   "bất thường", "bat thuong", "chạy đơn", "chay don")):
         return "check_order_timing"
     if any(word in q for word in ("còn thiếu", "con thieu", "mỗi ngày cần", "moi ngay can")) and any(
             threshold in q for threshold in ("65", "70", "80", "100", "120", "kpi")):
@@ -261,6 +303,9 @@ def _required_tool_for_question(question: str) -> str | None:
     if is_promo:
         return "get_promotion_effectiveness"
 
+    if any(marker in q for marker in ("sku chien luoc", "sp moi dat do phu", "san pham moi dat do phu")):
+        return "get_customer_product_coverage"
+
     if "ty le nhan su dat" in q and any(
             threshold in q for threshold in ("65", "70", "80", "100", "120")):
         return "get_employee_kpi"
@@ -280,7 +325,7 @@ def _required_tool_for_question(question: str) -> str | None:
                 ))):
             return "get_salary_data_quality"
         if any(marker in q for marker in (
-            "từng người", "tung nguoi", "cả đội", "ca doi", "toàn đội", "toan doi",
+            "từng người", "tung nguoi", "cả đội", "ca doi", "toàn đội", "toan doi", "doi",
             "thay đổi", "thay doi", "phụ cấp", "phu cap",
         )):
             # Mot bang compact cho ca doi, co san ky truoc + delta. Tranh 8 lenh salary_detail
