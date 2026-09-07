@@ -241,6 +241,12 @@ def test_high_risk_intents_force_their_single_verified_tool():
         "DT đội đến từ bao nhiêu khách/đơn; AOV và tần suất mua thay đổi"
     ) == "get_customer_product_coverage"
     assert nl2sql._required_tool_for_question(
+        "Khách nào giảm tần suất mua, AOV hoặc số SKU/đơn so với 3 tháng trước?"
+    ) == "get_customer_product_coverage"
+    assert nl2sql._required_tool_for_question(
+        "Khách nào mua ít hơn các khách tương đồng cùng tỉnh/phân khúc?"
+    ) == "get_customer_product_coverage"
+    assert nl2sql._required_tool_for_question(
         "Còn thiếu bao nhiêu để đạt 65%, 80%, 100%; mỗi ngày cần bán bao nhiêu"
     ) == "get_kpi_gap_run_rate"
     assert nl2sql._required_tool_for_question(

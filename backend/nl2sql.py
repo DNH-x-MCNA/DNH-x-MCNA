@@ -195,6 +195,16 @@ def _required_tool_for_question(question: str) -> str | None:
         "dia ban trong", "nv nghi", "chuyen vung", "khach chua gan",
     )):
         return "get_operational_data_quality"
+    # V26 phai xet truoc nhanh "tinh nao" ben duoi: day la cau hoi ve TUNG KHACH so voi
+    # benchmark noi bo, khong phai bao cao tong hop theo tinh.
+    if ("khach tuong dong" in q or "khach nao mua it hon" in q or
+            ("tuong dong" in q and "phan khuc" in q and "khach" in q)):
+        return "get_customer_product_coverage"
+    # V24: so sanh TUNG KHACH giua hai cua so 3 thang ve don/AOV/SKU. Khong de model tu
+    # chon bao cao dia ban chi vi cau co nhac den "tinh".
+    if "khach nao" in q and "3 thang" in q and any(
+            marker in q for marker in ("tan suat", "aov", "sku", "so sku", "sku/don")):
+        return "get_customer_product_coverage"
     if ("tung thang" in q or "qua tung thang" in q) and any(
             marker in q for marker in ("so khach", "khach/", "don/", "aov", "tan suat")):
         # M07: can chuoi khach/don/AOV theo dia ban, khong phai bang coverage cua mot cap ky.
@@ -628,12 +638,15 @@ TEMPLATE_TOOLS = [
                        "thay trong cua so kho, KHONG tu goi chac chan la khach moi trong doi. Khi hoi "
                        "tong doanh thu them/mat hay ty le bu doanh thu, BAT BUOC dung "
                        "summary_all_customers; summary_on_returned_top_rows chi la top-N de minh hoa. "
-                       "C20/M08: summary_all_customers da tach san new_or_first_observed_revenue, "
+                       "V23: voi dong REACTIVATED, dung cac truong pre_stop_* va recovery_* de so "
+                       "doanh thu thang quay lai voi binh quan cac thang co mua truoc khi ngung; "
+                       "gap/history CHI chac chan trong cua so 12 thang dang co, khong tu suy doan "
+                       "lich su xa hon. C20/M08: summary_all_customers da tach san new_or_first_observed_revenue, "
                        "reactivated_revenue, lost_previous_revenue va like_for_like_*; dung cac so nay, "
                        "KHONG tu phan loai lai hay de mot khoan 'chua phan loai'.",
         "input_schema": {"type": "object", "properties": {
             "month": {"type": "string", "description": "YYYY-MM."},
-            "history_months": {"type": "integer", "description": "Cua so nhan biet tai kich hoat, mac dinh 6."},
+            "history_months": {"type": "integer", "description": "Cua so nhan biet tai kich hoat, mac dinh 12."},
             "movement_filter": {"type": "string", "enum": ["all", "NEW_OR_FIRST_OBSERVED", "REACTIVATED", "STOPPED", "GROWING", "DECLINING"]},
             "limit": {"type": "integer"},
         }, "required": []},
@@ -674,13 +687,17 @@ TEMPLATE_TOOLS = [
                        "cung ngay trong thang truoc (01-04/09 vs 01-04/08), va rows GIU CA nhan vien ky "
                        "hien tai bang 0 - khong duoc bo qua. largest_increase/largest_decrease da tinh san. Dung cho khach "
                        "mua it SKU, tan suat/AOV giam, NV co nhieu khach nhung mua thap, san pham nhieu "
-                       "khach nhung luong/don thap. Benchmark chi trong DUNG pham vi tai khoan, KHONG "
+                       "khach nhung luong/don thap. V24: dung mode='customer', lookback_months=3 de xem "
+                       "tung khach giam don/AOV/SKU so voi cua so 3 thang lien truoc. V26: dung "
+                       "mode='customer_peer', lookback_months=3; benchmark hien chi theo CUNG TINH, "
+                       "vi kho chua co phan khuc khach hang chot chuan - phai noi ro gioi han nay. "
+                       "Benchmark chi trong DUNG pham vi tai khoan, KHONG "
                        "phai market share/share-of-wallet ngoai DNH va KHONG tu ket luan nhu cau. Voi "
                        "mode='product', dung net_revenue_per_paid_unit va truong previous/delta/pct de "
                        "phan tich xoi mon gia; day la doanh thu thuan tren don vi ban co gia, khong phai bang gia niem yet.",
         "input_schema": {"type": "object", "properties": {
             "as_of_date": {"type": "string"}, "lookback_months": {"type": "integer"},
-            "mode": {"type": "string", "enum": ["customer", "product", "employee", "priority"]},
+            "mode": {"type": "string", "enum": ["customer", "customer_peer", "product", "employee", "priority"]},
             "limit": {"type": "integer"},
         }, "required": []},
     },

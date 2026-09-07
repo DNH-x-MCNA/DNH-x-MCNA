@@ -141,6 +141,9 @@ def test_customer_movement_phan_loai_new_reactivated_stopped(tmp_path, monkeypat
     assert by["C3"]["movement"] == "NEW_OR_FIRST_OBSERVED"
     assert by["C3"]["has_repeat_order_current"] is True
     assert by["C4"]["movement"] == "REACTIVATED"
+    assert by["C4"]["pre_stop_average_monthly_revenue"] == 200
+    assert by["C4"]["recovery_delta_vs_pre_stop_average"] == 400
+    assert by["C4"]["inactive_months_before_reactivation"] == 2
     assert by["C2"]["movement"] == "STOPPED"
 
 
@@ -223,6 +226,31 @@ def test_coverage_benchmark_khach_va_san_pham(tmp_path, monkeypatch):
     assert pb["net_revenue_per_paid_unit"] == 210
     assert pb["previous_net_revenue_per_paid_unit"] == 140
     assert pb["net_revenue_per_paid_unit_pct"] == 50
+
+
+def test_customer_peer_benchmark_chi_so_sanh_cung_tinh_va_bao_gioi_han_phan_khuc(tmp_path, monkeypatch):
+    _setup(tmp_path, monkeypatch)
+    result = rt.customer_product_coverage(as_of_date="2026-04-20", lookback_months=3,
+                                          mode="customer_peer")
+    assert result["peer_benchmark_definition"].startswith("customer_peer")
+    by = {row["code"]: row for row in result["rows"]}
+    assert by["C1"]["province"] == "Ha Noi"
+    assert by["C1"]["peer_benchmark_status"] == "AVAILABLE"
+    assert by["C1"]["peer_group_size"] >= 3
+    assert by["C1"]["city_median_revenue"] is not None
+
+
+def test_customer_peer_khong_goi_doanh_thu_am_la_mua_it(tmp_path, monkeypatch):
+    db_path = _setup(tmp_path, monkeypatch)
+    with sqlite3.connect(db_path) as con:
+        con.execute("INSERT INTO vhoadon_otc VALUES "
+                    "('2026-04-19','C2','A',-1000,1,100,'RETURN-C2',1,'D2','2026-04-19','OTC')")
+    result = rt.customer_product_coverage(as_of_date="2026-04-20", lookback_months=3,
+                                          mode="customer_peer")
+    c2 = next(row for row in result["rows"] if row["code"] == "C2")
+    assert c2["revenue"] < 0
+    assert c2["peer_benchmark_status"] == "NON_POSITIVE_NET_REVENUE_REQUIRES_RETURN_CHECK"
+    assert "city_median_revenue" not in c2
 
 
 def test_coverage_giu_sku_ky_truoc_da_ve_0_va_doi_chieu_du_tong(tmp_path, monkeypatch):

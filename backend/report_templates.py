@@ -2021,7 +2021,7 @@ def customer_cohort_retention(month_to: str = None, months_back: int = 6,
     }
 
 
-def customer_movement(month: str = None, history_months: int = 6,
+def customer_movement(month: str = None, history_months: int = 12,
                       movement_filter: str = "all", limit: int = 50,
                       scope_area_code: str = None, scope_channel: str = None,
                       scope_employee_code: str = None) -> dict:
@@ -2063,6 +2063,33 @@ def customer_movement(month: str = None, history_months: int = 6,
         if movement_filter != "all" and movement != movement_filter.upper():
             continue
         emp = max(c["employees"], key=c["employees"].get) if c["employees"] else None
+        pre_stop_active = sorted(
+            [(ym, values) for ym, values in c["months"].items()
+             if ym < prev_month and values["revenue"] > 0],
+            key=lambda pair: pair[0],
+        )
+        last_active_month = pre_stop_active[-1][0] if pre_stop_active else None
+        pre_stop_revenue = sum(values["revenue"] for _, values in pre_stop_active)
+        pre_stop_avg = (pre_stop_revenue / len(pre_stop_active)) if pre_stop_active else None
+        # "Tai kich hoat" chi co nghia da khong mua o thang lien truoc. So thang nghi va moc
+        # truoc khi nghi phai tinh trong cua so hien co, khong duoc suy doan xa hon lich su kho.
+        gap_months = 0
+        if last_active_month:
+            cursor = _month_add(last_active_month, 1)
+            while cursor <= prev_month:
+                if c["months"].get(cursor, {"revenue": 0.0})["revenue"] <= 0:
+                    gap_months += 1
+                cursor = _month_add(cursor, 1)
+        reactivation_fields = {
+            "last_active_month_before_reactivation": last_active_month,
+            "inactive_months_before_reactivation": gap_months or None,
+            "pre_stop_active_month_count_in_window": len(pre_stop_active),
+            "pre_stop_average_monthly_revenue": pre_stop_avg,
+            "recovery_delta_vs_pre_stop_average": (
+                cur["revenue"] - pre_stop_avg if pre_stop_avg is not None else None),
+            "recovery_pct_vs_pre_stop_average": (
+                cur["revenue"] / pre_stop_avg * 100 if pre_stop_avg else None),
+        } if movement == "REACTIVATED" else {}
         detail.append({
             "customer_code": code,
             "customer_name": names.get(code, "(khong co trong danh muc khach hang)"),
@@ -2073,6 +2100,7 @@ def customer_movement(month: str = None, history_months: int = 6,
             "has_repeat_order_current": cur["orders"] >= 2,
             "earlier_revenue_in_window": earlier,
             "employee_code": emp, "channels": sorted(c["channels"]), "areas": sorted(c["areas"]),
+            **reactivation_fields,
         })
     detail.sort(key=lambda x: abs(x["delta"]), reverse=True)
 
@@ -2138,6 +2166,8 @@ def customer_movement(month: str = None, history_months: int = 6,
         "customers": returned_detail,
         "canh_bao": ("NEW_OR_FIRST_OBSERVED chi co nghia la lan dau THAY trong cua so du lieu dang co; "
                       "khong duoc khang dinh la khach moi trong doi neu kho thieu lich su truoc do. "
+                      "REACTIVATED/pre_stop_* chi duoc ket luan trong cua so tu history_from den month; "
+                      "khong co du lieu de khang dinh lan mua truoc do neu no nam truoc cua so nay. "
                       "Khi hoi tong doanh thu them/mat hoac ty le bu doanh thu, BAT BUOC dung "
                       "summary_all_customers; summary_on_returned_top_rows chi mo ta cac dong top-N "
                       "dang hien thi, khong dai dien cho toan bo tap khach."),
@@ -2354,14 +2384,19 @@ def customer_product_coverage(as_of_date: str = None, lookback_months: int = 3,
                               mode: str = "customer", limit: int = 100,
                               scope_area_code: str = None, scope_channel: str = None,
                               scope_employee_code: str = None) -> dict:
-    """Do phu/benchmark noi bo; mode=priority tra ba danh sach dong gap theo S84."""
+    """Do phu/benchmark noi bo; mode=priority tra ba danh sach dong gap theo S84.
+
+    customer_peer la benchmark TUNG KHACH theo trung vi CUNG TINH. Kho khong co phan khuc khach
+    hang chot chuan, nen tuyen doi khong goi day la benchmark "cung tinh/phan khuc".
+    """
     if mode == "priority":
         return priority_gap_actions(as_of_date=as_of_date, limit=limit,
                                     scope_area_code=scope_area_code,
                                     scope_channel=scope_channel,
                                     scope_employee_code=scope_employee_code)
-    if mode not in {"customer", "product", "employee"}:
-        return {"error": "mode chi nhan customer/product/employee/priority."}
+    if mode not in {"customer", "customer_peer", "product", "employee"}:
+        return {"error": "mode chi nhan customer/customer_peer/product/employee/priority."}
+    customer_mode = mode in {"customer", "customer_peer"}
     as_of_date = (as_of_date or latest_data_date())[:10]
     lookback_months = max(1, min(int(lookback_months or 3), 12))
     limit = max(1, min(int(limit or 100), 500))
@@ -2393,27 +2428,33 @@ def customer_product_coverage(as_of_date: str = None, lookback_months: int = 3,
     for period, date_from, date_to in (("CURRENT", current_from, as_of_date),
                                        ("PREVIOUS", previous_from, previous_to)):
         if scope_channel != "ETC":
-            join = (_otc_area_join("v", scope_area_code) +
-                    " LEFT JOIN dim_nhanvien nv ON nv.dmsid=v.employee_code")
+            geo_join = _otc_area_join("v", scope_area_code)
+            if not scope_area_code:
+                geo_join = (" LEFT JOIN dms_khachhang kh ON kh.code=v.customer_code "
+                            "LEFT JOIN dim_tinhthanhpho tp ON tp.city_id=kh.city_id")
+            join = geo_join + " LEFT JOIN dim_nhanvien nv ON nv.dmsid=v.employee_code"
             parts.append(f"SELECT '{period}' period,v.customer_code,v.item_code,v.amount9,v.quantity,"
                          "'OTC:'||v.doc_date||':'||v.customer_code||':'||COALESCE(v.stt,'') order_key,"
-                         f"COALESCE(nv.employee_code,v.employee_code) employee_code FROM vhoadon_otc v {join} "
+                         f"COALESCE(nv.employee_code,v.employee_code) employee_code,COALESCE(tp.city_name,'UNKNOWN') city_name FROM vhoadon_otc v {join} "
                          f"WHERE v.doc_date BETWEEN ? AND ? AND COALESCE(v.unit_price,0)>0{suffix}")
             params.extend((date_from, date_to) + suffix_params)
         if scope_channel != "OTC":
-            join = (_etc_area_join("v", scope_area_code) +
-                    " LEFT JOIN dim_nhanvien nv ON nv.dmsid=v.employee_code")
+            geo_join = _etc_area_join("v", scope_area_code)
+            if not scope_area_code:
+                geo_join = (" LEFT JOIN dmssx_khachhang kh ON kh.code=v.customer_code "
+                            "LEFT JOIN dim_tinhthanhpho tp ON tp.city_id=kh.city_id")
+            join = geo_join + " LEFT JOIN dim_nhanvien nv ON nv.dmsid=v.employee_code"
             parts.append(f"SELECT '{period}' period,v.customer_code,v.item_code,v.amount9,v.quantity,"
                          "'ETC:'||v.doc_date||':'||v.customer_code||':'||COALESCE(v.stt,'') order_key,"
-                         f"COALESCE(nv.employee_code,v.employee_code) employee_code FROM vhoadon_etc v {join} "
+                         f"COALESCE(nv.employee_code,v.employee_code) employee_code,COALESCE(tp.city_name,'UNKNOWN') city_name FROM vhoadon_etc v {join} "
                          f"WHERE v.doc_date BETWEEN ? AND ? AND COALESCE(v.unit_price,0)>0{suffix}")
             params.extend((date_from, date_to) + suffix_params)
     if not parts:
         return {"error": "Khong co kenh nao kha dung."}
     cte = "WITH lines AS (" + " UNION ALL ".join(parts) + ") "
-    dim = {"customer": "customer_code", "product": "item_code", "employee": "employee_code"}[mode]
+    dim = {"customer": "customer_code", "customer_peer": "customer_code", "product": "item_code", "employee": "employee_code"}[mode]
     raw = _q(
-        cte + f"SELECT period,{dim} code,SUM(amount9) revenue,SUM(quantity) quantity,"
+        cte + f"SELECT period,{dim} code,MAX(city_name) city_name,SUM(amount9) revenue,SUM(quantity) quantity,"
         "COUNT(DISTINCT order_key) orders,COUNT(DISTINCT customer_code) customers,"
         "COUNT(DISTINCT item_code) products FROM lines "
         f"WHERE {dim} IS NOT NULL AND TRIM({dim})<>'' GROUP BY period,{dim}", tuple(params))
@@ -2426,7 +2467,7 @@ def customer_product_coverage(as_of_date: str = None, lookback_months: int = 3,
     for r in raw:
         by_code.setdefault(r["code"], {})[r["period"]] = r
 
-    customer_names = _customer_names(list(by_code)) if mode == "customer" else {}
+    customer_names = _customer_names(list(by_code)) if customer_mode else {}
     product_names = {}
     if mode == "product" and by_code:
         ph = ",".join(["?"] * len(by_code))
@@ -2446,7 +2487,7 @@ def customer_product_coverage(as_of_date: str = None, lookback_months: int = 3,
         # bao cao mat dung nhom suy giam nang nhat va tong dimension lech tong pham vi.
         row = {
             "code": code,
-            "name": (customer_names.get(code) if mode == "customer" else
+            "name": (customer_names.get(code) if customer_mode else
                      product_names.get(code) if mode == "product" else employee_names.get(code)) or code,
             "revenue": _f(cur.get("revenue")), "orders": int(cur.get("orders") or 0),
             "customers": int(cur.get("customers") or 0), "products": int(cur.get("products") or 0),
@@ -2458,6 +2499,8 @@ def customer_product_coverage(as_of_date: str = None, lookback_months: int = 3,
             "previous_quantity": _f(prev.get("quantity")),
             "previous_products": int(prev.get("products") or 0),
         }
+        if mode == "customer_peer":
+            row["province"] = cur.get("city_name") or prev.get("city_name") or "UNKNOWN"
         row["frequency"] = row["orders"] / row["customers"] if row["customers"] else None
         row["previous_aov"] = (row["previous_revenue"] / row["previous_orders"]
                                if row["previous_orders"] else None)
@@ -2491,6 +2534,31 @@ def customer_product_coverage(as_of_date: str = None, lookback_months: int = 3,
                 if previous_unit_value and row["net_revenue_per_paid_unit_delta"] is not None else None
             )
         rows.append(row)
+    if mode == "customer_peer":
+        from statistics import median
+        peer_groups = {}
+        for r in rows:
+            if r.get("province") and r["province"] != "UNKNOWN" and r["revenue"] > 0:
+                peer_groups.setdefault(r["province"], []).append(r)
+        for r in rows:
+            peers = peer_groups.get(r.get("province"), [])
+            r["peer_group_size"] = len(peers)
+            if r["revenue"] <= 0:
+                # Doanh thu rong am thuong la hang tra/dieu chinh. Day khong phai bang chung khach
+                # "mua it" va ty le am so voi trung vi se danh lua nguoi doc.
+                r["peer_benchmark_status"] = "NON_POSITIVE_NET_REVENUE_REQUIRES_RETURN_CHECK"
+            elif len(peers) >= 3:
+                r["peer_benchmark_status"] = "AVAILABLE"
+                for metric, key in (("revenue", "city_median_revenue"), ("orders", "city_median_orders"),
+                                    ("aov", "city_median_aov"), ("products", "city_median_products")):
+                    med = median([_f(p[metric]) for p in peers if p.get(metric) is not None])
+                    r[key] = med
+                    r[f"{metric}_pct_of_city_median"] = (_f(r[metric]) / med * 100) if med else None
+                r["below_city_median_metrics"] = [metric for metric in ("revenue", "orders", "aov", "products")
+                                                  if r.get(f"{metric}_pct_of_city_median") is not None
+                                                  and r[f"{metric}_pct_of_city_median"] < 100]
+            else:
+                r["peer_benchmark_status"] = "INSUFFICIENT_PEERS_OR_UNKNOWN_PROVINCE"
     avg_products = sum(r["products"] for r in rows) / len(rows) if rows else 0.0
     avg_revenue = sum(r["revenue"] for r in rows) / len(rows) if rows else 0.0
     for r in rows:
@@ -2499,7 +2567,11 @@ def customer_product_coverage(as_of_date: str = None, lookback_months: int = 3,
         if mode == "product":
             r["revenue_per_customer"] = r["revenue"] / r["customers"] if r["customers"] else None
             r["quantity_per_order"] = r["quantity"] / r["orders"] if r["orders"] else None
-    if mode == "employee":
+    if mode == "customer_peer":
+        rows.sort(key=lambda r: (r.get("peer_benchmark_status") != "AVAILABLE",
+                                 r.get("revenue_pct_of_city_median") if r.get("revenue_pct_of_city_median") is not None else float("inf"),
+                                 r["revenue"]))
+    elif mode == "employee":
         rows.sort(key=lambda r: (-abs(r["revenue_delta"]), -r["revenue"]))
     else:
         rows.sort(key=lambda r: (-r["product_gap_vs_scope_avg"], -r["revenue"]))
@@ -2555,6 +2627,10 @@ def customer_product_coverage(as_of_date: str = None, lookback_months: int = 3,
                        "trung binh NOI BO cua dung pham vi tai khoan va cua so duoc hoi. "
                        "Khong phai market share/share-of-wallet ben ngoai DNH. product_gap > 0 nghia "
                        "la mua it SKU hon trung binh pham vi, khong tu dong dong nghia co nhu cau."),
+        "peer_benchmark_definition": (
+            "customer_peer: trung vi cua cac khach co mua trong CUNG TINH, can toi thieu 3 khach. "
+            "Doanh thu rong am khong duoc goi la mua it, can kiem tra hang tra/dieu chinh truoc. "
+            "Kho chua co phan khuc khach hang chot chuan, nen KHONG the khang dinh benchmark cung phan khuc."),
         "canh_bao": "Chi tiet san pham/hoa don chi giu khoang 12 thang; moi cua so bi gioi han toi da 12.",
         "data_as_of": latest_data_date(),
     }
