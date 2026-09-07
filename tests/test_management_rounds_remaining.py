@@ -374,13 +374,39 @@ def test_quality_dau_thang_dem_ca_nguoi_mat_snapshot_va_nguoi_moi(tmp_path, monk
     check = result['checks']['kpi_employee_mapping']
     # 6 nguoi thang 4 (ke ca MISSING khong co dim) + NEW, khong chi 2 nguoi da ban thang 5.
     assert check['employees'] == 7
+    assert check['roster_employees'] == 7
+    assert check['employees_with_current_snapshot'] == 2
+    assert check['employees_with_target'] == 1
     assert check['missing_current_snapshot'] == 5
     assert check['missing_target'] == 6
+    assert check['missing_target_with_current_snapshot'] == 1
+    assert 'KHONG phai so nguoi co target' in check['note']
     scoped = rt.operational_data_quality(as_of_date='2026-05-02', scope_employee_code='Q1')
     assert scoped['checks']['kpi_employee_mapping']['employees'] == 3  # T1/T2/NEW
     assert scoped['samples']['missing_current_snapshot'] == ['T2']
     assert set(scoped['samples']['missing_target']) == {'T2', 'NEW'}
     assert scoped['checks']['kpi_employee_mapping']['missing_manager'] == 0
+
+
+def test_revenue_reconciliation_khong_tu_goi_coverage_thap_la_binh_thuong(tmp_path, monkeypatch):
+    _setup(tmp_path, monkeypatch)
+    # Tao coverage thap ro rang: top-down MB thang 4 = 630, roll-up doi = 300.
+    with sqlite3.connect(local_warehouse.DB_PATH) as conn:
+        conn.execute("UPDATE fact_tonghopkhachhang SET amount_ct=150 "
+                     "WHERE employee_code IN ('T1','T2') AND save_date='2026-04-15'")
+
+    result = rt.revenue_reconciliation_check(as_of_date='2026-04-20', area_code='MB')
+
+    assert result['reconciliation_status'] == 'incomplete_needs_investigation'
+    assert result['matched_within_tolerance'] is False
+    assert result['gap_revenue'] > 0
+    assert result['warning'].startswith('CHUA DOI SOAT KHOP')
+    assert "KHONG duoc goi la 'binh thuong'" in result['note']
+    assert "ETC da bi loai" in result['note']
+    assert result['zones_without_qlv'] is None
+    assert result['rollup_nodes_without_tdv'] >= 0
+    assert result['cause_attribution_available'] is False
+    assert 'KHONG dong nghia voi so zone thieu QLV' in result['note']
 
 
 def test_call_template_ep_du_ca_ba_scope_cho_tool_moi(tmp_path, monkeypatch):

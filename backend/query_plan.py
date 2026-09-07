@@ -366,11 +366,16 @@ class QueryPlan:
             )
         revenue_reconcile = self._evidence.get("get_revenue_reconciliation")
         if isinstance(revenue_reconcile, dict) and "coverage_pct" in revenue_reconcile:
-            passed = not revenue_reconcile.get("warning") and float(revenue_reconcile["coverage_pct"] or 0) <= 100.5
+            status = revenue_reconcile.get("reconciliation_status")
+            # Payload cu khong co status chi duoc coi la khop neu nam trong dung sai hai phia.
+            coverage_pct = float(revenue_reconcile["coverage_pct"] or 0)
+            passed = (status == "matched_within_tolerance" if status is not None
+                      else 99.5 <= coverage_pct <= 100.5 and not revenue_reconcile.get("warning"))
             self._set_reconciliation(
                 "revenue_totals", passed,
-                "Đã đối chiếu top-down với roll-up đội; coverage không vượt 100,5%."
-                if passed else str(revenue_reconcile.get("warning") or "Coverage vượt 100,5%."),
+                "Đã đối chiếu top-down với roll-up đội; coverage nằm trong dung sai 99,5%-100,5%."
+                if passed else str(revenue_reconcile.get("warning") or
+                                    "Top-down và roll-up đội chưa khớp trong dung sai 99,5%-100,5%."),
             )
 
         movement = self._evidence.get("get_customer_movement")

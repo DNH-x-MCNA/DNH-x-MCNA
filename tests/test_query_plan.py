@@ -107,6 +107,45 @@ def test_reconcile_revenue_and_debt_from_real_payload_shapes():
     assert statuses["debt_aging"] == "passed"
 
 
+def test_reconcile_revenue_rollup_thieu_khong_duoc_danh_dau_passed():
+    plan = _plan()
+    key = "rollup"
+    plan.start_tool("get_revenue_reconciliation", {}, key)
+    plan.finish_tool(
+        key,
+        ok=True,
+        payload={
+            "coverage_pct": 72.4,
+            "reconciliation_status": "incomplete_needs_investigation",
+            "warning": "CHUA DOI SOAT KHOP: can dieu tra.",
+        },
+        source="template:get_revenue_reconciliation",
+        duration_ms=10,
+        timeout_seconds=40,
+    )
+
+    revenue_rule = next(item for item in plan.reconciliation_rules if item.rule == "revenue_totals")
+    assert revenue_rule.status == "failed"
+    assert "CHUA DOI SOAT KHOP" in revenue_rule.detail
+
+
+def test_reconcile_revenue_rollup_chi_pass_khi_nam_trong_dung_sai_hai_phia():
+    for coverage, expected in ((72.4, "failed"), (100.2, "passed"), (101.0, "failed")):
+        plan = _plan(query_id=f"coverage-{coverage}")
+        key = f"rollup-{coverage}"
+        plan.start_tool("get_revenue_reconciliation", {}, key)
+        plan.finish_tool(
+            key,
+            ok=True,
+            payload={"coverage_pct": coverage},
+            source="template:get_revenue_reconciliation",
+            duration_ms=10,
+            timeout_seconds=40,
+        )
+        revenue_rule = next(item for item in plan.reconciliation_rules if item.rule == "revenue_totals")
+        assert revenue_rule.status == expected
+
+
 def test_composite_promotion_tool_completes_promotion_customer_and_product_steps():
     plan = _plan(
         "Đánh giá CTKM theo khách hàng, sản phẩm và doanh thu tháng 12/2025",

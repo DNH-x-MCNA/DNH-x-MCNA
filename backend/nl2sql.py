@@ -715,7 +715,10 @@ TEMPLATE_TOOLS = [
                        "ke ro cac check CHUA CO NGUON (don chua hoa don, action tracker, chi nhanh/NPP); "
                        "KHONG duoc bien not_available thanh 0 loi. sample_details co ca ma, ten, vai tro, "
                        "vung va manager de hien thi than thien. management_rows_without_parent_in_source "
-                       "la QLV/cap quan ly thieu cay cap tren trong NGUON, khong tinh la loi nhan vien thieu manager.",
+                       "la QLV/cap quan ly thieu cay cap tren trong NGUON, khong tinh la loi nhan vien thieu manager. "
+                       "QUAN TRONG: roster_employees/employees la tong roster can kiem, KHONG phai so nguoi "
+                       "co target; chi employees_with_target moi mang nghia do. missing_target da gom nguoi "
+                       "missing_current_snapshot va hai nhom co chong lan, KHONG cong lai.",
         "input_schema": {"type": "object", "properties": {
             "as_of_date": {"type": "string"}, "sample_limit": {"type": "integer"},
         }, "required": []},
@@ -961,11 +964,13 @@ TEMPLATE_TOOLS = [
                         "thu CONG DON TU DUOI LEN (TDV -> QLV -> TP, tu KPI ca nhan) - dung khi nguoi "
                         "dung hoi kieu 'so lieu nay co khop voi KPI nhan vien khong', 'doanh thu tong "
                         "co dung khong', 'kiem tra chieo doanh thu tu duoi len', hoac nghi ngo so lieu "
-                        "tong the bi lech so voi tong hop tu cap duoi. Ket qua co 'coverage_pct' (cong "
-                        "don duoc bao nhieu % so tong tren xuong) - THAP HON 100% la BINH THUONG (kenh "
-                        "ETC + khach mo coi + cac 'to' chua xac dinh QLV khong the cong don duoc, xem "
-                        "'note' trong ket qua), CHI canh bao that neu co truong 'warning' rieng (dau "
-                        "hieu dem trung TDV).",
+                        "tong the bi lech so voi tong hop tu cap duoi. Hai ve deu CHI tinh OTC va cung "
+                        "ky. Doc reconciliation_status, gap_revenue, gap_pct va warning: coverage ngoai "
+                        "99,5%-100,5% la CHUA DOI SOAT KHOP/can dieu tra, KHONG duoc goi la binh thuong "
+                        "hay gap cau truc da biet. KHONG tu gan chenh lech cho ETC, khach mo coi, QLV/TDV "
+                        "neu ket qua chua co phep do dinh luong nguyen nhan; khong co so ky truoc thi "
+                        "khong ket luan gap on dinh. rollup_nodes_without_tdv KHONG phai so zone thieu "
+                        "QLV; cause_attribution_available=false nghia la CHUA DU DU LIEU quy nguyen nhan.",
         "input_schema": {
             "type": "object",
             "properties": {

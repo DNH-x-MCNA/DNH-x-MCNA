@@ -2849,17 +2849,35 @@ def operational_data_quality(as_of_date: str = None, sample_limit: int = 30,
             ]
             missing_target = [r["employee_code"] for r in employees if _f(r["target"]) <= 0]
             missing_snapshot = [r["employee_code"] for r in employees if r["metric_snapshot"] is None]
+            target_with_snapshot = [
+                r["employee_code"] for r in employees
+                if r["metric_snapshot"] is not None and _f(r["target"]) > 0
+            ]
+            missing_target_with_snapshot = [
+                r["employee_code"] for r in employees
+                if r["metric_snapshot"] is not None and _f(r["target"]) <= 0
+            ]
             missing_dim = [r["employee_code"] for r in employees if not r["dim_code"]]
             duplicates = [r["employee_code"] for r in employees if int(r["is_duplicate"] or 0) == 1
                           and r["employee_code"] not in _KNOWN_MISFLAGGED_DUPLICATE_CODES]
             result["checks"]["kpi_employee_mapping"] = {
                 "snapshot": fdate, "employees": len(employees),
+                # Ten ro nghia de model khong doc nham `employees` thanh "so nguoi co target".
+                # Giu `employees` ben tren de tuong thich nguoc voi pack UAT/script hien tai.
+                "roster_employees": len(employees),
+                "employees_with_current_snapshot": len(employees) - len(missing_snapshot),
+                "employees_with_target": len(target_with_snapshot),
                 "roster_snapshots": _roster_snapshot_dates(fdate),
                 "missing_current_snapshot": len(missing_snapshot),
                 "missing_manager": len(missing_manager), "missing_target": len(missing_target),
+                "missing_target_with_current_snapshot": len(missing_target_with_snapshot),
                 "missing_employee_dim": len(missing_dim), "duplicate_codes": len(duplicates),
                 "management_rows_without_parent_in_source": len(management_without_parent),
-                "note": "missing_target gom ca nguoi chua co dong KPI trong ky. Chua du du lieu "
+                "note": "roster_employees/employees la TONG DANH SACH NHAN SU can kiem tra, KHONG "
+                        "phai so nguoi co target. employees_with_target moi la so nguoi co target "
+                        "duong tai snapshot hien tai. missing_target gom ca nguoi chua co dong KPI "
+                        "trong ky; missing_target va missing_current_snapshot CO CHONG LAN, KHONG duoc "
+                        "cong hai nhom. Chua du du lieu "
                         "khong dong nghia voi 0% KPI hay da xac nhan chua giao chi tieu. "
                         "management_rows_without_parent_in_source la QLV/cap quan ly khong co cay "
                         "cap tren trong nguon phang; chi de canh bao gioi han nguon, khong tinh la loi NV.",
@@ -4859,17 +4877,9 @@ def revenue_reconciliation_check(as_of_date: str = None, area_code: str = None,
     CONG DON TU DUOI LEN (TDV -> QLV -> TP, dua tren snapshot fact_tonghopkhachhang qua revenue_tree)
     - phat hien lech giua 2 nguon thay vi chi tin 1 chieu tu tren xuong.
 
-    QUAN TRONG - LY DO CO SAN 1 KHOANG LECH "BINH THUONG" (khong phai loi du lieu):
-    1. Doanh thu tren xuong tinh CA kenh ETC (khong co NV phu trach truc tiep tren hoa don, xem
-       vhoadon_etc/dmssx_khachhang) + khach hang 'mo coi' (khong co ho so trong dms_khachhang) - 2
-       nhom nay KHONG THE gan cho bat ky TDV nao nen KHONG BAO GIO xuat hien trong tong cong don tu
-       duoi len. Ham nay CHI so sanh rieng kenh OTC (co gan NV) de tranh lech "gia" do nhom nay.
-    2. Cay to chuc suy luan qua quy uoc dat ten (org_hierarchy.py) co ~30% 'to' KHONG xac dinh duoc
-       QLV phu trach (ghi "Chua xac dinh", BI LOAI khoi cong don) - day la GAP TO CHUC da biet, khong
-       phai bug. Vi vay tong cong don tu duoi len LUON <= tong tren xuong ve mat cau truc, KHONG bao
-       gio > - neu code sau nay thay > thi moi la dau hieu bug that (vd dem trung TDV).
-    Ket qua tra ve ca "coverage_pct" (cong don duoc bao nhieu % so voi tong tren xuong) de nguoi dung
-    tu danh gia gap co hop ly khong, THAY VI chi 1 con so "lech" kho dien giai.
+    Hai ve deu CHI tinh OTC va cung ky. Coverage khac 100% la mot KET QUA CHUA DOI SOAT KHOP, khong
+    tu dong la "gap binh thuong". Ham khong du bang chung dinh luong de gan phan chenh cho khach mo
+    coi/cay to chuc; moi nguyen nhan phai duoc do rieng truoc khi ket luan.
     scope_area_code: ep gioi han vung khi tai khoan bi han che (vd QLV/GD mien)."""
     if scope_area_code:
         area_code = scope_area_code
@@ -4914,32 +4924,53 @@ def revenue_reconciliation_check(as_of_date: str = None, area_code: str = None,
     tree = revenue_tree(as_of_date=fdate, area_code=area_code)
     bottom_up_rev = 0.0
     tdv_count = 0
-    undetermined_zones = 0
+    rollup_nodes_without_tdv = 0
     for tp in tree["tree"]:
         for qlv in tp["qlv"]:
             if not qlv["tdv"]:
-                undetermined_zones += 1
+                # Day la MOT NUT QLV/nhom kenh khong co TDV trong cay, KHONG phai bang chung
+                # "mot dia ban/zone chua co QLV". Ten bien cu lam chatbot quy sai nguyen nhan M20.
+                rollup_nodes_without_tdv += 1
             for t in qlv["tdv"]:
                 bottom_up_rev += t["sales"]
                 tdv_count += 1
 
     coverage_pct = (bottom_up_rev / top_down_rev * 100) if top_down_rev else 0.0
+    gap_revenue = top_down_rev - bottom_up_rev
+    gap_pct = (gap_revenue / top_down_rev * 100) if top_down_rev else None
+    if top_down_rev <= 0:
+        reconciliation_status = "not_comparable_no_top_down_revenue"
+    elif coverage_pct > 100.5:
+        reconciliation_status = "overcount_needs_investigation"
+    elif coverage_pct < 99.5:
+        reconciliation_status = "incomplete_needs_investigation"
+    else:
+        reconciliation_status = "matched_within_tolerance"
     result = {
         "as_of": fdate, "area_code": area_code,
         "period_from": month_start, "period_to": fdate,
         "top_down_revenue_otc": top_down_rev,
         "bottom_up_revenue_otc": bottom_up_rev,
         "coverage_pct": coverage_pct,
+        "gap_revenue": gap_revenue,
+        "gap_pct": gap_pct,
+        "reconciliation_status": reconciliation_status,
+        "matched_within_tolerance": reconciliation_status == "matched_within_tolerance",
+        "tolerance_pct_points": 0.5,
         "tdv_count_in_tree": tdv_count,
-        "zones_without_qlv": undetermined_zones,
+        "rollup_nodes_without_tdv": rollup_nodes_without_tdv,
+        "zones_without_qlv": None,
+        "cause_attribution_available": False,
         "note": (f"CA HAI VE deu tinh cho cung ky {month_start} -> {fdate} (luy ke tu dau thang den "
                  "ngay chot snapshot KPI) va CA HAI VE deu CHI kenh OTC - ETC da bi loai khoi ca tu so "
                  "lan mau so nen KHONG phai ly do gay chenh lech, TUYET DOI KHONG giai thich khoang "
-                 "chenh bang 'do co kenh ETC'. Cong don tu duoi len LUON nho hon tong tren xuong (khong "
-                 "bao gio bang 100%) vi 3 ly do THAT: khach 'mo coi' trong hoa don OTC khong co NV phu "
-                 "trach, cac 'to' chua xac dinh QLV (xem zones_without_qlv), va TDV khong nam trong cay "
-                 "to chuc - day la GAP cau truc da biet, KHONG phai loi. coverage_pct qua thap bat "
-                 "thuong (vd giam dot ngot so ky truoc) moi dang nghi ngo co van de gan NV/vung sai. "
+                 "chenh bang 'do co kenh ETC'. Coverage ngoai 99,5%-100,5% la CHUA DOI SOAT KHOP va "
+                 "can dieu tra; KHONG duoc goi la 'binh thuong', 'gap cau truc da biet', hay tu gan "
+                 "nguyen nhan cho khach mo coi/QLV/TDV neu chua co phep do rieng. Neu chua co ty le ky "
+                 "truoc thi cung KHONG duoc ket luan gap nay on dinh hay khong bat thuong. "
+                 "rollup_nodes_without_tdv chi dem nut QLV/nhom kenh khong co TDV trong cay, KHONG "
+                 "dong nghia voi so zone thieu QLV. cause_attribution_available=false nghia la tool "
+                 "CHUA cung cap du phep do de ket luan nguyen nhan cua khoang chenh. "
                  "Khi trinh bay PHAI neu ro khoang thoi gian nay de nguoi doc khong tuong dang so 1 "
                  "ngay voi 1 thang."),
     }
@@ -4947,6 +4978,14 @@ def revenue_reconciliation_check(as_of_date: str = None, area_code: str = None,
         result["warning"] = ("BAT THUONG: cong don tu duoi len VUOT QUA tong tren xuong - dau hieu co "
                               "the dang dem trung TDV (vd 1 nguoi xuat hien o nhieu 'to') hoac loi join, "
                               "can kiem tra lai truoc khi tin so lieu nay.")
+    elif reconciliation_status == "incomplete_needs_investigation":
+        result["warning"] = ("CHUA DOI SOAT KHOP: cong don tu duoi len con thieu so voi tong tren "
+                             "xuong. Chua co bang chung dinh luong de quy chenh lech cho nguyen nhan "
+                             "cu the; can kiem tra mapping khach hang - NV va cay doi ngu truoc khi "
+                             "ket luan day la gap binh thuong.")
+    elif reconciliation_status == "not_comparable_no_top_down_revenue":
+        result["warning"] = ("KHONG DU DIEU KIEN DOI SOAT: doanh thu OTC tren xuong bang 0 trong ky, "
+                             "khong the dien giai coverage_pct.")
     return result
 
 
