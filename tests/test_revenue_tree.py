@@ -146,3 +146,29 @@ def test_cap_TP_khong_co_target_rieng_van_tra_ve_0_khong_bao_loi(tmp_path, monke
 
     assert tp["sales"] == 0.0 and tp["target"] == 0.0
     assert tp["qlv_count"] == 2  # van liet ke du QLV ben duoi
+
+
+def test_team_of_qlv_bao_gom_ca_ctv(tmp_path, monkeypatch):
+    """D09/D10: QLV co CTV duoi quyen (nhu Tran Minh Tu duoi Nguyen Phuong Nam) - khong duoc bo sot CTV."""
+    db_path = tmp_path / "warehouse.db"
+    _make_db(db_path)
+    # Them 1 CTV duoi QLV_MN
+    conn = sqlite3.connect(str(db_path))
+    conn.execute("INSERT INTO dim_nhanvien VALUES ('CTV_MN','Cong tac vien MN',0,'CTV','MN','CTV_MN',NULL,NULL,0,NULL)")
+    conn.execute(f"INSERT INTO fact_tonghopkhachhang VALUES ('CTV_MN','KH7',200000,400000,'{SAVE_DATE}',0,'QLV_MN')")
+    conn.commit()
+    conn.close()
+
+    monkeypatch.setattr(local_warehouse, "DB_PATH", str(db_path))
+
+    team = rt._team_of_qlv("QLV_MN", SAVE_DATE)
+    codes = {t["employee_code"] for t in team}
+    assert "TDV_MN" in codes
+    assert "CTV_MN" in codes
+    assert len(codes) == 2
+
+    res = rt.revenue_tree(as_of_date=SAVE_DATE, area_code="MN")
+    tp = next(t for t in res["tree"] if t["employee_code"] == "TP_MN")
+    qlv = next(q for q in tp["qlv"] if q["employee_code"] == "QLV_MN")
+    assert qlv["tdv_count"] == 2
+

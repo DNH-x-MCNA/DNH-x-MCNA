@@ -4688,7 +4688,7 @@ def _team_of_qlv(qlv_employee_code: str, fdate: str = None) -> list:
             f"SELECT DISTINCT e.employee_code, nv.name FROM fact_tonghopkhachhang e "
             f"JOIN {_MONTH_LATEST_SUBQ} l ON l.employee_code=e.employee_code AND l.d=e.save_date "
             f"LEFT JOIN dim_nhanvien nv ON nv.employee_code=e.employee_code "
-            f"WHERE e.manager_code=? AND nv.position_code='TDV'" for _ in cac_moc)
+            f"WHERE e.manager_code=? AND nv.position_code IN ('TDV', 'CTV')" for _ in cac_moc)
         tham = tuple(x for d in cac_moc for x in (d, d, qlv_employee_code))
         return _q(phan, tham)
     fdate = cac_moc[0] if cac_moc else None
@@ -4698,7 +4698,7 @@ def _team_of_qlv(qlv_employee_code: str, fdate: str = None) -> list:
         f"SELECT DISTINCT e.employee_code, nv.name FROM fact_tonghopkhachhang e "
         f"JOIN {_MONTH_LATEST_SUBQ} l ON l.employee_code=e.employee_code AND l.d=e.save_date "
         f"LEFT JOIN dim_nhanvien nv ON nv.employee_code=e.employee_code "
-        f"WHERE e.manager_code=? AND nv.position_code='TDV'", (fdate, fdate, qlv_employee_code))
+        f"WHERE e.manager_code=? AND nv.position_code IN ('TDV', 'CTV')", (fdate, fdate, qlv_employee_code))
 
 
 def qlv_change_history(area_code: str = None, qlv_search: str = None, scope_area_code: str = None) -> list:
@@ -5020,7 +5020,7 @@ def kpi_ranking(group_by: str = "qlv", as_of_date: str = None, limit: int = 20,
         #     1,5 ty, MBKV12 5,28 ty, TM25030101 Lac Ngoc Sam 0,935 ty). Danh sach mien tru tay
         #     _KNOWN_MISFLAGGED_DUPLICATE_CODES chi liet ke duoc 2/4 - va se lai thieu khi DNH them
         #     kenh moi. Gop theo manager_code khong phu thuoc nhan nen khong con phai va tiep.
-        managers = _rollup_tier_codes(latest_available or fdate)
+        managers = _rollup_tier_codes(fdate)
         if not managers:
             _warn("Khong xac dinh duoc tang quan ly (manager_code rong) nen KHONG tinh duoc KPI theo "
                   "vung. PHAI noi ro la chua tra cuu duoc, KHONG duoc tra ve 0 nhu the la khong dat.")
@@ -5075,7 +5075,7 @@ def kpi_ranking(group_by: str = "qlv", as_of_date: str = None, limit: int = 20,
     # NHOM/KENH chu khong phai ca nhan, de khong ai hieu nham dang xep hang mot con nguoi.
     # CO Y khong loc end_date/is_resigned nua: pham vi phai TRUNG KHIT nhanh 'region', them bat ky
     # dieu kien nao chi co o day se lam 2 con so lech nhau tro lai.
-    managers = _rollup_tier_codes(latest_available or fdate)
+    managers = _rollup_tier_codes(fdate)
     if not managers:
         _warn("Khong xac dinh duoc tang quan ly (manager_code rong) nen KHONG xep hang duoc QLV. "
               "PHAI noi ro la chua tra cuu duoc, KHONG tra ve danh sach rong nhu the la khong co ai.")
