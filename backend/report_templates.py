@@ -2881,11 +2881,164 @@ def geography_monthly_performance(month_to: str = None, months_back: int = 6,
     return ket_qua
 
 
+def _route_visit_effectiveness(month_to: str = None, months_back: int = 1, limit: int = 50,
+                               scope_area_code: str = None, scope_channel: str = None,
+                               scope_employee_code: str = None) -> dict:
+    """C49/S34: hieu qua di tuyen tu DMS_DiTuyen, truy van tong hop tren Bravo.
+
+    Khong dua 1,8 trieu dong di tuyen vao SMALL_TABLES: co che do reload toan bo moi gio va se lam
+    vong dong bo treo. Chi doc phan ky nguoi dung hoi, gom theo thang x TDV, nen vua du de phan tich
+    lai tuyen/vieng tham vua khong lam kho local phinh bat thuong.
+    """
+    if scope_channel and scope_channel.upper() == "ETC":
+        return {
+            "not_applicable": True, "channel_scope": "ETC", "rows": [],
+            "error": "DMS_DiTuyen la nguon viếng thăm kenh OTC; khong co nguon tuong duong cho ETC.",
+        }
+    latest = latest_data_date()
+    if not month_to:
+        # Mac dinh thang da tron gan nhat, tranh ket luan tu vai ngay MTD khi nguoi dung khong chi dinh ky.
+        today = dt.date.today()
+        month_to = _month_add(f"{today.year:04d}-{today.month:02d}", -1)
+    month_to = str(month_to)[:7]
+    try:
+        end_month_date = dt.date.fromisoformat(month_to + "-01")
+    except ValueError:
+        return {"error": "month_to phai co dang YYYY-MM.", "rows": []}
+    months_back = max(1, min(int(months_back or 1), 12))
+    month_from = _month_add(month_to, -(months_back - 1))
+    date_from = dt.date.fromisoformat(month_from + "-01")
+    date_to_exclusive = dt.date(end_month_date.year + (end_month_date.month == 12),
+                                1 if end_month_date.month == 12 else end_month_date.month + 1, 1)
+    limit = max(1, min(int(limit or 50), 200))
+
+    params = {"date_from": date_from, "date_to_exclusive": date_to_exclusive}
+    visit_joins = ""
+    visit_filter = ""
+    invoice_joins = ""
+    invoice_filter = ""
+    if scope_area_code:
+        visit_joins = (" LEFT JOIN dbo.DMS_KhachHang kh ON kh.Code=v.CustomerCode "
+                       " LEFT JOIN dbo.DIM_TinhThanhPho tp ON tp.CityId=kh.CityId ")
+        visit_filter += " AND tp.AreaCode=:scope_area_code"
+        invoice_joins = (" LEFT JOIN dbo.DMS_KhachHang ikh ON ikh.Code=i.CustomerCode "
+                         " LEFT JOIN dbo.DIM_TinhThanhPho itp ON itp.CityId=ikh.CityId ")
+        invoice_filter += " AND itp.AreaCode=:scope_area_code"
+        params["scope_area_code"] = scope_area_code
+    if scope_employee_code:
+        try:
+            dms_ids = _get_team_dms_ids(scope_employee_code, str(date_to_exclusive - dt.timedelta(days=1)))
+        except Exception as exc:
+            return {"error": f"Khong xac dinh duoc doi de loc du lieu di tuyen: {exc}", "rows": []}
+        placeholders = []
+        for idx, dms_id in enumerate(dms_ids):
+            key = f"employee_dms_{idx}"
+            params[key] = dms_id
+            placeholders.append(f":{key}")
+        if not placeholders:
+            return {"error": "Khong co DMSId duoc phan quyen de loc du lieu di tuyen.", "rows": []}
+        joined = ",".join(placeholders)
+        visit_filter += f" AND v.EmpDMSCode IN ({joined})"
+        invoice_filter += f" AND i.EmpDMSCode IN ({joined})"
+
+    try:
+        raw = _q_bravo(f"""
+            WITH visits AS (
+                SELECT v.DocDate, v.EmpDMSCode, v.CustomerCode,
+                       MAX(CASE WHEN v.IsPlaned=1 THEN 1 ELSE 0 END) IsPlanned
+                FROM dbo.DMS_DiTuyen v
+                {visit_joins}
+                WHERE v.DocDate>=:date_from AND v.DocDate<:date_to_exclusive {visit_filter}
+                GROUP BY v.DocDate, v.EmpDMSCode, v.CustomerCode
+            ), orders AS (
+                SELECT DISTINCT h.DocDate, h.DMSEmpId1 AS EmpDMSCode, h.CustomerCode
+                FROM dbo.DMS_DonHangHdr h
+                WHERE h.DocDate>=:date_from AND h.DocDate<:date_to_exclusive
+            ), revenue AS (
+                SELECT EOMONTH(i.DocDate) AS MonthEnd, i.EmpDMSCode, SUM(i.Amount9) Revenue
+                FROM dbo.vHoaDonTotal i
+                {invoice_joins}
+                WHERE i.DocDate>=:date_from AND i.DocDate<:date_to_exclusive {invoice_filter}
+                GROUP BY EOMONTH(i.DocDate), i.EmpDMSCode
+            )
+            SELECT EOMONTH(v.DocDate) AS MonthEnd, v.EmpDMSCode,
+                   COUNT(*) AS Visits, COUNT(DISTINCT v.CustomerCode) AS VisitedCustomers,
+                   SUM(v.IsPlanned) AS PlannedVisits,
+                   SUM(CASE WHEN o.CustomerCode IS NOT NULL THEN 1 ELSE 0 END) AS VisitsWithOrder,
+                   MAX(r.Revenue) AS Revenue
+            FROM visits v
+            LEFT JOIN orders o ON o.DocDate=v.DocDate AND o.EmpDMSCode=v.EmpDMSCode
+                              AND o.CustomerCode=v.CustomerCode
+            LEFT JOIN revenue r ON r.MonthEnd=EOMONTH(v.DocDate) AND r.EmpDMSCode=v.EmpDMSCode
+            GROUP BY EOMONTH(v.DocDate), v.EmpDMSCode
+            ORDER BY MonthEnd DESC, Visits DESC, v.EmpDMSCode
+        """, params)
+    except Exception as exc:
+        return {
+            "error": f"Khong doc duoc nguon DMS_DiTuyen tren Bravo: {exc}", "rows": [],
+            "source": "DMS_DiTuyen + DMS_DonHangHdr + vHoaDonTotal (OTC)",
+        }
+
+    rows = []
+    for row in raw:
+        visits = int(row.get("Visits") or 0)
+        with_order = int(row.get("VisitsWithOrder") or 0)
+        planned = int(row.get("PlannedVisits") or 0)
+        revenue = _f(row.get("Revenue"))
+        month_end = row.get("MonthEnd")
+        rows.append({
+            "month": str(month_end)[:7] if month_end else None,
+            "employee_dms_code": row.get("EmpDMSCode"),
+            "visits": visits,
+            "visited_customers": int(row.get("VisitedCustomers") or 0),
+            "planned_visits": planned,
+            "planned_visit_pct": round(planned / visits * 100, 1) if visits else None,
+            "visits_with_order": with_order,
+            "same_day_order_pct_lower_bound": round(with_order / visits * 100, 1) if visits else None,
+            "revenue": revenue,
+            "revenue_per_visit": round(revenue / visits, 2) if visits else None,
+        })
+
+    monthly_summary = []
+    for month in sorted({r["month"] for r in rows if r["month"]}, reverse=True):
+        group = [r for r in rows if r["month"] == month]
+        visits = sum(r["visits"] for r in group)
+        planned = sum(r["planned_visits"] for r in group)
+        ordered = sum(r["visits_with_order"] for r in group)
+        revenue = sum(r["revenue"] for r in group)
+        monthly_summary.append({
+            "month": month, "employees_with_visits": len(group), "visits": visits,
+            "visited_customers": sum(r["visited_customers"] for r in group),
+            "planned_visits": planned,
+            "planned_visit_pct": round(planned / visits * 100, 1) if visits else None,
+            "visits_with_order": ordered,
+            "same_day_order_pct_lower_bound": round(ordered / visits * 100, 1) if visits else None,
+            "revenue": revenue, "revenue_per_visit": round(revenue / visits, 2) if visits else None,
+        })
+    visible_rows, hidden = _giu_top_don_vi(rows, "employee_dms_code", "visits", limit)
+    return {
+        "mode": "route_visits", "month_from": month_from, "month_to": month_to,
+        "rows": visible_rows, "monthly_summary": monthly_summary,
+        "so_nhan_vien_khong_hien": hidden,
+        "source": "DMS_DiTuyen + DMS_DonHangHdr + vHoaDonTotal (OTC)",
+        "definition": (
+            "Mot luot vieng = mot cap ngay + TDV DMS + khach hang (loai dong trung). "
+            "Ty le co don chi tinh don cung ngay, cung TDV, cung khach nen la CAN DUOI; "
+            "don dat sau luot tham khong duoc tinh."),
+        "data_as_of": latest,
+    }
+
+
 def workforce_productivity(month_to: str = None, months_back: int = 6,
-                           group_by: str = "manager", limit: int = 200,
+                           group_by: str = "manager", limit: int = 200, mode: str = "productivity",
                            scope_area_code: str = None, scope_channel: str = None,
                            scope_employee_code: str = None) -> dict:
     """Nang suat thang theo nhan vien/QLV/vung, headcount, span va streak tang-giam."""
+    if mode == "route_visits":
+        return _route_visit_effectiveness(month_to, months_back, limit, scope_area_code,
+                                          scope_channel, scope_employee_code)
+    if mode != "productivity":
+        return {"error": "mode chi nhan productivity hoac route_visits."}
     if scope_channel and scope_channel.upper() != "OTC":
         return {"not_applicable": True,
                 "error": "Nguon KPI nhan su hien khong co chieu kenh ETC de ep phan quyen.",

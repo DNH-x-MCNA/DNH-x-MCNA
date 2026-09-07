@@ -61,6 +61,36 @@ def test_promotion_effectiveness_does_not_fallback_to_invoice_note(monkeypatch):
     assert len(calls) == 1, "Nguon thieu thi khong duoc chay query thay the sai nghia"
 
 
+def test_route_visit_mode_uses_dms_route_and_marks_same_day_conversion_as_lower_bound(monkeypatch):
+    """C49/S34 phai dung DMS_DiTuyen, va khong duoc goi ty le don cung ngay la conversion tuyet doi."""
+    captured = {}
+
+    def fake_bravo(sql, params=None):
+        captured["sql"] = sql
+        captured["params"] = params
+        return [{
+            "MonthEnd": "2026-08-31", "EmpDMSCode": "TDV01", "Visits": 10,
+            "VisitedCustomers": 8, "PlannedVisits": 7, "VisitsWithOrder": 2,
+            "Revenue": 1_000_000,
+        }]
+
+    monkeypatch.setattr(rt, "_q_bravo", fake_bravo)
+    monkeypatch.setattr(rt, "latest_data_date", lambda: "2026-09-07")
+    result = rt.workforce_productivity(month_to="2026-08", months_back=1, limit=1,
+                                       mode="route_visits")
+
+    assert "DMS_DiTuyen" in captured["sql"]
+    assert "DMS_DonHangHdr" in captured["sql"]
+    assert "vHoaDonTotal" in captured["sql"]
+    assert result["rows"] == [{
+        "month": "2026-08", "employee_dms_code": "TDV01", "visits": 10,
+        "visited_customers": 8, "planned_visits": 7, "planned_visit_pct": 70.0,
+        "visits_with_order": 2, "same_day_order_pct_lower_bound": 20.0,
+        "revenue": 1_000_000.0, "revenue_per_visit": 100000.0,
+    }]
+    assert "CAN DUOI" in result["definition"]
+
+
 def test_v25_tu_07_2026_la_doi_co_che_khong_phai_mismatch(monkeypatch):
     monkeypatch.setattr(rt, "_q", lambda sql, params=(): [{"d": "2026-07-31"}])
 
@@ -234,6 +264,9 @@ def test_high_risk_intents_force_their_single_verified_tool():
     assert nl2sql._required_tool_for_question(
         "Loại đơn hàng lớn bất thường và hàng trả; kết quả thực chất của đội"
     ) == "check_order_timing"
+    assert nl2sql._required_tool_for_question(
+        "Độ phủ tuyến, lượt viếng thăm và tỷ lệ có đơn sau thăm của đội"
+    ) == "get_workforce_productivity"
     assert nl2sql._required_tool_for_question(
         "So 3 tháng gần nhất, tháng này đội giảm ở khách/đơn/sản lượng hay giá trị đơn"
     ) == "get_geography_monthly_performance"

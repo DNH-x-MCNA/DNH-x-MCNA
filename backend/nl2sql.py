@@ -274,6 +274,11 @@ def _required_tool_for_question(question: str) -> str | None:
     )):
         return "get_geography_monthly_performance"
     if any(marker in q for marker in (
+        "vieng tham", "viếng thăm", "di tuyen", "đi tuyến", "phu tuyen", "phủ tuyến",
+        "route", "check-in", "check in", "ty le co don sau tham", "tỷ lệ có đơn sau thăm",
+    )):
+        return "get_workforce_productivity"
+    if any(marker in q for marker in (
         "nang suat", "span of control", "giam lien tiep 3 thang", "giam doanh so lien tiep",
         "headcount", "ramp-up", "ramp up",
     )):
@@ -753,9 +758,14 @@ TEMPLATE_TOOLS = [
         "description": "NANG SUAT DOI NGU theo thang: headcount TDV/CTV/CS, doanh so, target, doanh "
                        "thu/nhan vien, MoM va streak giam theo nhan vien/QLV/vung/tong. Dung cho span of "
                        "control, headcount tang nhung nang suat giam, ai/doi giam lien tiep. Chua co lich "
-                       "su vao-ra-chuyen vung chot chuan nen KHONG ket luan nhan qua tu bien dong headcount.",
+                       "su vao-ra-chuyen vung chot chuan nen KHONG ket luan nhan qua tu bien dong headcount. "
+                       "C49/S34: khi hoi di tuyen/vieng tham/phu tuyen/ty le co don sau tham, BAT BUOC truyen "
+                       "mode='route_visits'. Che do nay doc DMS_DiTuyen OTC theo ky hoi, tra luot vieng, khach "
+                       "duoc vieng, % theo tuyen, % co don cung ngay (CAN DUOI) va doanh thu/luot vieng.",
         "input_schema": {"type": "object", "properties": {
             "month_to": {"type": "string"}, "months_back": {"type": "integer"},
+            "mode": {"type": "string", "enum": ["productivity", "route_visits"],
+                     "description": "productivity (mac dinh) hoac route_visits cho C49/S34."},
             "group_by": {"type": "string", "enum": ["employee", "manager", "area", "total"]},
             "limit": {"type": "integer", "description": "So NHOM giu lai (khong phai so dong): giu "
                        "top N nhom theo tong doanh so ca cua so, KEM DU MOI THANG cua chung. Truong "
