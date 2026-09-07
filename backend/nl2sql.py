@@ -682,6 +682,13 @@ TEMPLATE_TOOLS = [
                        "dia ban; voi tai khoan QLV, dimension='area' + months_back=3 cung tra dung chuoi "
                        "3 thang cua RIENG DOI da bi ep scope, nen BAT BUOC dung cho cau 'so 3 thang gan "
                        "nhat doi giam o khach/don/san luong/AOV'. "
+                       "Neu nguoi dung hoi 'thang nay', de month_to trong de tool lay thang du lieu moi nhat; "
+                       "khong tu thay bang thang da tron truoc do. Neu month_to_is_partial=true, 'thang nay' CHI co du lieu MTD den month_to_data_through: "
+                       "khong duoc am tham thay bang thang truoc hay so sanh voi thang tron. Neu "
+                       "team_scope_reconciliation_warning co mat, khong duoc tron doanh thu KPI voi so don/AOV "
+                       "hoa don thanh mot bo so. Kho KHONG co target theo tinh/dia ban hay mapping TDV phu trach "
+                       "dia ban chot chuan; voi cau tinh nao duoi KH/phan hut/TDV phu trach, phai noi ro phan nay "
+                       "chua the kiem chung, chi bao doanh thu/khach/don thuc co. "
                        "dia ban, ke ca cau hoi dang 'dia ban QUY MO LON nhung TANG TRUONG THAP' "
                        "(doi chieu cot revenue/ty trong voi cot MoM - KHONG can viet SQL tay). Kho local CHUA co khoa chi nhanh/NPP/distributor; neu hoi chieu do tool "
                        "tra not_applicable, PHAI noi ro, KHONG tu suy tu tinh/vung.",
@@ -779,6 +786,8 @@ TEMPLATE_TOOLS = [
         "name": "check_order_timing",
         "description": "KIEM TRA CHAT LUONG DON cua ca ky trong 1 lan: (1) hang tra/dieu chinh Amount9 "
                         "am cho CA OTC/ETC, (2) phan bo gia tri don va ty trong top 1/2/5/10. "
+                        "top_detail tra cac DON cu the da bi danh dau (ma don, ngay, khach, gia tri, ly do); "
+                        "core_result_by_channel tra doanh thu con lai SAU KHI loai cac don do, tren cung tap du lieu. "
                         "DNH CHUA phe duyet nguong "
                         "'don lon bat thuong': muc >3x trung vi chi la THAM CHIEU, tuyet doi khong gan "
                         "nhan gian lan hay ket luan doanh thu 'thuc chat' neu chua noi ro do tap trung. "
@@ -792,7 +801,7 @@ TEMPLATE_TOOLS = [
                 "date_from": {"type": "string", "description": "YYYY-MM-DD, dau ky can kiem tra (thuong la ca thang can soi)"},
                 "date_to": {"type": "string", "description": "YYYY-MM-DD, cuoi ky can kiem tra"},
                 "threshold_days": {"type": "integer", "description": "Tham so cu, giu tuong thich API; hien khong su dung"},
-                "limit": {"type": "integer", "description": "Tham so cu, giu tuong thich API; hien khong su dung"},
+                "limit": {"type": "integer", "description": "So don hang tra/dieu chinh hoac >3x trung vi tham chieu hien chi tiet; total_flagged khong bi cat."},
             },
             "required": ["date_from", "date_to"],
         },

@@ -2619,26 +2619,29 @@ def geography_monthly_performance(month_to: str = None, months_back: int = 6,
     cutoff = _detail_cutoff()
     ngoai_cua_so = date_from < cutoff
     scope_sql, scope_params = _scope_clause(scope_area_code)
-    emp_sql, emp_params = _employee_scope_clause(scope_employee_code, "v", as_of=date_to)
-    suffix, suffix_params = scope_sql + emp_sql, scope_params + emp_params
     unit_expr = "COALESCE(tp.area_code,'UNKNOWN')" if dimension == "area" else "COALESCE(tp.city_name,'UNKNOWN')"
     parts, groups = [], []
-    if scope_channel != "ETC":
-        parts.append(f"SELECT substr(v.doc_date,1,7) month,{unit_expr} unit,tp.area_code,"
-                     "v.amount9 revenue,'OTC:'||v.doc_date||':'||v.customer_code||':'||COALESCE(v.stt,'') order_key,"
-                     "v.customer_code,v.quantity,v.unit_price FROM vhoadon_otc v "
-                     "LEFT JOIN dms_khachhang kh ON kh.code=v.customer_code "
-                     f"LEFT JOIN dim_tinhthanhpho tp ON tp.city_id=kh.city_id WHERE v.doc_date BETWEEN ? AND ?{suffix} "
-                     "")
-        groups.append((date_from, date_to) + suffix_params)
-    if scope_channel != "OTC":
-        parts.append(f"SELECT substr(v.doc_date,1,7) month,{unit_expr} unit,tp.area_code,"
-                     "v.amount9 revenue,'ETC:'||v.doc_date||':'||v.customer_code||':'||COALESCE(v.stt,'') order_key,"
-                     "v.customer_code,v.quantity,v.unit_price FROM vhoadon_etc v "
-                     "LEFT JOIN dmssx_khachhang kh ON kh.code=v.customer_code "
-                     f"LEFT JOIN dim_tinhthanhpho tp ON tp.city_id=kh.city_id WHERE v.doc_date BETWEEN ? AND ?{suffix} "
-                     "")
-        groups.append((date_from, date_to) + suffix_params)
+    # Scope cua QLV phai chot THEO TUNG THANG. Neu lay mot danh sach DMSId cua thang cuoi
+    # roi ap nguoc ve thang truoc, bao cao co the mat/chen doanh thu khi TDV chuyen doi.
+    months = [_month_add(month_from, i) for i in range(months_back)]
+    periods = [(ym, *_month_bounds(ym)) for ym in months] if scope_employee_code else [(month_to, date_from, date_to)]
+    for _ym, period_from, period_to in periods:
+        emp_sql, emp_params = _employee_scope_clause(scope_employee_code, "v", as_of=period_to)
+        suffix, suffix_params = scope_sql + emp_sql, scope_params + emp_params
+        if scope_channel != "ETC":
+            parts.append(f"SELECT substr(v.doc_date,1,7) month,{unit_expr} unit,tp.area_code,"
+                         "v.amount9 revenue,'OTC:'||v.doc_date||':'||v.customer_code||':'||COALESCE(v.stt,'') order_key,"
+                         "v.customer_code,v.quantity,v.unit_price FROM vhoadon_otc v "
+                         "LEFT JOIN dms_khachhang kh ON kh.code=v.customer_code "
+                         f"LEFT JOIN dim_tinhthanhpho tp ON tp.city_id=kh.city_id WHERE v.doc_date BETWEEN ? AND ?{suffix} ")
+            groups.append((period_from, period_to) + suffix_params)
+        if scope_channel != "OTC":
+            parts.append(f"SELECT substr(v.doc_date,1,7) month,{unit_expr} unit,tp.area_code,"
+                         "v.amount9 revenue,'ETC:'||v.doc_date||':'||v.customer_code||':'||COALESCE(v.stt,'') order_key,"
+                         "v.customer_code,v.quantity,v.unit_price FROM vhoadon_etc v "
+                         "LEFT JOIN dmssx_khachhang kh ON kh.code=v.customer_code "
+                         f"LEFT JOIN dim_tinhthanhpho tp ON tp.city_id=kh.city_id WHERE v.doc_date BETWEEN ? AND ?{suffix} ")
+            groups.append((period_from, period_to) + suffix_params)
     sql = ("WITH x AS (" + " UNION ALL ".join(parts) + ") SELECT month,unit,area_code,"
            "SUM(revenue) revenue,COUNT(DISTINCT order_key) invoices,COUNT(DISTINCT customer_code) customers,"
            "SUM(CASE WHEN COALESCE(unit_price,0)>0 THEN quantity ELSE 0 END) paid_quantity "
@@ -2682,6 +2685,9 @@ def geography_monthly_performance(month_to: str = None, months_back: int = 6,
     # nen so lieu cua cac don vi duoc giu van dung tuong quan voi ca nuoc, khong bi tinh lai theo
     # nhom con.
     rows, so_bi_cat = _giu_top_don_vi(rows, "unit", "revenue", limit)
+    data_as_of = latest_data_date()
+    _, month_to_end = _month_bounds(month_to)
+    month_to_partial = month_to == data_as_of[:7] and data_as_of < month_to_end
     ket_qua = {"month_from": month_from, "month_to": month_to, "dimension": dimension,
             "customer_count_definition": (
                 "customers = COUNT(DISTINCT customer_code) tren hoa don da loc day du pham vi doi. "
@@ -2689,9 +2695,55 @@ def geography_monthly_performance(month_to: str = None, months_back: int = 6,
             ),
             "rows": rows, "so_dia_ban_khong_hien": so_bi_cat,
             "unavailable_dimensions": ["branch", "NPP", "distributor"],
+            "unavailable_metrics": ["target_by_city", "gap_to_target_by_city", "employee_responsibility_by_city"],
+            "target_gap_note": (
+                "Kho chua co target phan bo theo tinh/dia ban va khong co mapping TDV-phu trach-dia ban "
+                "co lich su chot chuan. Chi co the bao doanh thu/khach/don theo dia ban; KHONG the ket "
+                "luan tinh nao duoi ke hoach, phan hut bao nhieu hay TDV nao chiu trach nhiem."),
             "canh_bao": ("UNKNOWN la khach/hoa don khong noi duoc danh muc tinh. Khong duoc tu gan "
                           "vung/tinh cho nhom nay. Chi tiet dia ban chi nam trong cua so hoa don gan."),
-            "data_as_of": latest_data_date()}
+            "data_as_of": data_as_of,
+            "month_to_is_partial": month_to_partial,
+            "month_to_data_through": data_as_of if month_to_partial else None,
+        }
+    if month_to_partial:
+        ket_qua["current_month_comparison_warning"] = (
+            f"Thang {month_to} moi co du lieu den {data_as_of}. Khong duoc so sanh truc tiep voi "
+            "thang tron hoac tu y doi 'thang nay' thanh thang truoc; neu can so sanh cong bang, chi "
+            "so den cung ngay trong cac thang truoc hoac noi ro day la MTD.")
+    if scope_employee_code:
+        reconciliation = []
+        for ym in months:
+            _, period_end = _month_bounds(ym)
+            fdate = _fact_date_le(period_end)
+            if not fdate:
+                reconciliation.append({"month": ym, "status": "NO_KPI_SNAPSHOT"})
+                continue
+            team = _team_of_qlv(scope_employee_code, fdate)
+            codes = [r["employee_code"] for r in team if r.get("employee_code")]
+            if not codes:
+                reconciliation.append({"month": ym, "status": "NO_TEAM_ROSTER", "snapshot": fdate})
+                continue
+            ph = ",".join("?" for _ in codes)
+            fact = _q(
+                f"SELECT COALESCE(SUM(f.amount_ct),0) revenue FROM fact_tonghopkhachhang f "
+                f"JOIN {_MONTH_LATEST_SUBQ} l ON l.employee_code=f.employee_code AND l.d=f.save_date "
+                f"WHERE f.employee_code IN ({ph})", (fdate, fdate, *codes))
+            snapshot_revenue = _f(fact[0]["revenue"]) if fact else 0.0
+            invoice_revenue = _f(totals.get(ym))
+            delta = invoice_revenue - snapshot_revenue
+            reconciliation.append({
+                "month": ym, "snapshot": fdate, "invoice_revenue": invoice_revenue,
+                "kpi_snapshot_revenue": snapshot_revenue, "delta": delta,
+                "matched": abs(delta) < 1,
+            })
+        ket_qua["team_scope_invoice_reconciliation"] = reconciliation
+        bad = [r for r in reconciliation if r.get("matched") is False]
+        if bad:
+            ket_qua["team_scope_reconciliation_warning"] = (
+                "Doanh thu hoa don theo DMSId KHONG khop doanh thu snapshot KPI o it nhat mot thang. "
+                "KHONG duoc ket hop doanh thu snapshot voi so don/AOV tu hoa don thanh mot bo so duy nhat; "
+                "can doi soat mapping DMSId lich su truoc khi ket luan cap doi.")
     if ngoai_cua_so:
         ket_qua["thieu_du_lieu_truoc_ngay"] = cutoff
         ket_qua["canh_bao_ngoai_cua_so"] = (
@@ -3850,7 +3902,8 @@ def order_timing_check(date_from: str, date_to: str, threshold_days: int = 2, li
     ``created_at`` la THOI DIEM TAO DON, khong phai thoi diem xac nhan don. DNH xac nhan ngay
     04/09/2026 rang do lech giua ``created_at`` va ``doc_date`` khong mang y nghia nghiep vu, nen
     ham nay khong truy van, xep hang hay neu ten nhan vien theo do lech do. Hai tham so
-    ``threshold_days`` va ``limit`` duoc giu de tuong thich API cu, nhung khong anh huong ket qua.
+    ``threshold_days`` duoc giu de tuong thich API cu, nhung khong anh huong ket qua. ``limit`` gioi
+    han so dong chi tiet bat thuong hien ra; tong so dong co trong ``total_flagged`` khong bi cat.
     ``scope_channel`` va ``scope_employee_code`` van ep pham vi ngay trong truy van du lieu don."""
     scope_sql, scope_params = _scope_clause(scope_area_code)
     emp_sql, emp_params = _employee_scope_clause(scope_employee_code, "v", as_of=date_to)
@@ -3886,6 +3939,7 @@ def order_timing_check(date_from: str, date_to: str, threshold_days: int = 2, li
     order_rows = _q(
         "WITH lines AS (" + " UNION ALL ".join(quality_parts) + ") "
         "SELECT channel||':'||COALESCE(NULLIF(stt,''),doc_date||':'||COALESCE(customer_code,'')) order_key,"
+        "MIN(doc_date) doc_date,MAX(customer_code) customer_code,"
         "SUM(amount9) revenue,"
         "SUM(CASE WHEN amount9<0 THEN amount9 ELSE 0 END) return_amount,"
         "MAX(CASE WHEN amount9<0 THEN 1 ELSE 0 END) has_return "
@@ -3893,9 +3947,72 @@ def order_timing_check(date_from: str, date_to: str, threshold_days: int = 2, li
         tuple(quality_params)) if quality_parts else []
     order_values = sorted((_f(r["revenue"]) for r in order_rows), reverse=True)
     total_order_revenue = sum(order_values)
-    median_order = float(median(order_values)) if order_values else 0.0
-    proposed_threshold = median_order * 3
-    reference_large = [v for v in order_values if v > proposed_threshold]
+    # Trung vi phai tinh RIENG tung kenh. OTC va ETC co mat bang gia tri don rat khac nhau;
+    # gop chung se danh dau sai don ETC hoac bo sot don OTC, trai voi quy tac S09 da cong bo.
+    values_by_channel = {}
+    for row in order_rows:
+        channel = str(row["order_key"]).split(":", 1)[0]
+        values_by_channel.setdefault(channel, []).append(_f(row["revenue"]))
+    median_by_channel = {
+        channel: float(median(values)) if values else 0.0
+        for channel, values in values_by_channel.items()
+    }
+    flagged = []
+    for row in order_rows:
+        channel = str(row["order_key"]).split(":", 1)[0]
+        median_order = median_by_channel.get(channel, 0.0)
+        proposed_threshold = median_order * 3
+        has_return = bool(row["has_return"])
+        is_large_reference = _f(row["revenue"]) > proposed_threshold
+        if not has_return and not is_large_reference:
+            continue
+        reasons = []
+        if has_return:
+            reasons.append("HANG_TRA_DIEU_CHINH")
+        if is_large_reference:
+            reasons.append("TREN_3X_TRUNG_VI_THAM_CHIEU")
+        flagged.append({
+            "order_key": row["order_key"],
+            "channel": channel,
+            "doc_date": row["doc_date"],
+            "customer_code": row["customer_code"],
+            "order_revenue": _f(row["revenue"]),
+            "return_adjustment": _f(row["return_amount"]),
+            "reasons": reasons,
+            "median_order_value": median_order,
+            "multiple_of_median": (_f(row["revenue"]) / median_order if median_order else None),
+            "large_order_threshold_status": "CHI_LA_THAM_CHIEU_CHUA_DUOC_DNH_PHE_DUYET",
+        })
+    flagged.sort(key=lambda row: abs(row["order_revenue"]), reverse=True)
+    result["total_flagged"] = len(flagged)
+    result["top_detail"] = flagged[:max(1, min(int(limit or 20), 100))]
+    result["top_detail_truncated"] = len(flagged) > len(result["top_detail"])
+    # Tra ve du ca hai ve cua cau hoi V05/M09/C12: don nao bi danh dau va sau khi loai thi
+    # con bao nhieu. Day la phep tinh tren CUNG tap don, khong ghep tong doanh thu tu tool khac.
+    flagged_keys = {row["order_key"] for row in flagged}
+    core_by_channel = []
+    for channel in sorted(values_by_channel):
+        channel_rows = [r for r in order_rows if str(r["order_key"]).split(":", 1)[0] == channel]
+        abnormal_rows = [r for r in channel_rows if r["order_key"] in flagged_keys]
+        gross_revenue = sum(_f(r["revenue"]) for r in channel_rows)
+        abnormal_revenue = sum(_f(r["revenue"]) for r in abnormal_rows)
+        core_by_channel.append({
+            "channel": channel,
+            "total_orders": len(channel_rows),
+            "flagged_orders": len(abnormal_rows),
+            "revenue_including_flagged": gross_revenue,
+            "core_revenue_excluding_flagged": gross_revenue - abnormal_revenue,
+            "flagged_revenue": abnormal_revenue,
+            "flagged_revenue_share_pct": (
+                abnormal_revenue / gross_revenue * 100 if gross_revenue else None),
+            "median_order_value": median_by_channel[channel],
+            "large_order_threshold": median_by_channel[channel] * 3,
+        })
+    result["core_result_by_channel"] = core_by_channel
+    reference_large_rows = [
+        row for row in order_rows
+        if _f(row["revenue"]) > median_by_channel.get(str(row["order_key"]).split(":", 1)[0], 0.0) * 3
+    ]
     concentration = {}
     for n in (1, 2, 5, 10):
         value = sum(order_values[:n])
@@ -3909,11 +4026,12 @@ def order_timing_check(date_from: str, date_to: str, threshold_days: int = 2, li
     }
     result["order_value_distribution"] = {
         "orders": len(order_rows), "revenue": total_order_revenue,
-        "median_order_value": median_order, **concentration,
+        "median_order_value_all_channels": (float(median(order_values)) if order_values else 0.0), **concentration,
         "reference_over_3x_median": {
             "status": "CHI_LA_THAM_CHIEU_CHUA_DUOC_DNH_PHE_DUYET",
-            "threshold": proposed_threshold,
-            "orders": len(reference_large), "revenue": sum(reference_large),
+            "definition": "Nguong tinh rieng theo tung kenh; xem core_result_by_channel.",
+            "orders": len(reference_large_rows),
+            "revenue": sum(_f(r["revenue"]) for r in reference_large_rows),
         },
         "warning": ("DNH chua phe duyet nguong nao duoc goi la 'don lon bat thuong'. Chi trinh bay "
                     "phan bo/top share va tham chieu >3x trung vi; KHONG ket luan gian lan/chay don "

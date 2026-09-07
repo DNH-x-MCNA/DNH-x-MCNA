@@ -297,6 +297,13 @@ def test_geography_monthly_co_san_luong_aov_tan_suat_cho_chuoi_3_thang(tmp_path,
     assert apr["aov"] == apr["revenue"] / 3
     assert apr["orders_per_customer"] == 1.5
     assert "COUNT(DISTINCT customer_code)" in result["customer_count_definition"]
+    assert result["month_to_is_partial"] is True
+    assert result["month_to_data_through"] == "2026-04-18"
+    assert "MTD" in result["current_month_comparison_warning"]
+    assert "target_by_city" in result["unavailable_metrics"]
+    assert "KHONG the ket" in result["target_gap_note"]
+    assert any(row.get("matched") is False for row in result["team_scope_invoice_reconciliation"])
+    assert "KHONG khop" in result["team_scope_reconciliation_warning"]
 
 
 def test_kpi_gap_tra_san_so_nguoi_theo_tung_moc(tmp_path, monkeypatch):

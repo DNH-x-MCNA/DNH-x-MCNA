@@ -137,14 +137,24 @@ def test_check_order_timing_qlv_chi_thay_doi_minh(tmp_path, monkeypatch):
     quality = result["result"]
     assert quality["created_at_doc_date_check"]["status"] == "NOT_APPLICABLE"
     assert "thoi diem tao don" in quality["created_at_doc_date_check"]["definition"]
-    assert quality["total_flagged"] == 0
+    assert quality["total_flagged"] == 1
     assert quality["summary_by_employee"] == []
-    assert quality["top_detail"] == []
+    assert quality["top_detail"][0]["order_key"] == "OTC:HD-TRA"
+    assert quality["top_detail"][0]["doc_date"] == "2026-07-11"
+    assert quality["top_detail"][0]["customer_code"] == "KH01"
+    assert quality["top_detail"][0]["reasons"] == ["HANG_TRA_DIEU_CHINH"]
     assert quality["order_value_distribution"]["orders"] == 2
     assert quality["order_value_distribution"]["reference_over_3x_median"]["status"] == \
         "CHI_LA_THAM_CHIEU_CHUA_DUOC_DNH_PHE_DUYET"
     assert quality["returns"]["orders_with_negative_lines"] == 1
     assert quality["returns"]["negative_amount"] == -100000
+    core = quality["core_result_by_channel"]
+    assert core == [{
+        "channel": "OTC", "total_orders": 2, "flagged_orders": 1,
+        "revenue_including_flagged": 400000.0, "core_revenue_excluding_flagged": 500000.0,
+        "flagged_revenue": -100000.0, "flagged_revenue_share_pct": -25.0,
+        "median_order_value": 200000.0, "large_order_threshold": 600000.0,
+    }]
     assert quality["pham_vi_du_lieu"]["loai"] == "DOI_CUA_QLV"
 
 
