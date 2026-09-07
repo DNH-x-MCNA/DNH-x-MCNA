@@ -158,6 +158,12 @@ def test_customer_movement_tong_bu_doanh_thu_tinh_tren_toan_bo_khach_truoc_khi_c
     assert all_rows["added_revenue"] == 1_050
     assert all_rows["lost_previous_revenue"] == 500
     assert all_rows["compensation_pct_of_lost_revenue"] == 210.0
+    assert all_rows["new_or_first_observed_revenue"] == 450
+    assert all_rows["reactivated_revenue"] == 600
+    assert all_rows["like_for_like_current_revenue"] == 180
+    assert all_rows["like_for_like_previous_revenue"] == 180
+    assert all_rows["like_for_like_delta"] == 0
+    assert all_rows["total_revenue_delta"] == all_rows["reconciled_delta"] == 550
     assert top_rows["customer_count_considered"] == 1
     assert top_rows["added_revenue"] == 600
     assert top_rows["lost_previous_revenue"] == 0
@@ -214,6 +220,26 @@ def test_coverage_benchmark_khach_va_san_pham(tmp_path, monkeypatch):
     pb = next(x for x in products["rows"] if x["code"] == "B")
     assert pb["customers"] == 2  # C1 + C4
     assert pb["quantity_per_order"] == 1
+    assert pb["net_revenue_per_paid_unit"] == 210
+    assert pb["previous_net_revenue_per_paid_unit"] == 140
+    assert pb["net_revenue_per_paid_unit_pct"] == 50
+
+
+def test_coverage_giu_sku_ky_truoc_da_ve_0_va_doi_chieu_du_tong(tmp_path, monkeypatch):
+    db_path = _setup(tmp_path, monkeypatch)
+    with sqlite3.connect(db_path) as con:
+        con.execute("INSERT INTO brv_sanpham VALUES ('C','San pham C','G2','hop',3)")
+        con.execute("INSERT INTO vhoadon_otc VALUES "
+                    "('2026-01-20','C2','C',700,7,100,'OLD-C',1,'D2','2026-01-20','OTC')")
+
+    result = rt.customer_product_coverage(
+        as_of_date="2026-04-20", lookback_months=3, mode="product",
+    )
+    old = next(row for row in result["rows"] if row["code"] == "C")
+    assert old["revenue"] == 0
+    assert old["previous_revenue"] == 700
+    assert old["revenue_delta"] == -700
+    assert result["reconciliation"]["passed"] is True
 
 
 def test_coverage_mtd_doi_chieu_cung_ngay_va_giu_nguoi_ky_nay_bang_0(tmp_path, monkeypatch):
@@ -319,8 +345,13 @@ def test_operational_quality_bat_mapping_loi_va_noi_ro_phan_chua_co(tmp_path, mo
     con.commit(); con.close()
     r = rt.operational_data_quality(as_of_date="2026-04-20")
     kpi = r["checks"]["kpi_employee_mapping"]
-    assert kpi["missing_manager"] >= 1 and kpi["missing_target"] >= 1
+    assert kpi["missing_manager"] == 1 and kpi["missing_target"] >= 1
+    assert kpi["management_rows_without_parent_in_source"] == 2
     assert kpi["missing_employee_dim"] >= 1
+    assert r["sample_details"]["missing_manager"] == [{
+        "employee_code": "MISSING", "employee_name": "(chua co ten trong danh muc)",
+        "position_code": None, "area_code": None, "manager_code": None,
+    }]
     assert r["checks"]["invoice_mapping"]["OTC"]["orphan_customers"] == 1
     assert any("chua hoa don" in x for x in r["unavailable_checks"])
     scoped = rt.operational_data_quality(as_of_date="2026-04-20", scope_area_code="MB")

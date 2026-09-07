@@ -31,9 +31,13 @@ _DOMAIN_SPECS = (
     {
         "domain": "revenue",
         "label": "Đối chiếu doanh thu",
-        "markers": ("doanh thu", "doanh so", "hoa don", "thuc thu"),
+        "markers": ("doanh thu", "doanh so", "hoa don", "thuc thu", "mom", "yoy", "ytd"),
         "tools": ("get_revenue_by_channel", "get_revenue_by_region", "get_revenue_tree",
-                  "get_revenue_reconciliation", "get_promotion_effectiveness"),
+                  "get_revenue_reconciliation", "get_revenue_monthly_series",
+                  "get_revenue_ytd_cumulative", "compare_periods",
+                  "get_geography_monthly_performance", "get_workforce_productivity",
+                  "get_customer_product_coverage", "get_customer_movement",
+                  "get_promotion_effectiveness"),
         "metrics": ("revenue",),
         "rules": ("revenue_totals",),
     },
@@ -42,7 +46,9 @@ _DOMAIN_SPECS = (
         "label": "Đối chiếu KPI và cây đội ngũ",
         "markers": ("kpi", "chi tieu", "target", "doi ngu", "nhan vien", "qlv", "tdv"),
         "tools": ("get_kpi_ranking", "get_revenue_tree", "get_employee_kpi",
-                  "get_employee_daily_kpi"),
+                  "get_employee_daily_kpi", "get_kpi_gap_run_rate",
+                  "get_workforce_productivity", "get_operational_data_quality",
+                  "get_salary_ranking"),
         "metrics": ("kpi",),
         "rules": ("team_employee_rollup",),
     },
@@ -58,24 +64,39 @@ _DOMAIN_SPECS = (
     {
         "domain": "customer",
         "label": "Phân tích khách hàng",
-        "markers": ("khach hang", "khach mua", "khach tham gia", "giam mua", "mua lai"),
+        "markers": ("khach hang", "khach", "khach mua", "khach tham gia", "giam mua", "mua lai",
+                    "mo moi", "tai kich hoat", "ngung mua", "im lang", "giu chan", "cohort"),
         "tools": ("get_top_customers", "get_customer_detail", "get_customer_revenue_debt_risk",
-                  "get_receivables_overview", "get_promotion_effectiveness"),
+                  "get_receivables_overview", "get_customer_lifecycle_summary",
+                  "get_customers_silent", "get_customer_cohort_retention", "get_customer_movement",
+                  "get_customer_product_coverage", "get_cross_sell_opportunities",
+                  "get_operational_data_quality", "get_promotion_effectiveness"),
         "metrics": ("customers",),
         "rules": (),
     },
     {
         "domain": "product",
         "label": "Phân tích sản phẩm",
-        "markers": ("san pham", "ma hang", "sku", "nhom hang"),
-        "tools": ("get_top_products", "get_promotion_effectiveness"),
+        "markers": ("san pham", "sp", "ma hang", "sku", "nhom hang", "gia ban", "san luong"),
+        "tools": ("get_top_products", "get_customer_product_coverage",
+                  "get_cross_sell_opportunities", "get_inventory_by_region",
+                  "get_inventory_expiry_report", "get_promotion_effectiveness"),
         "metrics": ("products",),
+        "rules": (),
+    },
+    {
+        "domain": "inventory",
+        "label": "Đối chiếu tồn kho",
+        "markers": ("ton kho", "can date", "cham luan chuyen", "stock-out", "thieu hang"),
+        "tools": ("get_inventory_by_region", "get_inventory_expiry_report"),
+        "metrics": ("inventory",),
         "rules": (),
     },
     {
         "domain": "salary",
         "label": "Đối chiếu lương thưởng",
-        "markers": ("luong", "tien thuong", "thuong kinh doanh", "bac thuong", "muc thuong",
+        "markers": ("luong co ban", "tien luong", "bang luong", "tien thuong",
+                    "thuong kinh doanh", "bac thuong", "muc thuong",
                     "v15", "v22", "v25", "aso", "phu cap"),
         "tools": ("get_salary_bonus_policy", "get_salary_data_quality",
                   "get_salary_achievement_summary", "get_salary_detail", "get_salary_ranking"),
@@ -95,7 +116,7 @@ _DOMAIN_SPECS = (
         "label": "Đối chiếu độ mới và nguồn dữ liệu",
         "markers": ("timestamp", "dong bo", "do moi", "freshness", "nguon du lieu", "warehouse", "sql live"),
         "tools": ("get_audit_log", "get_promotion_data_quality", "get_salary_data_quality",
-                  "query_sql_server"),
+                  "get_operational_data_quality", "query_sql_server"),
         "metrics": ("freshness",),
         "rules": ("source_freshness",),
     },
@@ -123,7 +144,7 @@ def infer_domains(question: str) -> list[dict[str, Any]]:
     lowered = (question or "").lower()
     found = [spec for spec in _DOMAIN_SPECS if (
         any(contains(marker) for marker in spec["markers"])
-        or (spec["domain"] == "salary" and "thưởng" in lowered)
+        or (spec["domain"] == "salary" and any(term in lowered for term in ("lương", "thưởng")))
     )]
     return found or [_DOMAIN_SPECS[0]]
 
@@ -350,6 +371,26 @@ class QueryPlan:
                 "revenue_totals", passed,
                 "Đã đối chiếu top-down với roll-up đội; coverage không vượt 100,5%."
                 if passed else str(revenue_reconcile.get("warning") or "Coverage vượt 100,5%."),
+            )
+
+        movement = self._evidence.get("get_customer_movement")
+        if isinstance(movement, dict):
+            summary = movement.get("summary_all_customers") or {}
+            if "total_revenue_delta" in summary and "reconciled_delta" in summary:
+                passed = self._close(summary["total_revenue_delta"], summary["reconciled_delta"])
+                self._set_reconciliation(
+                    "revenue_totals", passed,
+                    "Biến động tổng doanh thu khớp mở mới + tái kích hoạt + LFL - khách ngừng mua."
+                    if passed else "Phân rã luồng khách không khớp biến động tổng doanh thu.",
+                )
+
+        coverage = self._evidence.get("get_customer_product_coverage")
+        if isinstance(coverage, dict) and isinstance(coverage.get("reconciliation"), dict):
+            passed = bool(coverage["reconciliation"].get("passed"))
+            self._set_reconciliation(
+                "revenue_totals", passed,
+                "Tổng theo dimension khớp tổng phạm vi trước khi cắt danh sách."
+                if passed else "Tổng theo dimension lệch tổng phạm vi; có dòng thiếu khóa phân nhóm.",
             )
 
         debt = self._evidence.get("get_receivables_overview")

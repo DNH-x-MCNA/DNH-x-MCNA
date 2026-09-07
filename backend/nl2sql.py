@@ -17,6 +17,7 @@ nho lai vai cau hoi/tra loi gan nhat, de cau hoi tiep theo khong can nhac lai tu
 import os
 import json
 import time
+import unicodedata
 from collections import defaultdict
 import anthropic
 from schema_context import SCHEMA_CONTEXT
@@ -164,8 +165,76 @@ LLM_CALL_TIMEOUT_SECONDS = _timeout_env("CHAT_LLM_TIMEOUT_SECONDS", 45, REQUEST_
 
 def _required_tool_for_question(question: str) -> str | None:
     """Ep tool cho cac intent co mot duong du lieu duy nhat, tranh do catalog nhieu vong."""
-    q = " ".join((question or "").lower().split())
-    is_team = any(word in q for word in ("đội", "doi toi", "đội tôi", "toàn đội", "tong doi"))
+    q = " ".join("".join(
+        ch for ch in unicodedata.normalize("NFD", (question or "").lower())
+        if unicodedata.category(ch) != "Mn"
+    ).replace("đ", "d").split())
+    is_team = any(word in q for word in ("doi", "doi toi", "toan doi", "tong doi"))
+
+    # Dinh tuyen cac cau trong cot E UAT vao composite tool da co san. Thu tu tu cu the den rong:
+    # mot cau co the chua nhieu tu khoa, nhung vong dau phai vao dung nguon chinh thay vi free-SQL.
+    if ("tung thang" in q or "moi thang dat" in q) and (
+            "ytd" in q or "% ke hoach" in q or "phan tram ke hoach" in q):
+        return "get_revenue_monthly_series"
+    if "luy ke" in q or "ytd" in q:
+        return "get_revenue_ytd_cumulative"
+    if any(marker in q for marker in ("cohort", "giu chan sau", "ty le giu chan")):
+        return "get_customer_cohort_retention"
+    if any(marker in q for marker in (
+        "tai kich hoat", "ngung mua", "tang truong den tu mo moi", "doanh thu mat",
+        "bu duoc bao nhieu", "khach lon nao ngung", "keo dai chu ky mua",
+        "like-for-like", "like for like", "tang truong huu co", "tang mua tren khach hien huu",
+    )):
+        return "get_customer_movement"
+    if any(marker in q for marker in ("khach im lang", "im lang 30", "im lang 60", "im lang 90")):
+        return "get_customers_silent"
+    if any(marker in q for marker in (
+        "xoi mon gia", "gia ban thuc te", "giam gia ban", "do it khach", "it don",
+        "giam luong", "luong/don", "doanh thu/khach", "mua it sku", "share-of-wallet noi bo",
+    )):
+        return "get_customer_product_coverage"
+    if ("sku" in q or "san pham" in q or "nhom sp" in q) and any(
+            marker in q for marker in ("dong gop", "tang/giam", "keo giam")):
+        return "get_customer_product_coverage"
+    if any(marker in q for marker in ("ban cheo", "cross-sell", "mua cung", "ban combo")):
+        return "get_cross_sell_opportunities"
+    if any(marker in q for marker in (
+        "thieu target", "thieu manager", "thieu quan ly", "trung ma", "sai mapping",
+        "khach chua gan", "thieu dms", "snapshot chua chot", "ngoai le chua xu ly",
+    )):
+        return "get_operational_data_quality"
+    if any(marker in q for marker in ("gia tri ton kho", "so thang ton", "stock-out", "thieu hang")):
+        return "get_inventory_by_region"
+    if any(marker in q for marker in ("can date", "cham luan chuyen", "ton cao", "dung nhap")):
+        return "get_inventory_expiry_report"
+    if any(marker in q for marker in (
+        "tinh nao", "dia ban", "vung nao dong gop", "xep hang vung", "quy mo lon",
+        "tang truong thap", "co hoi trang",
+    )):
+        return "get_geography_monthly_performance"
+    if any(marker in q for marker in (
+        "nang suat", "span of control", "giam lien tiep 3 thang", "headcount",
+    )):
+        return "get_workforce_productivity"
+    if "mua vu" in q:
+        # C08: phai bat dau bang chuoi thang, de tool tu danh dau thang khong du du lieu
+        # thay vi model tu suy dien tinh mua vu tu vai ngay/1-2 thang hien co.
+        return "get_revenue_monthly_series"
+    if any(marker in q for marker in (
+        "theo tung thang", "qua tung thang", "xu huong tap trung",
+        "3/6 thang", "6 thang", "24 thang",
+    )) and any(marker in q for marker in ("doanh thu", "doanh so", "mom", "yoy", "cagr")):
+        return "get_revenue_monthly_series"
+
+    if any(marker in q for marker in (
+        "phu thuoc top", "top 10 khach", "top 10 san pham", "top 3 mien", "muc do tap trung",
+    )):
+        # C11: top-customers tra mau so toan pham vi (scope_revenue), sau do model co the
+        # goi them top-products/geography neu cau hoi yeu cau du ca ba chieu.
+        return "get_top_customers"
+    if "hang tra" in q or "dieu chinh don" in q:
+        # C13: Amount9 am phai di qua bao cao don, khong suy tu doanh thu tong hop.
+        return "check_order_timing"
 
     # Cac intent UAT cua QLV da tung chon sai/roi du lieu khi model tu ghep 4-12 tool. Ep DUONG
     # BAO CAO DA CO SAN ngay tu vong dau; cac vong sau van duoc phep goi them neu cau hoi co nhieu ve.
@@ -189,11 +258,21 @@ def _required_tool_for_question(question: str) -> str | None:
         "mat ma chuong trinh", "mốc liên kết", "moc lien ket", "độ phủ", "do phu",
     )):
         return "get_promotion_data_quality"
+    if is_promo:
+        return "get_promotion_effectiveness"
+
+    if "ty le nhan su dat" in q and any(
+            threshold in q for threshold in ("65", "70", "80", "100", "120")):
+        return "get_employee_kpi"
 
     is_salary = any(word in q for word in (
         "lương", "luong", "thưởng", "thuong", "v25", "totalpoint", "dmbonus",
     ))
     if is_salary:
+        if any(marker in q for marker in (
+            "chi phi thuong", "thuong tren doanh thu", "thuong kinh doanh tren doanh thu",
+        )):
+            return "get_salary_ranking"
         if (("totalpoint" in q and any(dm in q for dm in ("dm1", "dm2", "dm3", "dmbonus")))
                 or any(marker in q for marker in (
                     "lương cơ bản", "luong co ban", " lcb", "snapshot nào", "snapshot nao",
@@ -230,6 +309,8 @@ TEMPLATE_TOOLS = [
     {
         "name": "get_top_products",
         "description": "Top N san pham theo doanh thu trong 1 khoang ngay (da tu dong loai hang khuyen mai khoi so luong). "
+                        "Moi dong co scope_revenue va share_pct_of_scope tinh tren TOAN BO pham vi truoc khi cat top-N; "
+                        "dung cac truong nay cho cau hoi muc do tap trung, KHONG lay tong top-N lam mau so. "
                         "UU TIEN dung tool nay cho moi cau hoi ve san pham ban chay/top san pham. "
                         "Neu nguoi dung yeu cau tach/so sanh top san pham OTC va ETC, BAT BUOC goi tool HAI LAN "
                         "voi cung khoang ngay va limit: mot lan channel=OTC, mot lan channel=ETC; KHONG dung "
@@ -249,6 +330,8 @@ TEMPLATE_TOOLS = [
     {
         "name": "get_top_customers",
         "description": "Top N khach hang theo doanh thu trong 1 khoang ngay. "
+                        "Moi dong co scope_revenue va share_pct_of_scope tinh tren TOAN BO pham vi truoc khi cat top-N; "
+                        "dung de tinh muc phu thuoc top khach, KHONG lay tong danh sach top-N lam mau so. "
                         "UU TIEN dung tool nay cho moi cau hoi ve khach hang mua nhieu nhat/top khach hang.",
         "input_schema": {
             "type": "object",
@@ -358,8 +441,9 @@ TEMPLATE_TOOLS = [
     {
         "name": "compare_periods",
         "description": "So sanh nhanh tong doanh thu (OTC+ETC) giua 2 khoang thoi gian bat ky (vd thang nay vs "
-                        "thang truoc, quy nay vs cung ky nam truoc). Kho local co day du lich su tu ~2022 nen "
-                        "so sanh xa duoc, khong chi vai ngay gan day. UU TIEN dung tool nay cho moi cau hoi so sanh.",
+                        "thang truoc, quy nay vs cung ky nam truoc). Tool tu kiem pham vi kho; neu mot ky thieu "
+                        "du lieu thi comparison_valid=false va delta/pct_change=None. PHAI bao thieu lich su, "
+                        "TUYET DOI khong coi ky thieu la 0 dong. UU TIEN dung tool nay cho so sanh dung 2 ky.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -380,7 +464,8 @@ TEMPLATE_TOOLS = [
                         "(chi so 2 khoang RIENG LE do AI tu chi dinh ngay, de sai/lech khi phai tu tinh ngay "
                         "cho nhieu nam) - tool nay TU DONG dong bo cung khoang thang qua N nam lien tiep, UU "
                         "TIEN dung khi cau hoi noi 'luy ke' hoac so sanh HON 2 ky cung luc. Day la du lieu "
-                        "THUC TE da phat sinh (khong phai du bao) nen luon tra loi duoc, khong bi chan.",
+                        "THUC TE da phat sinh, nhung neu revenue_history_complete=false thi %KH/gap/binh quan "
+                        "la None vi kho thieu lich su; PHAI noi ro, khong tu tinh bu.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -403,6 +488,8 @@ TEMPLATE_TOOLS = [
                         "ghi ro: 'tinh theo doi hien tai, thanh phan doi ky do co the khac'; KHONG mot "
                         "vai noi he thong khong tinh duoc con vai khac lai coi roster hien tai la roster lich su. KHAC get_revenue_by_"
                         "channel (chi 1 con so TONG cho ca khoang) va compare_periods (dung 2 khoang). Thang "
+                        "Moi thang co san plan_revenue/achievement_pct/plan_variance khi target cung cap du; "
+                        "ETC theo vung va doi QLV co the co plan=None kem plan_note vi nguon khong tach du cap. Thang "
                         "nao nam ngoai pham vi du lieu se co 'khong_co_du_lieu': true va revenue=None - PHAI "
                         "noi ro voi nguoi dung la thang do CHUA CO DU LIEU, TUYET DOI KHONG trinh bay thanh "
                         "0 dong va khong tinh vao trung binh/tang truong.",
@@ -488,7 +575,10 @@ TEMPLATE_TOOLS = [
                        "khach ngung/tang/giam va doanh thu them-mat. NEW_OR_FIRST_OBSERVED chi la lan dau "
                        "thay trong cua so kho, KHONG tu goi chac chan la khach moi trong doi. Khi hoi "
                        "tong doanh thu them/mat hay ty le bu doanh thu, BAT BUOC dung "
-                       "summary_all_customers; summary_on_returned_top_rows chi la top-N de minh hoa.",
+                       "summary_all_customers; summary_on_returned_top_rows chi la top-N de minh hoa. "
+                       "C20/M08: summary_all_customers da tach san new_or_first_observed_revenue, "
+                       "reactivated_revenue, lost_previous_revenue va like_for_like_*; dung cac so nay, "
+                       "KHONG tu phan loai lai hay de mot khoan 'chua phan loai'.",
         "input_schema": {"type": "object", "properties": {
             "month": {"type": "string", "description": "YYYY-MM."},
             "history_months": {"type": "integer", "description": "Cua so nhan biet tai kich hoat, mac dinh 6."},
@@ -530,7 +620,9 @@ TEMPLATE_TOOLS = [
                        "hien tai bang 0 - khong duoc bo qua. largest_increase/largest_decrease da tinh san. Dung cho khach "
                        "mua it SKU, tan suat/AOV giam, NV co nhieu khach nhung mua thap, san pham nhieu "
                        "khach nhung luong/don thap. Benchmark chi trong DUNG pham vi tai khoan, KHONG "
-                       "phai market share/share-of-wallet ngoai DNH va KHONG tu ket luan nhu cau.",
+                       "phai market share/share-of-wallet ngoai DNH va KHONG tu ket luan nhu cau. Voi "
+                       "mode='product', dung net_revenue_per_paid_unit va truong previous/delta/pct de "
+                       "phan tich xoi mon gia; day la doanh thu thuan tren don vi ban co gia, khong phai bang gia niem yet.",
         "input_schema": {"type": "object", "properties": {
             "as_of_date": {"type": "string"}, "lookback_months": {"type": "integer"},
             "mode": {"type": "string", "enum": ["customer", "product", "employee"]},
@@ -576,7 +668,9 @@ TEMPLATE_TOOLS = [
                        "trung, khach hoa don mo coi, thieu mapping tinh, thieu ma NV va dong ghi ngay "
                        "tuong lai. Dung cho checklist cuoi thang/khach chua gan/sai mapping. Tool se liet "
                        "ke ro cac check CHUA CO NGUON (don chua hoa don, action tracker, chi nhanh/NPP); "
-                       "KHONG duoc bien not_available thanh 0 loi.",
+                       "KHONG duoc bien not_available thanh 0 loi. sample_details co ca ma, ten, vai tro, "
+                       "vung va manager de hien thi than thien. management_rows_without_parent_in_source "
+                       "la QLV/cap quan ly thieu cay cap tren trong NGUON, khong tinh la loi nhan vien thieu manager.",
         "input_schema": {"type": "object", "properties": {
             "as_of_date": {"type": "string"}, "sample_limit": {"type": "integer"},
         }, "required": []},

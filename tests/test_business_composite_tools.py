@@ -246,6 +246,45 @@ def test_high_risk_intents_force_their_single_verified_tool():
     assert nl2sql._required_tool_for_question(
         "Thưởng/phụ cấp từng người thay đổi; điểm không khớp KPI/chính sách của cả đội"
     ) == "get_salary_ranking"
+    assert nl2sql._required_tool_for_question(
+        "Lũy kế YTD so kế hoạch/cùng kỳ; bình quân cần đạt mỗi tháng còn lại"
+    ) == "get_revenue_ytd_cumulative"
+    assert nl2sql._required_tool_for_question(
+        "Khách lớn nào ngừng mua hoặc kéo dài chu kỳ mua so lịch sử"
+    ) == "get_customer_movement"
+    assert nl2sql._required_tool_for_question(
+        "Tăng trưởng like-for-like tách khỏi tăng trưởng do mở mới"
+    ) == "get_customer_movement"
+    assert nl2sql._required_tool_for_question(
+        "Phụ thuộc top 10 khách/top 10 SP/top 3 miền ở mức nào; xu hướng tập trung"
+    ) == "get_top_customers"
+    assert nl2sql._required_tool_for_question(
+        "Doanh thu gộp, chiết khấu, khuyến mãi, hàng trả, doanh thu thuần từng tháng"
+    ) == "check_order_timing"
+    assert nl2sql._required_tool_for_question(
+        "SKU doanh thu giảm do ít khách, ít đơn, giảm lượng hay giảm giá bán"
+    ) == "get_customer_product_coverage"
+    assert nl2sql._required_tool_for_question(
+        "Chỉ tiêu nào sai do thiếu manager, thiếu target, sai mapping hoặc trùng mã"
+    ) == "get_operational_data_quality"
+    assert nl2sql._required_tool_for_question(
+        "Hàng cận date và chậm luân chuyển nào cần đẩy bán hoặc dừng nhập"
+    ) == "get_inventory_expiry_report"
+    assert nl2sql._required_tool_for_question(
+        "Giá trị tồn kho, số tháng tồn và stock-out theo tháng"
+    ) == "get_inventory_by_region"
+    assert nl2sql._required_tool_for_question(
+        "Tháng mùa vụ cao/thấp; tháng hiện tại lệch mô hình bao nhiêu"
+    ) == "get_revenue_monthly_series"
+    assert nl2sql._required_tool_for_question(
+        "Khuyến mãi nào có nhiều khách tham gia nhưng không tạo tăng trưởng"
+    ) == "get_promotion_effectiveness"
+    assert nl2sql._required_tool_for_question(
+        "Tỷ lệ nhân sự đạt 65%, 70%, 80%, 100% và 120% là bao nhiêu"
+    ) == "get_employee_kpi"
+    assert nl2sql._required_tool_for_question(
+        "Chi phí thưởng kinh doanh trên doanh thu; tăng trưởng có bền vững không"
+    ) == "get_salary_ranking"
 
 
 def test_ask_sends_forced_tool_choice_only_on_first_round(monkeypatch):

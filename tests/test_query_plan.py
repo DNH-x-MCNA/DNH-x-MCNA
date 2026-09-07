@@ -135,6 +135,31 @@ def test_composite_promotion_tool_completes_promotion_customer_and_product_steps
     assert plan.status == "completed"
 
 
+def test_composite_uat_tools_complete_all_inferred_domains_without_phantom_pending_steps():
+    cases = [
+        ("Tăng trưởng doanh thu đến từ khách mở mới hay khách hiện hữu", "get_customer_movement"),
+        ("SKU tồn kho cận date và chậm luân chuyển nào cần xử lý", "get_inventory_expiry_report"),
+        ("Doanh thu/khách và sản lượng từng sản phẩm thay đổi", "get_customer_product_coverage"),
+    ]
+    for index, (question, tool) in enumerate(cases):
+        plan = _plan(question, query_id=f"composite-{index}")
+        key = f"{tool}-{index}"
+        plan.start_tool(tool, {}, key)
+        payload = {"status": "ok"}
+        if tool == "get_customer_movement":
+            payload["summary_all_customers"] = {
+                "total_revenue_delta": 100, "reconciled_delta": 100,
+            }
+        elif tool == "get_customer_product_coverage":
+            payload["reconciliation"] = {"passed": True}
+        plan.finish_tool(
+            key, ok=True, payload=payload, source=f"template:{tool}",
+            duration_ms=5, timeout_seconds=40,
+        )
+        plan.finalize()
+        assert plan.status == "completed", (question, plan.as_dict())
+
+
 def test_failed_source_produces_structured_partial_answer_without_guessing():
     plan = _plan("So sánh doanh thu và công nợ tháng 7/2026", query_id="partial")
     revenue_key = "revenue"
@@ -184,6 +209,11 @@ def test_multi_period_and_vietnamese_bat_thuong_do_not_trigger_salary_false_posi
     assert [step.domain for step in plan.steps] == ["revenue", "kpi"]
     assert plan.period["label"] == "06/2026 vs 07/2026"
     assert len(plan.period["periods"]) == 2
+
+
+def test_san_luong_khong_bi_hieu_nham_thanh_luong_nhan_su():
+    plan = _plan("Doanh thu/khách và sản lượng từng sản phẩm thay đổi", query_id="quantity")
+    assert "salary" not in {step.domain for step in plan.steps}
 
 
 def test_timestamp_question_uses_one_multisource_freshness_step():

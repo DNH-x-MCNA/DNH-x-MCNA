@@ -399,13 +399,17 @@ def revenue_by_channel(date_from: str, date_to: str, scope_area_code: str = None
                     (ym_from, ym_to) + msc_e_params)[0]
             etc_rev += _f(se["rev"]); etc_hd += int(se["hd"] or 0)
 
+    coverage = _revenue_period_coverage(date_from, date_to)
     result = {
         "date_from": date_from, "date_to": date_to,
         "otc": {"revenue": otc_rev, "invoices": otc_hd},
         "etc": {"revenue": etc_rev, "invoices": etc_hd},
         "total": {"revenue": otc_rev + etc_rev, "invoices": otc_hd + etc_hd},
         "data_as_of": latest_data_date(),
+        "data_coverage": coverage,
     }
+    if not coverage["complete"]:
+        result["coverage_warning"] = coverage["warning"]
     if scope_channel:
         result["channel_scope"] = f"Tai khoan chi duoc xem kenh {scope_channel} - so lieu kenh khac KHONG duoc hien thi."
     return result
@@ -439,13 +443,17 @@ def top_products(date_from: str, date_to: str, limit: int = 10, channel: str = "
     sql = f"""WITH combined AS ({" UNION ALL ".join(parts)})
               SELECT c.item_code, sp.name,
                      SUM(c.amount9) rev,
-                     SUM(CASE WHEN COALESCE(c.unit_price,0) > 0 THEN c.quantity ELSE 0 END) qty
+                     SUM(CASE WHEN COALESCE(c.unit_price,0) > 0 THEN c.quantity ELSE 0 END) qty,
+                     SUM(SUM(c.amount9)) OVER () scope_rev
               FROM combined c LEFT JOIN brv_sanpham sp ON sp.code = c.item_code
               GROUP BY c.item_code, sp.name ORDER BY rev DESC LIMIT ?"""
     params = tuple(p for pp in part_params for p in pp) + (limit,)
     rows = _q(sql, params)
     result = [{"item_code": r["item_code"], "name": r["name"] or f'(chua co ten - ma {r["item_code"]})',
-               "revenue": _f(r["rev"]), "qty": _f(r["qty"])} for r in rows]
+               "revenue": _f(r["rev"]), "qty": _f(r["qty"]),
+               "scope_revenue": _f(r["scope_rev"]),
+               "share_pct_of_scope": (_f(r["rev"]) / _f(r["scope_rev"]) * 100
+                                      if _f(r["scope_rev"]) else None)} for r in rows]
     # Du lieu cu hon 12 thang da bi NEN thanh KH x thang (khong con item_code) - top san pham KHONG
     # the tinh dung cho phan xa hon cua so nay, phai bao ro thay vi am tham tra ve so thieu.
     cutoff = _detail_cutoff()
@@ -504,11 +512,14 @@ def top_customers(date_from: str, date_to: str, limit: int = 10, channel: str = 
             part_params.append((ym_from, ym_to) + msc_params)
 
     sql = f"""WITH combined AS ({" UNION ALL ".join(parts)})
-              SELECT customer_code, SUM(amount9) rev
+              SELECT customer_code, SUM(amount9) rev, SUM(SUM(amount9)) OVER () scope_rev
               FROM combined GROUP BY customer_code ORDER BY rev DESC LIMIT ?"""
     params = tuple(p for pp in part_params for p in pp) + (limit,)
     rows = _q(sql, params)
-    return [{"customer_code": r["customer_code"], "revenue": _f(r["rev"])} for r in rows]
+    return [{"customer_code": r["customer_code"], "revenue": _f(r["rev"]),
+             "scope_revenue": _f(r["scope_rev"]),
+             "share_pct_of_scope": (_f(r["rev"]) / _f(r["scope_rev"]) * 100
+                                    if _f(r["scope_rev"]) else None)} for r in rows]
 
 
 def _channel_sub_buckets():
@@ -1203,13 +1214,22 @@ def employee_directory(search: str = None, position_code: str = None, area_code:
 def compare_periods(date_from_a: str, date_to_a: str, date_from_b: str, date_to_b: str,
                      scope_area_code: str = None, scope_channel: str = None,
                      scope_employee_code: str = None) -> dict:
-    """So sanh nhanh doanh thu giua 2 khoang thoi gian (vd thang nay vs thang truoc, cung ky nam truoc).
-    Vi kho local co day du lich su (nhieu nam) nen so sanh xa duoc, khong chi vai ngay gan day."""
+    """So sanh doanh thu hai ky; khong tao chenh lech khi mot ky nam ngoai pham vi kho."""
     a = revenue_by_channel(date_from_a, date_to_a, scope_area_code, scope_channel, scope_employee_code)
     b = revenue_by_channel(date_from_b, date_to_b, scope_area_code, scope_channel, scope_employee_code)
+    a_complete = (a.get("data_coverage") or {}).get("complete", True)
+    b_complete = (b.get("data_coverage") or {}).get("complete", True)
+    if not a_complete or not b_complete:
+        return {
+            "period_a": a, "period_b": b, "delta": None, "pct_change": None,
+            "comparison_valid": False,
+            "warning": ("Mot hoac ca hai ky nam ngoai pham vi doanh thu day du cua kho. "
+                        "Khong coi phan thieu la 0 dong va khong tinh chenh lech/% thay doi."),
+        }
     delta = a["total"]["revenue"] - b["total"]["revenue"]
     pct_change = (delta / b["total"]["revenue"] * 100) if b["total"]["revenue"] else None
-    return {"period_a": a, "period_b": b, "delta": delta, "pct_change": pct_change}
+    return {"period_a": a, "period_b": b, "delta": delta, "pct_change": pct_change,
+            "comparison_valid": True}
 
 
 def _ytd_plan(year: int, from_month: str, to_month: str, scope_area_code: str = None,
@@ -1412,6 +1432,30 @@ def _revenue_data_month_range() -> tuple:
     return (min(candidates) if candidates else None), latest
 
 
+def _revenue_period_coverage(date_from: str, date_to: str) -> dict:
+    """Danh dau khoang doanh thu bi thieu thay vi de SUM rong bien thanh 0 dong hop le."""
+    earliest, latest_month = _revenue_data_month_range()
+    latest_day = latest_data_date()[:10]
+    requested_from_month = str(date_from)[:7]
+    requested_to_month = str(date_to)[:7]
+    reasons = []
+    if not earliest or not latest_month:
+        reasons.append("Kho chua co du lieu doanh thu.")
+    else:
+        if requested_from_month < earliest:
+            reasons.append(f"Ky bat dau truoc thang som nhat trong kho ({earliest}).")
+        if requested_to_month > latest_month:
+            reasons.append(f"Ky ket thuc sau thang moi nhat trong kho ({latest_month}).")
+        elif str(date_to)[:10] > latest_day:
+            reasons.append(f"Ky ket thuc sau ngay du lieu moi nhat ({latest_day}).")
+    return {
+        "complete": not reasons,
+        "available_from_month": earliest,
+        "available_to_date": latest_day,
+        "warning": " ".join(reasons) if reasons else None,
+    }
+
+
 def revenue_monthly_series(month_to: str = None, months_back: int = 12, include_yoy: bool = True,
                             scope_area_code: str = None, scope_channel: str = None,
                             scope_employee_code: str = None) -> dict:
@@ -1477,6 +1521,22 @@ def revenue_monthly_series(month_to: str = None, months_back: int = 12, include_
             "otc_revenue": r["otc"]["revenue"], "etc_revenue": r["etc"]["revenue"],
             "revenue": r["total"]["revenue"], "invoices": r["total"]["invoices"],
         }
+        # C02: tra san target/%/chenh lech cua DUNG thang de model khong tu ghep doanh thu va
+        # target tu hai query roi cong nham kenh. Voi doi QLV hoac ETC theo vung, nguon khong co
+        # target lich su du cap chi tiet nen _ytd_plan tra None + ly do, khong chia deu/suy dien.
+        plan = _ytd_plan(int(ym[:4]), ym[5:7], ym[5:7],
+                         scope_area_code, scope_channel, scope_employee_code)
+        item["plan_revenue"] = plan["total"]
+        item["plan_otc_revenue"] = plan["otc"]
+        item["plan_etc_revenue"] = plan["etc"]
+        item["achievement_pct"] = (
+            item["revenue"] / plan["total"] * 100 if plan["total"] else None
+        )
+        item["plan_variance"] = (
+            item["revenue"] - plan["total"] if plan["total"] is not None else None
+        )
+        if plan.get("note"):
+            item["plan_note"] = plan["note"]
         # Thang NAM TRONG pham vi du lieu nhung khong co hoa don nao: pham vi tong the khong bat
         # duoc truong hop nay. Voi toan cong ty gan nhu chac chan la LO HONG DONG BO (DNH khong the
         # ban 0 dong ca thang); voi 1 doi QLV nho thi co the that. Khong tu ket luan - danh dau de
@@ -2024,16 +2084,49 @@ def customer_movement(month: str = None, history_months: int = 6,
         counts = {}
         for row in rows:
             counts[row["movement"]] = counts.get(row["movement"], 0) + 1
-        added = sum(row["current_revenue"] for row in rows
-                    if row["movement"] in {"NEW_OR_FIRST_OBSERVED", "REACTIVATED"})
+        new_revenue = sum(row["current_revenue"] for row in rows
+                          if row["movement"] == "NEW_OR_FIRST_OBSERVED")
+        reactivated_revenue = sum(row["current_revenue"] for row in rows
+                                  if row["movement"] == "REACTIVATED")
+        added = new_revenue + reactivated_revenue
         lost = sum(row["previous_revenue"] for row in rows if row["movement"] == "STOPPED")
+        lfl_rows = [row for row in rows if row["movement"] in {"GROWING", "DECLINING", "UNCHANGED"}]
+        lfl_current = sum(row["current_revenue"] for row in lfl_rows)
+        lfl_previous = sum(row["previous_revenue"] for row in lfl_rows)
+        lfl_delta = lfl_current - lfl_previous
+        total_current = sum(row["current_revenue"] for row in rows)
+        total_previous = sum(row["previous_revenue"] for row in rows)
+        new_delta = sum(row["delta"] for row in rows
+                        if row["movement"] == "NEW_OR_FIRST_OBSERVED")
+        reactivated_delta = sum(row["delta"] for row in rows
+                                if row["movement"] == "REACTIVATED")
+        stopped_delta = sum(row["delta"] for row in rows if row["movement"] == "STOPPED")
+        classified_delta = new_delta + reactivated_delta + stopped_delta + lfl_delta
+        # Neu co doanh thu am do hang tra, "doanh thu them - doanh thu mat" khong bang delta.
+        # Tach ro phan dieu chinh nay thay vi de mot khoan du "chua phan loai" nhu C20 UAT.
+        non_positive_adjustment = classified_delta - (added + lfl_delta - lost)
         return {
             "customer_count_considered": len(rows),
             "counts": counts,
+            "new_or_first_observed_revenue": new_revenue,
+            "reactivated_revenue": reactivated_revenue,
             "added_revenue": added,
             "lost_previous_revenue": lost,
             "net_offset": added - lost,
             "compensation_pct_of_lost_revenue": round(added / lost * 100, 1) if lost else None,
+            "like_for_like_customer_count": len(lfl_rows),
+            "like_for_like_current_revenue": lfl_current,
+            "like_for_like_previous_revenue": lfl_previous,
+            "like_for_like_delta": lfl_delta,
+            "like_for_like_pct": (lfl_delta / lfl_previous * 100) if lfl_previous else None,
+            "total_current_revenue": total_current,
+            "total_previous_revenue": total_previous,
+            "total_revenue_delta": total_current - total_previous,
+            "new_or_first_observed_delta": new_delta,
+            "reactivated_delta": reactivated_delta,
+            "stopped_delta": stopped_delta,
+            "non_positive_revenue_adjustment": non_positive_adjustment,
+            "reconciled_delta": classified_delta,
         }
 
     summary_all = _movement_summary(detail)
@@ -2344,8 +2437,8 @@ def customer_product_coverage(as_of_date: str = None, lookback_months: int = 3,
     for code, periods in by_code.items():
         cur = periods.get("CURRENT", {})
         prev = periods.get("PREVIOUS", {})
-        if not cur and mode != "employee":
-            continue
+        # M33 UAT: phai GIU ca SKU/khach chi co o ky truoc va da ve 0 ky nay. Neu bo chung,
+        # bao cao mat dung nhom suy giam nang nhat va tong dimension lech tong pham vi.
         row = {
             "code": code,
             "name": (customer_names.get(code) if mode == "customer" else
@@ -2374,6 +2467,24 @@ def customer_product_coverage(as_of_date: str = None, lookback_months: int = 3,
                                   if row["frequency"] is not None and row["previous_frequency"] is not None
                                   else None)
         row["products_delta"] = row["products"] - row["previous_products"]
+        if mode == "product":
+            row["net_revenue_per_paid_unit"] = (
+                row["revenue"] / row["quantity"] if row["quantity"] else None
+            )
+            row["previous_net_revenue_per_paid_unit"] = (
+                row["previous_revenue"] / row["previous_quantity"]
+                if row["previous_quantity"] else None
+            )
+            previous_unit_value = row["previous_net_revenue_per_paid_unit"]
+            row["net_revenue_per_paid_unit_delta"] = (
+                row["net_revenue_per_paid_unit"] - previous_unit_value
+                if row["net_revenue_per_paid_unit"] is not None and previous_unit_value is not None
+                else None
+            )
+            row["net_revenue_per_paid_unit_pct"] = (
+                row["net_revenue_per_paid_unit_delta"] / previous_unit_value * 100
+                if previous_unit_value and row["net_revenue_per_paid_unit_delta"] is not None else None
+            )
         rows.append(row)
     avg_products = sum(r["products"] for r in rows) / len(rows) if rows else 0.0
     avg_revenue = sum(r["revenue"] for r in rows) / len(rows) if rows else 0.0
@@ -2401,6 +2512,8 @@ def customer_product_coverage(as_of_date: str = None, lookback_months: int = 3,
         }
 
     current_total, previous_total = _period_total("CURRENT"), _period_total("PREVIOUS")
+    current_rows_total = sum(r["revenue"] for r in rows)
+    previous_rows_total = sum(r["previous_revenue"] for r in rows)
     total_change = {
         key + "_delta": (current_total[key] - previous_total[key]
                           if current_total[key] is not None and previous_total[key] is not None else None)
@@ -2415,6 +2528,13 @@ def customer_product_coverage(as_of_date: str = None, lookback_months: int = 3,
         "previous_period": {"from": previous_from, "to": previous_to},
         "comparison_basis": comparison_basis,
         "scope_totals": {"current": current_total, "previous": previous_total, **total_change},
+        "reconciliation": {
+            "current_scope_minus_all_dimension_rows": current_total["revenue"] - current_rows_total,
+            "previous_scope_minus_all_dimension_rows": previous_total["revenue"] - previous_rows_total,
+            "passed": (abs(current_total["revenue"] - current_rows_total) <= 1
+                       and abs(previous_total["revenue"] - previous_rows_total) <= 1),
+            "note": "Doi chieu tong pham vi voi tong tat ca dong dimension TRUOC khi cat limit.",
+        },
         "customer_count_definition": (
             "scope_totals.*.customers = COUNT(DISTINCT customer_code) tren hoa don cua TOAN BO "
             "pham vi doi sau khi phan giai DMSId; day la so khach mua that, KHONG phai tong cong "
@@ -2701,7 +2821,7 @@ def operational_data_quality(as_of_date: str = None, sample_limit: int = 30,
                    f"FROM fact_tonghopkhachhang e JOIN {_MONTH_LATEST_SUBQ} l "
                    "ON l.employee_code=e.employee_code AND l.d=e.save_date GROUP BY e.employee_code) "
                    "SELECT f.employee_code,f.manager_code,m.target,m.metric_snapshot,nv.employee_code dim_code,"
-                   "nv.is_duplicate,nv.area_code FROM roster f "
+                   "nv.name employee_name,nv.position_code,nv.is_duplicate,nv.area_code FROM roster f "
                    "LEFT JOIN metrics m ON m.employee_code=f.employee_code "
                    "LEFT JOIN dim_nhanvien nv ON nv.employee_code=f.employee_code WHERE 1=1")
             params = [*roster_params, fdate, fdate]
@@ -2713,7 +2833,20 @@ def operational_data_quality(as_of_date: str = None, sample_limit: int = 30,
                 sql += f" AND f.employee_code IN ({','.join(['?'] * len(codes))})"
                 params.extend(codes)
             employees = _q(sql, tuple(params))
-            missing_manager = [r["employee_code"] for r in employees if not (r["manager_code"] or "").strip()]
+            # C54 UAT: cap QLV khong co manager_code trong nguon phang la gioi han cay cap tren,
+            # khong duoc tron vao loi "nhan vien tuyen ban hang thieu quan ly". Neu tron, kho that
+            # 31/08 bao sai 21 loi trong khi ca 21 dong deu la QLV. Dong thieu DIM van giu trong
+            # tap loi vi chua du vai tro de chung minh day la cap quan ly hop le.
+            missing_manager = [
+                r["employee_code"] for r in employees
+                if not (r["manager_code"] or "").strip()
+                and (not r["dim_code"] or str(r["position_code"] or "").upper() in _EMPLOYEE_TIER_POSITIONS)
+            ]
+            management_without_parent = [
+                r["employee_code"] for r in employees
+                if not (r["manager_code"] or "").strip()
+                and r["dim_code"] and str(r["position_code"] or "").upper() not in _EMPLOYEE_TIER_POSITIONS
+            ]
             missing_target = [r["employee_code"] for r in employees if _f(r["target"]) <= 0]
             missing_snapshot = [r["employee_code"] for r in employees if r["metric_snapshot"] is None]
             missing_dim = [r["employee_code"] for r in employees if not r["dim_code"]]
@@ -2725,8 +2858,11 @@ def operational_data_quality(as_of_date: str = None, sample_limit: int = 30,
                 "missing_current_snapshot": len(missing_snapshot),
                 "missing_manager": len(missing_manager), "missing_target": len(missing_target),
                 "missing_employee_dim": len(missing_dim), "duplicate_codes": len(duplicates),
+                "management_rows_without_parent_in_source": len(management_without_parent),
                 "note": "missing_target gom ca nguoi chua co dong KPI trong ky. Chua du du lieu "
-                        "khong dong nghia voi 0% KPI hay da xac nhan chua giao chi tieu.",
+                        "khong dong nghia voi 0% KPI hay da xac nhan chua giao chi tieu. "
+                        "management_rows_without_parent_in_source la QLV/cap quan ly khong co cay "
+                        "cap tren trong nguon phang; chi de canh bao gioi han nguon, khong tinh la loi NV.",
             }
             result["samples"].update({
                 "missing_manager": missing_manager[:sample_limit],
@@ -2734,7 +2870,27 @@ def operational_data_quality(as_of_date: str = None, sample_limit: int = 30,
                 "missing_current_snapshot": missing_snapshot[:sample_limit],
                 "missing_employee_dim": missing_dim[:sample_limit],
                 "duplicate_codes": duplicates[:sample_limit],
+                "management_rows_without_parent_in_source": management_without_parent[:sample_limit],
             })
+            by_code = {r["employee_code"]: r for r in employees}
+            detail_groups = {
+                "missing_manager": missing_manager,
+                "missing_target": missing_target,
+                "missing_current_snapshot": missing_snapshot,
+                "missing_employee_dim": missing_dim,
+                "duplicate_codes": duplicates,
+                "management_rows_without_parent_in_source": management_without_parent,
+            }
+            result["sample_details"] = {
+                key: [{
+                    "employee_code": code,
+                    "employee_name": by_code[code].get("employee_name") or "(chua co ten trong danh muc)",
+                    "position_code": by_code[code].get("position_code"),
+                    "area_code": by_code[code].get("area_code"),
+                    "manager_code": by_code[code].get("manager_code"),
+                } for code in codes[:sample_limit]]
+                for key, codes in detail_groups.items()
+            }
     else:
         result["checks"]["kpi_employee_mapping"] = {
             "not_applicable": True,

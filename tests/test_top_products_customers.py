@@ -131,4 +131,6 @@ def test_top_customers_xep_hang_dung_theo_doanh_thu(tmp_path, monkeypatch):
 
     assert result[0]["customer_code"] == "KH_LON"
     assert result[0]["revenue"] == 5_000_000
+    assert result[0]["scope_revenue"] == 6_000_000
+    assert round(result[0]["share_pct_of_scope"], 2) == 83.33
     assert result[1]["customer_code"] == "KH_NHO"

@@ -54,6 +54,22 @@ def test_compare_periods_giu_nguyen_toan_bo_scope(monkeypatch):
     assert result["pct_change"] == 100.0
 
 
+def test_compare_periods_khong_coi_ky_thieu_kho_la_0_dong(monkeypatch):
+    def fake_revenue(date_from, *_args):
+        result = _period_result(200 if date_from == "2026-08-01" else 0)
+        result["data_coverage"] = {"complete": date_from == "2026-08-01"}
+        return result
+
+    monkeypatch.setattr(rt, "revenue_by_channel", fake_revenue)
+    result = rt.compare_periods(
+        "2026-08-01", "2026-08-31", "2025-08-01", "2025-08-31",
+    )
+
+    assert result["comparison_valid"] is False
+    assert result["delta"] is None
+    assert result["pct_change"] is None
+
+
 def test_revenue_ytd_cumulative_tinh_tang_truong_va_giu_scope(monkeypatch):
     calls = []
     revenues = {"2026": 300.0, "2025": 200.0, "2024": 100.0}
