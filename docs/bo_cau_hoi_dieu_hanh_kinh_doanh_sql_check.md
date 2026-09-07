@@ -798,6 +798,31 @@ phải nói rõ, vì đây là chỉ số đếm khách, không phải ước l�
 Cờ `IsAC` chỉ dành cho CS (Chợ sỉ) và TK (kênh MT) theo DNH chốt 27/08/2026 — `KhachAC` KHÔNG phải
 "khách hoạt động" của toàn công ty, không được dùng thay cho `TongKhach`.
 
+#### Truy vấn chi tiết khách mới cho V22 (Tên khách, Doanh thu, TDV, Trạng thái lặp)
+
+Dùng riêng cho câu hỏi **V22**: *"Khách mới tháng này là ai; đã có đơn lặp lại chưa và TDV nào phụ trách?"*
+
+    SELECT 
+      f.CustomerCode,
+      COALESCE(kh.Name, N'(Chưa có tên trong danh mục)') CustomerName,
+      f.EmployeeCode,
+      COALESCE(nv.Name, f.EmployeeCode) EmployeeName,
+      f.Amount_CT DoanhThuThang,
+      CASE WHEN f.IsRO = 1 THEN N'Đã mua lại' ELSE N'Chưa mua lại' END TrangThaiLapLai
+    FROM dbo.FACT_TongHopKhachHang f
+    LEFT JOIN dbo.DIM_NhanVien nv ON nv.EmployeeCode = f.EmployeeCode
+    OUTER APPLY (
+      SELECT TOP 1 Name FROM dbo.DMS_KhachHang WHERE Code = f.CustomerCode
+      UNION ALL
+      SELECT TOP 1 Name FROM dbo.DMSSX_KhachHang WHERE Code = f.CustomerCode
+    ) kh
+    WHERE (@ManagerCode IS NULL OR f.ManagerCode = @ManagerCode)
+      AND (@AreaCode IS NULL OR f.AreaCode = @AreaCode)
+      AND f.IsNC = 1
+      AND f.SaveDate = (SELECT MAX(SaveDate) FROM dbo.FACT_TongHopKhachHang 
+                        WHERE SaveDate >= @MonthStart AND SaveDate < @MonthEnd)
+    ORDER BY f.Amount_CT DESC;
+
 ### S19 — Cohort giữ chân khách — DERIVED
 
 Cohort mặc định là tháng có hóa đơn đầu tiên; nếu DNH định nghĩa khách mới khác thì thay nguồn cohort.
@@ -2613,41 +2638,105 @@ Chỉ đếm tầng nhân viên (TDV/CTV/CS) để không cộng trùng dòng ro
 
 ### S68 — Khách mua lại/tái kích hoạt và mức phục hồi doanh thu — READY
 
-Cho câu hỏi "khách mua lại/tái kích hoạt là ai; doanh thu phục hồi so trước khi ngừng mua". Xác định
-khách có khoảng nghỉ rồi quay lại, và so doanh thu sau khi quay lại với trước khi nghỉ.
+Cho câu hỏi **V23**: *"Khách mua lại/tái kích hoạt là ai; doanh thu phục hồi so trước khi ngừng mua thế nào?"*
 
-Dùng hóa đơn thật thay vì cờ IsRO, vì cần biết KHOẢNG NGHỈ bao lâu — cờ không cho biết điều đó.
+> ⚠️ **Lưu ý nghiệp vụ & sửa đổi 07/09/2026**:
+> 1. **Phạm vi tháng**: V23 là câu hỏi điều hành tháng, phải neo vào tháng đang xét `[@MonthStart, @MonthEnd)`. Không được dùng `@FromDate` (12 tháng trước) vì sẽ gom cả các ca từ năm trước làm sai lệch trọng tâm.
+> 2. **Phạm vi QLV**: Khi QLV hỏi, phải lọc theo đội của `@ManagerCode` (bao gồm cả đơn tự thân của QLV).
+> 3. **Tránh bẫy tương lai**: Không tính doanh thu 3 tháng sau ngày quay lại (`DATEADD(month, 3, ReturnDate)`) vì tại tháng gần nhất (T8, T9), 3 tháng tương lai chưa diễn ra khiến doanh thu bị cụt.
+> 4. **Trọng tâm đối chiếu**: Khách tái kích hoạt là khách **tháng này có mua**, **tháng liền trước không mua**, và **trước đó từng có lịch sử mua**. Doanh thu phục hồi so sánh giữa doanh thu tháng này với mức bình quân tháng trước khi ngừng.
 
-    WITH o AS (
-      SELECT CustomerCode,EmpDMSCode,DocDate,Amount9,
-             LAG(DocDate) OVER(PARTITION BY CustomerCode ORDER BY DocDate) PrevDate
-      FROM #sales
-    ), gap AS (
-      SELECT CustomerCode,EmpDMSCode,DocDate ReturnDate,PrevDate,
-             DATEDIFF(day,PrevDate,DocDate) GapDays
-      FROM o WHERE PrevDate IS NOT NULL AND DATEDIFF(day,PrevDate,DocDate)>=60
-    ), sau AS (
-      SELECT g.CustomerCode,g.ReturnDate,g.GapDays,SUM(s.Amount9) RevenueAfter
-      FROM gap g JOIN #sales s ON s.CustomerCode=g.CustomerCode
-        AND s.DocDate>=g.ReturnDate AND s.DocDate<DATEADD(month,3,g.ReturnDate)
-      GROUP BY g.CustomerCode,g.ReturnDate,g.GapDays
-    ), truoc AS (
-      SELECT g.CustomerCode,g.ReturnDate,SUM(s.Amount9) RevenueBefore
-      FROM gap g JOIN #sales s ON s.CustomerCode=g.CustomerCode
-        AND s.DocDate<g.PrevDate AND s.DocDate>=DATEADD(month,-3,g.PrevDate)
-      GROUP BY g.CustomerCode,g.ReturnDate
+Truy vấn chính (chuẩn hóa luồng hóa đơn theo tháng, khớp logic Chatbot `get_customer_movement`):
+
+    WITH team AS (
+      SELECT DISTINCT nv.EmployeeCode, nv.DMSId, nv.Name EmployeeName
+      FROM dbo.DIM_NhanVien nv
+      WHERE (@ManagerCode IS NULL OR nv.ManagerAreaCode = @ManagerCode 
+             OR nv.EmployeeCode = @ManagerCode
+             OR nv.EmployeeCode IN (SELECT DISTINCT EmployeeCode FROM dbo.FACT_TongHopKhachHang WHERE ManagerCode = @ManagerCode))
+        AND (@AreaCode IS NULL OR nv.AreaCode = @AreaCode)
+    ),
+    sales_scope AS (
+      SELECT s.CustomerCode, s.DocDate, s.Amount9, s.EmpDMSCode
+      FROM #sales s
+      INNER JOIN team t ON t.DMSId = s.EmpDMSCode OR t.EmployeeCode = s.EmpDMSCode
+    ),
+    khach_thang_nay AS (
+      SELECT CustomerCode, 
+             MIN(DocDate) ReturnDate,
+             SUM(Amount9) RevenueCurMonth,
+             COUNT(DISTINCT DocDate) OrdersCurMonth,
+             MAX(EmpDMSCode) LastEmpDMSCode
+      FROM sales_scope
+      WHERE DocDate >= @MonthStart AND DocDate < @MonthEnd
+      GROUP BY CustomerCode
+    ),
+    khach_thang_truoc AS (
+      SELECT DISTINCT CustomerCode
+      FROM sales_scope
+      WHERE DocDate >= DATEADD(month, -1, @MonthStart) AND DocDate < @MonthStart
+    ),
+    lich_su_truoc_do AS (
+      SELECT s.CustomerCode,
+             SUM(s.Amount9) RevenueBefore,
+             COUNT(DISTINCT DATEFROMPARTS(YEAR(s.DocDate), MONTH(s.DocDate), 1)) ActiveMonthsBefore,
+             MAX(s.DocDate) LastOrderDateBefore
+      FROM sales_scope s
+      WHERE s.DocDate >= DATEADD(month, -6, @MonthStart) 
+        AND s.DocDate < DATEADD(month, -1, @MonthStart)
+      GROUP BY s.CustomerCode
     )
-    SELECT a.CustomerCode,a.ReturnDate,a.GapDays,
-           ISNULL(b.RevenueBefore,0) RevenueBefore3M,a.RevenueAfter RevenueAfter3M,
-           a.RevenueAfter-ISNULL(b.RevenueBefore,0) RecoveryDelta,
-           100.0*a.RevenueAfter/NULLIF(b.RevenueBefore,0) RecoveryPct
-    FROM sau a LEFT JOIN truoc b ON b.CustomerCode=a.CustomerCode AND b.ReturnDate=a.ReturnDate
-    WHERE a.ReturnDate>=@FromDate
-    ORDER BY a.RevenueAfter DESC
-    OFFSET 0 ROWS FETCH NEXT 200 ROWS ONLY;
+    SELECT 
+      cur.CustomerCode,
+      COALESCE(kh.Name, N'(Chưa có tên trong danh mục)') CustomerName,
+      t.EmployeeCode,
+      t.EmployeeName,
+      cur.ReturnDate NgayQuayLai,
+      DATEDIFF(day, prev_hist.LastOrderDateBefore, cur.ReturnDate) SoNgayNghi,
+      cur.RevenueCurMonth DoanhThuThangNay,
+      ISNULL(prev_hist.RevenueBefore, 0) DoanhThuTruocKhiNghi,
+      ROUND(ISNULL(prev_hist.RevenueBefore, 0) / NULLIF(prev_hist.ActiveMonthsBefore, 0), 0) DoanhThuTBThangTruocKhiNghi,
+      cur.RevenueCurMonth - ROUND(ISNULL(prev_hist.RevenueBefore, 0) / NULLIF(prev_hist.ActiveMonthsBefore, 0), 0) ChenhLechPhucHoi,
+      CASE 
+        WHEN ISNULL(prev_hist.RevenueBefore, 0) = 0 THEN N'Khách mới'
+        ELSE CAST(ROUND(100.0 * cur.RevenueCurMonth / (prev_hist.RevenueBefore / NULLIF(prev_hist.ActiveMonthsBefore, 0)), 1) AS varchar(20)) + '%'
+      END TyLePhucHoi
+    FROM khach_thang_nay cur
+    LEFT JOIN khach_thang_truoc prev_m ON prev_m.CustomerCode = cur.CustomerCode
+    INNER JOIN lich_su_truoc_do prev_hist ON prev_hist.CustomerCode = cur.CustomerCode
+    LEFT JOIN team t ON t.DMSId = cur.LastEmpDMSCode OR t.EmployeeCode = cur.LastEmpDMSCode
+    OUTER APPLY (
+      SELECT TOP 1 Name FROM dbo.DMS_KhachHang WHERE Code = cur.CustomerCode
+      UNION ALL
+      SELECT TOP 1 Name FROM dbo.DMSSX_KhachHang WHERE Code = cur.CustomerCode
+    ) kh
+    WHERE prev_m.CustomerCode IS NULL
+    ORDER BY cur.RevenueCurMonth DESC;
 
-Chặn 200 dòng, xếp theo doanh thu sau khi quay lại — người đọc cần biết ca tái kích hoạt nào ĐÁNG
-TIỀN nhất. Xếp theo `ReturnDate DESC` như trước chỉ cho ra ca mới nhất và ra 14.868 dòng.
+Truy vấn đối chiếu nhanh theo cờ Bravo `FACT_TongHopKhachHang` (`IsRO = 1`):
+
+    SELECT 
+      f.CustomerCode,
+      COALESCE(kh.Name, N'(Chưa có tên)') CustomerName,
+      f.EmployeeCode,
+      nv.Name EmployeeName,
+      f.Amount_CT DoanhThuThang,
+      f.IsRO,
+      f.IsNC
+    FROM dbo.FACT_TongHopKhachHang f
+    LEFT JOIN dbo.DIM_NhanVien nv ON nv.EmployeeCode = f.EmployeeCode
+    OUTER APPLY (
+      SELECT TOP 1 Name FROM dbo.DMS_KhachHang WHERE Code = f.CustomerCode
+      UNION ALL
+      SELECT TOP 1 Name FROM dbo.DMSSX_KhachHang WHERE Code = f.CustomerCode
+    ) kh
+    WHERE (@ManagerCode IS NULL OR f.ManagerCode = @ManagerCode)
+      AND (@AreaCode IS NULL OR f.AreaCode = @AreaCode)
+      AND f.SaveDate = (SELECT MAX(SaveDate) FROM dbo.FACT_TongHopKhachHang 
+                        WHERE SaveDate >= @MonthStart AND SaveDate < @MonthEnd)
+      AND f.IsRO = 1
+    ORDER BY f.Amount_CT DESC;
+
 
 ### S69 — Khách im lặng 30/60/90 ngày — READY
 
@@ -2680,6 +2769,9 @@ Khác S40 ở chỗ phân nhóm theo BA MỐC và kèm sản phẩm mua nhiều 
                  WHERE d.DMSId=o.EmpDMSCode ORDER BY ISNULL(d.IsDuplicate,0),d.EmployeeCode) n
     LEFT JOIN topsku t ON t.CustomerCode=l.CustomerCode AND t.rn=1
     WHERE DATEDIFF(day,l.LastOrderDate,@AsOfDate)>=30
+      AND (@ManagerCode IS NULL OR n.ManagerAreaCode=@ManagerCode 
+           OR n.EmployeeCode=@ManagerCode
+           OR n.EmployeeCode IN (SELECT DISTINCT EmployeeCode FROM dbo.FACT_TongHopKhachHang WHERE ManagerCode=@ManagerCode))
     ORDER BY l.Revenue12M DESC
     OFFSET 0 ROWS FETCH NEXT 200 ROWS ONLY;
 
