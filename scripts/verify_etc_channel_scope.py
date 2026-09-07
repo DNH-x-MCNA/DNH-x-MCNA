@@ -50,7 +50,7 @@ def _print_human(payload: dict) -> None:
         "revenue_by_channel": "Doanh thu ETC không lộ số OTC",
         "customer_detail_mixed_channel": "Chi tiết khách hai kênh chỉ trả phần ETC",
         "customer_detail_pure_otc_denied": "Khách thuần OTC bị từ chối đúng với tài khoản ETC",
-        "order_timing": "Cảnh báo thời gian đơn chỉ đếm dữ liệu ETC",
+        "order_timing": "Phân tích đơn chỉ dùng dữ liệu ETC",
     }
     for check in payload["checks"]:
         name = labels.get(check["check"], check["check"])
@@ -59,6 +59,8 @@ def _print_human(payload: dict) -> None:
             details.append("doanh thu ETC %sđ" % format(float(check["etc_revenue"]), ",.0f"))
         if "etc_invoices" in check:
             details.append("%s hóa đơn" % format(int(check["etc_invoices"]), ","))
+        if "etc_orders" in check:
+            details.append("%s đơn" % format(int(check["etc_orders"]), ","))
         if "etc_flagged" in check:
             details.append("%s đơn bị gắn cờ" % format(int(check["etc_flagged"]), ","))
         suffix = " — " + "; ".join(details) if details else ""
@@ -165,23 +167,38 @@ def main(argv=None) -> int:
             "customer_code": pure_otc[0]["customer_code"],
         })
 
-    expected_flagged = rt._q(
-        """SELECT COUNT(*) count
-           FROM vhoadon_etc
-           WHERE doc_date BETWEEN ? AND ? AND created_at IS NOT NULL
-             AND ABS(CAST(julianday(created_at) - julianday(doc_date) AS INTEGER)) >= 2""",
+    # CreatedAt la thoi diem TAO don, khong phai xac nhan don (DNH xac nhan 04/09/2026),
+    # nen khong dung chenh CreatedAt-DocDate lam tieu chi kiem tra. Muc dich smoke test nay
+    # la bao dam tool khong lo OTC: doi chieu dung tap DON ETC va dung doanh thu ETC.
+    expected_timing = rt._q(
+        """SELECT COUNT(*) orders, COALESCE(SUM(revenue), 0) revenue
+           FROM (
+               SELECT COALESCE(NULLIF(stt, ''), doc_date || ':' || COALESCE(customer_code, '')) order_key,
+                      SUM(amount9) revenue
+               FROM vhoadon_etc
+               WHERE doc_date BETWEEN ? AND ?
+               GROUP BY COALESCE(NULLIF(stt, ''), doc_date || ':' || COALESCE(customer_code, ''))
+           )""",
         (date_from, date_to),
-    )[0]["count"]
+    )[0]
     timing = _tool(
         "check_order_timing",
         {"date_from": date_from, "date_to": date_to, "threshold_days": 2, "limit": 1},
     )
-    assert timing["total_flagged"] == int(expected_flagged or 0), timing
+    core_by_channel = timing.get("core_result_by_channel") or []
+    assert len(core_by_channel) == 1 and core_by_channel[0].get("channel") == "ETC", timing
+    core = core_by_channel[0]
+    assert int(core["total_orders"] or 0) == int(expected_timing["orders"] or 0), timing
+    assert abs(float(core["revenue_including_flagged"] or 0) -
+               float(expected_timing["revenue"] or 0)) < 0.01, timing
     checks.append({
         "check": "order_timing",
         "result": "PASS",
+        "etc_orders": core["total_orders"],
+        "etc_revenue": core["revenue_including_flagged"],
         "etc_flagged": timing["total_flagged"],
-        "matches_direct_etc_count": True,
+        "matches_direct_etc_orders_and_revenue": True,
+        "otc_redacted": True,
     })
 
     payload = {
