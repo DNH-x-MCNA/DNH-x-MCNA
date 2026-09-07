@@ -214,6 +214,11 @@ def _required_tool_for_question(question: str) -> str | None:
     if any(marker in q for marker in ("sku trong tam", "sku trọng tâm", "sku chien luoc")) and \
             any(marker in q for marker in ("target", "% target", "phan tram target", "khoang thieu")):
         return "get_customer_product_coverage"
+    # V31/S23: phan bo SKU theo KH/luong-don/AOV la hai nhom so sanh, khong phai top doanh thu
+    # hay bao cao xoi mon gia chung.
+    if any(marker in q for marker in ("nhieu khach mua", "it khach", "ít khách")) and \
+            any(marker in q for marker in ("luong/don", "lượng/đơn", "aov")):
+        return "get_customer_product_coverage"
     # V24: so sanh TUNG KHACH giua hai cua so 3 thang ve don/AOV/SKU. Khong de model tu
     # chon bao cao dia ban chi vi cau co nhac den "tinh".
     if "khach nao" in q and "3 thang" in q and any(
@@ -679,12 +684,13 @@ TEMPLATE_TOOLS = [
     },
     {
         "name": "get_cross_sell_opportunities",
-        "description": "CAP SKU thuong mua cung va danh sach khach da mua A nhung chua mua B trong "
-                       "cua so 1-12 thang. Dung cho ban cheo/combo/share-of-wallet noi bo. Ket qua chi "
+        "description": "CAP SKU thuong mua cung theo SO KHACH CHUNG (khong phai so don) va danh sach khach da mua A nhung chua mua B trong "
+                       "cua so 1-12 thang. Moi cap co shared_customers, buyers_a/b va attach_rate_pct; cap va khach la HAI bang rieng. "
+                       "Nguong mac dinh 5 khach chung la DE XUAT, can DNH chot. Dung cho ban cheo/combo/share-of-wallet noi bo. Ket qua chi "
                        "la GOI Y tu dong mua kem, KHONG phai ket luan nhu cau hay thi phan ngoai DNH.",
         "input_schema": {"type": "object", "properties": {
             "as_of_date": {"type": "string"}, "lookback_months": {"type": "integer"},
-            "min_together_orders": {"type": "integer"}, "pair_limit": {"type": "integer"},
+            "min_together_orders": {"type": "integer", "description": "Ten cu tuong thich API; gia tri la so KHACH CHUNG toi thieu, khong phai so don."}, "pair_limit": {"type": "integer"},
             "opportunity_limit": {"type": "integer"},
         }, "required": []},
     },
@@ -711,8 +717,8 @@ TEMPLATE_TOOLS = [
                        "phan tich xoi mon gia; day la doanh thu thuan tren don vi ban co gia, khong phai bang gia niem yet.",
         "input_schema": {"type": "object", "properties": {
             "as_of_date": {"type": "string"}, "lookback_months": {"type": "integer"},
-            "mode": {"type": "string", "enum": ["customer", "customer_peer", "product", "employee", "priority", "four_customer_priorities", "product_monthly", "sku_target"],
-                     "description": "V28/S83: four_customer_priorities (4 danh sach giu khach/tai kich hoat/thu no/ban cheo). V29/S21: product_monthly (top/bottom SKU tung thang va dong gop MoM). V30/S46: sku_target (kiem tra target theo SKU; bao lo nguon, khong tu suy dien %)."},
+            "mode": {"type": "string", "enum": ["customer", "customer_peer", "product", "employee", "priority", "four_customer_priorities", "product_monthly", "product_mix", "sku_target"],
+                     "description": "V28/S83: four_customer_priorities (4 danh sach giu khach/tai kich hoat/thu no/ban cheo). V29/S21: product_monthly (top/bottom SKU tung thang va dong gop MoM). V30/S46: sku_target (kiem tra target theo SKU; bao lo nguon, khong tu suy dien %). V31/S23: product_mix (nhieu khach-luong/don thap va it khach-AOV cao)."},
             "limit": {"type": "integer"},
         }, "required": []},
     },

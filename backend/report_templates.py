@@ -2299,11 +2299,16 @@ def kpi_gap_run_rate(as_of_date: str = None, group_by: str = "employee", limit: 
 
 
 def cross_sell_opportunities(as_of_date: str = None, lookback_months: int = 3,
-                             min_together_orders: int = 2, pair_limit: int = 20,
+                             min_together_orders: int = 5, pair_limit: int = 20,
                              opportunity_limit: int = 100,
                              scope_area_code: str = None, scope_channel: str = None,
                              scope_employee_code: str = None) -> dict:
-    """Cap SKU mua cung va khach da mua A nhung chua mua B trong cua so nhin lai."""
+    """S74: cap SKU co KHACH chung va khach da mua A nhung chua mua B trong cua so nhin lai.
+
+    ``min_together_orders`` giu ten tham so cu de tuong thich API, nhung tu 07/09/2026 no co nghia
+    la SO KHACH CHUNG toi thieu (khong phai so don). SQL checker S74 dem distinct CustomerCode; dem
+    don da tung lam ket qua cap SKU lech va thoi phong cap mua lap lai nhieu lan.
+    """
     as_of_date = (as_of_date or latest_data_date())[:10]
     lookback_months = max(1, min(int(lookback_months or 3), 12))
     pair_limit = max(1, min(int(pair_limit or 20), 100))
@@ -2333,11 +2338,18 @@ def cross_sell_opportunities(as_of_date: str = None, lookback_months: int = 3,
     params = tuple(p for group in param_groups for p in group)
     pair_rows = _q(
         lines_cte +
-        "SELECT a.item_code item_a,b.item_code item_b,COUNT(DISTINCT a.order_key) together_orders "
-        "FROM lines a JOIN lines b ON b.order_key=a.order_key AND b.item_code>a.item_code "
-        "GROUP BY a.item_code,b.item_code HAVING COUNT(DISTINCT a.order_key)>=? "
-        "ORDER BY together_orders DESC LIMIT ?",
-        params + (max(1, int(min_together_orders or 2)), pair_limit))
+        ", buyers AS (SELECT DISTINCT customer_code,item_code FROM lines "
+        "WHERE customer_code IS NOT NULL AND TRIM(customer_code)<>''), "
+        "pair_stats AS (SELECT a.item_code item_a,b.item_code item_b,COUNT(DISTINCT a.customer_code) shared_customers "
+        "FROM buyers a JOIN buyers b ON b.customer_code=a.customer_code AND b.item_code>a.item_code "
+        "GROUP BY a.item_code,b.item_code HAVING COUNT(DISTINCT a.customer_code)>=?), "
+        "counts AS (SELECT item_code,COUNT(DISTINCT customer_code) buyers FROM buyers GROUP BY item_code) "
+        "SELECT p.item_a,p.item_b,p.shared_customers,ca.buyers buyers_a,cb.buyers buyers_b,"
+        "100.0*p.shared_customers/NULLIF(ca.buyers,0) attach_rate_pct,"
+        "ca.buyers-p.shared_customers candidates_buy_a_only "
+        "FROM pair_stats p JOIN counts ca ON ca.item_code=p.item_a JOIN counts cb ON cb.item_code=p.item_b "
+        "ORDER BY p.shared_customers DESC,p.item_a,p.item_b LIMIT ?",
+        params + (max(1, int(min_together_orders or 5)), pair_limit))
 
     item_codes = sorted({r[k] for r in pair_rows for k in ("item_a", "item_b")})
     names = {}
@@ -2362,9 +2374,10 @@ def cross_sell_opportunities(as_of_date: str = None, lookback_months: int = 3,
                 opportunities.append({"customer_code": customer, "has_item": owned,
                                       "has_item_name": names.get(owned, owned),
                                       "missing_item": missing, "missing_item_name": names.get(missing, missing),
-                                      "pair_together_orders": int(p["together_orders"]),
+                                      "shared_customers": int(p["shared_customers"]),
+                                      "attach_rate_pct": _f(p["attach_rate_pct"]),
                                       "revenue_on_pair_items": customer_revenue.get(customer, 0.0)})
-    opportunities.sort(key=lambda r: (-r["pair_together_orders"], -r["revenue_on_pair_items"]))
+    opportunities.sort(key=lambda r: (-r["shared_customers"], -r["revenue_on_pair_items"]))
     customer_names = _customer_names([r["customer_code"] for r in opportunities[:opportunity_limit]])
     for r in opportunities[:opportunity_limit]:
         r["customer_name"] = customer_names.get(r["customer_code"], "(khong co trong danh muc khach hang)")
@@ -2373,8 +2386,11 @@ def cross_sell_opportunities(as_of_date: str = None, lookback_months: int = 3,
         "pairs": [{**p, "item_a_name": names.get(p["item_a"], p["item_a"]),
                     "item_b_name": names.get(p["item_b"], p["item_b"])} for p in pair_rows],
         "opportunities": opportunities[:opportunity_limit],
-        "definition": ("Co hoi = khach da mua mot SKU cua cap thuong mua cung trong cua so nhin lai "
-                       "nhung chua mua SKU con lai. Day la goi y tu dong mua kem, KHONG phai ket luan nhu cau."),
+        "definition": ("Cap manh = it nhat min_shared_customers KHACH da tung mua ca hai SKU trong cua so. "
+                       "Attach rate = khach chung / nguoi mua SKU A. Co hoi = khach da mua mot SKU cua cap "
+                       "nhung chua mua SKU con lai; day la goi y tu dong mua kem, KHONG phai ket luan nhu cau."),
+        "min_shared_customers": max(1, int(min_together_orders or 5)),
+        "threshold_status": "DE_XUAT_CHO_DNH_CHOT",
         "canh_bao": "Chi tiet SKU/hoa don chi duoc giu khoang 12 thang; lookback da bi gioi han toi da 12.",
         "data_as_of": latest_data_date(),
     }
@@ -2404,6 +2420,10 @@ def customer_product_coverage(as_of_date: str = None, lookback_months: int = 3,
                                            limit=limit, scope_area_code=scope_area_code,
                                            scope_channel=scope_channel,
                                            scope_employee_code=scope_employee_code)
+    if mode == "product_mix":
+        return product_mix_performance(as_of_date=as_of_date, limit=limit,
+                                       scope_area_code=scope_area_code, scope_channel=scope_channel,
+                                       scope_employee_code=scope_employee_code)
     if mode == "sku_target":
         # S46/V30: warehouse co co SKU trong tam, nhung KHONG co chi tieu gia tri/so luong
         # theo (TDV, khach, SKU). Tra ve lo nguon co cau truc de model khong bien viec thieu
@@ -2419,7 +2439,7 @@ def customer_product_coverage(as_of_date: str = None, lookback_months: int = 3,
             "data_as_of": latest_data_date(),
         }
     if mode not in {"customer", "customer_peer", "product", "employee"}:
-        return {"error": "mode chi nhan customer/customer_peer/product/employee/priority/four_customer_priorities/product_monthly/sku_target."}
+        return {"error": "mode chi nhan customer/customer_peer/product/employee/priority/four_customer_priorities/product_monthly/product_mix/sku_target."}
     customer_mode = mode in {"customer", "customer_peer"}
     as_of_date = (as_of_date or latest_data_date())[:10]
     lookback_months = max(1, min(int(lookback_months or 3), 12))
@@ -3189,8 +3209,9 @@ def four_customer_priorities(as_of_date: str = None, limit: int = 20,
         "customer_code": r["customer_code"], "customer_name": r.get("customer_name") or r["customer_code"],
         "has_item": r["has_item"], "has_item_name": r.get("has_item_name"),
         "missing_item": r["missing_item"], "missing_item_name": r.get("missing_item_name"),
-        "pair_together_orders": r["pair_together_orders"],
-        "criterion": "Khach da mua mot SKU cua cap thuong mua cung, nhung chua mua SKU con lai.",
+        "shared_customers": r["shared_customers"],
+        "attach_rate_pct": r["attach_rate_pct"],
+        "criterion": "Khach da mua mot SKU cua cap co khach chung, nhung chua mua SKU con lai.",
     } for r in cross.get("opportunities", [])]
 
     # Mot khach co the trung nhieu muc tieu. Hang tong hop de uu tien nhung GIU cac bang rieng
@@ -3290,6 +3311,56 @@ def product_monthly_performance(as_of_date: str = None, months_back: int = 3, li
         "definition": "Top/bottom theo doanh thu thuan SKU cua tung thang. Tang/giam la chenh lech SKU voi thang truoc.",
         "warning": ("Thang dang chay chua du ngay nen chi hien top/bottom MTD; khong ket luan tang/giam voi thang tron."
                     if not current_is_complete else None),
+        "data_as_of": latest_data_date(),
+    }
+
+
+def product_mix_performance(as_of_date: str = None, limit: int = 20,
+                            scope_area_code: str = None, scope_channel: str = None,
+                            scope_employee_code: str = None) -> dict:
+    """S23/V31: tach hai danh sach 'phu rong, luong/don thap' va 'phu hep, AOV cao'."""
+    as_of = dt.date.fromisoformat((as_of_date or latest_data_date())[:10])
+    # Khong so sanh vai ngay MTD voi ca thang: cau V31 khong neu MTD, nen dung thang tron gan nhat.
+    if as_of != _month_end(as_of):
+        as_of = dt.date(as_of.year, as_of.month, 1) - dt.timedelta(days=1)
+    base = customer_product_coverage(as_of_date=as_of.isoformat(), lookback_months=1,
+                                     mode="product", limit=500,
+                                     scope_area_code=scope_area_code, scope_channel=scope_channel,
+                                     scope_employee_code=scope_employee_code)
+    rows = [r for r in base.get("rows", []) if r.get("orders", 0) > 0 and r.get("revenue", 0) > 0]
+    if not rows:
+        return {"as_of": as_of.isoformat(), "month": as_of.strftime("%Y-%m"),
+                "high_customer_low_quantity_per_order": [], "low_customer_high_aov": [],
+                "product_metrics": [], "data_as_of": latest_data_date()}
+    from statistics import median
+    customer_median = float(median(r["customers"] for r in rows))
+    quantity_per_order_median = float(median(r["quantity_per_order"] for r in rows
+                                             if r["quantity_per_order"] is not None))
+    aov_median = float(median(r["aov"] for r in rows if r["aov"] is not None))
+    metrics = [{
+        "item_code": r["code"], "item_name": r["name"], "revenue": r["revenue"],
+        "customers": r["customers"], "orders": r["orders"], "quantity": r["quantity"],
+        "quantity_per_order": r["quantity_per_order"], "aov": r["aov"],
+    } for r in rows]
+    high_customer_low_quantity = [r for r in metrics
+                                  if r["customers"] >= customer_median
+                                  and r["quantity_per_order"] is not None
+                                  and r["quantity_per_order"] < quantity_per_order_median]
+    low_customer_high_aov = [r for r in metrics
+                             if r["customers"] < customer_median
+                             and r["aov"] is not None and r["aov"] > aov_median]
+    high_customer_low_quantity.sort(key=lambda r: (-r["customers"], r["quantity_per_order"], r["item_code"]))
+    low_customer_high_aov.sort(key=lambda r: (-r["aov"], r["customers"], r["item_code"]))
+    return {
+        "as_of": as_of.isoformat(), "month": as_of.strftime("%Y-%m"),
+        "high_customer_low_quantity_per_order": high_customer_low_quantity[:limit],
+        "low_customer_high_aov": low_customer_high_aov[:limit],
+        "product_metrics": sorted(metrics, key=lambda r: (-r["revenue"], r["item_code"]))[:limit],
+        "benchmarks": {"customer_median": customer_median,
+                       "quantity_per_order_median": quantity_per_order_median,
+                       "aov_median": aov_median},
+        "definition": ("Danh sach 1: so khach >= trung vi va luong/don < trung vi. Danh sach 2: "
+                       "so khach < trung vi va AOV > trung vi. Su dung thang tron gan nhat."),
         "data_as_of": latest_data_date(),
     }
 

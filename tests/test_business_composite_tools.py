@@ -256,6 +256,12 @@ def test_high_risk_intents_force_their_single_verified_tool():
         "SKU trọng tâm đạt bao nhiêu % target theo từng TDV và khách hàng; khoảng thiếu bao nhiêu?"
     ) == "get_customer_product_coverage"
     assert nl2sql._required_tool_for_question(
+        "Sản phẩm nào nhiều khách mua nhưng lượng/đơn thấp; sản phẩm nào ít khách nhưng AOV cao?"
+    ) == "get_customer_product_coverage"
+    assert nl2sql._required_tool_for_question(
+        "Cặp sản phẩm nào thường mua cùng; khách nào phù hợp bán combo nhưng chưa mua?"
+    ) == "get_cross_sell_opportunities"
+    assert nl2sql._required_tool_for_question(
         "Còn thiếu bao nhiêu để đạt 65%, 80%, 100%; mỗi ngày cần bán bao nhiêu"
     ) == "get_kpi_gap_run_rate"
     assert nl2sql._required_tool_for_question(

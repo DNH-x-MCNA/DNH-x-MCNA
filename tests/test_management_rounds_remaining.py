@@ -196,8 +196,12 @@ def test_gap_run_rate_qlv_chi_thay_doi_minh(tmp_path, monkeypatch):
 def test_cross_sell_tim_dung_khach_mua_a_chua_mua_b(tmp_path, monkeypatch):
     _setup(tmp_path, monkeypatch)
     r = rt.cross_sell_opportunities(as_of_date="2026-04-20", lookback_months=4,
-                                    min_together_orders=2)
+                                    min_together_orders=1)
     assert any({p["item_a"], p["item_b"]} == {"A", "B"} for p in r["pairs"])
+    pair = next(p for p in r["pairs"] if {p["item_a"], p["item_b"]} == {"A", "B"})
+    assert pair["shared_customers"] == 1  # C1 mua A+B nhieu lan, van chi la MOT khach chung.
+    assert pair["buyers_a"] == 4 and pair["buyers_b"] == 2
+    assert pair["attach_rate_pct"] == 25
     assert any(x["customer_code"] == "C2" and x["has_item"] == "A" and
                x["missing_item"] == "B" for x in r["opportunities"])
 
@@ -490,7 +494,8 @@ def test_s83_tach_bon_muc_tieu_khach_thay_vi_tra_gap_chung(tmp_path, monkeypatch
     assert "collection_actions" in result
     assert "cross_sell_actions" in result
     assert any(row["customer_code"] == "C4" for row in result["reactivation_actions"])
-    assert any(row["customer_code"] == "C2" for row in result["cross_sell_actions"])
+    # Fixture chi co 1 khach chung A/B, duoi nguong mac dinh 5 cua S74. Van phai giu bang rieng.
+    assert result["cross_sell_actions"] == []
     assert all(row["matched_target_count"] >= 1 for row in result["rows"])
 
 
@@ -518,3 +523,18 @@ def test_s46_khong_bia_target_theo_sku_khi_nguon_chua_co_mau_so(tmp_path, monkey
     assert result["status"] == "SOURCE_GAP_NO_SKU_TARGET_VALUE"
     assert "target_by_customer_sku" in result["can_not_calculate"]
     assert "% hoan thanh" in result["safe_next_report"]
+
+
+def test_s23_tach_sku_phu_rong_luong_don_thap_va_phu_hep_aov_cao(tmp_path, monkeypatch):
+    _setup(tmp_path, monkeypatch)
+
+    result = rt.customer_product_coverage(as_of_date="2026-04-20", mode="product_mix", limit=20)
+
+    assert result["month"] == "2026-03"  # 04 dang MTD, phai dung thang tron 03.
+    assert result["benchmarks"]["customer_median"] > 0
+    for row in result["high_customer_low_quantity_per_order"]:
+        assert row["customers"] >= result["benchmarks"]["customer_median"]
+        assert row["quantity_per_order"] < result["benchmarks"]["quantity_per_order_median"]
+    for row in result["low_customer_high_aov"]:
+        assert row["customers"] < result["benchmarks"]["customer_median"]
+        assert row["aov"] > result["benchmarks"]["aov_median"]
