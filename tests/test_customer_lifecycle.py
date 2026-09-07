@@ -194,6 +194,26 @@ def test_chuoi_nhieu_thang_va_thang_thieu_snapshot(tmp_path, monkeypatch):
     assert "2026-05" in r["canh_bao_thieu_lich_su"]
 
 
+def test_qlv_chuoi_lich_su_dung_doi_cua_tung_snapshot_khong_ap_nguoc_doi_hien_tai(tmp_path, monkeypatch):
+    """07/09/2026: TDV2 thuoc QLV1 thang 6, nhung chuyen sang QLV2 thang 7. Lay doi thang 7
+    cho ca chuoi se lam thang 6 hut KHJUNE; day la cung ban chat voi loi M01 da sua."""
+    db_path = _setup(tmp_path, monkeypatch)
+    conn = sqlite3.connect(db_path)
+    conn.execute("INSERT INTO fact_tonghopkhachhang VALUES "
+                 "('TDV2','KHJUNE',777,1000000,'2026-06-30','1','QLV1',0,777,'0','0',0,'TDV2')")
+    conn.commit()
+    conn.close()
+
+    result = rt.customer_lifecycle_summary(
+        year_month="2026-07", months_back=2, scope_employee_code="QLV1",
+    )
+    june, july = result["months"]
+    assert june["tong_khach"] == 2  # KH01 (TDV1) + KHJUNE (TDV2 con o doi trong thang 6)
+    assert july["tong_khach"] == 3  # TDV2 da chuyen QLV2, khong duoc lot vao doi QLV1 nua
+    assert june["team_roster_snapshot"] == "2026-06-30"
+    assert july["team_roster_snapshot"] == "2026-07-31"
+
+
 def test_lifecycle_etc_fail_closed_vi_nguon_chi_phu_otc(tmp_path, monkeypatch):
     _setup(tmp_path, monkeypatch)
     r = rt.customer_lifecycle_summary(year_month="2026-07", scope_channel="ETC")

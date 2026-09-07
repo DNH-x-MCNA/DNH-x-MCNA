@@ -64,6 +64,7 @@ def test_revenue_ytd_cumulative_tinh_tang_truong_va_giu_scope(monkeypatch):
 
     monkeypatch.setattr(rt, "revenue_by_channel", fake_revenue)
     monkeypatch.setattr(rt, "latest_data_date", lambda: "2026-08-28")
+    monkeypatch.setattr(rt, "_revenue_data_month_range", lambda: ("2020-01", "2026-08"))
     result = rt.revenue_ytd_cumulative(
         "2026-08", from_month="03", years_back=3,
         scope_area_code="MN", scope_channel="ETC", scope_employee_code="QLV02",
@@ -74,6 +75,42 @@ def test_revenue_ytd_cumulative_tinh_tang_truong_va_giu_scope(monkeypatch):
     assert result["cac_nam"][1]["pct_change_vs_prev_year"] == 100.0
     assert all(call[2:] == ("MN", "ETC", "QLV02") for call in calls)
     assert calls[0][:2] == ("2026-03-01", "2026-08-31")
+
+
+def test_revenue_ytd_cumulative_tra_ke_hoach_va_phan_con_lai_tu_target_da_nhap(monkeypatch):
+    monkeypatch.setattr(rt, "revenue_by_channel", lambda *args: _period_result(300.0))
+    monkeypatch.setattr(rt, "_revenue_data_month_range", lambda: ("2020-01", "2026-08"))
+    monkeypatch.setattr(rt, "_ytd_plan", lambda *args: {
+        "total": 500.0, "otc": 400.0, "etc": 100.0, "note": None,
+    })
+
+    result = rt.revenue_ytd_cumulative("2026-08", years_back=1)
+
+    row = result["cac_nam"][0]
+    assert row["plan_revenue"] == 500.0
+    assert row["pct_of_plan"] == 60.0
+    assert row["plan_gap_remaining"] == 200.0
+    assert row["months_remaining"] == 4
+    assert row["average_monthly_plan_needed"] == 50.0
+
+
+def test_revenue_ytd_cumulative_khong_chia_doanh_thu_thieu_lich_su_voi_target_day_du(monkeypatch):
+    """C03 UAT 07/09: T1-T6 doanh thu chua nam trong kho, nhung target da co du T1-T8. 15% la
+    phep chia sai (2 thang actual / 8 thang target), phai bao thieu du lieu va khong tao %KH/gap."""
+    monkeypatch.setattr(rt, "revenue_by_channel", lambda *args: _period_result(100.0))
+    monkeypatch.setattr(rt, "_revenue_data_month_range", lambda: ("2026-07", "2026-08"))
+    monkeypatch.setattr(rt, "_ytd_plan", lambda *args: {
+        "total": 500.0, "otc": 400.0, "etc": 100.0, "note": None,
+    })
+
+    result = rt.revenue_ytd_cumulative("2026-08", years_back=1)
+
+    row = result["cac_nam"][0]
+    assert row["revenue_history_complete"] is False
+    assert row["revenue_history_available_from"] == "2026-07"
+    assert row["pct_of_plan"] is None
+    assert "plan_gap_remaining" not in row
+    assert "canh_bao_thieu_lich_su_doanh_thu" in result
 
 
 def _make_inventory_db(path):

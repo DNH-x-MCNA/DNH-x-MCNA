@@ -1212,6 +1212,59 @@ def compare_periods(date_from_a: str, date_to_a: str, date_from_b: str, date_to_
     return {"period_a": a, "period_b": b, "delta": delta, "pct_change": pct_change}
 
 
+def _ytd_plan(year: int, from_month: str, to_month: str, scope_area_code: str = None,
+              scope_channel: str = None, scope_employee_code: str = None) -> dict:
+    """Ke hoach luy ke theo nguon chinh thuc; khong suy dien target doi/ETC theo vung khi kho khong co."""
+    period_from = f"{year:04d}-{from_month}-01"
+    period_to = f"{year:04d}-{to_month}-{_last_day_of_month(year, int(to_month)):02d}"
+    channel = str(scope_channel or "ALL").upper()
+    if channel not in {"ALL", "OTC", "ETC"}:
+        channel = "ALL"
+    if scope_employee_code:
+        return {
+            "total": None, "otc": None, "etc": None,
+            "note": ("Khong co target lich su da chot theo DOI QLV. Khong lay danh sach doi hien tai "
+                     "de cong nguoc ke hoach cac thang cu."),
+        }
+
+    def _sum(sql, params):
+        try:
+            rows = _q(sql, params)
+        except sqlite3.OperationalError:
+            return None
+        return _f(rows[0]["amount"]) if rows and rows[0]["amount"] is not None else None
+
+    otc = None
+    if channel != "ETC":
+        sql = ("SELECT SUM(COALESCE(amount,0)) amount FROM dim_targetvungmien "
+               "WHERE doc_date BETWEEN ? AND ?")
+        params = [period_from, period_to]
+        if scope_area_code:
+            sql += " AND area_code=?"
+            params.append(scope_area_code)
+        otc = _sum(sql, tuple(params))
+
+    # FACT_KeHoachTongETC chi co target toan quoc, khong co vung/QLV. Tra None thay vi chia deu.
+    etc = None
+    etc_note = None
+    if channel != "OTC":
+        if scope_area_code:
+            etc_note = "Ke hoach ETC chua tach theo vung trong nguon hien co."
+        else:
+            etc = _sum(
+                "SELECT SUM(COALESCE(amount,0)) amount FROM fact_kehoachtongetc WHERE doc_date BETWEEN ? AND ?",
+                (period_from, period_to),
+            )
+
+    if channel == "OTC":
+        total = otc
+    elif channel == "ETC":
+        total = etc
+    else:
+        total = otc + etc if otc is not None and etc is not None else None
+    return {"total": total, "otc": otc, "etc": etc, "note": etc_note}
+
+
 def revenue_ytd_cumulative(year_month_to: str, from_month: str = None, years_back: int = 3,
                             scope_area_code: str = None, scope_channel: str = None,
                             scope_employee_code: str = None) -> dict:
@@ -1244,6 +1297,7 @@ def revenue_ytd_cumulative(year_month_to: str, from_month: str = None, years_bac
 
     years_back = max(1, min(int(years_back or 3), 10))
     years, skipped = [], []
+    earliest_revenue_month, _ = _revenue_data_month_range()
     for i in range(years_back):
         y = year_to - i
         date_from = f"{y:04d}-{from_month}-01"
@@ -1252,9 +1306,42 @@ def revenue_ytd_cumulative(year_month_to: str, from_month: str = None, years_bac
         if r["total"]["revenue"] <= 0 and r["total"]["invoices"] == 0:
             skipped.append(y)
             continue
-        years.append({"year": y, "date_from": date_from, "date_to": date_to,
-                      "revenue": r["total"]["revenue"], "invoices": r["total"]["invoices"],
-                      "otc_revenue": r["otc"]["revenue"], "etc_revenue": r["etc"]["revenue"]})
+        plan = _ytd_plan(y, from_month, month_to, scope_area_code, scope_channel, scope_employee_code)
+        actual = r["total"]["revenue"]
+        plan_total = plan["total"]
+        # C03 UAT 07/09: target T1-T8 van du nhung kho doanh thu hien chi con T7-T8. Neu lay
+        # 2 thang thuc dat chia 8 thang target, chatbot se bao 15% YTD rat tron tru nhung sai. Khong
+        # duoc cong cac thang khong co kho nhu 0, va cung khong duoc tinh %KH/gap/binh quan can dat.
+        history_complete = not earliest_revenue_month or date_from[:7] >= earliest_revenue_month
+        year_row = {
+            "year": y, "date_from": date_from, "date_to": date_to,
+            "revenue": actual, "invoices": r["total"]["invoices"],
+            "otc_revenue": r["otc"]["revenue"], "etc_revenue": r["etc"]["revenue"],
+            "plan_revenue": plan_total, "plan_otc_revenue": plan["otc"],
+            "plan_etc_revenue": plan["etc"],
+            "revenue_history_complete": history_complete,
+            "pct_of_plan": round(actual / plan_total * 100, 2) if plan_total and history_complete else None,
+        }
+        if not history_complete:
+            year_row["revenue_history_available_from"] = earliest_revenue_month
+            year_row["history_warning"] = (
+                f"Kho doanh thu chi co tu {earliest_revenue_month}; doanh thu {date_from} den {date_to} "
+                f"dang thieu phan truoc {earliest_revenue_month}. Khong tinh % ke hoach/YTD gap "
+                "hay binh quan can dat tu so lieu khong day du."
+            )
+        if plan.get("note"):
+            year_row["plan_note"] = plan["note"]
+        # Day la phep chia KE HOACH DA NHAP - khong phai du bao/run-rate. Chi co y nghia cho nam
+        # dang xem va khi target duoc nguon xac nhan.
+        if y == year_to and plan_total is not None and history_complete:
+            remaining = max(0.0, plan_total - actual)
+            months_remaining = 12 - int(month_to)
+            year_row["plan_gap_remaining"] = remaining
+            year_row["months_remaining"] = months_remaining
+            year_row["average_monthly_plan_needed"] = (
+                remaining / months_remaining if months_remaining else None
+            )
+        years.append(year_row)
 
     # Moi nam sap xep TANG DAN theo thoi gian de tinh % tang truong giua nam lien ke (nam sau so nam
     # truoc ngay ben canh), roi moi dao lai THANH GIAM DAN (nam gan nhat len dau) cho de doc khi tra loi.
@@ -1269,6 +1356,11 @@ def revenue_ytd_cumulative(year_month_to: str, from_month: str = None, years_bac
         "tu_thang": from_month, "den_thang": month_to, "cac_nam": years,
         "data_as_of": latest_data_date(),
     }
+    if any(not row["revenue_history_complete"] for row in years):
+        result["canh_bao_thieu_lich_su_doanh_thu"] = (
+            "Co ky YTD thieu du lieu doanh thu truoc moc kho hien co. Cac cot % ke hoach, gap va "
+            "binh quan can dat cua ky do la None, khong duoc tu tinh them."
+        )
     if skipped:
         result["nam_bi_bo_qua"] = skipped
         result["ghi_chu"] = (f"Cac nam {', '.join(str(y) for y in skipped)} KHONG co du lieu phat sinh "
@@ -1533,11 +1625,6 @@ def customer_lifecycle_summary(year_month: str = None, months_back: int = 1,
         return {"error": "Kho chua co snapshot KPI khach hang nao."}
     year_month = (year_month or latest)[:7]
 
-    allowed = None
-    if scope_employee_code:
-        team = _team_of_qlv(scope_employee_code, latest)
-        allowed = [scope_employee_code] + [t["employee_code"] for t in team]
-
     pos_ph = ",".join(["?"] * len(_EMPLOYEE_TIER_POSITIONS))
     months = []
     for i in range(months_back - 1, -1, -1):
@@ -1547,6 +1634,16 @@ def customer_lifecycle_summary(year_month: str = None, months_back: int = 1,
         if not snap:
             months.append({"month": ym, "khong_co_du_lieu": True})
             continue
+
+        # 07/09/2026: khong duoc lay DOI HIEN TAI roi ap nguoc cho chuoi lich su. Cung mot bay
+        # da tung lam M01 sai: TDV chuyen doi se bi tinh nham vao (hoac bi bo sot khoi) thang cu.
+        # ManagerCode cua dung snapshot la nguon duy nhat biet thanh phan doi o ky dang bao cao.
+        allowed = None
+        roster_snapshot = None
+        if scope_employee_code:
+            team = _team_of_qlv(scope_employee_code, snap)
+            allowed = [scope_employee_code] + [t["employee_code"] for t in team]
+            roster_snapshot = snap
         sql = (f"SELECT COUNT(DISTINCT f.customer_code) tong_khach, "
                f"COUNT(DISTINCT CASE WHEN f.is_nc=1 THEN f.customer_code END) khach_moi, "
                f"COUNT(DISTINCT CASE WHEN f.is_ro=1 THEN f.customer_code END) so_is_ro, "
@@ -1576,7 +1673,7 @@ def customer_lifecycle_summary(year_month: str = None, months_back: int = 1,
             sql += f" AND f.employee_code IN ({','.join(['?'] * len(allowed))})"
             params.extend(allowed)
         r = _q(sql, tuple(params))[0]
-        months.append({
+        month_result = {
             "month": ym, "snapshot_date": snap,
             "tong_khach": int(r["tong_khach"] or 0),
             "khach_moi": int(r["khach_moi"] or 0),
@@ -1585,7 +1682,10 @@ def customer_lifecycle_summary(year_month: str = None, months_back: int = 1,
             "khach_khong_mang_co": int(r["khach_khong_mang_co"] or 0),
             "doanh_so_khach_moi": _f(r["doanh_so_khach_moi"]),
             "doanh_so_tang_nhan_vien": _f(r["doanh_so_tang_nhan_vien"]),
-        })
+        }
+        if roster_snapshot:
+            month_result["team_roster_snapshot"] = roster_snapshot
+        months.append(month_result)
 
     missing = [m["month"] for m in months if m.get("khong_co_du_lieu")]
     result = {
