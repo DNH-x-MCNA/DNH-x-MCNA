@@ -4575,7 +4575,9 @@ def _order_fulfillment_exceptions(date_from: str, date_to: str, threshold_days: 
         }
 
     try:
-        report_to = dt.date.fromisoformat(str(date_to))
+        # call_template them 23:59:59 cho truy van SQLite bao gom tron ngay cuoi. DMS chi can
+        # phan ngay, nen khong duoc dua chuoi co gio vao date.fromisoformat().
+        report_to = dt.date.fromisoformat(str(date_to)[:10])
     except ValueError:
         return {
             "status": "INVALID_PERIOD", "rows": [],
@@ -4669,7 +4671,7 @@ def _order_fulfillment_exceptions(date_from: str, date_to: str, threshold_days: 
     }
 
 
-def order_timing_check(date_from: str, date_to: str, threshold_days: int = 2, limit: int = 20,
+def order_timing_check(date_from: str = None, date_to: str = None, threshold_days: int = 2, limit: int = 20,
                         scope_area_code: str = None, scope_channel: str = None,
                         scope_employee_code: str = None) -> dict:
     """Kiem tra hang tra/dieu chinh va phan bo gia tri don trong ky.
@@ -4680,13 +4682,35 @@ def order_timing_check(date_from: str, date_to: str, threshold_days: int = 2, li
     ``top_detail`` la hang tra/dieu chinh va phan bo gia tri tu hoa don local; con
     ``order_fulfillment_exceptions`` doi chieu dung DMS_DonHangHdr voi vHoaDonTotal cho cac don
     chua/tre hoa don. ``limit`` gioi han so dong chi tiet hang tra/gia tri don; tong so dong co trong
-    ``total_flagged`` khong bi cat. ``scope_channel`` va ``scope_employee_code`` ep pham vi o ca hai phan."""
+    ``total_flagged`` khong bi cat. ``scope_channel`` va ``scope_employee_code`` ep pham vi o ca hai phan.
+    Neu khong truyen ky, mac dinh tu ngay dau thang chua moc du lieu moi nhat den chinh moc do; V33
+    vi vay chay ngay thay vi hoi nguoi dung them mot luot."""
+    period_defaulted = not date_from and not date_to
+    latest_day = latest_data_date()[:10]
+    raw_to = str(date_to or latest_day)
+    date_to_day = raw_to[:10]
+    raw_from = str(date_from or f"{date_to_day[:7]}-01")
+    date_from_day = raw_from[:10]
+    try:
+        parsed_from = dt.date.fromisoformat(date_from_day)
+        parsed_to = dt.date.fromisoformat(date_to_day)
+    except ValueError as exc:
+        raise ValueError("date_from/date_to phai co dang YYYY-MM-DD.") from exc
+    if parsed_from > parsed_to:
+        raise ValueError("date_from khong duoc sau date_to.")
+
+    # Giu hau to gio do call_template them vao date_to de SQLite gom het ngay cuoi; cac phep
+    # nghiep vu va SQL Server dung phan YYYY-MM-DD da chuan hoa.
+    date_from = date_from_day
+    date_to_query = raw_to if len(raw_to) > 10 else date_to_day
+    date_to = date_to_day
     scope_sql, scope_params = _scope_clause(scope_area_code)
     emp_sql, emp_params = _employee_scope_clause(scope_employee_code, "v", as_of=date_to)
     scope_sql += emp_sql
     scope_params += emp_params
     result = {
         "date_from": date_from, "date_to": date_to, "threshold_days": threshold_days,
+        "period_defaulted": period_defaulted,
         "created_at_doc_date_check": {
             "status": "NOT_APPLICABLE",
             "definition": "CreatedAt la thoi diem tao don, khong phai thoi diem xac nhan don.",
@@ -4707,13 +4731,13 @@ def order_timing_check(date_from: str, date_to: str, threshold_days: int = 2, li
         quality_parts.append(
             f"SELECT 'OTC' channel,v.doc_date,v.customer_code,v.stt,v.amount9 FROM vhoadon_otc v {join_o} "
             f"WHERE v.doc_date BETWEEN ? AND ?{scope_sql}")
-        quality_params.extend((date_from, date_to) + scope_params)
+        quality_params.extend((date_from, date_to_query) + scope_params)
     if scope_channel != "OTC":
         join_e = _etc_area_join("v", scope_area_code)
         quality_parts.append(
             f"SELECT 'ETC' channel,v.doc_date,v.customer_code,v.stt,v.amount9 FROM vhoadon_etc v {join_e} "
             f"WHERE v.doc_date BETWEEN ? AND ?{scope_sql}")
-        quality_params.extend((date_from, date_to) + scope_params)
+        quality_params.extend((date_from, date_to_query) + scope_params)
     order_rows = _q(
         "WITH lines AS (" + " UNION ALL ".join(quality_parts) + ") "
         "SELECT channel||':'||COALESCE(NULLIF(stt,''),doc_date||':'||COALESCE(customer_code,'')) order_key,"
@@ -5511,8 +5535,12 @@ def _team_of_qlv(qlv_employee_code: str, fdate: str = None) -> list:
             f"SELECT DISTINCT e.employee_code, nv.name, nv.position_code FROM fact_tonghopkhachhang e "
             f"JOIN {_MONTH_LATEST_SUBQ} l ON l.employee_code=e.employee_code AND l.d=e.save_date "
             f"LEFT JOIN dim_nhanvien nv ON nv.employee_code=e.employee_code "
-            f"WHERE e.manager_code=? AND nv.position_code IN ('TDV', 'CTV')" for _ in cac_moc)
-        tham = tuple(x for d in cac_moc for x in (d, d, qlv_employee_code))
+            f"WHERE e.manager_code=? AND UPPER(COALESCE(nv.position_code,'')) IN ({_tier_ph()})"
+            for _ in cac_moc)
+        tham = tuple(
+            x for d in cac_moc
+            for x in (d, d, qlv_employee_code, *_EMPLOYEE_TIER_POSITIONS)
+        )
         return _q(phan, tham)
     fdate = cac_moc[0] if cac_moc else None
     if not fdate:
@@ -5521,7 +5549,9 @@ def _team_of_qlv(qlv_employee_code: str, fdate: str = None) -> list:
         f"SELECT DISTINCT e.employee_code, nv.name, nv.position_code FROM fact_tonghopkhachhang e "
         f"JOIN {_MONTH_LATEST_SUBQ} l ON l.employee_code=e.employee_code AND l.d=e.save_date "
         f"LEFT JOIN dim_nhanvien nv ON nv.employee_code=e.employee_code "
-        f"WHERE e.manager_code=? AND nv.position_code IN ('TDV', 'CTV')", (fdate, fdate, qlv_employee_code))
+        f"WHERE e.manager_code=? AND UPPER(COALESCE(nv.position_code,'')) IN ({_tier_ph()})",
+        (fdate, fdate, qlv_employee_code, *_EMPLOYEE_TIER_POSITIONS),
+    )
 
 
 def qlv_change_history(area_code: str = None, qlv_search: str = None, scope_area_code: str = None) -> list:

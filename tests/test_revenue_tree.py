@@ -148,14 +148,21 @@ def test_cap_TP_khong_co_target_rieng_van_tra_ve_0_khong_bao_loi(tmp_path, monke
     assert tp["qlv_count"] == 2  # van liet ke du QLV ben duoi
 
 
-def test_team_of_qlv_bao_gom_ca_ctv(tmp_path, monkeypatch):
-    """D09/D10: QLV co CTV duoi quyen (nhu Tran Minh Tu duoi Nguyen Phuong Nam) - khong duoc bo sot CTV."""
+def test_team_of_qlv_bao_gom_du_tdv_ctv_cs_tk(tmp_path, monkeypatch):
+    """M20: moi vai tro tang la deu phai vao cay; bo CS tung tao gap gia 427,4 trieu o MB."""
     db_path = tmp_path / "warehouse.db"
     _make_db(db_path)
-    # Them 1 CTV duoi QLV_MN
+    # Them cac vai tro tang la khac TDV duoi QLV_MN.
     conn = sqlite3.connect(str(db_path))
-    conn.execute("INSERT INTO dim_nhanvien VALUES ('CTV_MN','Cong tac vien MN',0,'CTV','MN','CTV_MN',NULL,NULL,0,NULL)")
-    conn.execute(f"INSERT INTO fact_tonghopkhachhang VALUES ('CTV_MN','KH7',200000,400000,'{SAVE_DATE}',0,'QLV_MN')")
+    for code, role in (("CTV_MN", "CTV"), ("CS_MN", "CS"), ("TK_MN", "TK")):
+        conn.execute(
+            "INSERT INTO dim_nhanvien VALUES (?,?,0,?,'MN',?,NULL,NULL,0,NULL)",
+            (code, f"Nhan vien {role} MN", role, code),
+        )
+        conn.execute(
+            f"INSERT INTO fact_tonghopkhachhang VALUES (?,?,200000,400000,'{SAVE_DATE}',0,'QLV_MN')",
+            (code, f"KH_{code}"),
+        )
     conn.commit()
     conn.close()
 
@@ -163,15 +170,14 @@ def test_team_of_qlv_bao_gom_ca_ctv(tmp_path, monkeypatch):
 
     team = rt._team_of_qlv("QLV_MN", SAVE_DATE)
     codes = {t["employee_code"] for t in team}
-    assert "TDV_MN" in codes
-    assert "CTV_MN" in codes
-    assert len(codes) == 2
+    assert codes == {"TDV_MN", "CTV_MN", "CS_MN", "TK_MN"}
     assert next(t for t in team if t["employee_code"] == "CTV_MN")["position_code"] == "CTV"
 
     res = rt.revenue_tree(as_of_date=SAVE_DATE, area_code="MN")
     tp = next(t for t in res["tree"] if t["employee_code"] == "TP_MN")
     qlv = next(q for q in tp["qlv"] if q["employee_code"] == "QLV_MN")
-    assert qlv["tdv_count"] == 2
+    assert qlv["tdv_count"] == 4
     ctv = next(t for t in qlv["tdv"] if t["employee_code"] == "CTV_MN")
     assert ctv["threshold"] == 70
+    assert {t["employee_code"] for t in qlv["tdv"]} == codes
 

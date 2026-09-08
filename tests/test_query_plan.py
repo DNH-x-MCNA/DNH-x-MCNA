@@ -287,6 +287,107 @@ def test_c03_ytd_thieu_lich_su_bi_danh_dau_partial_va_chan_so_model_tu_tinh():
     assert "Không suy đoán số" in answer
 
 
+def test_c31_khong_doi_first_observed_thanh_khach_moi_thuc_su():
+    """C31: lan dau thay trong cua so lich su khong chung minh la khach moi trong doi."""
+    plan = _plan(
+        "Khách mới và tái kích hoạt bù doanh thu khách ngừng mua được bao nhiêu?",
+        query_id="c31-first-observed",
+    )
+    key = "movement"
+    plan.start_tool("get_customer_movement", {"month": "2026-08"}, key)
+    plan.finish_tool(
+        key,
+        ok=True,
+        payload={
+            "month": "2026-08",
+            "previous_month": "2026-07",
+            "history_from": "2025-09",
+            "summary_all_customers": {
+                "total_revenue_delta": 5_718_045_734,
+                "reconciled_delta": 5_718_045_734,
+            },
+            "canh_bao": (
+                "NEW_OR_FIRST_OBSERVED chi la lan dau thay trong cua so du lieu; "
+                "khong khang dinh la khach moi trong doi."
+            ),
+        },
+        source="template:get_customer_movement",
+        duration_ms=5,
+        timeout_seconds=40,
+    )
+    plan.finalize()
+
+    answer = plan.finalize_answer(
+        "Khách tái kích hoạt mang về gấp 5 lần khách mới thực sự."
+    )
+
+    assert "khách mới thực sự" not in answer
+    assert "khách lần đầu quan sát trong cửa sổ dữ liệu" in answer
+    assert "2025-09 đến 2026-08" in answer
+    assert "không đủ cơ sở xác nhận khách mới trong đời" in answer
+
+
+def test_m20_giam_doc_mien_khong_bi_ke_hoach_goi_lap_tool_luong_bi_chan():
+    plan = build_query_plan(
+        "Thưởng/KPI của đội có khớp doanh số và chính sách đã chốt?",
+        query_id="m20-regional-director",
+        scope_role="regional_director",
+        scope_area_code="MB",
+        scope_employee_code=None,
+        scope_channel=None,
+        max_rounds=8,
+        max_tools_per_round=5,
+        max_unique_tools=12,
+        request_timeout_seconds=110,
+    )
+
+    salary = next(step for step in plan.steps if step.domain == "salary")
+    assert salary.status == "skipped"
+    assert salary.tool_hints == []
+    assert "không mở" in salary.error
+    assert "get_salary_ranking" not in plan.prompt_note()
+    assert not any(rule.rule.startswith("salary_") for rule in plan.reconciliation_rules)
+
+    plan.finalize()
+    answer = plan.finalize_answer("KPI đã được đối chiếu.")
+    assert answer.count("Đối chiếu lương thưởng") == 1
+    assert "đạt giới hạn" not in answer.lower()
+
+
+def test_v33_la_kiem_tra_don_khong_bi_hieu_nham_thanh_doi_chieu_doanh_thu():
+    plan = build_query_plan(
+        "Đơn nào bị hủy, trả, điều chỉnh, giao/hóa đơn chậm hoặc chưa tìm thấy hóa đơn?",
+        query_id="v33-order-exceptions",
+        scope_role="qlv",
+        scope_area_code="MB",
+        scope_employee_code="TM25010183",
+        scope_channel="OTC",
+        max_rounds=8,
+        max_tools_per_round=5,
+        max_unique_tools=12,
+        request_timeout_seconds=110,
+    )
+
+    assert [step.domain for step in plan.steps] == ["orders"]
+    assert plan.metrics == ["order_quality"]
+    assert plan.steps[0].tool_hints == ["check_order_timing"]
+    assert plan.reconciliation_rules == []
+
+    key = "check-order-default-period"
+    plan.start_tool("check_order_timing", {}, key)
+    plan.finish_tool(
+        key,
+        ok=True,
+        payload={"status": "OK", "order_fulfillment_exceptions": {"rows": []}},
+        source="template:check_order_timing",
+        duration_ms=5,
+        timeout_seconds=40,
+    )
+    plan.finalize()
+    assert plan.status == "completed"
+    assert "Đối chiếu doanh thu" not in plan.prompt_note()
+
+
 def test_payload_thanh_cong_ky_thuat_nhung_comparison_invalid_van_la_partial():
     plan = _plan("So sánh doanh thu tháng 7 và tháng 8/2026", query_id="compare-incomplete")
     key = "compare"

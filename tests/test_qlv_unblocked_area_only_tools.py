@@ -160,6 +160,31 @@ def test_check_order_timing_qlv_chi_thay_doi_minh(tmp_path, monkeypatch):
     assert quality["pham_vi_du_lieu"]["loai"] == "DOI_CUA_QLV"
 
 
+def test_check_order_timing_khong_neu_ky_tu_lay_thang_hien_tai_den_moc_du_lieu(monkeypatch):
+    monkeypatch.setattr(rt, "latest_data_date", lambda: "2026-09-08")
+    monkeypatch.setattr(rt, "_q", lambda sql, params=(): [])
+    captured = {}
+
+    def fake_fulfillment(date_from, date_to, threshold_days, *scope):
+        captured["period"] = (date_from, date_to)
+        return {"status": "OK", "rows": []}
+
+    monkeypatch.setattr(rt, "_order_fulfillment_exceptions", fake_fulfillment)
+
+    result = rt.call_template(
+        "check_order_timing",
+        {},
+        question="Đơn nào bị hủy, trả, điều chỉnh, giao/hóa đơn chậm hoặc chưa tìm thấy hóa đơn?",
+        scope_role="c_level",
+    )
+
+    assert result["ok"] is True
+    assert result["result"]["date_from"] == "2026-09-01"
+    assert result["result"]["date_to"] == "2026-09-08"
+    assert result["result"]["period_defaulted"] is True
+    assert captured["period"] == ("2026-09-01", "2026-09-08")
+
+
 def test_check_order_timing_scope_etc_khong_doc_don_otc(tmp_path, monkeypatch):
     """Hoi quy 28/08/2026: code cu luon khoi tao UNION bang OTC, ke ca khi scope=ETC."""
     db_path = tmp_path / "warehouse.db"

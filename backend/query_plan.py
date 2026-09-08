@@ -46,6 +46,17 @@ _DOMAIN_SPECS = (
         "rules": ("revenue_totals",),
     },
     {
+        "domain": "orders",
+        "label": "Kiểm tra đơn hàng và hóa đơn",
+        "markers": ("don nao bi huy", "don bi huy", "don huy", "hang tra",
+                    "dieu chinh don", "giao cham", "hoa don cham",
+                    "chua tim thay hoa don", "chua co hoa don", "chua hoa don",
+                    "don/hoa don bat thuong"),
+        "tools": ("check_order_timing",),
+        "metrics": ("order_quality",),
+        "rules": (),
+    },
+    {
         "domain": "kpi",
         "label": "Đối chiếu KPI và cây đội ngũ",
         "markers": ("kpi", "chi tieu", "target", "doi ngu", "nhan vien", "qlv", "tdv"),
@@ -150,6 +161,16 @@ def infer_domains(question: str) -> list[dict[str, Any]]:
         any(contains(marker) for marker in spec["markers"])
         or (spec["domain"] == "salary" and any(term in lowered for term in ("lương", "thưởng")))
     )]
+    # V33: "hóa đơn" trong câu hỏi về hủy/trả/giao chậm là đối tượng cần kiểm tra, không phải
+    # yêu cầu tính doanh thu. Trước đây marker rộng "hoa don" sinh thêm một bước revenue, khiến
+    # model hỏi lại kỳ và footer báo sai "Đối chiếu doanh thu chưa chạy". Chỉ giữ revenue khi câu
+    # thật sự yêu cầu số tiền/kết quả sau khi loại các đơn bất thường.
+    found_domains = {spec["domain"] for spec in found}
+    asks_order_revenue = any(marker in plain for marker in (
+        "doanh thu", "doanh so", "ket qua thang", "loai di con bao nhieu",
+    ))
+    if "orders" in found_domains and not asks_order_revenue:
+        found = [spec for spec in found if spec["domain"] != "revenue"]
     return found or [_DOMAIN_SPECS[0]]
 
 
@@ -534,7 +555,8 @@ class QueryPlan:
 
     def prompt_note(self) -> str:
         expected = [{"step_id": s.step_id, "title": s.title, "domain": s.domain,
-                     "tool_hints": s.tool_hints, "dependencies": s.dependencies} for s in self.steps]
+                     "tool_hints": s.tool_hints, "dependencies": s.dependencies,
+                     "status": s.status, "error": s.error} for s in self.steps]
         return (
             "KE_HOACH_BACKEND_BAT_BUOC: "
             + json.dumps({
@@ -545,7 +567,8 @@ class QueryPlan:
                 "reconciliation_rules": [item.rule for item in self.reconciliation_rules],
             }, ensure_ascii=False)
             + "\nThực hiện đủ các domain liên quan trước khi kết luận. Nếu một nguồn lỗi, vẫn trả phần "
-              "đã kiểm chứng và nêu chính xác nguồn/bước thiếu; không đoán số và không nói 'quá phức tạp'."
+              "đã kiểm chứng và nêu chính xác nguồn/bước thiếu; không đoán số và không nói 'quá phức tạp'. "
+              "Bước có status=skipped do giới hạn quyền là giới hạn đã biết: KHÔNG thử gọi tool cho bước đó."
         )
 
     def finalize(self, *, limit_reached: bool = False) -> None:
@@ -598,6 +621,30 @@ class QueryPlan:
                     "Cần đồng bộ đủ doanh thu của toàn bộ kỳ rồi chạy lại. Không suy đoán số cho "
                     "phần còn thiếu."
                 )
+
+        # C31 UAT: ``NEW_OR_FIRST_OBSERVED`` cua get_customer_movement chi co nghia la lan dau
+        # xuat hien TRONG cua so lich su ma tool da doc. Model da tung doi nhan nay thanh "khach
+        # moi thuc su/hoan toan", du payload canh bao ro khong duoc ket luan nhu vay. Chuan hoa
+        # cum tu gay hieu nham va gan quy uoc o tang cuoi de moi cach dien dat cua model deu an toan.
+        movement = self._evidence.get("get_customer_movement")
+        if isinstance(movement, dict) and movement.get("history_from"):
+            answer = re.sub(
+                r"khách mới\s+(?:thực sự|hoàn toàn)",
+                "khách lần đầu quan sát trong cửa sổ dữ liệu",
+                answer,
+                flags=re.IGNORECASE,
+            )
+            answer_plain = _plain(answer)
+            if "khong du co so xac nhan khach moi trong doi" not in answer_plain:
+                history_from = str(movement.get("history_from"))
+                month = str(movement.get("month") or "kỳ đang xét")
+                answer = "\n".join([
+                    answer.rstrip(),
+                    "",
+                    "*Quy ước dữ liệu: `NEW_OR_FIRST_OBSERVED` là khách lần đầu xuất hiện trong "
+                    f"cửa sổ **{history_from} đến {month}**; không đủ cơ sở xác nhận khách mới "
+                    "trong đời nếu họ từng mua trước cửa sổ này.*",
+                ])
         if self.status not in {"partial", "failed"}:
             return answer
         missing = [step for step in self.steps if step.status in {"failed", "partial", "skipped"}]
@@ -666,14 +713,28 @@ def build_query_plan(question: str, *, query_id: str | None, scope_role: str | N
     metrics: list[str] = []
     rules: list[str] = []
     dependencies: dict[str, list[str]] = {}
+    blocked_salary_tools = {
+        "get_salary_bonus_policy", "get_salary_data_quality",
+        "get_salary_achievement_summary", "get_salary_detail", "get_salary_ranking",
+    } if scope_role == "regional_director" else set()
     for index, spec in enumerate(domains, 1):
         step_id = f"S{index:02d}"
+        salary_blocked_by_role = (
+            scope_role == "regional_director" and spec["domain"] == "salary"
+        )
         step = PlanStep(
             step_id=step_id,
             title=spec["label"],
             domain=spec["domain"],
             metrics=list(spec["metrics"]),
-            tool_hints=list(spec["tools"]),
+            tool_hints=([] if salary_blocked_by_role else [
+                tool for tool in spec["tools"] if tool not in blocked_salary_tools
+            ]),
+            status="skipped" if salary_blocked_by_role else "pending",
+            error=(
+                "Báo cáo lương/thưởng cá nhân không mở cho vai trò giám đốc miền/kênh."
+                if salary_blocked_by_role else None
+            ),
         )
         steps.append(step)
         dependencies[step_id] = []
@@ -681,6 +742,10 @@ def build_query_plan(question: str, *, query_id: str | None, scope_role: str | N
             if metric not in metrics:
                 metrics.append(metric)
         spec_rules = list(spec["rules"])
+        if salary_blocked_by_role:
+            # Khong de mot reconciliation rule bat kha thi treo o trang thai pending, va cung khong
+            # quang cao tool nhay cam qua query plan sau khi tang phan quyen da an chung.
+            spec_rules = []
         if freshness_comparison_only and spec["domain"] != "freshness":
             spec_rules = []
         if (spec["domain"] == "revenue" and "promotion" in domain_names
@@ -690,7 +755,8 @@ def build_query_plan(question: str, *, query_id: str | None, scope_role: str | N
             # "Doanh thu gắn với CTKM" là metric nằm trong composite promotion tool, không phải
             # tổng công ty để bắt buộc đối soát OTC+ETC.
             spec_rules = []
-        if (spec["domain"] == "salary" and not freshness_comparison_only
+        if (spec["domain"] == "salary" and not salary_blocked_by_role
+                and not freshness_comparison_only
                 and not any(marker in plain_question for marker in (
             "phu cap", "tong thu nhap", "tong thuong", "luong co ban", "thuong kinh doanh"
         ))):

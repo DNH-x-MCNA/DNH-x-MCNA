@@ -387,6 +387,15 @@ def test_m_role_questions_start_from_their_verified_report_not_free_sql():
         assert nl2sql._required_tool_for_question(question) == tool, question
 
 
+def test_v33_ep_bao_cao_don_va_cho_phep_bo_trong_ky():
+    question = "Đơn nào bị hủy, trả, điều chỉnh, giao/hóa đơn chậm hoặc chưa tìm thấy hóa đơn?"
+    assert nl2sql._required_tool_for_question(question) == "check_order_timing"
+
+    schema = next(item for item in nl2sql.TEMPLATE_TOOLS if item["name"] == "check_order_timing")
+    assert schema["input_schema"]["required"] == []
+    assert "KHONG hoi lai" in schema["input_schema"]["properties"]["date_to"]["description"]
+
+
 def test_ask_sends_forced_tool_choice_only_on_first_round(monkeypatch):
     seen = []
 

@@ -174,6 +174,14 @@ def _required_tool_for_question(question: str) -> str | None:
     # hieu qua mot chuong trinh. Giu no o bao cao chi tiet don/hang tra.
     if "doanh thu gop" in q and "doanh thu thuan" in q and "hang tra" in q:
         return "check_order_timing"
+    # V33: cau hoi van hanh ve don huy/tra/dieu chinh/chua co hoa don phai tu dong vao bao
+    # cao don. Khong bat nguoi dung nhac lai khoang ngay; tool tu lay dau thang hien tai den
+    # ngay du lieu moi nhat khi cau hoi khong ghi ky.
+    if any(marker in q for marker in (
+        "don nao bi huy", "don bi huy", "don huy", "giao/hoa don cham", "giao hoa don cham",
+        "giao cham", "hoa don cham", "chua tim thay hoa don", "chua co hoa don", "chua hoa don",
+    )):
+        return "check_order_timing"
     # CTKM phai xet truoc cac nhanh tong hop "doi/khach/don". V34 co du ca ba tu
     # nay nhung nguon chinh van la chuoi DMS_DonHangCTKM -> DMS_CTKM.
     is_promo = any(word in q for word in ("khuyen mai", "ctkm"))
@@ -871,12 +879,12 @@ TEMPLATE_TOOLS = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "date_from": {"type": "string", "description": "YYYY-MM-DD, dau ky can kiem tra (thuong la ca thang can soi)"},
-                "date_to": {"type": "string", "description": "YYYY-MM-DD, cuoi ky can kiem tra"},
+                "date_from": {"type": "string", "description": "YYYY-MM-DD, dau ky can kiem tra. Neu nguoi dung khong neu ky thi BO TRONG; tool tu lay ngay dau thang cua moc du lieu moi nhat."},
+                "date_to": {"type": "string", "description": "YYYY-MM-DD, cuoi ky can kiem tra. Neu nguoi dung khong neu ky thi BO TRONG; tool tu lay ngay du lieu moi nhat. KHONG hoi lai nguoi dung chi vi thieu ky."},
                 "threshold_days": {"type": "integer", "description": "Tham so cu, giu tuong thich API; hien khong su dung"},
                 "limit": {"type": "integer", "description": "So don hang tra/dieu chinh hoac >3x trung vi tham chieu hien chi tiet; total_flagged khong bi cat."},
             },
-            "required": ["date_from", "date_to"],
+            "required": [],
         },
     },
     {
