@@ -145,6 +145,12 @@ def _make_inventory_db(path):
             code TEXT, name TEXT, group_code TEXT, unit TEXT, id_code INTEGER
         );
         CREATE TABLE brv_kho (id_code INTEGER, branch_code TEXT, code TEXT, name TEXT);
+        CREATE TABLE vhoadon_otc (
+            doc_date TEXT, customer_code TEXT, item_code TEXT, amount9 REAL,
+            quantity REAL, unit_price REAL
+        );
+        CREATE TABLE dms_khachhang (code TEXT, name TEXT, city_id INTEGER);
+        CREATE TABLE dim_tinhthanhpho (city_id INTEGER, area_code TEXT);
         """
     )
     conn.executemany("INSERT INTO brv_kho VALUES (?,?,?,?)", [
@@ -169,6 +175,18 @@ def _make_inventory_db(path):
         ("LO-TRUNG", 2, "2026-01-01", "2026-10-01", 1),
         ("LO-MN", 4, "2026-01-01", "2026-12-31", 1),
     ])
+    conn.executemany("INSERT INTO dim_tinhthanhpho VALUES (?,?)", [(1, "MB"), (2, "MN")])
+    conn.executemany("INSERT INTO dms_khachhang VALUES (?,?,?)", [
+        ("KH1", "Khach Mien Bac", 1), ("KH2", "Khach Mien Nam", 2),
+    ])
+    # Fixed date 28/08 -> 3 thang hoan tat gan nhat la T5-T7. SP2 ban 30/thang
+    # nhung ton 20, phai duoc danh dau nguy co thieu; SP1 khong ban, la ton cham.
+    conn.executemany("INSERT INTO vhoadon_otc VALUES (?,?,?,?,?,?)", [
+        ("2026-05-10", "KH1", "SP2", 300, 30, 10),
+        ("2026-06-10", "KH1", "SP2", 300, 30, 10),
+        ("2026-07-10", "KH1", "SP2", 300, 30, 10),
+        ("2026-07-10", "KH2", "SP4", 999, 1, 999),
+    ])
     conn.commit()
     conn.close()
 
@@ -190,6 +208,17 @@ def test_inventory_expiry_phan_loai_dung_va_join_lo_bang_ca_item_id(tmp_path, mo
         "San pham het han", "San pham sap het han"
     ]
     assert all(row["branch_code"] == "B02" for row in result["rows"])
+    assert result["supply_risk"]["status"] == "OK_DERIVED"
+    risks = {row["item_code"]: row for row in result["supply_risk"]["rows"]}
+    assert risks["SP2"]["status"] == "CO_NGUY_CO_THIEU_HANG_DERIVED"
+    assert risks["SP2"]["months_of_cover"] == round(20 / 30, 2)
+    assert risks["SP1"]["status"] == "TON_KHONG_BAN_3_THANG"
+    assert result["supply_risk"]["recent_customer_candidates"] == [
+        {"item_code": "SP2", "customers": [{
+            "item_code": "SP2", "customer_code": "KH1", "customer_name": "Khach Mien Bac",
+            "qty_3m": 90.0, "revenue_3m": 900.0,
+        }]}
+    ]
 
 
 def test_inventory_expiry_scope_ghi_de_vung_ai_truyen_va_max_bucket(tmp_path, monkeypatch):

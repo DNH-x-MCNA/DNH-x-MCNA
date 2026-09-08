@@ -4956,6 +4956,136 @@ def _expiry_bucket(days_left: float) -> str:
     return "tren_18_thang"
 
 
+def _inventory_supply_risk(stock_by_item: dict, item_names: dict, area_code: str,
+                           limit: int = 30) -> dict:
+    """So sanh TON HIEN CO voi nhu cau OTC 3 thang da chot gan nhat.
+
+    Day la canh bao suy dien de tra loi S47/S28, khong phai bang chung khach da dat
+    hang ma bi thieu hay doanh thu da mat: DNH chua co DMS_DonHangHdr/backlog va du
+    lieu phan bo ton theo don.  Tach ham nay khoi phan han dung de mot cau hoi ve
+    "SKU thieu hang/cham ban" khong bi tra lai bang danh sach date lo hang khong lien quan.
+    """
+    if not stock_by_item:
+        return {"status": "NO_STOCK", "rows": [], "recent_customer_candidates": []}
+
+    today = dt.date.today()
+    last_complete = today.replace(day=1) - dt.timedelta(days=1)
+    month_end = last_complete.isoformat()
+    month_start = f"{_month_add(last_complete.strftime('%Y-%m'), -2)}-01"
+    item_codes = sorted(stock_by_item)
+    placeholders = ",".join("?" for _ in item_codes)
+    conditions = ["v.doc_date BETWEEN ? AND ?", f"v.item_code IN ({placeholders})"]
+    params = [month_start, month_end, *item_codes]
+    joins = "LEFT JOIN dms_khachhang kh ON kh.code=v.customer_code"
+    if area_code:
+        joins += " LEFT JOIN dim_tinhthanhpho tp ON tp.city_id=kh.city_id"
+        conditions.append("tp.area_code=?")
+        params.append(area_code)
+
+    try:
+        demand_rows = _q(
+            "SELECT v.item_code, "
+            "SUM(CASE WHEN COALESCE(v.unit_price,0)>0 THEN COALESCE(v.quantity,0) ELSE 0 END) qty_3m, "
+            "SUM(COALESCE(v.amount9,0)) revenue_3m "
+            f"FROM vhoadon_otc v {joins} WHERE {' AND '.join(conditions)} "
+            "GROUP BY v.item_code",
+            tuple(params),
+        )
+    except (sqlite3.Error, OSError):
+        # Kho cu/test database chua co hoa don chi tiet: bao ro nguon khong san sang,
+        # tuyet doi khong suy ra "khong co nhu cau" tu truy van loi.
+        return {
+            "status": "SOURCE_UNAVAILABLE",
+            "period": {"from": month_start, "to": month_end},
+            "rows": [],
+            "recent_customer_candidates": [],
+            "warning": "Chua doc duoc hoa don OTC chi tiet de tinh nhu cau 3 thang; khong ket luan SKU cham ban hay thieu hang.",
+        }
+
+    demand_by_item = {r["item_code"]: r for r in demand_rows}
+    risk_rows = []
+    for code, stock_qty in stock_by_item.items():
+        demand = demand_by_item.get(code, {})
+        avg_qty = _f(demand.get("qty_3m")) / 3.0
+        avg_revenue = _f(demand.get("revenue_3m")) / 3.0
+        cover = stock_qty / avg_qty if avg_qty > 0 else None
+        if avg_qty > 0 and stock_qty < avg_qty:
+            status = "CO_NGUY_CO_THIEU_HANG_DERIVED"
+        elif avg_qty <= 0:
+            status = "TON_KHONG_BAN_3_THANG"
+        elif cover > 6:
+            status = "CHAM_LUAN_CHUYEN_DERIVED"
+        else:
+            status = "BINH_THUONG"
+        risk_rows.append({
+            "item_code": code,
+            "item_name": item_names.get(code) or f"(chua co ten - ma {code})",
+            "stock_qty": stock_qty,
+            "average_monthly_qty_3m": avg_qty,
+            "average_monthly_revenue_3m": avg_revenue,
+            "months_of_cover": round(cover, 2) if cover is not None else None,
+            "status": status,
+        })
+
+    actionable = [r for r in risk_rows if r["status"] != "BINH_THUONG"]
+    actionable.sort(key=lambda r: (
+        0 if r["status"] == "CO_NGUY_CO_THIEU_HANG_DERIVED" else 1,
+        r["months_of_cover"] if r["months_of_cover"] is not None else float("inf"),
+        -r["stock_qty"],
+    ))
+
+    # "Khach phu hop" chi duoc dua ra nhu danh sach goi y lien he: khach da mua SKU
+    # trong 3 thang. Khong co du lieu nhu cau/chao hang de khang dinh se mua.
+    # Chi dua khach cho 10 SKU uu tien dau de payload khong phinh thanh hang tram dong,
+    # nhung van tra tong so SKU va thong ke trang thai o ben duoi.
+    shown_rows = actionable[:max(1, min(int(limit or 30), 50))]
+    buyer_candidates = []
+    candidate_codes = [r["item_code"] for r in shown_rows[:10] if r["average_monthly_qty_3m"] > 0]
+    if candidate_codes:
+        candidate_marks = ",".join("?" for _ in candidate_codes)
+        buyer_conditions = ["v.doc_date BETWEEN ? AND ?", f"v.item_code IN ({candidate_marks})"]
+        buyer_params = [month_start, month_end, *candidate_codes]
+        buyer_joins = "LEFT JOIN dms_khachhang kh ON kh.code=v.customer_code"
+        if area_code:
+            buyer_joins += " LEFT JOIN dim_tinhthanhpho tp ON tp.city_id=kh.city_id"
+            buyer_conditions.append("tp.area_code=?")
+            buyer_params.append(area_code)
+        try:
+            buyers = _q(
+                "SELECT v.item_code, v.customer_code, COALESCE(kh.name,v.customer_code) customer_name, "
+                "SUM(COALESCE(v.quantity,0)) qty_3m, SUM(COALESCE(v.amount9,0)) revenue_3m "
+                f"FROM vhoadon_otc v {buyer_joins} WHERE {' AND '.join(buyer_conditions)} "
+                "GROUP BY v.item_code,v.customer_code,kh.name ORDER BY v.item_code, revenue_3m DESC",
+                tuple(buyer_params),
+            )
+            per_item = {}
+            for buyer in buyers:
+                per_item.setdefault(buyer["item_code"], []).append(buyer)
+            for code, customers in per_item.items():
+                buyer_candidates.append({"item_code": code, "customers": customers[:3]})
+        except (sqlite3.Error, OSError):
+            pass
+
+    return {
+        "status": "OK_DERIVED",
+        "period": {"from": month_start, "to": month_end},
+        "total_actionable_skus": len(actionable),
+        "status_counts": {
+            status: sum(1 for row in actionable if row["status"] == status)
+            for status in (
+                "CO_NGUY_CO_THIEU_HANG_DERIVED",
+                "CHAM_LUAN_CHUYEN_DERIVED",
+                "TON_KHONG_BAN_3_THANG",
+            )
+        },
+        "rows": shown_rows,
+        "recent_customer_candidates": buyer_candidates,
+        "definition": (
+            "Canh bao suy dien tu ton hien co so voi binh quan ban OTC 3 thang da chot. "
+            "Khong co du lieu don cho xu ly/chia ton/khach cam ket nen KHONG ket luan da mat don hay doanh thu."),
+    }
+
+
 def inventory_expiry_report(area_code: str = None, max_bucket: str = None, limit: int = 30,
                              scope_area_code: str = None) -> dict:
     """Bao cao TON KHO THEO LO + HAN SU DUNG - tra loi cau hoi "hang nao sap het han/can date/da het
@@ -5002,7 +5132,7 @@ def inventory_expiry_report(area_code: str = None, max_bucket: str = None, limit
     if max_bucket and max_bucket not in valid_buckets:
         return {"error": f"max_bucket '{max_bucket}' khong hop le. Cac gia tri hop le: {', '.join(valid_buckets)}."}
 
-    sql = """SELECT t.item_lot_code, t.item_id, sp.name item_name, t.quantity, t.branch_code,
+    sql = """SELECT t.item_lot_code, t.item_id, sp.code item_code, sp.name item_name, t.quantity, t.branch_code,
                     k.branch_code kho_branch, l.mfg_date, l.expiry_date
              FROM brv_tonkhodklot t
              LEFT JOIN brv_lot l ON l.item_lot_code = t.item_lot_code AND l.item_id = t.item_id
@@ -5026,8 +5156,12 @@ def inventory_expiry_report(area_code: str = None, max_bucket: str = None, limit
     summary = {b[0]: {"so_lo": 0, "tong_so_luong": 0.0} for b in _EXPIRY_BUCKET_DAYS}
     unknown_expiry_count = 0
     detail = []
+    stock_by_item, item_names = {}, {}
     for r in rows:
         qty = _f(r["quantity"])
+        item_code = r["item_code"] or str(r["item_id"])
+        stock_by_item[item_code] = stock_by_item.get(item_code, 0.0) + qty
+        item_names[item_code] = r["item_name"] or item_names.get(item_code)
         if not r["expiry_date"]:
             unknown_expiry_count += 1
             continue
@@ -5042,6 +5176,7 @@ def inventory_expiry_report(area_code: str = None, max_bucket: str = None, limit
         summary[bucket]["tong_so_luong"] += qty
         detail.append({
             "item_lot_code": r["item_lot_code"],
+            "item_code": item_code,
             "item_name": r["item_name"] or f'(chua co ten - ma {r["item_id"]})',
             "quantity": qty,
             "branch_code": r["kho_branch"] or r["branch_code"],
@@ -5057,6 +5192,7 @@ def inventory_expiry_report(area_code: str = None, max_bucket: str = None, limit
         detail = [d for d in detail if d["bucket"] in allowed]
 
     detail.sort(key=lambda d: d["days_left"])
+    supply_risk = _inventory_supply_risk(stock_by_item, item_names, area_code, limit=limit)
 
     # Canh bao do moi dong bo - cung nguong 6 gio voi cong no (_customer_receivable/receivables_overview).
     # brv_tonkhodklot va brv_lot dong bo CUNG 1 lan (2 bang duoc them chung trong SMALL_TABLES, xem
@@ -5082,6 +5218,7 @@ def inventory_expiry_report(area_code: str = None, max_bucket: str = None, limit
         "khong_xac_dinh_han": unknown_expiry_count,
         "tong_so_lo_hien_thi": len(detail),
         "rows": detail[:limit],
+        "supply_risk": supply_risk,
         "note": (f"Chi hien thi {min(limit, len(detail))}/{len(detail)} lo (sap xep gan het han nhat "
                  f"truoc) - dung 'summary' de biet TONG THE ca khung, 'rows' chi la mau minh hoa."
                  if len(detail) > limit else None),

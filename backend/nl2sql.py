@@ -184,6 +184,10 @@ def _required_tool_for_question(question: str) -> str | None:
     # chi mot danh sach khach tai kich hoat.
     if "danh sach khach" in q and any(marker in q for marker in ("giu khach", "tai kich hoat", "thu no", "ban cheo")):
         return "get_customer_product_coverage"
+    # Bao cao tong gia tri ton theo mien van dung inventory_by_region, ke ca khi nguoi dung
+    # liet ke them stock-out. Chi dinh tuyen sang SKU risk khi trong tam la SKU/thieu/cham ban.
+    if "gia tri ton kho" in q:
+        return "get_inventory_by_region"
     if any(marker in q for marker in (
         "tai kich hoat", "ngung mua", "tang truong den tu mo moi", "doanh thu mat",
         "bu duoc bao nhieu", "khach lon nao ngung", "keo dai chu ky mua",
@@ -264,10 +268,14 @@ def _required_tool_for_question(question: str) -> str | None:
         if any(marker in q for marker in ("khach can", "khach vua", "doanh thu nguy co", "bop ban")):
             return "get_customer_revenue_debt_risk"
         return "get_receivables_overview"
-    if any(marker in q for marker in ("gia tri ton kho", "so thang ton", "stock-out", "thieu hang")):
-        return "get_inventory_by_region"
-    if any(marker in q for marker in ("can date", "cham luan chuyen", "ton cao", "dung nhap")):
+    if any(marker in q for marker in (
+        "stock-out", "thieu hang", "kho thieu", "nguy co mat hang", "nguy co mat don",
+        "cham luan chuyen", "ton cao", "dung nhap", "can date",
+    )):
+        # S28/S47: can ton theo SKU + nhu cau 3 thang, khong phai chi tong ton theo mien.
         return "get_inventory_expiry_report"
+    if "so thang ton" in q:
+        return "get_inventory_by_region"
     if any(marker in q for marker in (
         "tinh nao", "tinh/", "chi nhanh", "npp", "dia ban", "vung nao dong gop", "xep hang vung", "quy mo lon",
         "tang truong thap", "co hoi trang",
@@ -883,7 +891,8 @@ TEMPLATE_TOOLS = [
     },
     {
         "name": "get_inventory_expiry_report",
-        "description": "Ton kho THEO LO + HAN SU DUNG - dung cho cau hoi 'hang nao sap het han/can date/"
+        "description": "Ton kho THEO LO + HAN SU DUNG, dong thoi co canh bao SKU ton cao/cham luan chuyen/"
+                        "nguy co thieu hang - dung cho cau hoi 'hang nao sap het han/can date/"
                         "da het han', 'hang ton qua han su dung', 'kiem tra date hang ton kho'. KHAC voi "
                         "get_inventory_by_region (chi co TONG so luong/gia tri theo vung, KHONG biet lo/han "
                         "su dung tung mat hang). Tra ve 'summary' (tong so lo + so luong theo TUNG khung thoi "
@@ -891,7 +900,12 @@ TEMPLATE_TOOLS = [
                         "tren_18_thang - LUON dua CA BUC TRANH TONG THE nay truoc khi di vao chi tiet) va "
                         "'rows' (chi tiet tung lo, CHI la mau minh hoa GIOI HAN theo limit, KHONG PHAI danh "
                         "sach day du - neu 'note' bao con thieu, PHAI noi ro voi nguoi dung day chi la mot "
-                        "phan, khong phai toan bo). Neu nguoi dung hoi CHUNG CHUNG 'hang nao sap het han' "
+                        "phan, khong phai toan bo). Truong 'supply_risk' so sanh ton hien co voi binh quan "
+                        "ban OTC 3 thang da chot: dung cho cau hoi SKU ton cao, cham luan chuyen, kho thieu "
+                        "va nguy co hut hang. 'recent_customer_candidates' chi la khach da mua gan day de "
+                        "goi y lien he; PHAI noi ro day la CANH BAO SUY DIEN, khong co du lieu don cho xu ly/"
+                        "phan bo ton nen KHONG duoc ket luan da mat don, da mat doanh thu hay khach chac chan "
+                        "can mua. Neu nguoi dung hoi CHUNG CHUNG 'hang nao sap het han' "
                         "khong noi ro khung thoi gian, uu tien de max_bucket trong (mac dinh) de thay CA het "
                         "han LAN sap het han, hoac truyen max_bucket='duoi_3_thang' neu ho noi ro 'trong 3 "
                         "thang toi'. "
