@@ -328,6 +328,18 @@ def test_high_risk_intents_force_their_single_verified_tool():
         "Giá trị tồn kho, số tháng tồn và stock-out theo tháng"
     ) == "get_inventory_by_region"
     assert nl2sql._required_tool_for_question(
+        "SKU khách đang cần nhưng kho thiếu là gì; đơn/doanh thu nào có nguy cơ mất vì thiếu hàng?"
+    ) == "get_inventory_expiry_report"
+    assert nl2sql._required_tool_for_question(
+        "SKU tồn cao/chậm bán/cận date trong phạm vi vùng là gì; khách nào phù hợp để xử lý tồn?"
+    ) == "get_inventory_expiry_report"
+    assert nl2sql._required_tool_for_question(
+        "Chương trình khuyến mãi nào đội đang dùng; khách tham gia, số đơn và doanh thu trước–trong–sau chương trình thế nào?"
+    ) == "get_promotion_effectiveness"
+    assert nl2sql._required_tool_for_question(
+        "Thu tiền tháng này của từng TDV/khách so kế hoạch; cam kết thu nào đã quá hạn?"
+    ) == "get_receivables_overview"
+    assert nl2sql._required_tool_for_question(
         "Tháng mùa vụ cao/thấp; tháng hiện tại lệch mô hình bao nhiêu"
     ) == "get_revenue_monthly_series"
     assert nl2sql._required_tool_for_question(
