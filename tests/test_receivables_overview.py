@@ -72,6 +72,12 @@ def test_tong_va_tach_kenh_dung(tmp_path, monkeypatch):
     assert by_channel["ETC"]["balance_end"] == 500_000
     assert by_channel["ETC"]["total_overdue"] == 100_000
 
+    # S45/V37: snapshot cong no khong duoc bi hieu nham thanh so tien da thu/cam ket thu.
+    collection = result["collection_activity"]
+    assert collection["status"] == "source_gap"
+    assert "so_tien_da_thu_trong_thang_theo_tdv_khach" in collection["unavailable_metrics"]
+    assert "Khong suy ra so da thu" in collection["answer_rule"]
+
 
 def test_gop_vung_mb_va_mb2_thanh_mien_bac(tmp_path, monkeypatch):
     db_path = tmp_path / "warehouse.db"
@@ -203,3 +209,4 @@ def test_khong_co_du_lieu_thi_bao_ro_khong_am_tham_thanh_0(tmp_path, monkeypatch
     result = report_templates.receivables_overview()
 
     assert result["receivable_status"] == "unavailable"
+    assert result["collection_activity"]["status"] == "source_gap"

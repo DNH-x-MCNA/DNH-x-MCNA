@@ -939,7 +939,12 @@ TEMPLATE_TOOLS = [
                         "quy doi ngam hay coi 2 khung la mot. Pham vi vung/kenh duoc backend ep tu tai "
                         "khoan; neu ket qua co scope_note/scope_channel thi PHAI trinh bay dung pham vi, "
                         "KHONG duoc goi la 'toan cong ty' hay hien thi kenh khac. Khi hien thi bucket "
-                        "cuoi, viet 'tren 45 ngay', KHONG bat dau dong Markdown bang ky tu >.",
+                        "cuoi, viet 'tren 45 ngay', KHONG bat dau dong Markdown bang ky tu >. "
+                        "Neu cau hoi hoi SO TIEN DA THU, KE HOACH THU hoac CAM KET THU, BAT BUOC doc "
+                        "collection_activity: kho hien chi co snapshot du no, chua co chung tu thu gan "
+                        "hoa don/khach, chi tieu thu va cam ket. Khong suy ra so da thu tu chenh lech hai "
+                        "snapshot, khong gan cam ket qua han; chi neu so du/no qua han hien tai nhu phan "
+                        "thay the neu huu ich.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -1140,7 +1145,10 @@ TEMPLATE_TOOLS = [
                        "noi ky. associated_revenue la doanh thu gan voi don co CTKM, KHONG duoc cong "
                        "cac dong hoac goi la ROI/uplift vi mot don co the dung nhieu CTKM. Khi tra loi "
                        "BAT BUOC hien ca program_code, program_name va period tu payload; khong duoc "
-                       "chi viet ten chuong trinh hoac bo moc du lieu.",
+                       "chi viet ten chuong trinh hoac bo moc du lieu. Neu status=source_gap, PHAI neu "
+                       "dung promotion_link_coverage_to va requested_period, noi ro day la lo hong dong "
+                       "bo chu KHONG phai bang chung ky do khong co CTKM; khong suy dien khach/don/doanh "
+                       "thu va khong dung cot CTKM ghi chu tu do thay the.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -1587,7 +1595,9 @@ QUAN TRONG VE CHON TOOL:
   tren vHoaDon/vHoaDonTotal: cot do la ghi chu tu do, co the chua ten nguoi va so dien thoai. Doanh
   thu chuong trinh phai noi qua DMS_DonHangCTKM -> DMS_CTKM. Neu tool bao nguon lien ket chi den mot
   moc cu, noi ro moc do; KHONG lay ghi chu hoa don thay the va KHONG suy dien phan thieu. Khi trinh bay
-  tung CTKM, BAT BUOC ghi ro program_code, program_name va period do tool tra ve.
+  tung CTKM, BAT BUOC ghi ro program_code, program_name va period do tool tra ve. Neu status=source_gap,
+  PHAI neu dung promotion_link_coverage_to + requested_period va noi ro day la lo hong dong bo, KHONG
+  phai bang chung ky do khong co CTKM; khong noi chung chung "khong co du lieu".
 - CHAT LUONG/DO PHU CTKM (moc du lieu, link mat don/mat ma chuong trinh): BAT BUOC goi
   get_promotion_data_quality DUNG 1 LAN; KHONG search catalog/query SQL thu cong.
 - CACH TINH/BAC TIEN V15/V22/V25/ASO: BAT BUOC goi get_salary_bonus_policy DUNG 1 LAN. Neu tool phat
@@ -1625,6 +1635,9 @@ QUAN TRONG VE CHON TOOL:
 - CONG NO: cau hoi TONG HOP/nhieu khach (tong no qua han, top khach no, ty le qua han theo vung/kenh)
   -> dung get_receivables_overview. Cong no cua 1 khach cu the -> get_customer_detail. CONG NO da
   KHONG con tren Supabase - TUYET DOI khong truy van receivable_detail/receivable_etc (bang cu, da chan).
+  Neu hoi SO DA THU TRONG THANG/KE HOACH THU/CAM KET THU QUA HAN, doc collection_activity trong
+  get_receivables_overview: kho chi co snapshot du no, CHUA co chung tu thu gan hoa don/khach, target
+  thu hay bang cam ket. KHONG lay chenh lech hai snapshot lam tien da thu va KHONG tu gan cam ket qua han.
 - Voi phan cau hoi KHONG thuoc cac nhom tren: thu query_database tren warehouse truoc neu schema da
   mo ta. Neu warehouse KHONG CO object/cot can thiet, BAT BUOC dung search_sql_server_catalog de tim
   trong TOAN BO SQL Server da duoc cap quyen, sau do dung query_sql_server (neu tool kha dung) de doc

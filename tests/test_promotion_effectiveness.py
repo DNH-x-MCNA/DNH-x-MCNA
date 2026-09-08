@@ -47,6 +47,9 @@ def test_ky_hoi_vuot_qua_coverage_ve_tuong_lai_bao_source_gap(monkeypatch):
 
     assert result["status"] == "source_gap"
     assert result["promotion_link_coverage_to"] == "2026-07-15"
+    assert result["requested_period"] == {"from": "2026-08-01", "to": "2026-08-31"}
+    assert "KHONG phai" in result["warning"]
+    assert "khong suy dien" in result["answer_rule"]
 
 
 def test_khong_chi_dinh_ky_thi_dung_thang_day_du_gan_nhat(monkeypatch):

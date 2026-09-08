@@ -5230,6 +5230,31 @@ def inventory_expiry_report(area_code: str = None, max_bucket: str = None, limit
 _AREA_TO_REGION_VI = {m: REGION_NAMES_VI[key] for key, ms in REGION_SQL_MARKERS.items() for m in ms}
 
 
+def _collection_source_gap() -> dict:
+    """Gioi han nguon cho S45/V37 - tach khoi so du cong no hien tai.
+
+    Snapshot SP cong no cho biet con no bao nhieu, khong cho biet trong thang da thu
+    bao nhieu, ke hoach thu hay cam ket cua TDV/khach. Tra cau truc co dinh de model
+    khong suy ra nham "thu tien" tu chenh lech so du giua hai snapshot.
+    """
+    return {
+        "status": "source_gap",
+        "available_metrics": ["so_du_cong_no_hien_tai", "no_qua_han_hien_tai", "tuoi_no_hien_tai"],
+        "unavailable_metrics": [
+            "so_tien_da_thu_trong_thang_theo_tdv_khach",
+            "ke_hoach_thu_tien",
+            "cam_ket_thu_va_han_cam_ket",
+            "doi_chieu_chung_tu_thu_voi_hoa_don",
+        ],
+        "reason": (
+            "Kho chatbot chi co snapshot du no tu usp_DeptAccDueDate_GetData; chua co chung tu thu "
+            "gan hoa don/khach, chi tieu thu tien va bang cam ket thu."),
+        "answer_rule": (
+            "Khong suy ra so da thu tu chenh lech hai snapshot va khong gan nhan cam ket qua han. "
+            "Chi duoc trinh bay so du/no qua han hien tai neu nguoi dung chap nhan pham vi thay the."),
+    }
+
+
 def receivables_overview(top_n: int = 10, scope_area_code: str = None,
                          scope_channel: str = None) -> dict:
     """Tong quan CONG NO tu kho local fact_congno_khachhang (snapshot tuc thoi tu SP goc DNH
@@ -5275,7 +5300,8 @@ def receivables_overview(top_n: int = 10, scope_area_code: str = None,
                 "receivable_source": "bao cao cong no goc DNH (SP)",
                 "receivable_warning": (
                     "Chua tra cuu duoc cong no trong pham vi tai khoan tai thoi diem nay."),
-                "scope_area_code": scope_area_code, "scope_channel": channel}
+                "scope_area_code": scope_area_code, "scope_channel": channel,
+                "collection_activity": _collection_source_gap()}
 
     snapshot_at = meta[0]["at"]
 
@@ -5330,6 +5356,7 @@ def receivables_overview(top_n: int = 10, scope_area_code: str = None,
         "by_channel": channels,
         "by_region": regions,
         "top_overdue_customers": top_customers,
+        "collection_activity": _collection_source_gap(),
     }
     try:
         age_h = (dt.datetime.now() - dt.datetime.fromisoformat(snapshot_at)).total_seconds() / 3600.0
@@ -6499,7 +6526,11 @@ def promotion_effectiveness(date_from: str = None, date_to: str = None, limit: i
         return {
             "status": "source_gap",
             "programs": [],
+            "missing_source": "DMS_DonHangCTKM -> DMS_CTKM -> DMS_DonHangHdr",
             "note": "Khong xac dinh duoc moc du lieu don hang gan chuong trinh khuyen mai.",
+            "answer_rule": (
+                "Khong ket luan khong co chuong trinh; khong dung cot CTKM ghi chu tu do thay the. "
+                "Can khoi phuc/nap bu chuoi lien ket CTKM tu DMS."),
         }
     if not isinstance(coverage_date, dt.date):
         coverage_date = _parse_report_date(coverage_date, "coverage_date")
@@ -6523,10 +6554,16 @@ def promotion_effectiveness(date_from: str = None, date_to: str = None, limit: i
             "requested_period": {"from": str(report_from), "to": str(report_to)},
             "promotion_link_coverage_to": str(coverage_date),
             "programs": [],
+            "missing_source": "Du lieu lien ket DMS_DonHangCTKM sau moc coverage",
             "warning": (
-                "Bang lien ket don hang-chuong trinh khong co du lieu den ky duoc hoi. "
-                "Khong dung cot CTKM tren hoa don de thay the vi cot do la ghi chu tu do."
+                f"Bang lien ket don hang-chuong trinh chi co du lieu den {coverage_date}, "
+                f"khong phu ky {report_from} den {report_to}. Day la lo hong dong bo, KHONG phai "
+                "bang chung ky do khong co chuong trinh. Khong dung cot CTKM tren hoa don de thay "
+                "the vi cot do la ghi chu tu do."
             ),
+            "answer_rule": (
+                "Neu tra loi nguoi dung, phai neu dung moc coverage va ky bi thieu; khong noi chung "
+                "chung 'khong co du lieu' va khong suy dien khach/don/doanh thu CTKM."),
         }
     report_to = min(report_to, coverage_date)
     date_to_exclusive = report_to + dt.timedelta(days=1)
