@@ -77,7 +77,7 @@ if not _API_KEY or _API_KEY == "mock-key-for-local-testing":
     print('       $env:ANTHROPIC_API_KEY = "<key>"  roi chay lai.')
     raise SystemExit(2)
 
-print("API key dang dung: %s...%s (dai %d)" % (_API_KEY[:14], _API_KEY[-6:], len(_API_KEY)))
+print("Da phat hien API key hop le (gia tri duoc an khoi log).")
 
 import nl2sql  # noqa: E402
 
