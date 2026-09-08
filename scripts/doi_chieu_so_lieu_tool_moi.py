@@ -14,7 +14,8 @@ cho co loi. Chay tren may co du lieu that:
 
     python scripts/doi_chieu_so_lieu_tool_moi.py
 
-Ma thoat 0 = moi bat bien deu giu; 1 = co it nhat mot cho lech can dieu tra.
+Ma thoat 0 = moi bat bien chay duoc deu giu va chi con gioi han nguon da duoc phe duyet;
+1 = co it nhat mot cho lech hoac mot muc bo qua bat thuong can dieu tra.
 """
 import io
 import os
@@ -56,6 +57,16 @@ _loi = []
 _bo_qua = []
 _dat = [0]  # dem so phep kiem THUC SU chay va dat - de dong tong ket khong noi qua muc bang chung
 
+# Hai tool nay dang thieu du lieu nguon ben ngoai chatbot, da duoc ghi ro trong ke hoach UAT:
+# - CTKM chi co du lieu den 09/01/2026;
+# - cong no khong co snapshot lich su 31/07/2026 de so sanh ky.
+# Chung duoc phep qua gate VOI TRANG THAI CO GIOI HAN, khong duoc doi thanh "da kiem sach".
+# Moi tool/kiem tra khac bi bo qua van lam gate that bai de tranh hop thuc hoa loi moi.
+GIOI_HAN_NGUON_DA_BIET = frozenset({
+    "get_promotion_effectiveness",
+    "get_receivables_period_compare",
+})
+
 
 def _kiem(ten, dat, chi_tiet=""):
     print("  [%s] %s" % ("DAT " if dat else "LECH", ten))
@@ -72,6 +83,19 @@ def _bo(ten, ly_do):
     print("  [BO  ] %s" % ten)
     print("         %s" % ly_do)
     _bo_qua.append(ten)
+
+
+def _phan_loai_bo_qua(bo_qua):
+    """Tach gioi han nguon da phe duyet khoi cac muc bo qua bat thuong."""
+    da_biet = [ten for ten in bo_qua if ten in GIOI_HAN_NGUON_DA_BIET]
+    bat_thuong = [ten for ten in bo_qua if ten not in GIOI_HAN_NGUON_DA_BIET]
+    return da_biet, bat_thuong
+
+
+def _ma_thoat_gate(so_dat, loi, bo_qua):
+    """Gate chi qua khi co bang chung da chay, khong lech va khong bo qua bat thuong."""
+    _, bat_thuong = _phan_loai_bo_qua(bo_qua)
+    return 0 if so_dat > 0 and not loi and not bat_thuong else 1
 
 
 def _f0(x):
@@ -840,8 +864,13 @@ def main():
         print("CO %d CHO LECH - can dieu tra truoc khi tin so:" % len(_loi))
         for t in _loi:
             print("   - %s" % t)
-    if _bo_qua:
-        print("Khong chay duoc %d muc: %s" % (len(_bo_qua), ", ".join(_bo_qua)))
+    gioi_han_da_biet, bo_qua_bat_thuong = _phan_loai_bo_qua(_bo_qua)
+    if gioi_han_da_biet:
+        print("Gioi han nguon da biet %d muc: %s"
+              % (len(gioi_han_da_biet), ", ".join(gioi_han_da_biet)))
+    if bo_qua_bat_thuong:
+        print("Khong chay duoc BAT THUONG %d muc: %s"
+              % (len(bo_qua_bat_thuong), ", ".join(bo_qua_bat_thuong)))
 
     print()
     print("Da chay: %d phep kiem DAT, %d LECH, %d muc khong chay duoc."
@@ -851,13 +880,17 @@ def main():
         print("'Kho du lieu THAT dang truy van' o tren: rat co the dang tro vao ban test/kho rong.")
     elif not _loi and not _bo_qua:
         print("MOI BAT BIEN DEU GIU.")
+    elif not _loi and not bo_qua_bat_thuong:
+        print("DAT CO GIOI HAN NGUON: moi phep kiem chay duoc deu giu; %d muc thieu nguon"
+              " da duoc ghi nhan, chatbot phai neu ro gioi han va khong suy doan so."
+              % len(gioi_han_da_biet))
     elif not _loi:
         print("Cac phep kiem CHAY DUOC deu giu. Nhung con %d muc chua kiem - chua the ket luan"
-              " toan bo." % len(_bo_qua))
+              " toan bo." % len(bo_qua_bat_thuong))
     print("=" * 78)
-    # Ma thoat khac 0 khi co cho lech HOAC con muc chua kiem duoc: "chua kiem het" khong duoc phep
-    # trong giong "da kiem xong va sach" trong CI hay trong mat nguoi doc luot.
-    return 1 if (_loi or _bo_qua) else 0
+    # Gioi han nguon da biet duoc phep qua co dieu kien theo ke hoach UAT. Bat ky muc bo qua moi nao
+    # van tra ma khac 0: "chua kiem het" khong duoc phep trong giong "da kiem xong va sach".
+    return _ma_thoat_gate(_dat[0], _loi, _bo_qua)
 
 
 if __name__ == "__main__":
