@@ -24,7 +24,11 @@ PLAN_STATUSES = {"pending", "running", "completed", "partial", "failed"}
 
 def _plain(value: str) -> str:
     normalized = unicodedata.normalize("NFD", (value or "").lower())
-    return " ".join("".join(ch for ch in normalized if unicodedata.category(ch) != "Mn").split())
+    return " ".join(
+        "".join(ch for ch in normalized if unicodedata.category(ch) != "Mn")
+        .replace("đ", "d")
+        .split()
+    )
 
 
 _DOMAIN_SPECS = (
@@ -296,8 +300,9 @@ class QueryPlan:
                     else payload)
         payload_status = evidence.get("status") if isinstance(evidence, dict) else None
         limitation = self._payload_limitation(evidence)
+        normalized_status = str(payload_status or "").strip().lower()
         unavailable = (
-            payload_status in {"source_gap", "unavailable", "no_data", "not_applicable"}
+            normalized_status in {"source_gap", "unavailable", "no_data", "not_applicable", "partial"}
             or limitation is not None
         )
         error_text = evidence.get("error") if isinstance(evidence, dict) else None
@@ -342,11 +347,40 @@ class QueryPlan:
             return f"Đã nhận {len(payload)} dòng dữ liệu."
         return "Đã nhận kết quả từ tool."
 
-    @staticmethod
-    def _payload_limitation(payload: Any) -> str | None:
-        """Nâng giới hạn nghiệp vụ trong payload thành trạng thái partial của kế hoạch."""
+    def _payload_limitation(self, payload: Any) -> str | None:
+        """Nâng giới hạn nghiệp vụ trong payload thành trạng thái partial của kế hoạch.
+
+        Các tool composite vẫn có thể chạy thành công về kỹ thuật trong khi chính payload nói rõ
+        một phần dữ liệu không đủ. Nếu bỏ qua các cờ này, planner sẽ gắn nhầm ``completed`` và phần
+        cuối không còn hàng rào chống suy đoán.
+        """
         if not isinstance(payload, dict):
             return None
+        if payload.get("comparison_valid") is False:
+            return str(payload.get("warning") or "Một hoặc cả hai kỳ không đủ dữ liệu để so sánh.")
+        coverage = payload.get("data_coverage")
+        if isinstance(coverage, dict) and coverage.get("complete") is False:
+            return str(coverage.get("warning") or "Khoảng dữ liệu doanh thu chưa đầy đủ.")
+        if str(payload.get("receivable_status") or "").strip().lower() == "unavailable":
+            return str(payload.get("warning") or "Nguồn công nợ hiện không khả dụng.")
+        for field in ("unavailable_metrics", "unavailable_checks"):
+            values = payload.get(field)
+            if isinstance(values, list) and values:
+                return f"Nguồn hiện chưa hỗ trợ: {', '.join(str(value) for value in values[:6])}."
+        history_warning = (
+            payload.get("canh_bao_thieu_lich_su_doanh_thu")
+            or payload.get("canh_bao_thieu_lich_su")
+        )
+        if history_warning:
+            return str(history_warning)
+        collection = payload.get("collection_activity")
+        question = _plain(self.question)
+        asks_collection = any(marker in question for marker in (
+            "da thu", "thu duoc", "cam ket thu", "thu no", "tien thu",
+        ))
+        if (asks_collection and isinstance(collection, dict)
+                and str(collection.get("status") or "").strip().lower() == "source_gap"):
+            return str(collection.get("note") or "Thiếu nguồn sự kiện thu tiền/cam kết thu.")
         ytd_rows = payload.get("cac_nam")
         if isinstance(ytd_rows, list):
             incomplete = [row for row in ytd_rows if (

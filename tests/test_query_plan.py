@@ -287,6 +287,71 @@ def test_c03_ytd_thieu_lich_su_bi_danh_dau_partial_va_chan_so_model_tu_tinh():
     assert "Không suy đoán số" in answer
 
 
+def test_payload_thanh_cong_ky_thuat_nhung_comparison_invalid_van_la_partial():
+    plan = _plan("So sánh doanh thu tháng 7 và tháng 8/2026", query_id="compare-incomplete")
+    key = "compare"
+    plan.start_tool("compare_periods", {}, key)
+    plan.finish_tool(
+        key,
+        ok=True,
+        payload={
+            "comparison_valid": False,
+            "warning": "Kỳ tháng 7 nằm ngoài phạm vi dữ liệu đầy đủ.",
+        },
+        source="template:compare_periods",
+        duration_ms=5,
+        timeout_seconds=40,
+    )
+
+    step = next(item for item in plan.steps if item.tool_name == "compare_periods")
+    assert step.status == "partial"
+    assert "ngoài phạm vi" in step.error
+
+
+def test_status_partial_khong_bi_planner_danh_dau_completed():
+    plan = _plan("Khách nào giảm mua và còn thiếu dữ liệu công nợ?", query_id="nested-partial")
+    key = "coverage"
+    plan.start_tool("get_customer_product_coverage", {}, key)
+    plan.finish_tool(
+        key,
+        ok=True,
+        payload={
+            "status": "PARTIAL",
+            "unavailable_metrics": ["receivables"],
+            "rows": [],
+        },
+        source="template:get_customer_product_coverage",
+        duration_ms=5,
+        timeout_seconds=40,
+    )
+
+    assert any(step.status == "partial" for step in plan.steps)
+
+
+def test_hoi_tien_da_thu_gap_long_trong_receivables_overview_duoc_nang_len_partial():
+    plan = _plan("Tháng này từng TDV đã thu được bao nhiêu tiền?", query_id="collection-gap")
+    key = "receivables"
+    plan.start_tool("get_receivables_overview", {}, key)
+    plan.finish_tool(
+        key,
+        ok=True,
+        payload={
+            "receivable_status": "ok",
+            "total_overdue": 100,
+            "collection_activity": {
+                "status": "source_gap",
+                "note": "Chưa có nguồn sự kiện thu tiền theo TDV.",
+            },
+        },
+        source="template:get_receivables_overview",
+        duration_ms=5,
+        timeout_seconds=40,
+    )
+
+    assert any(step.status == "partial" for step in plan.steps)
+    assert any("sự kiện thu tiền" in (step.error or "") for step in plan.steps)
+
+
 def test_request_timeout_is_measured_from_plan_start():
     plan = _plan(query_id="timeout")
     plan.request_timeout_seconds = 0.01
