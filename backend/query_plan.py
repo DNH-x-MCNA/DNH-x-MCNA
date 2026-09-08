@@ -295,7 +295,11 @@ class QueryPlan:
         evidence = (payload.get("du_lieu") if isinstance(payload, dict) and "du_lieu" in payload
                     else payload)
         payload_status = evidence.get("status") if isinstance(evidence, dict) else None
-        unavailable = payload_status in {"source_gap", "unavailable", "no_data", "not_applicable"}
+        limitation = self._payload_limitation(evidence)
+        unavailable = (
+            payload_status in {"source_gap", "unavailable", "no_data", "not_applicable"}
+            or limitation is not None
+        )
         error_text = evidence.get("error") if isinstance(evidence, dict) else None
         for step in matched_steps:
             step.duration_ms = duration_ms
@@ -308,7 +312,9 @@ class QueryPlan:
                 step.error = str(error_text or "Tool trả trạng thái lỗi.")[:300]
             elif unavailable:
                 step.status = "partial"
-                step.error = str(evidence.get("warning") or evidence.get("note") or payload_status)[:300]
+                step.error = str(
+                    limitation or evidence.get("warning") or evidence.get("note") or payload_status
+                )[:300]
             else:
                 step.status = "completed"
                 step.result_summary = self._summarize(evidence)
@@ -335,6 +341,28 @@ class QueryPlan:
         if isinstance(payload, list):
             return f"Đã nhận {len(payload)} dòng dữ liệu."
         return "Đã nhận kết quả từ tool."
+
+    @staticmethod
+    def _payload_limitation(payload: Any) -> str | None:
+        """Nâng giới hạn nghiệp vụ trong payload thành trạng thái partial của kế hoạch."""
+        if not isinstance(payload, dict):
+            return None
+        ytd_rows = payload.get("cac_nam")
+        if isinstance(ytd_rows, list):
+            incomplete = [row for row in ytd_rows if (
+                isinstance(row, dict) and row.get("revenue_history_complete") is False
+            )]
+            if incomplete:
+                available = sorted({
+                    str(row.get("revenue_history_available_from"))
+                    for row in incomplete if row.get("revenue_history_available_from")
+                })
+                suffix = f"; kho chỉ có từ {', '.join(available)}" if available else ""
+                return (
+                    "Thiếu lịch sử doanh thu cho kỳ YTD" + suffix
+                    + ". Không tính % kế hoạch, gap hoặc bình quân cần đạt từ phần dữ liệu thiếu."
+                )
+        return None
 
     def _set_reconciliation(self, rule: str, passed: bool, detail: str) -> None:
         item = next((value for value in self.reconciliation_rules if value.rule == rule), None)
@@ -510,6 +538,32 @@ class QueryPlan:
         self.completed_at = dt.datetime.now().isoformat()
 
     def finalize_answer(self, answer: str) -> str:
+        # C03 UAT: khi lịch sử YTD thiếu, chặn ở tầng backend thay vì chỉ trông chờ model đọc đúng
+        # cảnh báo. Loại câu trả lời số do model soạn để tỷ lệ/gap suy diễn không lọt ra giao diện.
+        ytd = self._evidence.get("get_revenue_ytd_cumulative")
+        if isinstance(ytd, dict):
+            incomplete = [row for row in (ytd.get("cac_nam") or []) if (
+                isinstance(row, dict) and row.get("revenue_history_complete") is False
+            )]
+            if incomplete:
+                periods = sorted({
+                    f"{row.get('date_from')} đến {row.get('date_to')}"
+                    for row in incomplete if row.get("date_from") and row.get("date_to")
+                })
+                available = sorted({
+                    str(row.get("revenue_history_available_from"))
+                    for row in incomplete if row.get("revenue_history_available_from")
+                })
+                period_text = ", ".join(periods) if periods else "kỳ YTD được hỏi"
+                available_text = ", ".join(available) if available else "mốc chưa xác định"
+                return (
+                    "### Chưa thể tính chính xác YTD\n\n"
+                    f"Kỳ cần tính là **{period_text}**, nhưng kho doanh thu hiện chỉ có dữ liệu từ "
+                    f"**{available_text}**. Vì thiếu phần đầu kỳ, tôi không tính % đạt kế hoạch, "
+                    "khoảng thiếu/vượt hoặc bình quân cần đạt mỗi tháng từ các số liệu này.\n\n"
+                    "Cần đồng bộ đủ doanh thu của toàn bộ kỳ rồi chạy lại. Không suy đoán số cho "
+                    "phần còn thiếu."
+                )
         if self.status not in {"partial", "failed"}:
             return answer
         missing = [step for step in self.steps if step.status in {"failed", "partial", "skipped"}]

@@ -242,6 +242,51 @@ def test_partial_answer_co_san_phan_chua_kiem_chung_van_bi_chen_hang_rao_ket_lua
     assert "không có bất thường" in answer
 
 
+def test_c03_ytd_thieu_lich_su_bi_danh_dau_partial_va_chan_so_model_tu_tinh():
+    """C03: tool báo thiếu lịch sử thì backend không được giữ số YTD model tự tính."""
+    plan = _plan(
+        "Lũy kế YTD thực hiện so kế hoạch và cùng kỳ năm trước thế nào?",
+        query_id="c03-incomplete-ytd",
+    )
+    key = "ytd"
+    plan.start_tool("get_revenue_ytd_cumulative", {"year_month_to": "2026-08"}, key)
+    plan.finish_tool(
+        key,
+        ok=True,
+        payload={
+            "cac_nam": [{
+                "year": 2026,
+                "date_from": "2026-01-01",
+                "date_to": "2026-08-31",
+                "revenue": 119_731_751_334,
+                "plan_revenue": 777_008_113_856,
+                "pct_of_plan": None,
+                "revenue_history_complete": False,
+                "revenue_history_available_from": "2026-07",
+            }],
+            "canh_bao_thieu_lich_su_doanh_thu": "Thiếu doanh thu trước 2026-07.",
+        },
+        source="template:get_revenue_ytd_cumulative",
+        duration_ms=5,
+        timeout_seconds=40,
+    )
+    plan.finalize()
+
+    answer = plan.finalize_answer(
+        "YTD đạt 617,01 tỷ trên kế hoạch 777,01 tỷ, tương đương 79,41%."
+    )
+
+    revenue_step = next(step for step in plan.steps if step.domain == "revenue")
+    assert revenue_step.status == "partial"
+    assert plan.status == "partial"
+    assert "Chưa thể tính chính xác YTD" in answer
+    assert "2026-01-01 đến 2026-08-31" in answer
+    assert "2026-07" in answer
+    assert "617,01" not in answer
+    assert "79,41" not in answer
+    assert "Không suy đoán số" in answer
+
+
 def test_request_timeout_is_measured_from_plan_start():
     plan = _plan(query_id="timeout")
     plan.request_timeout_seconds = 0.01
