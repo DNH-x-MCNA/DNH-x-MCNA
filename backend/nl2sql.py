@@ -170,6 +170,19 @@ def _required_tool_for_question(question: str) -> str | None:
         if unicodedata.category(ch) != "Mn"
     ).replace("đ", "d").split())
     is_team = any(word in q for word in ("doi", "doi toi", "toan doi", "tong doi"))
+    # C13 co nhac "khuyen mai" nhu mot cau phan ra doanh thu gop/thuan, khong hoi
+    # hieu qua mot chuong trinh. Giu no o bao cao chi tiet don/hang tra.
+    if "doanh thu gop" in q and "doanh thu thuan" in q and "hang tra" in q:
+        return "check_order_timing"
+    # CTKM phai xet truoc cac nhanh tong hop "doi/khach/don". V34 co du ca ba tu
+    # nay nhung nguon chinh van la chuoi DMS_DonHangCTKM -> DMS_CTKM.
+    is_promo = any(word in q for word in ("khuyen mai", "ctkm"))
+    if is_promo and any(marker in q for marker in (
+        "den ngay nao", "mat don", "mat ma chuong trinh", "moc lien ket", "do phu",
+    )):
+        return "get_promotion_data_quality"
+    if is_promo:
+        return "get_promotion_effectiveness"
 
     # Dinh tuyen cac cau trong cot E UAT vao composite tool da co san. Thu tu tu cu the den rong:
     # mot cau co the chua nhieu tu khoa, nhung vong dau phai vao dung nguon chinh thay vi free-SQL.
@@ -343,15 +356,6 @@ def _required_tool_for_question(question: str) -> str | None:
     if is_team and (any(word in q for word in metric_words) or
                     any(word in q for word in ("đóng góp", "dong gop"))):
         return "get_customer_product_coverage"
-    is_promo = any(word in q for word in ("khuyến mãi", "khuyen mai", "ctkm"))
-    if is_promo and any(marker in q for marker in (
-        "đến ngày nào", "den ngay nao", "mất đơn", "mat don", "mất mã chương trình",
-        "mat ma chuong trinh", "mốc liên kết", "moc lien ket", "độ phủ", "do phu",
-    )):
-        return "get_promotion_data_quality"
-    if is_promo:
-        return "get_promotion_effectiveness"
-
     if any(marker in q for marker in ("sku chien luoc", "sp moi dat do phu", "san pham moi dat do phu")):
         return "get_customer_product_coverage"
 
