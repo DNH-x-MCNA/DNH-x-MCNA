@@ -116,6 +116,23 @@ DAU_HIEU_TU_CHOI = (
 )
 DAU_HIEU_CHAN_DU_BAO = ("dự báo", "không thể dự đoán", "chỉ phản ánh dữ liệu đã có")
 
+# Cac loi nay khong the tu het khi chay sang cau tiep theo. Dung ngay de tranh tao mot file 138
+# dong LOI gia (08/09/2026 da gap: het credit nhung smoke van goi du ca 5 cau).
+DAU_HIEU_LOI_PROVIDER_CAN_DUNG = (
+    "credit balance is too low",
+    "plans & billing",
+    "authentication_error",
+    "invalid x-api-key",
+    "api key is invalid",
+    "rate_limit_error",
+)
+
+
+def loi_provider_can_dung(error):
+    noi_dung = str(error or "").lower()
+    return next((dau_hieu for dau_hieu in DAU_HIEU_LOI_PROVIDER_CAN_DUNG
+                 if dau_hieu in noi_dung), None)
+
 
 def phan_loai(r):
     """Xep ket qua vao 4 nhom. Ghi ro tieu chi de nguoi doc bao cao kiem lai duoc, khong phai tin suong.
@@ -215,6 +232,12 @@ def main():
         if "Chưa cấu hình API Key" in answer:
             print("\nDUNG: ask() tra ve 'Chua cau hinh API Key' - khong lan goi nao den duoc model.")
             return 3
+        loi_dung = loi_provider_can_dung(error)
+        if loi_dung:
+            print("\nDUNG: nha cung cap model dang chan luot chay (%s)." % loi_dung)
+            print("Khong ghi cau loi nay vao ket qua. Cac cau truoc da duoc luu; khac phuc tai khoan")
+            print("roi chay lai cung lenh voi --resume %s." % out)
+            return 4
         da_co[cid] = {**case, "answer": answer, "error": error, "session_id": sid,
                       "duration_seconds": round(time.monotonic() - started, 2)}
         out.write_text(json.dumps(list(da_co.values()), ensure_ascii=False, indent=2),
