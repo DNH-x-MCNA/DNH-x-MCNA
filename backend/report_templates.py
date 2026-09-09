@@ -3935,10 +3935,12 @@ def operational_data_quality(as_of_date: str = None, sample_limit: int = 30,
         if fdate:
             roster_sql, roster_params = _roster_employee_sql(fdate)
             sql = (f"WITH roster AS ({roster_sql}), metrics AS ("
-                   "SELECT e.employee_code,MAX(e.month_sale_target) target,MAX(e.save_date) metric_snapshot "
+                   "SELECT e.employee_code,MAX(e.month_sale_target) target,SUM(e.amount_ct) actual,"
+                   "MAX(e.save_date) metric_snapshot "
                    f"FROM fact_tonghopkhachhang e JOIN {_MONTH_LATEST_SUBQ} l "
                    "ON l.employee_code=e.employee_code AND l.d=e.save_date GROUP BY e.employee_code) "
-                   "SELECT f.employee_code,f.manager_code,m.target,m.metric_snapshot,nv.employee_code dim_code,"
+                   "SELECT f.employee_code,f.manager_code,m.target,m.actual,m.metric_snapshot,"
+                   "nv.employee_code dim_code,"
                    "nv.name employee_name,nv.position_code,nv.is_duplicate,nv.area_code FROM roster f "
                    "LEFT JOIN metrics m ON m.employee_code=f.employee_code "
                    "LEFT JOIN dim_nhanvien nv ON nv.employee_code=f.employee_code WHERE 1=1")
@@ -3951,51 +3953,119 @@ def operational_data_quality(as_of_date: str = None, sample_limit: int = 30,
                 sql += f" AND f.employee_code IN ({','.join(['?'] * len(codes))})"
                 params.extend(codes)
             employees = _q(sql, tuple(params))
+
+            # C54/S38: FACT_TongHopKhachHang la 1 dong/(NV x khach) nen roster cua no chi co
+            # nguoi da phat sinh khach/doanh so. Nguon dung de kiem tra thieu target, trung tang
+            # va manager la FACT_ThongKeTinhLuong: 1 dong/NV, gom ca nguoi chua ban va cac ban ghi
+            # alias/vi tri trong. Do that T8/2026: TongHopKhachHang chi co 186 ma va bao 2 ca thieu
+            # target; ThongKeTinhLuong co 209 dong, trong do tang nhan vien 183 nguoi va 17 ca thieu
+            # target (2 ca da co doanh so). Chi dung nguon nay khi so dong khong kem hon roster cu,
+            # de fail-safe neu job luong/KPI chua dong bo du tren mot moi truong.
+            quality_source = "fact_tonghopkhachhang"
+            quality_snapshot = fdate
+            try:
+                salary_date_r = _q(
+                    "SELECT MAX(save_date) d FROM fact_thongketinhluong WHERE save_date<=?",
+                    (as_of_date,),
+                )
+                salary_date = salary_date_r[0]["d"] if salary_date_r and salary_date_r[0]["d"] else None
+                if salary_date:
+                    salary_sql = (
+                        "WITH latest AS (SELECT employee_code,MAX(save_date) d "
+                        "FROM fact_thongketinhluong WHERE save_date<=? "
+                        "AND substr(save_date,1,7)=substr(?,1,7) GROUP BY employee_code) "
+                        "SELECT f.employee_code,f.manager_code,f.month_sale_target target,"
+                        "f.month_sale_amount actual,f.save_date metric_snapshot,"
+                        "nv.employee_code dim_code,COALESCE(f.employee_name,nv.name) employee_name,"
+                        "COALESCE(f.position_code,nv.position_code) position_code,"
+                        "nv.is_duplicate,COALESCE(f.area_code,nv.area_code) area_code "
+                        "FROM fact_thongketinhluong f JOIN latest l "
+                        "ON l.employee_code=f.employee_code AND l.d=f.save_date "
+                        "LEFT JOIN dim_nhanvien nv ON nv.employee_code=f.employee_code WHERE 1=1"
+                    )
+                    salary_params = [salary_date, salary_date]
+                    if scope_area_code:
+                        salary_sql += " AND COALESCE(f.area_code,nv.area_code)=?"
+                        salary_params.append(scope_area_code)
+                    if scope_employee_code:
+                        salary_sql += (
+                            f" AND f.manager_code=? AND UPPER(COALESCE(f.position_code,"
+                            f"nv.position_code,'')) IN ({_tier_ph()})"
+                        )
+                        salary_params.extend([scope_employee_code, *_EMPLOYEE_TIER_POSITIONS])
+                    salary_rows = _q(salary_sql, tuple(salary_params))
+                    if salary_rows and len(salary_rows) >= len(employees):
+                        employees = salary_rows
+                        quality_source = "fact_thongketinhluong"
+                        quality_snapshot = salary_date
+            except sqlite3.OperationalError:
+                # Kho cu/test fixture co the chua co bang luong hoac chua du cot. Duong cu van
+                # fail-closed va cac canh bao snapshot tiep tuc duoc tra ve.
+                pass
             # C54 UAT: cap QLV khong co manager_code trong nguon phang la gioi han cay cap tren,
             # khong duoc tron vao loi "nhan vien tuyen ban hang thieu quan ly". Neu tron, kho that
             # 31/08 bao sai 21 loi trong khi ca 21 dong deu la QLV. Dong thieu DIM van giu trong
             # tap loi vi chua du vai tro de chung minh day la cap quan ly hop le.
+            def _is_employee_tier(row):
+                position = str(row["position_code"] or "").upper()
+                return position in _EMPLOYEE_TIER_POSITIONS or not row["dim_code"]
+
+            employee_tier = [r for r in employees if _is_employee_tier(r)]
+            management_tier = [r for r in employees if not _is_employee_tier(r)]
             missing_manager = [
                 r["employee_code"] for r in employees
                 if not (r["manager_code"] or "").strip()
-                and (not r["dim_code"] or str(r["position_code"] or "").upper() in _EMPLOYEE_TIER_POSITIONS)
+                and _is_employee_tier(r)
             ]
             management_without_parent = [
                 r["employee_code"] for r in employees
                 if not (r["manager_code"] or "").strip()
-                and r["dim_code"] and str(r["position_code"] or "").upper() not in _EMPLOYEE_TIER_POSITIONS
+                and not _is_employee_tier(r)
             ]
-            missing_target = [r["employee_code"] for r in employees if _f(r["target"]) <= 0]
-            missing_snapshot = [r["employee_code"] for r in employees if r["metric_snapshot"] is None]
+            target_population = employee_tier if quality_source == "fact_thongketinhluong" else employees
+            missing_target = [r["employee_code"] for r in target_population if _f(r["target"]) <= 0]
+            missing_snapshot = ([r["employee_code"] for r in employees if r["metric_snapshot"] is None]
+                                if quality_source != "fact_thongketinhluong" else [])
             target_with_snapshot = [
-                r["employee_code"] for r in employees
+                r["employee_code"] for r in target_population
                 if r["metric_snapshot"] is not None and _f(r["target"]) > 0
             ]
             missing_target_with_snapshot = [
-                r["employee_code"] for r in employees
+                r["employee_code"] for r in target_population
                 if r["metric_snapshot"] is not None and _f(r["target"]) <= 0
+            ]
+            missing_target_with_sales = [
+                r["employee_code"] for r in target_population
+                if _f(r["target"]) <= 0 and _f(r.get("actual")) > 0
             ]
             missing_dim = [r["employee_code"] for r in employees if not r["dim_code"]]
             duplicates = [r["employee_code"] for r in employees if int(r["is_duplicate"] or 0) == 1
                           and r["employee_code"] not in _KNOWN_MISFLAGGED_DUPLICATE_CODES]
             result["checks"]["kpi_employee_mapping"] = {
-                "snapshot": fdate, "employees": len(employees),
+                "snapshot": quality_snapshot, "quality_source": quality_source,
+                "employees": len(employees),
                 # Ten ro nghia de model khong doc nham `employees` thanh "so nguoi co target".
                 # Giu `employees` ben tren de tuong thich nguoc voi pack UAT/script hien tai.
                 "roster_employees": len(employees),
+                "employee_tier_employees": len(employee_tier),
+                "management_tier_employees": len(management_tier),
                 "employees_with_current_snapshot": len(employees) - len(missing_snapshot),
                 "employees_with_target": len(target_with_snapshot),
-                "roster_snapshots": _roster_snapshot_dates(fdate),
+                "roster_snapshots": ([quality_snapshot] if quality_source == "fact_thongketinhluong"
+                                     else _roster_snapshot_dates(fdate)),
                 "missing_current_snapshot": len(missing_snapshot),
                 "missing_manager": len(missing_manager), "missing_target": len(missing_target),
                 "missing_target_with_current_snapshot": len(missing_target_with_snapshot),
+                "missing_target_with_sales": len(missing_target_with_sales),
                 "missing_employee_dim": len(missing_dim), "duplicate_codes": len(duplicates),
                 "management_rows_without_parent_in_source": len(management_without_parent),
-                "note": "roster_employees/employees la TONG DANH SACH NHAN SU can kiem tra, KHONG "
-                        "phai so nguoi co target. employees_with_target moi la so nguoi co target "
-                        "duong tai snapshot hien tai. missing_target gom ca nguoi chua co dong KPI "
-                        "trong ky; missing_target va missing_current_snapshot CO CHONG LAN, KHONG duoc "
-                        "cong hai nhom. Chua du du lieu "
+                "note": "quality_source cho biet nguon roster da dung. Neu la fact_thongketinhluong, "
+                        "employee_tier_employees moi la mau so cua missing_target/missing_manager; "
+                        "management_tier_employees duoc tach rieng. roster_employees/employees la tong "
+                        "ca hai tang, KHONG phai so nguoi co target. employees_with_target moi la so "
+                        "nhan vien tuyen ban hang co target duong. missing_target_with_sales la nhom "
+                        "uu tien kiem tra. O duong fallback fact_tonghopkhachhang, missing_target va "
+                        "missing_current_snapshot CO CHONG LAN, KHONG duoc cong hai nhom. Chua du du lieu "
                         "khong dong nghia voi 0% KPI hay da xac nhan chua giao chi tieu. "
                         "management_rows_without_parent_in_source la QLV/cap quan ly khong co cay "
                         "cap tren trong nguon phang; chi de canh bao gioi han nguon, khong tinh la loi NV.",
@@ -4003,6 +4073,7 @@ def operational_data_quality(as_of_date: str = None, sample_limit: int = 30,
             result["samples"].update({
                 "missing_manager": missing_manager[:sample_limit],
                 "missing_target": missing_target[:sample_limit],
+                "missing_target_with_sales": missing_target_with_sales[:sample_limit],
                 "missing_current_snapshot": missing_snapshot[:sample_limit],
                 "missing_employee_dim": missing_dim[:sample_limit],
                 "duplicate_codes": duplicates[:sample_limit],
@@ -4012,6 +4083,7 @@ def operational_data_quality(as_of_date: str = None, sample_limit: int = 30,
             detail_groups = {
                 "missing_manager": missing_manager,
                 "missing_target": missing_target,
+                "missing_target_with_sales": missing_target_with_sales,
                 "missing_current_snapshot": missing_snapshot,
                 "missing_employee_dim": missing_dim,
                 "duplicate_codes": duplicates,

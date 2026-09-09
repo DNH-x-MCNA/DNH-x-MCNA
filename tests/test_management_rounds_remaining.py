@@ -506,6 +506,35 @@ def test_quality_dau_thang_dem_ca_nguoi_mat_snapshot_va_nguoi_moi(tmp_path, monk
     assert scoped['checks']['kpi_employee_mapping']['missing_manager'] == 0
 
 
+def test_operational_quality_uu_tien_roster_luong_day_du_cho_c54_s38(tmp_path, monkeypatch):
+    path = _setup(tmp_path, monkeypatch)
+    with sqlite3.connect(path) as conn:
+        # Roster luong/KPI day du bang roster cu, nen phai duoc uu tien. Hai QLV khong co
+        # manager la dung cau truc; chi tang nhan vien moi la mau so thieu manager/target.
+        conn.execute("DELETE FROM fact_thongketinhluong")
+        conn.executemany("INSERT INTO fact_thongketinhluong VALUES (?,?,?,?,?,?,?,?,?)", [
+            ('T1', 'TDV 1', 'TDV', 'MB', 'Q1', '2026-04-20', 600, 1000, 60),
+            ('T2', 'TDV 2', 'TDV', 'MB', 'Q1', '2026-04-20', 200, 0, 0),
+            ('T3', 'TDV 3', 'TDV', 'MN', 'Q2', '2026-04-20', 900, 1000, 90),
+            ('DUP', 'Ma trung', 'TDV', 'MB', 'Q1', '2026-04-20', 0, 0, 0),
+            ('Q1', 'QLV Bac', 'QLV', 'MB', None, '2026-04-20', 800, 2000, 40),
+            ('Q2', 'QLV Nam', 'QLV', 'MN', None, '2026-04-20', 900, 1000, 90),
+        ])
+
+    result = rt.operational_data_quality(as_of_date='2026-04-20')
+    check = result['checks']['kpi_employee_mapping']
+    assert check['quality_source'] == 'fact_thongketinhluong'
+    assert check['employees'] == 6
+    assert check['employee_tier_employees'] == 4
+    assert check['management_tier_employees'] == 2
+    assert check['missing_manager'] == 0
+    assert check['management_rows_without_parent_in_source'] == 2
+    assert check['missing_target'] == 2
+    assert check['missing_target_with_sales'] == 1
+    assert result['samples']['missing_target_with_sales'] == ['T2']
+    assert result['samples']['duplicate_codes'] == ['DUP']
+
+
 def test_revenue_reconciliation_khong_tu_goi_coverage_thap_la_binh_thuong(tmp_path, monkeypatch):
     _setup(tmp_path, monkeypatch)
     # Tao coverage thap ro rang: top-down MB thang 4 = 630, roll-up doi = 300.

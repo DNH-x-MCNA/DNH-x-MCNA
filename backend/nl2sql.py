@@ -825,9 +825,13 @@ TEMPLATE_TOOLS = [
                        "KHONG duoc bien not_available thanh 0 loi. sample_details co ca ma, ten, vai tro, "
                        "vung va manager de hien thi than thien. management_rows_without_parent_in_source "
                        "la QLV/cap quan ly thieu cay cap tren trong NGUON, khong tinh la loi nhan vien thieu manager. "
-                       "QUAN TRONG: roster_employees/employees la tong roster can kiem, KHONG phai so nguoi "
-                       "co target; chi employees_with_target moi mang nghia do. missing_target da gom nguoi "
-                       "missing_current_snapshot va hai nhom co chong lan, KHONG cong lai.",
+                       "QUAN TRONG C54/S38: quality_source=fact_thongketinhluong la roster day du; "
+                       "employee_tier_employees moi la mau so cua missing_target/missing_manager, con "
+                       "management_tier_employees la cap quan ly tach rieng. roster_employees/employees la "
+                       "tong ca hai tang, KHONG phai so nguoi co target; chi employees_with_target moi mang "
+                       "nghia do. missing_target_with_sales la nhom uu tien. Neu tool fallback sang "
+                       "fact_tonghopkhachhang thi missing_target co the chong lan missing_current_snapshot; "
+                       "KHONG cong hai nhom.",
         "input_schema": {"type": "object", "properties": {
             "as_of_date": {"type": "string"}, "sample_limit": {"type": "integer"},
         }, "required": []},
