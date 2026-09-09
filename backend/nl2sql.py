@@ -668,8 +668,13 @@ TEMPLATE_TOOLS = [
                         "mat dan', 'doanh thu co nguy co mat vi khach bo di'. Dua tren LICH SU HOA DON "
                         "THAT (lan mua cuoi + doanh thu ky nhin lai) nen chac chan hon get_customer_"
                         "lifecycle_summary (dem theo co Bravo chua xac nhan nghia). Sap xep theo doanh thu "
-                        "ky truoc giam dan - khach mat nhieu tien nhat len dau. Kho local chi giu chi tiet "
-                        "hoa don ~12 thang gan nhat, PHAI noi ro gioi han nay neu nguoi dung hoi xa hon.",
+                        "ky truoc giam dan - khach mat nhieu tien nhat len dau. V21/S69: BAT BUOC doc "
+                        "total_count/returned_count/truncated/not_shown_count; neu truncated=true phai noi "
+                        "ro con bao nhieu khach chua hien, khong duoc goi cac dong dang thay la toan bo. "
+                        "Moi khach co nhom_im_lang va san_pham_mua_nhieu_nhat. Neu san pham co status hoac "
+                        "product_name_status=not_available thi chi noi thieu thong tin san pham, KHONG loai "
+                        "khach va KHONG suy dien ten SKU. Kho local chi giu chi tiet hoa don ~12 thang gan "
+                        "nhat, PHAI noi ro gioi han nay neu nguoi dung hoi xa hon.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -686,8 +691,11 @@ TEMPLATE_TOOLS = [
         "description": "COHORT GIU CHAN khach theo thang co hoa don dau tien QUAN SAT DUOC, tinh ty "
                        "le con mua o tuoi 1/3/6/12 thang. BAT BUOC dung cho cau hoi 'giu chan cohort', "
                        "'khach mo moi sau 3/6/12 thang con mua bao nhieu'. Co the tach overall/channel/"
-                       "area. PHAI nhac canh bao: neu kho thieu lich su truoc do thi first observed KHONG "
-                       "chac la lan mua dau tien trong doi; ky chua du tuoi tra None, KHONG coi la 0%.",
+                       "area. C30/S19: BAT BUOC bo qua cohort co valid_new_customer_cohort=false khi "
+                       "ket luan ty le giu chan; left_censored_cohort_months la cac cohort o bien lich su, "
+                       "chi duoc neu nhu so quan sat tham khao. first observed KHONG chac la lan mua dau "
+                       "tien trong doi; ky co ky_da_du=false tra None, KHONG coi la 0%. DNH van can chot "
+                       "dinh nghia 'khach mo moi' truoc khi dung lam KPI chinh thuc.",
         "input_schema": {"type": "object", "properties": {
             "month_to": {"type": "string", "description": "YYYY-MM, thang cohort cuoi."},
             "months_back": {"type": "integer", "description": "So thang cohort, mac dinh 6, toi da 24."},
@@ -763,11 +771,15 @@ TEMPLATE_TOOLS = [
                        "mode='product', dung net_revenue_per_paid_unit va truong previous/delta/pct de "
                        "phan tich xoi mon gia; day la doanh thu thuan tren don vi ban co gia, khong phai bang gia niem yet. "
                        "C28/S91: mode='assignment_change' tach khach giu nguyen NV chinh, doi NV, moi va "
-                       "roi bo tren OTC; day la ket qua PARTIAL vi khong co lich su assignment dia ban chot chuan.",
+                       "roi bo tren OTC; day la ket qua PARTIAL vi khong co lich su assignment dia ban chot chuan. "
+                       "C34/M34/S22: BAT BUOC mode='product_first_observed', lookback_months=12. "
+                       "first_observed_sale_month KHONG phai ngay ra mat; chi dung dong co "
+                       "valid_for_launch_age_analysis=true. Kho chua co master launch date va target SKU, "
+                       "nen KHONG tinh % ke hoach va phai noi ro gioi han.",
         "input_schema": {"type": "object", "properties": {
             "as_of_date": {"type": "string"}, "lookback_months": {"type": "integer"},
-            "mode": {"type": "string", "enum": ["customer", "customer_peer", "product", "employee", "priority", "four_customer_priorities", "product_monthly", "product_mix", "sku_target", "assignment_change"],
-                     "description": "V28/S83: four_customer_priorities (4 danh sach giu khach/tai kich hoat/thu no/ban cheo). V29/S21: product_monthly (top/bottom SKU tung thang va dong gop MoM). V30/S46: sku_target (kiem tra target theo SKU; bao lo nguon, khong tu suy dien %). V31/S23: product_mix (nhieu khach-luong/don thap va it khach-AOV cao). C28/S91: assignment_change (tach nhom giu/doi NV; chi OTC, co canh bao gioi han nguon)."},
+            "mode": {"type": "string", "enum": ["customer", "customer_peer", "product", "employee", "priority", "four_customer_priorities", "product_monthly", "product_mix", "sku_target", "product_first_observed", "assignment_change"],
+                     "description": "V28/S83: four_customer_priorities (4 danh sach giu khach/tai kich hoat/thu no/ban cheo). V29/S21: product_monthly (top/bottom SKU tung thang va dong gop MoM). V30/S46: sku_target (kiem tra target theo SKU; bao lo nguon, khong tu suy dien %). C34/M34/S22: product_first_observed (moc ban dau quan sat, khong phai launch date; khong co target SKU). V31/S23: product_mix (nhieu khach-luong/don thap va it khach-AOV cao). C28/S91: assignment_change (tach nhom giu/doi NV; chi OTC, co canh bao gioi han nguon)."},
             "limit": {"type": "integer"},
         }, "required": []},
     },
@@ -803,6 +815,12 @@ TEMPLATE_TOOLS = [
                        "thu/nhan vien, MoM va streak giam theo nhan vien/QLV/vung/tong. Dung cho span of "
                        "control, headcount tang nhung nang suat giam, ai/doi giam lien tiep. Chua co lich "
                        "su vao-ra-chuyen vung chot chuan nen KHONG ket luan nhan qua tu bien dong headcount. "
+                       "M16/S55 va V13: khi hoi NHAN VIEN giam lien tiep, BAT BUOC goi group_by='employee', "
+                       "months_back>=4, limit=200. BAT BUOC noi tong so tu declining_employee_count va dung "
+                       "declining_employees de liet ke; neu declining_employees_truncated=true phai noi ro "
+                       "con bao nhieu nguoi khong hien. CHI duoc noi 'duy nhat' khi count=1. "
+                       "decline_cause_data_available=false nghia la tool moi chi chung minh doanh so giam; "
+                       "KHONG duoc tu suy dien mat khach, giam tan suat hay AOV, ma phai noi chua du bang chung. "
                        "C49/S34: khi hoi di tuyen/vieng tham/phu tuyen/ty le co don sau tham, BAT BUOC truyen "
                        "mode='route_visits'. Che do nay doc DMS_DiTuyen OTC theo ky hoi, tra luot vieng, khach "
                        "duoc vieng, % theo tuyen, % co don cung ngay (CAN DUOI) va doanh thu/luot vieng.",
@@ -829,7 +847,9 @@ TEMPLATE_TOOLS = [
                        "employee_tier_employees moi la mau so cua missing_target/missing_manager, con "
                        "management_tier_employees la cap quan ly tach rieng. roster_employees/employees la "
                        "tong ca hai tang, KHONG phai so nguoi co target; chi employees_with_target moi mang "
-                       "nghia do. missing_target_with_sales la nhom uu tien. Neu tool fallback sang "
+                       "nghia do. missing_target_details la danh sach DUY NHAT de hien thi; moi ma chi "
+                       "co mot dong va has_sales_without_target danh dau nhom uu tien. "
+                       "missing_target_with_sales la tap con de dem, KHONG liet ke lai. Neu tool fallback sang "
                        "fact_tonghopkhachhang thi missing_target co the chong lan missing_current_snapshot; "
                        "KHONG cong hai nhom. snapshot_is_closed=false CHI noi snapshot chua chot; TUYET DOI "
                        "KHONG goi thieu target la 'binh thuong', 'do dau thang' hay 'do chua nhap du' neu "
@@ -1414,7 +1434,11 @@ QUERY_SQL_SERVER_TOOL = {
         "context hoac goi search_sql_server_catalog. Dung T-SQL: TOP N, dbo.[TenObject], KHONG LIMIT, "
         "KHONG SELECT *. Chi SELECT/WITH; cam EXEC stored procedure, ghi/sua/xoa, SELECT INTO va truy van "
         "sang database khac. Du lieu live la nguon chinh de kiem tra do phu, nhung voi doanh thu/cong no/"
-        "KPI da co tool chuan thi van BAT BUOC dung tool chuan truoc. Tool live chi kha dung cho vai tro "
+        "KPI da co tool chuan thi van BAT BUOC dung tool chuan truoc. C44/M42 hop dong ETC: hoa don "
+        "hien KHONG co khoa hop dong da xac nhan; KHONG duoc ghep qua customer+SKU de tinh doanh thu "
+        "thuc hien, gia tri con lai, ty le giai ngan hay cong no theo hop dong. Chi doc metadata hop dong "
+        "va neu ro cac chi tieu tren chua kiem chung; khong cong/xep hang gia tri hop dong bat thuong khi "
+        "chua co quy tac chat luong du lieu duoc DNH chot. Tool live chi kha dung cho vai tro "
         "C-Level/Admin do SQL tu do khong the ep phan quyen dong theo moi bang."
     ),
     "input_schema": {
@@ -1804,6 +1828,12 @@ QUAN TRONG VE CHON TOOL:
   Neu hoi SO DA THU TRONG THANG/KE HOACH THU/CAM KET THU QUA HAN, doc collection_activity trong
   get_receivables_overview: kho chi co snapshot du no, CHUA co chung tu thu gan hoa don/khach, target
   thu hay bang cam ket. KHONG lay chenh lech hai snapshot lam tien da thu va KHONG tu gan cam ket qua han.
+- HOP DONG/GOI THAU ETC (C44/M42): hoa don hien KHONG co khoa hop dong da DNH xac nhan. TUYET DOI
+  KHONG ghep hoa don vao hop dong chi bang khach hang + SKU, vi mot dong co the nhan nham/nhan doi.
+  Chi duoc bao metadata hop dong co truc tiep trong nguon (so, khach, hieu luc, gia tri goc) va phai ghi
+  ro doanh thu thuc hien, gia tri con lai/giai ngan, ty le thuc hien va cong no qua han THEO HOP DONG
+  chua the kiem chung. Gia tri hop dong bat thuong khong duoc cong tong/xep hang nhu so sach neu chua
+  co quy tac kiem tra va xac nhan cua DNH.
 - Voi phan cau hoi KHONG thuoc cac nhom tren: thu query_database tren warehouse truoc neu schema da
   mo ta. Neu warehouse KHONG CO object/cot can thiet, BAT BUOC dung search_sql_server_catalog de tim
   trong TOAN BO SQL Server da duoc cap quyen, sau do dung query_sql_server (neu tool kha dung) de doc

@@ -298,6 +298,31 @@ def test_sap_xep_khach_mat_nhieu_tien_nhat_len_dau(tmp_path, monkeypatch):
     assert r["khach_im_lang"][0]["customer_code"] == "KHMOCOI"  # 7000 > 5000
 
 
+def test_v21_dem_toan_bo_truoc_khi_cat_va_bao_so_chua_hien(tmp_path, monkeypatch):
+    _setup(tmp_path, monkeypatch)
+    r = rt.customers_silent(
+        as_of_date="2026-07-29", silent_days=60, lookback_months=6, limit=1,
+    )
+
+    assert r["total_count"] == 2
+    assert r["so_khach"] == 2, "so_khach la tong day du, khong phai so dong sau limit"
+    assert r["returned_count"] == 1
+    assert r["truncated"] is True
+    assert r["not_shown_count"] == 1
+
+
+def test_v21_thieu_ten_san_pham_khong_lam_roi_khach(tmp_path, monkeypatch):
+    _setup(tmp_path, monkeypatch)
+    r = rt.customers_silent(as_of_date="2026-07-29", silent_days=60, lookback_months=6)
+
+    assert {x["customer_code"] for x in r["khach_im_lang"]} == {"KH02", "KHMOCOI"}
+    for customer in r["khach_im_lang"]:
+        favourite = customer["san_pham_mua_nhieu_nhat"]
+        assert favourite["item_code"] == "SP1"
+        assert favourite["product_name_status"] == "not_available"
+        assert "nhom_im_lang" in customer
+
+
 def test_giu_khach_mo_coi_khong_co_trong_danh_muc(tmp_path, monkeypatch):
     """Khach 'mo coi' (co hoa don nhung khong co trong danh muc) la CO THAT - vd HCM13508 ~2,3 ty
     doanh thu 2022-2025. Loai di la lam bay hoi doanh thu that, phai giu lai va ghi ro thieu ten."""

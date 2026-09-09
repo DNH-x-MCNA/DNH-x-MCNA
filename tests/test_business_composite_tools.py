@@ -759,3 +759,14 @@ def test_salary_queries_only_use_closed_period_snapshots():
     clause, params = rt._closed_salary_date_filter("", "2026-07")
     assert "substr(save_date,1,7)=?" in clause
     assert params == ("2026-07",)
+
+
+def test_c44_contract_guard_cam_ghep_hoa_don_qua_khach_sku():
+    prompt = nl2sql._static_system_prompt()
+    live_tool = nl2sql.QUERY_SQL_SERVER_TOOL["description"]
+
+    for text in (prompt, live_tool):
+        lowered = text.lower()
+        assert "khong co khoa hop dong" in lowered
+        assert ("khach" in lowered or "customer" in lowered) and "sku" in lowered
+        assert "gia tri con lai" in lowered

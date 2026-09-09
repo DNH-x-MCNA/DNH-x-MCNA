@@ -128,10 +128,50 @@ def test_cohort_retention_tinh_dung_tu_hoa_don(tmp_path, monkeypatch):
     r = rt.customer_cohort_retention(month_to="2026-01", months_back=1, age_months=[1, 3])
     jan = next(x for x in r["cohorts"] if x["cohort_month"] == "2026-01")
     assert jan["cohort_customers"] == 3  # C1, C2, C4
+    assert jan["cohort_is_left_censored"] is True
+    assert jan["valid_new_customer_cohort"] is False
+    assert r["left_censored_cohort_months"] == ["2026-01"]
     age1 = next(x for x in jan["retention"] if x["age_month"] == 1)
     age3 = next(x for x in jan["retention"] if x["age_month"] == 3)
     assert age1["retained_customers"] == 1  # chi C1 mua Feb
     assert age3["retained_customers"] == 2  # C1 va C4 mua Apr
+
+
+def test_c34_first_observed_khong_bi_goi_la_launch_va_khong_bia_target(tmp_path, monkeypatch):
+    db_path = _setup(tmp_path, monkeypatch)
+    with sqlite3.connect(db_path) as con:
+        con.execute("INSERT INTO brv_sanpham VALUES ('C','San pham C','G2','hop',3)")
+        con.execute("INSERT INTO vhoadon_otc VALUES "
+                    "('2026-03-07','C1','C',400,1,400,'OC1',1,'D1','2026-03-07','OTC')")
+        con.execute("INSERT INTO vhoadon_otc VALUES "
+                    "('2026-04-07','C2','C',500,1,500,'OC2',1,'D2','2026-04-07','OTC')")
+
+    result = rt.customer_product_coverage(
+        as_of_date="2026-04-20", lookback_months=12, mode="product_first_observed",
+    )
+    by_code = {x["item_code"]: x for x in result["products"]}
+    assert by_code["A"]["first_observed_is_left_censored"] is True
+    assert by_code["A"]["valid_for_launch_age_analysis"] is False
+    assert by_code["C"]["first_observed_sale_month"] == "2026-03"
+    assert by_code["C"]["first_observed_is_launch_date"] is False
+    age1 = next(x for x in by_code["C"]["age_results"] if x["age_month"] == 1)
+    assert age1["period_complete"] is False
+    assert age1["customers"] is None and age1["revenue"] is None
+    assert age1["target_status"] == "not_available"
+    assert age1["target_achievement_pct"] is None
+    assert result["launch_date_source"] == result["sku_target_source"] == "not_available"
+
+
+def test_c34_cau_hoi_tu_dong_chon_mode_fail_closed(tmp_path, monkeypatch):
+    _setup(tmp_path, monkeypatch)
+    result = rt.call_template(
+        "get_customer_product_coverage", {},
+        question="Doanh thu sản phẩm mới sau 1/3/6/12 tháng ra mắt và độ phủ khách hàng",
+        scope_role="c_level",
+    )
+    assert result["ok"] is True
+    assert result["result"]["mode"] == "product_first_observed"
+    assert result["result"]["launch_date_source"] == "not_available"
 
 
 def test_customer_movement_phan_loai_new_reactivated_stopped(tmp_path, monkeypatch):
@@ -540,6 +580,12 @@ def test_operational_quality_uu_tien_roster_luong_day_du_cho_c54_s38(tmp_path, m
     assert check['missing_target'] == 2
     assert check['missing_target_with_sales'] == 1
     assert result['samples']['missing_target_with_sales'] == ['T2']
+    assert result['missing_target_details_total'] == 2
+    assert [row['employee_code'] for row in result['missing_target_details']] == ['DUP', 'T2']
+    assert [row['has_sales_without_target'] for row in result['missing_target_details']] == [False, True]
+    assert result['missing_target_details_returned'] == 2
+    assert result['missing_target_details_truncated'] is False
+    assert len({row['employee_code'] for row in result['missing_target_details']}) == 2
     assert result['samples']['duplicate_codes'] == ['DUP']
     assert "KHONG duoc tu ket luan thieu target la binh thuong" in check['note']
 

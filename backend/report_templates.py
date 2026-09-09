@@ -1921,43 +1921,109 @@ def customers_silent(as_of_date: str = None, silent_days: int = 60, lookback_mon
     parts, part_params = [], []
     if scope_channel != "ETC":
         join_o = _otc_area_join("v", scope_area_code)
-        parts.append(f"SELECT v.customer_code, v.doc_date, v.amount9 FROM vhoadon_otc v {join_o} "
+        parts.append(f"SELECT v.customer_code, v.doc_date, v.item_code, v.amount9 FROM vhoadon_otc v {join_o} "
                       f"WHERE v.doc_date BETWEEN ? AND ?{scope_sql}")
         part_params.append((date_from, as_of_date) + scope_params)
     if scope_channel != "OTC":
         join_e = _etc_area_join("v", scope_area_code)
-        parts.append(f"SELECT v.customer_code, v.doc_date, v.amount9 FROM vhoadon_etc v {join_e} "
+        parts.append(f"SELECT v.customer_code, v.doc_date, v.item_code, v.amount9 FROM vhoadon_etc v {join_e} "
                       f"WHERE v.doc_date BETWEEN ? AND ?{scope_sql}")
         part_params.append((date_from, as_of_date) + scope_params)
     if not parts:
         return {"error": "Khong co kenh nao kha dung voi pham vi tai khoan."}
 
-    sql = f"""SELECT customer_code, MAX(doc_date) lan_mua_cuoi, SUM(amount9) doanh_thu_ky_nhin_lai,
-                     COUNT(DISTINCT substr(doc_date,1,7)) so_thang_co_mua
-              FROM ({" UNION ALL ".join(parts)})
-              GROUP BY customer_code
-              HAVING MAX(doc_date) <= ? AND SUM(amount9) > 0
-              ORDER BY SUM(amount9) DESC LIMIT ?"""
-    params = tuple(p for pp in part_params for p in pp) + (cutoff, limit)
+    base_sql = " UNION ALL ".join(parts)
+    sql = f"""WITH base AS ({base_sql}), silent AS (
+                SELECT customer_code, MAX(doc_date) lan_mua_cuoi,
+                       SUM(amount9) doanh_thu_ky_nhin_lai,
+                       COUNT(DISTINCT substr(doc_date,1,7)) so_thang_co_mua
+                FROM base
+                GROUP BY customer_code
+                HAVING MAX(doc_date) <= ? AND SUM(amount9) > 0
+              )
+              SELECT *, COUNT(*) OVER() total_count
+              FROM silent
+              ORDER BY doanh_thu_ky_nhin_lai DESC, customer_code
+              LIMIT ?"""
+    base_params = tuple(p for pp in part_params for p in pp)
+    params = base_params + (cutoff, limit)
     rows = _q(sql, params)
 
     names = _customer_names([r["customer_code"] for r in rows])
+    # San pham mua nhieu nhat chi la thong tin bo sung. Thieu danh muc/ma SKU KHONG duoc
+    # lam roi khach khoi ket qua V21: chinh tap khach im lang moi la tap can doi soat.
+    favourite_items = {}
+    returned_codes = [r["customer_code"] for r in rows]
+    if returned_codes:
+        ph = ",".join(["?"] * len(returned_codes))
+        item_rows = _q(
+            f"""WITH base AS ({base_sql})
+                SELECT customer_code,item_code,SUM(amount9) revenue
+                FROM base
+                WHERE customer_code IN ({ph})
+                  AND item_code IS NOT NULL AND TRIM(item_code)<>''
+                GROUP BY customer_code,item_code
+                HAVING SUM(amount9)>0
+                ORDER BY customer_code,revenue DESC,item_code""",
+            base_params + tuple(returned_codes),
+        )
+        for item in item_rows:
+            favourite_items.setdefault(item["customer_code"], {
+                "item_code": item["item_code"],
+                "revenue_in_lookback": _f(item["revenue"]),
+            })
+        item_codes = [v["item_code"] for v in favourite_items.values()]
+        item_names = {}
+        if item_codes:
+            item_ph = ",".join(["?"] * len(item_codes))
+            try:
+                item_names = {r["code"]: r["name"] for r in _q(
+                    f"SELECT code,name FROM brv_sanpham WHERE code IN ({item_ph})",
+                    tuple(item_codes),
+                )}
+            except sqlite3.OperationalError:
+                # Fixture/kho cu co the chua co danh muc SP. Day la truong bo sung,
+                # khong phai ly do loai ca khach hang khoi danh sach.
+                item_names = {}
+        for value in favourite_items.values():
+            value["item_name"] = item_names.get(value["item_code"])
+            value["product_name_status"] = (
+                "available" if value["item_name"] else "not_available"
+            )
+
     out = []
     for r in rows:
         last = str(r["lan_mua_cuoi"])[:10]
+        silent_for = (as_of - dt.date.fromisoformat(last)).days
+        favourite = favourite_items.get(r["customer_code"])
         out.append({
             "customer_code": r["customer_code"],
             "customer_name": names.get(r["customer_code"], "(khong co trong danh muc khach hang)"),
             "lan_mua_cuoi": last,
-            "so_ngay_im_lang": (as_of - dt.date.fromisoformat(last)).days,
+            "so_ngay_im_lang": silent_for,
+            "nhom_im_lang": (">=180_ngay" if silent_for >= 180 else
+                              "90_179_ngay" if silent_for >= 90 else
+                              "60_89_ngay" if silent_for >= 60 else
+                              "duoi_60_ngay"),
             "doanh_thu_ky_nhin_lai": _f(r["doanh_thu_ky_nhin_lai"]),
             "so_thang_co_mua": int(r["so_thang_co_mua"] or 0),
+            "san_pham_mua_nhieu_nhat": favourite or {
+                "status": "not_available",
+                "reason": "Khong co ma san pham co doanh thu duong trong ky nhin lai.",
+            },
         })
 
+    total_count = int(rows[0]["total_count"] or 0) if rows else 0
+    returned_count = len(out)
     result = {
         "as_of": as_of_date, "nguong_im_lang_ngay": silent_days,
         "ky_nhin_lai": {"tu": date_from, "den": as_of_date},
-        "so_khach": len(out), "khach_im_lang": out,
+        "so_khach": total_count,
+        "total_count": total_count,
+        "returned_count": returned_count,
+        "truncated": total_count > returned_count,
+        "not_shown_count": max(0, total_count - returned_count),
+        "khach_im_lang": out,
         "ghi_chu": ("Doanh thu o day la TONG trong ky nhin lai (khong phai doanh thu thang cuoi). "
                      "Kho local chi giu chi tiet hoa don ~12 thang gan nhat nen khach im lang lau hon "
                      "the co the khong xuat hien trong danh sach."),
@@ -2218,6 +2284,10 @@ def customer_cohort_retention(month_to: str = None, months_back: int = 6,
     cohorts = []
     for (cohort_month, group), b in sorted(grouped.items()):
         size = len(b["customers"])
+        # Khach xuat hien o dung bien trai cua kho co the da mua truoc do. Van tra so lieu
+        # quan sat de doi chieu, nhung gan nhan fail-closed de model khong goi day la cohort
+        # khach MOI hay dung lam mau so retention nghiep vu chinh thuc.
+        cohort_is_left_censored = cohort_month == earliest
         retention = []
         for age in ages:
             target_month = _month_add(cohort_month, age)
@@ -2230,16 +2300,25 @@ def customer_cohort_retention(month_to: str = None, months_back: int = 6,
                 "ky_da_du": complete,
             })
         cohorts.append({"cohort_month": cohort_month, "group": group,
-                        "cohort_customers": size, "retention": retention})
+                        "cohort_customers": size,
+                        "cohort_is_left_censored": cohort_is_left_censored,
+                        "valid_new_customer_cohort": not cohort_is_left_censored,
+                        "retention": retention})
 
+    left_censored_months = sorted({
+        c["cohort_month"] for c in cohorts if c["cohort_is_left_censored"]
+    })
     return {
         "definition": "Cohort = thang co hoa don dau tien QUAN SAT DUOC trong kho; retained = co hoa don o dung thang tuoi.",
         "cohort_from": cohort_from, "cohort_to": month_to, "group_by": group_by,
         "ages": ages, "cohorts": cohorts,
+        "left_censored_cohort_months": left_censored_months,
+        "valid_cohort_count": sum(1 for c in cohorts if c["valid_new_customer_cohort"]),
         "pham_vi_du_lieu_co_that": {"tu_thang": earliest, "den_thang": latest},
-        "canh_bao": ("Neu khach da mua truoc moc tu_thang cua kho, 'thang mua dau tien quan sat duoc' "
-                      "KHONG phai lan mua dau tien trong doi khach. Cac tuoi co target_month sau "
-                      "den_thang duoc tra None, khong coi la 0% giu chan."),
+        "canh_bao": ("Cohort o dung tu_thang cua kho bi left-censored: chi la lan dau QUAN SAT DUOC, "
+                      "khong duoc goi la khach moi trong doi hay dung de ket luan retention chinh thuc. "
+                      "Cac cohort khac van can DNH chot dinh nghia khach moi. Cac tuoi co target_month "
+                      "sau den_thang duoc tra None, khong coi la 0% giu chan."),
         "data_as_of": latest_data_date(),
     }
 
@@ -2628,6 +2707,123 @@ def cross_sell_opportunities(as_of_date: str = None, lookback_months: int = 3,
     }
 
 
+def product_first_observed_performance(as_of_date: str = None, lookback_months: int = 12,
+                                       limit: int = 100, scope_area_code: str = None,
+                                       scope_channel: str = None,
+                                       scope_employee_code: str = None) -> dict:
+    """C34/M34: hieu suat SKU sau moc ban dau tien QUAN SAT DUOC trong dung pham vi.
+
+    Kho khong co master launch date va target theo SKU. Ham co y khong goi MIN(doc_date)
+    la ngay ra mat; SKU o bien trai lich su bi gan left-censored.
+    """
+    as_of_date = (as_of_date or latest_data_date())[:10]
+    lookback_months = max(1, min(int(lookback_months or 12), 24))
+    limit = max(1, min(int(limit or 100), 500))
+    scope_sql, scope_params = _scope_clause(scope_area_code)
+    emp_sql, emp_params = _employee_scope_clause(scope_employee_code, "v", as_of=as_of_date)
+    suffix, suffix_params = scope_sql + emp_sql, scope_params + emp_params
+    parts, params = [], []
+    if scope_channel != "ETC":
+        join = _otc_area_join("v", scope_area_code)
+        parts.append(
+            "SELECT v.doc_date,v.item_code,v.customer_code,v.amount9 FROM vhoadon_otc v "
+            f"{join} WHERE v.doc_date<=? AND v.item_code IS NOT NULL "
+            f"AND TRIM(v.item_code)<>''{suffix}"
+        )
+        params.extend((as_of_date,) + suffix_params)
+    if scope_channel != "OTC":
+        join = _etc_area_join("v", scope_area_code)
+        parts.append(
+            "SELECT v.doc_date,v.item_code,v.customer_code,v.amount9 FROM vhoadon_etc v "
+            f"{join} WHERE v.doc_date<=? AND v.item_code IS NOT NULL "
+            f"AND TRIM(v.item_code)<>''{suffix}"
+        )
+        params.extend((as_of_date,) + suffix_params)
+    if not parts:
+        return {"error": "Khong co kenh nao kha dung."}
+
+    monthly = _q(
+        "WITH base AS (" + " UNION ALL ".join(parts) + ") "
+        "SELECT substr(doc_date,1,7) month,item_code,"
+        "COUNT(DISTINCT customer_code) customers,SUM(amount9) revenue "
+        "FROM base GROUP BY substr(doc_date,1,7),item_code",
+        tuple(params),
+    )
+    if not monthly:
+        return {"mode": "product_first_observed", "products": [],
+                "status": "NO_DATA_IN_SCOPE", "data_as_of": latest_data_date()}
+    earliest_history_month = min(r["month"] for r in monthly)
+    latest_month = as_of_date[:7]
+    ay, am, ad = (int(x) for x in as_of_date.split("-"))
+    complete_through_month = (
+        latest_month if ad == _last_day_of_month(ay, am) else _month_add(latest_month, -1)
+    )
+    candidate_from = _month_add(latest_month, -(lookback_months - 1))
+    by_product = {}
+    for row in monthly:
+        by_product.setdefault(row["item_code"], {})[row["month"]] = row
+
+    codes = list(by_product)
+    product_names = {}
+    if codes:
+        ph = ",".join(["?"] * len(codes))
+        try:
+            product_names = {r["code"]: r["name"] for r in _q(
+                f"SELECT code,name FROM brv_sanpham WHERE code IN ({ph})", tuple(codes)
+            )}
+        except sqlite3.OperationalError:
+            product_names = {}
+
+    products = []
+    for code, months in by_product.items():
+        first_observed = min(months)
+        if first_observed < candidate_from or first_observed > latest_month:
+            continue
+        left_censored = first_observed == earliest_history_month
+        age_results = []
+        for age in (1, 3, 6, 12):
+            target_month = _month_add(first_observed, age)
+            complete = target_month <= complete_through_month
+            row = months.get(target_month, {}) if complete else {}
+            age_results.append({
+                "age_month": age, "target_month": target_month,
+                "period_complete": complete,
+                "customers": int(row.get("customers") or 0) if complete else None,
+                "revenue": _f(row.get("revenue")) if complete else None,
+                "target_status": "not_available", "target_achievement_pct": None,
+            })
+        first_row = months[first_observed]
+        products.append({
+            "item_code": code, "item_name": product_names.get(code) or code,
+            "first_observed_sale_month": first_observed,
+            "first_observed_is_launch_date": False,
+            "first_observed_is_left_censored": left_censored,
+            "valid_for_launch_age_analysis": not left_censored,
+            "first_observed_customers": int(first_row.get("customers") or 0),
+            "first_observed_revenue": _f(first_row.get("revenue")),
+            "age_results": age_results,
+        })
+    products.sort(key=lambda r: (-r["first_observed_revenue"], r["item_code"]))
+    total = len(products)
+    returned = products[:limit]
+    return {
+        "mode": "product_first_observed", "as_of": as_of_date,
+        "candidate_from": candidate_from, "history_boundary_month": earliest_history_month,
+        "complete_through_month": complete_through_month,
+        "total_count": total, "returned_count": len(returned),
+        "truncated": total > len(returned), "not_shown_count": max(0, total - len(returned)),
+        "products": returned,
+        "launch_date_source": "not_available", "sku_target_source": "not_available",
+        "definition": ("first_observed_sale_month la thang ban dau tien QUAN SAT DUOC trong dung "
+                       "pham vi tai khoan, KHONG phai ngay ra mat san pham."),
+        "limitations": [
+            "SKU o history_boundary_month bi left-censored va khong duoc dung de ket luan tuoi san pham.",
+            "Kho chua co master launch date va target theo SKU; khong tinh % ke hoach.",
+        ],
+        "data_as_of": latest_data_date(),
+    }
+
+
 def customer_product_coverage(as_of_date: str = None, lookback_months: int = 3,
                               mode: str = "customer", limit: int = 100,
                               scope_area_code: str = None, scope_channel: str = None,
@@ -2670,6 +2866,12 @@ def customer_product_coverage(as_of_date: str = None, lookback_months: int = 3,
             "safe_next_report": "Co the bao cao do phu va doanh thu SKU tung thang; khong duoc goi do la % hoan thanh target.",
             "data_as_of": latest_data_date(),
         }
+    if mode == "product_first_observed":
+        return product_first_observed_performance(
+            as_of_date=as_of_date, lookback_months=lookback_months, limit=limit,
+            scope_area_code=scope_area_code, scope_channel=scope_channel,
+            scope_employee_code=scope_employee_code,
+        )
     if mode == "assignment_change":
         return customer_assignment_change(
             as_of_date=as_of_date, lookback_months=lookback_months, limit=limit,
@@ -2677,7 +2879,7 @@ def customer_product_coverage(as_of_date: str = None, lookback_months: int = 3,
             scope_employee_code=scope_employee_code,
         )
     if mode not in {"customer", "customer_peer", "product", "employee"}:
-        return {"error": "mode chi nhan customer/customer_peer/product/employee/priority/four_customer_priorities/product_monthly/product_mix/sku_target/assignment_change."}
+        return {"error": "mode chi nhan customer/customer_peer/product/employee/priority/four_customer_priorities/product_monthly/product_mix/sku_target/product_first_observed/assignment_change."}
     customer_mode = mode in {"customer", "customer_peer"}
     as_of_date = (as_of_date or latest_data_date())[:10]
     lookback_months = max(1, min(int(lookback_months or 3), 12))
@@ -3288,6 +3490,17 @@ def workforce_productivity(month_to: str = None, months_back: int = 6,
     if not latest:
         return {"error": "Kho chua co snapshot KPI/luong de tinh nang suat."}
     month_to = (month_to or latest)[:7]
+    latest_month = str(latest)[:7]
+    ly, lm = int(latest_month[:4]), int(latest_month[5:7])
+    latest_snapshot_is_month_end = str(latest)[:10] == (
+        f"{ly:04d}-{lm:02d}-{_last_day_of_month(ly, lm):02d}"
+    )
+    # M16/S55: snapshot cua thang dang chay chi la MTD. Neu dem no vao chuoi giam,
+    # gan nhu moi NV se bi danh dau giam gia vi dang so vai ngay voi ca thang truoc.
+    # Van tra rows MTD de nguoi dung xem nang suat hien tai, nhung summary "giam lien
+    # tiep" chi chot den thang tron gan nhat.
+    month_to_is_partial = month_to == latest_month and not latest_snapshot_is_month_end
+    decline_evaluated_through = _month_add(month_to, -1) if month_to_is_partial else month_to
     months_back = max(1, min(int(months_back or 6), 12))
     month_from = _month_add(month_to, -(months_back - 1))
     limit = max(1, min(int(limit or 200), 1000))
@@ -3354,6 +3567,7 @@ def workforce_productivity(month_to: str = None, months_back: int = 6,
         decline_streak = 0
         for month in sorted(ms):
             r = ms[month]; prev = ms.get(_month_add(month, -1))
+            r["previous_actual"] = prev["actual"] if prev else None
             r["mom_delta"] = r["actual"] - prev["actual"] if prev else None
             r["mom_pct"] = (r["mom_delta"] / prev["actual"] * 100) if prev and prev["actual"] else None
             if r["mom_delta"] is not None and r["mom_delta"] < 0: decline_streak += 1
@@ -3361,13 +3575,72 @@ def workforce_productivity(month_to: str = None, months_back: int = 6,
             r["decline_streak_months"] = decline_streak
             rows.append(r)
     rows.sort(key=lambda r: (r["month"], -(r["actual"] or 0)))
+
+    # M16/S55 + V13: `rows` se bi cat theo top doanh so de payload khong qua lon. Neu dung chinh
+    # tap da cat de tim nguoi giam lien tiep thi cac nhan vien doanh so thap (thuong la nhom can
+    # quan tam nhat) lai bien mat, va model co the nhin thay 1 nguoi roi goi do la "duy nhat".
+    # Tao mot summary rieng TU TAP DAY DU, moi NV chi lay dong moi nhat trong cua so. `>= 2` nghia
+    # la da co it nhat hai cap MoM giam lien tiep, tuong ung chuoi ba thang di xuong trong S55.
+    declining_employees = []
+    declining_employee_count = 0
+    declining_summary_limit = 200
+    if group_by == "employee":
+        latest_by_employee = {}
+        for row in rows:
+            if row["month"] != decline_evaluated_through:
+                continue
+            current = latest_by_employee.get(row["group_code"])
+            if current is None:
+                latest_by_employee[row["group_code"]] = row
+        all_declining = [
+            {
+                "employee_code": row["group_code"],
+                "employee_name": row["group_name"],
+                "latest_month": row["month"],
+                "decline_streak_months": row["decline_streak_months"],
+                "current_revenue": row["actual"],
+                "previous_revenue": row["previous_actual"],
+                "mom_delta": row["mom_delta"],
+                "mom_pct": row["mom_pct"],
+                # Tool nang suat chua co khach/don/AOV theo NV. Dat co cau truc fail-closed de
+                # chatbot khong bien mot chuoi doanh so giam thanh ket luan nhan qua.
+                "cause_data_available": False,
+            }
+            for row in latest_by_employee.values()
+            if row["decline_streak_months"] >= 2
+        ]
+        all_declining.sort(key=lambda row: (
+            -row["decline_streak_months"],
+            -abs(row["mom_delta"] or 0),
+            row["employee_code"],
+        ))
+        declining_employee_count = len(all_declining)
+        declining_employees = all_declining[:declining_summary_limit]
+
     rows, so_bi_cat = _giu_top_don_vi(rows, "group_code", "actual", limit)
     return {
         "month_from": month_from, "month_to": month_to, "group_by": group_by,
+        "month_to_is_partial": month_to_is_partial,
+        "decline_evaluated_through": decline_evaluated_through,
+        "partial_month_excluded_from_decline_streak": month_to_is_partial,
         "rows": rows, "so_nhom_khong_hien": so_bi_cat,
+        "declining_employee_count": declining_employee_count,
+        "declining_employees": declining_employees,
+        "declining_employees_truncated": declining_employee_count > len(declining_employees),
+        "declining_employees_not_shown": max(0, declining_employee_count - len(declining_employees)),
+        "decline_cause_data_available": False if group_by == "employee" else None,
+        "decline_cause_limitation": (
+            "Bao cao nay chi chung minh chuoi doanh so giam. Chua co phan ra khach, don va AOV "
+            "theo tung nhan vien trong cung payload, nen khong duoc ket luan nguyen nhan."
+            if group_by == "employee" else None
+        ),
         "definition": ("Headcount = nhan vien TDV/CTV/CS co dong trong snapshot luong thang; "
                        "revenue_per_employee = tong doanh so / headcount. Decline streak chi tang "
-                       "khi cac thang lien tiep deu giam."),
+                       "khi cac thang lien tiep deu giam. Voi group_by=employee, "
+                       "declining_employee_count/declining_employees duoc tinh tren toan bo nhan vien "
+                       "truoc khi cat rows; streak >= 2 la chuoi ba thang di xuong. "
+                       "Neu month_to_is_partial=true, thang MTD van co trong rows nhung bi loai khoi "
+                       "summary chuoi giam; decline_evaluated_through la thang tron da dung."),
         "limitations": [
             "Chua co FACT_PhatSinhNhanVien/lich su chuyen vung chot chuan, nen khong tach duoc anh huong vao-ra-chuyen dia ban.",
             "Ngay vao lam lay tu dim_nhanvien; dong thieu start_date co avg_tenure_months=None va khong duoc suy dien.",
@@ -4012,35 +4285,43 @@ def operational_data_quality(as_of_date: str = None, sample_limit: int = 30,
 
             employee_tier = [r for r in employees if _is_employee_tier(r)]
             management_tier = [r for r in employees if not _is_employee_tier(r)]
-            missing_manager = [
-                r["employee_code"] for r in employees
-                if not (r["manager_code"] or "").strip()
-                and _is_employee_tier(r)
-            ]
-            management_without_parent = [
-                r["employee_code"] for r in employees
-                if not (r["manager_code"] or "").strip()
-                and not _is_employee_tier(r)
-            ]
+
+            def _unique_codes(rows, predicate=lambda _row: True):
+                return sorted({
+                    r["employee_code"] for r in rows
+                    if r["employee_code"] and predicate(r)
+                }, key=str)
+
+            missing_manager = _unique_codes(
+                employees,
+                lambda r: not (r["manager_code"] or "").strip() and _is_employee_tier(r),
+            )
+            management_without_parent = _unique_codes(
+                employees,
+                lambda r: not (r["manager_code"] or "").strip() and not _is_employee_tier(r),
+            )
             target_population = employee_tier if quality_source == "fact_thongketinhluong" else employees
-            missing_target = [r["employee_code"] for r in target_population if _f(r["target"]) <= 0]
-            missing_snapshot = ([r["employee_code"] for r in employees if r["metric_snapshot"] is None]
+            missing_target = _unique_codes(target_population, lambda r: _f(r["target"]) <= 0)
+            missing_snapshot = (_unique_codes(employees, lambda r: r["metric_snapshot"] is None)
                                 if quality_source != "fact_thongketinhluong" else [])
-            target_with_snapshot = [
-                r["employee_code"] for r in target_population
-                if r["metric_snapshot"] is not None and _f(r["target"]) > 0
-            ]
-            missing_target_with_snapshot = [
-                r["employee_code"] for r in target_population
-                if r["metric_snapshot"] is not None and _f(r["target"]) <= 0
-            ]
-            missing_target_with_sales = [
-                r["employee_code"] for r in target_population
-                if _f(r["target"]) <= 0 and _f(r.get("actual")) > 0
-            ]
-            missing_dim = [r["employee_code"] for r in employees if not r["dim_code"]]
-            duplicates = [r["employee_code"] for r in employees if int(r["is_duplicate"] or 0) == 1
-                          and r["employee_code"] not in _KNOWN_MISFLAGGED_DUPLICATE_CODES]
+            target_with_snapshot = _unique_codes(
+                target_population,
+                lambda r: r["metric_snapshot"] is not None and _f(r["target"]) > 0,
+            )
+            missing_target_with_snapshot = _unique_codes(
+                target_population,
+                lambda r: r["metric_snapshot"] is not None and _f(r["target"]) <= 0,
+            )
+            missing_target_with_sales = _unique_codes(
+                target_population,
+                lambda r: _f(r["target"]) <= 0 and _f(r.get("actual")) > 0,
+            )
+            missing_dim = _unique_codes(employees, lambda r: not r["dim_code"])
+            duplicates = _unique_codes(
+                employees,
+                lambda r: int(r["is_duplicate"] or 0) == 1
+                and r["employee_code"] not in _KNOWN_MISFLAGGED_DUPLICATE_CODES,
+            )
             snapshot_is_closed = False
             if quality_snapshot:
                 sy, sm = int(str(quality_snapshot)[:4]), int(str(quality_snapshot)[5:7])
@@ -4050,13 +4331,14 @@ def operational_data_quality(as_of_date: str = None, sample_limit: int = 30,
             result["checks"]["kpi_employee_mapping"] = {
                 "snapshot": quality_snapshot, "quality_source": quality_source,
                 "snapshot_is_closed": snapshot_is_closed,
-                "employees": len(employees),
+                "employees": len(_unique_codes(employees)),
                 # Ten ro nghia de model khong doc nham `employees` thanh "so nguoi co target".
                 # Giu `employees` ben tren de tuong thich nguoc voi pack UAT/script hien tai.
-                "roster_employees": len(employees),
-                "employee_tier_employees": len(employee_tier),
-                "management_tier_employees": len(management_tier),
-                "employees_with_current_snapshot": len(employees) - len(missing_snapshot),
+                "roster_employees": len(_unique_codes(employees)),
+                "roster_rows": len(employees),
+                "employee_tier_employees": len(_unique_codes(employee_tier)),
+                "management_tier_employees": len(_unique_codes(management_tier)),
+                "employees_with_current_snapshot": len(_unique_codes(employees)) - len(missing_snapshot),
                 "employees_with_target": len(target_with_snapshot),
                 "roster_snapshots": ([quality_snapshot] if quality_source == "fact_thongketinhluong"
                                      else _roster_snapshot_dates(fdate)),
@@ -4092,6 +4374,19 @@ def operational_data_quality(as_of_date: str = None, sample_limit: int = 30,
                 "management_rows_without_parent_in_source": management_without_parent[:sample_limit],
             })
             by_code = {r["employee_code"]: r for r in employees}
+            missing_target_with_sales_set = set(missing_target_with_sales)
+            missing_target_details = [{
+                "employee_code": code,
+                "employee_name": by_code[code].get("employee_name") or "(chua co ten trong danh muc)",
+                "position_code": by_code[code].get("position_code"),
+                "area_code": by_code[code].get("area_code"),
+                "manager_code": by_code[code].get("manager_code"),
+                "has_sales_without_target": code in missing_target_with_sales_set,
+            } for code in missing_target[:sample_limit]]
+            result["missing_target_details"] = missing_target_details
+            result["missing_target_details_total"] = len(missing_target)
+            result["missing_target_details_returned"] = len(missing_target_details)
+            result["missing_target_details_truncated"] = len(missing_target) > len(missing_target_details)
             detail_groups = {
                 "missing_manager": missing_manager,
                 "missing_target": missing_target,
@@ -8793,6 +9088,13 @@ def call_template(name: str, args: dict, question: str = "", username: str = Non
         if name == "get_customer_product_coverage" and not call_args.get("mode"):
             q_lower = " ".join((question or "").lower().split())
             if any(marker in q_lower for marker in (
+                "sản phẩm mới", "san pham moi", "sp mới", "sp moi",
+            )) and any(marker in q_lower for marker in (
+                "độ phủ", "do phu", "sau 1", "sau 3", "sau 6", "sau 12", "ra mắt", "ra mat",
+            )):
+                call_args["mode"] = "product_first_observed"
+                call_args.setdefault("lookback_months", 12)
+            elif any(marker in q_lower for marker in (
                 "loại ảnh hưởng", "loai anh huong", "loại trừ ảnh hưởng", "loai tru anh huong",
             )) and any(marker in q_lower for marker in (
                 "chuyển nhân viên", "chuyen nhan vien", "chuyển khách", "chuyen khach",

@@ -171,6 +171,53 @@ def test_cat_danh_sach_nhan_su_phai_giu_nguoi_DOANH_SO_CAO_NHAT(tmp_path, monkey
     assert r["so_nhom_khong_hien"] == 4
 
 
+def test_m16_summary_giu_du_nguoi_giam_lien_tiep_truoc_khi_cat_rows(tmp_path, monkeypatch):
+    path = _setup(tmp_path, monkeypatch)
+    # Ba NV co chuoi 4 thang di xuong; ba NV con lai giu nguyen. `limit=1` co y lam rows chi
+    # con mot nhom, nhung summary M16 van phai dem va liet ke du ca ba nguoi dang giam.
+    series = {
+        "D1": [400, 300, 200, 100],
+        "D2": [500, 350, 200, 50],
+        "D3": [400, 350, 300, 250],
+    }
+    with sqlite3.connect(path) as con:
+        for employee_code, values in series.items():
+            for month, value in zip(_THANG, values):
+                con.execute(
+                    "UPDATE fact_thongketinhluong SET month_sale_amount=? "
+                    "WHERE employee_code=? AND substr(save_date,1,7)=?",
+                    (value, employee_code, month),
+                )
+
+    result = rt.workforce_productivity(
+        month_to="2026-04", months_back=4, group_by="employee", limit=1,
+    )
+
+    assert result["declining_employee_count"] == 3
+    assert [row["employee_code"] for row in result["declining_employees"]] == ["D2", "D1", "D3"]
+    # 04/2026 la MTD theo _FixedDate; summary chuoi giam phai chot o 03/2026.
+    assert all(row["decline_streak_months"] == 2 for row in result["declining_employees"])
+    assert result["month_to_is_partial"] is True
+    assert result["partial_month_excluded_from_decline_streak"] is True
+    assert result["decline_evaluated_through"] == "2026-03"
+    assert all(row["latest_month"] == "2026-03" for row in result["declining_employees"])
+    assert all(row["cause_data_available"] is False for row in result["declining_employees"])
+    assert result["declining_employees_truncated"] is False
+    assert result["declining_employees_not_shown"] == 0
+    assert len({row["employee_code"] for row in result["declining_employees"]}) == 3
+
+
+def test_m16_tool_description_ep_group_employee_va_chan_suy_dien_nguyen_nhan():
+    import nl2sql
+
+    tool = next(t for t in nl2sql.ALL_TOOLS if t["name"] == "get_workforce_productivity")
+    description = tool["description"]
+    assert "group_by='employee'" in description
+    assert "declining_employee_count" in description
+    assert "CHI duoc noi 'duy nhat' khi count=1" in description
+    assert "KHONG duoc tu suy dien" in description
+
+
 def test_khong_cat_gi_khi_so_don_vi_it_hon_limit(tmp_path, monkeypatch):
     """group_by mac dinh la 'manager' (28 QLV x 6 thang = 168 dong < 200) nen truoc gio KHONG lo ra
     loi - day chinh la ly do no song sot lau: duong di mac dinh vo tinh an toan, chi cac cau hoi hoi
