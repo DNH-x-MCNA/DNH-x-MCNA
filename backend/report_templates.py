@@ -1656,15 +1656,19 @@ def _invoice_customer_lifecycle_series(month_to: str, months_back: int,
                                        scope_employee_code: str = None) -> dict:
     """Chuoi C29 suy tu hoa don OTC, tach khoi co nghiep vu NC/RO/AC cua Bravo.
 
-    Khong goi `first_observed` la khach moi that. Ham nap them toi da 12 thang lich su truoc ky
-    hien thi de nhan biet tai kich hoat, va luon namespaced theo kenh o nguon chung de tranh trung
-    ma OTC/ETC. C29 hien chi co co NC/RO cho OTC, nen chuoi kem theo cung khoa OTC.
+    Khong goi `first_observed` la khach moi that. Ham dung mot cua so lich su 12 thang CO DINH,
+    neo vao month_to thay vi neo vao thang dau bang hien thi. Nhu vay so tai kich hoat cua cung mot
+    thang khong thay doi khi nguoi dung doi months_back tu 4 thanh 6. C29 hien chi co co NC/RO cho
+    OTC, nen chuoi kem theo cung khoa OTC.
     """
     earliest, latest = _revenue_data_month_range()
     if not earliest or not latest:
         return {"status": "no_data", "months": []}
     display_from = _month_add(month_to, -(months_back - 1))
-    required_history_from = _month_add(display_from, -12)
+    # Neo lich su vao THANG CUOI, khong vao display_from. Ban cu lam T8 co 14 thang lich su khi
+    # hien 4 dong, nhung 16 thang khi hien 6 dong; cung mot khach bi doi tu first-observed sang
+    # reactivated chi vi mo rong bang. 12 thang nay cung khop cua so #sales cua checker UAT.
+    required_history_from = _month_add(month_to, -12)
     history_from = max(earliest, required_history_from)
     history_complete = earliest <= required_history_from
     rows = _customer_monthly_activity(

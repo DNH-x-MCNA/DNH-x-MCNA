@@ -228,6 +228,27 @@ def test_c29_tra_rieng_co_bravo_va_chuoi_hanh_vi_tu_hoa_don(tmp_path, monkeypatc
     assert "KHAC co Bravo" in invoice["warning"]
 
 
+def test_c29_tai_kich_hoat_khong_doi_khi_mo_rong_so_thang_hien_thi(tmp_path, monkeypatch):
+    db_path = _setup(tmp_path, monkeypatch)
+    with sqlite3.connect(db_path) as conn:
+        # Lan mua cu nam NGOAI cua so 12 thang neo vao 2026-07. Ban cu neo theo display_from:
+        # months_back=3 se thay dong nay, months_back=2 thi khong, lam cung T7 doi nhom.
+        conn.execute("INSERT INTO monthly_customer_summary VALUES "
+                     "('2025-05','OTC','KHBOUND','D1',900,1)")
+        conn.execute("INSERT INTO vhoadon_otc VALUES "
+                     "('2026-07-12','KHBOUND','SP1',700,1,700,'H8',1,'D1','2026-07-12','A')")
+
+    two_months = rt.customer_lifecycle_summary(year_month="2026-07", months_back=2)
+    three_months = rt.customer_lifecycle_summary(year_month="2026-07", months_back=3)
+    july_two = two_months["invoice_lifecycle_series"]["months"][-1]
+    july_three = three_months["invoice_lifecycle_series"]["months"][-1]
+
+    assert july_two["invoice_reactivated_customers"] == july_three["invoice_reactivated_customers"]
+    assert july_two["invoice_first_observed_customers"] == july_three["invoice_first_observed_customers"]
+    assert two_months["invoice_lifecycle_series"]["history_from"] == "2025-07"
+    assert three_months["invoice_lifecycle_series"]["history_from"] == "2025-07"
+
+
 def test_qlv_chuoi_lich_su_dung_doi_cua_tung_snapshot_khong_ap_nguoc_doi_hien_tai(tmp_path, monkeypatch):
     """07/09/2026: TDV2 thuoc QLV1 thang 6, nhung chuyen sang QLV2 thang 7. Lay doi thang 7
     cho ca chuoi se lam thang 6 hut KHJUNE; day la cung ban chat voi loi M01 da sua."""
