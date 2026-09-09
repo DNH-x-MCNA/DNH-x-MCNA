@@ -454,6 +454,38 @@ def test_status_partial_khong_bi_planner_danh_dau_completed():
     assert any(step.status == "partial" for step in plan.steps)
 
 
+def test_kpi_giua_thang_khong_duoc_goi_la_binh_thuong_chi_vi_dau_thang():
+    plan = _plan(
+        "Thưởng/KPI của đội có khớp doanh số và chính sách; có bất thường nào cần kiểm tra?",
+        query_id="m20-midmonth",
+    )
+    key = "kpi-midmonth"
+    plan.start_tool("get_employee_kpi", {"as_of_date": "2026-09-09"}, key)
+    plan.finish_tool(
+        key,
+        ok=True,
+        payload={
+            "as_of": "2026-09-09",
+            "total_employees": 98,
+            "count_kpi_achieved": 0,
+            "rows": [{"employee_code": "MBKV12", "pct": 6.1}],
+        },
+        source="template:get_employee_kpi",
+        duration_ms=5,
+        timeout_seconds=40,
+    )
+    plan.finalize()
+
+    answer = plan.finalize_answer(
+        "- Đây là điều **bình thường ở giai đoạn đầu tháng** vì target là cho cả tháng.\n"
+        "- Không có ai lệch bất thường so với mặt bằng chung — phù hợp việc đang ở đầu chu kỳ tháng."
+    )
+
+    assert "bình thường ở giai đoạn đầu tháng" not in answer
+    assert "không có ai lệch bất thường" not in answer
+    assert "chưa đủ cơ sở kết luận nhịp độ hiện tại là bình thường hay bất thường" in answer
+
+
 def test_hoi_tien_da_thu_gap_long_trong_receivables_overview_duoc_nang_len_partial():
     plan = _plan("Tháng này từng TDV đã thu được bao nhiêu tiền?", query_id="collection-gap")
     key = "receivables"

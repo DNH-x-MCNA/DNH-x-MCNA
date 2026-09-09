@@ -496,7 +496,9 @@ TEMPLATE_TOOLS = [
                         "rieng: count_full_target (dat chi tieu), count_kpi_achieved (dat KPI), "
                         "count_above_target/count_below_target (toi muc thuong nhom hang) - dinh nghia/nguong "
                         "day du cua 3 muc nay va y nghia mau status da co o system prompt, KHONG tu suy dien "
-                        "lai o day. "
+                        "lai o day. Snapshot giua thang chi la luy ke den ngay: KHONG duoc mac dinh % thap "
+                        "la 'binh thuong vi dau thang'. Neu chua co ke hoach phan bo target theo ngay thi chi "
+                        "neu muc thuc dat va noi chua du co so ket luan nhip do binh thuong/bat thuong. "
                         "UU TIEN dung cho MOI cau hoi ve KPI/doanh so nhan vien TONG QUAN/xep hang (ke ca ma "
                         "khu vuc MBKV*/ASM*) - KHONG dung cho KPI THEO NGAY 1 nguoi (dung get_employee_daily_kpi). "
                         "Voi cau hoi 'ai chua dat KPI/target' -> dung filter='below_target' (KHONG dung limit lon "
@@ -1793,6 +1795,10 @@ QUAN TRONG VE CHON TOOL:
       QD 0429/.25 - van hieu luc voi cap quan ly).
     - Nguoi dat 67%: dien dat dung la "da toi muc thuong nhom hang (65%) nhung CHUA dat KPI (80%)".
     - Cau hoi mo ho -> dua CA BA con so kem nhan ro rang, dung tu chon 1 cai roi im lang.
+    - Snapshot GIUA THANG chi la doanh so luy ke den ngay, trong khi target la ca thang. Dau thang giai thich
+      vi sao % chua cao nhung KHONG phai bang chung rang muc do do "binh thuong". Neu khong co ke hoach phan
+      bo target theo ngay/nhan su thi PHAI noi "chua du co so ket luan nhip do binh thuong hay bat thuong";
+      chi ghi nhan % thuc dat. KHONG duoc viet "khong co ai lech bat thuong" chi vi moi dau chu ky.
     - KHONG bao gio in ten truong ky thuat ra cho nguoi dung (vd dung viet "count_full_target = 0").
       Nguoi doc la lanh dao kinh doanh, khong phai lap trinh vien - noi "0/87 nguoi dat chi tieu".
   ⚠️ 65%/70% CHI la cong cua THUONG NHOM HANG (DM1/DM2/DM3). DNH con it nhat 5 ho thuong khac, moc

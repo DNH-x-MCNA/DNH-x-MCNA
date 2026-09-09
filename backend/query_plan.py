@@ -645,6 +645,60 @@ class QueryPlan:
                     f"cửa sổ **{history_from} đến {month}**; không đủ cơ sở xác nhận khách mới "
                     "trong đời nếu họ từng mua trước cửa sổ này.*",
                 ])
+
+        # M20 UAT: target la ca thang con actual giua thang chi luy ke den ngay. Model tung bien
+        # su kien "moi dau thang" thanh bang chung rang 6-11% la BINH THUONG va "khong ai lech bat
+        # thuong", du khong co ke hoach phan bo target theo ngay. Day la ket luan vuot qua bang
+        # chung. Prompt da canh bao, nhung lop cuoi van loai cac dong dien giai nguy hiem de dap an
+        # khong phu thuoc vao viec model co tuan thu cau chu hay khong.
+        kpi_dates: list[str] = []
+        for tool_name in ("get_employee_kpi", "get_kpi_ranking"):
+            evidence = self._evidence.get(tool_name)
+            evidence_rows = evidence if isinstance(evidence, list) else [evidence]
+            for row in evidence_rows:
+                if isinstance(row, dict) and row.get("as_of"):
+                    kpi_dates.append(str(row["as_of"]))
+        has_midmonth_kpi = False
+        for value in kpi_dates:
+            try:
+                day = dt.date.fromisoformat(value[:10])
+            except (TypeError, ValueError):
+                continue
+            if day.day < calendar.monthrange(day.year, day.month)[1]:
+                has_midmonth_kpi = True
+                break
+        if has_midmonth_kpi:
+            kept_lines: list[str] = []
+            removed_unsafe_conclusion = False
+            for line in answer.splitlines():
+                plain_line = _plain(line)
+                calls_early_month_normal = (
+                    "binh thuong" in plain_line
+                    and any(marker in plain_line for marker in (
+                        "dau thang", "dau chu ky", "giai doan dau thang",
+                    ))
+                )
+                denies_outlier_from_early_month = (
+                    "khong co ai lech bat thuong" in plain_line
+                    and any(marker in plain_line for marker in ("dau thang", "dau chu ky"))
+                )
+                if calls_early_month_normal or denies_outlier_from_early_month:
+                    removed_unsafe_conclusion = True
+                    continue
+                kept_lines.append(line)
+            if removed_unsafe_conclusion:
+                caution = (
+                    "**Lưu ý tiến độ:** Đây là số lũy kế giữa tháng so với target cả tháng. "
+                    "Nếu chưa có kế hoạch phân bổ target theo ngày thì chưa đủ cơ sở kết luận "
+                    "nhịp độ hiện tại là bình thường hay bất thường; chỉ có thể ghi nhận % thực đạt."
+                )
+                insert_at = next(
+                    (i for i, line in enumerate(kept_lines)
+                     if _plain(line).startswith("### phan chua the kiem chung")),
+                    len(kept_lines),
+                )
+                kept_lines[insert_at:insert_at] = [caution, ""]
+                answer = "\n".join(kept_lines).strip()
         if self.status not in {"partial", "failed"}:
             return answer
         missing = [step for step in self.steps if step.status in {"failed", "partial", "skipped"}]
