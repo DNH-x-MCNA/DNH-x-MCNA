@@ -47,6 +47,7 @@ def _make_db(path):
             emp_code TEXT, kenh_bh TEXT);
         CREATE TABLE dmssx_khachhang (code TEXT, name TEXT, city_id INTEGER, id_code INTEGER,
             kenh_bh TEXT);
+        CREATE TABLE dim_tinhthanhpho (city_id INTEGER, city_name TEXT, area_code TEXT);
         CREATE TABLE monthly_customer_summary (year_month TEXT, channel TEXT, customer_code TEXT,
             employee_code TEXT, revenue REAL, invoice_count INTEGER);
         """
@@ -55,6 +56,13 @@ def _make_db(path):
     conn.execute("INSERT INTO dim_nhanvien VALUES ('TDV2','TDV Hai',0,'TDV','MN','D2',NULL,NULL,0,NULL)")
     conn.execute("INSERT INTO dim_nhanvien VALUES ('QLV1','QLV Mot',0,'QLV','MB','Q1',NULL,NULL,0,NULL)")
     conn.execute("INSERT INTO dim_nhanvien VALUES ('TDVDUP','TDV Trung',1,'TDV','MB','D9',NULL,NULL,0,NULL)")
+    conn.executemany("INSERT INTO dim_tinhthanhpho VALUES (?,?,?)", [
+        (1, 'Ha Noi', 'MB'), (2, 'Ho Chi Minh', 'MN'),
+    ])
+    # Moc 0 doanh thu chi de fixture mo ta kho co lich su du 12 thang cho phep phan loai
+    # first-observed/reactivated. Khong tao them khach hoat dong.
+    conn.execute("INSERT INTO monthly_customer_summary VALUES "
+                 "('2025-05','OTC','HISTORY-BOUND','D1',0,0)")
 
     # Co luu kieu TEXT '0'/'1' - dung Y HET production (do thuc te 24/08/2026: typeof=text du schema
     # khai INTEGER). Day la diem lam COALESCE(is_nc,0)=0 hong am tham, xem test rieng ben duoi.
@@ -192,6 +200,32 @@ def test_chuoi_nhieu_thang_va_thang_thieu_snapshot(tmp_path, monkeypatch):
     assert r["months"][0]["khong_co_du_lieu"] is True, "2026-05 khong co snapshot"
     assert r["months"][1]["tong_khach"] == 1  # thang 6 chi co KH01
     assert "2026-05" in r["canh_bao_thieu_lich_su"]
+
+
+def test_c29_tra_rieng_co_bravo_va_chuoi_hanh_vi_tu_hoa_don(tmp_path, monkeypatch):
+    db_path = _setup(tmp_path, monkeypatch)
+    with sqlite3.connect(db_path) as conn:
+        # KH02 quay lai sau khi nghi; KHCONT mua lien tuc; KHSTOP dung mua trong thang 7.
+        conn.execute("INSERT INTO vhoadon_otc VALUES "
+                     "('2026-07-10','KH02','SP1',800,1,800,'H4',1,'D1','2026-07-10','A')")
+        conn.execute("INSERT INTO vhoadon_otc VALUES "
+                     "('2026-06-10','KHCONT','SP1',400,1,400,'H5',1,'D1','2026-06-10','A')")
+        conn.execute("INSERT INTO vhoadon_otc VALUES "
+                     "('2026-07-11','KHCONT','SP1',500,1,500,'H6',1,'D1','2026-07-11','A')")
+        conn.execute("INSERT INTO vhoadon_otc VALUES "
+                     "('2026-06-12','KHSTOP','SP1',600,1,600,'H7',1,'D1','2026-06-12','A')")
+
+    result = rt.customer_lifecycle_summary(year_month="2026-07", months_back=2)
+    invoice = result["invoice_lifecycle_series"]
+    july = invoice["months"][-1]
+
+    assert result["months"][-1]["khach_moi"] == 2  # Van la co is_nc cua Bravo, kh bi ghi de.
+    assert july["invoice_active_customers"] == 3  # KH01 + KH02 + KHCONT.
+    assert july["invoice_continuing_customers"] == 1
+    assert july["invoice_reactivated_customers"] == 1
+    assert july["invoice_stopped_customers"] == 1
+    assert july["invoice_first_observed_customers"] == 1
+    assert "KHAC co Bravo" in invoice["warning"]
 
 
 def test_qlv_chuoi_lich_su_dung_doi_cua_tung_snapshot_khong_ap_nguoc_doi_hien_tai(tmp_path, monkeypatch):

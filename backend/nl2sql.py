@@ -201,6 +201,12 @@ def _required_tool_for_question(question: str) -> str | None:
         return "get_revenue_ytd_cumulative"
     if any(marker in q for marker in ("cohort", "giu chan sau", "ty le giu chan")):
         return "get_customer_cohort_retention"
+    # C29: can CA co nghiep vu NC/RO cua Bravo LAN chuoi active/reactivated/stopped tu hoa don.
+    # Bao cao lifecycle tra hai lop nay rieng biet; khong de nhanh "tai kich hoat" chung rut cau
+    # hoi tung thang thanh mot cap thang duy nhat.
+    if all(marker in q for marker in ("khach moi", "tai kich hoat", "ngung mua")) and any(
+            marker in q for marker in ("tung thang", "theo thang", "khach hoat dong", "mua lai")):
+        return "get_customer_lifecycle_summary"
     # V28/S83 phai nam TRUOC nhanh tai kich hoat chung: cau nay ket hop bon muc tieu, khong phai
     # chi mot danh sach khach tai kich hoat.
     if "danh sach khach" in q and any(marker in q for marker in ("giu khach", "tai kich hoat", "thu no", "ban cheo")):
@@ -637,7 +643,10 @@ TEMPLATE_TOOLS = [
                         "mua'. Neu nguoi dung hoi ve khach NGUNG MUA thi dung "
                         "get_customers_silent (dua tren hoa don that, chac chan hon). Nguon nay hien "
                         "CHI phu kenh OTC; voi tai khoan ETC tool se tra not_applicable, KHONG duoc "
-                        "trinh bay so OTC nhu so cua ETC. Kho chi giu khoang 90 ngay snapshot, neu ket "
+                        "trinh bay so OTC nhu so cua ETC. C29: invoice_lifecycle_series tra rieng so "
+                        "khach co hoa don duong, lien tuc, tai kich hoat, ngung mua va first-observed "
+                        "tung thang. Day la PHAN LOAI TU HOA DON, khac co NC/RO; khong doi continuing "
+                        "thanh Re-Order, khong coi first-observed la khach moi trong doi. Kho chi giu khoang 90 ngay snapshot, neu ket "
                         "qua co canh_bao_thieu_lich_su thi PHAI noi ro, KHONG coi thang thieu la 0 khach.",
         "input_schema": {
             "type": "object",

@@ -1651,6 +1651,102 @@ def _customer_flag_caveat() -> str:
             "khong duoc coi la 'khong mua'.")
 
 
+def _invoice_customer_lifecycle_series(month_to: str, months_back: int,
+                                       scope_area_code: str = None,
+                                       scope_employee_code: str = None) -> dict:
+    """Chuoi C29 suy tu hoa don OTC, tach khoi co nghiep vu NC/RO/AC cua Bravo.
+
+    Khong goi `first_observed` la khach moi that. Ham nap them toi da 12 thang lich su truoc ky
+    hien thi de nhan biet tai kich hoat, va luon namespaced theo kenh o nguon chung de tranh trung
+    ma OTC/ETC. C29 hien chi co co NC/RO cho OTC, nen chuoi kem theo cung khoa OTC.
+    """
+    earliest, latest = _revenue_data_month_range()
+    if not earliest or not latest:
+        return {"status": "no_data", "months": []}
+    display_from = _month_add(month_to, -(months_back - 1))
+    required_history_from = _month_add(display_from, -12)
+    history_from = max(earliest, required_history_from)
+    history_complete = earliest <= required_history_from
+    rows = _customer_monthly_activity(
+        history_from, month_to, scope_area_code, "OTC", scope_employee_code,
+    )
+    activity = {}
+    for row in rows:
+        # Du _customer_monthly_activity co the tra nhieu dong/NV, C29 dem moi khach dung mot lan.
+        key = (row["channel"], row["customer_code"])
+        months = activity.setdefault(key, {})
+        months[row["month"]] = months.get(row["month"], 0.0) + _f(row["revenue"])
+
+    series = []
+    for offset in range(months_back - 1, -1, -1):
+        month = _month_add(month_to, -offset)
+        previous = _month_add(month, -1)
+        if month < earliest:
+            series.append({
+                "month": month, "khong_co_du_lieu_hoa_don": True,
+                "invoice_active_customers": None, "invoice_continuing_customers": None,
+                "invoice_reactivated_customers": None, "invoice_stopped_customers": None,
+                "invoice_first_observed_customers": None,
+            })
+            continue
+        active = continuing = reactivated = first_observed = stopped = 0
+        for periods in activity.values():
+            current_revenue = periods.get(month, 0.0)
+            previous_revenue = periods.get(previous, 0.0)
+            had_before_previous = any(
+                revenue > 0 and observed_month < previous
+                for observed_month, revenue in periods.items()
+            )
+            if current_revenue > 0:
+                active += 1
+                if previous_revenue > 0:
+                    continuing += 1
+                elif had_before_previous:
+                    reactivated += 1
+                else:
+                    first_observed += 1
+            elif previous_revenue > 0:
+                stopped += 1
+        series.append({
+            "month": month,
+            "invoice_active_customers": active,
+            # Thieu thang lien truoc thi khong duoc bien "khong thay" thanh 0.
+            "invoice_continuing_customers": continuing if previous >= earliest else None,
+            "invoice_reactivated_customers": reactivated if history_complete else None,
+            "invoice_stopped_customers": stopped if previous >= earliest else None,
+            "invoice_first_observed_customers": first_observed if history_complete else None,
+            "classification_history_complete": history_complete,
+        })
+    return {
+        "status": "ok" if history_complete else "PARTIAL_HISTORY", "channel": "OTC",
+        "required_history_from": required_history_from, "history_from": history_from,
+        "available_month_range": {"from": earliest, "to": latest},
+        "months": series,
+        "definitions": {
+            "invoice_active_customers": "Khach co doanh thu hoa don rong duong trong thang.",
+            "invoice_continuing_customers": "Khach co doanh thu duong o ca thang nay va thang lien truoc.",
+            "invoice_reactivated_customers": (
+                "Khach co doanh thu duong thang nay, khong mua thang lien truoc, va da mua som hon "
+                "trong cua so lich su."
+            ),
+            "invoice_stopped_customers": (
+                "Khach co doanh thu duong thang truoc nhung thang nay khong co doanh thu duong; "
+                "chi dem tai thang dau tien ngung."
+            ),
+            "invoice_first_observed_customers": (
+                "Lan dau thay doanh thu duong trong cua so lich su dang co; KHONG dong nghia chac "
+                "chan la khach moi trong doi."
+            ),
+        },
+        "warning": (
+            "Chuoi hoa don la phep suy dien hanh vi, KHAC co Bravo: khach_moi=is_nc va "
+            "so_is_ro=Re-Order. Khong doi ten continuing thanh Re-Order va khong cong cac nhom "
+            "voi nhau nhu mot phep phan hoach neu chua khoa cung dinh nghia. Neu status=PARTIAL_HISTORY, "
+            "reactivated/first_observed tra None vi thieu lich su de phan biet; KHONG duoc noi la 0."
+        ),
+    }
+
+
 def customer_lifecycle_summary(year_month: str = None, months_back: int = 1,
                                 scope_area_code: str = None,
                                 scope_employee_code: str = None,
@@ -1756,6 +1852,9 @@ def customer_lifecycle_summary(year_month: str = None, months_back: int = 1,
         "pham_vi_kenh": "OTC (nguon FACT_TongHopKhachHang noi qua DIM_NhanVien chi phu nhan vien OTC)",
         "data_as_of": latest_data_date(),
     }
+    result["invoice_lifecycle_series"] = _invoice_customer_lifecycle_series(
+        year_month, months_back, scope_area_code, scope_employee_code,
+    )
     if missing:
         result["canh_bao_thieu_lich_su"] = (
             f"Khong co snapshot cho {len(missing)}/{len(months)} thang: {', '.join(missing)}. "
@@ -3380,8 +3479,6 @@ def priority_gap_actions(as_of_date: str = None, limit: int = 20,
         "warning": "Danh sach uu tien la xep hang theo gap quan sat duoc, khong phai cam ket nhu cau hay du bao.",
         "data_as_of": latest_data_date(),
     }
-
-
 def customer_assignment_change(as_of_date: str = None, lookback_months: int = 3,
                                limit: int = 100, scope_area_code: str = None,
                                scope_channel: str = None,

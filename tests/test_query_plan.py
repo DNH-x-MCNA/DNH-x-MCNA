@@ -222,6 +222,14 @@ def test_c28_assignment_change_khong_tao_buoc_kpi_gia():
     assert plan.status == "completed"
 
 
+def test_c29_lifecycle_khong_bi_hieu_nham_la_kpi_nhan_su():
+    question = ("Số khách hoạt động, khách mới, khách mua lại, khách tái kích hoạt và "
+                "khách ngừng mua từng tháng là bao nhiêu?")
+    plan = _plan(question, query_id="c29-lifecycle")
+
+    assert {step.domain for step in plan.steps} == {"customer"}
+
+
 def test_inventory_tool_khong_duoc_danh_dau_xong_doanh_thu_o_cau_hoi_tong_hop_chung():
     plan = _plan(
         "Tổng doanh thu và giá trị tồn kho hiện tại là bao nhiêu?",

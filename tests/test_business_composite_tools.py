@@ -314,6 +314,9 @@ def test_high_risk_intents_force_their_single_verified_tool():
         "Nếu loại ảnh hưởng của thay đổi địa bàn, chuyển nhân viên và chuyển khách, tăng trưởng thực của từng đơn vị còn bao nhiêu?"
     ) == "get_customer_product_coverage"
     assert nl2sql._required_tool_for_question(
+        "Số khách hoạt động, khách mới, khách mua lại, khách tái kích hoạt và khách ngừng mua từng tháng là bao nhiêu?"
+    ) == "get_customer_lifecycle_summary"
+    assert nl2sql._required_tool_for_question(
         "Phụ thuộc top 10 khách/top 10 SP/top 3 miền ở mức nào; xu hướng tập trung"
     ) == "get_top_customers"
     assert nl2sql._required_tool_for_question(

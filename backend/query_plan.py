@@ -180,6 +180,13 @@ def infer_domains(question: str) -> list[dict[str, Any]]:
     ))
     if assignment_change_question:
         found = [spec for spec in found if spec["domain"] != "kpi"]
+    # C29 nhac "khach hoat dong" va "mua lai" theo nghia vong doi, khong phai KPI nhan su.
+    # Tool lifecycle da tra ca co Bravo va chuoi suy tu hoa don nen chi can domain customer.
+    lifecycle_series_question = all(marker in plain for marker in (
+        "khach moi", "tai kich hoat", "ngung mua",
+    )) and any(marker in plain for marker in ("tung thang", "theo thang", "khach hoat dong", "mua lai"))
+    if lifecycle_series_question:
+        found = [spec for spec in found if spec["domain"] != "kpi"]
     return found or [_DOMAIN_SPECS[0]]
 
 
