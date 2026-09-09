@@ -4660,13 +4660,49 @@ def _order_fulfillment_exceptions(date_from: str, date_to: str, threshold_days: 
             "exception_reason": ("CHUA_TIM_THAY_HOA_DON" if invoice_date is None
                                  else "CHENH_LECH_NGAY_DON_HOA_DON"),
         })
+    lag_threshold = params["lag_threshold"]
+    cancelled = [row for row in details if (
+        "hủy" in str(row.get("status_description") or "").lower()
+        or "huy" in str(row.get("status_description") or "").lower()
+    )]
+    missing_invoice = [row for row in details if row.get("invoice_date") is None]
+    invoice_after = [row for row in details if (
+        row.get("invoice_lag_days") is not None
+        and row["invoice_lag_days"] >= lag_threshold
+    )]
+    invoice_before = [row for row in details if (
+        row.get("invoice_lag_days") is not None
+        and row["invoice_lag_days"] <= -lag_threshold
+    )]
     return {
         "status": "OK", "source": "DMS_DonHangHdr + vHoaDonTotal (OTC)",
         "date_from": str(date_from), "date_to": str(date_to),
-        "lag_threshold_days": params["lag_threshold"], "total_returned": len(details),
+        "lag_threshold_days": lag_threshold, "total_returned": len(details),
+        # Dat summary TRUOC rows de model van nhan du con so toan tap neu danh sach chi tiet dai
+        # bi lop gioi han payload rut gon. V33 tung dem 9/10/15 tuy theo doan JSON bi cat, du nguon
+        # Bravo co 22 dong; moi ket luan so luong phai doc summary nay, khong dem bang hien thi.
+        "summary": {
+            "total_exceptions": len(details),
+            "cancelled_orders": len(cancelled),
+            "missing_invoice_orders": len(missing_invoice),
+            "cancelled_and_missing_invoice_orders": sum(
+                1 for row in missing_invoice if row in cancelled
+            ),
+            "missing_invoice_not_cancelled_orders": sum(
+                1 for row in missing_invoice if row not in cancelled
+            ),
+            "invoice_after_order_at_least_threshold": len(invoice_after),
+            "invoice_before_order_at_least_threshold": len(invoice_before),
+        },
+        "counting_guidance": (
+            f"Dung cac con so trong summary cho TOAN TAP. Nguong la TU {lag_threshold} ngay "
+            f"(>= {lag_threshold}), nen don lech dung {lag_threshold} ngay VAN duoc tinh. "
+            "Khong goi lech ngay don-hoa don la giao cham vi nguon khong co ngay giao hang thuc te."
+        ),
         "rows": details,
-        "definition": ("Chua/tre hoa don = doi chieu ngay don DMS voi ngay hoa don dau tien. "
-                       "CreatedAt khong duoc dung vi chi la thoi diem tao don."),
+        "definition": ("Chua hoa don = khong tim thay hoa don noi bang DMSId. Chenh lech hoa don = "
+                       f"tri tuyet doi cua so ngay tu ngay don den hoa don dau tien >= {lag_threshold}. "
+                       "Day KHONG phai phep do giao cham. CreatedAt khong duoc dung vi chi la thoi diem tao don."),
         "limit_note": "Toi da 200 dong theo truy van chuan S42; neu can can xu ly them, hay chia nho ky.",
     }
 
@@ -8231,6 +8267,15 @@ def call_template(name: str, args: dict, question: str = "", username: str = Non
         # payload chi con cac con so; model da goi 9,82 ty cua DOI thanh "toan vung MT" trong UAT.
         if isinstance(result, dict):
             result = dict(result)
+            if name == "check_order_timing":
+                q_lower = (question or "").lower()
+                if "giao" in q_lower and ("chậm" in q_lower or "cham" in q_lower):
+                    # DMS_DonHangHdr + vHoaDonTotal chi cho ngay don va ngay hoa don dau tien.
+                    # Khong co ngay giao thuc te thi khong duoc doi ten phep do thanh "giao cham".
+                    result["unavailable_checks"] = [
+                        "Giao chậm: nguồn hiện chưa có mốc giao hàng thực tế; chỉ đối chiếu được "
+                        "ngày đơn với ngày hóa đơn đầu tiên."
+                    ]
             if scope_employee_code and name in _EMPLOYEE_SCOPED_TEMPLATES:
                 result["pham_vi_du_lieu"] = {
                     "loai": "DOI_CUA_QLV",

@@ -378,14 +378,23 @@ def test_v33_la_kiem_tra_don_khong_bi_hieu_nham_thanh_doi_chieu_doanh_thu():
     plan.finish_tool(
         key,
         ok=True,
-        payload={"status": "OK", "order_fulfillment_exceptions": {"rows": []}},
+        payload={
+            "status": "OK",
+            "order_fulfillment_exceptions": {"rows": []},
+            "unavailable_checks": [
+                "Giao chậm: chưa có mốc giao hàng thực tế; chỉ có ngày đơn và ngày hóa đơn."
+            ],
+        },
         source="template:check_order_timing",
         duration_ms=5,
         timeout_seconds=40,
     )
     plan.finalize()
-    assert plan.status == "completed"
+    assert plan.status == "partial"
     assert "Đối chiếu doanh thu" not in plan.prompt_note()
+    answer = plan.finalize_answer("Có 22 đơn cần kiểm tra; phần giao chậm chưa đủ nguồn.")
+    assert "Giao chậm" in answer
+    assert "Giới hạn kết luận" in answer
 
 
 def test_payload_thanh_cong_ky_thuat_nhung_comparison_invalid_van_la_partial():

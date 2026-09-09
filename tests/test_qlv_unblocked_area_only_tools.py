@@ -183,6 +183,10 @@ def test_check_order_timing_khong_neu_ky_tu_lay_thang_hien_tai_den_moc_du_lieu(m
     assert result["result"]["date_to"] == "2026-09-08"
     assert result["result"]["period_defaulted"] is True
     assert captured["period"] == ("2026-09-01", "2026-09-08")
+    assert result["result"]["unavailable_checks"] == [
+        "Giao chậm: nguồn hiện chưa có mốc giao hàng thực tế; chỉ đối chiếu được "
+        "ngày đơn với ngày hóa đơn đầu tiên."
+    ]
 
 
 def test_check_order_timing_scope_etc_khong_doc_don_otc(tmp_path, monkeypatch):
@@ -244,6 +248,17 @@ def test_check_order_timing_tra_dung_don_dms_chua_hoa_don(monkeypatch):
     assert "CreatedAt" not in captured["sql"]
     assert captured["params"]["lag_threshold"] == 2
     assert result["status"] == "OK"
+    assert result["summary"] == {
+        "total_exceptions": 1,
+        "cancelled_orders": 0,
+        "missing_invoice_orders": 1,
+        "cancelled_and_missing_invoice_orders": 0,
+        "missing_invoice_not_cancelled_orders": 1,
+        "invoice_after_order_at_least_threshold": 0,
+        "invoice_before_order_at_least_threshold": 0,
+    }
+    assert "TU 2 ngay" in result["counting_guidance"]
+    assert "KHONG phai phep do giao cham" in result["definition"]
     assert result["rows"] == [{
         "order_id": 12345, "order_date": "2026-08-15", "customer_code": "KH01",
         "employee_dms_id": "TDV01", "status_id": 2, "status_description": "Da xac nhan",

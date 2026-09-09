@@ -1,3 +1,4 @@
+import json
 import os
 import sys
 from types import SimpleNamespace
@@ -394,6 +395,50 @@ def test_v33_ep_bao_cao_don_va_cho_phep_bo_trong_ky():
     schema = next(item for item in nl2sql.TEMPLATE_TOOLS if item["name"] == "check_order_timing")
     assert schema["input_schema"]["required"] == []
     assert "KHONG hoi lai" in schema["input_schema"]["properties"]["date_to"]["description"]
+
+
+def test_v33_payload_gui_model_la_json_day_du_co_tong_dem_khong_bi_cat_giua_dong():
+    question = "Đơn nào bị hủy, trả, điều chỉnh, giao/hóa đơn chậm hoặc chưa tìm thấy hóa đơn?"
+    rows = [{
+        "order_id": index,
+        "order_date": "2026-09-05",
+        "customer_code": f"KH{index:03d}",
+        "employee_dms_id": "TDV01",
+        "status_description": "Đã hủy" if index <= 14 else "Đã xuất hóa đơn",
+        "invoice_date": None if index <= 14 else "2026-09-07",
+        "invoice_lag_days": None if index <= 14 else 2,
+        "exception_reason": "CHUA_TIM_THAY_HOA_DON" if index <= 14 else "CHENH_LECH_NGAY_DON_HOA_DON",
+    } for index in range(1, 23)]
+    payload = {
+        "date_from": "2026-09-01", "date_to": "2026-09-08", "period_defaulted": True,
+        "order_fulfillment_exceptions": {
+            "status": "OK", "total_returned": 22,
+            "summary": {"total_exceptions": 22, "cancelled_orders": 14,
+                        "missing_invoice_orders": 14,
+                        "invoice_after_order_at_least_threshold": 8},
+            "counting_guidance": "Nguong TU 2 ngay (>=2).",
+            "rows": rows,
+        },
+        "returns": {"orders_with_negative_lines": 0, "negative_amount": 0},
+        "top_detail": [{"order_key": f"OTC:{index}",
+                        "reasons": ["TREN_3X_TRUNG_VI_THAM_CHIEU"]}
+                       for index in range(15)],
+        "unavailable_checks": ["Giao cham chua co moc giao hang thuc te."],
+        "pham_vi_du_lieu": {"loai": "DOI_CUA_QLV", "ma_qlv": "TM25010183"},
+    }
+
+    compact = nl2sql._payload_for_model("check_order_timing", payload, question)
+    encoded = json.dumps(compact, ensure_ascii=False)
+
+    assert len(encoded) <= nl2sql.MAX_PAYLOAD_CHARS
+    assert json.loads(encoded) == compact
+    fulfillment = compact["order_fulfillment_exceptions"]
+    assert fulfillment["summary"]["total_exceptions"] == 22
+    assert fulfillment["rows_shown_to_model"] == 12
+    assert fulfillment["rows_not_shown_to_model"] == 10
+    assert fulfillment["rows_are_sample"] is True
+    assert compact["return_adjustment_detail"] == []
+    assert "top_detail" not in compact
 
 
 def test_ask_sends_forced_tool_choice_only_on_first_round(monkeypatch):

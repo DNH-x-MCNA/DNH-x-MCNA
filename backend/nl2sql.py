@@ -869,6 +869,11 @@ TEMPLATE_TOOLS = [
                         "Khi hoi don bi huy/giao tre/chua co hoa don, BAT BUOC doc order_fulfillment_exceptions: "
                         "day la doi chieu DMS_DonHangHdr voi vHoaDonTotal dung tap nguon S42; KHONG doi "
                         "danh sach nay voi top_detail (hang tra/dieu chinh hoa don). "
+                        "So luong TOAN TAP phai doc trong order_fulfillment_exceptions.summary, KHONG dem "
+                        "so dong mau dang hien. Nguong mac dinh la TU 2 ngay (>=2), nen lech dung 2 ngay "
+                        "van duoc tinh. Nguon KHONG co ngay giao hang thuc te: chi duoc goi la lech ngay "
+                        "don-hoa don, khong ket luan giao cham. Tach rieng don huy, don chua tim thay hoa "
+                        "don va don co hoa don lech ngay; khong gop nhan khi cac tap khac nhau. "
                         "DNH CHUA phe duyet nguong "
                         "'don lon bat thuong': muc >3x trung vi chi la THAM CHIEU, tuyet doi khong gan "
                         "nhan gian lan hay ket luan doanh thu 'thuc chat' neu chua noi ro do tap trung. "
@@ -1529,6 +1534,67 @@ def _raw_query_payload(result: dict, db: str, question: str) -> dict:
         except Exception as exc:
             payload["catalog_error"] = str(exc)[:180]
     return payload
+
+
+def _payload_for_model(tool_name: str, payload, question: str):
+    """Rut gon co cau truc cho tool dai, giu payload day du o last_result/UI.
+
+    Cat chuoi JSON giua dong lam model thay 15/22 don va tu dem sai. V33 chi can chi tiet don
+    fulfillment + hang tra/dieu chinh; phan tham chieu don lon thuoc cau hoi khac, nen bo khoi ban
+    gui model de JSON con nguyen ven trong gioi han 6.000 ky tu.
+    """
+    if tool_name != "check_order_timing" or not isinstance(payload, dict):
+        return payload
+    normalized = " ".join("".join(
+        ch for ch in unicodedata.normalize("NFD", (question or "").lower())
+        if unicodedata.category(ch) != "Mn"
+    ).replace("đ", "d").split())
+    fulfillment_intent = any(marker in normalized for marker in (
+        "don nao bi huy", "don bi huy", "don huy", "giao/hoa don cham", "giao hoa don cham",
+        "giao cham", "hoa don cham", "chua tim thay hoa don", "chua co hoa don", "chua hoa don",
+    ))
+    if not fulfillment_intent:
+        return payload
+
+    wrapper = payload if isinstance(payload.get("du_lieu"), dict) else None
+    data = payload.get("du_lieu") if wrapper else payload
+    fulfillment = data.get("order_fulfillment_exceptions") or {}
+    rows = fulfillment.get("rows") if isinstance(fulfillment, dict) else []
+    rows = rows if isinstance(rows, list) else []
+    shown = rows[:12]
+    compact_fulfillment = {
+        key: value for key, value in fulfillment.items() if key != "rows"
+    }
+    compact_fulfillment.update({
+        "rows_shown_to_model": len(shown),
+        "rows_not_shown_to_model": max(0, len(rows) - len(shown)),
+        "rows_are_sample": len(rows) > len(shown),
+        "rows": shown,
+    })
+    top_detail = data.get("top_detail") or []
+    return_detail = [row for row in top_detail if (
+        isinstance(row, dict) and "HANG_TRA_DIEU_CHINH" in (row.get("reasons") or [])
+    )][:10]
+    compact_data = {
+        "date_from": data.get("date_from"),
+        "date_to": data.get("date_to"),
+        "period_defaulted": data.get("period_defaulted"),
+        "order_fulfillment_exceptions": compact_fulfillment,
+        "returns": data.get("returns"),
+        "return_adjustment_detail": return_detail,
+        "return_adjustment_detail_truncated": sum(
+            1 for row in top_detail if isinstance(row, dict)
+            and "HANG_TRA_DIEU_CHINH" in (row.get("reasons") or [])
+        ) > len(return_detail),
+        "created_at_doc_date_check": data.get("created_at_doc_date_check"),
+        "unavailable_checks": data.get("unavailable_checks"),
+        "pham_vi_du_lieu": data.get("pham_vi_du_lieu"),
+        "data_as_of": data.get("data_as_of"),
+        "warning": data.get("warning"),
+    }
+    if wrapper:
+        return {**payload, "du_lieu": compact_data}
+    return compact_data
 
 # Beta header can thiet de dung TTL 1h (mac dinh cache_control chi song 5 phut neu khong co header nay).
 # Ap dung cho toan bo request (system + tools) - giup cache song qua nhieu cau hoi lien tiep trong gio
@@ -2287,7 +2353,8 @@ def ask(question: str, session_id: str = "default", username: str = None, scope_
             # lien tiep (truoc day template tools tra JSON 20K-50K chars, cong don qua cac vong lam
             # input tang tu 7K len 49K tokens cho 1 cau hoi). last_result (dong 804) VAN giu nguyen
             # ket qua day du cho UI frontend - chi phan gui cho AI model bi cat.
-            payload_str = json.dumps(payload, ensure_ascii=False) if isinstance(payload, (dict, list)) else str(payload)
+            model_payload = _payload_for_model(tu.name, payload, question)
+            payload_str = json.dumps(model_payload, ensure_ascii=False) if isinstance(model_payload, (dict, list)) else str(model_payload)
             if len(payload_str) > MAX_PAYLOAD_CHARS:
                 payload_str = payload_str[:MAX_PAYLOAD_CHARS] + "\n...(du lieu bi cat bot vi qua dai, phan tren DA DU de tra loi - KHONG can query lai)"
             payload_str += "\n" + query_plan.model_note()
@@ -2656,7 +2723,8 @@ def ask_stream(question: str, session_id: str = "default", username: str = None,
                 timeout_seconds=TOOL_TIMEOUT_SECONDS,
             )
 
-            payload_str = json.dumps(payload, ensure_ascii=False) if isinstance(payload, (dict, list)) else str(payload)
+            model_payload = _payload_for_model(tu.name, payload, question)
+            payload_str = json.dumps(model_payload, ensure_ascii=False) if isinstance(model_payload, (dict, list)) else str(model_payload)
             if len(payload_str) > MAX_PAYLOAD_CHARS:
                 payload_str = payload_str[:MAX_PAYLOAD_CHARS] + "\n...(du lieu bi cat bot vi qua dai, phan tren DA DU de tra loi - KHONG can query lai)"
             payload_str += "\n" + query_plan.model_note()
