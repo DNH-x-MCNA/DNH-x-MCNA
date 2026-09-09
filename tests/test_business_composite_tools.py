@@ -311,6 +311,9 @@ def test_high_risk_intents_force_their_single_verified_tool():
         "Tăng trưởng like-for-like tách khỏi tăng trưởng do mở mới"
     ) == "get_customer_movement"
     assert nl2sql._required_tool_for_question(
+        "Nếu loại ảnh hưởng của thay đổi địa bàn, chuyển nhân viên và chuyển khách, tăng trưởng thực của từng đơn vị còn bao nhiêu?"
+    ) == "get_customer_product_coverage"
+    assert nl2sql._required_tool_for_question(
         "Phụ thuộc top 10 khách/top 10 SP/top 3 miền ở mức nào; xu hướng tập trung"
     ) == "get_top_customers"
     assert nl2sql._required_tool_for_question(

@@ -203,6 +203,25 @@ def test_composite_uat_tools_complete_all_inferred_domains_without_phantom_pendi
         assert plan.status == "completed", (question, plan.as_dict())
 
 
+def test_c28_assignment_change_khong_tao_buoc_kpi_gia():
+    question = ("Nếu loại ảnh hưởng của thay đổi địa bàn, chuyển nhân viên và chuyển khách, "
+                "tăng trưởng thực của từng đơn vị còn bao nhiêu?")
+    plan = _plan(question, query_id="c28-assignment-change")
+
+    assert {step.domain for step in plan.steps} == {"customer"}
+    assert all(step.domain != "kpi" for step in plan.steps)
+
+    key = "coverage-c28"
+    plan.start_tool("get_customer_product_coverage", {"mode": "assignment_change"}, key)
+    plan.finish_tool(
+        key, ok=True,
+        payload={"status": "PARTIAL_SOURCE_LIMIT", "reconciliation": {"passed": True}},
+        source="template:get_customer_product_coverage", duration_ms=5, timeout_seconds=40,
+    )
+    plan.finalize()
+    assert plan.status == "completed"
+
+
 def test_inventory_tool_khong_duoc_danh_dau_xong_doanh_thu_o_cau_hoi_tong_hop_chung():
     plan = _plan(
         "Tổng doanh thu và giá trị tồn kho hiện tại là bao nhiêu?",

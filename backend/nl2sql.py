@@ -220,6 +220,14 @@ def _required_tool_for_question(question: str) -> str | None:
         return "get_top_customers"
     if any(marker in q for marker in ("khach im lang", "im lang 30", "im lang 60", "im lang 90")):
         return "get_customers_silent"
+    # C28/S91 hoi LOAI anh huong doi NV/khach, khac M18 hoi dia ban trong va NV nghi. Phai xet
+    # truoc nhanh "chuyen vung" rong, neu khong cau nay roi vao data-quality va khong co phep do.
+    if any(marker in q for marker in (
+        "loai anh huong", "loai tru anh huong", "giu nguyen nhan vien",
+    )) and any(marker in q for marker in (
+        "chuyen nhan vien", "chuyen nv", "chuyen khach", "thay doi dia ban", "chuyen vung",
+    )):
+        return "get_customer_product_coverage"
     if any(marker in q for marker in (
         "dia ban trong", "nv nghi", "chuyen vung", "khach chua gan",
     )):
@@ -741,11 +749,13 @@ TEMPLATE_TOOLS = [
                        "Benchmark chi trong DUNG pham vi tai khoan, KHONG "
                        "phai market share/share-of-wallet ngoai DNH va KHONG tu ket luan nhu cau. Voi "
                        "mode='product', dung net_revenue_per_paid_unit va truong previous/delta/pct de "
-                       "phan tich xoi mon gia; day la doanh thu thuan tren don vi ban co gia, khong phai bang gia niem yet.",
+                       "phan tich xoi mon gia; day la doanh thu thuan tren don vi ban co gia, khong phai bang gia niem yet. "
+                       "C28/S91: mode='assignment_change' tach khach giu nguyen NV chinh, doi NV, moi va "
+                       "roi bo tren OTC; day la ket qua PARTIAL vi khong co lich su assignment dia ban chot chuan.",
         "input_schema": {"type": "object", "properties": {
             "as_of_date": {"type": "string"}, "lookback_months": {"type": "integer"},
-            "mode": {"type": "string", "enum": ["customer", "customer_peer", "product", "employee", "priority", "four_customer_priorities", "product_monthly", "product_mix", "sku_target"],
-                     "description": "V28/S83: four_customer_priorities (4 danh sach giu khach/tai kich hoat/thu no/ban cheo). V29/S21: product_monthly (top/bottom SKU tung thang va dong gop MoM). V30/S46: sku_target (kiem tra target theo SKU; bao lo nguon, khong tu suy dien %). V31/S23: product_mix (nhieu khach-luong/don thap va it khach-AOV cao)."},
+            "mode": {"type": "string", "enum": ["customer", "customer_peer", "product", "employee", "priority", "four_customer_priorities", "product_monthly", "product_mix", "sku_target", "assignment_change"],
+                     "description": "V28/S83: four_customer_priorities (4 danh sach giu khach/tai kich hoat/thu no/ban cheo). V29/S21: product_monthly (top/bottom SKU tung thang va dong gop MoM). V30/S46: sku_target (kiem tra target theo SKU; bao lo nguon, khong tu suy dien %). V31/S23: product_mix (nhieu khach-luong/don thap va it khach-AOV cao). C28/S91: assignment_change (tach nhom giu/doi NV; chi OTC, co canh bao gioi han nguon)."},
             "limit": {"type": "integer"},
         }, "required": []},
     },

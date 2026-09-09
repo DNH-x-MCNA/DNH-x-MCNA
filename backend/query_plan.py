@@ -171,6 +171,15 @@ def infer_domains(question: str) -> list[dict[str, Any]]:
     ))
     if "orders" in found_domains and not asks_order_revenue:
         found = [spec for spec in found if spec["domain"] != "revenue"]
+    # C28: tu "nhan vien" mo ta chieu assignment, khong yeu cau KPI. Neu giu marker KPI rong,
+    # planner tao them buoc KPI khong lien quan va sinh footer "chua the kiem chung" gia.
+    assignment_change_question = any(marker in plain for marker in (
+        "loai anh huong", "loai tru anh huong",
+    )) and any(marker in plain for marker in (
+        "chuyen nhan vien", "chuyen nv", "chuyen khach", "thay doi dia ban", "chuyen vung",
+    ))
+    if assignment_change_question:
+        found = [spec for spec in found if spec["domain"] != "kpi"]
     return found or [_DOMAIN_SPECS[0]]
 
 

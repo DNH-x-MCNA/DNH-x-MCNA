@@ -1949,6 +1949,126 @@ def _customer_monthly_activity(month_from: str, month_to: str,
     return _q(sql, params)
 
 
+def _latest_complete_revenue_month() -> str:
+    """Thang tron gan nhat theo ngay du lieu that, khong theo dong ho may chu."""
+    data_day = dt.date.fromisoformat(str(latest_data_date())[:10])
+    if data_day.day < _last_day_of_month(data_day.year, data_day.month):
+        return _month_add(data_day.strftime("%Y-%m"), -1)
+    return data_day.strftime("%Y-%m")
+
+
+def _product_month_pair_summary(current_month: str, previous_month: str,
+                                scope_area_code: str = None,
+                                scope_channel: str = None,
+                                scope_employee_code: str = None) -> dict:
+    """Phan ra bien dong doanh thu theo TAP SAN PHAM giu nguyen/mo moi/ngung ban.
+
+    C20 hoi dong thoi "cung tap khach hang" va "cung tap san pham". Ban cu chi tra truc khach
+    hang, de model dung mot bang khach hang tra loi cho ca hai ve. Ham nay tinh doc lap tren SKU,
+    va tra san phep doi soat de hai phan ra deu cong lai dung tong doanh thu.
+    """
+    previous_from, previous_to = _month_bounds(previous_month)
+    current_from, current_to = _month_bounds(current_month)
+    if previous_from < _detail_cutoff():
+        return {
+            "status": "source_gap",
+            "current_month": current_month,
+            "previous_month": previous_month,
+            "note": ("Chi tiet SKU cua ky truoc nam ngoai cua so luu chi tiet 12 thang; "
+                     "khong the tinh LFL theo san pham tu tong doanh thu da nen."),
+        }
+
+    scope_sql, scope_params = _scope_clause(scope_area_code)
+    employee_sql, employee_params = _employee_scope_clause(
+        scope_employee_code, "v", as_of=current_to
+    )
+    suffix = scope_sql + employee_sql
+    suffix_params = scope_params + employee_params
+    parts, groups = [], []
+    if scope_channel != "ETC":
+        join = _otc_area_join("v", scope_area_code)
+        parts.append(
+            "SELECT substr(v.doc_date,1,7) month,v.item_code,SUM(v.amount9) revenue "
+            f"FROM vhoadon_otc v {join} WHERE v.doc_date BETWEEN ? AND ? "
+            f"AND v.item_code IS NOT NULL AND TRIM(v.item_code)<>''{suffix} "
+            "GROUP BY substr(v.doc_date,1,7),v.item_code"
+        )
+        groups.append((previous_from, current_to) + suffix_params)
+    if scope_channel != "OTC":
+        join = _etc_area_join("v", scope_area_code)
+        parts.append(
+            "SELECT substr(v.doc_date,1,7) month,v.item_code,SUM(v.amount9) revenue "
+            f"FROM vhoadon_etc v {join} WHERE v.doc_date BETWEEN ? AND ? "
+            f"AND v.item_code IS NOT NULL AND TRIM(v.item_code)<>''{suffix} "
+            "GROUP BY substr(v.doc_date,1,7),v.item_code"
+        )
+        groups.append((previous_from, current_to) + suffix_params)
+    if not parts:
+        return {"status": "no_data", "current_month": current_month,
+                "previous_month": previous_month}
+
+    rows = _q(
+        "WITH x AS (" + " UNION ALL ".join(parts) + ") "
+        "SELECT month,item_code,SUM(revenue) revenue FROM x GROUP BY month,item_code",
+        tuple(value for group in groups for value in group),
+    )
+    by_item = {}
+    for row in rows:
+        by_item.setdefault(row["item_code"], {})[row["month"]] = _f(row["revenue"])
+
+    lfl, current_only, previous_only, non_positive = [], [], [], []
+    for item_code, periods in by_item.items():
+        current = periods.get(current_month, 0.0)
+        previous = periods.get(previous_month, 0.0)
+        item = {"item_code": item_code, "current_revenue": current,
+                "previous_revenue": previous, "delta": current - previous}
+        if current > 0 and previous > 0:
+            lfl.append(item)
+        elif current > 0 and previous <= 0:
+            current_only.append(item)
+        elif previous > 0 and current <= 0:
+            previous_only.append(item)
+        elif current or previous:
+            non_positive.append(item)
+
+    def _sum(rows_to_sum, key):
+        return sum(row[key] for row in rows_to_sum)
+
+    total_current = sum(_f(row["revenue"]) for row in rows if row["month"] == current_month)
+    total_previous = sum(_f(row["revenue"]) for row in rows if row["month"] == previous_month)
+    lfl_current = _sum(lfl, "current_revenue")
+    lfl_previous = _sum(lfl, "previous_revenue")
+    lfl_delta = lfl_current - lfl_previous
+    current_only_delta = _sum(current_only, "delta")
+    previous_only_delta = _sum(previous_only, "delta")
+    non_positive_delta = _sum(non_positive, "delta")
+    reconciled = lfl_delta + current_only_delta + previous_only_delta + non_positive_delta
+    total_delta = total_current - total_previous
+    return {
+        "status": "ok",
+        "current_month": current_month,
+        "previous_month": previous_month,
+        "like_for_like_product_count": len(lfl),
+        "like_for_like_current_revenue": lfl_current,
+        "like_for_like_previous_revenue": lfl_previous,
+        "like_for_like_delta": lfl_delta,
+        "like_for_like_pct": (lfl_delta / lfl_previous * 100) if lfl_previous else None,
+        "current_only_product_count": len(current_only),
+        "current_only_product_delta": current_only_delta,
+        "previous_only_product_count": len(previous_only),
+        "previous_only_product_delta": previous_only_delta,
+        "non_positive_adjustment_delta": non_positive_delta,
+        "total_current_revenue": total_current,
+        "total_previous_revenue": total_previous,
+        "total_revenue_delta": total_delta,
+        "reconciled_delta": reconciled,
+        "reconciliation_gap": reconciled - total_delta,
+        "definition": ("LFL san pham = SKU co doanh thu duong o ca hai thang. SKU chi co o thang "
+                       "hien tai/ky truoc duoc tach rieng; khong tu goi la san pham moi/ngung kinh "
+                       "doanh neu chua co lich su va danh muc trang thai san pham."),
+    }
+
+
 def customer_cohort_retention(month_to: str = None, months_back: int = 6,
                               age_months: list = None, group_by: str = "overall",
                               scope_area_code: str = None, scope_channel: str = None,
@@ -2029,7 +2149,11 @@ def customer_movement(month: str = None, history_months: int = 12,
     earliest, latest = _revenue_data_month_range()
     if not earliest or not latest:
         return {"error": "Kho chua co hoa don de phan tich luong khach."}
-    month = (month or latest)[:7]
+    used_default_month = not month
+    # Cau C20 khong ghi ky: dung thang TRON gan nhat de hai ve cung do dai. Ban cu mac dinh thang
+    # du lieu moi nhat, nen ngay 08/09 co the am tham so 8 ngay T9 voi ca thang T8. Model co luc tu
+    # lui ve T8, co luc khong, lam cung mot cau UAT thay doi ky giua cac lan chay.
+    month = ((_latest_complete_revenue_month() if used_default_month else month) or latest)[:7]
     history_months = max(2, min(int(history_months or 6), 24))
     limit = max(1, min(int(limit or 50), 200))
     start = max(earliest, _month_add(month, -(history_months - 1)))
@@ -2159,9 +2283,14 @@ def customer_movement(month: str = None, history_months: int = 12,
 
     summary_all = _movement_summary(detail)
     returned_detail = detail[:limit]
+    product_summary = _product_month_pair_summary(
+        month, prev_month, scope_area_code, scope_channel, scope_employee_code
+    )
     return {
         "month": month, "previous_month": prev_month, "history_from": start,
+        "period_selection": ("THANG_TRON_GAN_NHAT" if used_default_month else "THANG_DUOC_CHI_DINH"),
         "summary_all_customers": summary_all,
+        "summary_all_products": product_summary,
         "summary_on_returned_top_rows": _movement_summary(returned_detail),
         "customers": returned_detail,
         "canh_bao": ("NEW_OR_FIRST_OBSERVED chi co nghia la lan dau THAY trong cua so du lieu dang co; "
@@ -2438,8 +2567,14 @@ def customer_product_coverage(as_of_date: str = None, lookback_months: int = 3,
             "safe_next_report": "Co the bao cao do phu va doanh thu SKU tung thang; khong duoc goi do la % hoan thanh target.",
             "data_as_of": latest_data_date(),
         }
+    if mode == "assignment_change":
+        return customer_assignment_change(
+            as_of_date=as_of_date, lookback_months=lookback_months, limit=limit,
+            scope_area_code=scope_area_code, scope_channel=scope_channel,
+            scope_employee_code=scope_employee_code,
+        )
     if mode not in {"customer", "customer_peer", "product", "employee"}:
-        return {"error": "mode chi nhan customer/customer_peer/product/employee/priority/four_customer_priorities/product_monthly/product_mix/sku_target."}
+        return {"error": "mode chi nhan customer/customer_peer/product/employee/priority/four_customer_priorities/product_monthly/product_mix/sku_target/assignment_change."}
     customer_mode = mode in {"customer", "customer_peer"}
     as_of_date = (as_of_date or latest_data_date())[:10]
     lookback_months = max(1, min(int(lookback_months or 3), 12))
@@ -3243,6 +3378,173 @@ def priority_gap_actions(as_of_date: str = None, limit: int = 20,
         "employee_actions": employee_actions, "rows": combined,
         "definition": "Gap KH/SP = binh quan 3 thang tron truoc - doanh thu MTD; gap NV = target - actual snapshot luong.",
         "warning": "Danh sach uu tien la xep hang theo gap quan sat duoc, khong phai cam ket nhu cau hay du bao.",
+        "data_as_of": latest_data_date(),
+    }
+
+
+def customer_assignment_change(as_of_date: str = None, lookback_months: int = 3,
+                               limit: int = 100, scope_area_code: str = None,
+                               scope_channel: str = None,
+                               scope_employee_code: str = None) -> dict:
+    """C28/S91: tach tang truong nhom khach giu nguyen NV khoi nhom doi NV."""
+    requested_date = str(as_of_date or "").strip()[:10]
+    if requested_date:
+        current_month = requested_date[:7]
+        requested_day = dt.date.fromisoformat(requested_date)
+        if requested_day.day < _last_day_of_month(requested_day.year, requested_day.month):
+            current_month = _month_add(current_month, -1)
+            period_selection = "THANG_TRON_TRUOC_NGAY_DUOC_CHI_DINH"
+        else:
+            period_selection = "THANG_DUOC_CHI_DINH_DA_TRON"
+    else:
+        current_month = _latest_complete_revenue_month()
+        period_selection = "THANG_TRON_GAN_NHAT"
+
+    lookback_months = max(1, min(int(lookback_months or 3), 6))
+    limit = max(1, min(int(limit or 100), 500))
+    current_from = f"{_month_add(current_month, -(lookback_months - 1))}-01"
+    _, current_to = _month_bounds(current_month)
+    previous_to_month = _month_add(current_month, -lookback_months)
+    previous_from = f"{_month_add(previous_to_month, -(lookback_months - 1))}-01"
+    _, previous_to = _month_bounds(previous_to_month)
+
+    if scope_channel and str(scope_channel).upper() == "ETC":
+        return {
+            "status": "SOURCE_GAP_ETC_ASSIGNMENT_HISTORY", "available_channel": "OTC",
+            "note": "Chua co lich su phan cong ETC da duoc chot de loai anh huong chuyen khach/NV.",
+        }
+
+    available = _q("SELECT MIN(doc_date) min_date,MAX(doc_date) max_date FROM vhoadon_otc")[0]
+    available_from, available_to = available.get("min_date"), available.get("max_date")
+    if not available_from or available_from > previous_from or not available_to or available_to < current_to:
+        return {
+            "status": "SOURCE_GAP_INCOMPLETE_ASSIGNMENT_HISTORY", "mode": "assignment_change",
+            "channel": "OTC", "required_period": {"from": previous_from, "to": current_to},
+            "available_detail_period": {"from": available_from, "to": available_to},
+            "note": (
+                "Du lieu hoa don chi tiet hien khong phu du hai cua so so sanh. Khong duoc coi "
+                "khach khong xuat hien trong phan lich su bi thieu la khach moi/chuyen NV."
+            ),
+        }
+
+    scope_sql, scope_params = _scope_clause(scope_area_code)
+    employee_sql, employee_params = _employee_scope_clause(
+        scope_employee_code, "v", as_of=current_to,
+    )
+    suffix = scope_sql + employee_sql
+    rows = _q(
+        "SELECT CASE WHEN v.doc_date BETWEEN ? AND ? THEN 'PREVIOUS' ELSE 'CURRENT' END period,"
+        "v.customer_code,COALESCE(NULLIF(TRIM(v.employee_code),''),'UNKNOWN') employee_code,"
+        "SUM(v.amount9) revenue "
+        f"FROM vhoadon_otc v {_otc_area_join('v', scope_area_code)} "
+        "WHERE v.doc_date BETWEEN ? AND ? AND v.customer_code IS NOT NULL "
+        f"AND TRIM(v.customer_code)<>''{suffix} "
+        "GROUP BY period,v.customer_code,COALESCE(NULLIF(TRIM(v.employee_code),''),'UNKNOWN')",
+        (previous_from, previous_to, previous_from, current_to) + scope_params + employee_params,
+    )
+
+    grouped = {}
+    for row in rows:
+        key = (row["customer_code"], row["period"])
+        grouped.setdefault(key, []).append({
+            "employee_code": row["employee_code"], "revenue": _f(row["revenue"]),
+        })
+    primary = {}
+    for key, candidates in grouped.items():
+        total = sum(item["revenue"] for item in candidates)
+        chosen = sorted(candidates, key=lambda item: (-item["revenue"], item["employee_code"]))[0]
+        primary[key] = {"employee_code": chosen["employee_code"], "revenue": total}
+
+    customers = sorted({customer for customer, _ in primary})
+    buckets = {
+        "STABLE_EMPLOYEE": [], "CHANGED_EMPLOYEE": [], "CURRENT_ONLY": [],
+        "PREVIOUS_ONLY": [], "UNKNOWN_ASSIGNMENT": [],
+    }
+    stable_by_employee = {}
+    detail = []
+    for customer in customers:
+        previous = primary.get((customer, "PREVIOUS"))
+        current = primary.get((customer, "CURRENT"))
+        prev_revenue = _f(previous and previous["revenue"])
+        cur_revenue = _f(current and current["revenue"])
+        prev_employee = previous and previous["employee_code"]
+        cur_employee = current and current["employee_code"]
+        if "UNKNOWN" in (prev_employee, cur_employee):
+            group = "UNKNOWN_ASSIGNMENT"
+        elif not previous:
+            group = "CURRENT_ONLY"
+        elif not current:
+            group = "PREVIOUS_ONLY"
+        elif prev_employee == cur_employee:
+            group = "STABLE_EMPLOYEE"
+        else:
+            group = "CHANGED_EMPLOYEE"
+        item = {
+            "customer_code": customer, "previous_primary_employee": prev_employee,
+            "current_primary_employee": cur_employee, "previous_revenue": prev_revenue,
+            "current_revenue": cur_revenue, "delta": cur_revenue - prev_revenue, "group": group,
+        }
+        buckets[group].append(item)
+        detail.append(item)
+        if group == "STABLE_EMPLOYEE":
+            unit = stable_by_employee.setdefault(cur_employee, {
+                "employee_code": cur_employee, "customers": 0,
+                "previous_revenue": 0.0, "current_revenue": 0.0,
+            })
+            unit["customers"] += 1
+            unit["previous_revenue"] += prev_revenue
+            unit["current_revenue"] += cur_revenue
+
+    groups = []
+    for name, items in buckets.items():
+        previous_revenue = sum(item["previous_revenue"] for item in items)
+        current_revenue = sum(item["current_revenue"] for item in items)
+        groups.append({
+            "group": name, "customers": len(items), "previous_revenue": previous_revenue,
+            "current_revenue": current_revenue, "delta": current_revenue - previous_revenue,
+            "growth_pct": ((current_revenue - previous_revenue) / previous_revenue * 100
+                           if previous_revenue else None),
+        })
+    stable_units = []
+    for unit in stable_by_employee.values():
+        unit["delta"] = unit["current_revenue"] - unit["previous_revenue"]
+        unit["growth_pct"] = (unit["delta"] / unit["previous_revenue"] * 100
+                              if unit["previous_revenue"] else None)
+        stable_units.append(unit)
+    stable_units.sort(key=lambda item: (-abs(item["delta"]), item["employee_code"]))
+    total_previous = sum(item["previous_revenue"] for item in detail)
+    total_current = sum(item["current_revenue"] for item in detail)
+    group_previous = sum(item["previous_revenue"] for item in groups)
+    group_current = sum(item["current_revenue"] for item in groups)
+    stable = next(item for item in groups if item["group"] == "STABLE_EMPLOYEE")
+    return {
+        "status": "PARTIAL_SOURCE_LIMIT", "mode": "assignment_change", "channel": "OTC",
+        "period_selection": period_selection,
+        "current_period": {"from": current_from, "to": current_to},
+        "previous_period": {"from": previous_from, "to": previous_to},
+        "groups": groups, "stable_customer_growth": stable,
+        "stable_growth_by_employee": stable_units[:limit],
+        "changed_customer_samples": sorted(
+            buckets["CHANGED_EMPLOYEE"], key=lambda item: -abs(item["delta"]),
+        )[:limit],
+        "reconciliation": {
+            "total_previous_revenue": total_previous, "total_current_revenue": total_current,
+            "total_delta": total_current - total_previous,
+            "group_previous_gap": group_previous - total_previous,
+            "group_current_gap": group_current - total_current,
+            "passed": abs(group_previous - total_previous) <= 1 and abs(group_current - total_current) <= 1,
+        },
+        "definition": (
+            "Tang truong it bi xao tron nhat = doanh thu cua cac khach co cung mot NV chinh o ca hai "
+            "cua so. NV chinh la NV co doanh thu cao nhat cua khach trong cua so; day la quy uoc "
+            "phan tich, khong phai lich su phan cong chot chuan."
+        ),
+        "limitations": (
+            "Kho chua co lich su assignment dia ban/QLV chot chuan, nen KHONG the noi da loai sach "
+            "anh huong doi dia ban. Khach bi chuyen NV roi ngung mua se nam o PREVIOUS_ONLY, vi vay "
+            "anh huong ban giao co the bi danh gia thap. Chi duoc trinh bay day la tang truong nhom "
+            "khach giu nguyen NV chinh, khong goi la tang truong thuc tuyet doi cua tung don vi."
+        ),
         "data_as_of": latest_data_date(),
     }
 
@@ -8295,6 +8597,15 @@ def call_template(name: str, args: dict, question: str = "", username: str = Non
                 "nguy cơ mất", "nguy co mat",
             )):
                 call_args["focus"] = "shortage"
+        if name == "get_customer_product_coverage" and not call_args.get("mode"):
+            q_lower = " ".join((question or "").lower().split())
+            if any(marker in q_lower for marker in (
+                "loại ảnh hưởng", "loai anh huong", "loại trừ ảnh hưởng", "loai tru anh huong",
+            )) and any(marker in q_lower for marker in (
+                "chuyển nhân viên", "chuyen nhan vien", "chuyển khách", "chuyen khach",
+                "thay đổi địa bàn", "thay doi dia ban", "chuyển vùng", "chuyen vung",
+            )):
+                call_args["mode"] = "assignment_change"
         result = fn(**call_args)
         # Gan nhan pham vi NGAY TRONG payload cho model. Truoc day code da loc dung doi QLV nhung
         # payload chi con cac con so; model da goi 9,82 ty cua DOI thanh "toan vung MT" trong UAT.

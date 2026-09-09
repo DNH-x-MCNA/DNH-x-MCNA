@@ -172,6 +172,68 @@ def test_customer_movement_tong_bu_doanh_thu_tinh_tren_toan_bo_khach_truoc_khi_c
     assert top_rows["lost_previous_revenue"] == 0
 
 
+def test_c20_customer_movement_tra_ca_lfl_san_pham_va_doi_chieu_du_tong(tmp_path, monkeypatch):
+    _setup(tmp_path, monkeypatch)
+
+    result = rt.customer_movement(month="2026-04", history_months=4, limit=50)
+    products = result["summary_all_products"]
+
+    assert products["status"] == "ok"
+    assert products["like_for_like_product_count"] == 2
+    assert products["like_for_like_previous_revenue"] == 680
+    assert products["like_for_like_current_revenue"] == 1230
+    assert products["like_for_like_delta"] == 550
+    assert products["total_revenue_delta"] == products["reconciled_delta"] == 550
+    assert products["reconciliation_gap"] == 0
+
+
+def test_c20_khong_neu_ky_thi_dung_thang_tron_gan_nhat(tmp_path, monkeypatch):
+    _setup(tmp_path, monkeypatch)
+
+    result = rt.customer_movement(history_months=4, limit=50)
+
+    assert result["month"] == "2026-03"
+    assert result["previous_month"] == "2026-02"
+    assert result["period_selection"] == "THANG_TRON_GAN_NHAT"
+
+
+def test_c28_tach_khach_giu_nguyen_va_doi_nv_kem_canh_bao_nguon(tmp_path, monkeypatch):
+    db_path = _setup(tmp_path, monkeypatch)
+    with sqlite3.connect(db_path) as con:
+        con.execute("INSERT INTO dms_khachhang VALUES ('C6','Khach doi NV',1,6,'D2','OTC')")
+        con.execute("INSERT INTO vhoadon_otc VALUES "
+                    "('2025-10-01','C6','A',0,1,1,'C6-BOUND',1,'D1','2025-10-01','OTC')")
+        con.execute("INSERT INTO vhoadon_otc VALUES "
+                    "('2025-12-15','C6','A',200,1,200,'C6-PRE',1,'D1','2025-12-15','OTC')")
+        con.execute("INSERT INTO vhoadon_otc VALUES "
+                    "('2026-01-15','C6','A',300,1,300,'C6-CUR',1,'D2','2026-01-15','OTC')")
+
+    result = rt.customer_product_coverage(mode="assignment_change", lookback_months=3)
+    groups = {row["group"]: row for row in result["groups"]}
+
+    assert result["status"] == "PARTIAL_SOURCE_LIMIT"
+    assert result["mode"] == "assignment_change"
+    assert result["current_period"] == {"from": "2026-01-01", "to": "2026-03-31"}
+    assert result["previous_period"] == {"from": "2025-10-01", "to": "2025-12-31"}
+    assert groups["CHANGED_EMPLOYEE"]["customers"] == 1
+    assert result["changed_customer_samples"][0]["customer_code"] == "C6"
+    assert result["reconciliation"]["passed"] is True
+    assert "KHONG the noi da loai sach" in result["limitations"]
+
+
+def test_c28_call_template_tu_ep_mode_assignment_change(tmp_path, monkeypatch):
+    _setup(tmp_path, monkeypatch)
+    question = ("Nếu loại ảnh hưởng của thay đổi địa bàn, chuyển nhân viên và chuyển khách, "
+                "tăng trưởng thực của từng đơn vị còn bao nhiêu?")
+
+    response = rt.call_template(
+        "get_customer_product_coverage", {}, question=question, scope_role="c_level",
+    )
+
+    assert response["ok"] is True
+    assert response["result"]["mode"] == "assignment_change"
+
+
 def test_gap_run_rate_qlv_chi_thay_doi_minh(tmp_path, monkeypatch):
     _setup(tmp_path, monkeypatch)
     r = rt.kpi_gap_run_rate(as_of_date="2026-04-15", group_by="employee",
