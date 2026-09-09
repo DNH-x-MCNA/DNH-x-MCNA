@@ -646,7 +646,10 @@ TEMPLATE_TOOLS = [
                         "trinh bay so OTC nhu so cua ETC. C29: invoice_lifecycle_series tra rieng so "
                         "khach co hoa don duong, lien tuc, tai kich hoat, ngung mua va first-observed "
                         "tung thang. Day la PHAN LOAI TU HOA DON, khac co NC/RO; khong doi continuing "
-                        "thanh Re-Order, khong coi first-observed la khach moi trong doi. Kho chi giu khoang 90 ngay snapshot, neu ket "
+                        "thanh Re-Order, khong coi first-observed la khach moi trong doi. VOI C29, ca bang "
+                        "hanh vi va bang co Bravo deu cung pham vi OTC: TUYET DOI KHONG lay them so "
+                        "OTC+ETC tu get_customer_movement, khong tu tinh 'khach dang mua' bang tong tru "
+                        "ngung mua. Kho chi giu khoang 90 ngay snapshot, neu ket "
                         "qua co canh_bao_thieu_lich_su thi PHAI noi ro, KHONG coi thang thieu la 0 khach.",
         "input_schema": {
             "type": "object",

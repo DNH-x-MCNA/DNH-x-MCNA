@@ -621,6 +621,98 @@ class QueryPlan:
             flags=re.IGNORECASE,
         )
 
+        # C29 UAT: payload lifecycle co hai lop dinh nghia (co Bravo va hanh vi suy tu hoa don).
+        # Model da tung bo qua invoice_lifecycle_series dung pham vi OTC, roi lay so tu
+        # get_customer_movement OTC+ETC va tu tinh "khach dang mua". Ket qua nghe hop ly nhung
+        # sai 2-3 lan so doi chung. Render truc tiep tu payload da doi soat de khoa cung pham vi.
+        question_plain = _plain(self.question)
+        is_c29 = all(marker in question_plain for marker in (
+            "khach moi", "tai kich hoat", "ngung mua",
+        )) and any(marker in question_plain for marker in (
+            "tung thang", "theo thang", "khach hoat dong", "mua lai",
+        ))
+        lifecycle = self._evidence.get("get_customer_lifecycle_summary")
+        if is_c29 and isinstance(lifecycle, dict):
+            invoice = lifecycle.get("invoice_lifecycle_series")
+            invoice_months = invoice.get("months") if isinstance(invoice, dict) else None
+            if isinstance(invoice_months, list) and invoice_months:
+                flag_by_month = {
+                    str(row.get("month")): row
+                    for row in (lifecycle.get("months") or [])
+                    if isinstance(row, dict) and row.get("month")
+                }
+
+                def fmt_count(value: Any) -> str:
+                    if value is None:
+                        return "—"
+                    try:
+                        return f"{int(value):,}".replace(",", ".")
+                    except (TypeError, ValueError):
+                        return "—"
+
+                lines = [
+                    "### Dòng khách hàng theo tháng — kênh OTC",
+                    "",
+                    "| Tháng | Khách hoạt động | Khách mới (cờ NC) | Khách mua lại (cờ RO) | "
+                    "Khách tái kích hoạt | Khách ngừng mua |",
+                    "|---|---:|---:|---:|---:|---:|",
+                ]
+                for row in invoice_months:
+                    if not isinstance(row, dict) or not row.get("month"):
+                        continue
+                    month = str(row["month"])
+                    flags = flag_by_month.get(month) or {}
+                    month_label = f"{month[5:7]}/{month[:4]}" if len(month) >= 7 else month
+                    if month == str(lifecycle.get("data_as_of") or "")[:7]:
+                        month_label += " (MTD)"
+                    lines.append(
+                        f"| {month_label} | {fmt_count(row.get('invoice_active_customers'))} | "
+                        f"{fmt_count(None if flags.get('khong_co_du_lieu') else flags.get('khach_moi'))} | "
+                        f"{fmt_count(None if flags.get('khong_co_du_lieu') else flags.get('so_is_ro'))} | "
+                        f"{fmt_count(row.get('invoice_reactivated_customers'))} | "
+                        f"{fmt_count(row.get('invoice_stopped_customers'))} |"
+                    )
+
+                lines.extend([
+                    "",
+                    "- **Khách hoạt động:** có doanh thu hóa đơn ròng dương trong tháng.",
+                    "- **Khách mới / mua lại:** lấy theo cờ nghiệp vụ NC / RO của Bravo.",
+                    "- **Tái kích hoạt:** có mua tháng này, không mua tháng liền trước nhưng đã mua "
+                    "trong lịch sử trước đó. **Ngừng mua:** có mua tháng trước nhưng không mua tháng này.",
+                    "- Tất cả số trong bảng đều cùng phạm vi **OTC**; không cộng hoặc trộn với ETC.",
+                ])
+                if str(invoice.get("status") or "").upper() == "PARTIAL_HISTORY":
+                    lines.extend([
+                        "",
+                        "**Giới hạn lịch sử:** Chưa đủ lịch sử để phân biệt chắc chắn khách tái kích "
+                        "hoạt với khách lần đầu quan sát; các ô không đủ căn cứ được để trống, không "
+                        "coi là 0.",
+                    ])
+                missing_flags = [
+                    str(row.get("month")) for row in (lifecycle.get("months") or [])
+                    if isinstance(row, dict) and row.get("khong_co_du_lieu")
+                ]
+                if missing_flags:
+                    lines.extend([
+                        "",
+                        "**Thiếu snapshot Bravo:** " + ", ".join(missing_flags)
+                        + ". Hai cột NC/RO ở các tháng này không có dữ liệu; dấu — không phải là 0.",
+                    ])
+                data_as_of = str(lifecycle.get("data_as_of") or "")
+                if data_as_of:
+                    try:
+                        as_of = dt.date.fromisoformat(data_as_of[:10])
+                    except ValueError:
+                        as_of = None
+                    if as_of and as_of.day < calendar.monthrange(as_of.year, as_of.month)[1]:
+                        lines.extend([
+                            "",
+                            f"**Lưu ý:** Tháng {as_of.month:02d}/{as_of.year} mới có dữ liệu đến "
+                            f"{as_of.strftime('%d/%m/%Y')}; số ngừng mua MTD chưa phù hợp để kết luận "
+                            "xu hướng cả tháng.",
+                        ])
+                return "\n".join(lines)
+
         # C03 UAT: khi lịch sử YTD thiếu, chặn ở tầng backend thay vì chỉ trông chờ model đọc đúng
         # cảnh báo. Loại câu trả lời số do model soạn để tỷ lệ/gap suy diễn không lọt ra giao diện.
         ytd = self._evidence.get("get_revenue_ytd_cumulative")

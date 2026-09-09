@@ -230,6 +230,47 @@ def test_c29_lifecycle_khong_bi_hieu_nham_la_kpi_nhan_su():
     assert {step.domain for step in plan.steps} == {"customer"}
 
 
+def test_c29_render_dung_chuoi_otc_khong_tron_so_toan_kenh():
+    question = ("Số khách hoạt động, khách mới, khách mua lại, khách tái kích hoạt và "
+                "khách ngừng mua từng tháng là bao nhiêu?")
+    plan = _plan(question, query_id="c29-render")
+    key = "lifecycle"
+    plan.start_tool("get_customer_lifecycle_summary", {"year_month": "2026-08", "months_back": 2}, key)
+    plan.finish_tool(
+        key,
+        ok=True,
+        payload={
+            "months": [
+                {"month": "2026-07", "tong_khach": 6829, "khach_moi": 605, "so_is_ro": 5581},
+                {"month": "2026-08", "tong_khach": 6896, "khach_moi": 612, "so_is_ro": 5565},
+            ],
+            "invoice_lifecycle_series": {
+                "status": "ok", "channel": "OTC",
+                "months": [
+                    {"month": "2026-07", "invoice_active_customers": 6861,
+                     "invoice_reactivated_customers": 2943, "invoice_stopped_customers": 2535},
+                    {"month": "2026-08", "invoice_active_customers": 6922,
+                     "invoice_reactivated_customers": 2459, "invoice_stopped_customers": 2812},
+                ],
+            },
+            "data_as_of": "2026-09-09",
+        },
+        source="template:get_customer_lifecycle_summary",
+        duration_ms=5,
+        timeout_seconds=40,
+    )
+    plan.finalize()
+
+    answer = plan.finalize_answer(
+        "Khách đang mua toàn kênh tháng 8 là 15.481; tái kích hoạt 2.598; ngừng mua 3.012."
+    )
+
+    assert "| 07/2026 | 6.861 | 605 | 5.581 | 2.943 | 2.535 |" in answer
+    assert "| 08/2026 | 6.922 | 612 | 5.565 | 2.459 | 2.812 |" in answer
+    assert "15.481" not in answer and "2.598" not in answer and "3.012" not in answer
+    assert "cùng phạm vi **OTC**" in answer
+
+
 def test_inventory_tool_khong_duoc_danh_dau_xong_doanh_thu_o_cau_hoi_tong_hop_chung():
     plan = _plan(
         "Tổng doanh thu và giá trị tồn kho hiện tại là bao nhiêu?",
