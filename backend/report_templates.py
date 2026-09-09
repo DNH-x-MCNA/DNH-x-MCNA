@@ -9101,7 +9101,37 @@ def call_template(name: str, args: dict, question: str = "", username: str = Non
                 "thay đổi địa bàn", "thay doi dia ban", "chuyển vùng", "chuyen vung",
             )):
                 call_args["mode"] = "assignment_change"
-        result = fn(**call_args)
+        q_plain = " ".join((question or "").lower().split())
+        contract_etc_question = any(marker in q_plain for marker in (
+            "hợp đồng etc", "hop dong etc", "hợp đồng/gói thầu", "hop dong/goi thau",
+            "gói thầu nào", "goi thau nao", "sắp hết hiệu lực", "sap het hieu luc",
+            "giá trị lớn chưa giải ngân", "gia tri lon chua giai ngan",
+            "tỷ lệ thực hiện thấp", "ty le thuc hien thap",
+        ))
+        if name == "get_geography_monthly_performance" and contract_etc_question:
+            # C44/M42: hoa don khong co contract_id da DNH xac nhan. Tra source-gap co
+            # cau truc ngay tai tool de model khong the tu ghep customer+SKU roi tinh sai.
+            result = {
+                "status": "SOURCE_GAP_CONTRACT_INVOICE_LINK",
+                "requested_scope": "ETC",
+                "verified_available": [
+                    "Metadata hop dong truc tiep trong nguon: so hop dong, khach hang, hieu luc, gia tri goc.",
+                ],
+                "not_verifiable": [
+                    "Doanh thu thuc hien theo tung hop dong",
+                    "Gia tri con lai/chua giai ngan va ty le thuc hien",
+                    "Cong no qua han theo tung hop dong",
+                ],
+                "reason": ("Hoa don hien khong co khoa hop dong da DNH xac nhan. Ghep bang khach "
+                           "hang + SKU co the gan nham hoac dem trung doanh thu."),
+                "forbidden_inference": "Khong noi hoa don vao hop dong qua customer+SKU.",
+                "data_quality_guard": ("Khong cong tong/xep hang gia tri hop dong bat thuong khi "
+                                       "chua co quy tac chat luong duoc DNH chot."),
+                "required_source": "contract_id hoac khoa lien ket don/hoa don-hop dong da DNH xac nhan.",
+                "data_as_of": latest_data_date(),
+            }
+        else:
+            result = fn(**call_args)
         # Gan nhan pham vi NGAY TRONG payload cho model. Truoc day code da loc dung doi QLV nhung
         # payload chi con cac con so; model da goi 9,82 ty cua DOI thanh "toan vung MT" trong UAT.
         if isinstance(result, dict):

@@ -341,6 +341,9 @@ def test_high_risk_intents_force_their_single_verified_tool():
         "SKU tồn cao/chậm bán/cận date trong phạm vi vùng là gì; khách nào phù hợp để xử lý tồn?"
     ) == "get_inventory_expiry_report"
     assert nl2sql._required_tool_for_question(
+        "Hợp đồng ETC nào thực hiện chậm, còn giá trị lớn chưa giải ngân hoặc sắp hết hiệu lực?"
+    ) == "get_geography_monthly_performance"
+    assert nl2sql._required_tool_for_question(
         "Chương trình khuyến mãi nào đội đang dùng; khách tham gia, số đơn và doanh thu trước–trong–sau chương trình thế nào?"
     ) == "get_promotion_effectiveness"
     assert nl2sql._required_tool_for_question(

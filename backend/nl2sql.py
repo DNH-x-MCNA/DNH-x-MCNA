@@ -215,6 +215,13 @@ def _required_tool_for_question(question: str) -> str | None:
     # liet ke them stock-out. Chi dinh tuyen sang SKU risk khi trong tam la SKU/thieu/cham ban.
     if "gia tri ton kho" in q:
         return "get_inventory_by_region"
+    # C44/M42: kho/hoa don khong co khoa hop dong da xac nhan. Ep vao bao cao co guard
+    # source-gap thay vi de model tu search SQL va noi hoa don qua customer+SKU.
+    if any(marker in q for marker in (
+        "hop dong etc", "hop dong/goi thau", "hop dong goi thau", "goi thau nao",
+        "sap het hieu luc", "gia tri lon chua giai ngan", "ty le thuc hien thap",
+    )):
+        return "get_geography_monthly_performance"
     if any(marker in q for marker in (
         "tai kich hoat", "ngung mua", "tang truong den tu mo moi", "doanh thu mat",
         "bu duoc bao nhieu", "khach lon nao ngung", "keo dai chu ky mua",
@@ -800,7 +807,9 @@ TEMPLATE_TOOLS = [
                        "chua the kiem chung, chi bao doanh thu/khach/don thuc co. "
                        "dia ban, ke ca cau hoi dang 'dia ban QUY MO LON nhung TANG TRUONG THAP' "
                        "(doi chieu cot revenue/ty trong voi cot MoM - KHONG can viet SQL tay). Kho local CHUA co khoa chi nhanh/NPP/distributor; neu hoi chieu do tool "
-                       "tra not_applicable, PHAI noi ro, KHONG tu suy tu tinh/vung.",
+                       "tra not_applicable, PHAI noi ro, KHONG tu suy tu tinh/vung. C44/M42 ve hop "
+                       "dong/goi thau ETC tra SOURCE_GAP_CONTRACT_INVOICE_LINK; phai liet ke dung "
+                       "not_verifiable va KHONG query SQL tu do de noi hoa don bang customer+SKU.",
         "input_schema": {"type": "object", "properties": {
             "month_to": {"type": "string"}, "months_back": {"type": "integer"},
             "dimension": {"type": "string", "enum": ["area", "city", "branch", "npp", "distributor"]},

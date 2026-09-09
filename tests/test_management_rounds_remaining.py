@@ -174,6 +174,20 @@ def test_c34_cau_hoi_tu_dong_chon_mode_fail_closed(tmp_path, monkeypatch):
     assert result["result"]["launch_date_source"] == "not_available"
 
 
+def test_c44_hop_dong_etc_fail_closed_khi_chua_co_khoa_hoa_don(tmp_path, monkeypatch):
+    _setup(tmp_path, monkeypatch)
+    payload = rt.call_template(
+        "get_geography_monthly_performance", {},
+        question="Hợp đồng ETC nào thực hiện chậm, còn giá trị lớn chưa giải ngân, sắp hết hiệu lực?",
+        scope_role="c_level",
+    )
+
+    result = payload["result"]
+    assert result["status"] == "SOURCE_GAP_CONTRACT_INVOICE_LINK"
+    assert "Doanh thu thuc hien theo tung hop dong" in result["not_verifiable"]
+    assert "customer+SKU" in result["forbidden_inference"]
+
+
 def test_customer_movement_phan_loai_new_reactivated_stopped(tmp_path, monkeypatch):
     _setup(tmp_path, monkeypatch)
     r = rt.customer_movement(month="2026-04", history_months=4, limit=50)
