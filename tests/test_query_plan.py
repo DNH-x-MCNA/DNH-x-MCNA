@@ -486,6 +486,19 @@ def test_kpi_giua_thang_khong_duoc_goi_la_binh_thuong_chi_vi_dau_thang():
     assert "chưa đủ cơ sở kết luận nhịp độ hiện tại là bình thường hay bất thường" in answer
 
 
+def test_footer_khong_lo_ten_ham_noi_bo_cho_nguoi_dung():
+    plan = _plan("KPI đội có bất thường nào cần kiểm tra?", query_id="friendly-footer")
+    plan.finalize()
+
+    answer = plan.finalize_answer(
+        "### Phần chưa thể kiểm chứng\n"
+        "- Truy vấn bổ sung bằng get_operational_data_quality: chưa có nguồn action tracker."
+    )
+
+    assert "get_operational_data_quality" not in answer
+    assert "Kiểm tra bổ sung: chưa có nguồn action tracker." in answer
+
+
 def test_hoi_tien_da_thu_gap_long_trong_receivables_overview_duoc_nang_len_partial():
     plan = _plan("Tháng này từng TDV đã thu được bao nhiêu tiền?", query_id="collection-gap")
     key = "receivables"

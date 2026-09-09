@@ -595,6 +595,16 @@ class QueryPlan:
         self.completed_at = dt.datetime.now().isoformat()
 
     def finalize_answer(self, answer: str) -> str:
+        # Giao dien danh cho nguoi dung nghiep vu. Model thinh thoang van chep ten ham noi bo vao
+        # footer (vd "Truy van bo sung bang get_operational_data_quality") du system prompt da cam.
+        # Xoa mau ro nhat o lop cuoi de khong lo chi tiet ky thuat ra cau tra loi.
+        answer = re.sub(
+            r"Truy\s+vấn\s+bổ\s+sung\s+bằng\s+get_[A-Za-z0-9_]+",
+            "Kiểm tra bổ sung",
+            answer,
+            flags=re.IGNORECASE,
+        )
+
         # C03 UAT: khi lịch sử YTD thiếu, chặn ở tầng backend thay vì chỉ trông chờ model đọc đúng
         # cảnh báo. Loại câu trả lời số do model soạn để tỷ lệ/gap suy diễn không lọt ra giao diện.
         ytd = self._evidence.get("get_revenue_ytd_cumulative")
