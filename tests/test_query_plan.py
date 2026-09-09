@@ -178,6 +178,10 @@ def test_composite_uat_tools_complete_all_inferred_domains_without_phantom_pendi
     cases = [
         ("Tăng trưởng doanh thu đến từ khách mở mới hay khách hiện hữu", "get_customer_movement"),
         ("SKU tồn kho cận date và chậm luân chuyển nào cần xử lý", "get_inventory_expiry_report"),
+        ("SKU khách đang cần nhưng kho thiếu là gì; đơn/doanh thu nào có nguy cơ mất vì thiếu hàng?",
+         "get_inventory_expiry_report"),
+        ("SKU tồn cao/chậm bán/cận date trong phạm vi vùng là gì; khách nào phù hợp để xử lý tồn?",
+         "get_inventory_expiry_report"),
         ("Doanh thu/khách và sản lượng từng sản phẩm thay đổi", "get_customer_product_coverage"),
     ]
     for index, (question, tool) in enumerate(cases):
@@ -197,6 +201,18 @@ def test_composite_uat_tools_complete_all_inferred_domains_without_phantom_pendi
         )
         plan.finalize()
         assert plan.status == "completed", (question, plan.as_dict())
+
+
+def test_inventory_tool_khong_duoc_danh_dau_xong_doanh_thu_o_cau_hoi_tong_hop_chung():
+    plan = _plan(
+        "Tổng doanh thu và giá trị tồn kho hiện tại là bao nhiêu?",
+        query_id="revenue-inventory-separate",
+    )
+    revenue = next(step for step in plan.steps if step.domain == "revenue")
+    inventory = next(step for step in plan.steps if step.domain == "inventory")
+
+    assert "get_inventory_expiry_report" not in revenue.tool_hints
+    assert "get_inventory_expiry_report" in inventory.tool_hints
 
 
 def test_failed_source_produces_structured_partial_answer_without_guessing():

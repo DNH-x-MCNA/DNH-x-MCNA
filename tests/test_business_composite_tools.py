@@ -441,6 +441,47 @@ def test_v33_payload_gui_model_la_json_day_du_co_tong_dem_khong_bi_cat_giua_dong
     assert "top_detail" not in compact
 
 
+def test_v39_payload_uu_tien_ton_cao_khach_goi_y_va_van_duoi_gioi_han():
+    question = "SKU tồn cao/chậm bán/cận date trong phạm vi vùng là gì; khách nào phù hợp để xử lý tồn?"
+    risks = [{
+        "item_code": f"SLOW{index}", "item_name": f"Hang ton cao {index}",
+        "stock_qty": 10_000 + index, "average_monthly_qty_3m": 100,
+        "average_monthly_revenue_3m": 1_000_000,
+        "months_of_cover": 100 + index, "status": "CHAM_LUAN_CHUYEN_DERIVED",
+    } for index in range(22)]
+    candidates = [{
+        "item_code": f"SLOW{index}",
+        "customers": [{
+            "item_code": f"SLOW{index}", "customer_code": f"KH{index}",
+            "customer_name": f"Khach hang {index}", "qty_3m": 100, "revenue_3m": 3_000_000,
+        }],
+    } for index in range(10)]
+    payload = {
+        "as_of": "2026-09-09", "area_code": "MB",
+        "summary": {"duoi_3_thang": {"so_lo": 0, "tong_so_luong": 0}},
+        "rows": [{"item_code": f"DATE{index}", "days_left": 200 + index} for index in range(30)],
+        "supply_risk": {
+            "status": "OK_DERIVED", "focus": "overstock", "total_actionable_skus": 42,
+            "status_counts": {"CO_NGUY_CO_THIEU_HANG_DERIVED": 19,
+                              "CHAM_LUAN_CHUYEN_DERIVED": 22,
+                              "TON_KHONG_BAN_3_THANG": 1},
+            "rows": risks, "recent_customer_candidates": candidates,
+            "definition": "Canh bao suy dien, khong phai don chac chan.",
+        },
+        "pham_vi_du_lieu": {"loai": "VUNG_MIEN", "ma_vung": "MB"},
+    }
+
+    compact = nl2sql._payload_for_model("get_inventory_expiry_report", payload, question)
+    encoded = json.dumps(compact, ensure_ascii=False)
+
+    assert len(encoded) <= nl2sql.MAX_PAYLOAD_CHARS
+    assert compact["supply_risk"]["focus"] == "overstock"
+    assert compact["supply_risk"]["rows_shown_to_model"] == 6
+    assert compact["supply_risk"]["rows_not_shown_to_model"] == 16
+    assert len(compact["supply_risk"]["recent_customer_candidates"]) == 3
+    assert len(compact["expiry_rows"]) == 3
+
+
 def test_ask_sends_forced_tool_choice_only_on_first_round(monkeypatch):
     seen = []
 

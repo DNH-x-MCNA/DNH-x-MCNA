@@ -936,6 +936,8 @@ TEMPLATE_TOOLS = [
                 "max_bucket": {"type": "string", "enum": ["het_han", "duoi_3_thang", "3_6_thang", "6_9_thang", "9_12_thang", "12_18_thang", "tren_18_thang"],
                                "description": "Chi lay cac lo TU khung nay TRO XUONG (gan het han hon) - vd 'duoi_3_thang' se gom ca het_han + duoi_3_thang. Bo trong de xem TAT CA cac khung."},
                 "limit": {"type": "integer", "description": "So dong chi tiet toi da tra ve trong 'rows' (mac dinh 30) - KHONG anh huong 'summary' (luon tinh tren toan bo pham vi)."},
+                "focus": {"type": "string", "enum": ["all", "shortage", "overstock"],
+                          "description": "Trong tam sap xep supply_risk: shortage cho SKU thieu hang; overstock cho ton cao/cham ban; all cho tong quan. Backend tu suy ra tu cau hoi neu bo trong."},
             },
             "required": [],
         },
@@ -1543,12 +1545,57 @@ def _payload_for_model(tool_name: str, payload, question: str):
     fulfillment + hang tra/dieu chinh; phan tham chieu don lon thuoc cau hoi khac, nen bo khoi ban
     gui model de JSON con nguyen ven trong gioi han 6.000 ky tu.
     """
-    if tool_name != "check_order_timing" or not isinstance(payload, dict):
+    if not isinstance(payload, dict):
         return payload
     normalized = " ".join("".join(
         ch for ch in unicodedata.normalize("NFD", (question or "").lower())
         if unicodedata.category(ch) != "Mn"
     ).replace("đ", "d").split())
+    if tool_name == "get_inventory_expiry_report":
+        wrapper = payload if isinstance(payload.get("du_lieu"), dict) else None
+        data = payload.get("du_lieu") if wrapper else payload
+        supply = data.get("supply_risk") or {}
+        risk_rows = supply.get("rows") if isinstance(supply, dict) else []
+        risk_rows = risk_rows if isinstance(risk_rows, list) else []
+        shown_risks = risk_rows[:6]
+        shown_codes = {row.get("item_code") for row in shown_risks if isinstance(row, dict)}
+        candidates = supply.get("recent_customer_candidates") or []
+        shown_candidates = [item for item in candidates if (
+            isinstance(item, dict) and item.get("item_code") in shown_codes
+        )][:3]
+        compact_supply = {
+            key: value for key, value in supply.items()
+            if key not in {"rows", "recent_customer_candidates"}
+        }
+        compact_supply.update({
+            "rows_shown_to_model": len(shown_risks),
+            "rows_not_shown_to_model": max(0, len(risk_rows) - len(shown_risks)),
+            "rows_are_sample": len(risk_rows) > len(shown_risks),
+            "rows": shown_risks,
+            "recent_customer_candidates": shown_candidates,
+            "customer_candidate_groups_shown": len(shown_candidates),
+        })
+        asks_expiry = any(marker in normalized for marker in (
+            "can date", "han su dung", "het han", "gan han",
+        ))
+        expiry_rows = data.get("rows") or []
+        compact_data = {
+            "as_of": data.get("as_of"),
+            "area_code": data.get("area_code"),
+            "summary": data.get("summary"),
+            "khong_xac_dinh_han": data.get("khong_xac_dinh_han"),
+            "expiry_rows": expiry_rows[:3] if asks_expiry else [],
+            "expiry_rows_are_sample": bool(asks_expiry and len(expiry_rows) > 3),
+            "supply_risk": compact_supply,
+            "sync_warning": data.get("sync_warning"),
+            "pham_vi_du_lieu": data.get("pham_vi_du_lieu"),
+        }
+        if wrapper:
+            return {**payload, "du_lieu": compact_data}
+        return compact_data
+
+    if tool_name != "check_order_timing":
+        return payload
     fulfillment_intent = any(marker in normalized for marker in (
         "don nao bi huy", "don bi huy", "don huy", "giao/hoa don cham", "giao hoa don cham",
         "giao cham", "hoa don cham", "chua tim thay hoa don", "chua co hoa don", "chua hoa don",

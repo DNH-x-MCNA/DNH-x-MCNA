@@ -5017,7 +5017,7 @@ def _expiry_bucket(days_left: float) -> str:
 
 
 def _inventory_supply_risk(stock_by_item: dict, item_names: dict, area_code: str,
-                           limit: int = 30) -> dict:
+                           limit: int = 30, focus: str = "all") -> dict:
     """So sanh TON HIEN CO voi nhu cau OTC 3 thang da chot gan nhat.
 
     Day la canh bao suy dien de tra loi S47/S28, khong phai bang chung khach da dat
@@ -5088,11 +5088,26 @@ def _inventory_supply_risk(stock_by_item: dict, item_names: dict, area_code: str
         })
 
     actionable = [r for r in risk_rows if r["status"] != "BINH_THUONG"]
-    actionable.sort(key=lambda r: (
-        0 if r["status"] == "CO_NGUY_CO_THIEU_HANG_DERIVED" else 1,
-        r["months_of_cover"] if r["months_of_cover"] is not None else float("inf"),
-        -r["stock_qty"],
-    ))
+    focus = focus if focus in {"all", "shortage", "overstock"} else "all"
+
+    def _priority(row):
+        status = row["status"]
+        cover = row["months_of_cover"]
+        if focus == "overstock":
+            # V39: ton khong ban va ton >6 thang phai len dau. Sap xep ton khong ban theo luong
+            # ton giam dan; nhom cham luan chuyen theo so thang du hang giam dan.
+            rank = {
+                "TON_KHONG_BAN_3_THANG": 0,
+                "CHAM_LUAN_CHUYEN_DERIVED": 1,
+                "CO_NGUY_CO_THIEU_HANG_DERIVED": 2,
+            }.get(status, 3)
+            metric = -(cover or 0) if status == "CHAM_LUAN_CHUYEN_DERIVED" else -row["stock_qty"]
+            return rank, metric, -row["stock_qty"]
+        # V38/all: nhom thieu hang uu tien so thang du hang thap nhat.
+        rank = 0 if status == "CO_NGUY_CO_THIEU_HANG_DERIVED" else 1
+        return rank, cover if cover is not None else float("inf"), -row["stock_qty"]
+
+    actionable.sort(key=_priority)
 
     # "Khach phu hop" chi duoc dua ra nhu danh sach goi y lien he: khach da mua SKU
     # trong 3 thang. Khong co du lieu nhu cau/chao hang de khang dinh se mua.
@@ -5100,7 +5115,9 @@ def _inventory_supply_risk(stock_by_item: dict, item_names: dict, area_code: str
     # nhung van tra tong so SKU va thong ke trang thai o ben duoi.
     shown_rows = actionable[:max(1, min(int(limit or 30), 50))]
     buyer_candidates = []
-    candidate_codes = [r["item_code"] for r in shown_rows[:10] if r["average_monthly_qty_3m"] > 0]
+    candidate_codes = [
+        r["item_code"] for r in shown_rows if r["average_monthly_qty_3m"] > 0
+    ][:10]
     if candidate_codes:
         candidate_marks = ",".join("?" for _ in candidate_codes)
         buyer_conditions = ["v.doc_date BETWEEN ? AND ?", f"v.item_code IN ({candidate_marks})"]
@@ -5128,6 +5145,7 @@ def _inventory_supply_risk(stock_by_item: dict, item_names: dict, area_code: str
 
     return {
         "status": "OK_DERIVED",
+        "focus": focus,
         "period": {"from": month_start, "to": month_end},
         "total_actionable_skus": len(actionable),
         "status_counts": {
@@ -5147,6 +5165,7 @@ def _inventory_supply_risk(stock_by_item: dict, item_names: dict, area_code: str
 
 
 def inventory_expiry_report(area_code: str = None, max_bucket: str = None, limit: int = 30,
+                             focus: str = "all",
                              scope_area_code: str = None) -> dict:
     """Bao cao TON KHO THEO LO + HAN SU DUNG - tra loi cau hoi "hang nao sap het han/can date/da het
     han", KHAC voi inventory_by_region() (chi co TONG so luong/gia tri theo vung, KHONG biet lo/han
@@ -5252,7 +5271,9 @@ def inventory_expiry_report(area_code: str = None, max_bucket: str = None, limit
         detail = [d for d in detail if d["bucket"] in allowed]
 
     detail.sort(key=lambda d: d["days_left"])
-    supply_risk = _inventory_supply_risk(stock_by_item, item_names, area_code, limit=limit)
+    supply_risk = _inventory_supply_risk(
+        stock_by_item, item_names, area_code, limit=limit, focus=focus,
+    )
 
     # Canh bao do moi dong bo - cung nguong 6 gio voi cong no (_customer_receivable/receivables_overview).
     # brv_tonkhodklot va brv_lot dong bo CUNG 1 lan (2 bang duoc them chung trong SMALL_TABLES, xem
@@ -8262,6 +8283,18 @@ def call_template(name: str, args: dict, question: str = "", username: str = Non
                     "cao hon (Truong phong/Giam doc vung) neu can pham vi rong hon.")}
         if scope_channel and _CHANNEL_SCOPE_POLICIES[name] == "filter":
             call_args["scope_channel"] = scope_channel
+        if name == "get_inventory_expiry_report" and not call_args.get("focus"):
+            q_lower = (question or "").lower()
+            if any(marker in q_lower for marker in (
+                "tồn cao", "ton cao", "chậm bán", "cham ban", "chậm luân chuyển",
+                "cham luan chuyen", "xử lý tồn", "xu ly ton",
+            )):
+                call_args["focus"] = "overstock"
+            elif any(marker in q_lower for marker in (
+                "thiếu hàng", "thieu hang", "kho thiếu", "kho thieu",
+                "nguy cơ mất", "nguy co mat",
+            )):
+                call_args["focus"] = "shortage"
         result = fn(**call_args)
         # Gan nhan pham vi NGAY TRONG payload cho model. Truoc day code da loc dung doi QLV nhung
         # payload chi con cac con so; model da goi 9,82 ty cua DOI thanh "toan vung MT" trong UAT.

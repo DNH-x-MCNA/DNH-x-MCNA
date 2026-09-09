@@ -709,6 +709,12 @@ def build_query_plan(question: str, *, query_id: str | None, scope_role: str | N
         # liệu nghiệp vụ nặng không liên quan.
         domains = [spec for spec in domains if spec["domain"] == "freshness"]
     domain_names = {spec["domain"] for spec in domains}
+    inventory_risk_composite = "inventory" in domain_names and any(
+        marker in plain_question for marker in (
+            "thieu hang", "kho thieu", "ton cao", "cham luan chuyen",
+            "nguy co mat", "xu ly ton",
+        )
+    )
     steps: list[PlanStep] = []
     metrics: list[str] = []
     rules: list[str] = []
@@ -722,14 +728,20 @@ def build_query_plan(question: str, *, query_id: str | None, scope_role: str | N
         salary_blocked_by_role = (
             scope_role == "regional_director" and spec["domain"] == "salary"
         )
+        tool_hints = [
+            tool for tool in spec["tools"] if tool not in blocked_salary_tools
+        ]
+        if (inventory_risk_composite and spec["domain"] in {"revenue", "customer"}
+                and "get_inventory_expiry_report" not in tool_hints):
+            # Chi V38/C42/M39: supply_risk co BQ doanh thu va khach tung mua cua chinh SKU.
+            # Khong quang cao tool ton kho cho moi cau doanh thu/khach hang noi chung.
+            tool_hints.append("get_inventory_expiry_report")
         step = PlanStep(
             step_id=step_id,
             title=spec["label"],
             domain=spec["domain"],
             metrics=list(spec["metrics"]),
-            tool_hints=([] if salary_blocked_by_role else [
-                tool for tool in spec["tools"] if tool not in blocked_salary_tools
-            ]),
+            tool_hints=[] if salary_blocked_by_role else tool_hints,
             status="skipped" if salary_blocked_by_role else "pending",
             error=(
                 "Báo cáo lương/thưởng cá nhân không mở cho vai trò giám đốc miền/kênh."
@@ -754,6 +766,10 @@ def build_query_plan(question: str, *, query_id: str | None, scope_role: str | N
                 ))):
             # "Doanh thu gắn với CTKM" là metric nằm trong composite promotion tool, không phải
             # tổng công ty để bắt buộc đối soát OTC+ETC.
+            spec_rules = []
+        if spec["domain"] == "revenue" and inventory_risk_composite:
+            # V38/C42/M39: doanh thu trong supply_risk la BQ ban 3 thang de uoc luong muc
+            # phoi nhiem, khong phai tong doanh thu cong ty. Khong treo doi chieu OTC+ETC vo nghia.
             spec_rules = []
         if (spec["domain"] == "salary" and not salary_blocked_by_role
                 and not freshness_comparison_only

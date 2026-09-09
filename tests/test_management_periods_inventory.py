@@ -241,3 +241,63 @@ def test_inventory_expiry_tu_choi_scope_vung_khong_hop_le():
     result = rt.inventory_expiry_report(scope_area_code="XX")
     assert "error" in result
     assert "XX" in result["error"]
+
+
+def test_supply_risk_focus_overstock_uu_tien_ton_cham_va_goi_y_dung_khach(monkeypatch):
+    def fake_q(sql, params=()):
+        if "GROUP BY v.item_code,v.customer_code" in sql:
+            return [{
+                "item_code": "SLOW", "customer_code": "KH-SLOW",
+                "customer_name": "Khach tung mua hang ton cao",
+                "qty_3m": 30.0, "revenue_3m": 300.0,
+            }]
+        return [
+            {"item_code": "SHORT", "qty_3m": 60.0, "revenue_3m": 600.0},
+            {"item_code": "SLOW", "qty_3m": 30.0, "revenue_3m": 300.0},
+        ]
+
+    monkeypatch.setattr(rt, "_q", fake_q)
+    monkeypatch.setattr(rt.dt, "date", _FixedDate)
+
+    result = rt._inventory_supply_risk(
+        {"SHORT": 5.0, "SLOW": 1_000.0, "NONE": 500.0},
+        {"SHORT": "Sap thieu", "SLOW": "Ton cao", "NONE": "Ba thang khong ban"},
+        "MB", limit=30, focus="overstock",
+    )
+
+    assert result["focus"] == "overstock"
+    assert [row["item_code"] for row in result["rows"]] == ["NONE", "SLOW", "SHORT"]
+    assert result["recent_customer_candidates"] == [{
+        "item_code": "SLOW",
+        "customers": [{
+            "item_code": "SLOW", "customer_code": "KH-SLOW",
+            "customer_name": "Khach tung mua hang ton cao",
+            "qty_3m": 30.0, "revenue_3m": 300.0,
+        }],
+    }]
+
+
+def test_v38_v39_backend_tu_chon_trong_tam_khong_phu_thuoc_model(tmp_path, monkeypatch):
+    db_path = tmp_path / "warehouse.db"
+    _make_inventory_db(db_path)
+    monkeypatch.setattr(local_warehouse, "DB_PATH", str(db_path))
+    monkeypatch.setattr(rt.dt, "date", _FixedDate)
+    monkeypatch.setattr(rt, "get_sync_meta", lambda _table: (None, None, None))
+
+    shortage = rt.call_template(
+        "get_inventory_expiry_report", {},
+        question="SKU khách đang cần nhưng kho thiếu là gì; đơn/doanh thu nào có nguy cơ mất vì thiếu hàng?",
+        scope_role="qlv", scope_area_code="MB", scope_employee_code="QLV01",
+    )
+    overstock = rt.call_template(
+        "get_inventory_expiry_report", {},
+        question="SKU tồn cao/chậm bán/cận date trong phạm vi vùng là gì; khách nào phù hợp để xử lý tồn?",
+        scope_role="qlv", scope_area_code="MB", scope_employee_code="QLV01",
+    )
+
+    assert shortage["ok"] is True
+    assert shortage["result"]["supply_risk"]["focus"] == "shortage"
+    assert shortage["result"]["supply_risk"]["rows"][0]["status"] == "CO_NGUY_CO_THIEU_HANG_DERIVED"
+    assert overstock["ok"] is True
+    assert overstock["result"]["supply_risk"]["focus"] == "overstock"
+    assert overstock["result"]["supply_risk"]["rows"][0]["status"] == "TON_KHONG_BAN_3_THANG"
