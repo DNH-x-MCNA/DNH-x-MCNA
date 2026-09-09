@@ -773,3 +773,30 @@ def test_c44_contract_guard_cam_ghep_hoa_don_qua_khach_sku():
         assert "khong co khoa hop dong" in lowered
         assert ("khach" in lowered or "customer" in lowered) and "sku" in lowered
         assert "gia tri con lai" in lowered
+
+
+def test_workforce_question_auto_applies_uat_mode_and_employee_scope(monkeypatch):
+    seen = []
+
+    def fake_workforce(**kwargs):
+        seen.append(kwargs)
+        return {"seen": kwargs}
+
+    monkeypatch.setitem(rt.TEMPLATES, "get_workforce_productivity", fake_workforce)
+    monkeypatch.setattr(rt, "_write_log", lambda entry: None)
+
+    route = rt.call_template(
+        "get_workforce_productivity", {},
+        question="Ai đi tuyến nhưng không phát sinh đơn; tỷ lệ viếng thăm có đơn",
+        scope_role="regional_director",
+    )
+    decline = rt.call_template(
+        "get_workforce_productivity", {"months_back": 3, "limit": 10},
+        question="NV giảm doanh số liên tiếp 3 tháng; do mất khách hay giảm tần suất",
+        scope_role="regional_director",
+    )
+
+    assert route["result"]["seen"]["mode"] == "route_visits"
+    assert decline["result"]["seen"]["group_by"] == "employee"
+    assert decline["result"]["seen"]["months_back"] == 4
+    assert decline["result"]["seen"]["limit"] == 200

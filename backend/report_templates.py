@@ -9085,6 +9085,21 @@ def call_template(name: str, args: dict, question: str = "", username: str = Non
                 "nguy cơ mất", "nguy co mat",
             )):
                 call_args["focus"] = "shortage"
+        if name == "get_workforce_productivity":
+            q_lower = " ".join((question or "").lower().split())
+            if not call_args.get("mode") and any(marker in q_lower for marker in (
+                "viếng thăm", "vieng tham", "đi tuyến", "di tuyen", "phủ tuyến", "phu tuyen",
+                "tỷ lệ có đơn sau thăm", "ty le co don sau tham", "check-in", "check in",
+            )):
+                call_args["mode"] = "route_visits"
+            if any(marker in q_lower for marker in (
+                "nhân viên giảm doanh số liên tiếp", "nhan vien giam doanh so lien tiep",
+                "nv giảm doanh số liên tiếp", "nv giam doanh so lien tiep",
+                "ai giảm doanh số liên tiếp", "ai giam doanh so lien tiep",
+            )):
+                call_args["group_by"] = "employee"
+                call_args["months_back"] = max(4, int(call_args.get("months_back") or 4))
+                call_args["limit"] = max(200, int(call_args.get("limit") or 200))
         if name == "get_customer_product_coverage" and not call_args.get("mode"):
             q_lower = " ".join((question or "").lower().split())
             if any(marker in q_lower for marker in (
