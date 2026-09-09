@@ -471,9 +471,16 @@ def test_operational_quality_bat_mapping_loi_va_noi_ro_phan_chua_co(tmp_path, mo
         "position_code": None, "area_code": None, "manager_code": None,
     }]
     assert r["checks"]["invoice_mapping"]["OTC"]["orphan_customers"] == 1
+    assert r["checks"]["invoice_mapping"]["OTC"]["future_dated_lines"] == 1
+    assert r["checks"]["invoice_mapping"]["OTC"]["future_date_cutoff"] == "2026-04-20"
     assert any("chua hoa don" in x for x in r["unavailable_checks"])
     scoped = rt.operational_data_quality(as_of_date="2026-04-20", scope_area_code="MB")
     assert scoped["checks"]["invoice_mapping"]["OTC"]["future_dated_lines"] == 0
+
+    # Moc doi chieu lich su khong duoc bien giao dich sau moc do nhung truoc hom nay thanh
+    # "chung tu tuong lai". Trong fixture chi dong 01/05 moi thuc su lon hon ngay he thong 20/04.
+    historical = rt.operational_data_quality(as_of_date="2026-04-10")
+    assert historical["checks"]["invoice_mapping"]["OTC"]["future_dated_lines"] == 1
 
 
 def test_quality_dau_thang_dem_ca_nguoi_mat_snapshot_va_nguoi_moi(tmp_path, monkeypatch):

@@ -4136,14 +4136,22 @@ def operational_data_quality(as_of_date: str = None, sample_limit: int = 30,
             "COUNT(DISTINCT CASE WHEN kh.code IS NOT NULL AND tp.city_id IS NULL THEN v.customer_code END) missing_city_mapping,"
             "COUNT(DISTINCT CASE WHEN v.employee_code IS NULL OR TRIM(v.employee_code)='' THEN v.stt END) missing_employee_invoices "
             f"FROM {table} v {join}{where}", tuple(params))[0]
-        future_where, future_params = " WHERE substr(v.doc_date,1,10)>?", [as_of_date]
+        # "Ngay tuong lai" phai so voi ngay he thong hien tai, KHONG so voi moc lich su nguoi
+        # dung dang hoi. Truoc day hoi snapshot 31/08 vao ngay 09/09 lam moi hoa don 01-09/09 bi
+        # gan nham la future (4.943 dong OTC + 361 ETC), du chung chi la giao dich sau ky doi chieu.
+        future_cutoff = dt.date.today().isoformat()
+        future_where, future_params = " WHERE substr(v.doc_date,1,10)>?", [future_cutoff]
         if scope_area_code:
             future_where += " AND tp.area_code=?"; future_params.append(scope_area_code)
         if scope_employee_code:
             emp_sql, emp_params = _employee_scope_clause(scope_employee_code, "v", as_of=as_of_date)
             future_where += emp_sql; future_params.extend(emp_params)
         future = _q(f"SELECT COUNT(*) n FROM {table} v {join}{future_where}", tuple(future_params))[0]["n"]
-        invoice_checks[channel] = {**row, "future_dated_lines": int(future or 0)}
+        invoice_checks[channel] = {
+            **row, "future_dated_lines": int(future or 0),
+            "future_date_cutoff": future_cutoff,
+            "future_date_definition": "Ngay chung tu lon hon ngay he thong, khong phai lon hon moc snapshot dang hoi.",
+        }
     result["checks"]["invoice_mapping"] = invoice_checks
     result["unavailable_checks"] = [
         "Don hang huy/cham/chua hoa don: bang DMS_DonHangHdr chua duoc dong bo vao kho local.",

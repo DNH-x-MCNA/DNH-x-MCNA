@@ -835,7 +835,10 @@ TEMPLATE_TOOLS = [
                        "KHONG goi thieu target la 'binh thuong', 'do dau thang' hay 'do chua nhap du' neu "
                        "khong co nguon xac nhan nguyen nhan. duplicate_codes chi la ma bi DIM gan co "
                        "IsDuplicate=1 (da loai ngoai le gan nham), KHONG phai bang chung moi ma xuat hien "
-                       "nhieu dong va KHONG cho phep de nghi xoa/gop hang loat.",
+                       "nhieu dong va KHONG cho phep de nghi xoa/gop hang loat. Khi bao missing_manager "
+                       "BAT BUOC viet X/employee_tier_employees nhan vien tuyen ban, KHONG noi X tren tong "
+                       "roster. missing_target_with_sales la TAP CON cua missing_target: danh dau ngay trong "
+                       "cung danh sach, KHONG noi/chen ma do them lan thu hai.",
         "input_schema": {"type": "object", "properties": {
             "as_of_date": {"type": "string"}, "sample_limit": {"type": "integer"},
         }, "required": []},
@@ -1774,6 +1777,12 @@ QUAN TRONG VE CHON TOOL:
 - DOI CHIEU DM1/DM2/DM3-TOTALPOINT, KIEM TRA LCB, CHAT LUONG SNAPSHOT LUONG: BAT BUOC goi
   get_salary_data_quality DUNG 1 LAN voi check_type tuong ung; KHONG tu doc prompt roi ket luan va
   KHONG search catalog/query SQL thu cong.
+- CHAT LUONG ROSTER/TARGET/MANAGER (C54/M28/V17): BAT BUOC tach tang nhan vien va tang quan ly.
+  missing_manager/missing_target co mau so employee_tier_employees, KHONG phai tong roster. Tuyet doi
+  khong viet "toan bo roster deu co manager" khi management_rows_without_parent_in_source > 0.
+  missing_target_with_sales la TAP CON cua missing_target: moi ma chi liet ke MOT LAN va danh dau uu tien
+  ngay tai dong do, KHONG noi hai danh sach roi ghep trung. future_dated_lines chi la chung tu co ngay lon
+  hon future_date_cutoff (ngay he thong); giao dich sau mot snapshot LICH SU khong phai chung tu tuong lai.
 - Cau hoi ket hop KHACH DOANH THU LON + CONG NO CAO + XU HUONG MUA GIAM: goi
   get_customer_revenue_debt_risk DUNG 1 LAN. Tool da noi hai ky doanh thu voi snapshot cong no;
   KHONG tach thanh nhieu tool/query lap lai.
