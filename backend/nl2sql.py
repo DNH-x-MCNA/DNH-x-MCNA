@@ -831,7 +831,11 @@ TEMPLATE_TOOLS = [
                        "tong ca hai tang, KHONG phai so nguoi co target; chi employees_with_target moi mang "
                        "nghia do. missing_target_with_sales la nhom uu tien. Neu tool fallback sang "
                        "fact_tonghopkhachhang thi missing_target co the chong lan missing_current_snapshot; "
-                       "KHONG cong hai nhom.",
+                       "KHONG cong hai nhom. snapshot_is_closed=false CHI noi snapshot chua chot; TUYET DOI "
+                       "KHONG goi thieu target la 'binh thuong', 'do dau thang' hay 'do chua nhap du' neu "
+                       "khong co nguon xac nhan nguyen nhan. duplicate_codes chi la ma bi DIM gan co "
+                       "IsDuplicate=1 (da loai ngoai le gan nham), KHONG phai bang chung moi ma xuat hien "
+                       "nhieu dong va KHONG cho phep de nghi xoa/gop hang loat.",
         "input_schema": {"type": "object", "properties": {
             "as_of_date": {"type": "string"}, "sample_limit": {"type": "integer"},
         }, "required": []},

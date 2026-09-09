@@ -4041,8 +4041,15 @@ def operational_data_quality(as_of_date: str = None, sample_limit: int = 30,
             missing_dim = [r["employee_code"] for r in employees if not r["dim_code"]]
             duplicates = [r["employee_code"] for r in employees if int(r["is_duplicate"] or 0) == 1
                           and r["employee_code"] not in _KNOWN_MISFLAGGED_DUPLICATE_CODES]
+            snapshot_is_closed = False
+            if quality_snapshot:
+                sy, sm = int(str(quality_snapshot)[:4]), int(str(quality_snapshot)[5:7])
+                snapshot_is_closed = str(quality_snapshot)[:10] == (
+                    f"{sy:04d}-{sm:02d}-{_last_day_of_month(sy, sm):02d}"
+                )
             result["checks"]["kpi_employee_mapping"] = {
                 "snapshot": quality_snapshot, "quality_source": quality_source,
+                "snapshot_is_closed": snapshot_is_closed,
                 "employees": len(employees),
                 # Ten ro nghia de model khong doc nham `employees` thanh "so nguoi co target".
                 # Giu `employees` ben tren de tuong thich nguoc voi pack UAT/script hien tai.
@@ -4067,6 +4074,11 @@ def operational_data_quality(as_of_date: str = None, sample_limit: int = 30,
                         "uu tien kiem tra. O duong fallback fact_tonghopkhachhang, missing_target va "
                         "missing_current_snapshot CO CHONG LAN, KHONG duoc cong hai nhom. Chua du du lieu "
                         "khong dong nghia voi 0% KPI hay da xac nhan chua giao chi tieu. "
+                        "snapshot_is_closed=false CHI co nghia so lieu chua phai chot cuoi thang; "
+                        "KHONG duoc tu ket luan thieu target la binh thuong, do dau thang, hay do DNH "
+                        "chua nhap du. duplicate_codes la cac ma bi DIM_NhanVien gan co IsDuplicate=1 "
+                        "(da loai 2 ma gan nham da biet), KHONG tu no chung minh mot ma xuat hien nhieu "
+                        "dong hoac cho phep xoa/gop hang loat. "
                         "management_rows_without_parent_in_source la QLV/cap quan ly khong co cay "
                         "cap tren trong nguon phang; chi de canh bao gioi han nguon, khong tinh la loi NV.",
             }

@@ -524,6 +524,7 @@ def test_operational_quality_uu_tien_roster_luong_day_du_cho_c54_s38(tmp_path, m
     result = rt.operational_data_quality(as_of_date='2026-04-20')
     check = result['checks']['kpi_employee_mapping']
     assert check['quality_source'] == 'fact_thongketinhluong'
+    assert check['snapshot_is_closed'] is False
     assert check['employees'] == 6
     assert check['employee_tier_employees'] == 4
     assert check['management_tier_employees'] == 2
@@ -533,6 +534,11 @@ def test_operational_quality_uu_tien_roster_luong_day_du_cho_c54_s38(tmp_path, m
     assert check['missing_target_with_sales'] == 1
     assert result['samples']['missing_target_with_sales'] == ['T2']
     assert result['samples']['duplicate_codes'] == ['DUP']
+    assert "KHONG duoc tu ket luan thieu target la binh thuong" in check['note']
+
+    closed = rt.operational_data_quality(as_of_date='2026-04-30')
+    # Nguon gan nhat van la 20/04, nen chua duoc danh dau chot chi vi as_of la cuoi thang.
+    assert closed['checks']['kpi_employee_mapping']['snapshot_is_closed'] is False
 
 
 def test_revenue_reconciliation_khong_tu_goi_coverage_thap_la_binh_thuong(tmp_path, monkeypatch):
