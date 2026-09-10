@@ -244,6 +244,48 @@ def chay(cur, sql: str, gioi_han_dong: int) -> "list[dict]":
     return ket_qua
 
 
+def duong_kho_local() -> str:
+    """Duong dan warehouse.db, lay tu chinh backend de khong lech mot nguon su that."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "_lw_doichung", os.path.join(ROOT, "backend", "local_warehouse.py"))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return str(mod.DB_PATH)
+
+
+def chay_kho_local(sql: str, gioi_han_dong: int) -> "list[dict]":
+    """Chay mot cau lenh SQLite tren warehouse.db o che do CHI DOC.
+
+    10/09/2026: truoc day cac cau lenh dung bang cua kho local chi bi DAN NHAN roi bo qua, khong
+    chay lan nao. Vi vay S26 mang dong thoi hai loi - cu phap T-SQL 'SELECT TOP (100)' va join vao
+    bang 'mart_customer_revenue_compare' khong ton tai - ma van xanh suot nhieu thang. Bo qua thi
+    khong bao gio biet checker do co chay duoc hay khong.
+    """
+    import sqlite3
+    duong = duong_kho_local()
+    if not os.path.isfile(duong):
+        raise RuntimeError("Khong thay kho local tai %s" % duong)
+    con = sqlite3.connect("file:%s?mode=ro" % duong.replace("\\", "/"), uri=True)
+    try:
+        cur = con.execute(sql.rstrip().rstrip(";"))
+        if not cur.description:
+            return []
+        cot = [c[0] for c in cur.description]
+        so_dong, dong_mau = 0, []
+        while True:
+            lo = cur.fetchmany(1000)
+            if not lo:
+                break
+            so_dong += len(lo)
+            if len(dong_mau) < gioi_han_dong:
+                dong_mau.extend(lo[:gioi_han_dong - len(dong_mau)])
+        mau = [{c: v for c, v in zip(cot, d)} for d in dong_mau]
+        return [{"cot": cot, "so_dong": so_dong, "mau": mau}]
+    finally:
+        con.close()
+
+
 _TEN_TRANG_THAI = {
     "CHAY_DUOC": "Chạy được",
     "CHAY_MOT_PHAN": "Chạy một phần",
@@ -283,15 +325,37 @@ def _tong_dong(muc: dict) -> int:
     )
 
 
+def gop_trang_thai(trang_thai_cau_lenh: set) -> str:
+    """Gop trang thai cua cac cau lenh trong mot checker thanh trang thai chung.
+
+    10/09/2026: truoc day checker vua co cau lenh Bravo vua co cau lenh kho local deu bi goi la
+    CHAY_MOT_PHAN, du ca hai phan cung chay duoc - vi hoi do phan kho local khong bao gio duoc
+    chay. Nay ca hai deu chay that, nen chi con LOI moi lam nen "mot phan"; con lai la chay duoc,
+    chi khac nguon du lieu.
+    """
+    tt = set(trang_thai_cau_lenh)
+    if "LOI" in tt:
+        return "LOI" if tt == {"LOI"} else "CHAY_MOT_PHAN"
+    if tt == {"KHO_LOCAL"}:
+        return "KHO_LOCAL"
+    return "CHAY_DUOC"
+
+
 def _ly_do_than_thien(muc: dict) -> str:
     if muc["trang_thai"] == "BO_QUA":
         if muc.get("nhan") == "BLOCKED_HISTORY":
             return "Chưa tích lũy đủ snapshot lịch sử để trả lời theo tháng."
         return "Chưa có nguồn dữ liệu đã được DNH xác nhận."
     if muc["trang_thai"] == "KHO_LOCAL":
-        return "Cần đồng bộ dữ liệu vào kho local trước khi đối chiếu."
+        # 10/09/2026: truoc day luon bao "can dong bo" ke ca khi cau lenh chua tung chay.
+        # Gio cau lenh kho local duoc chay that, nen phai noi dung ket qua thuc te.
+        so_dong = _tong_dong(muc)
+        if so_dong:
+            return ("Đã chạy trên kho local warehouse.db (%s dòng); bảng này không có trên Bravo."
+                    % format(so_dong, ","))
+        return "Đã chạy trên kho local nhưng không ra dòng nào — cần đồng bộ dữ liệu."
     if muc["trang_thai"] == "CHAY_MOT_PHAN":
-        return "Nguồn Bravo đã chạy; phần tổng hợp ở kho local chưa sẵn sàng."
+        return "Một phần chạy được, phần còn lại lỗi hoặc chưa có dữ liệu — xem chi tiết từng bảng."
     for cau_lenh in muc.get("cau_lenh", []):
         if cau_lenh.get("loi"):
             return cau_lenh["loi"]
@@ -654,9 +718,17 @@ def main() -> int:
                 for thu_tu, cau in enumerate(c["cau_lenh"], 1):
                     ghi = {"thu_tu": thu_tu}
                     if _BANG_KHO_LOCAL.search(cau):
-                        ghi["trang_thai"] = "KHO_LOCAL"
-                        ghi["ly_do"] = ("Truy van bang cua warehouse.db, khong co tren Bravo; "
-                                        "chay bang scripts/business_stress_suite.py.")
+                        # Chay THAT tren warehouse.db thay vi chi dan nhan roi bo qua.
+                        try:
+                            kiem_chi_doc(cau, c["ma"])
+                            ghi["bang"] = chay_kho_local(cau, tham_so.gioi_han_dong)
+                            ghi["trang_thai"] = "KHO_LOCAL"
+                            ghi["ly_do"] = "Chay tren warehouse.db (khong co bang nay tren Bravo)."
+                        except SystemExit:
+                            raise
+                        except Exception as loi:
+                            ghi["trang_thai"] = "LOI"
+                            ghi["loi"] = "Kho local: %s" % str(loi)[:400]
                     else:
                         try:
                             kiem_chi_doc(cau, c["ma"])
@@ -671,10 +743,7 @@ def main() -> int:
                     muc["cau_lenh"].append(ghi)
                 muc["thoi_gian_giay"] = round(time.perf_counter() - bat_dau_checker, 3)
                 tt = {g["trang_thai"] for g in muc["cau_lenh"]}
-                muc["trang_thai"] = ("LOI" if "LOI" in tt
-                                     else "CHAY_MOT_PHAN" if "KHO_LOCAL" in tt and len(tt) > 1
-                                     else "KHO_LOCAL" if tt == {"KHO_LOCAL"}
-                                     else "CHAY_DUOC")
+                muc["trang_thai"] = gop_trang_thai(tt)
                 tong = sum(b["so_dong"] for g in muc["cau_lenh"]
                            for b in g.get("bang", []))
                 loi_dau = next((g.get("loi", "") for g in muc["cau_lenh"]

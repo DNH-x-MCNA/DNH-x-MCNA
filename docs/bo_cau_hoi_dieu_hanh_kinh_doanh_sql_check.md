@@ -1179,28 +1179,72 @@ hoạch ra mắt sản phẩm thì mới ghép được cột so sánh — khôn
 Chỉ được trả chuỗi month-by-month nếu SnapshotCount có đủ các tháng; thiết kế hiện tại đang thay
 snapshot cũ bằng snapshot mới.
 
-### S26 — Khách đồng thời giảm mua và nợ xấu — PARTIAL
+### S26 — Khách đồng thời giảm mua và nợ xấu — READY_CURRENT
 
-> 🔴 **Da BAC bo mot ban sua ngay 10/09/2026.** Ban do doi `SELECT TOP (100)` thanh `LIMIT 100`
-> cho dung SQLite, nhung van giu `DATEADD(month,-1,@MonthStart)` va tham so `@MonthStart`/`@MonthEnd`
-> — deu la cu phap T-SQL. Chay thu tren `warehouse.db`: `OperationalError: no such column: month`.
-> Trinh doi chung danh dau muc nay la KHO_LOCAL nen khong chay, khien loi bi che hoan toan.
-> Muon sua dung phai dung `date(:MonthStart,'-1 month')` va tham so kieu SQLite.
+Cho C39, M38, V36: khách vừa có nợ quá hạn vừa đang giảm mua — nhóm cần siết bán hoặc thu hồi trước.
 
+> 🔴 **Sửa 10/09/2026 — bản cũ CHƯA TỪNG chạy được.** Hai lỗi cùng lúc: dùng `SELECT TOP (100)` là
+> cú pháp T-SQL trong khi đây là truy vấn SQLite trên `warehouse.db`, và join vào bảng
+> `mart_customer_revenue_compare` **không tồn tại** trong kho. Trình đối chứng đánh dấu mục này là
+> `KHO_LOCAL` nên bỏ qua, không chạy — lỗi bị che suốt. Vì vậy C39/M38/V36 chưa bao giờ có số đối
+> chứng, giống hệt trường hợp S69/V21.
+>
+> Một bản sửa ngày 10/09 đổi `TOP (100)` thành `LIMIT 100` nhưng vẫn giữ `DATEADD(month,-1,...)` và
+> tham số `@MonthStart` — đều là T-SQL, chạy thử báo `no such column: month`. Bản đó đã bị bác.
+> Bản dưới đây dùng đúng cú pháp SQLite (`date(...,'-1 month')`) và tự tính doanh thu từ hóa đơn
+> trong kho, không phụ thuộc bảng mart nào.
 
-Chạy trên kho local có attach/mart doanh thu tháng. Nếu chưa có mart doanh thu, dùng S20 xuất danh
-sách giảm mua rồi JOIN theo customer_code ngoài SQL.
+Nợ lấy ở **snapshot mới nhất** (kho chỉ giữ ảnh chụp hiện tại, không có lịch sử — xem `S25`).
+Doanh thu so tháng của mốc snapshot với tháng liền trước, tính thẳng từ hóa đơn hai kênh.
 
     -- !!! KHO LOCAL (warehouse.db, SQLite) - KHONG chay tren Bravo:
     --     Bravo se bao "Invalid object name 'fact_congno_khachhang'".
-    SELECT TOP (100) d.customer_code,SUM(d.balance_end) Balance,
-           SUM(d.total_overdue) Overdue,r.recent_revenue,r.prior_revenue,
-           r.recent_revenue-r.prior_revenue RevenueDelta
-    FROM fact_congno_khachhang d
-    JOIN mart_customer_revenue_compare r ON r.customer_code=d.customer_code
-    GROUP BY d.customer_code,r.recent_revenue,r.prior_revenue
-    HAVING SUM(d.total_overdue)>0 AND r.recent_revenue<r.prior_revenue
-    ORDER BY SUM(d.total_overdue) DESC;
+    WITH moc AS (
+      SELECT MAX(snapshot_date) d FROM fact_congno_khachhang
+    ), no AS (
+      SELECT customer_code,
+             MAX(customer_name) customer_name,
+             SUM(balance_end)   balance_end,
+             SUM(total_overdue) total_overdue
+      FROM fact_congno_khachhang
+      WHERE snapshot_date = (SELECT d FROM moc)
+      GROUP BY customer_code
+      HAVING SUM(total_overdue) > 0
+    ), ban AS (
+      SELECT customer_code, doc_date, amount9 FROM vhoadon_otc
+      UNION ALL
+      SELECT customer_code, doc_date, amount9 FROM vhoadon_etc
+    ), ky AS (
+      SELECT (SELECT d FROM moc) as_of,
+             substr((SELECT d FROM moc),1,7) || '-01' thang_nay,
+             date(substr((SELECT d FROM moc),1,7) || '-01', '-1 month') thang_truoc
+    ), dt AS (
+      SELECT b.customer_code,
+             SUM(CASE WHEN b.doc_date >= k.thang_nay THEN b.amount9 ELSE 0 END) dt_ky_nay,
+             SUM(CASE WHEN b.doc_date >= k.thang_truoc AND b.doc_date < k.thang_nay
+                      THEN b.amount9 ELSE 0 END) dt_ky_truoc
+      FROM ban b CROSS JOIN ky k
+      WHERE b.doc_date >= k.thang_truoc AND b.doc_date <= k.as_of
+      GROUP BY b.customer_code
+    )
+    SELECT n.customer_code, n.customer_name, n.balance_end, n.total_overdue,
+           COALESCE(d.dt_ky_nay,0)   dt_ky_nay,
+           COALESCE(d.dt_ky_truoc,0) dt_ky_truoc,
+           COALESCE(d.dt_ky_nay,0) - COALESCE(d.dt_ky_truoc,0) chenh_lech
+    FROM no n
+    LEFT JOIN dt d ON d.customer_code = n.customer_code
+    WHERE COALESCE(d.dt_ky_nay,0) < COALESCE(d.dt_ky_truoc,0)
+    ORDER BY n.total_overdue DESC
+    LIMIT 100;
+
+Chạy thật 10/09/2026 trên `warehouse.db`: **100 khách** vừa nợ quá hạn vừa giảm mua, tổng nợ quá hạn
+**28.637.144.091đ**. Dẫn đầu là nhóm bệnh viện/ETC — `HCM113854` nợ quá hạn 2,30 tỷ và tháng này
+doanh thu bằng 0, `TBI00503` nợ 1,94 tỷ và giảm 396 triệu.
+
+> ⚠️ Nợ là **ảnh chụp hiện tại**, doanh thu là **kỳ tháng**. Không được đọc thành "nợ tăng bao nhiêu
+> so tháng trước" — kho không có lịch sử công nợ để nói điều đó (`S25` là `BLOCKED_HISTORY`).
+> Khách có `dt_ky_nay = 0` nghĩa là chưa phát sinh hóa đơn trong kỳ, KHÔNG chắc là đã ngừng mua hẳn.
+
 
 ### S27 — Tồn kho snapshot — READY_CURRENT
 

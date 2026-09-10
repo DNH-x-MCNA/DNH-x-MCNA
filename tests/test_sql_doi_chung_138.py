@@ -1,4 +1,9 @@
+import inspect
+import os
 import re
+import sqlite3
+
+import pytest
 
 from scripts import chay_sql_doi_chung_138 as bo_sql
 
@@ -87,3 +92,73 @@ def test_doi_tham_so_ho_tro_scope_manager_va_area():
 
     assert "@AreaCode varchar(24) = 'MB'" in result
     assert "@ManagerCode varchar(24) = 'MBKV2'" in result
+
+
+_TSQL_KHONG_CHAY_TREN_SQLITE = (
+    (re.compile(r"\bSELECT\s+TOP\s*\(", re.I), "SELECT TOP (n) - SQLite dung LIMIT n"),
+    (re.compile(r"\bDATEADD\s*\(", re.I), "DATEADD - SQLite dung date(x,'-1 month')"),
+    (re.compile(r"\bEOMONTH\s*\(", re.I), "EOMONTH - khong co trong SQLite"),
+    (re.compile(r"\bDATEDIFF\s*\(", re.I), "DATEDIFF - khong co trong SQLite"),
+    (re.compile(r"\bISNULL\s*\(", re.I), "ISNULL - SQLite dung IFNULL/COALESCE"),
+    (re.compile(r"@\w+"), "tham so @Ten kieu T-SQL - SQLite dung ? hoac :ten"),
+)
+
+
+def _cau_lenh_kho_local():
+    noi_dung = bo_sql.doc_tai_lieu()
+    for item in bo_sql.lay_checker(noi_dung):
+        for sql in item["cau_lenh"]:
+            if bo_sql._BANG_KHO_LOCAL.search(sql):
+                yield item["ma"], sql
+
+
+def test_checker_kho_local_khong_duoc_dung_cu_phap_tsql():
+    """Cau lenh chay tren warehouse.db (SQLite) khong duoc mang cu phap T-SQL.
+
+    S26 tung mang dong thoi 'SELECT TOP (100)' va join vao bang khong ton tai ma van xanh nhieu
+    thang, vi trinh doi chung chi DAN NHAN roi bo qua thay vi chay that.
+    """
+    loi = []
+    for ma, sql in _cau_lenh_kho_local():
+        for mau, mo_ta in _TSQL_KHONG_CHAY_TREN_SQLITE:
+            if mau.search(sql):
+                loi.append("%s: %s" % (ma, mo_ta))
+    assert loi == [], "Cu phap T-SQL trong cau lenh kho local: %s" % loi
+
+
+def test_trinh_doi_chung_thuc_su_chay_checker_kho_local():
+    """Nhanh KHO_LOCAL phai goi chay_kho_local, khong duoc chi gan nhan roi bo qua."""
+    assert hasattr(bo_sql, "chay_kho_local")
+    nguon = inspect.getsource(bo_sql.main)
+    assert "chay_kho_local(" in nguon, "main() khong con chay checker kho local"
+
+
+@pytest.mark.skipif(
+    not os.path.isfile(os.path.join(bo_sql.ROOT, "backend", "warehouse.db")),
+    reason="Khong co warehouse.db tren may nay",
+)
+def test_cau_lenh_kho_local_chay_duoc_that_tren_warehouse():
+    """EXPLAIN tren kho that: bat ca loi cu phap lan bang/cot khong ton tai, khong tra du lieu."""
+    con = sqlite3.connect(os.path.join(bo_sql.ROOT, "backend", "warehouse.db"))
+    try:
+        for ma, sql in _cau_lenh_kho_local():
+            try:
+                con.execute("EXPLAIN " + sql.rstrip().rstrip(";"))
+            except sqlite3.Error as loi:
+                raise AssertionError("%s khong chay duoc tren kho local: %s" % (ma, loi))
+    finally:
+        con.close()
+
+
+def test_gop_trang_thai_chi_goi_mot_phan_khi_that_su_co_loi():
+    """Checker vua chay Bravo vua chay kho local ma ca hai deu duoc thi la CHAY_DUOC.
+
+    Truoc 10/09 to hop nay bi goi la CHAY_MOT_PHAN, khien S24 nhin nhu con thieu trong khi ca ba
+    bang deu ra so - chi vi phan kho local hoi do khong duoc chay bao gio.
+    """
+    assert bo_sql.gop_trang_thai({"CHAY_DUOC", "KHO_LOCAL"}) == "CHAY_DUOC"
+    assert bo_sql.gop_trang_thai({"CHAY_DUOC"}) == "CHAY_DUOC"
+    assert bo_sql.gop_trang_thai({"KHO_LOCAL"}) == "KHO_LOCAL"
+    assert bo_sql.gop_trang_thai({"LOI"}) == "LOI"
+    assert bo_sql.gop_trang_thai({"LOI", "CHAY_DUOC"}) == "CHAY_MOT_PHAN"
+    assert bo_sql.gop_trang_thai({"LOI", "KHO_LOCAL"}) == "CHAY_MOT_PHAN"
