@@ -2043,6 +2043,187 @@ def customers_silent(as_of_date: str = None, silent_days: int = 60, lookback_mon
     return result
 
 
+def customer_attrition_risk(month: str = None, lookback_months: int = 12,
+                            limit: int = 200, scope_area_code: str = None,
+                            scope_channel: str = None,
+                            scope_employee_code: str = None) -> dict:
+    """KHACH LON NGUNG MUA / GIAM MUA MANH / KEO DAI CHU KY MUA - ba tin hieu trong MOT bang,
+    dung dung dinh nghia checker S88. Dung cho cau M22 'khach lon nao ngung mua, giam mua hoac keo
+    dai chu ky mua so voi lich su'.
+
+    KHAC customers_silent (chi bat mot ve: da im lang >= N ngay) va KHAC customer_movement (chi so
+    thang nay voi thang lien truoc, khong co chu ky mua). Cau M22 hoi CA BA ve; tra loi chi mot ve
+    la CHUA DAT.
+
+    Ba tin hieu:
+      NGUNG_MUA        Cur=0 nhung 3 thang truoc con mua.
+      NGUNG_MUA_DA_LAU Cur=0 va ca 3 thang truoc cung =0, chi con doanh thu xa hon trong cua so.
+      GIAM_MUA         Cur>0 nhung < 60% muc trung binh thang cua baseline 3 thang.
+      KEO_DAI_CHU_KY   So ngay im lang > 2 lan khoang cach mua trung binh cua CHINH khach do.
+
+    Baseline 3 thang (Prior3M/3) de khu nhieu chu ky dat hang; nguong chu ky la dong theo tung
+    khach (AvgGapDays) chu khong phai mot moc cung - moc cung 45 ngay tung lam ve thu ba ra 0 dong.
+    AvgGapDays chi tinh khi khach co tu 3 ngay mua tro len, duoi muc do chu ky chua co nghia."""
+    earliest, latest = _revenue_data_month_range()
+    if not earliest or not latest:
+        return {"error": "Kho chua co hoa don de phan tich rui ro mat khach."}
+    used_default_month = not month
+    complete_month = _latest_complete_revenue_month()
+    # Mac dinh lay thang TRON gan nhat. Neu lay thang dang chay dang do (MTD), moi khach chua kip
+    # dat don dau thang deu bi gan nhan "ngung mua"/"giam mua" gia. Day la bay da duoc ghi nhan khi
+    # ra soat M16, khong duoc lap lai o day.
+    month = ((complete_month if used_default_month else month) or latest)[:7]
+    lookback_months = max(4, min(int(lookback_months or 12), 24))
+    limit = max(1, min(int(limit or 200), 200))
+
+    window_from = max(earliest, _month_add(month, -(lookback_months - 1)))
+    date_from, _ = _month_bounds(window_from)
+    cur_start, cur_end = _month_bounds(month)
+    prior_start, _ = _month_bounds(_month_add(month, -3))
+    prior_end = (dt.date.fromisoformat(cur_start) - dt.timedelta(days=1)).isoformat()
+    data_day = str(latest_data_date())[:10]
+    as_of_date = min(data_day, cur_end)
+    as_of = dt.date.fromisoformat(as_of_date)
+    ky_chua_tron = month > complete_month
+
+    scope_sql, scope_params = _scope_clause(scope_area_code)
+    emp_sql, emp_params = _employee_scope_clause(scope_employee_code, "v", as_of=as_of_date)
+    scope_sql += emp_sql
+    scope_params += emp_params
+
+    parts, part_params = [], []
+    if scope_channel != "ETC":
+        join_o = _otc_area_join("v", scope_area_code)
+        parts.append(f"SELECT v.customer_code, v.doc_date, v.amount9 FROM vhoadon_otc v {join_o} "
+                     f"WHERE v.doc_date BETWEEN ? AND ?{scope_sql}")
+        part_params.append((date_from, cur_end) + scope_params)
+    if scope_channel != "OTC":
+        join_e = _etc_area_join("v", scope_area_code)
+        parts.append(f"SELECT v.customer_code, v.doc_date, v.amount9 FROM vhoadon_etc v {join_e} "
+                     f"WHERE v.doc_date BETWEEN ? AND ?{scope_sql}")
+        part_params.append((date_from, cur_end) + scope_params)
+    if not parts:
+        return {"error": "Khong co kenh nao kha dung voi pham vi tai khoan."}
+
+    base_sql = " UNION ALL ".join(parts)
+    rows = _q(
+        f"""WITH base AS ({base_sql})
+            SELECT customer_code,
+                   SUM(amount9) rev_window,
+                   SUM(CASE WHEN doc_date>=? AND doc_date<=? THEN amount9 ELSE 0 END) cur_revenue,
+                   SUM(CASE WHEN doc_date>=? AND doc_date<=? THEN amount9 ELSE 0 END) prior3m_revenue,
+                   MAX(doc_date) last_buy, MIN(doc_date) first_buy,
+                   COUNT(DISTINCT substr(doc_date,1,10)) buy_days
+            FROM base
+            GROUP BY customer_code
+            HAVING SUM(amount9)>0""",
+        tuple(p for pp in part_params for p in pp)
+        + (cur_start, cur_end, prior_start, prior_end),
+    )
+
+    detail = []
+    for r in rows:
+        rev_window = _f(r["rev_window"])
+        cur = _f(r["cur_revenue"])
+        prior3m = _f(r["prior3m_revenue"])
+        baseline = prior3m / 3.0 if prior3m > 0 else None
+        last_buy = str(r["last_buy"])[:10]
+        first_buy = str(r["first_buy"])[:10]
+        buy_days = int(r["buy_days"] or 0)
+        silent_days = (as_of - dt.date.fromisoformat(last_buy)).days
+        avg_gap = None
+        if buy_days >= 3:
+            span = (dt.date.fromisoformat(last_buy) - dt.date.fromisoformat(first_buy)).days
+            avg_gap = span / (buy_days - 1) if span > 0 else None
+        # Thu tu nhanh giu dung CASE cua S88: mot khach chi mang mot tin hieu, khong dem trung.
+        if cur <= 0 and prior3m > 0:
+            signal = "NGUNG_MUA"
+        elif cur <= 0 and prior3m <= 0 and rev_window > 0:
+            signal = "NGUNG_MUA_DA_LAU"
+        elif cur > 0 and baseline and cur < 0.6 * baseline:
+            signal = "GIAM_MUA"
+        elif avg_gap is not None and silent_days > 2 * avg_gap and silent_days >= 14:
+            signal = "KEO_DAI_CHU_KY"
+        else:
+            continue
+        detail.append({
+            "customer_code": r["customer_code"],
+            "tin_hieu": signal,
+            "doanh_thu_cua_so": rev_window,
+            "doanh_thu_ky": cur,
+            "doanh_thu_3_thang_truoc": prior3m,
+            "muc_trung_binh_thang_baseline": baseline,
+            "pct_so_baseline": (round((cur - baseline) / baseline * 100, 1)
+                                if baseline else None),
+            "lan_mua_cuoi": last_buy,
+            "so_ngay_im_lang": silent_days,
+            "so_ngay_co_mua": buy_days,
+            "khoang_cach_mua_trung_binh_ngay": round(avg_gap, 1) if avg_gap is not None else None,
+            "chu_ky_chua_do_duoc": avg_gap is None,
+        })
+
+    detail.sort(key=lambda x: (-x["doanh_thu_cua_so"], x["customer_code"]))
+    # Tong hop tinh TRUOC khi cat top-N: neu dem sau khi cat thi so khach tung nhom se thay doi
+    # theo limit, dung bai hoc da ghi o C31.
+    counts, revenue_at_risk = {}, {}
+    for row in detail:
+        counts[row["tin_hieu"]] = counts.get(row["tin_hieu"], 0) + 1
+        revenue_at_risk[row["tin_hieu"]] = (
+            revenue_at_risk.get(row["tin_hieu"], 0.0) + row["doanh_thu_cua_so"])
+    total_count = len(detail)
+    shown = detail[:limit]
+
+    names = _customer_names([row["customer_code"] for row in shown])
+    for row in shown:
+        row["customer_name"] = names.get(row["customer_code"],
+                                         "(khong co trong danh muc khach hang)")
+
+    gioi_han = [
+        "Ba nhom tren la tin hieu canh bao tu hoa don, KHONG phai ket luan khach da bo hang. "
+        "Phai lien he xac minh truoc khi bao cao mat khach.",
+        "Khong co du lieu nguyen nhan (doi thu, gia, cong no, ton kho khach) trong tap nay; "
+        "khong duoc suy dien ly do khach giam mua.",
+    ]
+    if ky_chua_tron:
+        gioi_han.insert(0, (
+            f"Thang {month} CHUA TRON (du lieu den {as_of_date}). Nhan NGUNG_MUA va GIAM_MUA o ky "
+            "chua tron co the la bao dong gia do khach chua kip dat don trong thang. Chi ket luan "
+            f"tren thang tron gan nhat ({complete_month})."))
+    if window_from > _month_add(month, -(lookback_months - 1)):
+        gioi_han.append(
+            f"Kho chi co hoa don tu {window_from}; khach ngung mua truoc moc do khong xuat hien.")
+
+    result = {
+        "ky": month,
+        "ky_chua_tron": ky_chua_tron,
+        "thang_tron_gan_nhat": complete_month,
+        "cua_so_nhin_lai": {"tu": window_from, "den": month},
+        "baseline_3_thang": {"tu": prior_start[:7], "den": prior_end[:7]},
+        "as_of": as_of_date,
+        "dinh_nghia_tin_hieu": {
+            "NGUNG_MUA": "Ky nay khong mua, 3 thang truoc con mua.",
+            "NGUNG_MUA_DA_LAU": "Ky nay va ca 3 thang truoc deu khong mua, chi con doanh thu xa hon.",
+            "GIAM_MUA": "Ky nay co mua nhung duoi 60% muc trung binh thang cua baseline 3 thang.",
+            "KEO_DAI_CHU_KY": "So ngay im lang > 2 lan khoang cach mua trung binh cua chinh khach do "
+                              "va >= 14 ngay.",
+        },
+        "so_khach_rui_ro": total_count,
+        "phan_bo_tin_hieu": counts,
+        "doanh_thu_cua_so_theo_tin_hieu": revenue_at_risk,
+        "total_count": total_count,
+        "returned_count": len(shown),
+        "truncated": total_count > len(shown),
+        "not_shown_count": max(0, total_count - len(shown)),
+        "khach_rui_ro": shown,
+        "gioi_han": gioi_han,
+        "data_as_of": data_day,
+    }
+    if scope_channel:
+        result["channel_scope"] = (
+            f"Tai khoan chi duoc xem kenh {scope_channel} - so lieu kenh khac KHONG duoc hien thi.")
+    return result
+
+
 def _customer_monthly_activity(month_from: str, month_to: str,
                                scope_area_code: str = None,
                                scope_channel: str = None,
@@ -9173,6 +9354,7 @@ TEMPLATES = {
     "get_revenue_monthly_series": revenue_monthly_series,
     "get_customer_lifecycle_summary": customer_lifecycle_summary,
     "get_customers_silent": customers_silent,
+    "get_customer_attrition_risk": customer_attrition_risk,
     "get_customer_cohort_retention": customer_cohort_retention,
     "get_customer_movement": customer_movement,
     "get_kpi_gap_run_rate": kpi_gap_run_rate,
@@ -9228,7 +9410,7 @@ _PERSON_LEVEL_TEMPLATES = {
     "get_employee_daily_kpi", "check_order_timing",
     "get_revenue_by_channel", "get_revenue_by_region", "get_top_customers",
     "get_top_products", "compare_periods", "get_revenue_ytd_cumulative", "get_revenue_monthly_series",
-    "get_customer_lifecycle_summary", "get_customers_silent",
+    "get_customer_lifecycle_summary", "get_customers_silent", "get_customer_attrition_risk",
     "get_customer_cohort_retention", "get_customer_movement", "get_kpi_gap_run_rate",
     "get_cross_sell_opportunities", "get_customer_product_coverage", "get_geography_monthly_performance",
     "get_workforce_productivity", "get_operational_data_quality",
@@ -9262,6 +9444,7 @@ _EMPLOYEE_SCOPED_TEMPLATES = {
     "get_employee_daily_kpi", "get_revenue_by_channel", "get_top_customers",
     "get_top_products", "get_revenue_by_region", "compare_periods", "get_revenue_ytd_cumulative",
     "get_revenue_monthly_series", "get_customer_lifecycle_summary", "get_customers_silent",
+    "get_customer_attrition_risk",
     "get_customer_cohort_retention", "get_customer_movement", "get_kpi_gap_run_rate",
     "get_cross_sell_opportunities", "get_customer_product_coverage", "get_geography_monthly_performance",
     "get_workforce_productivity", "get_operational_data_quality",
@@ -9280,7 +9463,8 @@ _CHANNEL_SCOPE_POLICIES = {
     **{name: "filter" for name in {
         "get_revenue_by_channel", "get_top_products", "get_top_customers",
         "compare_periods", "get_revenue_ytd_cumulative", "get_revenue_monthly_series",
-        "get_customer_lifecycle_summary", "get_customers_silent", "get_customer_cohort_retention",
+        "get_customer_lifecycle_summary", "get_customers_silent", "get_customer_attrition_risk",
+        "get_customer_cohort_retention",
         "get_customer_movement", "get_kpi_gap_run_rate", "get_cross_sell_opportunities",
         "get_customer_product_coverage", "get_geography_monthly_performance",
         "get_workforce_productivity", "get_operational_data_quality", "get_customer_detail",

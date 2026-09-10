@@ -546,7 +546,7 @@ def _ly_do_khong_co_payload(result):
 
 
 def _tool_cases_40():
-    """Một ca smoke/contract cho đúng 40 tool nghiệp vụ, toàn bộ chỉ đọc kho local."""
+    """Một ca smoke/contract cho đúng 41 tool nghiệp vụ, toàn bộ chỉ đọc kho local."""
     ym, d_from, d_to = _thang_tron_gan_nhat()
     if not ym:
         ym, d_from, d_to = "2026-07", "2026-07-01", "2026-07-31"
@@ -577,6 +577,7 @@ def _tool_cases_40():
         "get_revenue_monthly_series": ({"month_to": ym, "months_back": 3, "include_yoy": False}, dict),
         "get_customer_lifecycle_summary": ({"year_month": ym, "months_back": 1}, dict),
         "get_customers_silent": ({"as_of_date": d_to, "limit": 10}, dict),
+        "get_customer_attrition_risk": ({"month": ym, "limit": 10}, dict),
         "get_customer_cohort_retention": ({"month_to": ym, "months_back": 3}, dict),
         "get_customer_movement": ({"month": ym, "limit": 10}, dict),
         "get_kpi_gap_run_rate": ({"as_of_date": d_to, "limit": 10}, dict),

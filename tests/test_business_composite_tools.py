@@ -323,8 +323,17 @@ def test_high_risk_intents_force_their_single_verified_tool():
     assert nl2sql._required_tool_for_question(
         "Lũy kế YTD so kế hoạch/cùng kỳ; bình quân cần đạt mỗi tháng còn lại"
     ) == "get_revenue_ytd_cumulative"
+    # M22/S88 doi ba ve: ngung mua, giam mua manh va keo dai chu ky. get_customer_movement khong
+    # co khoang cach mua trung binh nen khong tra loi duoc ve thu ba - phai di get_customer_attrition_risk.
     assert nl2sql._required_tool_for_question(
         "Khách lớn nào ngừng mua hoặc kéo dài chu kỳ mua so lịch sử"
+    ) == "get_customer_attrition_risk"
+    assert nl2sql._required_tool_for_question(
+        "Khách lớn nào ngừng mua, giảm mua hoặc kéo dài chu kỳ mua so với lịch sử?"
+    ) == "get_customer_attrition_risk"
+    # Cau chi hoi luong khach giua hai thang van phai o lai customer_movement.
+    assert nl2sql._required_tool_for_question(
+        "Khách đã mua tháng trước mà chưa mua tháng này là ai?"
     ) == "get_customer_movement"
     assert nl2sql._required_tool_for_question(
         "Tăng trưởng like-for-like tách khỏi tăng trưởng do mở mới"
@@ -834,3 +843,98 @@ def test_workforce_question_auto_applies_uat_mode_and_employee_scope(monkeypatch
     assert decline["result"]["seen"]["group_by"] == "employee"
     assert decline["result"]["seen"]["months_back"] == 4
     assert decline["result"]["seen"]["limit"] == 200
+
+
+def _attrition_rows():
+    # rev_window / cur / prior3m / last_buy / first_buy / buy_days
+    return [
+        # Ngung mua: ky nay 0 nhung baseline 3 thang con mua.
+        {"customer_code": "C_STOP", "rev_window": 900.0, "cur_revenue": 0.0,
+         "prior3m_revenue": 300.0, "last_buy": "2026-07-20", "first_buy": "2025-09-02",
+         "buy_days": 10},
+        # Giam mua: con mua nhung duoi 60% muc trung binh thang cua baseline (600/3=200 -> 100<120).
+        {"customer_code": "C_DROP", "rev_window": 2000.0, "cur_revenue": 100.0,
+         "prior3m_revenue": 600.0, "last_buy": "2026-08-05", "first_buy": "2025-09-01",
+         "buy_days": 12},
+        # Keo dai chu ky: van mua deu muc baseline nhung im lang gap hon 2 lan khoang cach thuong le.
+        # first->last = 300 ngay, 31 ngay mua -> avg gap 10 ngay; im lang 26 ngay > 20 va >= 14.
+        {"customer_code": "C_GAP", "rev_window": 5000.0, "cur_revenue": 300.0,
+         "prior3m_revenue": 900.0, "last_buy": "2026-08-05", "first_buy": "2025-10-09",
+         "buy_days": 31},
+        # Binh thuong: mua dung nhip, khong dat tin hieu nao -> phai bi loai khoi danh sach.
+        {"customer_code": "C_OK", "rev_window": 4000.0, "cur_revenue": 400.0,
+         "prior3m_revenue": 900.0, "last_buy": "2026-08-30", "first_buy": "2025-09-01",
+         "buy_days": 30},
+        # Duoi 3 ngay mua: chua do duoc chu ky, khong duoc gan nhan keo dai chu ky.
+        {"customer_code": "C_THIN", "rev_window": 150.0, "cur_revenue": 0.0,
+         "prior3m_revenue": 0.0, "last_buy": "2026-04-10", "first_buy": "2026-04-03",
+         "buy_days": 2},
+    ]
+
+
+def _patch_attrition(monkeypatch, rows=None):
+    monkeypatch.setattr(rt, "_revenue_data_month_range", lambda: ("2025-09", "2026-09"))
+    monkeypatch.setattr(rt, "_latest_complete_revenue_month", lambda: "2026-08")
+    monkeypatch.setattr(rt, "latest_data_date", lambda: "2026-09-10")
+    monkeypatch.setattr(rt, "_customer_names", lambda codes: {c: f"KH {c}" for c in codes})
+    monkeypatch.setattr(rt, "_q", lambda sql, params=(): list(rows if rows is not None else _attrition_rows()))
+
+
+def test_m22_tra_du_ba_tin_hieu_va_loai_khach_binh_thuong(monkeypatch):
+    _patch_attrition(monkeypatch)
+    out = rt.customer_attrition_risk()
+
+    assert out["ky"] == "2026-08"
+    assert out["ky_chua_tron"] is False
+    signals = {row["customer_code"]: row["tin_hieu"] for row in out["khach_rui_ro"]}
+    assert signals["C_STOP"] == "NGUNG_MUA"
+    assert signals["C_DROP"] == "GIAM_MUA"
+    assert signals["C_GAP"] == "KEO_DAI_CHU_KY"
+    assert signals["C_THIN"] == "NGUNG_MUA_DA_LAU"
+    # Khach mua dung nhip khong duoc coi la rui ro.
+    assert "C_OK" not in signals
+    # Ba ve cua M22 phai cung xuat hien, khong duoc chi con ve "ngung han".
+    assert out["phan_bo_tin_hieu"]["NGUNG_MUA"] == 1
+    assert out["phan_bo_tin_hieu"]["GIAM_MUA"] == 1
+    assert out["phan_bo_tin_hieu"]["KEO_DAI_CHU_KY"] == 1
+
+
+def test_m22_khach_duoi_ba_ngay_mua_khong_bi_goi_la_keo_dai_chu_ky(monkeypatch):
+    _patch_attrition(monkeypatch)
+    out = rt.customer_attrition_risk()
+    thin = next(r for r in out["khach_rui_ro"] if r["customer_code"] == "C_THIN")
+    assert thin["chu_ky_chua_do_duoc"] is True
+    assert thin["khoang_cach_mua_trung_binh_ngay"] is None
+    assert thin["tin_hieu"] != "KEO_DAI_CHU_KY"
+
+
+def test_m22_tong_hop_tinh_trong_toan_tap_truoc_khi_cat_top_n(monkeypatch):
+    _patch_attrition(monkeypatch)
+    full = rt.customer_attrition_risk()
+    cut = rt.customer_attrition_risk(limit=1)
+    # Cat danh sach hien thi KHONG duoc lam thay doi so khach tung nhom.
+    assert cut["phan_bo_tin_hieu"] == full["phan_bo_tin_hieu"]
+    assert cut["so_khach_rui_ro"] == full["so_khach_rui_ro"]
+    assert cut["returned_count"] == 1
+    assert cut["truncated"] is True
+    assert cut["not_shown_count"] == full["so_khach_rui_ro"] - 1
+
+
+def test_m22_ky_chua_tron_phai_canh_bao_bao_dong_gia(monkeypatch):
+    _patch_attrition(monkeypatch)
+    out = rt.customer_attrition_risk(month="2026-09")
+    assert out["ky_chua_tron"] is True
+    assert any("CHUA TRON" in line for line in out["gioi_han"])
+    assert any("2026-08" in line for line in out["gioi_han"])
+
+
+def test_m22_mac_dinh_khong_lay_thang_dang_chay_dang_do(monkeypatch):
+    _patch_attrition(monkeypatch)
+    # Du lieu moi nhat la 10/09 nhung mac dinh phai lui ve thang tron gan nhat.
+    assert rt.customer_attrition_risk()["ky"] == "2026-08"
+
+
+def test_m22_tool_duoc_cong_bo_cho_model_va_co_trong_dispatch():
+    assert "get_customer_attrition_risk" in rt.TEMPLATES
+    names = {tool["name"] for tool in nl2sql.TEMPLATE_TOOLS}
+    assert "get_customer_attrition_risk" in names

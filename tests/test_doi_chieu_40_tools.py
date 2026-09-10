@@ -14,7 +14,8 @@ SPEC.loader.exec_module(checker)
 def test_catalog_smoke_phu_dung_toan_bo_tool_da_dang_ky():
     cases = checker._tool_cases_40()
 
-    assert len(cases) == 40
+    # 10/09/2026: 41 sau khi them get_customer_attrition_risk cho M22/S88.
+    assert len(cases) == 41
     assert set(cases) == set(checker.rt.TEMPLATES)
 
 

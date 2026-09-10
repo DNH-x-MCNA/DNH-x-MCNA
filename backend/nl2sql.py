@@ -249,6 +249,15 @@ def _required_tool_for_question(question: str) -> str | None:
         "sap het hieu luc", "gia tri lon chua giai ngan", "ty le thuc hien thap",
     )):
         return "get_geography_monthly_performance"
+    # M22/S88: cau hoi ba ve "ngung mua HOAC giam mua HOAC keo dai chu ky mua so voi lich su" can
+    # ca ba tin hieu trong MOT bang. get_customer_movement chi so thang nay voi thang lien truoc va
+    # khong co khoang cach mua trung binh, nen luon thieu ve thu ba - dinh tuyen cu khien M22 tra
+    # loi khong du de bai. Phai xet TRUOC nhanh "ngung mua" rong ben duoi.
+    if "keo dai chu ky" in q or (
+        any(marker in q for marker in ("ngung mua", "khach lon nao ngung"))
+        and any(marker in q for marker in ("giam mua", "giam manh", "so voi lich su", "so lich su"))
+    ):
+        return "get_customer_attrition_risk"
     if any(marker in q for marker in (
         "tai kich hoat", "ngung mua", "tang truong den tu mo moi", "doanh thu mat",
         "bu duoc bao nhieu", "khach lon nao ngung", "keo dai chu ky mua",
@@ -735,6 +744,35 @@ TEMPLATE_TOOLS = [
                 "silent_days": {"type": "integer", "description": "So ngay khong mua toi thieu de bi liet ke (mac dinh 60)"},
                 "lookback_months": {"type": "integer", "description": "Cua so nhin lai de tinh doanh thu 'tung mua' (mac dinh 6 thang)"},
                 "limit": {"type": "integer", "description": "So khach tra ve (mac dinh 50, toi da 200)"},
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "get_customer_attrition_risk",
+        "description": "KHACH LON NGUNG MUA / GIAM MUA MANH / KEO DAI CHU KY MUA - ba tin hieu trong "
+                       "MOT bang theo checker S88. BAT BUOC dung cho M22 'khach lon nao ngung mua, "
+                       "giam mua hoac keo dai chu ky mua so voi lich su'. KHONG dung "
+                       "get_customer_movement cho cau nay: tool do chi so thang nay voi thang lien "
+                       "truoc va khong co khoang cach mua trung binh nen KHONG tra loi duoc ve "
+                       "'keo dai chu ky'. Bon nhan trong tin_hieu: NGUNG_MUA, NGUNG_MUA_DA_LAU, "
+                       "GIAM_MUA, KEO_DAI_CHU_KY - moi khach chi mang MOT nhan, khong cong don. "
+                       "PHAI trinh bay du ca ba ve nguoi dung hoi; neu chi neu khach ngung han va bo "
+                       "hai nhom con lai thi cau tra loi CHUA DAT. BAT BUOC doc phan_bo_tin_hieu de "
+                       "noi so khach tung nhom, va doc total_count/returned_count/truncated/"
+                       "not_shown_count; neu truncated=true phai noi ro con bao nhieu khach chua "
+                       "hien. Neu ky_chua_tron=true thi KHONG duoc ket luan khach da ngung mua - "
+                       "phai noi ro thang chua tron va dan ve thang tron gan nhat. "
+                       "chu_ky_chua_do_duoc=true nghia la khach co duoi 3 ngay mua nen chua do duoc "
+                       "chu ky, KHONG duoc goi la keo dai chu ky. BAT BUOC doc gioi_han va noi ro "
+                       "day la tin hieu canh bao tu hoa don, khong phai ket luan khach da bo hang; "
+                       "tap nay KHONG co du lieu nguyen nhan nen KHONG duoc suy dien ly do.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "month": {"type": "string", "description": "YYYY-MM, ky can danh gia (mac dinh: thang TRON gan nhat, khong lay thang dang chay dang do)"},
+                "lookback_months": {"type": "integer", "description": "Cua so lich su de tinh chu ky mua (mac dinh 12, toi thieu 4, toi da 24)"},
+                "limit": {"type": "integer", "description": "So khach tra ve (mac dinh 200, toi da 200)"},
             },
             "required": [],
         },
