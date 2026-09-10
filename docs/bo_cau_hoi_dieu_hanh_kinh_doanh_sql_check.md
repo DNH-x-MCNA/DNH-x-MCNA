@@ -1469,6 +1469,7 @@ Cần FACT_PhatSinhNhanVien được chốt để điều chỉnh chính xác v�
               +ISNULL(V25Bonus,0)+ISNULL(ASOBonus,0)) TotalBonus
     FROM b WHERE SnapshotRank=1
       AND (@AreaCode IS NULL OR AreaCode=@AreaCode)
+      AND (@ManagerCode IS NULL OR ManagerCode=@ManagerCode)
     GROUP BY EOMONTH(SaveDate),AreaCode,PositionCode;
 
 Chỉ tính bonus/revenue; bonus/profit bị chặn cho tới khi S10 có mapping giá vốn/lợi nhuận.
@@ -1669,6 +1670,7 @@ sự có vấn đề, chỉ khác nguyên nhân.
     LEFT JOIN dbo.DIM_NhanVien n ON n.EmployeeCode=f.EmployeeCode
       AND ISNULL(n.IsDuplicate,0)=0
     JOIN snaps s ON s.SaveDate=f.SaveDate
+    WHERE (@ManagerCode IS NULL OR f.ManagerCode=@ManagerCode)
     GROUP BY EOMONTH(f.SaveDate);
 
 Đếm đúng theo tầng — chỉ tầng nhân viên mới coi thiếu quản lý là lỗi:
@@ -2782,7 +2784,7 @@ Khác S40 ở chỗ phân nhóm theo BA MỐC và kèm sản phẩm mua nhiều 
            l.Revenue12M,l.Orders12M,t.ItemCode TopItem,t.SkuRevenue TopItemRevenue
     FROM last l
     LEFT JOIN owner o ON o.CustomerCode=l.CustomerCode
-    OUTER APPLY (SELECT TOP (1) d.EmployeeCode,d.Name FROM dbo.DIM_NhanVien d
+    OUTER APPLY (SELECT TOP (1) d.EmployeeCode,d.Name,d.ManagerAreaCode FROM dbo.DIM_NhanVien d
                  WHERE d.DMSId=o.EmpDMSCode ORDER BY ISNULL(d.IsDuplicate,0),d.EmployeeCode) n
     LEFT JOIN topsku t ON t.CustomerCode=l.CustomerCode AND t.rn=1
     WHERE DATEDIFF(day,l.LastOrderDate,@AsOfDate)>=30
@@ -2935,19 +2937,22 @@ Sản lượng chỉ tính UnitPrice > 0 (nguyên tắc pass/fail số 5) — h�
       FROM #sales WHERE DocDate>=DATEADD(month,-1,@MonthStart) AND DocDate<@MonthStart
       GROUP BY ItemCode
     )
-    SELECT c.ItemCode,c.Revenue,p.Revenue PrevRevenue,c.Revenue-p.Revenue RevenueDelta,
-           c.Customers-p.Customers CustomerDelta,
-           c.Orders-p.Orders OrderDelta,
-           c.PaidQty-p.PaidQty QuantityDelta,
+    SELECT COALESCE(c.ItemCode,p.ItemCode) ItemCode,
+           ISNULL(c.Revenue,0) Revenue,ISNULL(p.Revenue,0) PrevRevenue,
+           ISNULL(c.Revenue,0)-ISNULL(p.Revenue,0) RevenueDelta,
+           ISNULL(c.Customers,0)-ISNULL(p.Customers,0) CustomerDelta,
+           ISNULL(c.Orders,0)-ISNULL(p.Orders,0) OrderDelta,
+           ISNULL(c.PaidQty,0)-ISNULL(p.PaidQty,0) QuantityDelta,
            c.AvgPrice-p.AvgPrice PriceDelta,
-           CASE WHEN c.Customers<p.Customers THEN 'IT_KHACH'
-                WHEN c.Orders<p.Orders THEN 'IT_DON'
-                WHEN c.PaidQty<p.PaidQty THEN 'GIAM_LUONG'
+           CASE WHEN c.ItemCode IS NULL THEN 'NGUNG_BAN'
+                WHEN ISNULL(c.Customers,0)<ISNULL(p.Customers,0) THEN 'IT_KHACH'
+                WHEN ISNULL(c.Orders,0)<ISNULL(p.Orders,0) THEN 'IT_DON'
+                WHEN ISNULL(c.PaidQty,0)<ISNULL(p.PaidQty,0) THEN 'GIAM_LUONG'
                 WHEN c.AvgPrice<p.AvgPrice THEN 'GIAM_GIA'
                 ELSE 'KHAC' END NguyenNhanChinh
-    FROM cur c JOIN pre p ON p.ItemCode=c.ItemCode
-    WHERE c.Revenue<p.Revenue
-    ORDER BY (p.Revenue-c.Revenue) DESC;
+    FROM cur c FULL OUTER JOIN pre p ON p.ItemCode=c.ItemCode
+    WHERE ISNULL(c.Revenue,0)<ISNULL(p.Revenue,0)
+    ORDER BY (ISNULL(p.Revenue,0)-ISNULL(c.Revenue,0)) DESC;
 
 ### S73 — SKU tăng độ phủ nhưng giảm doanh thu/khách — DERIVED
 
@@ -3126,12 +3131,14 @@ Hàng tặng nhận diện bằng `UnitPrice = 0 AND Quantity > 0` (nhất quán
     WITH m AS (
       SELECT EOMONTH(DocDate) MonthEnd,AreaCode,
              SUM(CASE WHEN Amount9>0 THEN Amount9 ELSE 0 END) GrossRevenue,
+             SUM(CASE WHEN Amount9>0 THEN Amount9*ISNULL(DiscountRate,0) ELSE 0 END) DiscountAmount,
              SUM(CASE WHEN Amount9<0 OR DocCode='HC' THEN ABS(Amount9) ELSE 0 END) ReturnAmount,
              SUM(CASE WHEN UnitPrice=0 AND Quantity>0 THEN Quantity ELSE 0 END) GiftQuantity,
              COUNT(DISTINCT CASE WHEN UnitPrice=0 AND Quantity>0 THEN OrderKey END) GiftOrders
       FROM #sales GROUP BY EOMONTH(DocDate),AreaCode
     )
-    SELECT MonthEnd,AreaCode,GrossRevenue,ReturnAmount,GiftQuantity,GiftOrders,
+    SELECT MonthEnd,AreaCode,GrossRevenue,DiscountAmount,ReturnAmount,GiftQuantity,GiftOrders,
+           100.0*DiscountAmount/NULLIF(GrossRevenue,0) DiscountRatePct,
            100.0*ReturnAmount/NULLIF(GrossRevenue,0) ReturnRatePct,
            100.0*GiftOrders/NULLIF(COUNT(1) OVER(PARTITION BY MonthEnd,AreaCode),0) GiftOrderSharePct,
            ReturnAmount-LAG(ReturnAmount) OVER(PARTITION BY AreaCode ORDER BY MonthEnd) ReturnDelta
