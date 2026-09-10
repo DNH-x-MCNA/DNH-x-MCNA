@@ -617,11 +617,12 @@ def _tool_cases_40():
 
 def kiem_13_phu_du_40_tool_nghiep_vu():
     print()
-    print("13. SMOKE/CONTRACT CHO TOAN BO 40 TOOL NGHIEP VU")
+    print("13. SMOKE/CONTRACT CHO TOAN BO %d TOOL NGHIEP VU" % len(rt.TEMPLATES))
     cases = _tool_cases_40()
     registered = set(rt.TEMPLATES)
     configured = set(cases)
-    _kiem("catalog ca kiem phu dung 40/40 tool", len(cases) == 40 and configured == registered,
+    _kiem("catalog ca kiem phu dung %d/%d tool" % (len(cases), len(registered)),
+          len(cases) == len(registered) and configured == registered,
           "configured=%d | registered=%d | thieu=%s | thua=%s"
           % (len(cases), len(registered), sorted(registered - configured), sorted(configured - registered)))
     for name in sorted(registered):
