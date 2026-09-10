@@ -46,15 +46,36 @@ def test_master_va_catalog_dung_cung_mapping():
 
 
 def test_s38_loc_dung_manager_o_ca_ba_truy_van():
-    """V17/M28: moi bang S38 phai cung dung scope doi, khong tron so toan cong ty."""
+    """V17/M28: TUNG bang cua S38 phai tu ap scope doi, khong tron so toan cong ty.
+
+    Kiem theo tung cau lenh chu khong dem chuoi tren ban ghep. Dem tren ban ghep van xanh
+    ke ca khi ca ba bo loc don vao mot bang, con hai bang kia van tra so toan cong ty.
+    """
     noi_dung = bo_sql.doc_tai_lieu()
     checker = {item["ma"]: item for item in bo_sql.lay_checker(noi_dung)}
-    sql = "\n".join(checker["S38"]["cau_lenh"])
+    cau_lenh = checker["S38"]["cau_lenh"]
 
-    assert sql.count("@ManagerCode IS NULL") == 3
-    assert "f.ManagerCode=@ManagerCode" in sql
-    assert "ManagerCode=@ManagerCode" in sql
-    assert "b.ManagerCode=@ManagerCode" in sql
+    assert len(cau_lenh) == 3, "S38 phai co dung 3 bang: tong hop, theo tang, tung nguoi"
+    mau = re.compile(r"@ManagerCode IS NULL OR (?:\w+\.)?ManagerCode\s*(=|<>|!=)\s*@ManagerCode")
+    for i, sql in enumerate(cau_lenh, 1):
+        dau = mau.findall(sql)
+        assert dau, "Bang %d cua S38 thieu bo loc @ManagerCode - se tra so toan cong ty" % i
+        for d in dau:
+            assert d == "=", "Bang %d dung dau '%s' thay vi '=' - dao nguoc pham vi doi" % (i, d)
+
+
+def test_s38_bang_tung_nguoi_van_giu_nhanh_thieu_target():
+    """Chan viec them scope lam chet nhanh nghiep vu con lai.
+
+    Bang 3 loc (thieu manager HOAC thieu target). Khi da rang buoc ManagerCode=@ManagerCode thi
+    nhanh "thieu manager" thanh bat kha thi, nen nhanh "thieu target" la thu duy nhat con lai
+    va KHONG duoc mat theo.
+    """
+    noi_dung = bo_sql.doc_tai_lieu()
+    checker = {item["ma"]: item for item in bo_sql.lay_checker(noi_dung)}
+    bang_tung_nguoi = checker["S38"]["cau_lenh"][2]
+    assert "MonthSaleTarget IS NULL OR" in bang_tung_nguoi
+    assert "MonthSaleTarget<=0" in bang_tung_nguoi
 
 
 def test_doi_tham_so_ho_tro_scope_manager_va_area():

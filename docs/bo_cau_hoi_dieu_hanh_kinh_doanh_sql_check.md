@@ -1710,6 +1710,17 @@ sự có vấn đề, chỉ khác nguyên nhân.
 > tượng: "SQL trả về toàn công ty thay vì chỉ đội MBKV2". Đã thêm `@ManagerCode`; đặt
 > `@ManagerCode='MBKV2'` để lấy đúng đội.
 
+> ⚠️ **Khi đặt `@ManagerCode`, cột đếm "thiếu quản lý" trở thành 0 do CẤU TRÚC, không phải do đã
+> kiểm và không thấy.** Lọc `ManagerCode=@ManagerCode` thì theo định nghĩa không dòng nào còn
+> `ManagerCode` rỗng, nên `MissingManager` và `ThieuQuanLy` luôn bằng 0, và nhánh "thiếu manager"
+> ở bảng từng người thành bất khả thi. V17 hỏi cả "thiếu manager" nên phải trả lời rõ là **không
+> đánh giá được ở phạm vi đội**, KHÔNG được trình bày số 0 như đã kiểm chứng.
+>
+> Thực tế điều này không làm mất tín hiệu thật: đo T8/2026, tầng nhân viên có **0 người thiếu quản
+> lý** trên toàn công ty, còn 26 ca "thiếu" đều là chính các quản lý (TP/QLV/PP) — không có cấp trên
+> trong trường đó là đúng cấu trúc. Muốn soát "thiếu quản lý" thì chạy bảng theo tầng ở phạm vi
+> toàn công ty hoặc theo miền, đừng lọc theo đội.
+
 > ⚠️ **Cột `MissingManager` của truy vấn đầu là dương tính giả gần như hoàn toàn.** Đo T8/2026 trên
 > `FACT_ThongKeTinhLuong`: tầng nhân viên (TDV/CTV/CS/TK, 183 người) có **0 người thiếu quản lý**;
 > toàn bộ 26 ca "thiếu" đều là **chính các quản lý** (TP/QLV/PP) — không có cấp trên trong trường đó
