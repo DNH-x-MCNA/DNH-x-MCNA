@@ -2607,34 +2607,51 @@ Chưa có FACT_PhatSinhNhanVien nên không tách được ảnh hưởng vào/r
 Cho câu hỏi "số khách mới, tái kích hoạt, mua lại, ngừng mua của từng vùng; tỷ lệ giữ chân". Khác
 S18 (đếm toàn công ty) ở chỗ tách theo VÙNG và tính thêm tỷ lệ giữ chân giữa hai tháng liền kề.
 
-Chỉ đếm tầng nhân viên (TDV/CTV/CS) để không cộng trùng dòng rollup QLV.
+> ⚠️ **Lưu ý nghiệp vụ & chuẩn hóa 09/09/2026**:
+> - Đếm tầng nhân viên thực thi (`TDV`, `CTV`, `CS`, `TK` - Kênh MT).
+> - Đồng thời giữ lại các khách hàng do **QLV trực tiếp phụ trách/tự bán** khi địa bàn trống (ví dụ `LCH00074` do QLV Vũ Xuân Phong `TM25010129` tại MB bán trực tiếp) mà không tồn tại ở dòng TDV cấp dưới nào.
+> - Nếu chỉ lọc cứng `PositionCode IN ('TDV','CTV','CS')`, MB sẽ bị hụt mất 1 khách (`LCH00074`), MN hụt 2 khách MT (`HCM04272`, `HCM04298`).
+> - Đã kiểm chứng trên Bravo: MB = 4.859, MN = 1.080, MT = 987, Tổng = 6.926 — khớp 100% từng khách với hóa đơn thực tế.
 
     WITH latest67 AS (
-      SELECT EmployeeCode,EOMONTH(SaveDate) MonthEnd,MAX(SaveDate) d
+      SELECT EmployeeCode, EOMONTH(SaveDate) MonthEnd, MAX(SaveDate) d
       FROM dbo.FACT_TongHopKhachHang
       WHERE SaveDate>=@FromDate AND SaveDate<@ToDate
-      GROUP BY EmployeeCode,EOMONTH(SaveDate)
-    ), e AS (
-      SELECT l.MonthEnd,n.AreaCode,f.CustomerCode,f.IsNC,f.IsRO
+      GROUP BY EmployeeCode, EOMONTH(SaveDate)
+    ), base AS (
+      SELECT l.MonthEnd, n.AreaCode, f.CustomerCode, f.IsNC, f.IsRO, n.PositionCode
       FROM dbo.FACT_TongHopKhachHang f
       JOIN latest67 l ON l.EmployeeCode=f.EmployeeCode AND l.d=f.SaveDate
       JOIN dbo.DIM_NhanVien n ON n.EmployeeCode=f.EmployeeCode
-      WHERE n.PositionCode IN ('TDV','CTV','CS')
-        AND (@AreaCode IS NULL OR n.AreaCode=@AreaCode)
+    ), e AS (
+      SELECT MonthEnd, AreaCode, CustomerCode, IsNC, IsRO
+      FROM base
+      WHERE PositionCode IN ('TDV','CTV','CS','TK')
+      UNION ALL
+      SELECT MonthEnd, AreaCode, CustomerCode, IsNC, IsRO
+      FROM base b
+      WHERE PositionCode = 'QLV'
+        AND NOT EXISTS (
+          SELECT 1 FROM base sub
+          WHERE sub.MonthEnd = b.MonthEnd AND sub.CustomerCode = b.CustomerCode
+            AND sub.PositionCode IN ('TDV','CTV','CS','TK')
+        )
     ), m AS (
-      SELECT MonthEnd,AreaCode,
+      SELECT MonthEnd, AreaCode,
              COUNT(DISTINCT CustomerCode) TotalCustomers,
              COUNT(DISTINCT CASE WHEN IsNC=1 THEN CustomerCode END) NewCustomers,
              COUNT(DISTINCT CASE WHEN IsRO=1 THEN CustomerCode END) RepeatCustomers,
              COUNT(DISTINCT CASE WHEN (IsNC IS NULL OR IsNC<>1)
                                   AND (IsRO IS NULL OR IsRO<>1) THEN CustomerCode END) NoFlagCustomers
-      FROM e GROUP BY MonthEnd,AreaCode
+      FROM e
+      WHERE (@AreaCode IS NULL OR AreaCode=@AreaCode)
+      GROUP BY MonthEnd, AreaCode
     )
-    SELECT MonthEnd,AreaCode,TotalCustomers,NewCustomers,RepeatCustomers,NoFlagCustomers,
+    SELECT MonthEnd, AreaCode, TotalCustomers, NewCustomers, RepeatCustomers, NoFlagCustomers,
            LAG(TotalCustomers) OVER(PARTITION BY AreaCode ORDER BY MonthEnd) PrevTotal,
            100.0*RepeatCustomers/NULLIF(LAG(TotalCustomers)
              OVER(PARTITION BY AreaCode ORDER BY MonthEnd),0) RetentionPct
-    FROM m ORDER BY AreaCode,MonthEnd;
+    FROM m ORDER BY AreaCode, MonthEnd;
 
 ### S68 — Khách mua lại/tái kích hoạt và mức phục hồi doanh thu — READY
 
@@ -3481,6 +3498,13 @@ có từ 3 ngày mua trở lên, vì dưới mức đó chu kỳ chưa có nghĩ
 
 Chạy 04/09/2026: 200 dòng, phân bố 83 NGUNG_MUA / 66 GIAM_MUA / 51 KEO_DAI_CHU_KY. Nếu câu trả lời
 chỉ nêu khách ngừng hẳn mà bỏ hai nhóm còn lại thì **chưa đạt** — đề bài hỏi cả ba.
+
+> ⚠️ **Lưu ý đối chiếu với query biến thể S40c (3 phần) — 09/09/2026**:
+> - Query 3 phần `S40c` dùng trong một số kịch bản test:
+>   - **Phần 1** (Ngừng mua: `t7.DT_T7 > 0 AND t8.DT_T8 = 0`): So sánh MoM T8 vs T7.
+>   - **Phần 2** (Giảm mua: `t8.DT_T8 < 0.5 * t7.DT_T7`): Ngưỡng sụt giảm >50% so với T7.
+>   - **Phần 3** (Kéo dài chu kỳ: `SizeQuartile = 1 AND SilentDays >= 45`): Chú ý tại mốc 31/08/2026, toàn bộ Top 25% khách lớn nhất mua rất đều (khoảng cách tối đa 42 ngày), nên nếu để ngưỡng 45 ngày thì Phần 3 sẽ ra **0 dòng**. Để bắt được khách lớn kéo dài chu kỳ, khuyến nghị dùng công thức chu kỳ động `SilentDays > 2 * AvgGapDays` của S88, hoặc hạ ngưỡng xuống `SilentDays >= 30`.
+> - S88 là truy vấn chuẩn hợp nhất cả 3 tín hiệu, dùng baseline 3 tháng (`Prior3M / 3.0`) để khử nhiễu chu kỳ đặt hàng.
 
 ### S89 — Khách mua ít SKU hơn nhóm tương đồng — READY
 
