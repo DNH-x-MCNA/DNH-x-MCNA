@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import sys
 from types import SimpleNamespace
 
@@ -11,6 +12,24 @@ if BACKEND not in sys.path:
 
 import nl2sql
 import report_templates as rt
+
+
+def test_toan_bo_138_cau_deu_co_duong_bao_cao_hoac_bi_chan_du_bao():
+    path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                        "docs", "bo_cau_hoi_dieu_hanh_kinh_doanh_sql_check.md")
+    rows = []
+    with open(path, encoding="utf-8") as handle:
+        for line in handle:
+            match = re.match(r"\| ((?:C|M|V)\d{2}) \| (.*?) \| S\w+ \|", line)
+            if match:
+                rows.append(match.groups())
+    assert len(rows) == 138
+    uncovered = [
+        (code, question) for code, question in rows
+        if nl2sql._required_tool_for_question(question) is None
+        and not nl2sql.is_future_forecast_question(question)
+    ]
+    assert uncovered == []
 
 
 def test_promotion_effectiveness_uses_dms_link_and_latest_complete_month(monkeypatch):
@@ -361,6 +380,21 @@ def test_high_risk_intents_force_their_single_verified_tool():
     assert nl2sql._required_tool_for_question(
         "Chi phí thưởng kinh doanh trên doanh thu; tăng trưởng có bền vững không"
     ) == "get_salary_ranking"
+    assert nl2sql._required_tool_for_question(
+        "Lợi nhuận gộp và biên lợi nhuận gộp theo tháng, kênh, miền thay đổi thế nào?"
+    ) == "get_revenue_monthly_series"
+    assert nl2sql._required_tool_for_question(
+        "Khách mua đồng thời OTC và ETC đóng góp bao nhiêu doanh thu/công nợ; xu hướng mua chéo kênh?"
+    ) == "get_customer_product_coverage"
+    assert nl2sql._required_tool_for_question(
+        "Ba rủi ro lớn nhất khiến không đạt kế hoạch là gì; mỗi rủi ro ảnh hưởng bao nhiêu tiền?"
+    ) == "get_customer_product_coverage"
+    assert nl2sql._required_tool_for_question(
+        "QLV nào có nhiều nhân viên dưới 80% nhất; phần hụt của đội tập trung ở ai?"
+    ) == "get_workforce_productivity"
+    assert nl2sql._required_tool_for_question(
+        "Tỷ lệ khách không gán TDV, sai vùng hoặc thiếu thông tin DMS theo tháng là bao nhiêu?"
+    ) == "get_operational_data_quality"
 
 
 def test_m_role_questions_start_from_their_verified_report_not_free_sql():

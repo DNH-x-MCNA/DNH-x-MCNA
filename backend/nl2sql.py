@@ -199,8 +199,31 @@ def _required_tool_for_question(question: str) -> str | None:
         return "get_revenue_monthly_series"
     if "luy ke" in q or "ytd" in q:
         return "get_revenue_ytd_cumulative"
+    if any(marker in q for marker in ("loi nhuan gop", "bien loi nhuan", "loi nhuan thap", "loi nhuan am")):
+        # Kho khong co gia von/COGS. Van dua vao mot template chi-doc de call_template tra
+        # SOURCE_GAP co cau truc, khong cho free-SQL suy dien loi nhuan tu doanh thu.
+        return "get_revenue_monthly_series"
+    if "run-rate thang hien tai" in q or "run rate thang hien tai" in q:
+        return "get_kpi_gap_run_rate"
+    if "dong gop bao nhieu vao bien dong chung" in q:
+        return "get_geography_monthly_performance"
+    if "bien dong doanh thu duoc giai thich" in q and any(
+            marker in q for marker in ("so don", "so khach", "tan suat", "san luong", "gia ban")):
+        return "get_geography_monthly_performance"
+    if ("trung binh truot 3 thang" in q and "6 thang" in q) or "diem gay xu huong" in q:
+        return "get_revenue_monthly_series"
+    if "ty trong otc/etc" in q and "tung thang" in q:
+        return "get_revenue_monthly_series"
+    if "loai cac giao dich bat thuong" in q and any(
+            marker in q for marker in ("don lon", "tra hang", "dieu chinh")):
+        return "check_order_timing"
+    if "don vi nao" in q and "lien tuc 3/6 thang" in q:
+        return "get_geography_monthly_performance"
     if any(marker in q for marker in ("cohort", "giu chan sau", "ty le giu chan")):
         return "get_customer_cohort_retention"
+    if any(marker in q for marker in ("san pham moi", "sp moi")) and any(
+            marker in q for marker in ("do phu", "sau 1/3/6", "sau 1/3/6/12", "ra mat")):
+        return "get_customer_product_coverage"
     # C29: can CA co nghiep vu NC/RO cua Bravo LAN chuoi active/reactivated/stopped tu hoa don.
     # Bao cao lifecycle tra hai lop nay rieng biet; khong de nhanh "tai kich hoat" chung rut cau
     # hoi tung thang thanh mot cap thang duy nhat.
@@ -210,6 +233,10 @@ def _required_tool_for_question(question: str) -> str | None:
     # V28/S83 phai nam TRUOC nhanh tai kich hoat chung: cau nay ket hop bon muc tieu, khong phai
     # chi mot danh sach khach tai kich hoat.
     if "danh sach khach" in q and any(marker in q for marker in ("giu khach", "tai kich hoat", "thu no", "ban cheo")):
+        return "get_customer_product_coverage"
+    if "khach mua dong thoi otc va etc" in q or "mua cheo kenh" in q:
+        return "get_customer_product_coverage"
+    if "ba rui ro lon nhat" in q and "ke hoach" in q:
         return "get_customer_product_coverage"
     # Bao cao tong gia tri ton theo mien van dung inventory_by_region, ke ca khi nguoi dung
     # liet ke them stock-out. Chi dinh tuyen sang SKU risk khi trong tam la SKU/thieu/cham ban.
@@ -228,6 +255,12 @@ def _required_tool_for_question(question: str) -> str | None:
         "like-for-like", "like for like", "tang truong huu co", "tang mua tren khach hien huu",
         "mo nhieu khach moi",
     )):
+        return "get_customer_movement"
+    if "tang truong hien tai den tu mo moi" in q and "khach hang hien huu" in q:
+        return "get_customer_movement"
+    if "khach da mua thang truoc" in q and "chua mua thang nay" in q:
+        return "get_customer_movement"
+    if "khach moi thang nay" in q and "don lap lai" in q:
         return "get_customer_movement"
     if any(marker in q for marker in ("top khach hang", "top 10 khach", "khach tang/giam manh")):
         return "get_top_customers"
@@ -304,6 +337,12 @@ def _required_tool_for_question(question: str) -> str | None:
         "owner, deadline", "owner deadline", "hanh dong, owner",
     )):
         return "get_operational_data_quality"
+    if "ty le khach khong gan tdv" in q or (
+            "sai vung" in q and "thieu thong tin dms" in q):
+        return "get_operational_data_quality"
+    if ("chu so huu" in q or "nguoi chiu trach nhiem" in q) and any(
+            marker in q for marker in ("deadline", "han hoan thanh", "cam ket hanh dong", "hanh dong")):
+        return "get_operational_data_quality"
     if any(marker in q for marker in (
         "tong no", "no qua han", "dso", "thu tien", "no xau", "bop ban", "thu hoi",
     )):
@@ -336,6 +375,13 @@ def _required_tool_for_question(question: str) -> str | None:
     if any(marker in q for marker in ("gap toi kh", "duoi 80% kh", "moi ngay can dong gop",
                                        "ngay/tuan dang chay", "nhip can thiet")):
         return "get_kpi_gap_run_rate"
+    if "gap toi ke hoach" in q and "moi vung" in q:
+        return "get_kpi_gap_run_rate"
+    if "vung nao duoi 80% ke hoach lien tiep" in q:
+        return "get_workforce_productivity"
+    if ("doanh so, target" in q and "tung qlv/doi" in q) or \
+            "qlv nao co nhieu nhan vien duoi 80%" in q:
+        return "get_workforce_productivity"
     if any(marker in q for marker in (
         "tdv trong doi", "doanh so/target", "dat 100%", "qua cong 65", "duoi cong",
         "so nv duoi 80",
@@ -773,10 +819,21 @@ TEMPLATE_TOOLS = [
                        "tung khach giam don/AOV/SKU so voi cua so 3 thang lien truoc. V26: dung "
                        "mode='customer_peer', lookback_months=3; benchmark hien chi theo CUNG TINH, "
                        "vi kho chua co phan khuc khach hang chot chuan - phai noi ro gioi han nay. "
+                       "M25-M26/S89: mode='customer_revenue_tier_peer' benchmark cung kenh x mien x "
+                       "bac doanh thu NTILE(5), chi nhom >=5 khach; day la do rong danh muc noi bo, "
+                       "khong phai share-of-wallet thi truong hay bang chung nhu cau. "
+                       "C26/S16: mode='dual_channel' tra tung thang so khach mua ca OTC+ETC va "
+                       "ty trong doanh thu; debt_status/debt_limitation la gioi han cong no bat buoc neu. "
                        "Benchmark chi trong DUNG pham vi tai khoan, KHONG "
                        "phai market share/share-of-wallet ngoai DNH va KHONG tu ket luan nhu cau. Voi "
                        "mode='product', dung net_revenue_per_paid_unit va truong previous/delta/pct de "
                        "phan tich xoi mon gia; day la doanh thu thuan tren don vi ban co gia, khong phai bang gia niem yet. "
+                       "M33/S72: largest_revenue_declines da sap theo muc mat doanh thu va "
+                       "primary_decline_driver tach FEWER_CUSTOMERS/FEWER_ORDERS/"
+                       "LOWER_PAID_QUANTITY_PER_ORDER/LOWER_NET_REVENUE_PER_PAID_UNIT; khong tu suy "
+                       "nguyen nhan tu mot cot doanh thu. C33/C36: dung largest_revenue_increases, "
+                       "largest_internal_share_losses, coverage_up_revenue_per_customer_down va "
+                       "revenue_up_coverage_down da tinh tren tap day du truoc khi cat limit. "
                        "C28/S91: mode='assignment_change' tach khach giu nguyen NV chinh, doi NV, moi va "
                        "roi bo tren OTC; day la ket qua PARTIAL vi khong co lich su assignment dia ban chot chuan. "
                        "C34/M34/S22: BAT BUOC mode='product_first_observed', lookback_months=12. "
@@ -785,8 +842,8 @@ TEMPLATE_TOOLS = [
                        "nen KHONG tinh % ke hoach va phai noi ro gioi han.",
         "input_schema": {"type": "object", "properties": {
             "as_of_date": {"type": "string"}, "lookback_months": {"type": "integer"},
-            "mode": {"type": "string", "enum": ["customer", "customer_peer", "product", "employee", "priority", "four_customer_priorities", "product_monthly", "product_mix", "sku_target", "product_first_observed", "assignment_change"],
-                     "description": "V28/S83: four_customer_priorities (4 danh sach giu khach/tai kich hoat/thu no/ban cheo). V29/S21: product_monthly (top/bottom SKU tung thang va dong gop MoM). V30/S46: sku_target (kiem tra target theo SKU; bao lo nguon, khong tu suy dien %). C34/M34/S22: product_first_observed (moc ban dau quan sat, khong phai launch date; khong co target SKU). V31/S23: product_mix (nhieu khach-luong/don thap va it khach-AOV cao). C28/S91: assignment_change (tach nhom giu/doi NV; chi OTC, co canh bao gioi han nguon)."},
+            "mode": {"type": "string", "enum": ["customer", "customer_peer", "customer_revenue_tier_peer", "product", "employee", "priority", "dual_channel", "four_customer_priorities", "product_monthly", "product_mix", "sku_target", "product_first_observed", "assignment_change"],
+                     "description": "C26/S16: dual_channel (khach mua ca OTC+ETC theo thang, cong no fail-closed). V28/S83: four_customer_priorities (4 danh sach giu khach/tai kich hoat/thu no/ban cheo). V29/S21: product_monthly (top/bottom SKU tung thang va dong gop MoM). V30/S46: sku_target (kiem tra target theo SKU; bao lo nguon, khong tu suy dien %). C34/M34/S22: product_first_observed (moc ban dau quan sat, khong phai launch date; khong co target SKU). V31/S23: product_mix (nhieu khach-luong/don thap va it khach-AOV cao). C28/S91: assignment_change (tach nhom giu/doi NV; chi OTC, co canh bao gioi han nguon)."},
             "limit": {"type": "integer"},
         }, "required": []},
     },

@@ -288,6 +288,212 @@ def test_c28_call_template_tu_ep_mode_assignment_change(tmp_path, monkeypatch):
     assert response["result"]["mode"] == "assignment_change"
 
 
+def test_call_template_ep_dung_mode_coverage_theo_tung_cau_uat_ke_ca_model_truyen_sai(
+        tmp_path, monkeypatch):
+    _setup(tmp_path, monkeypatch)
+    monkeypatch.setitem(rt.TEMPLATES, "get_customer_product_coverage", lambda **kwargs: kwargs)
+    cases = [
+        ("DT đội đến từ bao nhiêu khách/đơn; AOV và tần suất mua thay đổi", "employee", 1, 200),
+        ("Khách nào giảm tần suất mua, AOV hoặc số SKU/đơn so với 3 tháng trước?", "customer", 3, 200),
+        ("Khách nào mua ít hơn các khách tương đồng cùng tỉnh/phân khúc?", "customer_peer", 3, 200),
+        ("Khách nào có tiềm năng bán chéo do đang mua ít SKU hơn nhóm khách tương đồng?",
+         "customer_revenue_tier_peer", 3, 200),
+        ("Khách hàng nào có share-of-wallet nội bộ thấp: doanh thu lớn nhưng chỉ mua một nhóm sản phẩm?",
+         "customer_revenue_tier_peer", 3, 200),
+        ("Danh sách khách ưu tiên tuần này theo bốn mục tiêu: giữ khách lớn, tái kích hoạt, thu nợ và bán chéo?",
+         "four_customer_priorities", None, 20),
+        ("Top/bottom sản phẩm từng tháng của đội; SKU nào làm tăng/giảm doanh số nhiều nhất?",
+         "product_monthly", 3, None),
+        ("SKU trọng tâm đạt bao nhiêu % target theo từng TDV và khách hàng; khoảng thiếu bao nhiêu?",
+         "sku_target", None, None),
+        ("Sản phẩm nào nhiều khách mua nhưng lượng/đơn thấp; sản phẩm nào ít khách nhưng AOV cao?",
+         "product_mix", None, None),
+        ("SKU nào doanh thu giảm do ít khách mua, ít đơn, giảm lượng/đơn hay giảm giá bán?",
+         "product", 1, 200),
+        ("Nhóm sản phẩm/SKU nào là động lực tăng trưởng, nhóm nào kéo giảm và mất thị phần nội bộ?",
+         "product", 3, 200),
+        ("SKU nào có độ phủ khách hàng tăng nhưng doanh thu/khách giảm, hoặc doanh thu tăng nhưng độ phủ co lại?",
+         "product", 3, 200),
+        ("Hôm nay cần ưu tiên khách hàng, sản phẩm và nhân viên nào để đóng gap lớn nhất?",
+         "priority", None, None),
+        ("Khách mua đồng thời OTC và ETC đóng góp bao nhiêu doanh thu/công nợ; xu hướng mua chéo kênh?",
+         "dual_channel", 6, 100),
+        ("Ba rủi ro lớn nhất khiến không đạt kế hoạch là gì; mỗi rủi ro ảnh hưởng bao nhiêu tiền?",
+         "priority", None, 20),
+    ]
+    for question, expected_mode, expected_months, minimum_limit in cases:
+        response = rt.call_template(
+            "get_customer_product_coverage",
+            {"mode": "customer", "lookback_months": 9, "limit": 1},
+            question=question, scope_role="c_level",
+        )
+        result = response["result"]
+        assert result["mode"] == expected_mode, question
+        if expected_months is not None:
+            assert result["lookback_months"] == expected_months, question
+        if minimum_limit is not None:
+            assert result["limit"] >= minimum_limit, question
+
+
+def test_m31_theo_thang_tu_dong_chon_product_monthly(tmp_path, monkeypatch):
+    _setup(tmp_path, monkeypatch)
+    monkeypatch.setitem(rt.TEMPLATES, "get_customer_product_coverage", lambda **kwargs: kwargs)
+    response = rt.call_template(
+        "get_customer_product_coverage", {"mode": "customer"},
+        question="Nhóm sản phẩm/SKU nào đóng góp nhiều nhất vào tăng/giảm của miền theo tháng?",
+        scope_role="c_level",
+    )
+    assert response["result"]["mode"] == "product_monthly"
+
+
+def test_v07_thang_nay_ep_moc_du_lieu_moi_nhat_va_ba_thang(tmp_path, monkeypatch):
+    _setup(tmp_path, monkeypatch)
+    monkeypatch.setattr(rt, "latest_data_date", lambda: "2026-09-09")
+    monkeypatch.setitem(rt.TEMPLATES, "get_geography_monthly_performance", lambda **kwargs: kwargs)
+    response = rt.call_template(
+        "get_geography_monthly_performance",
+        {"month_to": "2026-08", "months_back": 8, "dimension": "area"},
+        question="So với 3 tháng gần nhất, tháng này đội giảm ở số khách, số đơn, sản lượng hay giá trị đơn?",
+        scope_role="c_level",
+    )
+    assert response["result"]["month_to"] == "2026-09"
+    assert response["result"]["months_back"] == 3
+    assert response["result"]["dimension"] == "area"
+
+
+def test_c26_mua_cheo_hai_kenh_tach_so_khach_doanh_thu_va_fail_closed_cong_no(
+        tmp_path, monkeypatch):
+    db_path = _setup(tmp_path, monkeypatch)
+    with sqlite3.connect(db_path) as con:
+        con.execute("INSERT INTO dmssx_khachhang VALUES ('C1','Khach 1 ETC',1,11,'ETC')")
+        con.execute("INSERT INTO vhoadon_etc VALUES "
+                    "('2026-04-09','C1','A',70,1,70,'E1','D1','2026-04-09')")
+
+    result = rt.customer_product_coverage(
+        as_of_date="2026-04-20", lookback_months=4, mode="dual_channel", limit=100,
+    )
+    april = next(row for row in result["rows"] if row["month"] == "2026-04")
+    assert april["dual_channel_customers"] == 1
+    assert april["dual_channel_revenue"] == 250
+    assert april["total_customers"] == 4
+    assert result["dual_customer_count_in_window"] == 1
+    assert result["dual_customers"][0]["customer_code"] == "C1"
+    assert result["debt_status"] == "not_available_for_dual_channel_customer_history"
+
+    blocked = rt.customer_product_coverage(mode="dual_channel", scope_channel="OTC")
+    assert blocked["status"] == "NOT_APPLICABLE_SINGLE_CHANNEL_SCOPE"
+
+
+def test_s89_peer_theo_kenh_mien_bac_doanh_thu_va_chi_nhom_du_5_khach(
+        tmp_path, monkeypatch):
+    db_path = _setup(tmp_path, monkeypatch)
+    with sqlite3.connect(db_path) as con:
+        con.execute("INSERT INTO brv_sanpham VALUES ('C','San pham C','G2','hop',3)")
+        for index in range(30):
+            code = f"K{index:02d}"
+            con.execute("INSERT INTO dms_khachhang VALUES (?,?,?,?,?,?)",
+                        (code, f"Khach {index:02d}", 1, 100 + index, "D1", "OTC"))
+            con.execute("INSERT INTO vhoadon_otc VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                        ("2026-03-15", code, "A", 1000 + index * 100, 1, 1000 + index * 100,
+                         f"P{index:02d}A", 1, "D1", "2026-03-15", "OTC"))
+            if index % 2 == 0:
+                con.execute("INSERT INTO vhoadon_otc VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                            ("2026-03-15", code, "C", 10, 1, 10, f"P{index:02d}C", 1,
+                             "D1", "2026-03-15", "OTC"))
+
+    result = rt.customer_product_coverage(
+        as_of_date="2026-04-20", lookback_months=3,
+        mode="customer_revenue_tier_peer", limit=200, scope_area_code="MB",
+    )
+    assert result["period_selection"] == "THANG_TRON_GAN_NHAT"
+    assert result["total_candidates"] > 0
+    assert all(row["peer_count"] >= 5 for row in result["rows"])
+    assert all(row["missing_skus_vs_peer"] > 0 for row in result["rows"])
+    assert all(row["priority_score"] > 0 for row in result["rows"])
+    assert result["one_group_high_revenue_total"] > 0
+    assert all(row["product_groups"] == 1 for row in result["one_group_high_revenue"])
+    assert "KHONG phai share-of-wallet" in result["share_of_wallet_limitation"]
+
+
+def test_product_mode_phan_ra_nguyen_nhan_giam_va_thi_phan_noi_bo(tmp_path, monkeypatch):
+    db_path = _setup(tmp_path, monkeypatch)
+    with sqlite3.connect(db_path) as con:
+        con.execute("INSERT INTO brv_sanpham VALUES ('C','San pham C','G2','hop',3)")
+        con.execute("INSERT INTO vhoadon_otc VALUES "
+                    "('2026-03-11','C1','C',1000,10,100,'C-MAR',1,'D1','2026-03-11','OTC')")
+        con.execute("INSERT INTO vhoadon_otc VALUES "
+                    "('2026-04-11','C1','C',400,5,80,'C-APR',1,'D1','2026-04-11','OTC')")
+
+    result = rt.customer_product_coverage(
+        as_of_date="2026-04-20", lookback_months=1, mode="product", limit=100,
+    )
+    product = next(row for row in result["rows"] if row["code"] == "C")
+    assert product["revenue_delta"] == -600
+    assert product["quantity_per_order_delta"] == -5
+    assert product["primary_decline_driver"] == "LOWER_PAID_QUANTITY_PER_ORDER"
+    assert product["internal_share_delta_pct_points"] < 0
+    assert result["largest_revenue_declines"][0]["code"] == "C"
+    assert "Hang tang" in result["decline_driver_definition"]
+
+
+def test_workforce_manager_tra_du_so_nguoi_duoi_80_gap_va_streak(tmp_path, monkeypatch):
+    _setup(tmp_path, monkeypatch)
+    result = rt.workforce_productivity(
+        month_to="2026-04", months_back=3, group_by="manager", scope_area_code="MB",
+    )
+    q1 = next(row for row in result["manager_attention"] if row["manager_code"] == "Q1")
+    assert q1["below_80_count"] == 2
+    assert q1["employees_with_target"] == 2
+    assert q1["below_80_gap"] == 1400
+    assert q1["worst_employee"]["employee_code"] == "T1"
+    assert q1["below_80_streak_months"] == 3
+
+
+def test_workforce_manager_khong_bao_0_duoi_80_khi_thang_moi_chua_co_target(
+        tmp_path, monkeypatch):
+    db_path = _setup(tmp_path, monkeypatch)
+    with sqlite3.connect(db_path) as con:
+        con.executemany("INSERT INTO fact_thongketinhluong VALUES (?,?,?,?,?,?,?,?,?)", [
+            ("T1", "TDV 1", "TDV", "MB", "Q1", "2026-09-04", 100, 0, None),
+            ("T2", "TDV 2", "TDV", "MB", "Q1", "2026-09-04", 200, 0, None),
+        ])
+    result = rt.workforce_productivity(
+        month_to="2026-09", months_back=6, group_by="manager", scope_area_code="MB",
+    )
+    assert result["manager_attention_period_fallback"] is True
+    assert result["manager_attention_evaluated_month"] == "2026-04"
+    q1 = next(row for row in result["manager_attention"] if row["manager_code"] == "Q1")
+    assert q1["below_80_count"] == 2
+    september = next(row for row in result["rows"] if row["month"] == "2026-09")
+    assert september["assessment_status"] == "NO_TARGET_DATA"
+
+
+def test_m05_lien_tiep_khong_dem_thang_mtd_vao_chuoi_duoi_80(tmp_path, monkeypatch):
+    _setup(tmp_path, monkeypatch)
+    monkeypatch.setitem(rt.TEMPLATES, "get_workforce_productivity", lambda **kwargs: kwargs)
+    response = rt.call_template(
+        "get_workforce_productivity", {"month_to": "2026-04", "group_by": "employee"},
+        question="Vùng nào dưới 80% kế hoạch liên tiếp; tổng hụt doanh thu tích lũy là bao nhiêu?",
+        scope_role="regional_director", scope_area_code="MB",
+    )
+    assert response["result"]["group_by"] == "manager"
+    assert response["result"]["month_to"] == "2026-03"
+    assert response["result"]["months_back"] == 6
+
+
+def test_c14_loi_nhuan_fail_closed_khi_kho_khong_co_cogs(tmp_path, monkeypatch):
+    _setup(tmp_path, monkeypatch)
+    response = rt.call_template(
+        "get_revenue_monthly_series", {},
+        question="Lợi nhuận gộp và biên lợi nhuận gộp theo tháng thay đổi thế nào?",
+        scope_role="c_level",
+    )
+    result = response["result"]
+    assert result["status"] == "SOURCE_GAP_NO_COGS_OR_GROSS_MARGIN"
+    assert "Gia von/COGS" in result["not_verifiable"]
+    assert "khong du de suy ra loi nhuan" in result["reason"]
+
+
 def test_gap_run_rate_qlv_chi_thay_doi_minh(tmp_path, monkeypatch):
     _setup(tmp_path, monkeypatch)
     r = rt.kpi_gap_run_rate(as_of_date="2026-04-15", group_by="employee",
