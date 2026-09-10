@@ -520,6 +520,9 @@ def main() -> int:
     ap.add_argument("--den-ngay", help="Ghi de @ToDate, dang YYYY-MM-DD")
     ap.add_argument("--as-of", help="Ghi de ngay chot du lieu, dang YYYY-MM-DD")
     ap.add_argument("--checker", help="Chi chay cac ma nay, cach nhau bang dau phay")
+    ap.add_argument("--manager", help="Ghi de @ManagerCode - loc theo DOI. Vi du MBKV2 (doi Pham Xuan Tu) "
+                                       "hoac TM25010183 (doi Nguyen Thi Hong Thuy). Bat buoc cho nhom cau V.")
+    ap.add_argument("--area", help="Ghi de @AreaCode - loc theo mien: MB, MT, MN.")
     ap.add_argument("--gioi-han-dong", type=int, default=5, help="So dong mau giu lai moi bang")
     ap.add_argument(
         "--ra",
@@ -567,7 +570,8 @@ def main() -> int:
                 raise SystemExit("%s phai dang YYYY-MM-DD." % ten)
 
     thay = {"FromDate": tham_so.tu_ngay, "ToDate": tham_so.den_ngay,
-            "AsOfDate": tham_so.as_of}
+            "AsOfDate": tham_so.as_of,
+            "ManagerCode": tham_so.manager, "AreaCode": tham_so.area}
     if tham_so.thang:
         try:
             dau_thang = dt.datetime.strptime(tham_so.thang + "-01", "%Y-%m-%d").date()

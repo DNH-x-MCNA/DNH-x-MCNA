@@ -1756,6 +1756,7 @@ sự có vấn đề, chỉ khác nguyên nhân.
                 AND MonthSaleAmount>0 THEN 1 ELSE 0 END) CoDoanhSoMaThieuTarget
     FROM b WHERE SnapshotRank=1
       AND (@AreaCode IS NULL OR AreaCode=@AreaCode)
+      AND (@ManagerCode IS NULL OR ManagerCode=@ManagerCode)
     GROUP BY EOMONTH(SaveDate),
       CASE WHEN PositionCode IN ('TDV','CTV','CS','TK') THEN 'Tang nhan vien' ELSE 'Tang quan ly' END
     ORDER BY MonthEnd DESC,Tang;
@@ -1781,6 +1782,7 @@ Danh sách TỪNG NGƯỜI có vấn đề — C54 và V17 hỏi "nhân viên n�
       AND ((b.ManagerCode IS NULL OR b.ManagerCode='')
            OR b.MonthSaleTarget IS NULL OR b.MonthSaleTarget<=0)
       AND (@AreaCode IS NULL OR b.AreaCode=@AreaCode)
+      AND (@ManagerCode IS NULL OR b.ManagerCode=@ManagerCode)
     ORDER BY MonthEnd DESC,LoaiVanDe,b.EmployeeCode;
 
 **Ba nhóm lộ ra khi chạy T8/2026 (17 người), rất khác nhau về mức nghiêm trọng:**

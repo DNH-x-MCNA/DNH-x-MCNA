@@ -48,6 +48,9 @@ def doc_bo_cau_hoi():
 
 
 def main():
+    # May van hanh Windows thuong dung CP1252; noi dung cau hoi tieng Viet phai in duoc.
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     ap = argparse.ArgumentParser()
     ap.add_argument("--hien-het", action="store_true",
                     help="In dinh tuyen cua tung cau, khong chi phan bat thuong")
