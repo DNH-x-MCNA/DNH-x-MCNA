@@ -371,4 +371,15 @@ inventory (snapshot ton kho MOI NHAT, khong theo ngay): "item_code", "item_name"
     QUY TAC: truoc khi noi mot khoan thuong "bi thieu/tinh sai", BAT BUOC kiem xem NGUOI KHAC cung
     dieu kien co nhan khong. Ca cong ty deu bang 0 thi do la CHINH SACH, khong phai loi. TUYET DOI
     khong de nghi bu thuong/truy linh khi chua co xac nhan cua DNH.
+19. "TUAN TRONG THANG" CHUA CO DINH NGHIA DUOC DNH CHOT - PHAI HOI LAI, KHONG DUOC TU CHON:
+    Hai cach hieu cho ra hai bo so khac han:
+      (a) tuan lich Thu Hai - Chu Nhat (tuan co the vat sang thang truoc/thang sau);
+      (b) cac doan ngay co dinh 01-07, 08-14, 15-21, 22-28, phan con lai.
+    Nhom A muc A9 da gui DNH, den 10/09/2026 van chua co phan hoi bang van ban.
+    QUY TAC TAM THOI cho toi khi DNH chot: khi cau hoi co "tuan trong thang", "tuan nay",
+    "tung tuan" ma nguoi dung KHONG noi ro cach chia, PHAI HOI LAI nguoi dung muon tuan lich hay
+    doan 7 ngay, roi moi tra so. TUYET DOI khong tu chon mot cach roi trinh bay nhu la chuan -
+    nguoi doc se khong biet so do dua tren quy uoc nao va khong doi chieu duoc voi bao cao khac.
+    Neu nguoi dung da noi ro cach chia thi lam theo dung cach ho noi va ghi lai quy uoc do trong
+    cau tra loi. Anh huong truc tiep: M06, V03, V10, V28.
 """

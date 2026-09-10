@@ -7960,6 +7960,50 @@ def _month_end(value: dt.date) -> dt.date:
     return next_month - dt.timedelta(days=1)
 
 
+def _promotion_period_fields(program_from, program_to, report_from, report_to) -> dict:
+    """Ky chay THAT cua chuong trinh so voi ky bao cao dang xem.
+
+    Mot chuong trinh quy (vd Q1.2026_BPNGAM_10_TQ chay 01/01-31/03) trai ba thang. Neu ky bao cao
+    chi la mot thang thi associated_revenue chi phu mot phan vong doi chuong trinh. Truoc day payload
+    khong he noi dieu do, nen cau tra loi trinh bay so mot thang nhu la hieu qua ca chuong trinh.
+    """
+    def _d(v):
+        if not v:
+            return None
+        if isinstance(v, dt.date):
+            return v
+        try:
+            return dt.date.fromisoformat(str(v)[:10])
+        except ValueError:
+            return None
+
+    pf, pt = _d(program_from), _d(program_to)
+    rf, rt = _d(report_from), _d(report_to)
+    out = {
+        "program_from": pf.isoformat() if pf else None,
+        "program_to": pt.isoformat() if pt else None,
+    }
+    if not pf or not pt:
+        out["program_period_status"] = "not_available"
+        return out
+    months = (pt.year - pf.year) * 12 + (pt.month - pf.month) + 1
+    out["program_month_count"] = max(1, months)
+    out["program_spans_multiple_months"] = months > 1
+    if rf and rt:
+        phu_tu, phu_den = max(pf, rf), min(pt, rt)
+        so_ngay_phu = (phu_den - phu_tu).days + 1 if phu_den >= phu_tu else 0
+        so_ngay_ct = (pt - pf).days + 1
+        out["report_covers_program_days"] = so_ngay_phu
+        out["program_total_days"] = so_ngay_ct
+        out["report_covers_full_program"] = so_ngay_phu >= so_ngay_ct
+        if 0 < so_ngay_phu < so_ngay_ct:
+            out["period_coverage_note"] = (
+                "Ky bao cao chi phu %d/%d ngay cua chuong trinh (%s den %s). Cac so o day la PHAN "
+                "TRONG KY, khong phai ket qua ca chuong trinh." % (
+                    so_ngay_phu, so_ngay_ct, out["program_from"], out["program_to"]))
+    return out
+
+
 def promotion_effectiveness(date_from: str = None, date_to: str = None, limit: int = 20,
                             scope_area_code: str = None, scope_employee_code: str = None,
                             scope_channel: str = None) -> dict:
@@ -8093,13 +8137,14 @@ def promotion_effectiveness(date_from: str = None, date_to: str = None, limit: i
                SUM(CASE WHEN i.OrderId IS NULL THEN 1 ELSE 0 END) AS OrdersWithoutInvoice,
                SUM(ISNULL(i.PaidProductCount, 0)) AS PaidProductOccurrences,
                MAX(ISNULL(g.GiftProductCount, 0)) AS GiftProductCount,
-               MAX(ISNULL(c.ConfiguredProductCount, 0)) AS ConfiguredProductCount
+               MAX(ISNULL(c.ConfiguredProductCount, 0)) AS ConfiguredProductCount,
+               p.FromDate AS ProgramFrom, p.ToDate AS ProgramTo
         FROM ProgramOrders po
         INNER JOIN dbo.DMS_CTKM p ON p.Id=po.ProgId
         LEFT HASH JOIN InvoiceByOrder i ON i.OrderId=po.OrderId
         LEFT JOIN GiftProducts g ON g.ProgId=po.ProgId
         LEFT JOIN ConfiguredProducts c ON c.ProgId=po.ProgId
-        GROUP BY p.Id, p.Code, p.Name
+        GROUP BY p.Id, p.Code, p.Name, p.FromDate, p.ToDate
         ORDER BY AssociatedRevenue DESC
         OPTION (HASH JOIN)
     """, params)
@@ -8121,7 +8166,20 @@ def promotion_effectiveness(date_from: str = None, date_to: str = None, limit: i
             "configured_product_count": int(row.get("ConfiguredProductCount") or 0),
             "gift_product_count": int(row.get("GiftProductCount") or 0),
             "paid_product_occurrences": int(row.get("PaidProductOccurrences") or 0),
+            **_promotion_period_fields(row.get("ProgramFrom"), row.get("ProgramTo"),
+                                       report_from, report_to),
         })
+
+    # Cung MOT ten chuong trinh co the ung voi nhieu ma o cac ky khac nhau
+    # (T9.2025_BPNGAM_10_TQ, Q4.2025_..., Q1.2026_... deu ten "Bo phe Ngam mua 10 tang 01").
+    # Neu chi doc ten thi ba dong nay nhin nhu mot chuong trinh duy nhat.
+    _ten = {}
+    for prog in programs:
+        _ten.setdefault(prog["program_name"], []).append(prog["program_code"])
+    for prog in programs:
+        trung = _ten.get(prog["program_name"], [])
+        prog["same_name_program_codes"] = sorted(trung) if len(trung) > 1 else []
+        prog["name_is_ambiguous"] = len(trung) > 1
 
     warning = None
     if requested_to > coverage_date:

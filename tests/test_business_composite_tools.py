@@ -938,3 +938,47 @@ def test_m22_tool_duoc_cong_bo_cho_model_va_co_trong_dispatch():
     assert "get_customer_attrition_risk" in rt.TEMPLATES
     names = {tool["name"] for tool in nl2sql.TEMPLATE_TOOLS}
     assert "get_customer_attrition_risk" in names
+
+
+def test_m35_ctkm_nhieu_thang_phai_lo_ky_chay_that():
+    # Chuong trinh quy chay 01/01-31/03 nhung ky bao cao chi la thang 1.
+    out = rt._promotion_period_fields("2026-01-01", "2026-03-31", "2026-01-01", "2026-01-31")
+    assert out["program_month_count"] == 3
+    assert out["program_spans_multiple_months"] is True
+    assert out["report_covers_full_program"] is False
+    # Phai noi ro so trong ky khong phai ket qua ca chuong trinh.
+    assert "PHAN TRONG KY" in out["period_coverage_note"]
+    assert "2026-03-31" in out["period_coverage_note"]
+
+
+def test_m35_chuong_trinh_mot_thang_khong_bi_gan_canh_bao_thua():
+    out = rt._promotion_period_fields("2025-12-01", "2025-12-31", "2025-12-01", "2025-12-31")
+    assert out["program_month_count"] == 1
+    assert out["program_spans_multiple_months"] is False
+    assert out["report_covers_full_program"] is True
+    assert "period_coverage_note" not in out
+
+
+def test_m35_thieu_ngay_chuong_trinh_thi_bao_khong_co_thay_vi_doan():
+    out = rt._promotion_period_fields(None, None, "2026-01-01", "2026-01-31")
+    assert out["program_period_status"] == "not_available"
+    assert out["program_from"] is None
+    assert "program_month_count" not in out
+
+
+def test_m35_mo_ta_tool_buoc_phan_biet_ma_trung_ten():
+    tool = next(t for t in nl2sql.TEMPLATE_TOOLS if t["name"] == "get_promotion_effectiveness")
+    d = tool["description"]
+    assert "program_spans_multiple_months" in d
+    assert "report_covers_full_program" in d
+    assert "same_name_program_codes" in d
+
+
+def test_a9_tuan_trong_thang_phai_hoi_lai_chua_duoc_tu_chon():
+    import schema_context
+    ctx = schema_context.SCHEMA_CONTEXT
+    assert "TUAN TRONG THANG" in ctx
+    assert "PHAI HOI LAI" in ctx
+    # Bon cau bi anh huong truc tiep theo trang quyet dinh Nhom A muc A9.
+    for ma in ("M06", "V03", "V10", "V28"):
+        assert ma in ctx
