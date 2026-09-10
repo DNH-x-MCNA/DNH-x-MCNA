@@ -153,7 +153,12 @@ Nhịp tăng trưởng cả kỳ (CAGR quy năm) — so 12 tháng gần nhất v
 
 ### S02 — Thực hiện so target tháng/YTD — PARTIAL
 
-Chỉ cộng tầng nhân viên tuyến dưới để tránh trùng roll-up. Target ETC toàn kênh phải map riêng.
+Chỉ cộng tầng nhân viên tuyến dưới để tránh trùng roll-up. Đã bổ sung `TK` (Trưởng kênh / Kênh MT)
+để tránh hụt doanh số thực tế (xác nhận trên Bravo ở S67 và UAT).
+> ⚠️ **Lưu ý về phạm vi kênh**: `FACT_ThongKeTinhLuong` **chỉ có Target cho kênh OTC** (chỉ tiêu TDV/CTV/CS/TK).
+> Kênh ETC không giao chỉ tiêu cá nhân trong bảng này. Khi tính % hoàn thành kế hoạch toàn công ty,
+> không được lấy mẫu số này chia cho tổng doanh thu (vì tử số có cả ETC sẽ làm sai lệch tỷ lệ). Target ETC
+> phải map riêng qua hợp đồng/kế hoạch thầu.
 
     WITH b AS (
       SELECT *,DENSE_RANK() OVER(
@@ -163,7 +168,7 @@ Chỉ cộng tầng nhân viên tuyến dưới để tránh trùng roll-up. Tar
     ), k AS (
       SELECT EOMONTH(SaveDate) MonthEnd,AreaCode,
              SUM(MonthSaleAmount) Actual,SUM(MonthSaleTarget) Target
-      FROM b WHERE SnapshotRank=1 AND PositionCode IN ('TDV','CTV','CS')
+      FROM b WHERE SnapshotRank=1 AND PositionCode IN ('TDV','CTV','CS','TK')
         AND (@AreaCode IS NULL OR AreaCode=@AreaCode)
       GROUP BY EOMONTH(SaveDate),AreaCode
     )
@@ -173,30 +178,61 @@ Chỉ cộng tầng nhân viên tuyến dưới để tránh trùng roll-up. Tar
 
 ### S03 — Run-rate và nhịp cần đạt cuối tháng — DERIVED
 
+Bổ sung phân rã theo Kênh, Miền và Toàn công ty, kèm mức doanh thu **dự kiến đạt** tại ngày 15/20/25
+nếu giữ nguyên nhịp bán hiện tại, phục vụ C04/M06/V03.
+
+> ⚠️ **Ba cột `ProjectedByDay15/20/25` là NGOẠI SUY theo nhịp hiện tại, KHÔNG phải mức cần đạt.**
+> Chúng bằng `MTDRevenue × N / ElapsedDays` nên chỉ nói "nếu giữ nguyên tốc độ này thì đến ngày N
+> sẽ được bao nhiêu". Mức **cần đạt** phải suy từ `MonthSaleTarget` (`FACT_ThongKeTinhLuong`), không
+> có trong `#sales`. Chatbot KHÔNG được gọi ba cột này là chỉ tiêu hay mốc phải đạt.
+
     WITH x AS (
-      SELECT SUM(Amount9) MTDRevenue,
-             DATEDIFF(day,@MonthStart,DATEADD(day,1,@AsOfDate)) ElapsedDays,
-             DAY(EOMONTH(@MonthStart)) DaysInMonth
+      SELECT CAST(ISNULL(Channel, 'TOAN_CONG_TY') AS varchar(20)) Channel,
+             CAST(ISNULL(AreaCode, 'TOAN_CONG_TY') AS varchar(20)) AreaCode,
+             SUM(Amount9) MTDRevenue
       FROM #sales WHERE DocDate>=@MonthStart AND DocDate<=@AsOfDate
+      GROUP BY GROUPING SETS ((Channel, AreaCode), ())
+    ), p AS (
+      SELECT DATEDIFF(day,@MonthStart,DATEADD(day,1,@AsOfDate)) ElapsedDays,
+             DAY(EOMONTH(@MonthStart)) DaysInMonth
     )
-    SELECT MTDRevenue,ElapsedDays,DaysInMonth,
-           MTDRevenue/NULLIF(ElapsedDays,0) RevenuePerDay,
-           MTDRevenue*DaysInMonth/NULLIF(ElapsedDays,0) LinearRunRate
-    FROM x;
+    SELECT x.Channel, x.AreaCode, x.MTDRevenue, p.ElapsedDays, p.DaysInMonth,
+           x.MTDRevenue/NULLIF(p.ElapsedDays,0) RevenuePerDay,
+           x.MTDRevenue*p.DaysInMonth/NULLIF(p.ElapsedDays,0) LinearRunRate,
+           x.MTDRevenue*15.0/NULLIF(p.ElapsedDays,0) ProjectedByDay15,
+           x.MTDRevenue*20.0/NULLIF(p.ElapsedDays,0) ProjectedByDay20,
+           x.MTDRevenue*25.0/NULLIF(p.ElapsedDays,0) ProjectedByDay25
+    FROM x CROSS JOIN p
+    ORDER BY CASE WHEN x.Channel='TOAN_CONG_TY' THEN 0 ELSE 1 END, x.Channel, x.AreaCode;
 
 ### S04 — Đóng góp tăng/giảm theo kênh/miền — DERIVED
+
+Đã sửa lỗi nghịch lý đảo dấu toán học khi tổng công ty suy giảm (`SUM(Delta) < 0`): tách rõ
+`MoMPct` (tự thân đơn vị tăng/giảm bao nhiêu %) và `ShareOfTotalChangePct` (đơn vị tăng đóng góp
+bao nhiêu % trong tổng tăng, đơn vị giảm đóng góp bao nhiêu % trong tổng kéo lùi).
 
     WITH a AS (
       SELECT AreaCode,Channel,
         SUM(CASE WHEN DocDate>=@MonthStart AND DocDate<@MonthEnd THEN Amount9 ELSE 0 END) Cur,
         SUM(CASE WHEN DocDate>=DATEADD(month,-1,@MonthStart) AND DocDate<@MonthStart THEN Amount9 ELSE 0 END) Prev
       FROM #sales GROUP BY AreaCode,Channel
+    ), calc AS (
+      SELECT AreaCode,Channel,Cur,Prev,(Cur-Prev) Delta,
+             100.0*(Cur-Prev)/NULLIF(Prev,0) MoMPct,
+             SUM(CASE WHEN Cur>Prev THEN Cur-Prev ELSE 0 END) OVER() TotalGain,
+             SUM(CASE WHEN Cur<Prev THEN Cur-Prev ELSE 0 END) OVER() TotalDrop
+      FROM a
     )
-    SELECT AreaCode,Channel,Cur,Prev,Cur-Prev Delta,
-           100.0*(Cur-Prev)/NULLIF(SUM(Cur-Prev) OVER(),0) ContributionToChangePct
-    FROM a ORDER BY Delta DESC;
+    SELECT AreaCode,Channel,Cur,Prev,Delta,MoMPct,
+           CASE WHEN Delta>0 THEN 100.0*Delta/NULLIF(TotalGain,0)
+                WHEN Delta<0 THEN 100.0*Delta/NULLIF(TotalDrop,0)
+                ELSE 0 END ShareOfTotalChangePct
+    FROM calc ORDER BY Delta DESC;
 
 ### S05 — Revenue driver bridge: khách, đơn, lượng, giá trị đơn — DERIVED
+
+Áp dụng mô hình phân rã 3 nhân tố chuẩn (Khách hàng × Tần suất đơn/khách × Giá trị đơn AOV) để
+giải thích đúng câu hỏi C06/V07: ba cấu phần cộng lại đúng bằng tổng biến động doanh thu (`TotalDelta`).
 
     WITH m AS (
       SELECT DATEFROMPARTS(YEAR(DocDate),MONTH(DocDate),1) MonthStart,
@@ -204,10 +240,22 @@ Chỉ cộng tầng nhân viên tuyến dưới để tránh trùng roll-up. Tar
              SUM(CASE WHEN UnitPrice>0 THEN Quantity ELSE 0 END) PaidQty,
              SUM(Amount9) Revenue
       FROM #sales GROUP BY DATEFROMPARTS(YEAR(DocDate),MONTH(DocDate),1)
+    ), metrics AS (
+      SELECT MonthStart, Customers, Orders, PaidQty, Revenue,
+             1.0*Orders/NULLIF(Customers,0) OrdersPerCust,
+             1.0*Revenue/NULLIF(Orders,0) AOV,
+             LAG(Customers) OVER(ORDER BY MonthStart) PrevCust,
+             LAG(1.0*Orders/NULLIF(Customers,0)) OVER(ORDER BY MonthStart) PrevOrdersPerCust,
+             LAG(1.0*Revenue/NULLIF(Orders,0)) OVER(ORDER BY MonthStart) PrevAOV,
+             LAG(Revenue) OVER(ORDER BY MonthStart) PrevRev
+      FROM m
     )
-    SELECT *,Revenue/NULLIF(Orders,0) AOV,1.0*Orders/NULLIF(Customers,0) OrdersPerCustomer,
-           Revenue/NULLIF(PaidQty,0) RevenuePerPaidUnit
-    FROM m ORDER BY MonthStart;
+    SELECT MonthStart, Customers, Orders, PaidQty, Revenue,
+           Revenue - PrevRev TotalDelta,
+           (Customers - PrevCust) * PrevOrdersPerCust * PrevAOV ImpactFromCustomerCount,
+           Customers * (OrdersPerCust - PrevOrdersPerCust) * PrevAOV ImpactFromOrderFrequency,
+           Orders * (AOV - PrevAOV) ImpactFromAOV
+    FROM metrics ORDER BY MonthStart;
 
 ### S06 — Rolling trend và seasonality — DERIVED
 
@@ -1091,8 +1139,9 @@ hoạch ra mắt sản phẩm thì mới ghép được cột so sánh — khôn
 
 ### S24 — Công nợ snapshot hiện tại — READY_CURRENT
 
-Nguồn đúng là SP DNH. Chạy SP để lấy result set thô; các phép tổng hợp hiện có trong
-scripts/business_stress_suite.py và kho local fact_congno_khachhang.
+> ⚠️ **Lưu ý về câu hỏi C40**: C40 hỏi tỷ lệ nợ quá hạn/nợ xấu thay đổi thế nào **qua từng tháng**.
+> Nguồn dữ liệu Bravo chỉ lưu Snapshot tức thời (qua SP `usp_DeptAccDueDate_GetData` và bảng `fact_congno_khachhang`),
+> KHÔNG lưu lịch sử số dư nợ theo từng tháng trong quá khứ. Do đó checker chỉ trả lời được kỳ hiện tại (`READY_CURRENT`).
 
     DECLARE @DebtFromDate date = DATEFROMPARTS(YEAR(@AsOfDate),1,1);
     EXEC dbo.usp_DeptAccDueDate_GetData
@@ -1131,6 +1180,13 @@ Chỉ được trả chuỗi month-by-month nếu SnapshotCount có đủ các t
 snapshot cũ bằng snapshot mới.
 
 ### S26 — Khách đồng thời giảm mua và nợ xấu — PARTIAL
+
+> 🔴 **Da BAC bo mot ban sua ngay 10/09/2026.** Ban do doi `SELECT TOP (100)` thanh `LIMIT 100`
+> cho dung SQLite, nhung van giu `DATEADD(month,-1,@MonthStart)` va tham so `@MonthStart`/`@MonthEnd`
+> — deu la cu phap T-SQL. Chay thu tren `warehouse.db`: `OperationalError: no such column: month`.
+> Trinh doi chung danh dau muc nay la KHO_LOCAL nen khong chay, khien loi bi che hoan toan.
+> Muon sua dung phai dung `date(:MonthStart,'-1 month')` va tham so kieu SQLite.
+
 
 Chạy trên kho local có attach/mart doanh thu tháng. Nếu chưa có mart doanh thu, dùng S20 xuất danh
 sách giảm mua rồi JOIN theo customer_code ngoài SQL.
@@ -1449,13 +1505,17 @@ xu hướng.
     SELECT EOMONTH(SaveDate) MonthEnd,AreaCode,ManagerCode,
            COUNT(DISTINCT EmployeeCode) Employees,SUM(MonthSaleAmount) Actual,
            SUM(MonthSaleAmount)/NULLIF(COUNT(DISTINCT EmployeeCode),0) RevenuePerEmployee
-    FROM b WHERE SnapshotRank=1 AND PositionCode IN ('TDV','CTV','CS')
+    FROM b WHERE SnapshotRank=1 AND PositionCode IN ('TDV','CTV','CS','TK')
       AND (@AreaCode IS NULL OR AreaCode=@AreaCode)
     GROUP BY EOMONTH(SaveDate),AreaCode,ManagerCode;
 
 Cần FACT_PhatSinhNhanVien được chốt để điều chỉnh chính xác vào/ra/chuyển vùng.
 
 ### S33 — Thưởng và hiệu quả thưởng — PARTIAL
+
+> 🔴 **Sửa 10/09/2026 — bản cũ chỉ lọc `@AreaCode` (miền), không lọc theo ĐỘI.** Câu V18 hỏi thưởng
+> của đội nhưng bộ lọc miền vẫn trả về cả miền, rộng hơn nhiều lần phạm vi được phép xem. Đã thêm
+> `@ManagerCode`. Đo T8/2026: đội `MBKV2` có 11 người trên tổng 209 toàn công ty.
 
     WITH b AS (
       SELECT *,DENSE_RANK() OVER(
@@ -1594,7 +1654,7 @@ này thấp hơn thực tế. Muốn đo đúng phải chốt với DNH khoảng
       SELECT SUM(f.MonthSaleTarget) Target
       FROM dbo.FACT_ThongKeTinhLuong f
       JOIN latest l ON l.EmployeeCode=f.EmployeeCode AND l.d=f.SaveDate
-      WHERE f.PositionCode IN ('TDV','CTV','CS')
+      WHERE f.PositionCode IN ('TDV','CTV','CS','TK')
         AND (@AreaCode IS NULL OR f.AreaCode=@AreaCode)
         AND (@ManagerCode IS NULL OR f.ManagerCode=@ManagerCode)
     )
@@ -1644,6 +1704,11 @@ vấn đề phía công cụ chứ không phải nguồn. Nhưng kết quả cu�
 sự có vấn đề, chỉ khác nguyên nhân.
 
 ### S38 — Chất lượng mapping, target và snapshot — READY
+
+> 🔴 **Sửa 10/09/2026 — bản cũ KHÔNG có bộ lọc phạm vi nào.** Truy vấn gộp toàn công ty, nên câu hỏi
+> cấp đội (V17) luôn nhận số của cả 209 người thay vì 11 người của đội. Người chấm ghi đúng hiện
+> tượng: "SQL trả về toàn công ty thay vì chỉ đội MBKV2". Đã thêm `@ManagerCode`; đặt
+> `@ManagerCode='MBKV2'` để lấy đúng đội.
 
 > ⚠️ **Cột `MissingManager` của truy vấn đầu là dương tính giả gần như hoàn toàn.** Đo T8/2026 trên
 > `FACT_ThongKeTinhLuong`: tầng nhân viên (TDV/CTV/CS/TK, 183 người) có **0 người thiếu quản lý**;
@@ -2187,7 +2252,7 @@ Gộp snapshot theo từng nhân viên trong tháng (xem quy ước ở mục 1)
       WHERE SaveDate>=@FromDate AND SaveDate<@ToDate
     ), e AS (
       SELECT EOMONTH(SaveDate) MonthEnd,ManagerCode,EmployeeCode,MonthSaleAmount
-      FROM b WHERE SnapshotRank=1 AND PositionCode IN ('TDV','CTV','CS')
+      FROM b WHERE SnapshotRank=1 AND PositionCode IN ('TDV','CTV','CS','TK')
         AND (@AreaCode IS NULL OR AreaCode=@AreaCode)
     ), t AS (
       SELECT MonthEnd,ManagerCode,SUM(MonthSaleAmount) TeamRevenue,
@@ -2216,7 +2281,7 @@ Ghép streak (từ bảng lương) với ba chỉ số nguyên nhân (từ hóa 
       WHERE SaveDate>=@FromDate AND SaveDate<@ToDate
     ), e AS (
       SELECT EOMONTH(SaveDate) MonthEnd,EmployeeCode,EmployeeName,ManagerCode,MonthSaleAmount
-      FROM b WHERE SnapshotRank=1 AND PositionCode IN ('TDV','CTV','CS')
+      FROM b WHERE SnapshotRank=1 AND PositionCode IN ('TDV','CTV','CS','TK')
         AND (@ManagerCode IS NULL OR ManagerCode=@ManagerCode)
     ), d AS (
       SELECT *,CASE WHEN MonthSaleAmount<LAG(MonthSaleAmount)
@@ -2290,7 +2355,7 @@ Cho câu hỏi "nhân viên nào đóng góp nhiều nhất vào tăng/giảm do
       WHERE SaveDate>=@FromDate AND SaveDate<@ToDate
     ), e AS (
       SELECT EOMONTH(SaveDate) MonthEnd,EmployeeCode,EmployeeName,ManagerCode,MonthSaleAmount
-      FROM b WHERE SnapshotRank=1 AND PositionCode IN ('TDV','CTV','CS')
+      FROM b WHERE SnapshotRank=1 AND PositionCode IN ('TDV','CTV','CS','TK')
         AND (@ManagerCode IS NULL OR ManagerCode=@ManagerCode)
     ), d AS (
       SELECT *,MonthSaleAmount-LAG(MonthSaleAmount)
@@ -2322,7 +2387,7 @@ Target ETC toàn kênh chưa map riêng nên phần ETC vẫn PARTIAL — xem gh
     ), k AS (
       SELECT EOMONTH(SaveDate) MonthEnd,AreaCode,
              SUM(MonthSaleAmount) Actual,SUM(MonthSaleTarget) Target
-      FROM b WHERE SnapshotRank=1 AND PositionCode IN ('TDV','CTV','CS')
+      FROM b WHERE SnapshotRank=1 AND PositionCode IN ('TDV','CTV','CS','TK')
         AND (@AreaCode IS NULL OR AreaCode=@AreaCode)
       GROUP BY EOMONTH(SaveDate),AreaCode
     ), f AS (
@@ -2389,7 +2454,7 @@ Target theo tỉnh không có sẵn; phần hụt quy về nhân viên phụ tr�
       WHERE SaveDate>=@MonthStart AND SaveDate<@MonthEnd
     ), t AS (
       SELECT EmployeeCode,MonthSaleTarget Target,MonthSaleAmount Actual,ManagerCode
-      FROM b WHERE SnapshotRank=1 AND PositionCode IN ('TDV','CTV','CS')
+      FROM b WHERE SnapshotRank=1 AND PositionCode IN ('TDV','CTV','CS','TK')
         AND (@ManagerCode IS NULL OR ManagerCode=@ManagerCode)
     )
     SELECT s.AreaCode,s.CityName,n.EmployeeCode,n.Name EmployeeName,t.ManagerCode,
@@ -2520,7 +2585,7 @@ KPI tại từng tháng) ở chỗ đếm CHUỖI LIÊN TIẾP và cộng dồn 
       SELECT EOMONTH(SaveDate) MonthEnd,EmployeeCode,EmployeeName,ManagerCode,AreaCode,
              MonthSaleAmount Actual,MonthSaleTarget Target,
              CASE WHEN MonthSalePercent_R<0.8 THEN 1 ELSE 0 END Below80
-      FROM b WHERE SnapshotRank=1 AND PositionCode IN ('TDV','CTV','CS')
+      FROM b WHERE SnapshotRank=1 AND PositionCode IN ('TDV','CTV','CS','TK')
         AND (@AreaCode IS NULL OR AreaCode=@AreaCode)
         AND (@ManagerCode IS NULL OR ManagerCode=@ManagerCode)
     ), g AS (
@@ -2551,7 +2616,7 @@ Không cộng doanh số ở nhiều tầng (nguyên tắc pass/fail số 2): ch
     ), e AS (
       SELECT EmployeeCode,EmployeeName,ManagerCode,AreaCode,
              MonthSaleAmount Actual,MonthSaleTarget Target,MonthSalePercent_R Pct
-      FROM b WHERE SnapshotRank=1 AND PositionCode IN ('TDV','CTV','CS')
+      FROM b WHERE SnapshotRank=1 AND PositionCode IN ('TDV','CTV','CS','TK')
         AND (@AreaCode IS NULL OR AreaCode=@AreaCode)
     ), agg AS (
       SELECT ManagerCode,MAX(AreaCode) AreaCode,
@@ -2587,7 +2652,7 @@ Chưa có FACT_PhatSinhNhanVien nên không tách được ảnh hưởng vào/r
              COUNT(DISTINCT EmployeeCode) TeamSize,
              SUM(MonthSaleAmount) TeamRevenue,
              SUM(MonthSaleAmount)/NULLIF(COUNT(DISTINCT EmployeeCode),0) RevenuePerEmployee
-      FROM b WHERE SnapshotRank=1 AND PositionCode IN ('TDV','CTV','CS')
+      FROM b WHERE SnapshotRank=1 AND PositionCode IN ('TDV','CTV','CS','TK')
         AND (@AreaCode IS NULL OR AreaCode=@AreaCode)
       GROUP BY EOMONTH(SaveDate),ManagerCode
     ), bench AS (
@@ -2818,6 +2883,9 @@ quy mô từng mốc để biết tổng mức rủi ro. Bản cũ trả 13.887 
 Cho câu hỏi "doanh thu phụ thuộc top 10 khách, top 10 sản phẩm và top 3 miền bao nhiêu". Khác S08
 (cơ cấu kênh) ở chỗ đo MỨC TẬP TRUNG trên ba chiều cùng lúc.
 
+> ⚠️ **Lưu ý về Top3MienPct**: DNH chỉ có đúng 3 miền (MB/MT/MN), do đó tỷ trọng 3 miền luôn bằng 100% (vô nghĩa).
+> Để đo lường tập trung địa lý thực chất, bổ sung thêm `Top1AreaPct` và `Top5CityPct` (theo tỉnh/thành phố).
+
     WITH tot AS (SELECT SUM(Amount9) Total FROM #sales
                  WHERE DocDate>=@MonthStart AND DocDate<@MonthEnd),
     kh AS (
@@ -2921,6 +2989,15 @@ Cho câu hỏi "SKU nào giảm do ít khách, ít đơn, giảm lượng/đơn 
 nhân thành bốn cột riêng thay vì để người đọc suy luận.
 
 Sản lượng chỉ tính UnitPrice > 0 (nguyên tắc pass/fail số 5) — hàng tặng không vào paid quantity.
+
+> 🔴 **Sửa 10/09/2026 — bản cũ dùng `JOIN` (inner) nên BỎ SÓT đúng nhóm giảm nặng nhất.** SKU tháng
+> trước có bán mà tháng này về 0 thì không có dòng trong `cur`, nên inner join loại hẳn khỏi kết quả.
+> Đo T7→T8/2026: inner join trả 71 SKU giảm, trong khi có thêm **36 SKU ngừng bán hoàn toàn, tương
+> ứng 3.151.845.812 đồng** biến mất mà checker không hề nhắc tới.
+>
+> Đây là nguồn của việc chấm nhầm M33: chatbot nêu một SKU ngừng bán là ĐÚNG, nhưng người chấm không
+> thấy SKU đó trong kết quả checker nên ghi "SKU chatbot trả về không có trong query". Lỗi nằm ở
+> checker, không nằm ở chatbot. Bản mới dùng `FULL OUTER JOIN` và thêm nhãn `NGUNG_BAN`.
 
     WITH cur AS (
       SELECT ItemCode,COUNT(DISTINCT CustomerCode) Customers,COUNT(DISTINCT OrderKey) Orders,
@@ -3080,7 +3157,7 @@ Mỗi dòng là một loại tồn đọng kèm số lượng; không trộn cá
       SELECT COUNT(*) n FROM (
         SELECT EmployeeCode FROM dbo.FACT_ThongKeTinhLuong
         WHERE SaveDate>=@MonthStart AND SaveDate<@MonthEnd
-          AND PositionCode IN ('TDV','CTV','CS')
+          AND PositionCode IN ('TDV','CTV','CS','TK')
           AND (MonthSaleTarget IS NULL OR MonthSaleTarget<=0)
         GROUP BY EmployeeCode) x
     ), khach_chua_gan AS (
@@ -3124,9 +3201,16 @@ Ngưỡng 2% là đề xuất để có kết quả chạy được — cần DN
 Cho câu hỏi "tỷ lệ trả hàng, chiết khấu và hàng tặng trên doanh thu của từng vùng thay đổi ra sao".
 
 Hàng tặng nhận diện bằng `UnitPrice = 0 AND Quantity > 0` (nhất quán với nguyên tắc pass/fail số 5).
-**Phần chiết khấu là PARTIAL**: chưa xác nhận cột chiết khấu nào tồn tại trên `vHoaDonTotal`/
-`vHoaDonETCTotal`. Không suy ra chiết khấu bằng cách lấy hiệu giá niêm yết trừ giá bán — sai lệch do
-đổi bảng giá sẽ bị hiểu nhầm thành chiết khấu. Chạy lệnh kiểm cột ở mục 2 rồi mới bổ sung.
+
+> ✅ **Cập nhật 10/09/2026 — chiết khấu đã có nguồn, không còn là hạn chế hệ thống.** Ghi chú cũ ở đây
+> nói "chưa xác nhận cột chiết khấu nào tồn tại" là SAI kể từ 03/09: `S87` đã xác nhận thật trên Bravo
+> rằng cột `DiscountRate` có trên cả `vHoaDonTotal` và `vHoaDonETCTotal`, và `Amount9` là giá GỘP chưa
+> trừ chiết khấu. Cột này đã nằm sẵn trong `#sales` ở mục 2. Vì vậy tỷ lệ chiết khấu/doanh thu theo
+> vùng và theo tháng tính được ngay bằng `Amount9 × DiscountRate`, không cần chờ nguồn mới.
+>
+> Vẫn KHÔNG suy chiết khấu bằng hiệu giá niêm yết trừ giá bán — đổi bảng giá sẽ bị hiểu nhầm thành
+> chiết khấu. Phần **khuyến mãi** vẫn tách riêng và chưa nối (xem `S87` và `S12`): một đơn có thể
+> thuộc nhiều chương trình CTKM nên cộng ngang theo dòng hóa đơn sẽ đúp.
 
     WITH m AS (
       SELECT EOMONTH(DocDate) MonthEnd,AreaCode,
@@ -3161,7 +3245,7 @@ năm chưa có snapshot.
     ), k AS (
       SELECT YEAR(SaveDate) Yr,MONTH(SaveDate) Mth,
              SUM(MonthSaleAmount) Actual,SUM(MonthSaleTarget) Target
-      FROM b WHERE SnapshotRank=1 AND PositionCode IN ('TDV','CTV','CS')
+      FROM b WHERE SnapshotRank=1 AND PositionCode IN ('TDV','CTV','CS','TK')
         AND (@AreaCode IS NULL OR AreaCode=@AreaCode)
       GROUP BY YEAR(SaveDate),MONTH(SaveDate)
     ), ytd AS (
@@ -3251,7 +3335,7 @@ chính thức của DNH. Nếu DNH có khung rủi ro riêng thì phải map l�
       WHERE SaveDate>=@MonthStart AND SaveDate<=@AsOfDate
     ), e AS (
       SELECT EmployeeCode,ManagerCode,MonthSaleAmount Actual,MonthSaleTarget Target
-      FROM b WHERE SnapshotRank=1 AND PositionCode IN ('TDV','CTV','CS')
+      FROM b WHERE SnapshotRank=1 AND PositionCode IN ('TDV','CTV','CS','TK')
         AND (@AreaCode IS NULL OR AreaCode=@AreaCode)
     ), r1 AS (
       SELECT SUM(Target-Actual) v FROM e WHERE Actual<0.8*Target
@@ -3351,7 +3435,7 @@ Xếp theo mức hụt tuyệt đối so bình quân ba tháng trước, vì đ�
               PARTITION BY EOMONTH(SaveDate), EmployeeCode ORDER BY SaveDate DESC) SnapshotRank
             FROM dbo.FACT_ThongKeTinhLuong
             WHERE SaveDate>=@MonthStart AND SaveDate<=@AsOfDate) b
-      WHERE SnapshotRank=1 AND PositionCode IN ('TDV','CTV','CS')
+      WHERE SnapshotRank=1 AND PositionCode IN ('TDV','CTV','CS','TK')
         AND (@ManagerCode IS NULL OR ManagerCode=@ManagerCode)
       GROUP BY EmployeeCode ORDER BY MucHut DESC
     )
@@ -3378,7 +3462,7 @@ ngày vào làm chính thức.
     ), e AS (
       SELECT EOMONTH(SaveDate) MonthEnd,EmployeeCode,EmployeeName,PositionCode,ManagerCode,
              MonthSaleAmount Actual,MonthSaleTarget Target
-      FROM b WHERE SnapshotRank=1 AND PositionCode IN ('TDV','CTV','CS')
+      FROM b WHERE SnapshotRank=1 AND PositionCode IN ('TDV','CTV','CS','TK')
         AND (@AreaCode IS NULL OR AreaCode=@AreaCode)
     ), first_m AS (
       SELECT EmployeeCode,MIN(MonthEnd) FirstMonth FROM e GROUP BY EmployeeCode
@@ -3494,13 +3578,16 @@ có từ 3 ngày mua trở lên, vì dưới mức đó chu kỳ chưa có nghĩ
     SELECT TOP (200) CustomerCode, Rev12M, Prior3M, Cur, SilentDays,
       CAST(AvgGapDays AS decimal(10,1)) AvgGapDays,
       CASE WHEN Cur=0 AND Prior3M>0 THEN 'NGUNG_MUA'
+           WHEN Cur=0 AND Prior3M=0 AND Rev12M>0 THEN 'NGUNG_MUA_DA_LAU'
            WHEN Cur>0 AND Prior3M>0 AND Cur < 0.6*(Prior3M/3.0) THEN 'GIAM_MUA'
-           ELSE 'KEO_DAI_CHU_KY' END TinHieu,
+           WHEN AvgGapDays IS NOT NULL AND SilentDays > 2*AvgGapDays AND SilentDays>=14 THEN 'KEO_DAI_CHU_KY'
+           ELSE 'BINH_THUONG' END TinHieu,
       CASE WHEN Prior3M>0 THEN CAST(100.0*(Cur-Prior3M/3.0)/(Prior3M/3.0) AS decimal(10,1)) END PctVsBaseline
     FROM m
     WHERE (Cur=0 AND Prior3M>0)
+       OR (Cur=0 AND Prior3M=0 AND Rev12M>0)
        OR (Cur>0 AND Prior3M>0 AND Cur < 0.6*(Prior3M/3.0))
-       OR (AvgGapDays IS NOT NULL AND SilentDays > 2*AvgGapDays)
+       OR (AvgGapDays IS NOT NULL AND SilentDays > 2*AvgGapDays AND SilentDays>=14)
     ORDER BY Rev12M DESC;
 
 Chạy 04/09/2026: 200 dòng, phân bố 83 NGUNG_MUA / 66 GIAM_MUA / 51 KEO_DAI_CHU_KY. Nếu câu trả lời
