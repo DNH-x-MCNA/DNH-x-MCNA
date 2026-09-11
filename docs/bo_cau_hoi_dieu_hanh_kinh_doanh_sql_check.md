@@ -1183,19 +1183,26 @@ snapshot cũ bằng snapshot mới.
 
 Cho C39, M38, V36: khách vừa có nợ quá hạn vừa đang giảm mua — nhóm cần siết bán hoặc thu hồi trước.
 
-> 🔴 **Sửa 10/09/2026 — bản cũ CHƯA TỪNG chạy được.** Hai lỗi cùng lúc: dùng `SELECT TOP (100)` là
-> cú pháp T-SQL trong khi đây là truy vấn SQLite trên `warehouse.db`, và join vào bảng
-> `mart_customer_revenue_compare` **không tồn tại** trong kho. Trình đối chứng đánh dấu mục này là
-> `KHO_LOCAL` nên bỏ qua, không chạy — lỗi bị che suốt. Vì vậy C39/M38/V36 chưa bao giờ có số đối
-> chứng, giống hệt trường hợp S69/V21.
+> 🔴 **Đính chính 11/09/2026 — bản 10/09 so KỲ CHƯA TRÒN, số bị thổi phồng khoảng 3–4 lần.** Bản trước lấy
+> "tháng này" là tháng của ngày snapshot công nợ. Snapshot ngày 04/09 nên "tháng này" chỉ có 4 ngày tháng 9,
+> đem so với cả tháng 8 — gần như mọi khách đều trông như giảm mua. Đo trên cùng kho, cùng snapshot:
 >
-> Một bản sửa ngày 10/09 đổi `TOP (100)` thành `LIMIT 100` nhưng vẫn giữ `DATEADD(month,-1,...)` và
-> tham số `@MonthStart` — đều là T-SQL, chạy thử báo `no such column: month`. Bản đó đã bị bác.
-> Bản dưới đây dùng đúng cú pháp SQLite (`date(...,'-1 month')`) và tự tính doanh thu từ hóa đơn
-> trong kho, không phụ thuộc bảng mart nào.
+> | Cách so | Số khách vừa nợ quá hạn vừa giảm mua | Tổng nợ quá hạn của nhóm |
+> |---|---:|---:|
+> | Bản 10/09: T9 (4 ngày) so T8 | 2.575 | 36.482.395.431đ |
+> | Bản này: T8 so T7 (hai tháng tròn) | **961** | **8.963.791.924đ** |
+>
+> Con số "100 khách, 28.637.144.091đ" ghi ở bản 10/09 là tổng của 100 dòng đầu trong nhóm SAI — cao hơn
+> cả tổng nợ quá hạn của TOÀN BỘ nhóm đúng. Mọi kết quả đã đối chiếu với bản 10/09 phải chấm lại.
+>
+> Lịch sử sửa: bản gốc chưa từng chạy được (`SELECT TOP (100)` là T-SQL, và join vào bảng
+> `mart_customer_revenue_compare` không tồn tại). Bản sửa đầu 10/09 còn giữ `DATEADD` T-SQL, bị bác. Bản 10/09
+> chạy được nhưng dính lỗi kỳ chưa tròn nói trên.
 
-Nợ lấy ở **snapshot mới nhất** (kho chỉ giữ ảnh chụp hiện tại, không có lịch sử — xem `S25`).
-Doanh thu so tháng của mốc snapshot với tháng liền trước, tính thẳng từ hóa đơn hai kênh.
+Nợ lấy ở **snapshot mới nhất**; kho chỉ giữ ảnh chụp hiện tại, không có lịch sử (xem `S25`). Doanh thu so
+**tháng tròn gần nhất** với tháng liền trước, tính từ hóa đơn hai kênh. "Tháng tròn gần nhất" xác định theo
+ngày hóa đơn mới nhất trong kho: nếu ngày đó chưa phải cuối tháng thì lùi một tháng — không dùng tháng đang
+chạy dở.
 
     -- !!! KHO LOCAL (warehouse.db, SQLite) - KHONG chay tren Bravo:
     --     Bravo se bao "Invalid object name 'fact_congno_khachhang'".
@@ -1214,20 +1221,29 @@ Doanh thu so tháng của mốc snapshot với tháng liền trước, tính th�
       SELECT customer_code, doc_date, amount9 FROM vhoadon_otc
       UNION ALL
       SELECT customer_code, doc_date, amount9 FROM vhoadon_etc
+    ), ngay AS (
+      SELECT MAX(doc_date) d FROM ban
     ), ky AS (
-      SELECT (SELECT d FROM moc) as_of,
-             substr((SELECT d FROM moc),1,7) || '-01' thang_nay,
-             date(substr((SELECT d FROM moc),1,7) || '-01', '-1 month') thang_truoc
+      SELECT CASE WHEN strftime('%d', date((SELECT d FROM ngay), '+1 day')) = '01'
+                  THEN substr((SELECT d FROM ngay),1,7) || '-01'
+                  ELSE date(substr((SELECT d FROM ngay),1,7) || '-01', '-1 month') END thang_nay
+    ), ky2 AS (
+      SELECT thang_nay,
+             date(thang_nay, '+1 month') het_thang_nay,
+             date(thang_nay, '-1 month') thang_truoc
+      FROM ky
     ), dt AS (
       SELECT b.customer_code,
-             SUM(CASE WHEN b.doc_date >= k.thang_nay THEN b.amount9 ELSE 0 END) dt_ky_nay,
+             SUM(CASE WHEN b.doc_date >= k.thang_nay AND b.doc_date < k.het_thang_nay
+                      THEN b.amount9 ELSE 0 END) dt_ky_nay,
              SUM(CASE WHEN b.doc_date >= k.thang_truoc AND b.doc_date < k.thang_nay
                       THEN b.amount9 ELSE 0 END) dt_ky_truoc
-      FROM ban b CROSS JOIN ky k
-      WHERE b.doc_date >= k.thang_truoc AND b.doc_date <= k.as_of
+      FROM ban b CROSS JOIN ky2 k
+      WHERE b.doc_date >= k.thang_truoc AND b.doc_date < k.het_thang_nay
       GROUP BY b.customer_code
     )
     SELECT n.customer_code, n.customer_name, n.balance_end, n.total_overdue,
+           (SELECT thang_nay FROM ky2) ky_so_sanh,
            COALESCE(d.dt_ky_nay,0)   dt_ky_nay,
            COALESCE(d.dt_ky_truoc,0) dt_ky_truoc,
            COALESCE(d.dt_ky_nay,0) - COALESCE(d.dt_ky_truoc,0) chenh_lech
@@ -1237,13 +1253,58 @@ Doanh thu so tháng của mốc snapshot với tháng liền trước, tính th�
     ORDER BY n.total_overdue DESC
     LIMIT 100;
 
-Chạy thật 10/09/2026 trên `warehouse.db`: **100 khách** vừa nợ quá hạn vừa giảm mua, tổng nợ quá hạn
-**28.637.144.091đ**. Dẫn đầu là nhóm bệnh viện/ETC — `HCM113854` nợ quá hạn 2,30 tỷ và tháng này
-doanh thu bằng 0, `TBI00503` nợ 1,94 tỷ và giảm 396 triệu.
+Bảng trên chỉ là 100 dòng nợ quá hạn lớn nhất. Tổng của cả nhóm, cùng mốc và cùng kỳ:
 
-> ⚠️ Nợ là **ảnh chụp hiện tại**, doanh thu là **kỳ tháng**. Không được đọc thành "nợ tăng bao nhiêu
-> so tháng trước" — kho không có lịch sử công nợ để nói điều đó (`S25` là `BLOCKED_HISTORY`).
-> Khách có `dt_ky_nay = 0` nghĩa là chưa phát sinh hóa đơn trong kỳ, KHÔNG chắc là đã ngừng mua hẳn.
+    -- !!! KHO LOCAL (warehouse.db, SQLite) - KHONG chay tren Bravo:
+    --     Bravo se bao "Invalid object name 'fact_congno_khachhang'".
+    WITH moc AS (
+      SELECT MAX(snapshot_date) d FROM fact_congno_khachhang
+    ), no AS (
+      SELECT customer_code, SUM(total_overdue) total_overdue
+      FROM fact_congno_khachhang
+      WHERE snapshot_date = (SELECT d FROM moc)
+      GROUP BY customer_code
+      HAVING SUM(total_overdue) > 0
+    ), ban AS (
+      SELECT customer_code, doc_date, amount9 FROM vhoadon_otc
+      UNION ALL
+      SELECT customer_code, doc_date, amount9 FROM vhoadon_etc
+    ), ngay AS (
+      SELECT MAX(doc_date) d FROM ban
+    ), ky AS (
+      SELECT CASE WHEN strftime('%d', date((SELECT d FROM ngay), '+1 day')) = '01'
+                  THEN substr((SELECT d FROM ngay),1,7) || '-01'
+                  ELSE date(substr((SELECT d FROM ngay),1,7) || '-01', '-1 month') END thang_nay
+    ), ky2 AS (
+      SELECT thang_nay, date(thang_nay, '+1 month') het_thang_nay,
+             date(thang_nay, '-1 month') thang_truoc
+      FROM ky
+    ), dt AS (
+      SELECT b.customer_code,
+             SUM(CASE WHEN b.doc_date >= k.thang_nay AND b.doc_date < k.het_thang_nay
+                      THEN b.amount9 ELSE 0 END) dt_ky_nay,
+             SUM(CASE WHEN b.doc_date >= k.thang_truoc AND b.doc_date < k.thang_nay
+                      THEN b.amount9 ELSE 0 END) dt_ky_truoc
+      FROM ban b CROSS JOIN ky2 k
+      WHERE b.doc_date >= k.thang_truoc AND b.doc_date < k.het_thang_nay
+      GROUP BY b.customer_code
+    )
+    SELECT (SELECT d FROM moc) snapshot_cong_no,
+           (SELECT d FROM ngay) hoa_don_moi_nhat,
+           (SELECT thang_nay FROM ky2) ky_so_sanh,
+           COUNT(*) so_khach,
+           SUM(n.total_overdue) tong_no_qua_han
+    FROM no n
+    LEFT JOIN dt d ON d.customer_code = n.customer_code
+    WHERE COALESCE(d.dt_ky_nay,0) < COALESCE(d.dt_ky_truoc,0);
+
+Đo 11/09/2026 trên kho local của máy phát triển (hóa đơn chi tiết chỉ có 01/07–04/09, snapshot công nợ
+04/09): **961 khách, tổng nợ quá hạn 8.963.791.924đ**, so T8 với T7. Kho máy phát triển này đã cũ một tuần;
+số dùng để chấm phải lấy trên kho của máy 24 hoặc sau khi đồng bộ lại, và ghi rõ mốc snapshot kèm theo.
+
+> ⚠️ Nợ là **ảnh chụp hiện tại**, doanh thu là **tháng tròn**. Không được đọc thành "nợ tăng bao nhiêu so
+> tháng trước" — kho không có lịch sử công nợ (`S25` là `BLOCKED_HISTORY`). Khách có `dt_ky_nay = 0` nghĩa là
+> không có hóa đơn trong tháng so sánh, KHÔNG chắc là đã ngừng mua hẳn.
 
 
 ### S27 — Tồn kho snapshot — READY_CURRENT

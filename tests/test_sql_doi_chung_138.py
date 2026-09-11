@@ -162,3 +162,50 @@ def test_gop_trang_thai_chi_goi_mot_phan_khi_that_su_co_loi():
     assert bo_sql.gop_trang_thai({"LOI"}) == "LOI"
     assert bo_sql.gop_trang_thai({"LOI", "CHAY_DUOC"}) == "CHAY_MOT_PHAN"
     assert bo_sql.gop_trang_thai({"LOI", "KHO_LOCAL"}) == "CHAY_MOT_PHAN"
+
+
+def _kho_gia_s26():
+    """Kho SQLite gia: hoa don moi nhat 04/09 (thang 9 moi co 4 ngay), snapshot no 04/09."""
+    con = sqlite3.connect(":memory:")
+    con.executescript("""
+        CREATE TABLE fact_congno_khachhang (snapshot_date TEXT, customer_code TEXT, customer_name TEXT,
+            balance_end REAL, total_overdue REAL);
+        CREATE TABLE vhoadon_otc (customer_code TEXT, doc_date TEXT, amount9 REAL);
+        CREATE TABLE vhoadon_etc (customer_code TEXT, doc_date TEXT, amount9 REAL);
+    """)
+    for kh in ("DEU", "GIAM", "CHUA_KIP_MUA"):
+        con.execute("INSERT INTO fact_congno_khachhang VALUES ('2026-09-04', ?, ?, 1000, 500)", (kh, kh))
+    hoa_don = [
+        ("DEU", "2026-07-10", 100), ("DEU", "2026-08-10", 100),            # mua deu hai thang tron
+        ("GIAM", "2026-07-10", 100), ("GIAM", "2026-08-10", 40),           # giam that o thang tron
+        ("CHUA_KIP_MUA", "2026-07-10", 100), ("CHUA_KIP_MUA", "2026-08-10", 100),
+        ("DEU", "2026-09-04", 5),                                          # thang 9 moi co 4 ngay
+    ]
+    con.executemany("INSERT INTO vhoadon_otc VALUES (?, ?, ?)", hoa_don)
+    return con
+
+
+def test_s26_so_thang_tron_khong_so_thang_dang_chay_do():
+    """Bay MTD: so 4 ngay dau thang 9 voi ca thang 8 thi gan nhu ai cung 'giam mua'.
+
+    Ban 10/09 dinh bay nay: tren kho that ra 2.575 khach thay vi 961. Kho gia co 3 khach no qua han,
+    chi 1 khach (GIAM) giam that o hai thang tron. Ban dung phai so T8 voi T7 va ra dung 1 khach.
+    """
+    noi_dung = bo_sql.doc_tai_lieu()
+    checker = {item["ma"]: item for item in bo_sql.lay_checker(noi_dung)}
+    cau_lenh = checker["S26"]["cau_lenh"]
+    assert len(cau_lenh) == 2, "S26 phai co bang danh sach va bang tong"
+
+    con = _kho_gia_s26()
+    try:
+        ds = con.execute(cau_lenh[0].rstrip().rstrip(";")).fetchall()
+        tong = con.execute(cau_lenh[1].rstrip().rstrip(";")).fetchone()
+    finally:
+        con.close()
+
+    assert [r[0] for r in ds] == ["GIAM"]
+    snapshot, hoa_don_moi_nhat, ky_so_sanh, so_khach, tong_no = tong
+    assert hoa_don_moi_nhat == "2026-09-04"
+    assert ky_so_sanh == "2026-08-01", "Phai lui ve thang tron gan nhat, khong lay thang 9 dang do"
+    assert so_khach == 1
+    assert tong_no == 500
