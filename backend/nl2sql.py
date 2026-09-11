@@ -581,7 +581,18 @@ TEMPLATE_TOOLS = [
                         "roi tu loc thu cong, gay ton du lieu va co the khong tra loi duoc). "
                         "Voi cau hoi chi dinh ro VAI TRO (vd 'top TDV', 'cac QLV chua dat KPI') -> BAT BUOC dung "
                         "tham so position_code (vd 'TDV','QLV') de loc NGAY TU DAU, TUYET DOI KHONG tu loc thu "
-                        "cong ket qua sau khi nhan ve (da tung gay sot du lieu, vd 1 QLV lot vao top TDV).",
+                        "cong ket qua sau khi nhan ve (da tung gay sot du lieu, vd 1 QLV lot vao top TDV). "
+                        "11/09/2026 (Q013): voi cau hoi 'XEP HANG TOAN BO nhan vien' (khong gioi han vai tro/so "
+                        "luong) -> goi DUNG 1 LAN voi limit=1000 (du lon hon tong so nhan vien thuc te, hien "
+                        "~150-200 nguoi co target/ky) va order_by phu hop. TUYET DOI KHONG dung sql_tu_do de tu "
+                        "phan trang nhieu vong (vd LIMIT 20 OFFSET 20, 40, 60...) - da tung gay 1 cau hoi phai "
+                        "goi toi 10 vong SQL tu do rieng le va het thoi gian request (timeout) truoc khi tra loi "
+                        "duoc, trong khi 1 lan goi tool nay voi limit=1000 chi mat duoi 1 giay va tra du. "
+                        "11/09/2026 (M13): voi cau hoi 'QLV nao co nhieu NV DUOI KPI (80%) nhat' -> GOI DUNG 1 "
+                        "LAN voi filter='below_target' hoac filter='all' roi doc san field below_kpi_by_manager "
+                        "(da gop san so nguoi duoi 80% + danh sach ten theo tung QLV, xep giam dan) - TUYET DOI "
+                        "KHONG tu goi lai get_workforce_productivity/get_revenue_tree nhieu lan voi month_to "
+                        "khac nhau de tu dò (da tung gay timeout do dò 4-5 vong khong ra ket qua).",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -904,7 +915,14 @@ TEMPLATE_TOOLS = [
                        "(doi chieu cot revenue/ty trong voi cot MoM - KHONG can viet SQL tay). Kho local CHUA co khoa chi nhanh/NPP/distributor; neu hoi chieu do tool "
                        "tra not_applicable, PHAI noi ro, KHONG tu suy tu tinh/vung. C44/M42 ve hop "
                        "dong/goi thau ETC tra SOURCE_GAP_CONTRACT_INVOICE_LINK; phai liet ke dung "
-                       "not_verifiable va KHONG query SQL tu do de noi hoa don bang customer+SKU.",
+                       "not_verifiable va KHONG query SQL tu do de noi hoa don bang customer+SKU. "
+                       "11/09/2026 (C24/M27): voi dimension='city', moi dong da co san "
+                       "area_avg_revenue_per_city/area_avg_customers_per_city/area_avg_revenue_per_customer "
+                       "(trung binh cac tinh CUNG VUNG, cung thang) va 2 co bool "
+                       "below_area_avg_customers/below_area_avg_revenue_per_customer - dung TRUC TIEP cac "
+                       "field nay cho cau hoi 'tinh nao co do phu/doanh thu-khach thap hon CHUAN MIEN/dia "
+                       "ban tuong dong'. TUYET DOI KHONG tu viet SQL tu do de tinh trung binh vung, KHONG "
+                       "goi lai tool nhieu lan voi dimension/months_back khac nhau de dò.",
         "input_schema": {"type": "object", "properties": {
             "month_to": {"type": "string"}, "months_back": {"type": "integer"},
             "dimension": {"type": "string", "enum": ["area", "city", "branch", "npp", "distributor"]},
@@ -1249,6 +1267,27 @@ TEMPLATE_TOOLS = [
             "required": [],
         },
     },
+    {
+        "name": "get_revenue_view_reconciliation",
+        "description": "Doi chieu doanh thu giua VIEW TONG (vHoaDonTotal/vHoaDonETCTotal) va VIEW "
+                        "THUONG (vHoaDon/vHoaDonETC) tren Bravo - dung khi nguoi dung hoi kieu 'doi "
+                        "soat/so sanh doanh thu giua view tong va view thuong', 'view nao dung hon', "
+                        "'lech giua 2 nguon hoa don la bao nhieu'. KHAC voi get_revenue_reconciliation "
+                        "(top-down tu hoa don vs bottom-up tu KPI ca nhan). "
+                        "LUON tra ve CA HAI kenh OTC va ETC trong 1 lan goi (khong duoc chi bao 1 "
+                        "kenh roi bo sot kenh con lai neu cau hoi khong gioi han kenh nao). Doc "
+                        "recommended_source: view TONG la nguon chuan vi bao gom them dong dieu "
+                        "chinh/hoan don ma view thuong khong co; needs_investigation=true khi lech "
+                        "vuot 0.5%.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "date_from": {"type": "string", "description": "YYYY-MM-DD, dau ky can doi soat"},
+                "date_to": {"type": "string", "description": "YYYY-MM-DD, cuoi ky can doi soat"},
+            },
+            "required": ["date_from", "date_to"],
+        },
+    },
     # 10/08/2026: bo sung khoi "GOI DUNG 1 LAN LA DU" sau khi cau hoi "Bao cao chi phi AI chi tiet theo
     # nguoi dung" that bai 2 lan lien tiep trong 1 buoi (14:10 va 14:12, 2 phien khac nhau), nguoi dung
     # nhan cau tu choi "cau hoi qua phuc tap". Doc audit_log 2 phien do thay cung 1 khuon mau:
@@ -1366,11 +1405,13 @@ TEMPLATE_TOOLS = [
                        "QUY TAC NGOAI LE: CS (Cho si) va TK (kenh MT) dung co is_ac/Active Customer, "
                        "KHONG co ASO; neu da co is_ac thi khong gan/cong ASO. ASO trong du lieu DNH la "
                        "CHI TIEU/KHOAN THUONG khach hang hoat dong cua cac vai tro con lai, khong phai chuc danh. "
-                       "QUY TAC BAT BUOC: V25 dung han tu 07/2026 va duoc thay bang V15/V22; V25Bonus=0 "
-                       "trong ky 07/2026 tro di la DUNG CO CHE, KHONG PHAI loi thu tuc va TUYET DOI KHONG "
-                       "de nghi bu thuong/truy linh. Cac dong V25 con trong DIM_BacThuong co the la cau hinh "
-                       "lich su ton du. Tool chi kiem tra mismatch V25 cho ky den het 06/2026; neu co chenh "
-                       "lech thi cung chi goi la CAN KE TOAN/IT XAC NHAN, khong tu ghi de so da chot.",
+                       "11/09/2026: DA BO gia dinh cung 'V25 het hieu luc tu 07/2026' (kiem chung lai tren "
+                       "Bravo cho thay DIM_BacThuong V25 van con hieu luc, va ky 07-08/2026 co hang tram "
+                       "truong hop dat nguong nhung V25Bonus=0 het - nghi la LOI THU TUC tinh luong, KHONG "
+                       "phai doi chinh sach co chu dich). Tool nay GIO LUON doi chieu mismatch dua tren du "
+                       "lieu that cho MOI ky, khong tu suy dien theo moc thoi gian. Neu co chenh lech "
+                       "(rule_actual_mismatches khong rong) chi goi la CAN KE TOAN/IT XAC NHAN, TUYET DOI "
+                       "khong tu ket luan 'dung co che' hay tu de nghi bu thuong/truy linh.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -1380,6 +1421,36 @@ TEMPLATE_TOOLS = [
                 "position_code": {"type": "string", "description": "Loc TDV/QLV/TP/PP/TBP/CS/TK/CTV neu nguoi dung neu ro."},
             },
             "required": ["bonus_type"],
+        },
+    },
+    {
+        "name": "get_salary_aso_detail",
+        "description": "Chi tiet THUONG ASO TUNG NHAN VIEN trong ky, doc truc tiep 3 co dieu kien tren "
+                       "Bravo (pass_customer_quantity_condition, pass_sale_condition, passed_final) - CAC "
+                       "CO NAY CHUA CO trong get_salary_ranking/get_salary_detail (2 tool do chi co so tien "
+                       "aso_bonus cuoi cung, khong co ly do neu ai khong qua). "
+                       "BAT BUOC dung tool nay (GOI DUNG 1 LAN) khi hoi 'ASO cua tung nhan vien duoc chot "
+                       "the nao', 'ai khong qua dieu kien ASO', 'vi sao ASO bang 0 du co doanh so' - "
+                       "TUYET DOI KHONG tu viet nhieu vong SQL tu do de doc tung cot dieu kien rieng le "
+                       "(da tung gay 1 cau hoi phai goi 6 vong qua nhieu tool/SQL khac nhau va het thoi "
+                       "gian request truoc khi tra loi duoc). "
+                       "Doc fail_reason tren tung dong de biet CHINH XAC ly do khong qua: "
+                       "'khong_du_dieu_kien_so_luong_khach_active' (chua du SO LUONG khach hoat dong), "
+                       "'khong_du_dieu_kien_doanh_so_di_kem' (thieu doanh so kem theo), hoac "
+                       "'fail_khac_du_qua_2_dieu_kien_con_can_ke_toan_xac_nhan' (da qua ca 2 dieu kien "
+                       "con nhung van fail o buoc cuoi - day la truong hop CAN DNH/KE TOAN XAC NHAN, "
+                       "KHONG duoc tu suy dien nguyen nhan). CS (Cho si) va TK (kenh MT) KHONG co ASO "
+                       "(dung is_ac/Active Customer) - tool tra not_applicable rieng, khong lam vao danh sach.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "year_month": {"type": "string", "description": "YYYY-MM; mac dinh ky luong day du gan nhat."},
+                "area_code": {"type": "string", "description": "Loc MB/MT/MN neu nguoi dung neu ro."},
+                "position_code": {"type": "string", "description": "Loc TDV/QLV/TP/PP/TBP/CTV neu nguoi dung neu ro (CS/TK khong co ASO)."},
+                "only_failed": {"type": "boolean", "description": "true = CHI tra nhung nguoi KHONG qua dieu kien cuoi (passed_final=false). Dung khi hoi 'ai khong qua'."},
+                "limit": {"type": "integer", "description": "So dong toi da tra ve, mac dinh 300, toi da 500."},
+            },
+            "required": [],
         },
     },
     {
@@ -1628,7 +1699,7 @@ ALL_TOOLS_CACHED = ALL_TOOLS[:-1] + [{**ALL_TOOLS[-1], "cache_control": {"type":
 # co the an truoc khi model thu goi; call_template() van giu kiem tra fail-closed doc lap.
 _SALARY_SENSITIVE_TEMPLATE_NAMES = {
     "get_salary_bonus_policy", "get_salary_data_quality", "get_salary_detail",
-    "get_salary_achievement_summary", "get_salary_ranking",
+    "get_salary_achievement_summary", "get_salary_ranking", "get_salary_aso_detail",
 }
 
 

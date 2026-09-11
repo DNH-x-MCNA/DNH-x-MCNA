@@ -833,17 +833,19 @@ def employee_kpi(as_of_date: str, limit: int = 10, order_by: str = "sales", filt
     sql = f"""WITH roster AS ({roster_sql}), metrics AS (
                  SELECT e.employee_code, SUM(e.amount_ct) sales,
                         MAX(e.month_sale_target) target, SUM(e.is_nc) new_customers,
-                        MAX(e.save_date) metric_snapshot
+                        MAX(e.save_date) metric_snapshot, MAX(e.manager_code) manager_code
                  FROM fact_tonghopkhachhang e
                  JOIN {_MONTH_LATEST_SUBQ} l ON l.employee_code=e.employee_code AND l.d=e.save_date
                  GROUP BY e.employee_code
              ) SELECT nv.name name, e.employee_code employee_code,
                     nv.position_code position_code, cv.description position_label,
-                    m.sales, m.target, m.new_customers, m.metric_snapshot
+                    m.sales, m.target, m.new_customers, m.metric_snapshot, m.manager_code,
+                    COALESCE(mgr.name, m.manager_code) manager_name
              FROM roster e
              LEFT JOIN metrics m ON m.employee_code=e.employee_code
              LEFT JOIN dim_nhanvien nv ON nv.employee_code=e.employee_code
              LEFT JOIN dim_chucvu cv ON cv.position_code=nv.position_code
+             LEFT JOIN dim_nhanvien mgr ON mgr.employee_code=m.manager_code
              WHERE {_not_duplicate_sql('nv')}"""
     params = [*roster_params, fdate, fdate]
     if position_code:
@@ -913,6 +915,27 @@ def employee_kpi(as_of_date: str, limit: int = 10, order_by: str = "sales", filt
          "total": len(rows)}
         for threshold in (65, 70, 80, 100, 120)
     ]
+    # 11/09/2026 (M13): cau hoi "QLV nao co nhieu NV duoi 80% nhat" truoc day khong co san field
+    # gop theo QLV (chi co danh sach phang tung nhan vien) nen model phai tu dò nhieu vong
+    # get_workforce_productivity/get_revenue_tree voi cac month_to khac nhau va het thoi gian
+    # request. Tinh san so nguoi DUOI KPI (80%, khong phai muc huong thuong 65/70%) theo tung QLV.
+    below_kpi = [r for r in rows if not r["meets_kpi"]]
+    by_manager = {}
+    for r in below_kpi:
+        mgr_code = r.get("manager_code") or "MISSING_MANAGER"
+        entry = by_manager.setdefault(mgr_code, {
+            "manager_code": mgr_code,
+            "manager_name": r.get("manager_name") or mgr_code,
+            "count_below_kpi": 0,
+            "employees": [],
+        })
+        entry["count_below_kpi"] += 1
+        entry["employees"].append({
+            "employee_code": r["employee_code"], "name": r["name"], "pct": round(r["pct"], 1),
+        })
+    below_kpi_by_manager = sorted(by_manager.values(), key=lambda x: -x["count_below_kpi"])
+    for entry in below_kpi_by_manager:
+        entry["employees"] = sorted(entry["employees"], key=lambda e: e["pct"])
     return {"as_of": fdate, "total_employees": len(rows),
             "roster_employees": len(roster), "unassessed_count": len(unassessed),
             "missing_current_snapshot_count": sum(r["metric_snapshot"] is None for r in roster),
@@ -932,6 +955,10 @@ def employee_kpi(as_of_date: str, limit: int = 10, order_by: str = "sales", filt
             # Model tung dem tay sai 3/7 thay vi 2/7 o moc 80%. Tra san ca 5 moc ma UAT hay hoi
             # de cau tra loi chi DOC ket qua, khong tu dem lai danh sach va khong nham 65/70 voi KPI.
             "threshold_summary": threshold_summary,
+            # QLV nao co nhieu NV DUOI KPI (80%) nhat - da xep giam dan san, moi QLV kem danh sach
+            # NV cua minh (te nhat truoc). "MISSING_MANAGER" nghia la khong xac dinh duoc QLV that
+            # tren fact_tonghopkhachhang, KHONG duoc bao la mot QLV that.
+            "below_kpi_by_manager": below_kpi_by_manager,
             "rows": selected}
 
 
@@ -3728,8 +3755,31 @@ def geography_monthly_performance(month_to: str = None, months_back: int = 6,
     for r in raw:
         r["revenue"] = _f(r["revenue"]); r["invoices"] = int(r["invoices"] or 0)
         r["customers"] = int(r["customers"] or 0)
+        r["revenue_per_customer"] = r["revenue"] / r["customers"] if r["customers"] else None
         by_unit.setdefault(r["unit"], {})[r["month"]] = r
         totals[r["month"]] = totals.get(r["month"], 0.0) + r["revenue"]
+    # 11/09/2026 (C24/M27): "dia ban nao co do phu/doanh thu-khach thap hon CHUAN MIEN/dia ban tuong
+    # dong" truoc day khong co san field so sanh nay, khien model tu viet SQL tu do dò tung vung
+    # (C24) hoac goi lai tool nhieu lan voi dimension/months_back khac nhau (M27) va timeout. Tinh
+    # san TRUNG BINH VUNG (area_code) cung thang de moi dia ban (city) so duoc voi chuan mien cua no,
+    # khong tu suy dien "chuan" la gi.
+    area_month_avg = {}
+    if dimension == "city":
+        area_month_totals = {}
+        for r in raw:
+            key = (r.get("area_code") or "UNKNOWN", r["month"])
+            bucket = area_month_totals.setdefault(key, {"revenue": 0.0, "customers": 0, "units": set()})
+            bucket["revenue"] += r["revenue"]
+            bucket["customers"] += r["customers"]
+            bucket["units"].add(r["unit"])
+        for (area_code, month), bucket in area_month_totals.items():
+            n_units = len(bucket["units"]) or 1
+            area_month_avg[(area_code, month)] = {
+                "area_code": area_code, "month": month,
+                "avg_revenue_per_city": bucket["revenue"] / n_units,
+                "avg_customers_per_city": bucket["customers"] / n_units,
+                "avg_revenue_per_customer": (bucket["revenue"] / bucket["customers"]) if bucket["customers"] else None,
+            }
     rows = []
     for unit, monthly in by_unit.items():
         streak_dir, streak_len = None, 0
@@ -3741,10 +3791,22 @@ def geography_monthly_performance(month_to: str = None, months_back: int = 6,
             if delta is not None:
                 if direction == streak_dir: streak_len += 1
                 else: streak_dir, streak_len = direction, 1
+            area_avg = area_month_avg.get((r.get("area_code") or "UNKNOWN", ym))
             rows.append({**r, "mom_delta": delta,
                          "mom_pct": (delta / prev["revenue"] * 100) if prev and prev["revenue"] else None,
                          "share_pct": r["revenue"] / totals[ym] * 100 if totals.get(ym) else None,
-                         "streak_direction": streak_dir, "streak_months": streak_len})
+                         "streak_direction": streak_dir, "streak_months": streak_len,
+                         "area_avg_revenue_per_city": area_avg["avg_revenue_per_city"] if area_avg else None,
+                         "area_avg_customers_per_city": area_avg["avg_customers_per_city"] if area_avg else None,
+                         "area_avg_revenue_per_customer": area_avg["avg_revenue_per_customer"] if area_avg else None,
+                         "below_area_avg_customers": (
+                             area_avg is not None and r["customers"] < area_avg["avg_customers_per_city"]
+                         ),
+                         "below_area_avg_revenue_per_customer": (
+                             area_avg is not None and area_avg["avg_revenue_per_customer"] is not None
+                             and r["revenue_per_customer"] is not None
+                             and r["revenue_per_customer"] < area_avg["avg_revenue_per_customer"]
+                         )})
     for ym in sorted({r["month"] for r in rows}):
         month_rows = sorted([r for r in rows if r["month"] == ym], key=lambda r: -r["revenue"])
         for rank, r in enumerate(month_rows, 1): r["rank"] = rank
@@ -7399,6 +7461,66 @@ def kpi_ranking(group_by: str = "qlv", as_of_date: str = None, limit: int = 20,
     return sorted(result, key=lambda x: -x["pct"])[:limit]
 
 
+def revenue_view_reconciliation(date_from: str, date_to: str) -> dict:
+    """Doi chieu doanh thu giua VIEW TONG (vHoaDonTotal/vHoaDonETCTotal) va VIEW THUONG
+    (vHoaDon/vHoaDonETC) tren Bravo, cho CA HAI kenh OTC va ETC trong cung 1 lan goi.
+
+    11/09/2026 (Q012): truoc day cau hoi dang 'doi soat doanh thu giua view tong va view thuong'
+    khong co tool rieng nen model phai tu viet SQL tu do va tung chi lam kenh OTC, bo sot hoan toan
+    ETC (checker REV_RECONCILE yeu cau ca 2 dong OTC/ETC). View tong (Total) bao gom them cac dong
+    dieu chinh/hoan don (Amount9 co the am) ma view thuong khong co, nen view thuong thuong LECH
+    (thieu) so voi view tong; muc lech nho (<0.5%) la binh thuong do cach ghi nhan dieu chinh, muc
+    lech lon moi can dieu tra. LUON tra ca OTC va ETC, khong duoc chi bao 1 kenh."""
+    params = {"date_from": date_from, "date_to": date_to}
+    otc = _q_bravo("""
+        SELECT
+            (SELECT COALESCE(SUM(Amount9),0) FROM dbo.vHoaDonTotal WHERE DocDate BETWEEN :date_from AND :date_to) AS total_view_revenue,
+            (SELECT COUNT(DISTINCT Stt) FROM dbo.vHoaDonTotal WHERE DocDate BETWEEN :date_from AND :date_to) AS total_view_invoices,
+            (SELECT COALESCE(SUM(Amount9),0) FROM dbo.vHoaDon WHERE DocDate BETWEEN :date_from AND :date_to) AS base_view_revenue,
+            (SELECT COUNT(DISTINCT Stt) FROM dbo.vHoaDon WHERE DocDate BETWEEN :date_from AND :date_to) AS base_view_invoices
+    """, params)[0]
+    etc = _q_bravo("""
+        SELECT
+            (SELECT COALESCE(SUM(Amount9),0) FROM dbo.vHoaDonETCTotal WHERE DocDate BETWEEN :date_from AND :date_to) AS total_view_revenue,
+            (SELECT COUNT(DISTINCT Stt) FROM dbo.vHoaDonETCTotal WHERE DocDate BETWEEN :date_from AND :date_to) AS total_view_invoices,
+            (SELECT COALESCE(SUM(Amount9),0) FROM dbo.vHoaDonETC WHERE DocDate BETWEEN :date_from AND :date_to) AS base_view_revenue,
+            (SELECT COUNT(DISTINCT Stt) FROM dbo.vHoaDonETC WHERE DocDate BETWEEN :date_from AND :date_to) AS base_view_invoices
+    """, params)[0]
+
+    def _channel_result(row):
+        total_rev = _f(row.get("total_view_revenue"))
+        base_rev = _f(row.get("base_view_revenue"))
+        gap = base_rev - total_rev
+        gap_pct = (gap / total_rev * 100) if total_rev else None
+        return {
+            "total_view_revenue": total_rev,
+            "total_view_invoices": int(row.get("total_view_invoices") or 0),
+            "base_view_revenue": base_rev,
+            "base_view_invoices": int(row.get("base_view_invoices") or 0),
+            "gap_base_minus_total": gap,
+            "gap_pct": gap_pct,
+            "needs_investigation": gap_pct is not None and abs(gap_pct) > 0.5,
+        }
+
+    otc_result = _channel_result(otc)
+    etc_result = _channel_result(etc)
+    return {
+        "date_from": date_from, "date_to": date_to,
+        "otc": otc_result,
+        "etc": etc_result,
+        "total": {
+            "total_view_revenue": otc_result["total_view_revenue"] + etc_result["total_view_revenue"],
+            "base_view_revenue": otc_result["base_view_revenue"] + etc_result["base_view_revenue"],
+            "gap_base_minus_total": otc_result["gap_base_minus_total"] + etc_result["gap_base_minus_total"],
+        },
+        "recommended_source": (
+            "View TONG (vHoaDonTotal/vHoaDonETCTotal) nen dung lam nguon chuan: view nay bao gom "
+            "ca cac dong dieu chinh/hoan don ma view thuong (vHoaDon/vHoaDonETC) khong phan anh day "
+            "du, nen view thuong co the lech (thieu) so voi view tong."
+        ),
+    }
+
+
 def revenue_reconciliation_check(as_of_date: str = None, area_code: str = None,
                                   scope_area_code: str = None) -> dict:
     """Doi chieu doanh thu TU TREN XUONG (SUM(amount9) tren hoa don OTC, toan vung) voi doanh thu
@@ -8332,11 +8454,16 @@ def salary_bonus_policy(bonus_type: str = "v25", as_of_date: str = None,
     policy_date = _parse_report_date(snapshot_date, "snapshot_date") if snapshot_date else requested
     month_start = dt.date(policy_date.year, policy_date.month, 1)
     month_end = _month_end(policy_date)
-    # DNH doi co che tu ky 07/2026: V25 dung han, V15/V22 bat dau duoc chi. Du lieu toan cong ty
-    # 07-08/2026 deu co V25Bonus=0, ke ca QLV vuot nguong; day KHONG phai mismatch ca nhan hay loi
-    # thu tuc. DIM_BacThuong co the van con dong V25 lich su/chua dong EndDate, khong duoc dung cac
-    # dong cau hinh ton du do de de nghi bu thuong.
-    v25_inactive_by_mechanism = bonus == "V25" and policy_date >= dt.date(2026, 7, 1)
+    # 11/09/2026: DA BO gia dinh cung "V25 het hieu luc tu 07/2026" (tung dua vao loi ke rang DNH
+    # doi co che sang V15/V22). Kiem tra lai truc tiep tren Bravo cho thay DIM_BacThuong TypeCode
+    # V25 van con nguyen 65 dong hieu luc (EndDate NULL, chua tung dong), va trong ky 07-08/2026 co
+    # toi 100 dong nhan vien dat V25Percent_R>70% nhung CA 415/415 ban ghi luong ky do deu
+    # V25Bonus=0 - tuc 100% truong hop dat nguong deu bi treo thuong, khop voi canh bao
+    # 'procedure_loads_v25' ben duoi (usp_SaleSalary_Calculation_Ver2 nghi khong con nap TypeCode
+    # V25 vao #KPICt nhung buoc sau van JOIN de gan V25Bonus => loi thu tuc tinh luong, KHONG PHAI
+    # doi chinh sach co chu dich). Vi vay tu gio LUON doi chieu mismatch dua tren du lieu that,
+    # khong tu suy dien theo moc thoi gian cung.
+    v25_inactive_by_mechanism = False
 
     params = {
         "bonus_type": bonus,
@@ -8456,11 +8583,10 @@ def salary_bonus_policy(bonus_type: str = "v25", as_of_date: str = None,
 
     formula = {
         "V25": (
-            "V25 chi ap dung den het ky 06/2026. Tu ky 07/2026 DNH da doi co che sang V15/V22; "
-            "V25Bonus=0 trong cac ky tu 07/2026 la dung co che, KHONG PHAI loi tinh luong."
-            if v25_inactive_by_mechanism else
             "Ty le V25 = doanh so luy ke den ngay chot V25 / chi tieu thang; doi chieu bac V25 "
-            "dang hieu luc cho cac ky den het 06/2026."
+            "dang hieu luc theo DIM_BacThuong (khong gia dinh V25 da ngung theo moc thoi gian - "
+            "DIM_BacThuong van con dong hieu luc, xem procedure_loads_v25_rules/implementation_warning "
+            "neu V25Bonus=0 hang loat du van con nguoi dat nguong)."
         ),
         "V15": "Tinh doanh so luy ke den moc V15, doi chieu dieu kien va bac tien V15 dang hieu luc.",
         "V22": "Tinh doanh so luy ke den moc V22, doi chieu dieu kien va bac tien V22 dang hieu luc.",
@@ -8471,13 +8597,15 @@ def salary_bonus_policy(bonus_type: str = "v25", as_of_date: str = None,
     }[bonus]
 
     implementation_warning = None
-    if bonus == "V25" and procedure_loads_v25 is False and not v25_inactive_by_mechanism:
+    if bonus == "V25" and procedure_loads_v25 is False:
         implementation_warning = (
             "Can DNH kiem tra usp_SaleSalary_Calculation_Ver2: khoi #KPICt hien khong nap TypeCode "
-            "V25 nhung buoc sau lai JOIN #KPICt de gan V25Bonus. Chatbot chi bao so da luu va "
-            "chenh lech, KHONG tu sua/tinh de len so chot cua SQL Server."
+            "V25 nhung buoc sau lai JOIN #KPICt de gan V25Bonus - day nhieu kha nang la LOI THU TUC "
+            "tinh luong (khong phai doi chinh sach co chu dich), vi DIM_BacThuong van con dong V25 "
+            "hieu luc va van co nguoi dat nguong tien thuong. Chatbot chi bao so da luu va chenh "
+            "lech, KHONG tu sua/tinh de len so chot cua SQL Server."
         )
-    elif mismatch_rows and not v25_inactive_by_mechanism:
+    elif mismatch_rows:
         implementation_warning = (
             "Co truong hop ty le V25 nam trong bac co tien thuong nhung V25Bonus da luu bang 0; "
             "can DNH/ke toan xac nhan truoc khi dung de chi tra."
@@ -8488,19 +8616,142 @@ def salary_bonus_policy(bonus_type: str = "v25", as_of_date: str = None,
         "policy_as_of": str(policy_date),
         "actual_snapshot_date": snapshot_date,
         "formula": formula,
-        "mechanism_status": ("INACTIVE_FROM_2026_07_REPLACED_BY_V15_V22"
-                             if v25_inactive_by_mechanism else "ACTIVE_FOR_REQUESTED_PERIOD"),
+        "mechanism_status": "ACTIVE_FOR_REQUESTED_PERIOD",
         "procedure_loads_v25_rules": procedure_loads_v25,
         "implementation_warning": implementation_warning,
         "rule_actual_mismatch_count": len(mismatch_rows),
         "rule_actual_mismatches": mismatch_rows,
-        "inactive_rule_rows_count": len(rule_rows) if v25_inactive_by_mechanism else 0,
+        "inactive_rule_rows_count": 0,
         "terminology_note": (
             "Trong du lieu tinh luong DNH, ASO la mot chi tieu/khoan thuong rieng; neu y nguoi hoi "
             "la 'tung nhan vien' thi phai liet ke theo nhan vien, khong goi nhan vien la ASO."
         ),
-        "rule_count": 0 if v25_inactive_by_mechanism else len(rule_rows),
-        "rules": [] if v25_inactive_by_mechanism else list(grouped.values()),
+        "rule_count": len(rule_rows),
+        "rules": list(grouped.values()),
+    }
+
+
+def salary_aso_detail(year_month: str = None, area_code: str = None, position_code: str = None,
+                       only_failed: bool = False, scope_area_code: str = None,
+                       scope_employee_code: str = None, scope_role: str = None,
+                       limit: int = 300) -> dict:
+    """Chi tiet THUONG ASO tung nhan vien trong ky: doc truc tiep tren Bravo cac co dieu kien
+    IsCalASOBonus/PassCheckASOForASO/PassCheckSaleForASO/PassCheckASOBonus - cac co nay CHUA duoc
+    dong bo ve warehouse local (chi co aso_bonus la SO TIEN cuoi cung), nen dung tool nay khi can
+    biet TUNG DIEU KIEN cua ASO da qua hay chua, khong chi so tien.
+
+    11/09/2026 (Q068): cau hoi 'thuong ASO cua tung nhan vien duoc chot the nao, ai khong qua' truoc
+    day khong co tool rieng nen model phai tu do 6 vong (salary_bonus_policy -> salary_achievement_summary
+    -> salary_ranking -> 3 lan SQL tu do rieng le de doc tung cot dieu kien) va het thoi gian request.
+    Tool nay gop san 3 dieu kien thanh 1 lan doc: PassCheckASOForASO (dat dieu kien SO LUONG khach
+    hang active de duoc TINH ASO), PassCheckSaleForASO (dat dieu kien DOANH SO di kem), PassCheckASOBonus
+    (ket qua CUOI CUNG - co the fail dù ca 2 dieu kien tren deu dat, do bac thuong/gioi han khac).
+    CS (Cho si) va TK (kenh MT) KHONG co ASO (dung is_ac/Active Customer thay the) - tool tra
+    not_applicable rieng cho 2 vai tro nay, khong lam vao danh sach.
+    scope_employee_code: gioi han CHINH QLV do + doi TDV bao cao truc tiep (dung _team_of_qlv,
+    cung nguon quan he voi salary_bonus_policy)."""
+    if scope_area_code:
+        area_code = scope_area_code
+    normalized_position = str(position_code or "").strip().upper()
+
+    if as_of_year_month := year_month:
+        raw = str(as_of_year_month).strip()
+        requested = _month_end(dt.date.fromisoformat(raw + "-01")) if len(raw) == 7 else _parse_report_date(raw, "year_month")
+    else:
+        requested = dt.date.today()
+    closed = _q(
+        "SELECT MAX(save_date) d FROM fact_thongketinhluong "
+        "WHERE save_date<=? AND save_date=date(save_date,'start of month','+1 month','-1 day')",
+        (str(requested),),
+    )
+    snapshot_date = closed[0]["d"] if closed and closed[0]["d"] else None
+    if not snapshot_date:
+        return {"snapshot_date": None, "error": "Chua co snapshot luong CUOI KY da chot cho ky nay."}
+
+    if normalized_position in _IS_AC_POSITIONS:
+        return {
+            "snapshot_date": snapshot_date,
+            "position_code": normalized_position,
+            "not_applicable": True,
+            "warning": (
+                "ASO khong ap dung cho CS (Cho si) va TK (kenh MT); hai vai tro nay dung "
+                "co is_ac/Active Customer, khong co dieu kien ASO de doi chieu."
+            ),
+            "total_calculated": 0, "total_failed": 0, "rows": [],
+        }
+
+    where = ["f.SaveDate=:snapshot_date", "f.IsCalASOBonus=1",
+             "UPPER(COALESCE(f.PositionCode,'')) NOT IN ('CS','TK')"]
+    params = {"snapshot_date": snapshot_date}
+    if area_code:
+        where.append("f.AreaCode=:area_code")
+        params["area_code"] = area_code
+    if normalized_position:
+        where.append("f.PositionCode=:position_code")
+        params["position_code"] = normalized_position
+    if only_failed:
+        where.append("f.PassCheckASOBonus=0")
+    if scope_employee_code:
+        allowed_codes = [scope_employee_code] + [
+            x.get("employee_code") for x in _team_of_qlv(scope_employee_code, snapshot_date)
+            if x.get("employee_code")
+        ]
+        placeholders = []
+        for idx, employee_code in enumerate(dict.fromkeys(allowed_codes)):
+            key = f"allowed_{idx}"
+            params[key] = employee_code
+            placeholders.append(f":{key}")
+        where.append(f"f.EmployeeCode IN ({','.join(placeholders)})")
+
+    rows = _q_bravo(f"""
+        SELECT TOP ({max(1, min(int(limit or 300), 500))})
+               f.EmployeeCode, f.EmployeeName, f.PositionCode, f.AreaCode,
+               f.PassCheckASOForASO, f.PassCheckSaleForASO, f.PassCheckASOBonus,
+               f.ASOQuantity, f.ASOQuantityTarget, f.ASOPercent_R, f.ASOBonus, f.IsSuspend
+        FROM dbo.FACT_ThongKeTinhLuong f
+        WHERE {" AND ".join(where)}
+        ORDER BY f.PassCheckASOBonus ASC, f.PositionCode, f.AreaCode, f.EmployeeCode
+    """, params)
+
+    def _fail_reason(row):
+        if not row.get("PassCheckASOForASO"):
+            return "khong_du_dieu_kien_so_luong_khach_active"
+        if not row.get("PassCheckSaleForASO"):
+            return "khong_du_dieu_kien_doanh_so_di_kem"
+        if not row.get("PassCheckASOBonus"):
+            return "fail_khac_du_qua_2_dieu_kien_con_can_ke_toan_xac_nhan"
+        return None
+
+    out_rows = []
+    for row in rows:
+        passed_final = bool(row.get("PassCheckASOBonus"))
+        out_rows.append({
+            "employee_code": row.get("EmployeeCode"),
+            "employee_name": row.get("EmployeeName"),
+            "position_code": row.get("PositionCode"),
+            "area_code": row.get("AreaCode"),
+            "pass_customer_quantity_condition": bool(row.get("PassCheckASOForASO")),
+            "pass_sale_condition": bool(row.get("PassCheckSaleForASO")),
+            "passed_final": passed_final,
+            "fail_reason": None if passed_final else _fail_reason(row),
+            "aso_quantity": _f(row.get("ASOQuantity")),
+            "aso_quantity_target": _f(row.get("ASOQuantityTarget")),
+            "aso_percent": round(_f(row.get("ASOPercent_R")) * 100, 2) if row.get("ASOPercent_R") is not None else None,
+            "aso_bonus": _f(row.get("ASOBonus")),
+            "is_suspend": bool(row.get("IsSuspend")),
+        })
+
+    total_calculated = len(out_rows)
+    total_failed = sum(1 for r in out_rows if not r["passed_final"])
+    return {
+        "snapshot_date": snapshot_date,
+        "area_code": area_code,
+        "position_code": normalized_position or None,
+        "total_calculated": total_calculated,
+        "total_passed": total_calculated - total_failed,
+        "total_failed": total_failed,
+        "rows": out_rows,
+        "rows_truncated": len(rows) >= max(1, min(int(limit or 300), 500)),
     }
 
 
@@ -9433,6 +9684,7 @@ TEMPLATES = {
     "get_revenue_tree": revenue_tree,
     "get_kpi_ranking": kpi_ranking,
     "get_revenue_reconciliation": revenue_reconciliation_check,
+    "get_revenue_view_reconciliation": revenue_view_reconciliation,
     "get_receivables_overview": receivables_overview,
     "get_receivables_period_compare": receivables_period_compare,
     "get_receivables_history_dates": receivables_history_dates,
@@ -9441,6 +9693,7 @@ TEMPLATES = {
     "get_promotion_effectiveness": promotion_effectiveness,
     "get_promotion_data_quality": promotion_data_quality,
     "get_salary_bonus_policy": salary_bonus_policy,
+    "get_salary_aso_detail": salary_aso_detail,
     "get_salary_data_quality": salary_data_quality,
     "get_salary_detail": salary_detail,
     "get_salary_achievement_summary": salary_achievement_summary,
@@ -9451,12 +9704,12 @@ _SELF_SCOPED_TEMPLATES = {"get_audit_log"}
 
 _ROLE_SCOPED_TEMPLATES = {
     "get_salary_detail", "get_salary_achievement_summary", "get_salary_ranking",
-    "get_salary_bonus_policy", "get_salary_data_quality",
+    "get_salary_bonus_policy", "get_salary_data_quality", "get_salary_aso_detail",
 }
 
 _AREA_EXEMPT_TEMPLATES = {
     "get_audit_log", "get_salary_detail", "get_salary_achievement_summary", "get_salary_ranking",
-    "get_salary_bonus_policy", "get_salary_data_quality",
+    "get_salary_bonus_policy", "get_salary_data_quality", "get_salary_aso_detail",
     # 21/08/2026: get_receivables_history_dates chi liet ke NGAY co du lieu (khong co so lieu cong
     # no nao), khong nhan tham so scope_area_code trong chu ky ham - PHAI o day neu khong call_template
     # se ep them tham so ma ham khong khai bao, gay TypeError.
@@ -9493,7 +9746,7 @@ _PERSON_LEVEL_TEMPLATES = {
     # duoc ham nay VA thay xep hang thuong ca nhan CUA CA CONG TY, khong bi chan o dau ca. Xem sua
     # cung dot: salary_ranking() them tham so scope_employee_code + loc that tren manager_code.
     "get_salary_detail", "get_salary_achievement_summary", "get_salary_bonus_policy",
-    "get_salary_data_quality",
+    "get_salary_data_quality", "get_salary_aso_detail",
     "get_salary_ranking",
 }
 
@@ -9510,7 +9763,7 @@ _EMPLOYEE_SCOPED_TEMPLATES = {
     "get_promotion_data_quality",
     "get_customer_revenue_debt_risk",
     "get_salary_detail", "get_salary_achievement_summary", "get_salary_bonus_policy",
-    "get_salary_data_quality",
+    "get_salary_data_quality", "get_salary_aso_detail",
     "get_salary_ranking",
     # check_order_timing can scope_employee_code de hang tra/phan bo gia tri don cua QLV chi gom doi minh.
     "check_order_timing",
@@ -9537,12 +9790,15 @@ _CHANNEL_SCOPE_POLICIES = {
     # Du lieu luong chi duoc mo cho tai khoan QLV da co scope nhan vien; regional channel-only bi chan.
     **{name: "employee" for name in {
         "get_salary_bonus_policy", "get_salary_data_quality", "get_salary_detail",
-        "get_salary_achievement_summary", "get_salary_ranking",
+        "get_salary_achievement_summary", "get_salary_ranking", "get_salary_aso_detail",
     }},
     # Chua co cot/quan he kenh du tin cay: fail-closed thay vi mac dinh xem toan cong ty.
     **{name: "blocked" for name in {
         "get_employee_directory", "get_inventory_by_region", "get_inventory_expiry_report",
         "get_qlv_change_history",
+        # Luon tra ca OTC+ETC gop trong 1 payload, khong co scope_channel de loc rieng kenh -
+        # tai khoan bi gioi han 1 kenh se thay ca so kenh khac neu khong chan.
+        "get_revenue_view_reconciliation",
     }},
     # Metadata khong chua so lieu kinh doanh theo kenh, hoac da tu gioi han theo chinh nguoi dung.
     "get_receivables_history_dates": "exempt",
