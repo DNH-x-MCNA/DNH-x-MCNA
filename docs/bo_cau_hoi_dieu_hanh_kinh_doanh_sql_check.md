@@ -2557,6 +2557,78 @@ Ngưỡng gate 65% cho TDV và 70% cho quản lý — xem S31.
            (1.00*Target-Actual)/NULLIF(DaysLeft,0) PerDayTo100
     FROM r ORDER BY Gap100 DESC;
 
+Cho **V03** ("doanh số từng ngày/tuần cao/thấp hơn nhịp cần thiết; ngày nào không phát sinh") — bổ sung
+11/09/2026. Trước đó V03 dùng `S03`, là run-rate toàn công ty theo kênh/miền: không liệt kê từng ngày, không dùng
+target, không lọc được đội — không thể trả lời câu hỏi cấp đội này.
+
+Liệt kê **mọi ngày lịch** từ đầu tháng tới `@AsOfDate`, kể cả thứ Bảy/Chủ nhật và ngày không có hóa đơn. Đội lấy
+từ `FACT_TongHopKhachHang.ManagerCode` (như bảng trên), nối sang hóa đơn qua `DIM_NhanVien.DMSId = EmpDMSCode`
+(như `S69`). Nhịp đều = target đội ÷ số ngày lịch của tháng.
+
+> ⚠️ Nhịp theo **ngày lịch** là tạm tính. DNH chưa chốt so theo ngày lịch hay ngày làm việc (câu 1 trong
+> `DNH_can_xac_nhan_2_cau_han_10-09.md`). "Theo tuần" chưa có định nghĩa được chốt (Nhóm A mục A9): chatbot phải
+> hỏi lại người dùng, bảng này chỉ cung cấp số ngày để gộp theo cách người dùng chọn.
+>
+> Doanh số từng ngày tính từ hóa đơn (người bán trên chứng từ), còn `Amount_CT` ở bảng trên là số của hệ KPI —
+> hai nguồn độc lập. Dòng `TONG_HOA_DON` cuối bảng để đối soát. Đo 11/09/2026 đội `MBKV2` tháng 9: tổng hóa đơn
+> **477.444.069đ / 230 đơn**, bằng đúng tổng `Amount_CT` của 10 nhân viên ở bảng trên — khớp tới từng đồng.
+>
+> Ngày hôm nay (`NGAY_DANG_CHAY`) mới có dữ liệu tới lần đồng bộ gần nhất, không được đánh giá là thấp hơn nhịp.
+> Cột `Thu` là nhãn cố định T2…CN, không phụ thuộc cấu hình `DATEFIRST` của máy chủ. Có hóa đơn thứ Bảy/Chủ nhật
+> thì vẫn tính — ví dụ thứ Bảy 05/09 đội bán 56.713.923đ / 30 đơn.
+
+    WITH doi AS (
+      SELECT DISTINCT f.EmployeeCode
+      FROM dbo.FACT_TongHopKhachHang f
+      WHERE f.SaveDate>=@MonthStart AND f.SaveDate<=@AsOfDate
+        AND (@ManagerCode IS NULL OR f.ManagerCode=@ManagerCode)
+    ), dms AS (
+      SELECT DISTINCT n.DMSId
+      FROM dbo.DIM_NhanVien n
+      JOIN doi ON doi.EmployeeCode=n.EmployeeCode
+      WHERE n.DMSId IS NOT NULL AND LTRIM(RTRIM(n.DMSId))<>''
+    ), moc AS (
+      SELECT f.EmployeeCode,MAX(f.SaveDate) d
+      FROM dbo.FACT_TongHopKhachHang f
+      JOIN doi ON doi.EmployeeCode=f.EmployeeCode
+      WHERE f.SaveDate>=@MonthStart AND f.SaveDate<=@AsOfDate
+      GROUP BY f.EmployeeCode
+    ), tg AS (
+      SELECT SUM(x.Target) TargetDoi
+      FROM (SELECT f.EmployeeCode,MAX(f.MonthSaleTarget) Target
+            FROM dbo.FACT_TongHopKhachHang f
+            JOIN moc ON moc.EmployeeCode=f.EmployeeCode AND moc.d=f.SaveDate
+            GROUP BY f.EmployeeCode) x
+    ), lich AS (
+      SELECT CONVERT(date,@MonthStart) Ngay
+      UNION ALL
+      SELECT DATEADD(day,1,Ngay) FROM lich WHERE Ngay<CONVERT(date,@AsOfDate)
+    ), ban AS (
+      SELECT CONVERT(date,s.DocDate) Ngay,SUM(s.Amount9) DoanhSo,COUNT(DISTINCT s.OrderKey) SoDon
+      FROM #sales s
+      JOIN dms ON dms.DMSId=s.EmpDMSCode
+      WHERE s.DocDate>=@MonthStart AND s.DocDate<=@AsOfDate
+      GROUP BY CONVERT(date,s.DocDate)
+    )
+    SELECT CONVERT(varchar(10),l.Ngay,23) Ngay,
+           CASE DATEDIFF(day,'19000101',l.Ngay)%7
+                WHEN 0 THEN 'T2' WHEN 1 THEN 'T3' WHEN 2 THEN 'T4' WHEN 3 THEN 'T5'
+                WHEN 4 THEN 'T6' WHEN 5 THEN 'T7' ELSE 'CN' END Thu,
+           ISNULL(b.DoanhSo,0) DoanhSo,ISNULL(b.SoDon,0) SoDon,
+           tg.TargetDoi/DAY(EOMONTH(@MonthStart)) NhipNgayDeu,
+           CASE WHEN l.Ngay=CONVERT(date,GETDATE()) THEN 'NGAY_DANG_CHAY'
+                WHEN b.Ngay IS NULL THEN 'KHONG_PHAT_SINH'
+                WHEN b.DoanhSo < tg.TargetDoi/DAY(EOMONTH(@MonthStart)) THEN 'THAP_HON_NHIP'
+                ELSE 'DAT_NHIP' END DanhGia
+    FROM lich l
+    LEFT JOIN ban b ON b.Ngay=l.Ngay
+    CROSS JOIN tg
+    UNION ALL
+    SELECT 'TONG_HOA_DON',NULL,SUM(b.DoanhSo),SUM(b.SoDon),MAX(tg.TargetDoi),NULL
+    FROM ban b CROSS JOIN tg
+    ORDER BY Ngay
+    OPTION (MAXRECURSION 32);
+
 ### S60 — Địa bàn con dưới kế hoạch và TDV phụ trách — PARTIAL
 
 Cho câu hỏi "tỉnh/địa bàn con nào dưới kế hoạch; hụt bao nhiêu và TDV nào phụ trách". Nối doanh thu
@@ -3268,6 +3340,48 @@ Cho câu hỏi "khách nào chưa gán TDV, sai mã, sai tỉnh/vùng hoặc kh�
         OR MAX(k.Name) IS NULL
     ORDER BY Revenue DESC;
 
+Cho **M28** ("tỷ lệ khách không gán TDV, sai vùng hoặc thiếu thông tin DMS **theo tháng**") — bổ sung
+11/09/2026. Trước đó M28 dùng `S38`, là chất lượng mapping **nhân viên–target**: sai chủ đề. Bảng trên đúng ba
+chiều M28 hỏi nhưng chỉ liệt kê khách của một tháng; bảng dưới gộp thành **tỷ lệ theo từng tháng**. Mẫu số là
+số khách có hóa đơn trong tháng, mỗi khách đếm một lần.
+
+> ⚠️ "Sai vùng" ở đây chỉ bắt được khách **không map được vùng** (`AreaCode='CHUA_XAC_DINH'`). Khách bị map
+> NHẦM sang vùng khác thì truy vấn không phát hiện được — cần danh mục đúng từ DNH để so.
+>
+> **Đo thật 11/09/2026, toàn công ty, 09/2025–09/2026:** `KhongGanTDV`, `KhongMapVung`, `KhongCoTrongDMS` đều
+> bằng **0 ở mọi tháng** — không phải số 0 do cấu trúc: `vHoaDon` nối danh mục khách bằng `LEFT JOIN`, chỉ
+> `INNER JOIN` với bảng trạng thái hóa đơn, nên khách thiếu trong DMS vẫn hiện nếu có. Tín hiệu thật là cột
+> `MaNVLa` — mã người bán trên hóa đơn không có trong `DIM_NhanVien`: T7/2026 là 443/7.304 khách (6,1%), T8/2026
+> là 467/7.393 (6,3%); tháng đang chạy không so. Nếu người hỏi hiểu "không gán TDV" là "không truy ra được TDV
+> hợp lệ" thì đây mới là con số cần trả lời. Người chấm M28 phải xác định cách hiểu trước khi so: câu trả lời
+> "0%" và "khoảng 6%" đều có thể đúng, tùy định nghĩa được chấp nhận.
+
+    WITH dm AS (
+      SELECT Code,MAX(Name) Name FROM (
+        SELECT Code,Name FROM dbo.DMS_KhachHang
+        UNION ALL SELECT Code,Name FROM dbo.DMSSX_KhachHang) u
+      GROUP BY Code
+    ), k AS (
+      SELECT EOMONTH(s.DocDate) MonthEnd,s.CustomerCode,
+             MAX(CASE WHEN s.EmpDMSCode IS NULL OR LTRIM(RTRIM(s.EmpDMSCode))='' THEN 1 ELSE 0 END) KhongGanTDV,
+             MAX(CASE WHEN s.EmpDMSCode IS NOT NULL AND LTRIM(RTRIM(s.EmpDMSCode))<>''
+                       AND n.EmployeeCode IS NULL THEN 1 ELSE 0 END) MaNVKhongCoTrongDanhMuc,
+             MAX(CASE WHEN s.AreaCode='CHUA_XAC_DINH' THEN 1 ELSE 0 END) KhongMapVung,
+             MAX(CASE WHEN dm.Code IS NULL THEN 1 ELSE 0 END) KhongCoTrongDMS
+      FROM #sales s
+      LEFT JOIN (SELECT DISTINCT DMSId,EmployeeCode FROM dbo.DIM_NhanVien WHERE DMSId IS NOT NULL) n
+             ON n.DMSId=s.EmpDMSCode
+      LEFT JOIN dm ON dm.Code=s.CustomerCode
+      GROUP BY EOMONTH(s.DocDate),s.CustomerCode
+    )
+    SELECT MonthEnd,COUNT(*) TongKhach,
+           SUM(KhongGanTDV) KhongGanTDV,CAST(100.0*SUM(KhongGanTDV)/COUNT(*) AS decimal(6,2)) TyLeKhongGanTDV,
+           SUM(MaNVKhongCoTrongDanhMuc) MaNVLa,
+           SUM(KhongMapVung) KhongMapVung,CAST(100.0*SUM(KhongMapVung)/COUNT(*) AS decimal(6,2)) TyLeKhongMapVung,
+           SUM(KhongCoTrongDMS) KhongCoTrongDMS,CAST(100.0*SUM(KhongCoTrongDMS)/COUNT(*) AS decimal(6,2)) TyLeKhongCoTrongDMS,
+           SUM(CASE WHEN KhongGanTDV=1 OR KhongMapVung=1 OR KhongCoTrongDMS=1 THEN 1 ELSE 0 END) CoItNhatMotLoi
+    FROM k GROUP BY MonthEnd ORDER BY MonthEnd;
+
 ### S76 — Checklist tồn đọng cuối tháng — READY
 
 Cho câu hỏi "cuối tháng còn tồn đọng gì: target thiếu, khách chưa gán, đơn chưa xử lý". Gộp các
@@ -3976,7 +4090,7 @@ Câu trả lời khẳng định có vùng mở nhiều mà chất lượng th�
 | M25 | Khách nào có tiềm năng bán chéo nhóm sản phẩm do đang mua ít SKU hơn nhóm khách tương đồng? | S89 | READY |
 | M26 | Khách hàng nào có share-of-wallet nội bộ thấp: doanh thu lớn nhưng chỉ mua một nhóm sản phẩm? | S89 | READY |
 | M27 | Tỉnh/huyện nào có ít khách hoạt động, ít đơn hoặc doanh thu/khách thấp hơn chuẩn miền? | S53 | READY |
-| M28 | Tỷ lệ khách không gán TDV, sai vùng hoặc thiếu thông tin DMS theo tháng là bao nhiêu? | S38 | READY |
+| M28 | Tỷ lệ khách không gán TDV, sai vùng hoặc thiếu thông tin DMS theo tháng là bao nhiêu? | S75 | READY |
 | M29 | NPP/chi nhánh nào có tăng trưởng khách hàng tốt nhưng công nợ hoặc tồn kho xấu đi? | S15 | PARTIAL |
 | M30 | Danh sách 20 khách hàng ưu tiên cần giữ, thu hồi, tái kích hoạt hoặc mở rộng trong tháng tới là ai? | S48 | DERIVED |
 | M31 | Nhóm sản phẩm/SKU nào đóng góp nhiều nhất vào tăng/giảm của miền/kênh theo tháng? | S21 | PARTIAL |
@@ -3995,7 +4109,7 @@ Câu trả lời khẳng định có vùng mở nhiều mà chất lượng th�
 | M44 | Với từng vùng dưới kế hoạch: ba nguyên nhân định lượng, ba hành động, người chịu trách nhiệm và deadline là gì? | S36 | BLOCKED |
 | V01 | Đội tôi đạt bao nhiêu doanh số và bao nhiêu % target tháng; MoM, YoY và YTD thế nào? | S43 | PARTIAL |
 | V02 | Còn thiếu bao nhiêu để đạt 65/70%, 80%, 100% và 120%; mỗi ngày còn lại cần bán bao nhiêu? | S59 | PARTIAL |
-| V03 | Doanh số từng ngày/tuần đang cao hay thấp hơn nhịp cần thiết; ngày nào không có phát sinh? | S03 | DERIVED |
+| V03 | Doanh số từng ngày/tuần đang cao hay thấp hơn nhịp cần thiết; ngày nào không có phát sinh? | S59 | DERIVED |
 | V04 | Nhân viên nào đóng góp nhiều nhất vào tăng/giảm doanh số đội tháng này? | S57 | READY |
 | V05 | Nếu loại đơn hàng lớn bất thường và hàng trả, kết quả thực chất của đội là bao nhiêu? | S09 | READY |
 | V06 | Doanh thu đội đến từ bao nhiêu khách, bao nhiêu đơn; AOV và tần suất mua thay đổi thế nào? | S07 | READY |

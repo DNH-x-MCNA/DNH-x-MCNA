@@ -157,7 +157,7 @@ thái đơn/hóa đơn.
 25. **M25** — Khách nào có tiềm năng bán chéo nhóm sản phẩm do đang mua ít SKU hơn nhóm khách tương đồng? — [SQL: S89](./bo_cau_hoi_dieu_hanh_kinh_doanh_sql_check.md)
 26. **M26** — Khách hàng nào có share-of-wallet nội bộ thấp: doanh thu lớn nhưng chỉ mua một nhóm sản phẩm? — [SQL: S89](./bo_cau_hoi_dieu_hanh_kinh_doanh_sql_check.md)
 27. **M27** — Tỉnh/huyện nào có ít khách hoạt động, ít đơn hoặc doanh thu/khách thấp hơn chuẩn miền? — [SQL: S53](./bo_cau_hoi_dieu_hanh_kinh_doanh_sql_check.md)
-28. **M28** — Tỷ lệ khách không gán TDV, sai vùng hoặc thiếu thông tin DMS theo tháng là bao nhiêu? — [SQL: S38](./bo_cau_hoi_dieu_hanh_kinh_doanh_sql_check.md)
+28. **M28** — Tỷ lệ khách không gán TDV, sai vùng hoặc thiếu thông tin DMS theo tháng là bao nhiêu? — [SQL: S75](./bo_cau_hoi_dieu_hanh_kinh_doanh_sql_check.md)
 29. **M29** — NPP/chi nhánh nào có tăng trưởng khách hàng tốt nhưng công nợ hoặc tồn kho xấu đi? — [SQL: S15](./bo_cau_hoi_dieu_hanh_kinh_doanh_sql_check.md)
 30. **M30** — Danh sách 20 khách hàng ưu tiên cần giữ, thu hồi, tái kích hoạt hoặc mở rộng trong tháng tới là ai? — [SQL: S48](./bo_cau_hoi_dieu_hanh_kinh_doanh_sql_check.md)
 
@@ -187,7 +187,7 @@ thái đơn/hóa đơn.
 
 1. **V01** — Đội tôi đạt bao nhiêu doanh số và bao nhiêu % target tháng; MoM, YoY và YTD thế nào? — [SQL: S43](./bo_cau_hoi_dieu_hanh_kinh_doanh_sql_check.md)
 2. **V02** — Còn thiếu bao nhiêu để đạt 65/70%, 80%, 100% và 120%; mỗi ngày còn lại cần bán bao nhiêu? — [SQL: S59](./bo_cau_hoi_dieu_hanh_kinh_doanh_sql_check.md)
-3. **V03** — Doanh số từng ngày/tuần đang cao hay thấp hơn nhịp cần thiết; ngày nào không có phát sinh? — [SQL: S03](./bo_cau_hoi_dieu_hanh_kinh_doanh_sql_check.md)
+3. **V03** — Doanh số từng ngày/tuần đang cao hay thấp hơn nhịp cần thiết; ngày nào không có phát sinh? — [SQL: S59](./bo_cau_hoi_dieu_hanh_kinh_doanh_sql_check.md)
 4. **V04** — Nhân viên nào đóng góp nhiều nhất vào tăng/giảm doanh số đội tháng này? — [SQL: S57](./bo_cau_hoi_dieu_hanh_kinh_doanh_sql_check.md)
 5. **V05** — Nếu loại đơn hàng lớn bất thường và hàng trả, kết quả thực chất của đội là bao nhiêu? — [SQL: S09](./bo_cau_hoi_dieu_hanh_kinh_doanh_sql_check.md)
 6. **V06** — Doanh thu đội đến từ bao nhiêu khách, bao nhiêu đơn; AOV và tần suất mua thay đổi thế nào? — [SQL: S07](./bo_cau_hoi_dieu_hanh_kinh_doanh_sql_check.md)
