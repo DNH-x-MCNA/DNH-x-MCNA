@@ -546,7 +546,7 @@ def _ly_do_khong_co_payload(result):
 
 
 def _tool_cases_40():
-    """Một ca smoke/contract cho đúng 41 tool nghiệp vụ, toàn bộ chỉ đọc kho local."""
+    """Một ca smoke/contract cho đúng 44 tool nghiệp vụ, chỉ đọc (kho local; hai tool đọc Bravo)."""
     ym, d_from, d_to = _thang_tron_gan_nhat()
     if not ym:
         ym, d_from, d_to = "2026-07", "2026-07-01", "2026-07-31"
@@ -612,6 +612,11 @@ def _tool_cases_40():
         "get_salary_detail": ({"employee_code": employee, "scope_role": "c_level"}, dict),
         "get_salary_achievement_summary": ({"save_date": d_to, "scope_role": "c_level"}, dict),
         "get_salary_ranking": ({"year_month": ym, "limit": 10, "scope_role": "c_level"}, dict),
+        # 11/09/2026: ba tool gop tu hai nhanh sua tay may 24. Hai tool cuoi doc thang Bravo.
+        "get_sku_revenue_drop_vs_stock": ({"months_back": 1, "limit": 10}, dict),
+        "get_revenue_view_reconciliation": ({"date_from": d_from, "date_to": d_to,
+                                             "scope_role": "c_level"}, dict),
+        "get_salary_aso_detail": ({"year_month": ym, "limit": 10, "scope_role": "c_level"}, dict),
     }
 
 

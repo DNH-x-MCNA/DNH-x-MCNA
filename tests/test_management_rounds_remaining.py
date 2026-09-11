@@ -134,6 +134,33 @@ def test_cohort_retention_tinh_dung_tu_hoa_don(tmp_path, monkeypatch):
     age1 = next(x for x in jan["retention"] if x["age_month"] == 1)
     age3 = next(x for x in jan["retention"] if x["age_month"] == 3)
     assert age1["retained_customers"] == 1  # chi C1 mua Feb
+    # 11/09/2026: hoa don cuoi cung la 18/04 nen thang 4 chua tron. Tuoi 3 (target 04) chua du ky,
+    # tra None chu khong phai so dem vai ngay dau thang - khach chua kip mua khong bi tinh la roi bo.
+    assert r["latest_complete_month"] == "2026-03"
+    assert age3["ky_da_du"] is False
+    assert age3["retained_customers"] is None
+    assert age3["retention_pct"] is None
+
+
+def test_cohort_retention_dem_thang_cuoi_khi_thang_do_da_tron(tmp_path, monkeypatch):
+    db_path = _setup(tmp_path, monkeypatch)
+
+    class _SauThang4(real_dt.date):
+        @classmethod
+        def today(cls):
+            return cls(2026, 5, 2)
+
+    # latest_data_date() bo chung tu sau "hom nay"; dat hom nay sang thang 5 de 30/04 duoc tinh.
+    monkeypatch.setattr(rt.dt, "date", _SauThang4)
+    with sqlite3.connect(db_path) as con:
+        # Co hoa don ngay 30/04 -> thang 4 da tron, tuoi 3 duoc dem that.
+        con.execute("INSERT INTO vhoadon_otc VALUES "
+                    "('2026-04-30','C1','A',10,1,10,'O4END',1,'D1','2026-04-30','OTC')")
+    r = rt.customer_cohort_retention(month_to="2026-01", months_back=1, age_months=[3])
+    jan = next(x for x in r["cohorts"] if x["cohort_month"] == "2026-01")
+    age3 = jan["retention"][0]
+    assert r["latest_complete_month"] == "2026-04"
+    assert age3["ky_da_du"] is True
     assert age3["retained_customers"] == 2  # C1 va C4 mua Apr
 
 

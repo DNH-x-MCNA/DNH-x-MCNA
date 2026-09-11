@@ -37,7 +37,8 @@ _DOMAIN_SPECS = (
         "label": "Đối chiếu doanh thu",
         "markers": ("doanh thu", "doanh so", "hoa don", "thuc thu", "mom", "yoy", "ytd"),
         "tools": ("get_revenue_by_channel", "get_revenue_by_region", "get_revenue_tree",
-                  "get_revenue_reconciliation", "get_revenue_monthly_series",
+                  "get_revenue_reconciliation", "get_revenue_view_reconciliation",
+                  "get_sku_revenue_drop_vs_stock", "get_revenue_monthly_series",
                   "get_revenue_ytd_cumulative", "compare_periods",
                   "get_geography_monthly_performance", "get_workforce_productivity",
                   "get_customer_product_coverage", "get_customer_movement",
@@ -96,7 +97,8 @@ _DOMAIN_SPECS = (
         "markers": ("san pham", "sp", "ma hang", "sku", "nhom hang", "gia ban", "san luong"),
         "tools": ("get_top_products", "get_customer_product_coverage",
                   "get_cross_sell_opportunities", "get_inventory_by_region",
-                  "get_inventory_expiry_report", "get_promotion_effectiveness"),
+                  "get_inventory_expiry_report", "get_sku_revenue_drop_vs_stock",
+                  "get_promotion_effectiveness"),
         "metrics": ("products",),
         "rules": (),
     },
@@ -104,7 +106,7 @@ _DOMAIN_SPECS = (
         "domain": "inventory",
         "label": "Đối chiếu tồn kho",
         "markers": ("ton kho", "can date", "cham luan chuyen", "stock-out", "thieu hang"),
-        "tools": ("get_inventory_by_region", "get_inventory_expiry_report"),
+        "tools": ("get_inventory_by_region", "get_inventory_expiry_report", "get_sku_revenue_drop_vs_stock"),
         "metrics": ("inventory",),
         "rules": (),
     },
@@ -115,7 +117,8 @@ _DOMAIN_SPECS = (
                     "thuong kinh doanh", "bac thuong", "muc thuong",
                     "v15", "v22", "v25", "aso", "phu cap"),
         "tools": ("get_salary_bonus_policy", "get_salary_data_quality",
-                  "get_salary_achievement_summary", "get_salary_detail", "get_salary_ranking"),
+                  "get_salary_achievement_summary", "get_salary_detail", "get_salary_ranking",
+                  "get_salary_aso_detail"),
         "metrics": ("salary_bonus",),
         "rules": ("salary_bonus_excludes_allowance",),
     },
@@ -183,9 +186,10 @@ def infer_domains(question: str) -> list[dict[str, Any]]:
         found = [spec for spec in found if spec["domain"] != "kpi"]
     # C29 nhac "khach hoat dong" va "mua lai" theo nghia vong doi, khong phai KPI nhan su.
     # Tool lifecycle da tra ca co Bravo va chuoi suy tu hoa don nen chi can domain customer.
-    lifecycle_series_question = all(marker in plain for marker in (
-        "khach moi", "tai kich hoat", "ngung mua",
-    )) and any(marker in plain for marker in ("tung thang", "theo thang", "khach hoat dong", "mua lai"))
+    lifecycle_series_question = (
+        sum(marker in plain for marker in ("khach hoat dong", "tai kich hoat", "ngung mua", "mua lai")) >= 3
+        and ("khach moi" in plain or re.search(r"\bmoi\b", plain))
+        and any(marker in plain for marker in ("tung thang", "theo thang", "moi thang")))
     if lifecycle_series_question:
         found = [spec for spec in found if spec["domain"] != "kpi"]
     return found or [_DOMAIN_SPECS[0]]

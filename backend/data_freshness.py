@@ -65,6 +65,9 @@ _SOURCES = {
 
 
 _TEMPLATE_SOURCES = {
+    "get_revenue_view_reconciliation": ("sql_server",),
+    "get_salary_aso_detail": ("sql_server",),
+    "get_sku_revenue_drop_vs_stock": ("sales_otc", "sales_etc", "inventory"),
     "get_revenue_by_channel": ("sales_otc", "sales_etc"),
     "get_top_products": ("sales_otc", "sales_etc"),
     "get_top_customers": ("sales_otc", "sales_etc"),
