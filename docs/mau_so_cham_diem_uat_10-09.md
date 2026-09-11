@@ -1,5 +1,7 @@
 # Mẫu số chấm điểm UAT — loại câu không thể chấm được (10/09/2026)
 
+> ⛔ **ĐÃ BỊ THAY THẾ ngày 11/09/2026.** Mẫu số 119 trong tài liệu này KHÔNG còn dùng. Phạm vi chính thức là **126 câu** theo cột `TÍnh cần thiết của câu hỏi` trên sheet UAT (loại 9 câu dự báo/lợi nhuận: C04, C14, C15, C19, C50, C51, M39, M43, V09; tạm loại 3 câu: C25, C49, V16). Các câu thiếu nguồn vẫn nằm trong phạm vi và được chấm theo nhãn "ĐẠT — giới hạn nguồn/quyền đã xác nhận". Giữ tài liệu để truy vết, không trích số từ đây.
+
 Nguồn dữ liệu: sheet kết quả UAT (tab `Trang tính1`, 138 dòng, cột `Kết quả chạy` và
 `Chốt đánh giá`) đối chiếu với cột trạng thái nguồn trong
 `docs/bo_cau_hoi_dieu_hanh_kinh_doanh_sql_check.md` tại `c697799`.

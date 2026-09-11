@@ -1,5 +1,7 @@
 # Gửi người chấm UAT — cập nhật 10/09/2026
 
+> ⛔ **ĐÃ BỊ THAY THẾ ngày 11/09/2026.** Mẫu số 119 trong tài liệu này KHÔNG còn dùng. Phạm vi chính thức là **126 câu** theo cột `TÍnh cần thiết của câu hỏi` trên sheet UAT (loại 9 câu dự báo/lợi nhuận: C04, C14, C15, C19, C50, C51, M39, M43, V09; tạm loại 3 câu: C25, C49, V16). Các câu thiếu nguồn vẫn nằm trong phạm vi và được chấm theo nhãn "ĐẠT — giới hạn nguồn/quyền đã xác nhận". Giữ tài liệu để truy vết, không trích số từ đây.
+
 ## 1. Dừng chấm 7 câu này, checker đã đổi từ 04/09
 
 Commit `700ad9f` ngày 04/09 đã đổi checker cho 7 câu vì checker cũ trả lời **câu khác**. Nếu đang
