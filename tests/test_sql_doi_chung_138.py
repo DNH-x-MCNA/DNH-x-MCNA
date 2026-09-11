@@ -209,3 +209,44 @@ def test_s26_so_thang_tron_khong_so_thang_dang_chay_do():
     assert ky_so_sanh == "2026-08-01", "Phai lui ve thang tron gan nhat, khong lay thang 9 dang do"
     assert so_khach == 1
     assert tong_no == 500
+
+
+_LOC_TRUOC_KHI_TINH_CHUOI = re.compile(
+    r"-\s*ROW_NUMBER\(\)\s*OVER\(\s*PARTITION BY\s+[^)]*,\s*(\w+)\s+ORDER BY[^)]*\)\s*\w+\s+"
+    r"FROM\s+\w+\s+WHERE\s+\1\s*=\s*1", re.I)
+
+
+def test_khong_checker_nao_loc_truoc_roi_moi_tinh_chuoi_lien_tiep():
+    """Loi 11/09/2026 o S11, S55, S58, S64: loc WHERE co=1 truoc khi lay hieu hai ROW_NUMBER.
+
+    Tren tap da loc, ROW_NUMBER theo khoa va ROW_NUMBER theo (khoa, co) luon bang nhau, Grp luon 0,
+    moi thang thoa dieu kien bi gop thanh MOT chuoi. S64 tung ghi 80 nguoi 'duoi 80% tu 6 thang lien
+    tiep tro len' trong khi dung ra la 21.
+    """
+    noi_dung = bo_sql.doc_tai_lieu()
+    loi = [c["ma"] for c in bo_sql.lay_checker(noi_dung)
+           if _LOC_TRUOC_KHI_TINH_CHUOI.search("\n".join(c["cau_lenh"]))]
+    assert loi == [], "Checker dem thang roi rac thanh chuoi lien tiep: %s" % loi
+
+
+def test_mau_loi_chuoi_bat_duoc_ban_cu():
+    ban_cu = """      SELECT *,ROW_NUMBER() OVER(PARTITION BY AreaCode ORDER BY MonthEnd)
+               -ROW_NUMBER() OVER(PARTITION BY AreaCode,Below ORDER BY MonthEnd) Grp
+      FROM f WHERE Below=1"""
+    assert _LOC_TRUOC_KHI_TINH_CHUOI.search(ban_cu)
+    ban_moi = """      SELECT *,DATEDIFF(month,'19000101',MonthEnd)
+               -ROW_NUMBER() OVER(PARTITION BY AreaCode ORDER BY MonthEnd) Grp
+      FROM f WHERE Below=1"""
+    assert not _LOC_TRUOC_KHI_TINH_CHUOI.search(ban_moi)
+
+
+def test_s55_chuoi_giam_lien_tiep_dung_mien_va_thang_lien_ke():
+    """M16/V13: loc duoc theo mien, chi tinh giam khi thang truoc la thang lich lien ke, co cot chuoi
+    dang dien ra, va bo thang dang chay do."""
+    noi_dung = bo_sql.doc_tai_lieu()
+    sql = "\n".join({c["ma"]: c for c in bo_sql.lay_checker(noi_dung)}["S55"]["cau_lenh"])
+    assert "(@AreaCode IS NULL OR AreaCode=@AreaCode)" in sql
+    assert "PrevMonthEnd=EOMONTH(DATEADD(month,-1,MonthEnd))" in sql
+    assert "ConDangGiam" in sql
+    assert "FROM g WHERE IsDown=1" in sql and "FROM d WHERE IsDown=1" not in sql
+    assert "DATEFROMPARTS(YEAR(@AsOfDate),MONTH(@AsOfDate),1)" in sql

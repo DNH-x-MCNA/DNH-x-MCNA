@@ -451,6 +451,8 @@ riêng và đối chiếu tổng trước khi coi khuyến mãi là số đáng 
 
 ### S11 — Xu hướng giá bán thực tế theo SKU và SKU nào xói mòn giá — READY
 
+> 🔴 **Sửa 11/09/2026 — bản cũ đếm tháng RẢI RÁC thành chuỗi liên tiếp.** CTE tính `Grp` lọc `WHERE IsDown=1` rồi mới lấy hiệu hai `ROW_NUMBER`; trên tập đã lọc hai số đó luôn bằng nhau, `Grp` luôn 0, nên mọi tháng thỏa điều kiện bị gộp thành một chuỗi. Cùng lỗi với S55. Nay `Grp` = chỉ số tháng lịch − `ROW_NUMBER` trên tập đã lọc: tháng liền nhau cùng nhóm, thiếu một tháng (hoặc một tháng không thỏa) là đứt chuỗi.
+
 > 🔴 **Đính chính 04/09/2026 — công thức `Amount9/Quantity` KHÔNG đo được giá thực tế ở kênh OTC.**
 > Đã xác minh ở `S87`: `Amount9 = UnitPrice × Quantity`. Vậy `SUM(Amount9)/SUM(Quantity)` **luôn trả
 > về đúng đơn giá niêm yết**, theo định nghĩa — chiết khấu nằm ở cột `DiscountRate` riêng, không bao
@@ -500,8 +502,8 @@ cùng cách phân loại chatbot đã dùng khi trả lời trực tiếp ngư�
         COUNT(*) OVER(PARTITION BY Channel,ItemCode) MonthsInWindow
       FROM m WHERE MonthStart>=DATEADD(month,-2,@MonthStart) AND MonthStart<=@MonthStart
     ), g AS (
-      SELECT *,ROW_NUMBER() OVER(PARTITION BY Channel,ItemCode ORDER BY MonthStart)
-               -ROW_NUMBER() OVER(PARTITION BY Channel,ItemCode,IsDown ORDER BY MonthStart) Grp
+      SELECT *,DATEDIFF(month,'19000101',MonthStart)
+               -ROW_NUMBER() OVER(PARTITION BY Channel,ItemCode ORDER BY MonthStart) Grp
       FROM win WHERE IsDown=1
     ), streak AS (
       SELECT Channel,ItemCode,MAX(cnt) MaxDownStreak
@@ -2396,6 +2398,25 @@ Dùng cho **M16** (cấp quản lý) và **V13** (cấp đội) — cùng một 
 Cho câu hỏi "nhân viên nào giảm liên tiếp 2–3 tháng; do mất khách, ít đơn hay giảm giá trị đơn".
 Ghép streak (từ bảng lương) với ba chỉ số nguyên nhân (từ hóa đơn) trong cùng một kết quả.
 
+> 🔴 **Sửa 11/09/2026 — bản cũ đếm tháng giảm RẢI RÁC thành chuỗi liên tiếp.** CTE `g` lọc `WHERE IsDown=1`
+> **trước** khi tính `ROW_NUMBER`, nên hai `ROW_NUMBER` luôn bằng nhau, `Grp` luôn bằng 0 và mọi tháng giảm của
+> một người dồn vào một chuỗi duy nhất. Chạy miền MB ngày 11/09 ra `DownMonths = 8` — tức 8 tháng giảm rải rác
+> trong 12 tháng, không phải 8 tháng liên tiếp. Đúng cái bẫy kế hoạch 11–20/09 dặn cho M16: phải phân biệt giảm
+> ba tháng liên tiếp với ba lần giảm rải rác.
+>
+> Bản mới sửa thêm ba chỗ: (1) chỉ tính là giảm khi tháng trước là **đúng tháng lịch liền kề** — thiếu tháng thì
+> đứt chuỗi, không bắc cầu, không coi tháng thiếu là 0; (2) cột `ConDangGiam = 1` chỉ khi chuỗi kết thúc ở tháng
+> tròn gần nhất — người có tháng cuối 06/2026 không còn hiện như đang giảm; (3) các cột nguyên nhân tính `LAG`
+> theo tháng của chính người đó, bản cũ so điểm cuối chuỗi này với điểm cuối chuỗi trước. Tháng đang chạy dở bị
+> loại để tránh bẫy MTD.
+>
+> Bản cũ cũng **không có bộ lọc `@AreaCode`**: M16 là câu của Trưởng phòng miền nhưng checker luôn trả cả công ty
+> (chạy `@AreaCode='MB'` vẫn ra người HCM, Bắc Huế, BDI). Đã thêm.
+>
+> "Giảm liên tiếp 3 tháng" của M16 = `DownMonths >= 3` và `ConDangGiam = 1` (ba lần giảm liên tiếp, cần bốn
+> tháng dữ liệu liền nhau).
+
+
     WITH b AS (
       SELECT *,DENSE_RANK() OVER(
         PARTITION BY EOMONTH(SaveDate), EmployeeCode ORDER BY SaveDate DESC) SnapshotRank
@@ -2404,37 +2425,58 @@ Ghép streak (từ bảng lương) với ba chỉ số nguyên nhân (từ hóa 
     ), e AS (
       SELECT EOMONTH(SaveDate) MonthEnd,EmployeeCode,EmployeeName,ManagerCode,MonthSaleAmount
       FROM b WHERE SnapshotRank=1 AND PositionCode IN ('TDV','CTV','CS','TK')
+        AND (@AreaCode IS NULL OR AreaCode=@AreaCode)
         AND (@ManagerCode IS NULL OR ManagerCode=@ManagerCode)
+        -- Bo thang dang chay do (MTD): doanh so luy ke vai ngay luon thap hon ca thang truoc.
+        AND (EOMONTH(SaveDate) < DATEFROMPARTS(YEAR(@AsOfDate),MONTH(@AsOfDate),1)
+             OR @AsOfDate = EOMONTH(@AsOfDate))
     ), d AS (
-      SELECT *,CASE WHEN MonthSaleAmount<LAG(MonthSaleAmount)
-                      OVER(PARTITION BY EmployeeCode ORDER BY MonthEnd) THEN 1 ELSE 0 END IsDown
+      SELECT *,LAG(MonthEnd) OVER(PARTITION BY EmployeeCode ORDER BY MonthEnd) PrevMonthEnd,
+               LAG(MonthSaleAmount) OVER(PARTITION BY EmployeeCode ORDER BY MonthEnd) PrevAmount
       FROM e
+    ), d2 AS (
+      -- Chi tinh la giam khi thang truoc la DUNG thang lich lien ke. Thieu thang thi dut chuoi:
+      -- khong bac cau qua khoang trong, khong coi thang thieu la 0.
+      SELECT *,CASE WHEN PrevMonthEnd=EOMONTH(DATEADD(month,-1,MonthEnd))
+                         AND MonthSaleAmount<PrevAmount THEN 1 ELSE 0 END IsDown
+      FROM d
     ), g AS (
+      -- ROW_NUMBER phai tinh tren TOAN BO cac thang roi moi loc IsDown=1 o buoc sau. Loc truoc
+      -- thi hai ROW_NUMBER bang nhau, Grp luon 0, moi thang giam roi rac bi gop thanh mot chuoi.
       SELECT *,ROW_NUMBER() OVER(PARTITION BY EmployeeCode ORDER BY MonthEnd)
                -ROW_NUMBER() OVER(PARTITION BY EmployeeCode,IsDown ORDER BY MonthEnd) Grp
-      FROM d WHERE IsDown=1
+      FROM d2
     ), streak AS (
       SELECT EmployeeCode,MAX(EmployeeName) EmployeeName,MAX(ManagerCode) ManagerCode,
-             COUNT(*) DownMonths,MAX(MonthEnd) LastMonth
-      FROM g GROUP BY EmployeeCode,Grp
+             COUNT(*) DownMonths,MIN(MonthEnd) FirstDownMonth,MAX(MonthEnd) LastMonth
+      FROM g WHERE IsDown=1 GROUP BY EmployeeCode,Grp
+    ), moc AS (
+      SELECT MAX(MonthEnd) ThangCuoi FROM e
     ), cause AS (
       SELECT EmpDMSCode,EOMONTH(DocDate) MonthEnd,
              COUNT(DISTINCT CustomerCode) Customers,COUNT(DISTINCT OrderKey) Orders,
              SUM(Amount9)/NULLIF(COUNT(DISTINCT OrderKey),0) AOV,
              COUNT(DISTINCT ItemCode) SKUs
       FROM #sales GROUP BY EmpDMSCode,EOMONTH(DocDate)
+    ), cause2 AS (
+      -- Delta nguyen nhan tinh o day, theo tung thang cua chinh nguoi do; tinh o SELECT cuoi thi LAG
+      -- so diem cuoi chuoi nay voi diem cuoi chuoi truoc.
+      SELECT *,Customers-LAG(Customers) OVER(PARTITION BY EmpDMSCode ORDER BY MonthEnd) CustomerDelta,
+               Orders-LAG(Orders) OVER(PARTITION BY EmpDMSCode ORDER BY MonthEnd) OrderDelta,
+               AOV-LAG(AOV) OVER(PARTITION BY EmpDMSCode ORDER BY MonthEnd) AOVDelta,
+               SKUs-LAG(SKUs) OVER(PARTITION BY EmpDMSCode ORDER BY MonthEnd) SKUDelta
+      FROM cause
     )
-    SELECT s.EmployeeCode,s.EmployeeName,s.ManagerCode,s.DownMonths,s.LastMonth,
-           c.Customers,c.Orders,c.AOV,c.SKUs,
-           c.Customers-LAG(c.Customers) OVER(PARTITION BY s.EmployeeCode ORDER BY c.MonthEnd) CustomerDelta,
-           c.Orders-LAG(c.Orders) OVER(PARTITION BY s.EmployeeCode ORDER BY c.MonthEnd) OrderDelta,
-           c.AOV-LAG(c.AOV) OVER(PARTITION BY s.EmployeeCode ORDER BY c.MonthEnd) AOVDelta,
-           c.SKUs-LAG(c.SKUs) OVER(PARTITION BY s.EmployeeCode ORDER BY c.MonthEnd) SKUDelta
+    SELECT s.EmployeeCode,s.EmployeeName,s.ManagerCode,s.DownMonths,s.FirstDownMonth,s.LastMonth,
+           CASE WHEN s.LastMonth=m.ThangCuoi THEN 1 ELSE 0 END ConDangGiam,
+           c.Customers,c.Orders,c.AOV,c.SKUs,c.CustomerDelta,c.OrderDelta,c.AOVDelta,c.SKUDelta
     FROM streak s
-    LEFT JOIN dbo.DIM_NhanVien n ON n.EmployeeCode=s.EmployeeCode
-    LEFT JOIN cause c ON c.EmpDMSCode=n.DMSId AND c.MonthEnd=s.LastMonth
+    CROSS JOIN moc m
+    OUTER APPLY (SELECT TOP (1) d.DMSId FROM dbo.DIM_NhanVien d
+                 WHERE d.EmployeeCode=s.EmployeeCode ORDER BY ISNULL(d.IsDuplicate,0)) n
+    LEFT JOIN cause2 c ON c.EmpDMSCode=n.DMSId AND c.MonthEnd=s.LastMonth
     WHERE s.DownMonths>=2
-    ORDER BY s.DownMonths DESC,s.EmployeeCode;
+    ORDER BY ConDangGiam DESC,s.DownMonths DESC,s.EmployeeCode;
 
 ### S56 — Doanh số, target và xu hướng từng TDV theo tháng — READY
 
@@ -2496,6 +2538,8 @@ Cho câu hỏi "nhân viên nào đóng góp nhiều nhất vào tăng/giảm do
 
 ### S58 — Vùng dưới kế hoạch liên tiếp và hụt tích lũy — PARTIAL
 
+> 🔴 **Sửa 11/09/2026 — bản cũ đếm tháng RẢI RÁC thành chuỗi liên tiếp.** CTE tính `Grp` lọc `WHERE Below=1` rồi mới lấy hiệu hai `ROW_NUMBER`; trên tập đã lọc hai số đó luôn bằng nhau, `Grp` luôn 0, nên mọi tháng thỏa điều kiện bị gộp thành một chuỗi. Cùng lỗi với S55. Nay `Grp` = chỉ số tháng lịch − `ROW_NUMBER` trên tập đã lọc: tháng liền nhau cùng nhóm, thiếu một tháng (hoặc một tháng không thỏa) là đứt chuỗi.
+
 Cho câu hỏi "vùng nào dưới 80% kế hoạch liên tiếp; tổng hụt tích lũy bao nhiêu". Khác S43 (gap tại
 một kỳ) ở chỗ đếm SỐ THÁNG LIÊN TIẾP và CỘNG DỒN phần hụt qua các tháng đó.
 
@@ -2517,8 +2561,8 @@ Target ETC toàn kênh chưa map riêng nên phần ETC vẫn PARTIAL — xem gh
              CASE WHEN 100.0*Actual/NULLIF(Target,0)<80 THEN 1 ELSE 0 END Below
       FROM k
     ), g AS (
-      SELECT *,ROW_NUMBER() OVER(PARTITION BY AreaCode ORDER BY MonthEnd)
-               -ROW_NUMBER() OVER(PARTITION BY AreaCode,Below ORDER BY MonthEnd) Grp
+      SELECT *,DATEDIFF(month,'19000101',MonthEnd)
+               -ROW_NUMBER() OVER(PARTITION BY AreaCode ORDER BY MonthEnd) Grp
       FROM f WHERE Below=1
     )
     SELECT AreaCode,COUNT(*) MonthsBelow80,MIN(MonthEnd) FromMonth,MAX(MonthEnd) ToMonth,
@@ -2767,6 +2811,8 @@ Chặn 200 dòng, xếp theo khoảng cách xa trung vị tỉnh nhất (bản k
 
 ### S64 — Cá nhân/đội dưới 80% liên tiếp và khoảng hụt — READY
 
+> 🔴 **Sửa 11/09/2026 — bản cũ đếm tháng RẢI RÁC thành chuỗi liên tiếp.** CTE tính `Grp` lọc `WHERE Below80=1` rồi mới lấy hiệu hai `ROW_NUMBER`; trên tập đã lọc hai số đó luôn bằng nhau, `Grp` luôn 0, nên mọi tháng thỏa điều kiện bị gộp thành một chuỗi. Cùng lỗi với S55. Nay `Grp` = chỉ số tháng lịch − `ROW_NUMBER` trên tập đã lọc: tháng liền nhau cùng nhóm, thiếu một tháng (hoặc một tháng không thỏa) là đứt chuỗi.
+
 Cho câu hỏi "cá nhân/đội nào dưới 80% liên tiếp 3 tháng; khoảng hụt bao nhiêu". Khác S31 (phân tầng
 KPI tại từng tháng) ở chỗ đếm CHUỖI LIÊN TIẾP và cộng dồn phần hụt.
 
@@ -2783,8 +2829,8 @@ KPI tại từng tháng) ở chỗ đếm CHUỖI LIÊN TIẾP và cộng dồn 
         AND (@AreaCode IS NULL OR AreaCode=@AreaCode)
         AND (@ManagerCode IS NULL OR ManagerCode=@ManagerCode)
     ), g AS (
-      SELECT *,ROW_NUMBER() OVER(PARTITION BY EmployeeCode ORDER BY MonthEnd)
-               -ROW_NUMBER() OVER(PARTITION BY EmployeeCode,Below80 ORDER BY MonthEnd) Grp
+      SELECT *,DATEDIFF(month,'19000101',MonthEnd)
+               -ROW_NUMBER() OVER(PARTITION BY EmployeeCode ORDER BY MonthEnd) Grp
       FROM e WHERE Below80=1
     )
     SELECT EmployeeCode,MAX(EmployeeName) EmployeeName,MAX(ManagerCode) ManagerCode,
