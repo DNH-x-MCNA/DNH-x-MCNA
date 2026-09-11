@@ -2437,6 +2437,13 @@ def customer_cohort_retention(month_to: str = None, months_back: int = 6,
     Khong gan nhan cohort nay bang IsNC cua Bravo: y nghia cohort o day duoc dinh nghia minh bach
     tu hoa don. Neu kho khong co lich su truoc thang mua dau tien thi day chi la "first observed",
     khong duoc khang dinh la lan mua dau tien trong doi khach.
+
+    10/09/2026 - SUA LOI "da du ky" xet theo THANG TRON gan nhat (_latest_complete_revenue_month()),
+    khong con dung thang cua ngay du lieu tho (latest_data_date()[:7]). Truoc day, neu thang hien tai
+    moi la MTD (vd moi co 10/30 ngay), moi cohort co target_month roi dung vao thang do bi tinh "da du
+    ky" va retention bi danh gia THAP GIA TAO (khach chua kip mua trong vai ngay dau thang bi coi la
+    khong giu chan) - phat hien qua vi du thuc te: cohort 06/2026 tuoi 3 thang bao 10,7% trong khi
+    cohort lien ke 04-05/2026 bao 42,9%/33,8%, chenh lech bat thuong cung 1 nguyen nhan.
     """
     earliest, latest = _revenue_data_month_range()
     if not earliest or not latest:
@@ -2448,6 +2455,15 @@ def customer_cohort_retention(month_to: str = None, months_back: int = 6,
         return {"error": "group_by chi nhan overall/channel/area."}
     cohort_from = _month_add(month_to, -(months_back - 1))
     activity_to = min(latest, _month_add(month_to, max(ages or [0])))
+    # 10/09/2026 - SUA LOI: truoc day dung `latest` (thang cua NGAY du lieu moi nhat, vd '2026-09' tu
+    # ngay 2026-09-10) de xet "da du ky" cho tung tuoi cohort - nhung thang hien tai co the moi la MTD
+    # (10/30 ngay), khien retention cua BAT KY cohort nao co target_month roi vao thang chua tron bi
+    # danh gia THAP GIA TAO (khach chua kip mua trong vai ngay dau thang bi tinh la "khong giu chan").
+    # Da bat qua vi du thuc te: cohort 06/2026 tuoi 3 thang (target=09/2026) bao 10,7% trong khi cohort
+    # lien ke 04/2026, 05/2026 bao 42,9%/33,8% - chenh lech bat thuong do cung 1 nguyen nhan. Dung thang
+    # TRON gan nhat (giong customer_movement da lam) de xet "da du ky", khong dung thang cua ngay du
+    # lieu tho.
+    latest_complete = _latest_complete_revenue_month()
     rows = _customer_monthly_activity(
         earliest, activity_to, scope_area_code, scope_channel, scope_employee_code)
 
@@ -2481,7 +2497,7 @@ def customer_cohort_retention(month_to: str = None, months_back: int = 6,
         retention = []
         for age in ages:
             target_month = _month_add(cohort_month, age)
-            complete = target_month <= latest
+            complete = target_month <= latest_complete
             retained = len(b["retained"][age]) if complete else None
             retention.append({
                 "age_month": age, "target_month": target_month,
@@ -2505,10 +2521,13 @@ def customer_cohort_retention(month_to: str = None, months_back: int = 6,
         "left_censored_cohort_months": left_censored_months,
         "valid_cohort_count": sum(1 for c in cohorts if c["valid_new_customer_cohort"]),
         "pham_vi_du_lieu_co_that": {"tu_thang": earliest, "den_thang": latest},
+        "latest_complete_month": latest_complete,
         "canh_bao": ("Cohort o dung tu_thang cua kho bi left-censored: chi la lan dau QUAN SAT DUOC, "
                       "khong duoc goi la khach moi trong doi hay dung de ket luan retention chinh thuc. "
                       "Cac cohort khac van can DNH chot dinh nghia khach moi. Cac tuoi co target_month "
-                      "sau den_thang duoc tra None, khong coi la 0% giu chan."),
+                      "sau latest_complete_month duoc tra None ('ky_da_du': false), khong coi la 0% giu "
+                      "chan - day KHONG PHAI loi, ma la thang do CHUA TRON (vd thang hien tai moi co du "
+                      "lieu vai ngay dau) nen chua the danh gia cong bang."),
         "data_as_of": latest_data_date(),
     }
 
@@ -3976,7 +3995,11 @@ def workforce_productivity(month_to: str = None, months_back: int = 6,
                            group_by: str = "manager", limit: int = 200, mode: str = "productivity",
                            scope_area_code: str = None, scope_channel: str = None,
                            scope_employee_code: str = None) -> dict:
-    """Nang suat thang theo nhan vien/QLV/vung, headcount, span va streak tang-giam."""
+    """Nang suat thang theo nhan vien/QLV/vung, headcount, span va streak tang-giam.
+
+    10/09/2026: them headcount_up_productivity_down (chi voi group_by='manager'/'area') - danh sach
+    san cac nhom co headcount tang nhung revenue_per_employee giam so thang truoc, tranh phai goi
+    tool nhieu lan voi group_by/months_back khac nhau de tu do tim (da gay timeout thuc te o C46)."""
     if mode == "route_visits":
         return _route_visit_effectiveness(month_to, months_back, limit, scope_area_code,
                                           scope_channel, scope_employee_code)
@@ -4193,9 +4216,44 @@ def workforce_productivity(month_to: str = None, months_back: int = 6,
             -row["below_80_count"], -row["below_80_gap"], row["manager_code"],
         ))
 
+    # 10/09/2026 (C46): cau hoi "don vi nao tang headcount nhung nang suat giam" khong co tool tong
+    # hop san - model phai tu goi workforce_productivity NHIEU LAN (group_by khac nhau, months_back
+    # khac nhau) de tu do tim, het ngan sach thoi gian truoc khi tra loi duoc (bat qua thuc te: 5 lan
+    # goi lien tiep roi timeout). Tinh san danh sach nay tu TAP DAY DU (truoc khi cat theo limit) de
+    # model chi can 1 lan goi la co ngay cau tra loi, giong cach da lam voi declining_employees.
+    headcount_up_productivity_down = []
+    if group_by in {"manager", "area"}:
+        for key, ms in by_group.items():
+            for month in sorted(ms):
+                r = ms[month]
+                prev = ms.get(_month_add(month, -1))
+                if not prev or not prev.get("revenue_per_employee") or not r.get("revenue_per_employee"):
+                    continue
+                if r["headcount"] > prev["headcount"] and r["revenue_per_employee"] < prev["revenue_per_employee"]:
+                    headcount_up_productivity_down.append({
+                        "group_code": r["group_code"], "group_name": r["group_name"], "month": month,
+                        "headcount": r["headcount"], "previous_headcount": prev["headcount"],
+                        "revenue_per_employee": r["revenue_per_employee"],
+                        "previous_revenue_per_employee": prev["revenue_per_employee"],
+                        "revenue_per_employee_pct_change": (
+                            (r["revenue_per_employee"] - prev["revenue_per_employee"])
+                            / prev["revenue_per_employee"] * 100
+                        ),
+                    })
+        headcount_up_productivity_down.sort(
+            key=lambda row: row["revenue_per_employee_pct_change"])
+
     rows, so_bi_cat = _giu_top_don_vi(rows, "group_code", "actual", limit)
     return {
         "month_from": month_from, "month_to": month_to, "group_by": group_by,
+        "headcount_up_productivity_down": headcount_up_productivity_down,
+        "headcount_up_productivity_down_definition": (
+            "Danh sach (nhom, thang) co headcount THANG NAY > THANG TRUOC lien ke VA "
+            "revenue_per_employee THANG NAY < THANG TRUOC - tinh tren TOAN BO tap nhom truoc khi cat "
+            "theo limit. Chi co gia tri khi group_by='manager' hoac 'area'; rong voi group_by khac. "
+            "Sap xep theo % giam nang suat manh nhat truoc."
+            if group_by in {"manager", "area"} else None
+        ),
         "month_to_is_partial": month_to_is_partial,
         "decline_evaluated_through": decline_evaluated_through,
         "partial_month_excluded_from_decline_streak": month_to_is_partial,
@@ -6539,6 +6597,144 @@ def _inventory_supply_risk(stock_by_item: dict, item_names: dict, area_code: str
         "definition": (
             "Canh bao suy dien tu ton hien co so voi binh quan ban OTC 3 thang da chot. "
             "Khong co du lieu don cho xu ly/chia ton/khach cam ket nen KHONG ket luan da mat don hay doanh thu."),
+    }
+
+
+def sku_revenue_drop_vs_stock(months_back: int = 3, area_code: str = None,
+                              min_prev_revenue: float = 50_000_000,
+                              drop_pct_threshold: float = 30.0,
+                              limit: int = 30,
+                              scope_area_code: str = None,
+                              scope_channel: str = None) -> dict:
+    """SKU doanh thu giam manh so ky truoc, doi chieu voi TON KHO THEO LO hien co - tra loi 2 dang
+    cau hoi hay bi gop chung: "SKU mat doanh so do thieu hang" (doanh thu giam + ton gan nhu 0) va
+    "SKU ton cao trong khi doanh so giam" (doanh thu giam nhung van con nhieu hang, nghi ung dong/
+    mat khach chu khong phai dut hang).
+
+    08/09/2026 (khoi tao) - 10/09/2026 (dong bo lai sau khi bi ghi de mat trong 1 lan deploy khac):
+    TRUOC KHI CO TOOL NAY, cau hoi dang tren khong co tool co dinh nao phu trach, buoc model phai
+    tu viet SQL tu do (sql_tu_do) MOI LAN duoc hoi - da bat duoc qua kiem thu thuc te: 2 lan hoi
+    CUNG 1 cau nhung ra 2 ky so sanh khac nhau va co lan LAY NHAM ton kho tu bang khong loc nam tai
+    chinh (BRV_TonKhoDK/brv_tonkhodklot thieu dieu kien year=nam moi nhat), tinh ca ton "lo ma" cua
+    nam 2024/2025 da ban het tu lau vao con so "ton hien co", bao mot SKU dang co that 105 don vi
+    ton du thuc te da het hang (0 theo dung lo con active nam nay). Ham nay CO DINH logic: doanh thu
+    dung UNION ALL OTC(vhoadon_otc/dms_khachhang)+ETC(vhoadon_etc/dmssx_khachhang) giong
+    geography_monthly_performance; ton kho dung DUNG bang brv_tonkhodklot loc is_active=1, quantity>0
+    VA year=_nam_moi_nhat(...) - cung dieu kien da sua o inventory_expiry_report, khong duoc bo qua.
+
+    Ky so sanh: 2 khoang LIEN TIEP cung do dai (months_back thang), ket thuc tai ngay du lieu moi nhat
+    - vd months_back=3: ky nay la 3 thang gan nhat, ky truoc la 3 thang lien ke truoc do. Khong dung
+    thang duong lich co dinh de tranh lech do dai giua 2 ky.
+
+    Phan loai (chi xet SKU co PrevRevenue>=min_prev_revenue de tranh SKU nho le lam nhieu danh sach):
+    - MAT_DOANH_SO_NGHI_THIEU_HANG: doanh thu giam >=drop_pct_threshold% VA ton kho hien co = 0.
+      Day la suy dien tu ton=0, KHONG PHAI bang chung da co don bi tu choi/huy vi thieu hang - DNH
+      chua co DMS_DonHangHdr/backlog de xac nhan chac chan nguyen nhan.
+    - TON_CAO_DOANH_SO_GIAM: doanh thu giam >=drop_pct_threshold% NHUNG ton kho hien co > 0 va du
+      ban qua so thang tuong duong voi doanh thu ky truoc (nghi mat khach/ung dong hang, khong phai
+      dut hang).
+    area_code: 'MB'/'MT'/'MN' - loc theo vung khach hang (qua dim_tinhthanhpho.area_code), bo trong
+    la toan cong ty. scope_area_code: EP GHI DE area_code khi tai khoan bi gioi han vung.
+    scope_channel: EP GHI DE tu server khi tai khoan bi gioi han kenh ('OTC' hoac 'ETC') - chi tinh
+    doanh thu/nhu cau tu kenh do, giong geography_monthly_performance."""
+    if scope_area_code:
+        area_code = scope_area_code
+    months_back = max(1, min(int(months_back or 3), 12))
+    latest = latest_data_date()
+    if not latest:
+        return {"error": "Kho chua co hoa don."}
+    period_to = latest[:10]
+    period_to_date = dt.date.fromisoformat(period_to)
+    cur_from_date = period_to_date - dt.timedelta(days=30 * months_back - 1)
+    prev_to_date = cur_from_date - dt.timedelta(days=1)
+    prev_from_date = prev_to_date - dt.timedelta(days=30 * months_back - 1)
+    cur_from, prev_from, prev_to = cur_from_date.isoformat(), prev_from_date.isoformat(), prev_to_date.isoformat()
+
+    area_join_otc = (" LEFT JOIN dms_khachhang kh ON kh.code=v.customer_code "
+                     "LEFT JOIN dim_tinhthanhpho tp ON tp.city_id=kh.city_id") if area_code else ""
+    area_join_etc = (" LEFT JOIN dmssx_khachhang kh ON kh.code=v.customer_code "
+                     "LEFT JOIN dim_tinhthanhpho tp ON tp.city_id=kh.city_id") if area_code else ""
+    area_cond = " AND tp.area_code=?" if area_code else ""
+    area_params = (area_code,) if area_code else ()
+
+    parts, params = [], []
+    for period_label, date_from, date_to in (("CUR", cur_from, period_to), ("PREV", prev_from, prev_to)):
+        if scope_channel != "ETC":
+            parts.append(f"SELECT '{period_label}' period, v.item_code, v.amount9 revenue FROM vhoadon_otc v"
+                         f"{area_join_otc} WHERE v.doc_date BETWEEN ? AND ?{area_cond}")
+            params.extend((date_from, date_to) + area_params)
+        if scope_channel != "OTC":
+            parts.append(f"SELECT '{period_label}' period, v.item_code, v.amount9 revenue FROM vhoadon_etc v"
+                         f"{area_join_etc} WHERE v.doc_date BETWEEN ? AND ?{area_cond}")
+            params.extend((date_from, date_to) + area_params)
+    if not parts:
+        return {"error": "Khong co kenh nao kha dung."}
+    sql = ("WITH x AS (" + " UNION ALL ".join(parts) + ") "
+           "SELECT item_code, period, SUM(revenue) revenue FROM x GROUP BY item_code, period")
+    raw = _q(sql, tuple(params))
+
+    by_item = {}
+    for r in raw:
+        by_item.setdefault(r["item_code"], {})[r["period"]] = _f(r["revenue"])
+
+    # Ton kho theo LO, DUNG dieu kien da sua o inventory_expiry_report (year=nam moi nhat) - khong
+    # duoc lap lai loi "lo ma" cua nam cu.
+    stock_sql = ("SELECT sp.code item_code, sp.name item_name, SUM(t.quantity) stock_qty "
+                "FROM brv_tonkhodklot t LEFT JOIN brv_sanpham sp ON sp.id_code=t.item_id "
+                "WHERE t.is_active=1 AND t.quantity>0")
+    stock_params = []
+    nam_lot_moi = _nam_moi_nhat("brv_tonkhodklot", "year")
+    if nam_lot_moi is not None:
+        stock_sql += " AND t.year=?"
+        stock_params.append(nam_lot_moi)
+    stock_sql += " GROUP BY sp.code, sp.name"
+    stock_rows = _q(stock_sql, tuple(stock_params))
+    stock_by_item = {r["item_code"]: {"stock_qty": _f(r["stock_qty"]), "item_name": r["item_name"]}
+                     for r in stock_rows if r["item_code"]}
+
+    thieu_hang, ton_cao = [], []
+    for code, periods in by_item.items():
+        prev_rev = periods.get("PREV", 0.0)
+        cur_rev = periods.get("CUR", 0.0)
+        if prev_rev < min_prev_revenue:
+            continue
+        drop_pct = (prev_rev - cur_rev) / prev_rev * 100 if prev_rev else 0.0
+        if drop_pct < drop_pct_threshold:
+            continue
+        stock_info = stock_by_item.get(code, {"stock_qty": 0.0, "item_name": None})
+        row = {
+            "item_code": code,
+            "item_name": stock_info["item_name"] or f"(chua co ten trong danh muc - ma {code})",
+            "prev_revenue": prev_rev,
+            "cur_revenue": cur_rev,
+            "revenue_drop_pct": round(drop_pct, 1),
+            "stock_qty": stock_info["stock_qty"],
+        }
+        if stock_info["stock_qty"] <= 0:
+            thieu_hang.append(row)
+        else:
+            ton_cao.append(row)
+
+    thieu_hang.sort(key=lambda r: -r["prev_revenue"])
+    ton_cao.sort(key=lambda r: -r["stock_qty"])
+    limit = max(1, min(int(limit or 30), 100))
+
+    return {
+        "period_current": {"from": cur_from, "to": period_to},
+        "period_previous": {"from": prev_from, "to": prev_to},
+        "min_prev_revenue": min_prev_revenue,
+        "drop_pct_threshold": drop_pct_threshold,
+        "mat_doanh_so_nghi_thieu_hang": thieu_hang[:limit],
+        "mat_doanh_so_nghi_thieu_hang_total": len(thieu_hang),
+        "ton_cao_doanh_so_giam": ton_cao[:limit],
+        "ton_cao_doanh_so_giam_total": len(ton_cao),
+        "definition": (
+            "MAT_DOANH_SO_NGHI_THIEU_HANG: doanh thu giam >=nguong VA ton kho theo lo (is_active=1, "
+            "year=nam tai chinh moi nhat) = 0 - suy dien tu ton=0, KHONG PHAI bang chung da co don bi "
+            "tu choi vi thieu hang (DNH chua co du lieu backlog/don bi huy). "
+            "TON_CAO_DOANH_SO_GIAM: doanh thu giam >=nguong nhung ton kho > 0 - nghi mat khach/ung "
+            "dong hang, khong phai dut hang. Ton kho la ANH CHUP HIEN TAI (khong theo ky doanh thu)."
+        ),
     }
 
 
@@ -9429,6 +9625,7 @@ TEMPLATES = {
     "check_order_timing": order_timing_check,
     "get_inventory_by_region": inventory_by_region,
     "get_inventory_expiry_report": inventory_expiry_report,
+    "get_sku_revenue_drop_vs_stock": sku_revenue_drop_vs_stock,
     "get_qlv_change_history": qlv_change_history,
     "get_revenue_tree": revenue_tree,
     "get_kpi_ranking": kpi_ranking,
@@ -9529,6 +9726,7 @@ _CHANNEL_SCOPE_POLICIES = {
         "check_order_timing", "get_revenue_by_region", "get_promotion_effectiveness",
         "get_promotion_data_quality", "get_customer_revenue_debt_risk",
         "get_receivables_overview", "get_receivables_period_compare", "get_employee_daily_kpi",
+        "get_sku_revenue_drop_vs_stock",
     }},
     # Cac tool nay hien chi co nguon OTC. Tai khoan OTC duoc dung; ETC bi chan de tranh tra sai kenh.
     **{name: "otc_only" for name in {

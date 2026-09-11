@@ -227,8 +227,20 @@ def _required_tool_for_question(question: str) -> str | None:
     # C29: can CA co nghiep vu NC/RO cua Bravo LAN chuoi active/reactivated/stopped tu hoa don.
     # Bao cao lifecycle tra hai lop nay rieng biet; khong de nhanh "tai kich hoat" chung rut cau
     # hoi tung thang thanh mot cap thang duy nhat.
-    if all(marker in q for marker in ("khach moi", "tai kich hoat", "ngung mua")) and any(
-            marker in q for marker in ("tung thang", "theo thang", "khach hoat dong", "mua lai")):
+    #
+    # 10/09/2026: cau hoi THAT cua DNH (C29) viet dang liet ke roi dau phay - "khach hoat dong, moi,
+    # mua lai, tai kich hoat, ngung mua tung thang" - sau khi bo dau/chuan hoa khoang trang, "moi"
+    # dung MOT MINH (khong dinh lien "khach moi") nen pattern cu bo lo route nay, khien model tu goi
+    # THEM ca get_customer_movement (dinh nghia "khach moi" khac han, tu suy tu hoa don thay vi dung
+    # co he thong IsNC) tron chung vao 1 cau tra loi - da bat qua kiem thu thuc te: 2 bang cung
+    # ten "khach moi" ra 612 (dung, khop UAT) va 441 (tu suy dien, SAI y nghia) trong CUNG 1 cau tra
+    # loi, gay nham lan khi doi chieu. Them bien the liet ke roi ("moi" dung rieng canh "khach hoat
+    # dong"/"ngung mua"/"tai kich hoat") de bat dung ca cach viet cau hoi tu nhien nay.
+    c29_markers = ("khach hoat dong", "tai kich hoat", "ngung mua", "mua lai")
+    q_words = f" {q.replace(',', ' ')} "
+    if sum(marker in q for marker in c29_markers) >= 3 and (
+        "khach moi" in q or " moi " in q_words
+    ) and any(marker in q for marker in ("tung thang", "theo thang", "moi thang")):
         return "get_customer_lifecycle_summary"
     # V28/S83 phai nam TRUOC nhanh tai kich hoat chung: cau nay ket hop bon muc tieu, khong phai
     # chi mot danh sach khach tai kich hoat.
@@ -785,8 +797,10 @@ TEMPLATE_TOOLS = [
                        "area. C30/S19: BAT BUOC bo qua cohort co valid_new_customer_cohort=false khi "
                        "ket luan ty le giu chan; left_censored_cohort_months la cac cohort o bien lich su, "
                        "chi duoc neu nhu so quan sat tham khao. first observed KHONG chac la lan mua dau "
-                       "tien trong doi; ky co ky_da_du=false tra None, KHONG coi la 0%. DNH van can chot "
-                       "dinh nghia 'khach mo moi' truoc khi dung lam KPI chinh thuc.",
+                       "tien trong doi; ky co ky_da_du=false tra None, KHONG coi la 0% - xet theo "
+                       "latest_complete_month (thang TRON gan nhat, khong phai thang hien tai neu thang "
+                       "do moi la MTD) nen thang vua qua CHUA CO du lieu se luon la None chu khong phai "
+                       "0%. DNH van can chot dinh nghia 'khach mo moi' truoc khi dung lam KPI chinh thuc.",
         "input_schema": {"type": "object", "properties": {
             "month_to": {"type": "string", "description": "YYYY-MM, thang cohort cuoi."},
             "months_back": {"type": "integer", "description": "So thang cohort, mac dinh 6, toi da 24."},
@@ -808,7 +822,15 @@ TEMPLATE_TOOLS = [
                        "gap/history CHI chac chan trong cua so 12 thang dang co, khong tu suy doan "
                        "lich su xa hon. C20/M08: summary_all_customers da tach san new_or_first_observed_revenue, "
                        "reactivated_revenue, lost_previous_revenue va like_for_like_*; dung cac so nay, "
-                       "KHONG tu phan loai lai hay de mot khoan 'chua phan loai'.",
+                       "KHONG tu phan loai lai hay de mot khoan chua phan loai. "
+                       "10/09/2026: KHONG duoc goi tool nay THEM vao cung cau tra loi da dung "
+                       "get_customer_lifecycle_summary cho C29 (khach hoat dong/moi/mua lai/tai kich "
+                       "hoat/ngung mua tung thang) - hai tool dinh nghia khach moi KHAC HAN nhau (tool "
+                       "nay tu suy tu hoa don, con lifecycle_summary dung dung co he thong IsNC da xac "
+                       "nhan UAT), gop ca hai vao 1 cau tra loi se dua ra 2 con so khach moi khac nhau "
+                       "cho CUNG 1 thang gay nham lan nghiem trong (da bat qua kiem thu thuc te: 612 vs "
+                       "441 cho thang 8/2026). Neu cau hoi da khop dung C29, CHI dung "
+                       "get_customer_lifecycle_summary, KHONG goi tool nay bo sung.",
         "input_schema": {"type": "object", "properties": {
             "month": {"type": "string", "description": "YYYY-MM."},
             "history_months": {"type": "integer", "description": "Cua so nhan biet tai kich hoat, mac dinh 12."},
@@ -919,6 +941,11 @@ TEMPLATE_TOOLS = [
                        "thu/nhan vien, MoM va streak giam theo nhan vien/QLV/vung/tong. Dung cho span of "
                        "control, headcount tang nhung nang suat giam, ai/doi giam lien tiep. Chua co lich "
                        "su vao-ra-chuyen vung chot chuan nen KHONG ket luan nhan qua tu bien dong headcount. "
+                       "C46: cau hoi 'don vi nao tang headcount nhung nang suat giam' - BAT BUOC dung dung "
+                       "1 lan goi voi group_by='manager' (hoac 'area' neu hoi theo vung), months_back>=3, "
+                       "roi doc thang headcount_up_productivity_down (da tinh san tren TOAN BO nhom, khong "
+                       "bi cat theo limit) - KHONG duoc tu goi lai nhieu lan voi group_by/months_back khac "
+                       "nhau de tu do tim, se het ngan sach thoi gian truoc khi tra loi duoc. "
                        "M16/S55 va V13: khi hoi NHAN VIEN giam lien tiep, BAT BUOC goi group_by='employee', "
                        "months_back>=4, limit=200. BAT BUOC noi tong so tu declining_employee_count va dung "
                        "declining_employees de liet ke; neu declining_employees_truncated=true phai noi ro "
@@ -1097,6 +1124,33 @@ TEMPLATE_TOOLS = [
                 "limit": {"type": "integer", "description": "So dong chi tiet toi da tra ve trong 'rows' (mac dinh 30) - KHONG anh huong 'summary' (luon tinh tren toan bo pham vi)."},
                 "focus": {"type": "string", "enum": ["all", "shortage", "overstock"],
                           "description": "Trong tam sap xep supply_risk: shortage cho SKU thieu hang; overstock cho ton cao/cham ban; all cho tong quan. Backend tu suy ra tu cau hoi neu bo trong."},
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "get_sku_revenue_drop_vs_stock",
+        "description": "SKU doanh thu giam manh so ky truoc (2 khoang lien tiep cung do dai), DOI CHIEU "
+                       "voi ton kho theo LO hien co - dung cho cau hoi so sanh 2 KY CU THE dang 'SKU mat "
+                       "doanh so do thieu hang' hoac 'SKU ton cao trong khi doanh so giam'. KHAC voi "
+                       "get_inventory_expiry_report (focus=shortage/overstock): tool do so ton hien co voi "
+                       "BINH QUAN 3 thang da chot (khong so 2 ky rieng biet); tool nay so RO doanh thu ky "
+                       "nay vs ky truoc lien ke, phu hop khi nguoi dung muon thay ro % giam va so tien cu "
+                       "the giua 2 ky. Neu khong ro nguoi dung muon kieu nao, uu tien "
+                       "get_inventory_expiry_report truoc (da co san, it tham so hon). "
+                       "Tra ve 2 danh sach tach biet: mat_doanh_so_nghi_thieu_hang (doanh thu giam manh VA "
+                       "ton kho=0 - CHI la suy dien, KHONG PHAI bang chung da co don bi tu choi vi thieu "
+                       "hang, PHAI noi ro dieu nay) va ton_cao_doanh_so_giam (doanh thu giam manh nhung van "
+                       "con ton - nghi mat khach/ung dong, khong phai dut hang). Ton kho la ANH CHUP HIEN "
+                       "TAI, khong theo ky doanh thu dang so sanh - PHAI noi ro khi tra loi.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "months_back": {"type": "integer", "description": "Do dai moi ky so sanh, tinh bang thang (mac dinh 3) - ky nay va ky truoc lien ke cung do dai nay."},
+                "area_code": {"type": "string", "description": "Loc theo vung khach hang: 'MB'/'MT'/'MN' (khong bat buoc - bo trong de xem toan cong ty)."},
+                "min_prev_revenue": {"type": "number", "description": "Nguong doanh thu ky truoc toi thieu de xet (mac dinh 50 trieu) - tranh SKU qua nho lam nhieu danh sach."},
+                "drop_pct_threshold": {"type": "number", "description": "Nguong % giam doanh thu toi thieu de tinh la 'giam manh' (mac dinh 30)."},
+                "limit": {"type": "integer", "description": "So dong toi da moi danh sach (mac dinh 30) - cac truong '..._total' cho biet tong so thuc te neu bi cat."},
             },
             "required": [],
         },
@@ -2328,6 +2382,15 @@ def ask(question: str, session_id: str = "default", username: str = None, scope_
     ran_adhoc_query = None  # (question, sql) - luu vao longterm_memory neu query_database chay ok
     seen_tool_calls = set()
     unique_tool_calls = 0
+    executed_tool_names = set()
+    # 10/09/2026: get_customer_lifecycle_summary (dung co he thong IsNC, da xac nhan khop UAT) va
+    # get_customer_movement (tu suy "khach moi" tu hoa don) dinh nghia "khach moi"/"khach hoat dong"
+    # KHAC NHAU. Da bat qua kiem thu thuc te: sua rieng tool description 2 lan van khong ngan duoc
+    # model tu goi CA HAI cho cung 1 cau hoi C29, dua ra 2 con so "khach moi" khac nhau (612 vs 441
+    # cho T8/2026) trong CUNG 1 cau tra loi gay nham lan nghiem trong khi doi chieu. Chan CUNG bang
+    # code: mot khi 1 trong 2 tool nay da chay, loai NGAY tool kia khoi tools_for_request cho cac
+    # vong con lai cua CUNG cau hoi - khong dua vao prompt/description nua.
+    _MUTUALLY_EXCLUSIVE_CUSTOMER_TOOLS = {"get_customer_lifecycle_summary", "get_customer_movement"}
 
     # Tai khoan bi gioi han vung: loai han tool SQL tu do khoi danh sach gui cho AI (AI KHONG CO KHA
     # NANG goi, khong chi la "duoc dan dung goi") - chi con lai cac tool bao cao chuan da kiem soat
@@ -2482,6 +2545,25 @@ def ask(question: str, session_id: str = "default", username: str = None, scope_
                 })
                 continue
 
+            if (tu.name in _MUTUALLY_EXCLUSIVE_CUSTOMER_TOOLS
+                    and (_MUTUALLY_EXCLUSIVE_CUSTOMER_TOOLS - {tu.name}) & executed_tool_names):
+                other = next(iter((_MUTUALLY_EXCLUSIVE_CUSTOMER_TOOLS - {tu.name}) & executed_tool_names))
+                query_plan.skip_tool(
+                    tu.name, tu.input,
+                    f"{other} da chay - hai tool dinh nghia 'khach moi' khac nhau, khong duoc dung ca hai.",
+                )
+                tool_results.append({
+                    "type": "tool_result",
+                    "tool_use_id": tu.id,
+                    "content": json.dumps({
+                        "note": (f"Da dung {other} cho cau hoi nay. {tu.name} dinh nghia 'khach moi'/"
+                                 "'khach hoat dong' KHAC voi tool do - khong duoc goi ca hai trong cung 1 "
+                                 "cau tra loi vi se ra 2 con so khac nhau gay nham lan. Hay tong hop tu "
+                                 f"ket qua cua {other} da co.")
+                    }),
+                })
+                continue
+
             if query_plan.expired():
                 query_plan.skip_tool(tu.name, tu.input, "Đã hết tổng ngân sách thời gian request.")
                 tool_results.append({
@@ -2494,6 +2576,7 @@ def ask(question: str, session_id: str = "default", username: str = None, scope_
                 continue
 
             seen_tool_calls.add(tool_key)
+            executed_tool_names.add(tu.name)
             unique_tool_calls += 1
             new_tools_this_round += 1
             executed_count += 1
@@ -2710,6 +2793,8 @@ def ask_stream(question: str, session_id: str = "default", username: str = None,
     ran_adhoc_query = None
     seen_tool_calls = set()
     unique_tool_calls = 0
+    executed_tool_names = set()
+    _MUTUALLY_EXCLUSIVE_CUSTOMER_TOOLS = {"get_customer_lifecycle_summary", "get_customer_movement"}
 
     tools_for_request = _tools_for_request(
         scope_area_code, scope_channel, scope_role, scope_employee_code
@@ -2863,6 +2948,25 @@ def ask_stream(question: str, session_id: str = "default", username: str = None,
                 })
                 continue
 
+            if (tu.name in _MUTUALLY_EXCLUSIVE_CUSTOMER_TOOLS
+                    and (_MUTUALLY_EXCLUSIVE_CUSTOMER_TOOLS - {tu.name}) & executed_tool_names):
+                other = next(iter((_MUTUALLY_EXCLUSIVE_CUSTOMER_TOOLS - {tu.name}) & executed_tool_names))
+                query_plan.skip_tool(
+                    tu.name, tu.input,
+                    f"{other} da chay - hai tool dinh nghia 'khach moi' khac nhau, khong duoc dung ca hai.",
+                )
+                tool_results.append({
+                    "type": "tool_result",
+                    "tool_use_id": tu.id,
+                    "content": json.dumps({
+                        "note": (f"Da dung {other} cho cau hoi nay. {tu.name} dinh nghia 'khach moi'/"
+                                 "'khach hoat dong' KHAC voi tool do - khong duoc goi ca hai trong cung 1 "
+                                 "cau tra loi vi se ra 2 con so khac nhau gay nham lan. Hay tong hop tu "
+                                 f"ket qua cua {other} da co.")
+                    }),
+                })
+                continue
+
             if query_plan.expired():
                 query_plan.skip_tool(tu.name, tu.input, "Đã hết tổng ngân sách thời gian request.")
                 tool_results.append({
@@ -2875,6 +2979,7 @@ def ask_stream(question: str, session_id: str = "default", username: str = None,
                 continue
 
             seen_tool_calls.add(tool_key)
+            executed_tool_names.add(tu.name)
             unique_tool_calls += 1
             new_tools_this_round += 1
             executed_count += 1
