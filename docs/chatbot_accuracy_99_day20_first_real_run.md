@@ -1,5 +1,7 @@
 # Chatbot Accuracy 99% — Day 20 First Real Run
 
+> ⛔ **Từ 11/09/2026 business-eval đã bị gỡ bỏ và cấm dùng** (xem `AGENTS.md`). Tài liệu này chỉ còn giá trị lịch sử; không chạy lại các lệnh bên dưới.
+
 Chạy thật: 18/08/2026 17:35 (máy 24, `results/business-eval-sonnet-5-v2-20260818-173525.json`).
 Phân tích + vá lỗi: 19/08/2026.
 

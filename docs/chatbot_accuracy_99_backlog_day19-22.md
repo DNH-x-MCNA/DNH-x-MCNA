@@ -1,5 +1,7 @@
 # Backlog chi tiết — Ngày 19-22 (đối chiếu với kế hoạch gốc, 19/08/2026)
 
+> ⛔ **Từ 11/09/2026 business-eval đã bị gỡ bỏ và cấm dùng** (xem `AGENTS.md`). Tài liệu này chỉ còn giá trị lịch sử; không chạy lại các lệnh bên dưới.
+
 ## 🔴 Việc phát sinh ngoài checklist — kiểm toàn bộ 4 tập phân quyền tool (đáng lẽ Ngày 23)
 
 Từ lỗ hổng `get_salary_ranking` (xem mục Lương thưởng), đối chiếu chữ ký hàm thật của cả 22 tool

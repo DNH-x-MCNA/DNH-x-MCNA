@@ -83,10 +83,11 @@ import nl2sql  # noqa: E402
 
 
 def _load_eval_helpers():
+    # 11/09/2026: business-eval da bi go; hai ham doc nhat ky duoc tach sang nhat_ky_eval.py.
     spec = importlib.util.spec_from_file_location(
-        "beval_helpers", ROOT / "scripts" / "run_business_evaluation.py")
+        "nhat_ky_eval", ROOT / "scripts" / "nhat_ky_eval.py")
     mod = importlib.util.module_from_spec(spec)
-    sys.modules["beval_helpers"] = mod
+    sys.modules["nhat_ky_eval"] = mod
     spec.loader.exec_module(mod)
     return mod
 

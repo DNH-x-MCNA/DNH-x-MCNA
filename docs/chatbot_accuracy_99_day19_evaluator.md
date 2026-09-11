@@ -1,5 +1,7 @@
 # Chatbot Accuracy 99% — Day 19 Evaluator
 
+> ⛔ **Từ 11/09/2026 business-eval đã bị gỡ bỏ và cấm dùng** (xem `AGENTS.md`). Tài liệu này chỉ còn giá trị lịch sử; không chạy lại các lệnh bên dưới.
+
 Ngày chốt: 18/08/2026. Bổ sung sau khi kiểm lại toàn bộ việc ngày 17-19 và phát hiện gate quan
 trọng nhất của Day 19 ("evaluator end-to-end đủ 90 câu") thực tế chưa đạt.
 

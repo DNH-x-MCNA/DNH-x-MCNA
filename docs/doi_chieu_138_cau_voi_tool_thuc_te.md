@@ -1,5 +1,7 @@
 # Đối chiếu 138 câu hỏi điều hành với tool thật của chatbot
 
+> ⛔ **Từ 11/09/2026 business-eval đã bị gỡ bỏ và cấm dùng** (xem `AGENTS.md`). Tài liệu này chỉ còn giá trị lịch sử; không chạy lại các lệnh bên dưới.
+
 > Cập nhật ngày 24/08/2026, **không gọi API**. Kết quả được đối chiếu từ
 > `backend/nl2sql.py`, `backend/report_templates.py` và kiểm thử tự động.
 >
