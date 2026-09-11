@@ -26,7 +26,7 @@ Nguồn: đọc tab kết quả trên sheet UAT lúc ~09:30 ngày 11/09, theo **
 |---|---|---|
 | C11 | CHỜ CHỐT GIỚI HẠN | Khớp sau bản sửa 07/09; giới hạn: top SKU năm 2025 vượt 12 tháng chi tiết — người chấm duyệt giới hạn |
 | C24 | ĐẠT | Đã phân xử: chatbot đúng, S51 lệch 1–2 khách — S51 cần sửa cho vòng sau |
-| C39 | CHỜ KIỂM | S26 bản 10/09 so 4 ngày T9 với cả T8 (2.575 khách/36,5 tỷ); bản đúng T8 so T7 là 961 khách/8,96 tỷ — chấm lại |
+| C39 | CHỜ KIỂM | S26 bản 10/09 so 4 ngày T9 với cả T8 (2.575 khách/36,5 tỷ); đúng là T8 so T7 đủ tháng: 1.647 khách/20,3 tỷ (nợ snapshot 04/09) — chấm lại trên kho máy 24 |
 | C41 | CHỜ CHỐT GIỚI HẠN | Xác nhận với người chấm |
 | C42 | CHỜ KIỂM | Chatbot có SKU mà query không có — soát S47b bỏ sót trước khi coi là lỗi chatbot |
 | C46 | ĐẠT | Đối chiếu với S32 trước khi thêm TK (+5,11 tỷ MN) — retest |

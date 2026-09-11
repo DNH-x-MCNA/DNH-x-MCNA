@@ -351,8 +351,10 @@ def _ly_do_than_thien(muc: dict) -> str:
         # Gio cau lenh kho local duoc chay that, nen phai noi dung ket qua thuc te.
         so_dong = _tong_dong(muc)
         if so_dong:
-            return ("Đã chạy trên kho local warehouse.db (%s dòng); bảng này không có trên Bravo."
-                    % format(so_dong, ","))
+            # 11/09/2026: kho local cua may dang chay co the thieu thang (may phat trien chi co 52% hoa
+            # don thang 7) - so tu day chi dung de cham khi kho dong bo cung moc voi chatbot.
+            return ("Đã chạy trên kho local warehouse.db (%s dòng); bảng này không có trên Bravo. "
+                    "Chỉ dùng để chấm khi kho này đồng bộ cùng mốc với chatbot." % format(so_dong, ","))
         return "Đã chạy trên kho local nhưng không ra dòng nào — cần đồng bộ dữ liệu."
     if muc["trang_thai"] == "CHAY_MOT_PHAN":
         return "Một phần chạy được, phần còn lại lỗi hoặc chưa có dữ liệu — xem chi tiết từng bảng."

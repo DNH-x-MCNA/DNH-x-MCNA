@@ -1183,17 +1183,20 @@ snapshot cũ bằng snapshot mới.
 
 Cho C39, M38, V36: khách vừa có nợ quá hạn vừa đang giảm mua — nhóm cần siết bán hoặc thu hồi trước.
 
-> 🔴 **Đính chính 11/09/2026 — bản 10/09 so KỲ CHƯA TRÒN, số bị thổi phồng khoảng 3–4 lần.** Bản trước lấy
-> "tháng này" là tháng của ngày snapshot công nợ. Snapshot ngày 04/09 nên "tháng này" chỉ có 4 ngày tháng 9,
-> đem so với cả tháng 8 — gần như mọi khách đều trông như giảm mua. Đo trên cùng kho, cùng snapshot:
+> 🔴 **Đính chính 11/09/2026 — bản 10/09 so KỲ CHƯA TRÒN, và kho local của máy phát triển KHÔNG đủ để lấy
+> số chấm.** Bản 10/09 lấy "tháng này" là tháng của ngày snapshot công nợ; snapshot 04/09 nên "tháng này" chỉ có
+> 4 ngày tháng 9, đem so với cả tháng 8. Cùng snapshot nợ 04/09, ba cách tính cho ba kết quả:
 >
-> | Cách so | Số khách vừa nợ quá hạn vừa giảm mua | Tổng nợ quá hạn của nhóm |
+> | Cách tính | Số khách vừa nợ quá hạn vừa giảm mua | Tổng nợ quá hạn |
 > |---|---:|---:|
-> | Bản 10/09: T9 (4 ngày) so T8 | 2.575 | 36.482.395.431đ |
-> | Bản này: T8 so T7 (hai tháng tròn) | **961** | **8.963.791.924đ** |
+> | Bản 10/09: T9 (4 ngày) so T8, kho local | 2.575 | 36.482.395.431đ |
+> | T8 so T7 trên kho local máy phát triển — **tháng 7 chỉ có 52% hóa đơn** | 961 | 8.963.791.924đ |
+> | **T8 so T7, doanh thu lấy thẳng từ Bravo (đủ tháng)** | **1.647** | **20.312.995.881đ** |
 >
-> Con số "100 khách, 28.637.144.091đ" ghi ở bản 10/09 là tổng của 100 dòng đầu trong nhóm SAI — cao hơn
-> cả tổng nợ quá hạn của TOÀN BỘ nhóm đúng. Mọi kết quả đã đối chiếu với bản 10/09 phải chấm lại.
+> Kho local máy phát triển: tháng 8 khớp Bravo tuyệt đối (80.553.513.057đ, 25.658 dòng) nhưng tháng 7 chỉ có
+> 39.178.238.277đ / 11.418 dòng so với 74.835.467.323đ / 24.285 dòng trên Bravo. So với nửa tháng 7 thì khách
+> trông như TĂNG mua, nên đếm thiếu. Con số "100 khách, 28.637.144.091đ" của bản 10/09 và "961 khách" ghi sáng
+> 11/09 đều KHÔNG dùng được. Mọi kết quả đã đối chiếu với các bản trước phải chấm lại.
 >
 > Lịch sử sửa: bản gốc chưa từng chạy được (`SELECT TOP (100)` là T-SQL, và join vào bảng
 > `mart_customer_revenue_compare` không tồn tại). Bản sửa đầu 10/09 còn giữ `DATEADD` T-SQL, bị bác. Bản 10/09
@@ -1298,9 +1301,10 @@ Bảng trên chỉ là 100 dòng nợ quá hạn lớn nhất. Tổng của cả
     LEFT JOIN dt d ON d.customer_code = n.customer_code
     WHERE COALESCE(d.dt_ky_nay,0) < COALESCE(d.dt_ky_truoc,0);
 
-Đo 11/09/2026 trên kho local của máy phát triển (hóa đơn chi tiết chỉ có 01/07–04/09, snapshot công nợ
-04/09): **961 khách, tổng nợ quá hạn 8.963.791.924đ**, so T8 với T7. Kho máy phát triển này đã cũ một tuần;
-số dùng để chấm phải lấy trên kho của máy 24 hoặc sau khi đồng bộ lại, và ghi rõ mốc snapshot kèm theo.
+**Số dùng để chấm phải lấy trên kho của máy 24**, cùng mốc snapshot công nợ với lúc chatbot trả lời, và ghi
+rõ mốc đó kèm kết quả. Trước khi tin số, kiểm tháng so sánh trong kho có đủ hóa đơn không: tổng `amount9` từng
+tháng phải khớp `vHoaDonTotal` + `vHoaDonETCTotal` trên Bravo. Số tham chiếu hiện có (nợ snapshot 04/09, doanh
+thu T8/T7 từ Bravo): 1.647 khách, tổng nợ quá hạn 20.312.995.881đ.
 
 > ⚠️ Nợ là **ảnh chụp hiện tại**, doanh thu là **tháng tròn**. Không được đọc thành "nợ tăng bao nhiêu so
 > tháng trước" — kho không có lịch sử công nợ (`S25` là `BLOCKED_HISTORY`). Khách có `dt_ky_nay = 0` nghĩa là
