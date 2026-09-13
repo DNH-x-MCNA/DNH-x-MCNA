@@ -614,7 +614,10 @@ def test_regional_director_skips_forced_salary_tool_that_is_not_advertised(monke
 
     names = {tool["name"] for tool in seen[0]["tools"]}
     assert "get_salary_ranking" not in names
-    assert "tool_choice" not in seen[0]
+    # 11/09/2026: van khong ep tool luong (khong co trong danh sach), nhung ep sang tool KPI de cau
+    # tra loi giu phan KPI thay vi tu choi ca cau (M20 UAT 09/09). Khong bao gio ep tool khong quang cao.
+    assert seen[0]["tool_choice"] == {"type": "tool", "name": "get_employee_kpi"}
+    assert seen[0]["tool_choice"]["name"] in names
 
 
 def test_new_quality_tools_keep_qlv_scope_fail_closed(monkeypatch):
@@ -841,7 +844,9 @@ def test_workforce_question_auto_applies_uat_mode_and_employee_scope(monkeypatch
 
     assert route["result"]["seen"]["mode"] == "route_visits"
     assert decline["result"]["seen"]["group_by"] == "employee"
-    assert decline["result"]["seen"]["months_back"] == 4
+    # 11/09/2026: 4 -> 6. Giam lien tiep 3 thang can 4 thang tron + thang truoc de so; thang dang
+    # chay bi loai, nen 4 thang chi do toi da 2 lan giam (M16 khong bao gio tra duoc).
+    assert decline["result"]["seen"]["months_back"] == 6
     assert decline["result"]["seen"]["limit"] == 200
 
 

@@ -332,12 +332,16 @@ def sync_fact_tonghopkhachhang(days=90):
     print(f"[fact_tonghopkhachhang] Reload {days} ngay gan nhat: {len(rows)} dong")
 
 
-def sync_fact_thongketinhluong(days=90):
+def sync_fact_thongketinhluong(days=400):
     """Dong bo ket qua tinh thuong/luong kinh doanh (KPI+luong moi QD 0429/.25 + QD 0107/2026) tu
     Bravo FACT_ThongKeTinhLuong - da xac nhan (xem local_warehouse.py::SCHEMA) day la ket qua Bravo
     DA TU TINH SAN dung cong thuc, khong phai du lieu tho can tinh lai. CHI 1 SNAPSHOT/NGAY (SaveDate),
-    khac fact_tonghopkhachhang (nhieu dong/thang theo khach hang) - reload N ngay gan nhat la du vi
-    day la du lieu KET QUA cuoi ky, khong can lich su xa de doi chieu tung khach hang."""
+    khac fact_tonghopkhachhang (nhieu dong/thang theo khach hang).
+
+    11/09/2026: 90 -> 400 ngay. 90 ngay chi con 3 thang tron, nen chuoi dai nhat do duoc la 2 lan giam:
+    M16 "giam lien tiep 3 thang" KHONG BAO GIO tra duoc (Pham Xuan Toan giam 4 thang lien 05->08/2026
+    tren Bravo, kho chi thay 2), M05/C47 hoi 6 thang lien tiep cung am tham chi co 3 thang. Bang chi co
+    1 snapshot cuoi thang/nguoi (~210 NV) nen 13 thang ~3.000 dong, chi phi khong dang ke."""
     start = dt.date.today() - dt.timedelta(days=days)
     _, rows = bravo_query(
         "SELECT EmployeeCode, EmployeeName, PositionCode, AreaCode, AreaCode2, ManagerCode, SaveDate, "

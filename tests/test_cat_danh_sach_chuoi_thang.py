@@ -201,7 +201,13 @@ def test_m16_summary_giu_du_nguoi_giam_lien_tiep_truoc_khi_cat_rows(tmp_path, mo
     assert result["partial_month_excluded_from_decline_streak"] is True
     assert result["decline_evaluated_through"] == "2026-03"
     assert all(row["latest_month"] == "2026-03" for row in result["declining_employees"])
-    assert all(row["cause_data_available"] is False for row in result["declining_employees"])
+    # 11/09/2026: M16 hoi ca nguyen nhan - nay phan ra tu hoa don cua chinh NV (fixture: moi thang
+    # 1 hoa don, 1 khach), so thang cuoi chuoi 03/2026 voi 02/2026.
+    for row in result["declining_employees"]:
+        assert row["cause_data_available"] is True
+        assert (row["cause"]["thang"], row["cause"]["thang_truoc"]) == ("2026-03", "2026-02")
+        assert row["cause"]["khach"] == {"truoc": 1, "nay": 1}
+    assert result["declining_count_by_streak"] == {">=2": 3, ">=3": 0, ">=4": 0}
     assert result["declining_employees_truncated"] is False
     assert result["declining_employees_not_shown"] == 0
     assert len({row["employee_code"] for row in result["declining_employees"]}) == 3

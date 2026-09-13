@@ -234,6 +234,37 @@ def _fact_date_le(as_of_date: str = None) -> str:
     return r[0]["d"] if r and r[0]["d"] else None
 
 
+def _dms_theo_ma_nv(codes: list) -> dict:
+    """employee_code -> DMSId (khoa noi sang hoa don). Dung chung cho doi QLV va phan ra M16."""
+    if not codes:
+        return {}
+    placeholders = ",".join(["?"] * len(codes))
+    rows = _q(f"SELECT employee_code,dmsid FROM dim_nhanvien "
+              f"WHERE employee_code IN ({placeholders})", tuple(codes))
+    dms_by_employee = {r["employee_code"]: r.get("dmsid") for r in rows if r.get("dmsid")}
+    missing_codes = [code for code in codes if not dms_by_employee.get(code)]
+    if missing_codes:
+        # Fallback cho kho sync cu: EmpDMSCode trong FACT la khoa noi chuan sang hoa don va da duoc
+        # dong bo tu 31/07/2026. UAT that tung gap dim_nhanvien.dmsid NULL 320/320 dong, lam moi bao
+        # cao doi tra loi 0/"khong co du lieu" du FACT van co du mapping.
+        try:
+            missing_ph = ",".join(["?"] * len(missing_codes))
+            fact_rows = _q(
+                f"SELECT f.employee_code,f.emp_dms_code dmsid FROM fact_tonghopkhachhang f "
+                f"JOIN (SELECT employee_code,MAX(save_date) d FROM fact_tonghopkhachhang "
+                f"WHERE employee_code IN ({missing_ph}) GROUP BY employee_code) l "
+                f"ON l.employee_code=f.employee_code AND l.d=f.save_date "
+                f"WHERE f.emp_dms_code IS NOT NULL AND TRIM(f.emp_dms_code)<>'' "
+                f"GROUP BY f.employee_code,f.emp_dms_code",
+                tuple(missing_codes),
+            )
+            for r in fact_rows:
+                dms_by_employee.setdefault(r["employee_code"], r["dmsid"])
+        except sqlite3.OperationalError:
+            pass
+    return dms_by_employee
+
+
 def _get_team_dms_ids(scope_employee_code: str, fdate: str = None) -> list:
     """DMSId cua tat ca TDV thuoc quyen quan ly cua 1 QLV tai thoi diem `fdate`.
 
@@ -285,30 +316,7 @@ def _get_team_dms_ids(scope_employee_code: str, fdate: str = None) -> list:
             f"nao bao cao len ma nay trong FACT_TongHopKhachHang. KHONG the tra so doanh thu theo "
             f"doi. Bao voi nguoi dung rang du lieu phan cong doi cua ho chua co trong he thong, "
             f"can DNH kiem tra lai ManagerCode tren Bravo.")
-    placeholders = ",".join(["?"] * len(codes))
-    rows = _q(f"SELECT employee_code,dmsid FROM dim_nhanvien "
-              f"WHERE employee_code IN ({placeholders})", tuple(codes))
-    dms_by_employee = {r["employee_code"]: r.get("dmsid") for r in rows if r.get("dmsid")}
-    missing_codes = [code for code in codes if not dms_by_employee.get(code)]
-    if missing_codes:
-        # Fallback cho kho sync cu: EmpDMSCode trong FACT la khoa noi chuan sang hoa don va da duoc
-        # dong bo tu 31/07/2026. UAT that tung gap dim_nhanvien.dmsid NULL 320/320 dong, lam moi bao
-        # cao doi tra loi 0/"khong co du lieu" du FACT van co du mapping.
-        try:
-            missing_ph = ",".join(["?"] * len(missing_codes))
-            fact_rows = _q(
-                f"SELECT f.employee_code,f.emp_dms_code dmsid FROM fact_tonghopkhachhang f "
-                f"JOIN (SELECT employee_code,MAX(save_date) d FROM fact_tonghopkhachhang "
-                f"WHERE employee_code IN ({missing_ph}) GROUP BY employee_code) l "
-                f"ON l.employee_code=f.employee_code AND l.d=f.save_date "
-                f"WHERE f.emp_dms_code IS NOT NULL AND TRIM(f.emp_dms_code)<>'' "
-                f"GROUP BY f.employee_code,f.emp_dms_code",
-                tuple(missing_codes),
-            )
-            for r in fact_rows:
-                dms_by_employee.setdefault(r["employee_code"], r["dmsid"])
-        except sqlite3.OperationalError:
-            pass
+    dms_by_employee = _dms_theo_ma_nv(codes)
     dms_ids = [dms_by_employee[code] for code in codes if dms_by_employee.get(code)]
     if not dms_ids:
         raise KhongXacDinhDuocDoi(
@@ -998,6 +1006,7 @@ def employee_daily_kpi(employee_code: str, year_month: str, scope_area_code: str
         # mot nguoi van giu nguyen danh sach days day du o nhanh ben duoi.
         compact = []
         team_by_date = {}
+        team_weekend = {}
         team_target = sum(_f(r.get("month_sale_target")) for r in results)
         for r in results:
             days = r.get("days") or []
@@ -1013,14 +1022,20 @@ def employee_daily_kpi(employee_code: str, year_month: str, scope_area_code: str
                 "zero_revenue_dates": [d["date"] for d in days if not _f(d.get("revenue"))],
                 "yellow_dates": [d["date"] for d in days if str(d.get("status", "")).startswith("🟡")],
                 "green_dates": [d["date"] for d in days if str(d.get("status", "")).startswith("🟢")],
+                "weekend_revenue": r.get("weekend_revenue"),
             })
             for day in days:
                 team_by_date[day["date"]] = team_by_date.get(day["date"], 0.0) + _f(day.get("revenue"))
+            for day in r.get("weekend_days") or []:
+                cu = team_weekend.setdefault(day["date"], {"date": day["date"], "thu": day["thu"],
+                                                           "revenue": 0.0})
+                cu["revenue"] += _f(day.get("revenue"))
         team_days = []
         for date, revenue in sorted(team_by_date.items()):
             pct = revenue / team_target * 100 if team_target else 0.0
             team_days.append({"date": date, "revenue": revenue,
                               "pct_of_team_target": pct, "status": _daily_kpi_status(pct)})
+        weekend = sorted(team_weekend.values(), key=lambda d: d["date"])
         team_daily_summary = {
             "count_red": sum(1 for d in team_days if str(d["status"]).startswith("🔴")),
             "count_yellow": sum(1 for d in team_days if str(d["status"]).startswith("🟡")),
@@ -1028,7 +1043,10 @@ def employee_daily_kpi(employee_code: str, year_month: str, scope_area_code: str
             "zero_revenue_dates": [d["date"] for d in team_days if not d["revenue"]],
             "yellow_dates": [d["date"] for d in team_days if str(d["status"]).startswith("🟡")],
             "green_dates": [d["date"] for d in team_days if str(d["status"]).startswith("🟢")],
-            "top_revenue_dates": sorted(team_days, key=lambda d: -d["revenue"])[:5],
+            # T7/CN khong co mau KPI ngay nhung VAN la doanh so that - xep hang ngay cao nhat gom ca T7.
+            "top_revenue_dates": sorted(team_days + weekend, key=lambda d: -d["revenue"])[:5],
+            "weekend_days": weekend,
+            "weekend_revenue": sum(d["revenue"] for d in weekend),
         }
         return {
             "is_bulk": True, "requested_count": min(len(codes), 30), "count": len(results),
@@ -1043,8 +1061,9 @@ def employee_daily_kpi(employee_code: str, year_month: str, scope_area_code: str
         }
     """KPI THEO NGAY cho 1 nhan vien CA NHAN (co ma truc tiep tren hoa don, vd EmpDMSCode nhu
     'tungtx') trong 1 thang (YYYY-MM). Target 1 ngay = 4% MonthSaleTarget cua nhan vien (tuong duong
-    100% cua ngay). Phan loai tung ngay: 🔴 Do (<2.5%), 🟡 Vang (2.5%-3.5%), 🟢 Xanh (>3.5%). CHI tinh
-    T2-T6 (bo qua T7/CN). Rieng "month_pct_of_target" la % TONG thang (thuc te/target*100, cach tinh
+    100% cua ngay). Phan loai tung ngay: 🔴 Do (<2.5%), 🟡 Vang (2.5%-3.5%), 🟢 Xanh (>3.5%). Mau KPI
+    ngay CHI ap T2-T6; doanh so T7/CN tra rieng o weekend_days (11/09/2026 - truoc do bi bo han, ma T7
+    la ngay ban nhieu nhat). Rieng "month_pct_of_target" la % TONG thang (thuc te/target*100, cach tinh
     CU khong lien quan 4%/ngay, KHONG co mau/nguong - chi la con so tham khao cuoi thang.
     KHONG dung cho ma khu vuc/quan ly vung (MBKV*, ASM*...) - cac ma nay khong xuat hien tren hoa don,
     dung get_employee_kpi (snapshot thang, nguong theo vai tro: TDV 65% / quan ly 70%, canh bao 50%)
@@ -1116,6 +1135,10 @@ def employee_daily_kpi(employee_code: str, year_month: str, scope_area_code: str
               "hoi thang khac.")
 
     days = []
+    # 11/09/2026 (V03): T7/CN tach RIENG, khong bo. T7 la ngay ban nhieu nhat (22,3% doanh thu OTC
+    # T8/2026 tren Bravo); vong lap cu chi giu T2-T6 nen danh sach theo ngay giau ca phan do. Mau KPI
+    # ngay (4%/ngay) van chi ap cho T2-T6 cho toi khi DNH chot lai quy tac - khong tu doi quy tac.
+    weekend_days = []
     total_sales_month = 0.0
     count_red = count_yellow = count_green = 0
     if range_end >= month_start:
@@ -1145,6 +1168,9 @@ def employee_daily_kpi(employee_code: str, year_month: str, scope_area_code: str
                 if status.startswith("🔴"): count_red += 1
                 elif status.startswith("🟡"): count_yellow += 1
                 else: count_green += 1
+            else:
+                weekend_days.append({"date": str(d), "thu": "T7" if d.weekday() == 5 else "CN",
+                                     "revenue": by_date.get(str(d), 0.0)})
             d += dt.timedelta(days=1)
 
     month_pct = (total_sales_month / target * 100) if target else 0.0
@@ -1155,6 +1181,10 @@ def employee_daily_kpi(employee_code: str, year_month: str, scope_area_code: str
         "daily_target_pct": DAILY_KPI_TARGET_PCT,
         "days": days,
         "count_red": count_red, "count_yellow": count_yellow, "count_green": count_green,
+        "weekend_days": weekend_days,
+        "weekend_revenue": sum(x["revenue"] for x in weekend_days),
+        "weekend_note": ("days chi gom T2-T6 (mau KPI ngay 4%). Doanh so T7/CN nam o weekend_days, "
+                         "VAN tinh trong month_total_sales - khong duoc bo khi noi ve doanh so tung ngay."),
         "month_total_sales": total_sales_month, "month_pct_of_target": month_pct,
         "channel_scope": channel,
         "data_as_of": latest_data_date(),
@@ -2723,6 +2753,86 @@ def customer_movement(month: str = None, history_months: int = 12,
     }
 
 
+_THU = ("T2", "T3", "T4", "T5", "T6", "T7", "CN")
+
+
+def _otc_daily_series(date_from: str, date_to: str, scope_area_code: str = None,
+                      scope_employee_code: str = None) -> dict:
+    """Doanh thu hoa don OTC tung ngay LICH trong [date_from, date_to], cung bo loc vung/doi voi
+    revenue_by_channel. Ngay khong co hoa don van co dong (revenue=0) de liet ke ngay khong phat sinh."""
+    scope_sql, scope_params = _scope_clause(scope_area_code)
+    emp_sql, emp_params = _employee_scope_clause(scope_employee_code, "v", as_of=date_to)
+    join_o = _otc_area_join("v", scope_area_code)
+    ngay_sau = str(dt.date.fromisoformat(date_to) + dt.timedelta(days=1))
+    rows = _q(f"SELECT substr(v.doc_date,1,10) d, COALESCE(SUM(v.amount9),0) rev, "
+              f"COUNT(DISTINCT v.stt) hd FROM vhoadon_otc v {join_o} "
+              f"WHERE v.doc_date>=? AND v.doc_date<?{scope_sql}{emp_sql} GROUP BY substr(v.doc_date,1,10)",
+              (date_from, ngay_sau) + tuple(scope_params) + tuple(emp_params))
+    return {r["d"]: (_f(r["rev"]), int(r["hd"] or 0)) for r in rows}
+
+
+def _nhip_theo_ngay(fdate: str, as_of_date: str, scope_target: float, scope_area_code: str = None,
+                    scope_employee_code: str = None) -> dict:
+    """V03: doanh so tung ngay/tuan so voi nhip can thiet, liet ke ngay khong phat sinh.
+
+    11/09/2026: truoc day V03 di vao tool nay nhung chi co so TONG THANG, khong co ngay/tuan; con
+    get_employee_daily_kpi thi bo han T7/CN - ma T7 la ngay ban nhieu nhat (22,3% doanh thu OTC
+    T8/2026 tren Bravo). Tinh DU moi ngay lich. DNH chua chot nhip theo ngay lich hay ngay lam viec,
+    nen tra CA HAI nhip, khong tu chon."""
+    y, m = int(fdate[:4]), int(fdate[5:7])
+    month_days = _last_day_of_month(y, m)
+    thang_dau, thang_cuoi = dt.date(y, m, 1), dt.date(y, m, month_days)
+    den = dt.date.fromisoformat(str(as_of_date or latest_data_date())[:10])
+    den = max(thang_dau, min(den, thang_cuoi, dt.date.today()))
+    theo_ngay = _otc_daily_series(str(thang_dau), str(den), scope_area_code, scope_employee_code)
+    # Ngay ban hang = T2-T7: CN khong phat sinh hoa don OTC tren Bravo (T8/2026: 0 dong).
+    ngay_ban_trong_thang = sum(1 for i in range(month_days)
+                               if (thang_dau + dt.timedelta(days=i)).weekday() < 6)
+    nhip_lich = scope_target / month_days if scope_target else None
+    nhip_ban = scope_target / ngay_ban_trong_thang if scope_target else None
+    daily, weekly, tuan = [], [], {}
+    d = thang_dau
+    while d <= den:
+        rev, hd = theo_ngay.get(str(d), (0.0, 0))
+        daily.append({
+            "date": str(d), "thu": _THU[d.weekday()], "revenue": rev, "invoices": hd,
+            "khong_phat_sinh": rev == 0 and hd == 0,
+            "dang_chay_do": d == dt.date.today(),
+            "pct_nhip_ngay_lich": rev / nhip_lich * 100 if nhip_lich else None,
+            "pct_nhip_ngay_ban_t2_t7": (rev / nhip_ban * 100 if nhip_ban and d.weekday() < 6 else None),
+        })
+        dau_tuan = d - dt.timedelta(days=d.weekday())
+        w = tuan.setdefault(dau_tuan, {"tu": str(max(dau_tuan, thang_dau)), "den": str(d),
+                                       "revenue": 0.0, "invoices": 0, "so_ngay": 0,
+                                       "so_ngay_khong_phat_sinh": 0})
+        w["den"] = str(d)
+        w["revenue"] += rev
+        w["invoices"] += hd
+        w["so_ngay"] += 1
+        w["so_ngay_khong_phat_sinh"] += int(rev == 0 and hd == 0)
+        d += dt.timedelta(days=1)
+    for w in tuan.values():
+        w["nhip_can_thiet_ngay_lich"] = nhip_lich * w["so_ngay"] if nhip_lich else None
+        weekly.append(w)
+    return {
+        "tu_ngay": str(thang_dau), "den_ngay": str(den),
+        "scope_target": scope_target or None,
+        "nhip_can_thiet_moi_ngay_lich": nhip_lich,
+        "nhip_can_thiet_moi_ngay_ban_t2_t7": nhip_ban,
+        "so_ngay_ban_t2_t7_trong_thang": ngay_ban_trong_thang,
+        "daily": daily, "weekly": weekly,
+        "ngay_khong_phat_sinh_t2_t7": [x["date"] for x in daily
+                                      if x["khong_phat_sinh"] and x["thu"] != "CN"
+                                      and not x["dang_chay_do"]],
+        "chu_nhat_khong_phat_sinh": [x["date"] for x in daily if x["khong_phat_sinh"] and x["thu"] == "CN"],
+        "tong_doanh_thu_hoa_don": sum(x["revenue"] for x in daily),
+        "definition": ("Doanh thu hoa don OTC theo NGAY LICH (gom T7, CN), cung pham vi vung/doi. KHAC "
+                       "nguon voi actual (snapshot KPI) nen tong co the lech do moc chot. DNH CHUA CHOT "
+                       "nhip theo ngay lich hay ngay ban hang: trinh bay ca hai, khong tu chon. Ngay "
+                       "dang_chay_do moi luy ke mot phan ngay, khong ket luan la thap."),
+    }
+
+
 def kpi_gap_run_rate(as_of_date: str = None, group_by: str = "employee", limit: int = 50,
                      scope_area_code: str = None, scope_channel: str = None,
                      scope_employee_code: str = None) -> dict:
@@ -2833,11 +2943,18 @@ def kpi_gap_run_rate(as_of_date: str = None, group_by: str = "employee", limit: 
         }
         for threshold in (65, 70, 80, 100, 120)
     ]
+    # Nhip theo ngay dung target CA pham vi (truoc limit), khong phai target cua cac dong dang hien.
+    scope_target = sum(r["target"] for r in result_rows)
+    try:
+        nhip = _nhip_theo_ngay(fdate, as_of_date, scope_target, scope_area_code, scope_employee_code)
+    except KhongXacDinhDuocDoi as exc:
+        nhip = {"error": str(exc)}
     return {
         "as_of": fdate, "group_by": group_by, "rows": result_rows[:limit],
         # Tra san phep dem tren TOAN BO tap du lieu truoc limit. Model khong duoc dem bang tay tren
         # danh sach bi cat (UAT tung bao 3/7 nguoi >=80% trong khi ket qua dung la 2/7).
         "threshold_summary": threshold_summary,
+        "nhip_theo_ngay": nhip,
         "definition": ("linear_run_rate = doanh so luy ke / so ngay lich da qua * so ngay trong thang. "
                        "Day CHI la ngoai suy tuyen tinh, KHONG phai forecast/xac suat dat."),
         "thresholds": {"65_70": "cong thuong theo vai tro", "80": "dat KPI",
@@ -4054,6 +4171,61 @@ def _route_visit_effectiveness(month_to: str = None, months_back: int = 1, limit
     }
 
 
+def _nguyen_nhan_giam_doanh_so(employee_codes: list, month: str) -> dict:
+    """M16: do mat khach, giam tan suat hay giam gia tri don? So thang cuoi chuoi giam voi thang
+    lien truoc tren hoa don OTC cua chinh NV. Khach x (don/khach) x AOV = doanh thu hoa don, nen ba ty
+    le thay doi cho biet phan nao keo giam. Doanh thu hoa don co the lech doanh so bang luong."""
+    dms = _dms_theo_ma_nv(employee_codes)
+    if not dms:
+        return {}
+    ma_theo_dms = {}
+    for code, dms_id in dms.items():
+        ma_theo_dms.setdefault(dms_id, code)
+    thang_truoc = _month_add(month, -1)
+    tu, _ = _month_bounds(thang_truoc)
+    _, den = _month_bounds(month)
+    den_sau = str(dt.date.fromisoformat(den) + dt.timedelta(days=1))
+    ph = ",".join(["?"] * len(ma_theo_dms))
+    so = {}
+    for r in _q(f"SELECT employee_code dms, substr(doc_date,1,7) m, COUNT(DISTINCT customer_code) kh, "
+                f"COUNT(DISTINCT stt) don, COALESCE(SUM(amount9),0) dt, COUNT(DISTINCT item_code) sku "
+                f"FROM vhoadon_otc WHERE employee_code IN ({ph}) AND doc_date>=? AND doc_date<? "
+                f"GROUP BY employee_code, substr(doc_date,1,7)", tuple(ma_theo_dms) + (tu, den_sau)):
+        so[(ma_theo_dms.get(r["dms"]), r["m"])] = r
+
+    def _pct(moi, cu):
+        return (moi - cu) / cu * 100 if cu else None
+
+    ket_qua = {}
+    for code in employee_codes:
+        cu, moi = so.get((code, thang_truoc)), so.get((code, month))
+        if not cu and not moi:
+            continue
+        cu, moi = cu or {}, moi or {}
+        kh = (int(cu.get("kh") or 0), int(moi.get("kh") or 0))
+        don = (int(cu.get("don") or 0), int(moi.get("don") or 0))
+        dt_ = (_f(cu.get("dt")), _f(moi.get("dt")))
+        tan_suat = tuple(d / k if k else None for d, k in zip(don, kh))
+        aov = tuple(v / d if d else None for v, d in zip(dt_, don))
+        thay_doi = {
+            "mat_khach": _pct(kh[1], kh[0]),
+            "giam_tan_suat": _pct(tan_suat[1], tan_suat[0]) if None not in tan_suat else None,
+            "giam_gia_tri_don": _pct(aov[1], aov[0]) if None not in aov else None,
+        }
+        am = {k: v for k, v in thay_doi.items() if v is not None and v < 0}
+        ket_qua[code] = {
+            "thang": month, "thang_truoc": thang_truoc,
+            "khach": {"truoc": kh[0], "nay": kh[1]}, "don": {"truoc": don[0], "nay": don[1]},
+            "don_moi_khach": {"truoc": tan_suat[0], "nay": tan_suat[1]},
+            "aov": {"truoc": aov[0], "nay": aov[1]},
+            "sku": {"truoc": int(cu.get("sku") or 0), "nay": int(moi.get("sku") or 0)},
+            "doanh_thu_hoa_don": {"truoc": dt_[0], "nay": dt_[1]},
+            "pct_thay_doi": thay_doi,
+            "yeu_to_giam_manh_nhat": min(am, key=am.get) if am else None,
+        }
+    return ket_qua
+
+
 def workforce_productivity(month_to: str = None, months_back: int = 6,
                            group_by: str = "manager", limit: int = 200, mode: str = "productivity",
                            scope_area_code: str = None, scope_channel: str = None,
@@ -4247,6 +4419,18 @@ def workforce_productivity(month_to: str = None, months_back: int = 6,
         ))
         declining_employee_count = len(all_declining)
         declining_employees = all_declining[:declining_summary_limit]
+        # 11/09/2026 (M16 "do mat khach/giam tan suat/giam gia tri don"): truoc day chi co co
+        # cause_data_available=False nen cau tra loi thieu han ve nguyen nhan cua cau hoi.
+        if declining_employees:
+            nguyen_nhan = _nguyen_nhan_giam_doanh_so(
+                [row["employee_code"] for row in declining_employees], decline_evaluated_through)
+            for row in declining_employees:
+                row["cause"] = nguyen_nhan.get(row["employee_code"])
+                row["cause_data_available"] = row["cause"] is not None
+    declining_count_by_streak = (
+        {f">={n}": sum(1 for row in all_declining if row["decline_streak_months"] >= n) for n in (2, 3, 4)}
+        if group_by == "employee" else None
+    )
 
     manager_attention = []
     manager_attention_evaluated_month = None
@@ -4330,10 +4514,13 @@ def workforce_productivity(month_to: str = None, months_back: int = 6,
         "declining_employees": declining_employees,
         "declining_employees_truncated": declining_employee_count > len(declining_employees),
         "declining_employees_not_shown": max(0, declining_employee_count - len(declining_employees)),
-        "decline_cause_data_available": False if group_by == "employee" else None,
+        "declining_count_by_streak": declining_count_by_streak,
+        "decline_cause_data_available": (any(r.get("cause_data_available") for r in declining_employees)
+                                         if group_by == "employee" else None),
         "decline_cause_limitation": (
-            "Bao cao nay chi chung minh chuoi doanh so giam. Chua co phan ra khach, don va AOV "
-            "theo tung nhan vien trong cung payload, nen khong duoc ket luan nguyen nhan."
+            "cause so thang cuoi chuoi voi thang lien truoc tren HOA DON OTC cua chinh NV: khach, "
+            "don/khach (tan suat), AOV - ba he so nhan lai bang doanh thu hoa don. Doanh thu hoa don "
+            "co the lech doanh so bang luong; cause=None la khong co hoa don de phan ra, khong suy dien."
             if group_by == "employee" else None
         ),
         "manager_attention": manager_attention,
@@ -4352,7 +4539,10 @@ def workforce_productivity(month_to: str = None, months_back: int = 6,
                        "revenue_per_employee = tong doanh so / headcount. Decline streak chi tang "
                        "khi cac thang lien tiep deu giam. Voi group_by=employee, "
                        "declining_employee_count/declining_employees duoc tinh tren toan bo nhan vien "
-                       "truoc khi cat rows; streak >= 2 la chuoi ba thang di xuong. "
+                       "truoc khi cat rows. decline_streak_months = so LAN giam lien tiep so voi thang "
+                       "lien truoc; thieu thang thi dut chuoi. 'Giam lien tiep N thang' = streak >= N "
+                       "(can N+1 thang lien nhau), dem san o declining_count_by_streak; danh sach gom tu "
+                       "streak >= 2 de thay nguoi sap vao chuoi - KHONG gop nhom >=2 thanh 'giam 3 thang'. "
                        "Neu month_to_is_partial=true, thang MTD van co trong rows nhung bi loai khoi "
                        "summary chuoi giam; decline_evaluated_through la thang tron da dung."),
         "limitations": [
@@ -4908,6 +5098,28 @@ def product_mix_performance(as_of_date: str = None, limit: int = 20,
     }
 
 
+_NGUON_DON_HANG_CACHE = {"ts": None, "value": None}
+_NGUON_DON_HANG_TTL = dt.timedelta(minutes=10)
+
+
+def _trang_thai_nguon_don_hang() -> dict:
+    """Doc thu nguon don DMS tren Bravo. Nang luc lay tu tinh trang THAT, cache 10 phut.
+
+    11/09/2026 (ke hoach UAT, loi cheo M20/C54/V40): operational_data_quality tung ghi CUNG "bang
+    DMS_DonHangHdr chua duoc dong bo" trong khi check_order_timing van doc bang do truc tiep Bravo."""
+    now = dt.datetime.now()
+    cache = _NGUON_DON_HANG_CACHE
+    if cache["value"] is not None and cache["ts"] and now - cache["ts"] < _NGUON_DON_HANG_TTL:
+        return cache["value"]
+    try:
+        _q_bravo("SELECT TOP (1) 1 AS ok FROM dbo.DMS_DonHangHdr", {})
+        value = {"status": "OK"}
+    except Exception as exc:
+        value = {"status": "UNAVAILABLE", "reason": str(exc)[:200]}
+    cache.update(ts=now, value=value)
+    return value
+
+
 def operational_data_quality(as_of_date: str = None, sample_limit: int = 30,
                              scope_area_code: str = None, scope_channel: str = None,
                              scope_employee_code: str = None) -> dict:
@@ -5162,11 +5374,24 @@ def operational_data_quality(as_of_date: str = None, sample_limit: int = 30,
             "future_date_definition": "Ngay chung tu lon hon ngay he thong, khong phai lon hon moc snapshot dang hoi.",
         }
     result["checks"]["invoice_mapping"] = invoice_checks
-    result["unavailable_checks"] = [
-        "Don hang huy/cham/chua hoa don: bang DMS_DonHangHdr chua duoc dong bo vao kho local.",
+    unavailable = [
         "Action/owner/deadline: chua co nguon action tracker.",
         "Sai chi nhanh/NPP: hoa don/danh muc local chua co khoa branch/distributor chuan.",
     ]
+    nguon_don = {"source": "DMS_DonHangHdr + vHoaDonTotal (OTC)", "tool": "check_order_timing"}
+    if scope_channel and scope_channel.upper() == "ETC":
+        nguon_don["status"] = "NOT_APPLICABLE"
+        unavailable.insert(0, "Don hang huy/cham/chua hoa don: nguon don DMS chi co kenh OTC.")
+    else:
+        nguon_don.update(_trang_thai_nguon_don_hang())
+        if nguon_don["status"] == "OK":
+            nguon_don["note"] = ("Don huy/cham/chua hoa don KHONG nam trong kho local nhung DOC DUOC truc "
+                                 "tiep Bravo: tra bang check_order_timing. Khong duoc bao la chua dong bo.")
+        else:
+            unavailable.insert(0, "Don hang huy/cham/chua hoa don: khong doc duoc nguon DMS_DonHangHdr "
+                                  "tren Bravo luc kiem (%s)." % nguon_don.get("reason"))
+    result["checks"]["order_invoice_source"] = nguon_don
+    result["unavailable_checks"] = unavailable
     result["canh_bao"] = ("So UNKNOWN/orphan trong tai khoan bi gioi han vung co the khong dem duoc vi "
                            "chinh dong thieu mapping khong suy ra duoc no thuoc vung nao. Khong duoc "
                            "hieu 0 la toan cong ty khong co loi.")
@@ -10162,7 +10387,10 @@ def call_template(name: str, args: dict, question: str = "", username: str = Non
                 "ai giam doanh so lien tiep",
             )):
                 call_args["group_by"] = "employee"
-                call_args["months_back"] = max(4, int(call_args.get("months_back") or 4))
+                # 11/09/2026: 6 thang. "Giam lien tiep 3 thang" = 3 lan giam, can 4 thang tron lien
+                # nhau; thang dang chay bi loai va thang dau cua so khong co thang truoc de so, nen
+                # 4 thang chi do toi da duoc 2 lan giam.
+                call_args["months_back"] = max(6, int(call_args.get("months_back") or 6))
                 call_args["limit"] = max(200, int(call_args.get("limit") or 200))
         if name == "get_customer_product_coverage":
             # Cac cau nay dung chung mot tool nhung can mode khac nhau. Ep theo intent ke ca khi

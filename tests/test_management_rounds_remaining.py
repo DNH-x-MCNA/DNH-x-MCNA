@@ -120,6 +120,9 @@ def _setup(tmp_path, monkeypatch):
     monkeypatch.setattr(local_warehouse, "DB_PATH", str(path))
     monkeypatch.setattr(rt.dt, "date", _FixedDate)
     monkeypatch.setattr(rt, "_write_log", lambda entry: None)
+    # Test don vi khong duoc cham Bravo that; test rieng o duoi dat nguon ve OK khi can.
+    monkeypatch.setattr(rt, "_trang_thai_nguon_don_hang",
+                        lambda: {"status": "UNAVAILABLE", "reason": "test: khong ket noi Bravo"})
     return path
 
 

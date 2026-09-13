@@ -679,7 +679,9 @@ TEMPLATE_TOOLS = [
                         "phai ho ban duoc 0 dong. Voi cap quan ly PHAI dung get_employee_kpi (KPI thang) "
                         "hoac get_revenue_tree (doanh so ca doi). "
                         "Trong 1 thang. Target 1 ngay = 4% MonthSaleTarget cua nhan vien do "
-                        "(4% = 100% cua ngay). Ket qua co san 'days' (danh sach tung ngay T2-T6 trong thang, "
+                        "(4% = 100% cua ngay). Doanh so T7/CN nam o 'weekend_days' (khong co mau KPI "
+                        "ngay nhung VAN la doanh so that, T7 ban nhieu nhat - khong duoc bo). "
+                        "Ket qua co san 'days' (danh sach tung ngay T2-T6 trong thang, "
                         "moi ngay co 'status': 🔴 Do <2.5%, 🟡 Vang 2.5%-3.5%, 🟢 Xanh >3.5% - LUON dung "
                         "nguyen status nay, khong tu tinh nguong khac) va dem san count_red/count_yellow/"
                         "count_green. Co the truyen NHIEU ma TDV cach nhau bang dau phay de xem ca doi "
@@ -906,7 +908,10 @@ TEMPLATE_TOOLS = [
         "description": "GAP den 65/70/80/100/120% target va so tien can ban moi ngay con lai, theo "
                        "nhan vien/QLV/vung/tong. Co linear_run_rate tinh san. BAT BUOC dung cho 'con thieu "
                        "bao nhieu', 'moi ngay can ban bao nhieu', 'nhiep hien tai'. Day CHI la ngoai suy "
-                       "tuyen tinh, KHONG phai forecast/xac suat; PHAI noi ro dieu nay. Nguon KPI chi phu OTC.",
+                       "tuyen tinh, KHONG phai forecast/xac suat; PHAI noi ro dieu nay. Nguon KPI chi phu OTC. "
+                       "V03: nhip_theo_ngay co daily (MOI ngay lich ke ca T7/CN, revenue/invoices/thu), weekly, "
+                       "ngay_khong_phat_sinh_t2_t7, chu_nhat_khong_phat_sinh va HAI nhip can thiet (ngay lich va "
+                       "ngay ban T2-T7) - DNH chua chot dung nhip nao nen trinh bay ca hai. KHONG bo doanh so T7.",
         "input_schema": {"type": "object", "properties": {
             "as_of_date": {"type": "string", "description": "YYYY-MM-DD."},
             "group_by": {"type": "string", "enum": ["employee", "qlv", "area", "total"]},
@@ -1017,11 +1022,13 @@ TEMPLATE_TOOLS = [
                        "bi cat theo limit) - KHONG duoc tu goi lai nhieu lan voi group_by/months_back khac "
                        "nhau de tu do tim, se het ngan sach thoi gian truoc khi tra loi duoc. "
                        "M16/S55 va V13: khi hoi NHAN VIEN giam lien tiep, BAT BUOC goi group_by='employee', "
-                       "months_back>=4, limit=200. BAT BUOC noi tong so tu declining_employee_count va dung "
+                       "months_back>=6, limit=200. BAT BUOC noi tong so tu declining_employee_count va dung "
                        "declining_employees de liet ke; neu declining_employees_truncated=true phai noi ro "
-                       "con bao nhieu nguoi khong hien. CHI duoc noi 'duy nhat' khi count=1. "
-                       "decline_cause_data_available=false nghia la tool moi chi chung minh doanh so giam; "
-                       "KHONG duoc tu suy dien mat khach, giam tan suat hay AOV, ma phai noi chua du bang chung. "
+                       "con bao nhieu nguoi khong hien. 'Giam lien tiep N thang' = decline_streak_months >= N: "
+                       "bao so dung N tu declining_count_by_streak, KHONG gop nhom >=2 thanh 'giam 3 thang'. "
+                       "CHI duoc noi 'duy nhat' khi count=1 (dem theo dung N). Nguyen nhan: doc cause tung "
+                       "nguoi (khach, don/khach, AOV, yeu_to_giam_manh_nhat); cause=None thi KHONG duoc tu "
+                       "suy dien mat khach, giam tan suat hay AOV, ma phai noi chua du bang chung. "
                        "C49/S34: khi hoi di tuyen/vieng tham/phu tuyen/ty le co don sau tham, BAT BUOC truyen "
                        "mode='route_visits'. Che do nay doc DMS_DiTuyen OTC theo ky hoi, tra luot vieng, khach "
                        "duoc vieng, % theo tuyen, % co don cung ngay (CAN DUOI) va doanh thu/luot vieng.",
@@ -1745,6 +1752,29 @@ def _customer_tool_conflict(name: str, question: str) -> bool:
             and _required_tool_for_question(question) == "get_customer_lifecycle_summary")
 
 
+# 11/09/2026 (M20 UAT 09/09): cau hoi dinh tuyen vao tool luong ma vai tro khong duoc xem (Giam doc
+# mien/kenh bi an moi tool luong o _tools_for_request). Truoc day required_tool bi bo qua vi tool khong
+# co trong danh sach, model khong bi ep gi va tu choi CA cau - bo luon phan KPI vai tro nay duoc xem.
+# Nay ep sang tool KPI va dan model noi ro phan tien luong/thuong ca nhan khong mo cho vai tro nay.
+_SALARY_FALLBACK_TOOL = "get_employee_kpi"
+_SALARY_FALLBACK_NOTE = (
+    "LUU Y QUYEN CHO CAU NAY: tai khoan khong duoc xem luong/thuong CA NHAN chi tiet. KHONG tu choi ca "
+    "cau: tra loi day du phan KPI tu get_employee_kpi (% dat chi tieu, dat KPI 80%, nguong thuong nhom "
+    "hang TDV 65%/QLV 70%, ai duoi nguong, QLV nao co nhieu nguoi duoi KPI), roi noi ro so tien "
+    "luong/thuong tung nguoi chi C-Level hoac QLV cua chinh doi do xem duoc."
+)
+
+
+def _required_tool_for_request(question: str, tools_for_request: list[dict]) -> tuple:
+    """(tool bat buoc, ghi chu them vao system dong) theo cau hoi VA danh sach tool cua vai tro."""
+    tool = _required_tool_for_question(question)
+    names = {t["name"] for t in tools_for_request}
+    if (tool in _SALARY_SENSITIVE_TEMPLATE_NAMES and tool not in names
+            and _SALARY_FALLBACK_TOOL in names):
+        return _SALARY_FALLBACK_TOOL, "\n\n" + _SALARY_FALLBACK_NOTE
+    return tool, ""
+
+
 def _tools_for_question(tools: list[dict], question: str) -> list[dict]:
     allowed = [tool for tool in tools if not _customer_tool_conflict(tool["name"], question)]
     return _cache_tools([{k: v for k, v in tool.items() if k != "cache_control"}
@@ -2455,6 +2485,7 @@ def ask(question: str, session_id: str = "default", username: str = None, scope_
         scope_area_code, scope_channel, scope_role, scope_employee_code
     )
     tools_for_request = _tools_for_question(tools_for_request, question)
+    required_tool, luu_y_quyen = _required_tool_for_request(question, tools_for_request)
     max_rounds = _max_tool_rounds(scope_role)
     query_plan = build_query_plan(
         question,
@@ -2476,7 +2507,7 @@ def ask(question: str, session_id: str = "default", username: str = None, scope_
         {"type": "text", "text": _static_system_prompt(), "cache_control": {"type": "ephemeral", "ttl": "1h"}},
         {"type": "text", "text": (_dynamic_context_note(
             question, session_id, scope_area_code, scope_employee_code, scope_channel, username, scope_role
-        ) + "\n\n" + query_plan.prompt_note())},
+        ) + "\n\n" + query_plan.prompt_note() + luu_y_quyen)},
     ]
 
     # 06/08/2026: GO BO output_config={"effort": "medium"} (them 05/08) sau khi do tren du lieu that.
@@ -2488,7 +2519,6 @@ def ask(question: str, session_id: str = "default", username: str = None, scope_
     # Doi lai, effort chi tiet kiem ~0,005 USD/cau (output 1.473 -> 990 token) trong khi breakpoint
     # cache o duoi tiet kiem ~0,025 USD/cau (input 14.734 -> 1.791) - bo effort chi mat ~10% khoan
     # tiet kiem nhung lay lai 27% so cau tra loi duoc. Cac toi uu khac GIU NGUYEN.
-    required_tool = _required_tool_for_question(question)
     for round_index in range(max_rounds):
         if query_plan.expired():
             break
@@ -2848,6 +2878,7 @@ def ask_stream(question: str, session_id: str = "default", username: str = None,
         scope_area_code, scope_channel, scope_role, scope_employee_code
     )
     tools_for_request = _tools_for_question(tools_for_request, question)
+    required_tool, luu_y_quyen = _required_tool_for_request(question, tools_for_request)
     max_rounds = _max_tool_rounds(scope_role)
     query_plan = build_query_plan(
         question,
@@ -2866,10 +2897,9 @@ def ask_stream(question: str, session_id: str = "default", username: str = None,
         {"type": "text", "text": _static_system_prompt(), "cache_control": {"type": "ephemeral", "ttl": "1h"}},
         {"type": "text", "text": (_dynamic_context_note(
             question, session_id, scope_area_code, scope_employee_code, scope_channel, username, scope_role
-        ) + "\n\n" + query_plan.prompt_note())},
+        ) + "\n\n" + query_plan.prompt_note() + luu_y_quyen)},
     ]
 
-    required_tool = _required_tool_for_question(question)
     for round_i in range(max_rounds):
         if query_plan.expired():
             break
