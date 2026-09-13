@@ -52,3 +52,18 @@ def test_moi_tool_duoc_dinh_tuyen_deu_ton_tai_trong_registry():
 def test_m22_di_dung_tool_ba_tin_hieu():
     cau_m22 = next(noi_dung for ma, noi_dung, _, _ in runner.doc_bo_cau_hoi() if ma == "M22")
     assert nl2sql._required_tool_for_question(cau_m22) == "get_customer_attrition_risk"
+
+
+def test_cau_hoi_chuoi_lien_tiep_phai_vao_tool_co_chuoi():
+    """13/09/2026 (ra soat 126 cau): chi get_workforce_productivity co decline_streak_months va
+    below_80_streak_months. Truoc do V13 ("ai giam lien tiep 2-3 thang; nguyen nhan mat khach, it don,
+    it SKU") bi luat "it don" keo sang tool do phu khach-SKU, con C47 ("duoi 80% lien tiep 3 thang")
+    bi luat dia ban keo di - ca hai deu khong tra loi duoc ve "lien tiep"."""
+    theo_ma = {ma: noi_dung for ma, noi_dung, _, _ in runner.doc_bo_cau_hoi()}
+
+    for ma in ("C47", "M05", "M16", "V13"):
+        assert nl2sql._required_tool_for_question(theo_ma[ma]) == "get_workforce_productivity", ma
+
+    # Luat moi khong duoc cuop cac cau khach hang/ton kho ben canh.
+    assert nl2sql._required_tool_for_question(theo_ma["M22"]) == "get_customer_attrition_risk"
+    assert nl2sql._required_tool_for_question(theo_ma["V21"]) == "get_customers_silent"

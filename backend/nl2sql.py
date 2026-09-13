@@ -170,6 +170,14 @@ def _required_tool_for_question(question: str) -> str | None:
         if unicodedata.category(ch) != "Mn"
     ).replace("đ", "d").split())
     is_team = any(word in q for word in ("doi", "doi toi", "toan doi", "tong doi"))
+    # 13/09/2026 (ra soat 126 cau): cau hoi ve CHUOI THANG LIEN TIEP cua nguoi/doi phai vao
+    # workforce_productivity - tool duy nhat co decline_streak_months va below_80_streak_months.
+    # Dat TRUOC moi luat tu khoa khac: V13 ("ai giam lien tiep 2-3 thang; nguyen nhan mat khach, it
+    # don, it SKU") tung bi luat "it don" keo sang tool do phu khach-SKU, con C47 ("duoi 80% lien tiep
+    # 3 thang") bi luat dia ban keo di - ca hai tool deu khong co chuoi lien tiep nen khong tra loi
+    # tron cau. Trong 126 cau chi C47/M05/M16/V13 co cum "lien tiep" nen luat nay khong cuop cau khac.
+    if "lien tiep" in q and any(marker in q for marker in ("giam", "duoi 80")):
+        return "get_workforce_productivity"
     if "view" in q and any(marker in q for marker in ("doi soat", "doi chieu", "so sanh", "lech")):
         return "get_revenue_view_reconciliation"
     if "aso" in q.split() and any(marker in q for marker in (

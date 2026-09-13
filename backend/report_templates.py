@@ -295,6 +295,22 @@ def _get_team_dms_ids(scope_employee_code: str, fdate: str = None) -> list:
     va sang 13/08."""
     team = _team_of_qlv(scope_employee_code, fdate)
     codes = [t["employee_code"] for t in team if t.get("employee_code")]
+    if not codes and fdate:
+        # 13/09/2026 (V34): ky duoc hoi co the nam TRUOC pham vi phan cong doi con giu trong kho
+        # (fact_tonghopkhachhang chi giu ~90 ngay). Vi du that: tool khuyen mai lay moc phu CTKM
+        # 09/01/2026 lam ngay chot doi -> khong co snapshot nao <= moc do -> MOI cau hoi khuyen mai
+        # cua QLV deu hong cung. _employee_scope_clause() gap dung tinh huong nay thi canh bao roi
+        # dung doi hien tai; o day phai xu ly giong nhau, khong duoc hong cung.
+        som = _q("SELECT MIN(save_date) d FROM fact_tonghopkhachhang WHERE save_date>?", (fdate,))
+        som_nhat = som[0]["d"] if som and som[0]["d"] else None
+        if som_nhat:
+            team = _team_of_qlv(scope_employee_code, som_nhat)
+            codes = [t["employee_code"] for t in team if t.get("employee_code")]
+            if codes:
+                _warn(f"DOI LICH SU KHONG CO SNAPSHOT: ky duoc hoi den {fdate} nam TRUOC pham vi phan "
+                      f"cong doi con giu trong kho (som nhat {str(som_nhat)[:10]}). Dang dung thanh phan "
+                      f"doi tai {str(som_nhat)[:10]}; thanh phan doi tai ky do co the khac - PHAI noi ro "
+                      f"khi trinh bay, khong duoc khang dinh day la doi hinh cua chinh ky do.")
     if not codes:
         if scope_employee_code in _VERIFIED_SELF_MANAGED_QLV_CODES:
             rows = _q(
