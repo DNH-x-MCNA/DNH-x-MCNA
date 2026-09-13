@@ -2058,6 +2058,26 @@ def customers_silent(as_of_date: str = None, silent_days: int = 60, lookback_mon
                 "available" if value["item_name"] else "not_available"
             )
 
+    # 13/09/2026 (V21/S69b): "ky nhin lai" cu la 6 thang tinh den HOM NAY, nen khach ngung tu lau chi
+    # con vai thang co mua trong do - lech han voi checker (6 thang TRUOC LAN MUA CUOI cua chinh khach).
+    # Tra ca hai, ghi ro dinh nghia. Lich su lay ca phan da nen nen khong bi cat nhu #sales 12 thang.
+    lich_su_khach = _lich_su_thang_cua_khach(returned_codes, as_of_date[:7], scope_area_code,
+                                             scope_channel, scope_employee_code)
+
+    def _truoc_khi_ngung(ma, lan_cuoi):
+        thang = lich_su_khach.get(ma) or {}
+        if not thang:
+            return None
+        den = str(lan_cuoi)[:7]
+        tu = _month_add(den, -5)
+        trong_ky = {ym: rev for ym, rev in thang.items() if tu <= ym <= den and rev}
+        return {
+            "tu_thang": tu, "den_thang": den,
+            "doanh_thu": sum(trong_ky.values()),
+            "so_thang_co_mua": len(trong_ky),
+            "trung_binh_thang": (sum(trong_ky.values()) / len(trong_ky)) if trong_ky else None,
+        }
+
     out = []
     for r in rows:
         last = str(r["lan_mua_cuoi"])[:10]
@@ -2074,6 +2094,7 @@ def customers_silent(as_of_date: str = None, silent_days: int = 60, lookback_mon
                               "duoi_60_ngay"),
             "doanh_thu_ky_nhin_lai": _f(r["doanh_thu_ky_nhin_lai"]),
             "so_thang_co_mua": int(r["so_thang_co_mua"] or 0),
+            "sau_thang_truoc_khi_ngung": _truoc_khi_ngung(r["customer_code"], last),
             "san_pham_mua_nhieu_nhat": favourite or {
                 "status": "not_available",
                 "reason": "Khong co ma san pham co doanh thu duong trong ky nhin lai.",
@@ -2091,9 +2112,12 @@ def customers_silent(as_of_date: str = None, silent_days: int = 60, lookback_mon
         "truncated": total_count > returned_count,
         "not_shown_count": max(0, total_count - returned_count),
         "khach_im_lang": out,
-        "ghi_chu": ("Doanh thu o day la TONG trong ky nhin lai (khong phai doanh thu thang cuoi). "
-                     "Kho local chi giu chi tiet hoa don ~12 thang gan nhat nen khach im lang lau hon "
-                     "the co the khong xuat hien trong danh sach."),
+        "ghi_chu": ("HAI con so doanh thu KHAC NHAU, phai goi dung ten khi tra loi: "
+                     "doanh_thu_ky_nhin_lai = tong trong ky nhin lai CO DINH (ky_nhin_lai.tu -> den, "
+                     "tinh den hom nay); sau_thang_truoc_khi_ngung = 6 thang lich tinh den THANG MUA "
+                     "CUOI cua chinh khach do (dung khi hoi 'truoc khi ngung mua ho mua bao nhieu'). "
+                     "Danh sach khach im lang duoc loc theo ky nhin lai co dinh, nen khach im lang lau "
+                     "hon ky do co the khong xuat hien."),
         "data_as_of": latest_data_date(),
     }
     if scope_channel:
@@ -2590,6 +2614,97 @@ def customer_cohort_retention(month_to: str = None, months_back: int = 6,
     }
 
 
+def _nv_theo_dms(dms_ids: list) -> dict:
+    """{DMSId: {'employee_code','employee_name'}} - hoa don ghi theo DMSId, bao cao can ma nhan vien."""
+    ids = [x for x in dict.fromkeys(dms_ids) if x]
+    if not ids:
+        return {}
+    out = {}
+    for i in range(0, len(ids), 300):
+        chunk = ids[i:i + 300]
+        ph = ",".join(["?"] * len(chunk))
+        for r in _q(f"SELECT dmsid, employee_code, name FROM dim_nhanvien WHERE dmsid IN ({ph}) "
+                    "ORDER BY COALESCE(is_duplicate,0) DESC", tuple(chunk)):
+            out.setdefault(r["dmsid"], {"employee_code": r["employee_code"], "employee_name": r["name"]})
+    return out
+
+
+def _lich_su_thang_cua_khach(codes: list, month_to: str, scope_area_code: str = None,
+                             scope_channel: str = None, scope_employee_code: str = None) -> dict:
+    """{ma_khach: {'YYYY-MM': doanh_thu}} tren TOAN BO lich su kho (chi tiet 12 thang + bang nen cu
+    hon), theo dung pham vi tai khoan.
+
+    13/09/2026 (V15/S61b, V23/S68b): customer_movement chi nhin trong cua so history_months nen
+    (1) khach tung mua truoc cua so bi goi la "khach mo moi" - do tren Bravo doi MBKV2 thang 8/2026:
+    tool goi 32 khach la moi, that ra chi 22 khach lan dau mua, 10 khach da mua tu 2023-2025;
+    (2) moc "truoc khi ngung" va so thang nghi cung bi cat theo cua so. Ham nay lay ca phan ngoai
+    cua so de hai viec do dung.
+    """
+    if not codes:
+        return {}
+    _, date_to = _month_bounds(month_to)
+    summary_to = min(month_to, _month_add(_detail_cutoff()[:7], -1))
+    scope_sql, scope_params = _scope_clause(scope_area_code)
+    emp_sql, emp_params = _employee_scope_clause(scope_employee_code, "v", as_of=date_to)
+    lich_su = {}
+    codes = list(dict.fromkeys(codes))
+    for i in range(0, len(codes), 300):
+        chunk = codes[i:i + 300]
+        ph = ",".join(["?"] * len(chunk))
+        parts, part_params = [], []
+        for channel, table, join_fn in (("OTC", "vhoadon_otc", _otc_area_join),
+                                        ("ETC", "vhoadon_etc", _etc_area_join)):
+            if scope_channel and scope_channel != channel:
+                continue
+            join = join_fn("v", scope_area_code)
+            parts.append(f"SELECT v.customer_code code, substr(v.doc_date,1,7) m, SUM(v.amount9) rev "
+                         f"FROM {table} v {join} WHERE v.customer_code IN ({ph}) AND v.doc_date<=?"
+                         f"{scope_sql}{emp_sql} GROUP BY v.customer_code, substr(v.doc_date,1,7)")
+            part_params.append(tuple(chunk) + (date_to,) + scope_params + emp_params)
+        for channel in ("OTC", "ETC"):
+            if scope_channel and scope_channel != channel:
+                continue
+            m_scope, m_params = _monthly_summary_scope_clause(scope_area_code, channel)
+            m_emp, m_emp_params = _employee_scope_clause(scope_employee_code, "m", as_of=date_to)
+            parts.append("SELECT m.customer_code code, m.year_month m, SUM(m.revenue) rev "
+                         "FROM monthly_customer_summary m "
+                         f"WHERE m.channel=? AND m.customer_code IN ({ph}) AND m.year_month<=?"
+                         f"{m_scope}{m_emp} GROUP BY m.customer_code, m.year_month")
+            part_params.append((channel,) + tuple(chunk) + (summary_to,) + m_params + m_emp_params)
+        if not parts:
+            return {}
+        sql = "SELECT code, m, SUM(rev) rev FROM (" + " UNION ALL ".join(parts) + ") GROUP BY code, m"
+        params = tuple(p for group in part_params for p in group)
+        for r in _q(sql, params):
+            lich_su.setdefault(r["code"], {})[r["m"]] = _f(r["rev"])
+    return lich_su
+
+
+def _chuoi_truoc_khi_ngung(thang_doanh_thu: dict, month: str, prev_month: str) -> dict:
+    """Moc mua cuoi truoc khi ngung + chuoi thang lien tiep co mua ngay truoc do (dung cho V23/S68b)."""
+    co_mua = sorted(ym for ym, rev in thang_doanh_thu.items() if ym < prev_month and rev > 0)
+    if not co_mua:
+        return {"last_active_month": None, "streak_months": 0, "streak_revenue": 0.0,
+                "streak_avg": None, "gap_months": None, "first_purchase_month": None}
+    last_active = co_mua[-1]
+    chuoi = [last_active]
+    while True:
+        truoc = _month_add(chuoi[0], -1)
+        if thang_doanh_thu.get(truoc, 0.0) > 0:
+            chuoi.insert(0, truoc)
+        else:
+            break
+    tong = sum(thang_doanh_thu[ym] for ym in chuoi)
+    gap = 0
+    cursor = _month_add(last_active, 1)
+    while cursor <= prev_month:
+        gap += 1
+        cursor = _month_add(cursor, 1)
+    return {"last_active_month": last_active, "streak_months": len(chuoi), "streak_revenue": tong,
+            "streak_avg": tong / len(chuoi), "gap_months": gap,
+            "first_purchase_month": min(thang_doanh_thu)}
+
+
 def customer_movement(month: str = None, history_months: int = 12,
                       movement_filter: str = "all", limit: int = 50,
                       scope_area_code: str = None, scope_channel: str = None,
@@ -2616,15 +2731,28 @@ def customer_movement(month: str = None, history_months: int = 12,
         m["revenue"] += _f(r["revenue"]); m["orders"] += int(r["orders"] or 0)
         c["channels"].add(r["channel"]); c["areas"].add(r["area_code"])
         c["employees"][r["employee_code"]] = c["employees"].get(r["employee_code"], 0.0) + _f(r["revenue"])
+        if r["month"] == month:
+            thang_nay = c.setdefault("employees_this_month", {})
+            thang_nay[r["employee_code"]] = thang_nay.get(r["employee_code"], 0.0) + _f(r["revenue"])
 
     names = _customer_names(list(customers))
+    # 13/09/2026 (V15/S61b): khach "thang nay co mua, thang truoc khong" phai tra lich su DAY DU de
+    # biet ho lan dau mua hay quay lai - cua so history_months khong du de ket luan.
+    ung_vien = [ma for ma, c in customers.items()
+                if c["months"].get(month, {"revenue": 0.0})["revenue"] > 0
+                and c["months"].get(prev_month, {"revenue": 0.0})["revenue"] <= 0]
+    lich_su_day_du = _lich_su_thang_cua_khach(ung_vien, prev_month, scope_area_code, scope_channel,
+                                              scope_employee_code)
     detail = []
     for code, c in customers.items():
         cur = c["months"].get(month, {"revenue": 0.0, "orders": 0})
         prev = c["months"].get(prev_month, {"revenue": 0.0, "orders": 0})
         earlier = sum(v["revenue"] for k, v in c["months"].items() if k < prev_month)
+        truoc_day = lich_su_day_du.get(code) or {}
+        thang_mua_dau = min(truoc_day) if truoc_day else None
         if cur["revenue"] > 0 and prev["revenue"] <= 0:
-            movement = "REACTIVATED" if earlier > 0 else "NEW_OR_FIRST_OBSERVED"
+            # Lan dau mua that su (ke ca phan ngoai cua so) moi duoc goi la khach moi.
+            movement = "REACTIVATED" if (truoc_day or earlier > 0) else "NEW_OR_FIRST_OBSERVED"
         elif cur["revenue"] <= 0 and prev["revenue"] > 0:
             movement = "STOPPED"
         elif cur["revenue"] > prev["revenue"]:
@@ -2636,32 +2764,25 @@ def customer_movement(month: str = None, history_months: int = 12,
         if movement_filter != "all" and movement != movement_filter.upper():
             continue
         emp = max(c["employees"], key=c["employees"].get) if c["employees"] else None
-        pre_stop_active = sorted(
-            [(ym, values) for ym, values in c["months"].items()
-             if ym < prev_month and values["revenue"] > 0],
-            key=lambda pair: pair[0],
-        )
-        last_active_month = pre_stop_active[-1][0] if pre_stop_active else None
-        pre_stop_revenue = sum(values["revenue"] for _, values in pre_stop_active)
-        pre_stop_avg = (pre_stop_revenue / len(pre_stop_active)) if pre_stop_active else None
-        # "Tai kich hoat" chi co nghia da khong mua o thang lien truoc. So thang nghi va moc
-        # truoc khi nghi phai tinh trong cua so hien co, khong duoc suy doan xa hon lich su kho.
-        gap_months = 0
-        if last_active_month:
-            cursor = _month_add(last_active_month, 1)
-            while cursor <= prev_month:
-                if c["months"].get(cursor, {"revenue": 0.0})["revenue"] <= 0:
-                    gap_months += 1
-                cursor = _month_add(cursor, 1)
+        # V15/S61b: nguoi "mo" khach la nguoi ban cho khach do trong CHINH thang dang xet (ban nhieu
+        # nhat), khong phai nguoi ban nhieu nhat ca cua so 12 thang.
+        emp_thang = c.get("employees_this_month") or {}
+        # Hoa nhau thi lay ma nho hon de ket qua on dinh va trung voi checker S61b.
+        emp_thang_nay = min(emp_thang, key=lambda ma: (-emp_thang[ma], str(ma))) if emp_thang else None
+        # 13/09/2026 (V23/S68b): "truoc khi ngung" tinh tren CHUOI THANG LIEN TIEP co mua ngay truoc
+        # ky nghi, lay ca phan ngoai cua so hien thi - truoc day chia trung binh cho moi thang co mua
+        # trong cua so nen lech voi checker.
+        chuoi = _chuoi_truoc_khi_ngung(truoc_day, month, prev_month) if truoc_day else None
         reactivation_fields = {
-            "last_active_month_before_reactivation": last_active_month,
-            "inactive_months_before_reactivation": gap_months or None,
-            "pre_stop_active_month_count_in_window": len(pre_stop_active),
-            "pre_stop_average_monthly_revenue": pre_stop_avg,
+            "last_active_month_before_reactivation": chuoi["last_active_month"] if chuoi else None,
+            "inactive_months_before_reactivation": (chuoi["gap_months"] or None) if chuoi else None,
+            "pre_stop_streak_month_count": chuoi["streak_months"] if chuoi else 0,
+            "pre_stop_streak_revenue": chuoi["streak_revenue"] if chuoi else None,
+            "pre_stop_average_monthly_revenue": chuoi["streak_avg"] if chuoi else None,
             "recovery_delta_vs_pre_stop_average": (
-                cur["revenue"] - pre_stop_avg if pre_stop_avg is not None else None),
+                cur["revenue"] - chuoi["streak_avg"] if chuoi and chuoi["streak_avg"] else None),
             "recovery_pct_vs_pre_stop_average": (
-                cur["revenue"] / pre_stop_avg * 100 if pre_stop_avg else None),
+                cur["revenue"] / chuoi["streak_avg"] * 100 if chuoi and chuoi["streak_avg"] else None),
         } if movement == "REACTIVATED" else {}
         detail.append({
             "customer_code": code,
@@ -2672,7 +2793,9 @@ def customer_movement(month: str = None, history_months: int = 12,
             "current_orders": cur["orders"], "previous_orders": prev["orders"],
             "has_repeat_order_current": cur["orders"] >= 2,
             "earlier_revenue_in_window": earlier,
-            "employee_code": emp, "channels": sorted(c["channels"]), "areas": sorted(c["areas"]),
+            "employee_code": emp, "employee_code_this_month": emp_thang_nay,
+            "channels": sorted(c["channels"]), "areas": sorted(c["areas"]),
+            "first_purchase_month": thang_mua_dau or (month if cur["revenue"] > 0 and not prev["revenue"] else None),
             **reactivation_fields,
         })
     detail.sort(key=lambda x: abs(x["delta"]), reverse=True)
@@ -2731,6 +2854,34 @@ def customer_movement(month: str = None, history_months: int = 12,
         }
 
     summary_all = _movement_summary(detail)
+    # 13/09/2026 (V15/S61b): so khach theo tung TDV truoc day model phai tu dem tren danh sach da cat
+    # top-N va chi co ma DMS - nen lech han voi checker. Tinh san o day tren TOAN BO tap khach.
+    nv = _nv_theo_dms([row.get("employee_code_this_month") for row in detail])
+    theo_nv = {}
+    for row in detail:
+        dms = row.get("employee_code_this_month")
+        khoa = (nv.get(dms, {}).get("employee_code") or dms or "(khong xac dinh)")
+        muc = theo_nv.setdefault(khoa, {
+            "employee_code": khoa, "employee_name": nv.get(dms, {}).get("employee_name"),
+            "dms_id": dms, "khach_moi": 0, "khach_moi_co_mua_lai": 0, "doanh_thu_khach_moi": 0.0,
+            "khach_tai_kich_hoat": 0, "doanh_thu_tai_kich_hoat": 0.0, "khach_ngung_mua": 0,
+            "doanh_thu_mat_do_ngung": 0.0,
+        })
+        if row["movement"] == "NEW_OR_FIRST_OBSERVED":
+            muc["khach_moi"] += 1
+            muc["doanh_thu_khach_moi"] += row["current_revenue"]
+            muc["khach_moi_co_mua_lai"] += int(bool(row.get("has_repeat_order_current")))
+        elif row["movement"] == "REACTIVATED":
+            muc["khach_tai_kich_hoat"] += 1
+            muc["doanh_thu_tai_kich_hoat"] += row["current_revenue"]
+        elif row["movement"] == "STOPPED":
+            muc["khach_ngung_mua"] += 1
+            muc["doanh_thu_mat_do_ngung"] += row["previous_revenue"]
+    for muc in theo_nv.values():
+        muc["ty_le_mua_lai_khach_moi_pct"] = (
+            muc["khach_moi_co_mua_lai"] / muc["khach_moi"] * 100 if muc["khach_moi"] else None)
+    by_employee = sorted(theo_nv.values(),
+                         key=lambda x: (-x["khach_moi"], -x["khach_tai_kich_hoat"], x["employee_code"]))
     returned_detail = detail[:limit]
     product_summary = _product_month_pair_summary(
         month, prev_month, scope_area_code, scope_channel, scope_employee_code
@@ -2739,13 +2890,18 @@ def customer_movement(month: str = None, history_months: int = 12,
         "month": month, "previous_month": prev_month, "history_from": start,
         "period_selection": ("THANG_TRON_GAN_NHAT" if used_default_month else "THANG_DUOC_CHI_DINH"),
         "summary_all_customers": summary_all,
+        "by_employee": by_employee,
         "summary_all_products": product_summary,
         "summary_on_returned_top_rows": _movement_summary(returned_detail),
         "customers": returned_detail,
-        "canh_bao": ("NEW_OR_FIRST_OBSERVED chi co nghia la lan dau THAY trong cua so du lieu dang co; "
-                      "khong duoc khang dinh la khach moi trong doi neu kho thieu lich su truoc do. "
-                      "REACTIVATED/pre_stop_* chi duoc ket luan trong cua so tu history_from den month; "
-                      "khong co du lieu de khang dinh lan mua truoc do neu no nam truoc cua so nay. "
+        "canh_bao": ("NEW_OR_FIRST_OBSERVED = lan dau mua tren TOAN BO lich su kho trong pham vi tai "
+                      "khoan (13/09/2026), khong con phu thuoc history_months; first_purchase_month cua "
+                      "tung dong la bang chung. Khach tung mua truoc do luon la REACTIVATED. "
+                      "pre_stop_* lay ca phan ngoai cua so hien thi: pre_stop_average_monthly_revenue la "
+                      "trung binh cua CHUOI THANG LIEN TIEP co mua ngay truoc ky nghi. "
+                      "So khach theo tung TDV BAT BUOC lay o by_employee (tinh tren toan bo tap khach, "
+                      "quy chu khach cho nguoi ban nhieu nhat trong chinh thang do) - KHONG duoc tu dem "
+                      "tren danh sach customers da cat top-N. "
                       "Khi hoi tong doanh thu them/mat hoac ty le bu doanh thu, BAT BUOC dung "
                       "summary_all_customers; summary_on_returned_top_rows chi mo ta cac dong top-N "
                       "dang hien thi, khong dai dien cho toan bo tap khach."),

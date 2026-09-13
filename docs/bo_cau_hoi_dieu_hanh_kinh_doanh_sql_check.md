@@ -1624,6 +1624,8 @@ Cần FACT_PhatSinhNhanVien được chốt để điều chỉnh chính xác v�
 
 ### S33 — Thưởng và hiệu quả thưởng — PARTIAL
 
+> 🔁 **Đã sửa 13/09/2026 — dùng S33c ở mục 3b**: phụ cấp nằm ở ba cột LunchAmount_R / TransportAmount_R / PhoneAmount_R, không phải cột chưa xác định.
+
 > 🔴 **Sửa 10/09/2026 — bản cũ chỉ lọc `@AreaCode` (miền), không lọc theo ĐỘI.** Câu V18 hỏi thưởng
 > của đội nhưng bộ lọc miền vẫn trả về cả miền, rộng hơn nhiều lần phạm vi được phép xem. Đã thêm
 > `@ManagerCode`. Đo T8/2026: đội `MBKV2` có 11 người trên tổng 209 toàn công ty.
@@ -2707,6 +2709,8 @@ Target theo tỉnh không có sẵn; phần hụt quy về nhân viên phụ tr�
 
 ### S61 — Hiệu quả mở khách mới so tỷ lệ mua lại theo nhân viên — READY
 
+> 🔁 **Đã sửa 13/09/2026 — dùng S61b ở mục 3b**: lần mua đầu phải đọc từ bảng gốc (đọc từ `#sales` 12 tháng làm thừa 10 khách "mở mới" ở đội MBKV2 tháng 8), và chốt quy tắc quy chủ khách theo từng TDV.
+
 Cho câu hỏi "ai mở nhiều khách mới nhưng tỷ lệ mua lại thấp; ai tái kích hoạt tốt nhất". Dùng cờ
 IsNC/IsRO gốc của Bravo trên tầng nhân viên.
 
@@ -2741,6 +2745,8 @@ không lọc.
 *Đã chạy kiểm trên Bravo 03/09/2026.*
 
 ### S62 — Khách giảm tần suất, AOV hoặc số SKU so 3 tháng trước — READY
+
+> 🔁 **Ghi chú 13/09/2026 — xem S62b ở mục 3b**: chênh 1 đơn với chatbot là do độ trễ đồng bộ, mọi cách đếm đơn đều cho cùng một con số.
 
 Cho câu hỏi "khách nào giảm tần suất mua, AOV hoặc số SKU/đơn so với 3 tháng trước". So kỳ hiện tại
 với kỳ 3 tháng trước đó trên CÙNG tập khách.
@@ -2962,6 +2968,8 @@ S18 (đếm toàn công ty) ở chỗ tách theo VÙNG và tính thêm tỷ lệ
 
 ### S68 — Khách mua lại/tái kích hoạt và mức phục hồi doanh thu — READY
 
+> 🔁 **Đã sửa 13/09/2026 — dùng S68b ở mục 3b**: khử trùng danh mục khách (39.336 mã có ở cả hai bảng nên mỗi khách ra hai dòng) và lấy chuỗi tháng trước khi ngừng từ bảng gốc.
+
 Cho câu hỏi **V23**: *"Khách mua lại/tái kích hoạt là ai; doanh thu phục hồi so trước khi ngừng mua thế nào?"*
 
 > ⚠️ **Lưu ý nghiệp vụ & sửa đổi 07/09/2026**:
@@ -3063,6 +3071,8 @@ Truy vấn đối chiếu nhanh theo cờ Bravo `FACT_TongHopKhachHang` (`IsRO =
 
 
 ### S69 — Khách im lặng 30/60/90 ngày — READY
+
+> 🔁 **Đã sửa 13/09/2026 — dùng S69b ở mục 3b**: tách rõ "kỳ nhìn lại cố định" và "6 tháng trước lần mua cuối", kèm khử trùng danh mục khách.
 
 Cho câu hỏi "khách im lặng 30/60/90 ngày là ai; lần mua gần nhất, giá trị và sản phẩm thường mua".
 Khác S40 ở chỗ phân nhóm theo BA MỐC và kèm sản phẩm mua nhiều nhất của từng khách.
@@ -4050,6 +4060,145 @@ khách mới quay lại mua. Cohort giữ chân (S19) trả lời theo *tháng m
 Đo thật 04/09/2026: MB 596 khách mới / 7,6 tr/khách / mua lại 42,1%; MN 316 / 6,3 tr / 33,9%;
 MT 203 / 4,4 tr / 29,1%. Không vùng nào "mở nhiều nhưng kém" — MB dẫn đầu cả ba trục, MT yếu cả ba.
 Câu trả lời khẳng định có vùng mở nhiều mà chất lượng thấp là **sai với dữ liệu hiện tại**.
+
+## 3b. Bản sửa checker ngày 13/09/2026 (V15, V18, V21, V23, V24)
+
+Bốn lỗi dưới đây tìm ra khi chấm lại bản `b`/`c` ngày 12–13/09. **Dùng bản trong mục này thay cho bản
+cũ của S33/S61/S68/S69.** Mọi con số nêu ở đây đều đo trực tiếp trên Bravo ngày 13/09/2026, phạm vi đội
+MBKV2 (tài khoản `tu.pham`), tháng 8/2026.
+
+### Lỗi 1 — `#sales` chỉ có 12 tháng nên "khách mở mới" bị đếm thừa (V15, V23)
+
+`#sales` bị chặn bởi `@FromDate` (mục 2, mặc định 12 tháng). Lấy `MIN(DocDate)` trên `#sales` chỉ cho
+biết **lần đầu thấy trong cửa sổ**, không phải lần đầu mua. Đo thật: đội MBKV2 tháng 8/2026 có 237 khách
+"tháng này có mua, tháng trước không mua" — trong đó **22 khách lần đầu mua thật** và **215 khách tái
+kích hoạt** (người sớm nhất mua từ 29/06/2022). Nếu lấy lần đầu mua trong `#sales` thì ra **32** khách
+"mở mới", tức **thừa 10 khách** đã mua từ 2023–2025. Chatbot trước 13/09 mắc đúng lỗi này (cửa sổ 12
+tháng của `customer_movement`); đã sửa để đọc toàn bộ lịch sử kho.
+
+**Quy tắc chốt:** lần mua đầu tiên phải đọc từ bảng gốc `vHoaDonTotal`/`vHoaDonETCTotal`, không đọc từ
+`#sales`.
+
+### Lỗi 2 — nối danh mục khách bằng `UNION ALL` làm nhân đôi dòng (V23, V21)
+
+`DMS_KhachHang` và `DMSSX_KhachHang` có **39.336 mã khách trùng nhau**. Mẫu
+`kh AS (SELECT Code,Name FROM DMS_KhachHang UNION ALL SELECT Code,Name FROM DMSSX_KhachHang)` khiến mỗi
+khách như vậy ra **hai dòng**. Thay bằng:
+
+    kh AS (
+      SELECT Code, MAX(Name) Name
+      FROM (SELECT Code,Name FROM dbo.DMS_KhachHang
+            UNION ALL SELECT Code,Name FROM dbo.DMSSX_KhachHang) u
+      GROUP BY Code
+    )
+
+### S61b — Khách mở mới / tái kích hoạt và hiệu quả theo từng TDV (thay S61 cho V15)
+
+    -- Phan 1: tong doi. Lan dau mua doc tu BANG GOC nen khong bi cat 12 thang.
+    WITH team AS (
+      SELECT DISTINCT DMSId FROM dbo.DIM_NhanVien
+      WHERE DMSId IS NOT NULL
+        AND (@ManagerCode IS NULL OR EmployeeCode IN (
+              SELECT EmployeeCode FROM dbo.FACT_TongHopKhachHang WHERE ManagerCode=@ManagerCode))
+    ), goc AS (
+      SELECT CustomerCode, DocDate, Amount9, EmpDMSCode FROM dbo.vHoaDonTotal
+      UNION ALL
+      SELECT CustomerCode, DocDate, Amount9, EmpDMSCode FROM dbo.vHoaDonETCTotal
+    ), pham_vi AS (
+      SELECT g.* FROM goc g
+      WHERE @ManagerCode IS NULL OR g.EmpDMSCode IN (SELECT DMSId FROM team)
+    ), c AS (
+      SELECT CustomerCode,
+        SUM(CASE WHEN DocDate>=@MonthStart AND DocDate<@MonthEnd THEN Amount9 ELSE 0 END) Cur,
+        SUM(CASE WHEN DocDate>=DATEADD(month,-1,@MonthStart) AND DocDate<@MonthStart THEN Amount9 ELSE 0 END) Prev,
+        MIN(DocDate) FirstEver
+      FROM pham_vi GROUP BY CustomerCode
+    )
+    SELECT
+      SUM(CASE WHEN Cur>0 AND Prev<=0 AND FirstEver>=@MonthStart THEN 1 ELSE 0 END) [Khach_mo_moi],
+      SUM(CASE WHEN Cur>0 AND Prev<=0 AND FirstEver<@MonthStart THEN 1 ELSE 0 END) [Khach_tai_kich_hoat],
+      SUM(CASE WHEN Cur<=0 AND Prev>0 THEN 1 ELSE 0 END) [Khach_ngung_mua],
+      SUM(CASE WHEN Cur>0 AND Prev<=0 AND FirstEver>=@MonthStart THEN Cur ELSE 0 END) [DT_khach_mo_moi],
+      SUM(CASE WHEN Cur>0 AND Prev<=0 AND FirstEver<@MonthStart THEN Cur ELSE 0 END) [DT_tai_kich_hoat],
+      SUM(CASE WHEN Cur<=0 AND Prev>0 THEN Prev ELSE 0 END) [DT_mat_do_ngung]
+    FROM c;
+
+Phần theo từng TDV dùng lại `team`/`goc`/`pham_vi`/`c` ở trên, chủ khách của tháng là **người bán nhiều
+nhất cho khách đó trong chính tháng đang xét**, hòa thì lấy mã nhỏ hơn — đúng quy tắc `by_employee` của
+chatbot nên hai bên so được trực tiếp:
+
+    , chu_khach AS (
+      SELECT CustomerCode, EmpDMSCode,
+             ROW_NUMBER() OVER (PARTITION BY CustomerCode ORDER BY SUM(Amount9) DESC, EmpDMSCode) rn
+      FROM pham_vi WHERE DocDate>=@MonthStart AND DocDate<@MonthEnd
+      GROUP BY CustomerCode, EmpDMSCode
+    ), don_thang AS (
+      SELECT CustomerCode, COUNT(DISTINCT CONCAT(CONVERT(varchar(10),DocDate,120),CHAR(124),Stt)) SoDon
+      FROM dbo.vHoaDonTotal WHERE DocDate>=@MonthStart AND DocDate<@MonthEnd GROUP BY CustomerCode
+    ), nv AS (
+      SELECT DMSId, MAX(EmployeeCode) EmployeeCode, MAX(Name) Name
+      FROM dbo.DIM_NhanVien WHERE DMSId IS NOT NULL GROUP BY DMSId
+    )
+    SELECT COALESCE(nv.EmployeeCode, N'(khong xac dinh)') [Ma_NV], MAX(nv.Name) [Ten],
+           SUM(CASE WHEN c.FirstEver>=@MonthStart THEN 1 ELSE 0 END) [Khach_mo_moi],
+           SUM(CASE WHEN c.FirstEver>=@MonthStart AND ISNULL(d.SoDon,1)>1 THEN 1 ELSE 0 END) [Khach_moi_co_mua_lai],
+           SUM(CASE WHEN c.FirstEver<@MonthStart THEN 1 ELSE 0 END) [Khach_tai_kich_hoat]
+    FROM c
+    JOIN chu_khach k ON k.CustomerCode=c.CustomerCode AND k.rn=1
+    LEFT JOIN nv ON nv.DMSId=k.EmpDMSCode
+    LEFT JOIN don_thang d ON d.CustomerCode=c.CustomerCode
+    WHERE c.Cur>0 AND c.Prev<=0
+    GROUP BY nv.EmployeeCode
+    ORDER BY [Khach_mo_moi] DESC;
+
+Chatbot trả sẵn phần này ở `by_employee`, tính trên toàn bộ tập khách chứ không phải danh sách top-N
+đang hiển thị — trước 13/09 model phải tự đếm trên danh sách đã cắt nên số theo từng TDV luôn lệch.
+
+### S68b — Doanh thu trước khi ngừng (V23)
+
+Hai điểm phải sửa so với bản đang chạy:
+
+1. Dùng `kh` đã khử trùng ở Lỗi 2 — nếu không, mỗi khách có trong cả hai danh mục sẽ ra hai dòng.
+2. Chuỗi tháng trước khi ngừng phải đọc từ bảng gốc. Chatbot tính **bình quân của chuỗi tháng liên tiếp
+   có mua ngay trước kỳ nghỉ** (`pre_stop_average_monthly_revenue`, kèm `pre_stop_streak_month_count`),
+   lấy cả phần nằm ngoài cửa sổ 12 tháng. Checker phải dùng cùng định nghĩa, nếu không sẽ lệch với mọi
+   khách từng mua trước `@FromDate`.
+
+### S69b — Khách im lặng: hai con số doanh thu khác nhau (V21)
+
+Bản cũ trộn hai khái niệm. Từ 13/09, chatbot trả **cả hai**, phải đối chiếu đúng cặp:
+
+| Khái niệm | Trường của chatbot | Ý nghĩa |
+|---|---|---|
+| Kỳ nhìn lại cố định | `doanh_thu_ky_nhin_lai` | Tổng trong `ky_nhin_lai.tu → den`, tính đến hôm nay |
+| Trước khi ngừng | `sau_thang_truoc_khi_ngung.doanh_thu` | 6 tháng lịch tính đến **tháng mua cuối của chính khách đó** |
+
+Checker phải lấy phần "trước khi ngừng" từ bảng gốc: `#sales` bắt đầu từ `@FromDate` nên khách ngừng
+mua sớm sẽ bị cắt mất phần đầu của 6 tháng đó và luôn thấp hơn số thật.
+
+### S33c — Phụ cấp có thật, nằm ở ba cột (V18)
+
+Bản cũ để `Phu_cap` là `NULL` với ghi chú "chưa xác định cột". Đã xác định:
+
+    ISNULL(LunchAmount_R,0)        -- phu cap an trua
+    + ISNULL(TransportAmount_R,0)  -- phu cap xang xe
+    + ISNULL(PhoneAmount_R,0)      -- phu cap dien thoai
+      AS PhuCap
+
+> ⚠️ **Độ phủ tụt hẳn từ tháng 7/2026** (đo 13/09/2026, toàn công ty): số người có phụ cấp khác 0 là
+> 150–184 người/tháng suốt 09/2025–06/2026, nhưng **T7/2026 chỉ còn 58 (ăn trưa) và 23 (xăng xe, điện
+> thoại)**, T8/2026 là 59/33/33, và **T9/2026 xăng xe cùng điện thoại bằng 0**. Cả đội MBKV2 tháng 8 đều
+> bằng 0. Vì vậy **0 đồng ở đây không được kết luận là "không được phụ cấp"** — phải hỏi DNH xem tháng
+> 7–9/2026 đã chốt phụ cấp chưa. Chatbot đã có sẵn ba cột này trong `get_salary_detail` và
+> `get_salary_ranking` (trường `allowance`).
+
+### S62b — Lệch 1 đơn là do độ trễ đồng bộ, không phải định nghĩa (V24)
+
+Đo lại ngày 13/09/2026 cho đội MBKV2, kỳ 01/07–11/09: **mọi cách đếm đều ra 1.990 đơn** — theo
+`kênh|Stt` (checker), theo `kênh:ngày:khách:Stt` (chatbot), có lọc `UnitPrice>0` hay không; và không có
+đơn nào chỉ gồm dòng giá 0. Vì vậy chênh 1 đơn giữa hai lần chạy là do kho local đồng bộ sau Bravo.
+Khi chấm câu đếm đơn, phải ghi lại `data_as_of` của câu trả lời và giờ chạy checker; chatbot có sẵn
+`data_as_of` trong mọi kết quả tool.
 
 ## 4. Mapping từng câu hỏi → SQL checker
 

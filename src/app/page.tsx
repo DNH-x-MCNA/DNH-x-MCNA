@@ -172,11 +172,25 @@ function groupSessionsByDate(list: SessionSummary[]): SessionGroup[] {
   ].filter((g) => g.items.length > 0);
 }
 
+// Backend tra moc du lieu rieng o truong `freshness` va CAM model tu viet dong "du lieu den ngay..."
+// (xem THOI DIEM DU LIEU trong system prompt). Truoc 13/09/2026 giao dien khong doc truong nay nen
+// cau tra loi mat han moc du lieu - nguoi cham UAT khong biet so lech la do kho dong bo sau Bravo
+// hay do tinh sai (V24).
+type FreshnessItem = {
+  source_name?: string;
+  business_data_date?: string | null;
+  sync_completed_at?: string | null;
+  snapshot_date?: string | null;
+  is_stale?: boolean;
+  warning?: string | null;
+};
+
 type Message = {
   id?: number;
   role: "user" | "bot";
   text: string;
   queryId?: string | null;
+  freshness?: FreshnessItem[];
   sqlUsed?: string[];
   columns?: string[] | null;
   rows?: unknown[][] | null;
@@ -703,6 +717,23 @@ const MessageList = memo(function MessageList({
               );
             })()}
 
+            {m.role === "bot" && m.freshness && m.freshness.length > 0 && (() => {
+              const ngay = m.freshness
+                .map((f) => f.business_data_date || f.snapshot_date)
+                .filter(Boolean) as string[];
+              const dongBo = m.freshness.map((f) => f.sync_completed_at).filter(Boolean) as string[];
+              const cu = m.freshness.filter((f) => f.is_stale);
+              const gon = (v: string) => v.slice(0, 16).replace("T", " ");
+              return (
+                <div className={`mt-2 text-[11px] ${cu.length ? "text-amber-700" : "text-slate-400"}`}>
+                  {ngay.length > 0 && <span>Dữ liệu đến: {gon(ngay.sort().slice(-1)[0])}</span>}
+                  {dongBo.length > 0 && <span> · Đồng bộ: {gon(dongBo.sort().slice(-1)[0])}</span>}
+                  <span> · Nguồn: {m.freshness.map((f) => f.source_name).filter(Boolean).join(", ")}</span>
+                  {cu.length > 0 && <span> · ⚠️ {cu[0].warning || "nguồn có thể chưa đồng bộ kịp"}</span>}
+                </div>
+              );
+            })()}
+
             {m.sqlUsed && m.sqlUsed.length > 0 && (
               <details className="mt-2 text-xs text-slate-400">
                 <summary className="cursor-pointer select-none hover:text-slate-600">
@@ -1121,6 +1152,7 @@ export default function Home() {
           if (!jsonStr) continue;
           let evt: { type: string; query_id?: string; text?: string; message?: string; answer?: string;
                      sql_used?: string[]; columns?: string[] | null; rows?: unknown[][] | null;
+                     freshness?: FreshnessItem[];
                      quota_used?: number | null; quota_limit?: number | null;
                      quota_remaining?: number | null; quota_resets_at?: string | null };
           try {
@@ -1151,6 +1183,7 @@ export default function Home() {
                   sqlUsed: evt.sql_used,
                   columns: evt.columns,
                   rows: evt.rows,
+                  freshness: evt.freshness,
                 };
               }
               return next;
