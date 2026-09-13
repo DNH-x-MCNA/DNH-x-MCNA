@@ -276,11 +276,16 @@ def _required_tool_for_question(question: str) -> str | None:
         return "get_inventory_by_region"
     # C44/M42: kho/hoa don khong co khoa hop dong da xac nhan. Ep vao bao cao co guard
     # source-gap thay vi de model tu search SQL va noi hoa don qua customer+SKU.
+    # 13/09/2026: C44/M42 hoi TIEN DO THUC HIEN hop dong. Truoc day day sang bao cao dia ban (chi co
+    # doanh thu thuc hien, khong co gia tri hop dong/con lai/han) nen ca hai deu CHUA DAT voi ly do
+    # "chua co khoa lien ket hoa don - hop dong". Kiem lai 13/09: khoa CO that, ContractId phu 100%
+    # dong hoa don ETC va khop 1.037/1.037 hop dong -> dung tool hop dong.
     if any(marker in q for marker in (
         "hop dong etc", "hop dong/goi thau", "hop dong goi thau", "goi thau nao",
         "sap het hieu luc", "gia tri lon chua giai ngan", "ty le thuc hien thap",
+        "chua giai ngan",
     )):
-        return "get_geography_monthly_performance"
+        return "get_etc_contract_status"
     # M22/S88: cau hoi ba ve "ngung mua HOAC giam mua HOAC keo dai chu ky mua so voi lich su" can
     # ca ba tin hieu trong MOT bang. get_customer_movement chi so thang nay voi thang lien truoc va
     # khong co khoang cach mua trung binh, nen luon thieu ve thu ba - dinh tuyen cu khien M22 tra
@@ -359,8 +364,9 @@ def _required_tool_for_question(question: str) -> str | None:
             marker in q for marker in ("khach hang", "san pham", "nhan vien", "tdv")):
         return "get_customer_product_coverage"
     if any(marker in q for marker in ("ke hoach thau", "ty le trung thau", "gia tri trung thau")):
-        # Kho chua co ke hoach/tender; bao cao dia ban ETC chi cung cap phan doanh thu thuc hien
-        # con co the kiem chung va buoc chatbot neu ro cac chi tieu thau/thu tien la thieu nguon.
+        # Ke hoach/gia tri tham gia thau va ty le trung KHONG co trong vHopDongETC (bang do chi co hop
+        # dong da ky). Giu bao cao dia ban ETC cho phan doanh thu thuc hien va buoc chatbot neu ro
+        # phan thau la thieu nguon - C43/M41 dang khop theo huong nay.
         return "get_geography_monthly_performance"
     if any(marker in q for marker in (
         "xoi mon gia", "gia ban thuc te", "giam gia ban", "do it khach", "it don",
@@ -1055,6 +1061,22 @@ TEMPLATE_TOOLS = [
                        "top N nhom theo tong doanh so ca cua so, KEM DU MOI THANG cua chung. Truong "
                        "so_nhom_khong_hien cho biet con bao nhieu nhom khong hien."},
         }, "required": []},
+    },
+    {
+        "name": "get_etc_contract_status",
+        "description": "HOP DONG/GOI THAU ETC: gia tri hop dong, da xuat hoa don, con lai, ty le thuc "
+                       "hien, hop dong sap het han va hop dong chua xuat hoa don nao. BAT BUOC dung cho "
+                       "C43/C44/M42 - moi cau hoi ve hop dong, goi thau, gia tri chua giai ngan, tien do "
+                       "thuc hien hop dong ETC. Nguon: vHopDongETC noi vHoaDonETCTotal.ContractId (do "
+                       "13/09/2026: ContractId co tren 100% dong hoa don ETC, khop 1.037/1.037 hop dong). "
+                       "CAC HOP DONG CO GIA TRI BAT THUONG da duoc tach rieng khoi moi con so tong "
+                       "(so_hop_dong_gia_tri_bat_thuong / hop_dong_gia_tri_bat_thuong) - PHAI noi ro dieu "
+                       "nay khi bao tong gia tri, khong duoc cong chung vao.",
+        "input_schema": {"type": "object", "properties": {
+            "as_of_date": {"type": "string", "description": "YYYY-MM-DD; mac dinh ngay du lieu moi nhat."},
+            "expiring_days": {"type": "integer", "description": "Nguong 'sap het han', mac dinh 90 ngay."},
+            "only_active": {"type": "boolean", "description": "Chi xet hop dong con hieu luc (mac dinh true)."},
+            "limit": {"type": "integer", "minimum": 1, "maximum": 200}}, "required": []},
     },
     {
         "name": "get_operational_data_quality",

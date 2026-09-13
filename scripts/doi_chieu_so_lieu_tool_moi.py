@@ -546,7 +546,7 @@ def _ly_do_khong_co_payload(result):
 
 
 def _tool_cases_40():
-    """Một ca smoke/contract cho đúng 44 tool nghiệp vụ, chỉ đọc (kho local; hai tool đọc Bravo)."""
+    """Một ca smoke/contract cho đúng 45 tool nghiệp vụ, chỉ đọc (kho local; ba tool đọc Bravo)."""
     ym, d_from, d_to = _thang_tron_gan_nhat()
     if not ym:
         ym, d_from, d_to = "2026-07", "2026-07-01", "2026-07-31"
@@ -586,6 +586,8 @@ def _tool_cases_40():
         "get_geography_monthly_performance": ({"month_to": ym, "months_back": 3, "limit": 20}, dict),
         "get_workforce_productivity": ({"month_to": ym, "months_back": 3, "limit": 20}, dict),
         "get_operational_data_quality": ({"as_of_date": d_to, "sample_limit": 10}, dict),
+        # 13/09/2026: hop dong ETC (C44/M42) - doc Bravo, chi lay danh sach ngan de smoke.
+        "get_etc_contract_status": ({"as_of_date": d_to, "limit": 5}, dict),
         "get_employee_kpi": ({"as_of_date": d_to, "limit": 10}, dict),
         "get_employee_daily_kpi": ({"employee_code": employee, "year_month": ym}, dict),
         "compare_periods": ({"date_from_a": d_from, "date_to_a": d_to,

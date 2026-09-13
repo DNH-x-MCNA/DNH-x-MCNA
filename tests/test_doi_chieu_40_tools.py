@@ -17,7 +17,8 @@ def test_catalog_smoke_phu_dung_toan_bo_tool_da_dang_ky():
     # 10/09/2026: 41 sau khi them get_customer_attrition_risk cho M22/S88.
     # 11/09/2026: 44 sau khi gop sku_revenue_drop_vs_stock, revenue_view_reconciliation,
     # salary_aso_detail tu hai nhanh sua tay may 24.
-    assert len(cases) == 44
+    # 13/09/2026: 45 sau khi them get_etc_contract_status cho C44/M42.
+    assert len(cases) == 45
     assert set(cases) == set(checker.rt.TEMPLATES)
 
 

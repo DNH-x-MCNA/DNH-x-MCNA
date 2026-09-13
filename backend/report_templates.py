@@ -5363,6 +5363,128 @@ def _trang_thai_nguon_don_hang() -> dict:
     return value
 
 
+def etc_contract_status(as_of_date: str = None, expiring_days: int = 90, limit: int = 50,
+                        only_active: bool = True, scope_area_code: str = None,
+                        scope_channel: str = None, scope_employee_code: str = None) -> dict:
+    """C43/C44/M42: hop dong ETC - gia tri, da xuat hoa don, con lai, ty le thuc hien, sap het han.
+
+    13/09/2026 - VI SAO CO TOOL NAY: ba cau cum H bi ghi la "chua co khoa lien ket hoa don voi hop
+    dong/goi thau ETC" nen deu CHUA DAT, va router day chung sang bao cao dia ban (chi co doanh thu
+    thuc hien). Kiem lai tren Bravo: vHoaDonETCTotal CO cot ContractId, do phu 100% so dong va 100%
+    doanh thu T7-T8/2026, va 1.037/1.037 ma hop dong tren hoa don deu khop vHopDongETC. Khoa co that.
+
+    NHUNG gia tri hop dong co ban ghi hong: 3/9.135 hop dong chiem 99,88% tong gia tri (HD 115627 ghi
+    don gia 295.238.095.239d/don vi). Vi vay tool TACH RIENG cac hop dong co gia tri bat thuong
+    (AmountAfterVat lech qua 5% so voi Quantity*UnitPrice) ra khoi moi con so tong, khong am tham
+    cong vao - nguoi doc thay ca hai phan.
+    """
+    as_of_date = (as_of_date or latest_data_date())[:10]
+    expiring_days = max(1, min(int(expiring_days or 90), 720))
+    limit = max(1, min(int(limit or 50), 200))
+    params = {"as_of": as_of_date}
+    dieu_kien_vung = ""
+    if scope_area_code:
+        dieu_kien_vung = (" AND EXISTS (SELECT 1 FROM dbo.DMSSX_KhachHang kh "
+                          "JOIN dbo.DIM_TinhThanhPho tp ON tp.CityId=kh.CityId "
+                          "WHERE kh.Code=hd.CustomerCode AND CASE WHEN tp.AreaCode IN (N'MB',N'MB1',N'MB2') "
+                          "THEN N'MB' ELSE tp.AreaCode END=:area)")
+        params["area"] = scope_area_code
+    dieu_kien_nv = ""
+    if scope_employee_code:
+        dms_ids = _get_team_dms_ids(scope_employee_code, as_of_date)
+        cho = []
+        for i, ma in enumerate(dms_ids):
+            params["nv%d" % i] = ma
+            cho.append(":nv%d" % i)
+        dieu_kien_nv = " AND (hd.EmpDMSCode1 IN (%s) OR hd.EmpDMSCode2 IN (%s))" % (
+            ",".join(cho), ",".join(cho))
+    sql = (
+        "WITH dong AS ("
+        " SELECT Id, RowId, MAX(CustomerCode) CustomerCode, MAX(DocNo) DocNo,"
+        " MAX(FromDate) FromDate, MAX(ToDate) ToDate, MAX(StatusId) StatusId,"
+        " MAX(EmpDMSCode1) EmpDMSCode1, MAX(EmpDMSCode2) EmpDMSCode2,"
+        " MAX(AmountAfterVat) AmountAfterVat, MAX(Quantity) Quantity, MAX(UnitPrice) UnitPrice"
+        " FROM dbo.vHopDongETC GROUP BY Id, RowId"
+        "), hd AS ("
+        " SELECT Id, MAX(CustomerCode) CustomerCode, MAX(DocNo) DocNo, MAX(FromDate) FromDate,"
+        " MAX(ToDate) ToDate, MAX(StatusId) StatusId, MAX(EmpDMSCode1) EmpDMSCode1,"
+        " MAX(EmpDMSCode2) EmpDMSCode2, SUM(AmountAfterVat) GiaTri, COUNT(*) SoDong,"
+        " SUM(CASE WHEN ABS(AmountAfterVat - Quantity*UnitPrice) >"
+        "          0.05*CASE WHEN ABS(AmountAfterVat)>ABS(Quantity*UnitPrice)"
+        "                    THEN ABS(AmountAfterVat) ELSE ABS(Quantity*UnitPrice) END"
+        "     THEN 1 ELSE 0 END) SoDongLechGiaTri"
+        " FROM dong GROUP BY Id"
+        "), hoadon AS ("
+        " SELECT ContractId, SUM(Amount9) DaXuat, COUNT(DISTINCT Stt) SoHoaDon,"
+        " MAX(DocDate) LanXuatCuoi FROM dbo.vHoaDonETCTotal"
+        " WHERE ContractId IS NOT NULL GROUP BY ContractId"
+        ") SELECT hd.Id, hd.DocNo, hd.CustomerCode, hd.StatusId, hd.SoDong, hd.SoDongLechGiaTri,"
+        " CONVERT(varchar(10), hd.FromDate, 120) FromDate,"
+        " CONVERT(varchar(10), hd.ToDate, 120) ToDate,"
+        " hd.GiaTri, ISNULL(h.DaXuat, 0) DaXuat, ISNULL(h.SoHoaDon, 0) SoHoaDon,"
+        " CONVERT(varchar(10), h.LanXuatCuoi, 120) LanXuatCuoi,"
+        " DATEDIFF(day, CAST(:as_of AS date), hd.ToDate) ConLaiNgay"
+        " FROM hd LEFT JOIN hoadon h ON h.ContractId = hd.Id"
+        " WHERE 1=1" + dieu_kien_vung + dieu_kien_nv + " ORDER BY hd.Id")
+    rows = _q_bravo(sql, params)
+
+    hop_dong, bat_thuong = [], []
+    for r in rows:
+        gia_tri = _f(r["GiaTri"])
+        da_xuat = _f(r["DaXuat"])
+        con_lai_ngay = int(r["ConLaiNgay"]) if r["ConLaiNgay"] is not None else None
+        muc = {
+            "contract_id": r["Id"], "so_hop_dong": r["DocNo"], "customer_code": r["CustomerCode"],
+            "tu_ngay": r["FromDate"], "den_ngay": r["ToDate"], "status_id": r["StatusId"],
+            "gia_tri_hop_dong": gia_tri, "da_xuat_hoa_don": da_xuat,
+            "con_lai": gia_tri - da_xuat,
+            "ty_le_thuc_hien_pct": (da_xuat / gia_tri * 100) if gia_tri else None,
+            "so_hoa_don": int(r["SoHoaDon"] or 0), "lan_xuat_cuoi": r["LanXuatCuoi"],
+            "con_lai_ngay": con_lai_ngay,
+            "sap_het_han": con_lai_ngay is not None and 0 <= con_lai_ngay <= expiring_days,
+            "da_het_han": con_lai_ngay is not None and con_lai_ngay < 0,
+        }
+        if int(r["SoDongLechGiaTri"] or 0) > 0:
+            muc["ly_do_bat_thuong"] = (
+                "AmountAfterVat lech qua 5%% so voi Quantity*UnitPrice o %d/%d dong - gia tri hop "
+                "dong KHONG dung de ket luan." % (int(r["SoDongLechGiaTri"]), int(r["SoDong"] or 0)))
+            bat_thuong.append(muc)
+        else:
+            hop_dong.append(muc)
+
+    dang_hieu_luc = [x for x in hop_dong if not x["da_het_han"]]
+    xet = dang_hieu_luc if only_active else hop_dong
+    sap_het = [x for x in xet if x["sap_het_han"]]
+    chua_xuat = [x for x in xet if x["so_hoa_don"] == 0]
+    thuc_hien_thap = sorted(
+        [x for x in xet if x["ty_le_thuc_hien_pct"] is not None and x["ty_le_thuc_hien_pct"] < 50],
+        key=lambda x: (x["ty_le_thuc_hien_pct"], -x["con_lai"]))
+    return {
+        "as_of": as_of_date, "nguong_sap_het_han_ngay": expiring_days,
+        "chi_xet_hop_dong_con_hieu_luc": only_active,
+        "nguon": "vHopDongETC + vHoaDonETCTotal.ContractId (Bravo)",
+        "do_phu_khoa": ("ContractId co tren 100% dong hoa don ETC T7-T8/2026 va khop 1.037/1.037 ma "
+                        "hop dong - kiem chung 13/09/2026."),
+        "tong_so_hop_dong": len(hop_dong) + len(bat_thuong),
+        "so_hop_dong_con_hieu_luc": len(dang_hieu_luc),
+        "tong_gia_tri": sum(x["gia_tri_hop_dong"] for x in xet),
+        "tong_da_xuat_hoa_don": sum(x["da_xuat_hoa_don"] for x in xet),
+        "tong_con_lai": sum(x["con_lai"] for x in xet),
+        "so_hop_dong_sap_het_han": len(sap_het),
+        "gia_tri_con_lai_cua_hop_dong_sap_het_han": sum(x["con_lai"] for x in sap_het),
+        "so_hop_dong_chua_xuat_hoa_don_nao": len(chua_xuat),
+        "hop_dong_thuc_hien_duoi_50_pct": thuc_hien_thap[:limit],
+        "hop_dong_sap_het_han": sorted(sap_het, key=lambda x: x["con_lai_ngay"])[:limit],
+        "so_hop_dong_gia_tri_bat_thuong": len(bat_thuong),
+        "hop_dong_gia_tri_bat_thuong": sorted(bat_thuong, key=lambda x: -x["gia_tri_hop_dong"])[:20],
+        "canh_bao": ("Cac hop dong co gia tri bat thuong da duoc TACH RIENG khoi moi con so tong o "
+                     "day (do 13/09/2026: 3/9.135 hop dong chiem 99,88% tong gia tri). Khi tra loi "
+                     "phai neu ro con so tong khong gom nhung hop dong do va can DNH kiem lai du lieu "
+                     "goc. Ty le thuc hien = tong Amount9 hoa don co ContractId / gia tri hop dong."),
+        "data_as_of": latest_data_date(),
+    }
+
+
 def operational_data_quality(as_of_date: str = None, sample_limit: int = 30,
                              scope_area_code: str = None, scope_channel: str = None,
                              scope_employee_code: str = None) -> dict:
@@ -10291,6 +10413,7 @@ TEMPLATES = {
     "get_geography_monthly_performance": geography_monthly_performance,
     "get_workforce_productivity": workforce_productivity,
     "get_operational_data_quality": operational_data_quality,
+    "get_etc_contract_status": etc_contract_status,
     "get_employee_kpi": employee_kpi,
     "get_employee_daily_kpi": employee_daily_kpi,
     "compare_periods": compare_periods,
@@ -10411,6 +10534,10 @@ _CHANNEL_SCOPE_POLICIES = {
     **{name: "otc_only" for name in {
         "get_employee_kpi", "get_revenue_tree", "get_kpi_ranking", "get_revenue_reconciliation",
     }},
+    # Nguoc lai: hop dong/goi thau chi co o kenh ETC (vHopDongETC). Tai khoan gioi han kenh OTC bi chan.
+    **{name: "etc_only" for name in {
+        "get_etc_contract_status",
+    }},
     # Du lieu luong chi duoc mo cho tai khoan QLV da co scope nhan vien; regional channel-only bi chan.
     **{name: "employee" for name in {
         "get_salary_bonus_policy", "get_salary_data_quality", "get_salary_detail",
@@ -10455,6 +10582,8 @@ def template_available_for_channel(name: str, scope_channel: str = None,
         return True
     if policy == "otc_only":
         return channel == "OTC"
+    if policy == "etc_only":
+        return channel == "ETC"
     if policy == "employee":
         return bool(scope_employee_code)
     return False

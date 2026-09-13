@@ -3795,6 +3795,8 @@ ngày vào làm chính thức.
 
 ### S86 — Hợp đồng ETC chậm thực hiện, còn giá trị lớn hoặc sắp hết hạn — PARTIAL
 
+> 🔁 **Đã sửa 13/09/2026 — xem S86b ở mục 3b**: khóa nối hóa đơn–hợp đồng ETC CÓ thật (`ContractId`, phủ 100%); chỉ cần tách riêng 70 hợp đồng có giá trị bất thường.
+
 Cho câu hỏi "hợp đồng ETC nào thực hiện chậm, còn giá trị lớn chưa giải ngân, sắp hết hạn hoặc phát
 sinh công nợ quá hạn". Khác S29 (liệt kê hợp đồng) ở chỗ đối chiếu giá trị hợp đồng với DOANH THU
 THỰC HIỆN và trả về tỷ lệ thực hiện cùng số ngày còn lại.
@@ -4212,6 +4214,44 @@ Bản cũ để `Phu_cap` là `NULL` với ghi chú "chưa xác định cột". 
 đơn nào chỉ gồm dòng giá 0. Vì vậy chênh 1 đơn giữa hai lần chạy là do kho local đồng bộ sau Bravo.
 Khi chấm câu đếm đơn, phải ghi lại `data_as_of` của câu trả lời và giờ chạy checker; chatbot có sẵn
 `data_as_of` trong mọi kết quả tool.
+
+### S86b — Hợp đồng ETC: khóa nối hóa đơn–hợp đồng CÓ thật (C44, M42)
+
+Kết luận cũ *"chưa có khóa liên kết chính thức giữa hóa đơn và hợp đồng/gói thầu ETC"* là **sai**. Đo
+trên Bravo ngày 13/09/2026:
+
+| Phép đo | Kết quả |
+|---|---|
+| Dòng hóa đơn ETC T7/2026 có `ContractId` | 1.038/1.038 = **100%** (100% doanh thu) |
+| Dòng hóa đơn ETC T8/2026 có `ContractId` | 1.060/1.060 = **100%** (100% doanh thu) |
+| Mã hợp đồng trên hóa đơn khớp `vHopDongETC.Id` | **1.037/1.037** |
+| Hợp đồng trong `vHopDongETC` | 9.135 hợp đồng, 20.927 dòng (không trùng `(Id, RowId)`) |
+
+**Nhưng giá trị hợp đồng có bản ghi hỏng.** Nếu cộng thô `AmountAfterVat`, tổng ra 3,1 triệu tỷ đồng —
+vô lý so với 1.561 tỷ đã xuất hóa đơn. Nguyên nhân: **3 hợp đồng chiếm 99,88% tổng giá trị**, ví dụ
+`Id=115627` ghi đơn giá **295.238.095.239đ/đơn vị**. Cách chốt: coi là bất thường khi
+`ABS(AmountAfterVat - Quantity*UnitPrice)` vượt 5% giá trị lớn hơn trong hai vế, **tách riêng, không
+cộng vào bất kỳ số tổng nào**. Với ngưỡng đó có 70/9.135 hợp đồng bất thường.
+
+Chatbot đã có `get_etc_contract_status` (13/09/2026) dùng đúng nguồn và quy tắc trên. Số đo được ngày
+13/09, toàn công ty, chỉ tính hợp đồng còn hiệu lực và đã loại nhóm bất thường:
+
+| Chỉ tiêu | Giá trị |
+|---|---:|
+| Hợp đồng còn hiệu lực | 2.512 |
+| Tổng giá trị | 1.089.261.705.913đ |
+| Đã xuất hóa đơn | 303.643.483.526đ |
+| Còn lại chưa xuất | 785.618.222.387đ |
+| Sắp hết hạn ≤ 90 ngày | 342 hợp đồng, còn lại 41.162.127.576đ |
+| Chưa xuất hóa đơn nào | 947 hợp đồng |
+| Giá trị bất thường (tách riêng) | 70 hợp đồng |
+
+Checker cho C44/M42 phải dùng cùng quy tắc: khử trùng theo `(Id, RowId)`, nối
+`vHoaDonETCTotal.ContractId = vHopDongETC.Id`, và loại nhóm bất thường khỏi số tổng.
+
+> ⚠️ **C43 và M41 vẫn thiếu nguồn ở phần thầu**: `vHopDongETC` chỉ có hợp đồng **đã ký**, không có giá
+> trị tham gia thầu hay tỷ lệ trúng. Hai câu này giữ nguyên cách trả lời cũ (doanh thu thực hiện theo
+> vùng/khách) và phải nói rõ phần kế hoạch thầu/tỷ lệ trúng là thiếu nguồn.
 
 ## 4. Mapping từng câu hỏi → SQL checker
 

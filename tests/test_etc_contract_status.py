@@ -1,0 +1,88 @@
+# -*- coding: utf-8 -*-
+"""C44/M42 (13/09/2026): hop dong ETC - gia tri, da xuat, con lai, sap het han, gia tri bat thuong.
+
+Ba cau cum H tung bi ket luan "chua co khoa lien ket hoa don voi hop dong/goi thau ETC" nen CHUA DAT.
+Kiem lai tren Bravo: vHoaDonETCTotal CO cot ContractId, phu 100% dong hoa don ETC T7-T8/2026 va khop
+1.037/1.037 ma hop dong. Nhung gia tri hop dong co ban ghi hong (1 hop dong ghi don gia 295 ty/don vi),
+nen moi con so tong phai TACH RIENG nhom bat thuong. Test dung du lieu gia, khong cham Bravo.
+"""
+import os
+import sys
+
+BACKEND = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "backend")
+if BACKEND not in sys.path:
+    sys.path.append(BACKEND)
+
+import report_templates as rt
+
+
+def _dong(contract_id, gia_tri, da_xuat, con_lai_ngay, so_hoa_don=1, lech=0, so_dong=2):
+    return {
+        "Id": contract_id, "DocNo": "HD%s" % contract_id, "CustomerCode": "KH%s" % contract_id,
+        "StatusId": 2, "SoDong": so_dong, "SoDongLechGiaTri": lech,
+        "FromDate": "2026-01-01", "ToDate": "2026-12-31",
+        "GiaTri": gia_tri, "DaXuat": da_xuat, "SoHoaDon": so_hoa_don,
+        "LanXuatCuoi": "2026-09-01", "ConLaiNgay": con_lai_ngay,
+    }
+
+
+def _chay(monkeypatch, rows, **kw):
+    monkeypatch.setattr(rt, "_q_bravo", lambda sql, params=None: rows)
+    monkeypatch.setattr(rt, "latest_data_date", lambda: "2026-09-13")
+    return rt.etc_contract_status(as_of_date="2026-09-13", **kw)
+
+
+def test_tinh_dung_con_lai_va_ty_le_thuc_hien(monkeypatch):
+    r = _chay(monkeypatch, [_dong(1, 1000.0, 400.0, 200)])
+
+    hd = r["hop_dong_thuc_hien_duoi_50_pct"][0]
+    assert hd["gia_tri_hop_dong"] == 1000 and hd["da_xuat_hoa_don"] == 400
+    assert hd["con_lai"] == 600 and hd["ty_le_thuc_hien_pct"] == 40
+    assert r["tong_con_lai"] == 600
+
+
+def test_hop_dong_gia_tri_bat_thuong_khong_duoc_cong_vao_tong(monkeypatch):
+    r = _chay(monkeypatch, [
+        _dong(1, 1000.0, 400.0, 200),
+        _dong(2, 3_100_000_000_000_000.0, 0.0, 200, so_hoa_don=0, lech=1),  # ban ghi hong
+    ])
+
+    assert r["tong_gia_tri"] == 1000  # KHONG gom hop dong hong
+    assert r["so_hop_dong_gia_tri_bat_thuong"] == 1
+    assert r["hop_dong_gia_tri_bat_thuong"][0]["contract_id"] == 2
+    assert "lech qua 5%" in r["hop_dong_gia_tri_bat_thuong"][0]["ly_do_bat_thuong"]
+    assert r["tong_so_hop_dong"] == 2  # van bao du tong so hop dong
+    # Hop dong hong khong duoc dem vao nhom "chua xuat hoa don nao".
+    assert r["so_hop_dong_chua_xuat_hoa_don_nao"] == 0
+
+
+def test_sap_het_han_va_het_han(monkeypatch):
+    r = _chay(monkeypatch, [
+        _dong(1, 1000.0, 100.0, 10),    # sap het han
+        _dong(2, 2000.0, 0.0, -5, so_hoa_don=0),  # da het han
+        _dong(3, 3000.0, 500.0, 300),   # con dai han
+    ], expiring_days=90)
+
+    assert r["so_hop_dong_sap_het_han"] == 1
+    assert r["gia_tri_con_lai_cua_hop_dong_sap_het_han"] == 900
+    assert [x["contract_id"] for x in r["hop_dong_sap_het_han"]] == [1]
+    # only_active mac dinh: hop dong het han khong tinh vao tong va khong tinh "chua xuat hoa don".
+    assert r["so_hop_dong_con_hieu_luc"] == 2
+    assert r["tong_gia_tri"] == 4000
+    assert r["so_hop_dong_chua_xuat_hoa_don_nao"] == 0
+
+
+def test_only_active_false_thi_tinh_ca_hop_dong_het_han(monkeypatch):
+    r = _chay(monkeypatch, [
+        _dong(1, 1000.0, 100.0, 10),
+        _dong(2, 2000.0, 0.0, -5, so_hoa_don=0),
+    ], only_active=False)
+
+    assert r["tong_gia_tri"] == 3000
+    assert r["so_hop_dong_chua_xuat_hoa_don_nao"] == 1
+
+
+def test_tai_khoan_chi_xem_otc_bi_chan_tool_hop_dong_etc():
+    assert rt.template_available_for_channel("get_etc_contract_status", "OTC") is False
+    assert rt.template_available_for_channel("get_etc_contract_status", "ETC") is True
+    assert rt.template_available_for_channel("get_etc_contract_status", None) is True
