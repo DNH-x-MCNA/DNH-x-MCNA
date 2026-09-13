@@ -528,7 +528,8 @@ TEMPLATE_TOOLS = [
         "name": "get_salary_aso_detail",
         "description": "Chi tiet co dieu kien ASO tren Bravo: so khach, doanh so, ket qua cuoi. "
                        "Dung khi hoi ai khong qua/vi sao ASO bang 0. Chi C-Level/admin hoac QLV dung doi. "
-                       "CS/TK dung is_ac, khong ap dung ASO. NULL/khong tinh la chua du bang chung, "
+                       "CS/TK dung is_ac, khong ap dung ASO; doi chi gom CS/TK tra not_applicable, "
+                       "cs_tk_excluded_count la so nguoi CS/TK da loai. NULL/khong tinh la chua du bang chung, "
                        "khong phai khong dat. total_* la toan scope, selected_total theo only_failed, "
                        "rows_truncated bao cat limit. Snapshot cuoi thang KHONG tu dong la da duyet luong. "
                        "Doc fail_reasons; khong suy nguyen nhan hay de nghi bu thuong.",

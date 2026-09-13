@@ -8580,7 +8580,10 @@ def salary_aso_detail(year_month: str = None, area_code: str = None, position_co
         return {"status": "source_gap", "requested_month": year_month, "rows": [],
                 "warning": "Chua co snapshot cuoi thang duoc yeu cau; khong lay thang truoc thay the."}
     params = {"snapshot_date": snapshot}
-    where = ["f.SaveDate=:snapshot_date", "UPPER(COALESCE(f.PositionCode,'')) NOT IN ('CS','TK')"]
+    # 11/09/2026: CS/TK duoc lay ve roi tach o duoi, KHONG loc trong SQL. Loc trong SQL thi doi chi
+    # gom CS/TK (Kenh MT = MN1, Cho si = MN4/MBKV12) chi con dong cua chinh ma quan ly khung va tool bao
+    # "1 nguoi chua danh gia ASO" - dung ra la ca doi khong ap dung ASO.
+    where = ["f.SaveDate=:snapshot_date"]
     if area_code:
         where.append("f.AreaCode=:area_code"); params["area_code"] = area_code
     if position:
@@ -8595,6 +8598,11 @@ def salary_aso_detail(year_month: str = None, area_code: str = None, position_co
              f.ASOQuantity, f.ASOQuantityTarget, f.ASOPercent_R, f.ASOBonus, f.IsSuspend
         FROM dbo.FACT_ThongKeTinhLuong f WHERE {' AND '.join(where)}
         ORDER BY f.EmployeeCode""", params)
+    cs_tk, khac = [], []
+    for r in raw:
+        la_cs_tk = str(r.get("PositionCode") or "").strip().upper() in _IS_AC_POSITIONS
+        (cs_tk if la_cs_tk else khac).append(r)
+    raw = khac
     codes = [r.get("EmployeeCode") for r in raw]
     if len(set(codes)) != len(codes):
         return {"error": "Trung nhan vien tai snapshot ASO; can doi chieu truoc khi cong thuong."}
@@ -8629,6 +8637,17 @@ def salary_aso_detail(year_month: str = None, area_code: str = None, position_co
                      "aso_quantity": r.get("ASOQuantity"), "aso_quantity_target": r.get("ASOQuantityTarget"),
                      "aso_ratio_raw": ratio, "aso_percent": _f(ratio) * 100 if ratio is not None else None,
                      "aso_bonus": r.get("ASOBonus"), "is_suspend": flag(r.get("IsSuspend"))})
+    cs_tk_rows = [{"employee_code": r.get("EmployeeCode"), "employee_name": r.get("EmployeeName"),
+                   "position_code": r.get("PositionCode")} for r in cs_tk]
+    # Doi chi gom CS/TK: phan con lai chi la chinh ma quan ly (ma khung nhu MN1/MN4) va ma do khong
+    # duoc tinh ASO -> ca doi khong ap dung, khong bao la "chua danh gia". Quan ly co ASO that thi giu.
+    if scope_employee_code and cs_tk and all(
+            r["employee_code"] == scope_employee_code and r["is_calculated"] is not True for r in rows):
+        return {"snapshot_date": str(snapshot), "requested_month": year_month,
+                "not_applicable": True, "rows": [],
+                "cs_tk_count": len(cs_tk_rows), "cs_tk_employees": cs_tk_rows,
+                "warning": "Doi nay chi gom CS/TK: thuong tinh theo khach hoat dong (is_ac), KHONG ap "
+                           "dung ASO. Khong noi la chua danh gia hay khong dat ASO."}
     assessed = [r for r in rows if r["is_calculated"] is True and r["passed_final"] is not None]
     failed = [r for r in assessed if r["passed_final"] is False]
     selected = failed if only_failed else rows
@@ -8639,6 +8658,7 @@ def salary_aso_detail(year_month: str = None, area_code: str = None, position_co
             "total_passed": len(assessed) - len(failed), "total_failed": len(failed),
             "unassessed_count": len(rows) - len(assessed), "selected_total": len(selected),
             "rows": selected[:limit], "rows_truncated": len(selected) > limit,
+            "cs_tk_excluded_count": len(cs_tk_rows),
             "definition": "Co ASO doc truc tiep tu Bravo; NULL/khong tinh khong dong nghia khong dat. "
                           "Khong suy nguyen nhan ngoai cac co, khong de nghi bu thuong. "
                           "Snapshot cuoi thang khong chung minh da duyet chi tra."}
