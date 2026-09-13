@@ -33,9 +33,7 @@ Chạy `scripts/ra_soat_tool_126_cau.py` — gọi đúng tool mà từng câu �
 | C45 | `get_employee_kpi` | theo tháng, theo kênh | Tỷ lệ nhân sự đạt 65/70%, 80%, 100% và 120% KPI từng tháng theo kênh/m |
 | M12 | `get_employee_kpi` | theo tháng | Đội nào đạt 100%, 80%, qua cổng 65/70% hoặc dưới cổng; xu hướng 3 thán |
 | M21 | `get_top_customers` | theo tháng | Top khách hàng theo doanh thu từng tháng; khách nào tăng/giảm mạnh và  |
-| M28 | `get_operational_data_quality` | tỷ lệ | Tỷ lệ khách không gán TDV, sai vùng hoặc thiếu thông tin DMS theo thán |
 | M32 | `get_customer_product_coverage` | tỷ lệ | SKU chiến lược đạt bao nhiêu % target tại từng vùng; vùng nào có khoản |
-| M42 | `get_geography_monthly_performance` | tỷ lệ | Hợp đồng/gói thầu nào có tỷ lệ thực hiện thấp, còn giá trị lớn hoặc sắ |
 | M44 | `get_operational_data_quality` | nguyên nhân | Với từng vùng dưới kế hoạch: ba nguyên nhân định lượng, ba hành động,  |
 | V14 | `get_customer_product_coverage` | tỷ lệ | Ai có nhiều khách phụ trách nhưng tỷ lệ khách mua thấp; ai có ít khách |
 | V19 | `get_top_customers` | theo tháng | Top khách hàng đội tôi từng tháng là ai; khách nào tăng/giảm mạnh nhất |
