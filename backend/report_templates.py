@@ -5276,6 +5276,71 @@ def product_mix_performance(as_of_date: str = None, limit: int = 20,
     }
 
 
+def _chat_luong_mapping_khach_theo_thang(month_to: str, months_back: int = 6,
+                                         scope_area_code: str = None, scope_channel: str = None,
+                                         scope_employee_code: str = None) -> list:
+    """M28/S75: ty le khach khong gan TDV / ma NV la / khong map vung / khong co trong danh muc, theo
+    TUNG THANG. Moi khach dem MOT LAN trong thang; mau so la so khach co hoa don thang do.
+
+    13/09/2026: truoc day operational_data_quality chi dem tai MOT thoi diem, khong co chuoi theo
+    thang nen M28 ("ty le ... theo thang") khong tra loi tron cau duoc."""
+    month_from = _month_add(month_to, -(max(1, min(int(months_back or 6), 24)) - 1))
+    date_from, _ = _month_bounds(month_from)
+    _, date_to = _month_bounds(month_to)
+    scope_sql, scope_params = _scope_clause(scope_area_code)
+    emp_sql, emp_params = _employee_scope_clause(scope_employee_code, "v", as_of=date_to)
+    parts, part_params = [], []
+    for channel, table, kh_table in (("OTC", "vhoadon_otc", "dms_khachhang"),
+                                     ("ETC", "vhoadon_etc", "dmssx_khachhang")):
+        if scope_channel and scope_channel.upper() != channel:
+            continue
+        # LEFT JOIN de GIU lai dong thieu mapping - day chinh la thu dang dem.
+        parts.append(
+            "SELECT substr(v.doc_date,1,7) thang, v.customer_code, "
+            "MAX(CASE WHEN v.employee_code IS NULL OR TRIM(v.employee_code)='' THEN 1 ELSE 0 END) khong_gan_tdv, "
+            "MAX(CASE WHEN v.employee_code IS NOT NULL AND TRIM(v.employee_code)<>'' "
+            "         AND nv.dmsid IS NULL AND sx.code IS NULL THEN 1 ELSE 0 END) ma_nv_la, "
+            "MAX(CASE WHEN v.employee_code IS NOT NULL AND TRIM(v.employee_code)<>'' "
+            "         AND nv.dmsid IS NULL AND sx.code IS NOT NULL THEN 1 ELSE 0 END) ma_nv_he_etc, "
+            "MAX(CASE WHEN tp.area_code IS NULL THEN 1 ELSE 0 END) khong_map_vung, "
+            "MAX(CASE WHEN kh.code IS NULL THEN 1 ELSE 0 END) khong_co_trong_danh_muc "
+            f"FROM {table} v "
+            f"LEFT JOIN {kh_table} kh ON kh.code=v.customer_code "
+            "LEFT JOIN dim_tinhthanhpho tp ON tp.city_id=kh.city_id "
+            "LEFT JOIN (SELECT DISTINCT dmsid FROM dim_nhanvien WHERE dmsid IS NOT NULL "
+            "           AND TRIM(dmsid)<>'') nv ON nv.dmsid=v.employee_code "
+            # 13/09/2026: nhan vien phia SX/ETC nam o BANG RIENG. Chi noi dim_nhanvien thi 28/29 ma
+            # nguoi ban tren hoa don ETC thang 8 bi dem la "ma la" (228 khach MB), trong khi that su
+            # chi 1 ma khong co o dau. Checker S75 cung dang thieu phep noi nay.
+            "LEFT JOIN (SELECT DISTINCT code FROM dmssx_nhanvien) sx ON sx.code=v.employee_code "
+            f"WHERE v.doc_date BETWEEN ? AND ?{scope_sql}{emp_sql} "
+            "GROUP BY substr(v.doc_date,1,7), v.customer_code")
+        part_params.append((date_from, date_to) + tuple(scope_params) + tuple(emp_params))
+    if not parts:
+        return []
+    try:
+        rows = _q(
+            "WITH k AS (" + " UNION ALL ".join(parts) + ") "
+            "SELECT thang, COUNT(DISTINCT customer_code) tong_khach, "
+            "SUM(khong_gan_tdv) khong_gan_tdv, SUM(ma_nv_la) ma_nv_la, SUM(ma_nv_he_etc) ma_nv_he_etc, "
+            "SUM(khong_map_vung) khong_map_vung, SUM(khong_co_trong_danh_muc) khong_co_trong_danh_muc, "
+            "SUM(CASE WHEN khong_gan_tdv=1 OR khong_map_vung=1 OR khong_co_trong_danh_muc=1 THEN 1 ELSE 0 END) co_it_nhat_mot_loi "
+            "FROM k GROUP BY thang ORDER BY thang",
+            tuple(p for group in part_params for p in group))
+    except sqlite3.OperationalError:
+        # Kho cu chua co bang nhan vien SX/ETC: khong duoc lam hong ca tool chi vi phan bo sung nay.
+        return []
+    ket_qua = []
+    for r in rows:
+        tong = int(r["tong_khach"] or 0)
+        muc = {k: (int(r[k] or 0) if k != "thang" else r[k]) for k in r.keys()}
+        for ten in ("khong_gan_tdv", "ma_nv_la", "ma_nv_he_etc", "khong_map_vung",
+                    "khong_co_trong_danh_muc", "co_it_nhat_mot_loi"):
+            muc["ty_le_%s_pct" % ten] = (muc[ten] / tong * 100) if tong else None
+        ket_qua.append(muc)
+    return ket_qua
+
+
 _NGUON_DON_HANG_CACHE = {"ts": None, "value": None}
 _NGUON_DON_HANG_TTL = dt.timedelta(minutes=10)
 
@@ -5569,6 +5634,19 @@ def operational_data_quality(as_of_date: str = None, sample_limit: int = 30,
             unavailable.insert(0, "Don hang huy/cham/chua hoa don: khong doc duoc nguon DMS_DonHangHdr "
                                   "tren Bravo luc kiem (%s)." % nguon_don.get("reason"))
     result["checks"]["order_invoice_source"] = nguon_don
+    # M28/S75: ty le theo TUNG THANG, mau so la so khach co hoa don thang do.
+    theo_thang = _chat_luong_mapping_khach_theo_thang(
+        as_of_date[:7], 6, scope_area_code, scope_channel, scope_employee_code)
+    result["checks"]["customer_mapping_by_month"] = {
+        "rows": theo_thang,
+        "definition": ("Moi khach dem MOT LAN trong thang; mau so tong_khach la so khach co hoa don "
+                       "thang do. ma_nv_la = ma nguoi ban tren hoa don khong co trong danh muc nhan "
+                       "vien (khac voi khong_gan_tdv la hoa don khong ghi ma nao). ma_nv_he_etc la "
+                       "ma NAM O bang nhan vien SX/ETC rieng - KHONG phai loi mapping, khong duoc gop "
+                       "vao ma_nv_la. Dung dinh nghia "
+                       "S75 - khi hoi 'ty le ... theo thang' phai lay o day, khong dung so dem cua "
+                       "mot thoi diem ben tren."),
+    }
     result["unavailable_checks"] = unavailable
     result["canh_bao"] = ("So UNKNOWN/orphan trong tai khoan bi gioi han vung co the khong dem duoc vi "
                            "chinh dong thieu mapping khong suy ra duoc no thuoc vung nao. Khong duoc "

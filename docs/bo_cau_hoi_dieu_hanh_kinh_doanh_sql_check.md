@@ -3407,8 +3407,21 @@ số khách có hóa đơn trong tháng, mỗi khách đếm một lần.
 > **Đo thật 11/09/2026, toàn công ty, 09/2025–09/2026:** `KhongGanTDV`, `KhongMapVung`, `KhongCoTrongDMS` đều
 > bằng **0 ở mọi tháng** — không phải số 0 do cấu trúc: `vHoaDon` nối danh mục khách bằng `LEFT JOIN`, chỉ
 > `INNER JOIN` với bảng trạng thái hóa đơn, nên khách thiếu trong DMS vẫn hiện nếu có. Tín hiệu thật là cột
-> `MaNVLa` — mã người bán trên hóa đơn không có trong `DIM_NhanVien`: T7/2026 là 443/7.304 khách (6,1%), T8/2026
-> là 467/7.393 (6,3%); tháng đang chạy không so. Nếu người hỏi hiểu "không gán TDV" là "không truy ra được TDV
+> `MaNVLa` — mã người bán trên hóa đơn không có trong `DIM_NhanVien`.
+>
+> 🔁 **Sửa 13/09/2026 — con số cũ (T7: 443/7.304 = 6,1%; T8: 467/7.393 = 6,3%) là SAI vì thiếu một phép nối.**
+> Nhân viên phía SX/ETC nằm ở bảng RIÊNG `DMSSX_NhanVien`, không có trong `DIM_NhanVien`, nên bị đếm nhầm
+> thành "mã lạ". Đo lại trên Bravo ngày 13/09, toàn công ty, khi nối cả hai bảng:
+>
+> | Tháng | Tổng khách | Mã lạ THẬT | Mã thuộc hệ ETC |
+> |---|---:|---:|---:|
+> | 7/2026 | 7.304 | **24 (0,33%)** | 432 (5,91%) |
+> | 8/2026 | 7.393 | **20 (0,27%)** | 454 (6,14%) |
+>
+> Vì vậy phải thêm `LEFT JOIN (SELECT DISTINCT Code FROM dbo.DMSSX_NhanVien) sx ON sx.Code=s.EmpDMSCode`
+> và chỉ tính là mã lạ khi **cả hai** bảng đều không có. Chatbot đã trả riêng hai con số này trong
+> `get_operational_data_quality` → `checks.customer_mapping_by_month` (`ma_nv_la` và `ma_nv_he_etc`),
+> kèm tỷ lệ theo từng tháng đúng như S75 yêu cầu. Nếu người hỏi hiểu "không gán TDV" là "không truy ra được TDV
 > hợp lệ" thì đây mới là con số cần trả lời. Người chấm M28 phải xác định cách hiểu trước khi so: câu trả lời
 > "0%" và "khoảng 6%" đều có thể đúng, tùy định nghĩa được chấp nhận.
 
