@@ -2610,6 +2610,12 @@ def customer_cohort_retention(month_to: str = None, months_back: int = 6,
                       "sau latest_complete_month duoc tra None ('ky_da_du': false), khong coi la 0% giu "
                       "chan - day KHONG PHAI loi, ma la thang do CHUA TRON (vd thang hien tai moi co du "
                       "lieu vai ngay dau) nen chua the danh gia cong bang."),
+        # 13/09/2026 (M23/S67): cohort dem tu HOA DON nen mac dinh gom CA OTC va ETC, con S67
+        # dem tu FACT_TongHopKhachHang chi phu doi OTC. Cung MB thang 8/2026: 5.087 khach neu
+        # gom ETC, 4.859 neu chi OTC (khop tuyet doi tung ma voi S67). Ghi ro de khong so nham.
+        "pham_vi_kenh": (scope_channel.upper() if scope_channel else "OTC+ETC"),
+        "luu_y_doi_chieu": ("Con so nay dem tu hoa don. Checker S67 dem tu FACT_TongHopKhachHang, "
+                            "chi phu doi OTC - muon so voi S67 phai truyen scope_channel='OTC'."),
         "data_as_of": latest_data_date(),
     }
 
