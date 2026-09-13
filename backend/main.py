@@ -45,6 +45,7 @@ from auth import (
     set_password,
     reset_password_and_revoke_sessions,
     approve_user,
+    set_user_email,
     toggle_user_active,
     list_users,
     delete_all_sessions_for_user,
@@ -371,6 +372,7 @@ class ApproveUserRequest(BaseModel):
     scope_value: Optional[str] = None
     employee_code: Optional[str] = None
     scope_channel: Optional[str] = None
+    email: Optional[str] = None  # None/rong = giu nguyen email hien co
 
 
 class ChatRequest(BaseModel):
@@ -634,12 +636,12 @@ def create_user_by_admin(req: AdminCreateUserRequest, user: dict = Depends(requi
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
 
+    # 11/09/2026: ban cu goi send_password_email(user_name=...) - ham khong co tham so do nen nem
+    # TypeError SAU KHI tai khoan da ghi vao DB: tra 500, admin khong thay mat khau, email khong gui ->
+    # tai khoan ton tai voi mat khau khong ai biet. Gui loi thi van tra mat khau cho admin chuyen tay.
+    email_sent = None
     if req.email and req.email.strip():
-        send_password_email(
-            to_email=req.email.strip(),
-            user_name=req.name or clean_username,
-            password=generated_pwd
-        )
+        email_sent = send_password_email(req.email.strip().lower(), generated_pwd, is_reset=False)
 
     _write_log({
         "ts": dt.datetime.now().isoformat(),
@@ -654,6 +656,7 @@ def create_user_by_admin(req: AdminCreateUserRequest, user: dict = Depends(requi
         "message": f"Khởi tạo tài khoản {clean_username} thành công!",
         "username": clean_username,
         "email": req.email,
+        "email_sent": email_sent,
         "generated_password": generated_pwd if not req.password else None
     }
 
@@ -663,8 +666,22 @@ def approve_user_endpoint(username: str, req: ApproveUserRequest, user: dict = D
     if user["role"] != "c_level":
         raise HTTPException(403, "Chỉ C-Level mới có quyền phê duyệt và gán phạm vi tài khoản")
 
+    # 11/09/2026: cho C-Level gan email cho tai khoan da co. Truoc day khong co cho nao sua email, ma
+    # "Cap lai MK" chi gui qua email, nen tai khoan tao khong kem email khong lay lai duoc mat khau.
+    # CHI C-Level: neu Admin Van Hanh doi duoc email, ho dat email cua minh roi bam cap lai de nhan mat
+    # khau - pha dung thiet ke "admin khong nhin thay mat khau" cua reset_user_password_endpoint.
+    new_email = (req.email or "").strip().lower() or None
+    if new_email:
+        if not new_email.endswith(f"@{ALLOWED_EMAIL_DOMAIN}"):
+            raise HTTPException(400, f"Email phải là email công ty @{ALLOWED_EMAIL_DOMAIN}")
+        owner = get_user_by_email_or_username(new_email)
+        if owner and owner["username"] != username.strip().lower():
+            raise HTTPException(400, f"Email {new_email} đã được dùng cho tài khoản {owner['username']}")
+
     try:
         success = approve_user(username, req.role, req.scope_value, req.employee_code, req.scope_channel)
+        if success and new_email:
+            set_user_email(username, new_email)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     if not success:
@@ -672,7 +689,8 @@ def approve_user_endpoint(username: str, req: ApproveUserRequest, user: dict = D
     _write_log({
         "ts": dt.datetime.now().isoformat(),
         "username": user["username"],
-        "question": f"✅ Phê duyệt tài khoản {username} (vai trò {req.role})",
+        "question": f"✅ Phê duyệt tài khoản {username} (vai trò {req.role})"
+                    + (f", email {new_email}" if new_email else ""),
         "sql": "<admin:approve_user>",
         "status": "ok"
     })

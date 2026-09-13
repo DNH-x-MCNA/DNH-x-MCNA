@@ -345,6 +345,27 @@ def approve_user(username_or_email: str, role: str, scope_value: str = None,
         conn.close()
 
 
+def set_user_email(username: str, email: str) -> bool:
+    """Gan/doi email cho tai khoan da co - dia chi nhan mat khau khi cap lai.
+
+    Tai khoan tao truoc day khong co email thi khong cap lai mat khau duoc (reset chi gui qua email).
+    Kiem tra ten mien o tang API; o day chan email da thuoc tai khoan khac (unique index)."""
+    clean_email = str(email or "").strip().lower()
+    if not clean_email:
+        raise ValueError("Email trống")
+    conn = get_conn()
+    try:
+        try:
+            cur = conn.execute("UPDATE users SET email=? WHERE username=?",
+                               (clean_email, username.lower().strip()))
+        except sqlite3.IntegrityError as exc:
+            raise ValueError(f"Email {clean_email} đã được dùng cho tài khoản khác") from exc
+        conn.commit()
+        return cur.rowcount > 0
+    finally:
+        conn.close()
+
+
 def toggle_user_active(username_or_email: str) -> dict | None:
     """Bat/Tat trang thai is_active cua tai khoan."""
     clean_id = username_or_email.lower().strip()

@@ -72,6 +72,7 @@ export default function AdminUsersPanel({ authToken, currentRole, onClose }: Adm
   const [scopeValue, setScopeValue] = useState<string>("MB");
   const [employeeCode, setEmployeeCode] = useState<string>("");
   const [scopeChannel, setScopeChannel] = useState<string>("");
+  const [editEmail, setEditEmail] = useState<string>("");
   const [actionLoading, setActionLoading] = useState<boolean>(false);
 
   // Form tạo tài khoản mới state
@@ -195,6 +196,8 @@ export default function AdminUsersPanel({ authToken, currentRole, onClose }: Adm
           scope_value: (role === "c_level" || role === "admin_ops") ? null : (scopeValue || null),
           employee_code: role === "qlv" ? (employeeCode.trim() || null) : null,
           scope_channel: (role === "c_level" || role === "admin_ops") ? null : (scopeChannel || null),
+          // Để trống = giữ nguyên email hiện có. Email là nơi nhận mật khẩu khi "Cấp lại MK".
+          email: editEmail.trim() || null,
         }),
       });
 
@@ -238,7 +241,9 @@ export default function AdminUsersPanel({ authToken, currentRole, onClose }: Adm
       if (!res.ok) throw new Error(data.detail || "Tạo tài khoản thất bại");
 
       setCreateMsg({
-        text: data.message || "Tạo tài khoản thành công!",
+        text: data.email_sent === false
+          ? "Đã tạo tài khoản nhưng KHÔNG gửi được email. Chép mật khẩu bên dưới và gửi trực tiếp cho người dùng."
+          : (data.message || "Tạo tài khoản thành công!"),
         type: "success",
         pwd: data.generated_password,
       });
@@ -539,6 +544,7 @@ export default function AdminUsersPanel({ authToken, currentRole, onClose }: Adm
                                 setScopeValue(u.scope_value || "");
                                 setEmployeeCode(u.employee_code || "");
                                 setScopeChannel(u.scope_channel || "");
+                                setEditEmail(u.email || "");
                               }}
                               className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded font-semibold text-[11px] shadow-sm inline-flex items-center gap-1"
                             >
@@ -702,7 +708,7 @@ export default function AdminUsersPanel({ authToken, currentRole, onClose }: Adm
             <h3 className="text-sm font-bold text-emerald-400 mb-3 flex items-center gap-1.5">
               <IconSettings className="w-4 h-4" /> Cấu hình Phân quyền cho: <span className="text-white">{selectedUser.username}</span> ({selectedUser.email})
             </h3>
-            <form onSubmit={handleApprove} className="grid grid-cols-1 md:grid-cols-5 gap-3 items-end">
+            <form onSubmit={handleApprove} className="grid grid-cols-1 md:grid-cols-6 gap-3 items-end">
               <div>
                 <label className="block text-xs text-slate-300 mb-1 font-medium">Vai trò (Role)</label>
                 <select
@@ -758,6 +764,17 @@ export default function AdminUsersPanel({ authToken, currentRole, onClose }: Adm
                   />
                 </div>
               )}
+
+              <div>
+                <label className="block text-xs text-slate-300 mb-1 font-medium">Email công ty (nhận MK khi cấp lại)</label>
+                <input
+                  type="email"
+                  placeholder="ten.ho@namhapharma.com"
+                  value={editEmail}
+                  onChange={(e) => setEditEmail(e.target.value)}
+                  className="w-full p-2 bg-slate-800 border border-slate-700 rounded text-xs text-white focus:outline-none focus:border-blue-500"
+                />
+              </div>
 
               <div className="flex gap-2">
                 <button
