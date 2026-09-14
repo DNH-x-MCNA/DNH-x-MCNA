@@ -213,6 +213,11 @@ def _required_tool_for_question(question: str) -> str | None:
             and "thang" in q):
         return "get_revenue_tree"
 
+    # C11/S70 co nhac "top 3 mien/vung" nhung trong tam la muc tap trung dong thoi theo
+    # khach + SKU + dia ly va xu huong thang. Phai chan truoc luat doanh thu theo vung rong.
+    if any(marker in q for marker in ("phu thuoc top", "phu thuoc vao top", "muc do tap trung")) \
+            and any(marker in q for marker in ("top 10 khach", "top 10 san pham")):
+        return "get_top_customers"
     if (any(marker in q for marker in ("doanh thu", "doanh so", "phat sinh"))
             and any(marker in q for marker in ("3 mien", "ba mien", "theo mien", "theo vung"))):
         return "get_revenue_by_region"
@@ -359,6 +364,11 @@ def _required_tool_for_question(question: str) -> str | None:
         return "get_top_customers"
     if any(marker in q for marker in ("khach im lang", "im lang 30", "im lang 60", "im lang 90")):
         return "get_customers_silent"
+    # M40/S28 co "chuyen vung" nhu mot HANH DONG xu ly ton, khong phai dieu chuyen nhan su/khach.
+    # Chan truoc nhanh data-quality rong ben duoi.
+    if any(marker in q for marker in ("can date", "cham luan chuyen", "cham ban")) and any(
+            marker in q for marker in ("chuyen vung", "day ban", "dung nhap", "xu ly ton")):
+        return "get_inventory_expiry_report"
     # C28/S91 hoi LOAI anh huong doi NV/khach, khac M18 hoi dia ban trong va NV nghi. Phai xet
     # truoc nhanh "chuyen vung" rong, neu khong cau nay roi vao data-quality va khong co phep do.
     if any(marker in q for marker in (
@@ -639,7 +649,10 @@ TEMPLATE_TOOLS = [
         "description": "Top N khach hang theo doanh thu trong 1 khoang ngay. "
                         "Moi dong co scope_revenue va share_pct_of_scope tinh tren TOAN BO pham vi truoc khi cat top-N; "
                         "dung de tinh muc phu thuoc top khach, KHONG lay tong danh sach top-N lam mau so. "
-                        "UU TIEN dung tool nay cho moi cau hoi ve khach hang mua nhieu nhat/top khach hang.",
+                        "UU TIEN dung tool nay cho moi cau hoi ve khach hang mua nhieu nhat/top khach hang. "
+                        "C11/S70 co concentration_by_month cho top khach, top SKU va mien. "
+                        "C32/M21/V19 co monthly_customer_changes: top tang/giam RIENG tung thang, "
+                        "dong gop vao bien dong tong va ma nguoi phu trach.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -1045,8 +1058,8 @@ TEMPLATE_TOOLS = [
                        "nen KHONG tinh % ke hoach va phai noi ro gioi han.",
         "input_schema": {"type": "object", "properties": {
             "as_of_date": {"type": "string"}, "lookback_months": {"type": "integer"},
-            "mode": {"type": "string", "enum": ["customer", "customer_peer", "customer_revenue_tier_peer", "product", "employee", "priority", "dual_channel", "four_customer_priorities", "product_monthly", "product_mix", "sku_target", "product_first_observed", "assignment_change"],
-                     "description": "C26/S16: dual_channel (khach mua ca OTC+ETC theo thang, cong no fail-closed). V28/S83: four_customer_priorities (4 danh sach giu khach/tai kich hoat/thu no/ban cheo). V29/S21: product_monthly (top/bottom SKU tung thang va dong gop MoM). V30/S46: sku_target (kiem tra target theo SKU; bao lo nguon, khong tu suy dien %). C34/M34/S22: product_first_observed (moc ban dau quan sat, khong phai launch date; khong co target SKU). V31/S23: product_mix (nhieu khach-luong/don thap va it khach-AOV cao). C28/S91: assignment_change (tach nhom giu/doi NV; chi OTC, co canh bao gioi han nguon)."},
+            "mode": {"type": "string", "enum": ["customer", "customer_peer", "customer_revenue_tier_peer", "product", "employee", "employee_assignment", "priority", "dual_channel", "four_customer_priorities", "product_monthly", "product_mix", "sku_target", "product_first_observed", "assignment_change"],
+                     "description": "C26/S16: dual_channel (khach mua ca OTC+ETC theo thang, cong no fail-closed). V14/S44: employee_assignment (mau so la khach duoc phan cong hien tai, khong phai chi khach da mua). V28/S83: four_customer_priorities (4 danh sach giu khach/tai kich hoat/thu no/ban cheo). V29/S21: product_monthly (top/bottom SKU tung thang va dong gop MoM). V30/S46: sku_target (kiem tra target theo SKU; bao lo nguon, khong tu suy dien %). C34/M34/S22: product_first_observed (moc ban dau quan sat, khong phai launch date; khong co target SKU). V31/S23: product_mix (nhieu khach-luong/don thap va it khach-AOV cao). C28/S91: assignment_change (tach nhom giu/doi NV; chi OTC, co canh bao gioi han nguon)."},
             "limit": {"type": "integer"},
         }, "required": []},
     },
@@ -1239,6 +1252,10 @@ TEMPLATE_TOOLS = [
                         "THANG con bao nhieu' -> dat group_by_month=true va truyen CA KHOANG NHIEU THANG vao "
                         "date_from/date_to (vd 12 thang) trong DUNG 1 LAN GOI - se co them "
                         "core_result_by_month (moi thang x kenh mot dong, kem core_revenue_excluding_flagged). "
+                        "C13/S87, C17/S77 va M36/S78 duoc backend tu bat group_by_month va tra "
+                        "financial_quality_by_month: doanh thu gop, chiet khau, hang tra, doanh thu "
+                        "thuan, ty le va co nguong theo thang/kenh/vung. Hang tang va khuyen mai co "
+                        "trang thai nguon rieng; khong bien thieu nguon thanh 0. "
                         "TUYET DOI KHONG goi lai tool nhieu lan cho tung thang rieng le (da tung gay 1 cau "
                         "hoi phai goi 6-10 vong va het thoi gian request). Khi group_by_month=true, tool TU "
                         "DONG rut gon top_detail (mac dinh con 3 dong) va bo qua order_fulfillment_exceptions "
@@ -2323,9 +2340,10 @@ order_by='sales' roi order_by='pct' roi filter='below_target') de do y nguoi dun
 khong chac dung y.
 
 QUAN TRONG VE CHON TOOL:
-- CTKM: DNH da xac nhan ngay 11/09/2026 chuoi lien ket chuong trinh chi den 09/01/2026.
-  Voi C13/M35/M36/V34 phai noi ro moc nay khi noi ve CTKM; doanh thu/DiscountRate tren hoa don
-  KHONG chung minh chuong trinh hien tai. Chi thay moc neu tool tra bang chung nguon moi hon.
+- CTKM: moi lan hoi C13/M35/V34 PHAI doc moc promotion_link_coverage_to vua tra ve tu
+  get_promotion_effectiveness; KHONG lap lai moc 09/01/2026 cua lan kiem cu neu chua kiem lai nguon.
+  Doanh thu/DiscountRate tren hoa don KHONG chung minh chuong trinh hien tai. M36 hoi chiet khau,
+  hang tra va hang tang theo vung, khong tu dong doi thanh cau hoi CTKM.
 - ⚠️  KHONG BAO GIO nhac ten tool/ham/truong ky thuat trong cau tra loi cho nguoi dung. Nguoi doc la
   lanh dao kinh doanh, khong phai lap trinh vien. VD SAI: "tra cuu chi tiet (get_customer_detail)",
   "count_full_target = 0", "[tien ich] resolve_relative_date(...)". VD DUNG: "toi co the tra cuu chi
