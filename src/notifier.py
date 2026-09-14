@@ -378,38 +378,86 @@ DIGEST_EMAIL_TEMPLATE = """
         </div>
 
         <div class="content">
-            {% if metrics.has_critical %}
-            <!-- 13/07/2026: đổi từ banner đỏ gắt sang tông trung tính — báo cáo định kỳ không
-            cần "hét" mức khẩn cấp giống alert thời gian thực (Teams đã lo việc đó ngay lúc phát
-            sinh), chỉ cần nhắc người đọc xem kỹ mục Điểm Nổi Bật. -->
-            <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-left: 4px solid #94a3b8; border-radius: 8px; padding: 12px 16px; margin-bottom: 20px; font-size: 13px; color: #475569;">
-                Kỳ này có cảnh báo mức nghiêm trọng — xem chi tiết ở mục "Điểm Nổi Bật Trong Kỳ" bên dưới.
-            </div>
+            {% set ins = metrics.insights %}
+            {% if ins %}
+            {# 14/09/2026: thay hai muc doc lai log canh bao da gui (phan lon la canh bao lap) bang viec
+            can xu ly tinh truc tiep theo quy tac da kiem thu nguoc (src/insights.py), da loc dung pham vi
+            nguoi nhan - xem src/insight_report.py. #}
+            <div class="section-title">Việc Cần Xử Lý (dữ liệu đến {{ ins.as_of_display }})</div>
+            {% set tp = ins.team_pace or {} %}
+            {% if tp.applicable %}
+            <div style="font-weight: 700; color: #1f4a22; font-size: 13px; margin: 12px 0 4px;">Đội QLV có nguy cơ hụt chỉ tiêu tháng</div>
+            {% if not tp.evaluated %}
+            <div class="no-data">Đánh giá từ ngày {{ tp.min_day or 15 }} hằng tháng (trước đó doanh số còn quá ít để dự phóng).</div>
+            {% elif tp.at_risk %}
+            <table class="data-table">
+                <thead><tr><th>Đội QLV</th><th>Số TDV</th><th>Đạt đến nay</th><th>Dự phóng cuối tháng</th></tr></thead>
+                <tbody>
+                    {% for t in tp.at_risk %}
+                    <tr><td>{{ t.team_name }} ({{ t.team_code }})</td><td>{{ t.members }}</td><td>{{ "%.1f"|format(t.achievement_pct) }}%</td><td class="trend-down">{{ "%.0f"|format(t.projection_pct) }}%</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            {% else %}
+            <div class="no-data">Không đội nào dự phóng dưới {{ "%.0f"|format(tp.threshold_pct or 60) }}% chỉ tiêu.</div>
+            {% endif %}
             {% endif %}
 
-            {% if show_period_warnings and metrics.warning_alerts %}
-            <!-- 21/08/2026: warning_alerts được _get_period_warning_alerts (src/etl.py) tính từ
-            alert_severity_log từ trước nhưng chưa bao giờ được render vào email định kỳ — người
-            đọc phải chờ mail alert riêng lẻ. Đặt ngay dưới banner has_critical để đối chiếu trực
-            tiếp. Block div full-width (không chia cột) nên an toàn Word engine. -->
-            <div class="section-title">Cảnh Báo Trong Kỳ</div>
-            {% for w in metrics.warning_alerts %}
-            <div style="background: #fffbeb; border: 1px solid #fde68a; border-left: 4px solid #d97706; border-radius: 8px; padding: 10px 14px; margin-bottom: 8px; font-size: 13px; color: #78350f;">
-                <strong>{{ w.alert_name }}</strong>{% if w.region %} &bull; {{ w.region }}{% endif %} &bull; lặp {{ w.repeat_count }} lần trong kỳ
-                {% if w.issue %}<div style="margin-top: 4px; color: #92400e;">{{ w.issue }}</div>{% endif %}
-                {% if w.last_sent_display %}<div style="margin-top: 2px; font-size: 12px; color: #a16207;">Lần cuối: {{ w.last_sent_display }}</div>{% endif %}
-            </div>
-            {% endfor %}
+            {% set sc = ins.silent_customers or {} %}
+            <div style="font-weight: 700; color: #1f4a22; font-size: 13px; margin: 12px 0 4px;">Khách mua đều chưa có đơn tháng này</div>
+            {% if not sc.evaluated %}
+            <div class="no-data">Đánh giá từ ngày {{ sc.min_day or 20 }} hằng tháng.</div>
+            {% elif sc.rows %}
+            <table class="data-table">
+                <thead><tr><th>Mã KH</th><th>Tên KH</th><th>Kênh</th><th>Thường mua/tháng</th></tr></thead>
+                <tbody>
+                    {% for c in sc.rows[:10] %}
+                    <tr><td>{{ c.customer_code }}</td><td>{{ c.customer_name }}</td><td>{{ c.sales_channel }}</td><td>{{ (c.baseline_monthly)|vnd }}</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            {% if sc.rows|length > 10 %}<div class="no-data">Đang liệt kê 10/{{ sc.rows|length }} khách, xếp theo mức mua thường lệ.</div>{% endif %}
+            {% else %}
+            <div class="no-data">Không có khách mua đều nào chưa có đơn.</div>
             {% endif %}
 
-            {% if metrics.highlights %}
-            <!-- Điểm nổi bật Section — nối luồng cảnh báo thời gian thực với báo cáo định kỳ -->
-            <div class="section-title">Điểm Nổi Bật Trong Kỳ</div>
-            <ul style="margin: 0 0 20px 0; padding-left: 20px; font-size: 13px; color: #334155;">
-                {% for h in metrics.highlights %}
-                <li style="margin-bottom: 6px;"><strong>{{ h.label }}</strong> — {{ h.sent_at_display }} (giá trị: {{ h.value_display }})</li>
-                {% endfor %}
-            </ul>
+            {% set no45 = ins.new_over45 or {} %}
+            <div style="font-weight: 700; color: #1f4a22; font-size: 13px; margin: 12px 0 4px;">Khách mới rơi vào nợ quá hạn trên 45 ngày</div>
+            {% if not no45.available %}
+            <div class="no-data">Chưa có bản chụp công nợ đủ cũ để so sánh — hệ thống tự tích lũy mỗi ngày.</div>
+            {% elif no45.rows %}
+            <table class="data-table">
+                <thead><tr><th>Mã KH</th><th>Tên KH</th><th>Kênh</th><th>Nợ &gt;45 ngày</th></tr></thead>
+                <tbody>
+                    {% for c in no45.rows[:10] %}
+                    <tr><td>{{ c.customer_code }}</td><td>{{ c.customer_name }}</td><td>{{ c.sales_channel }}</td><td style="color: #ef4444; font-weight: bold;">{{ (c.overdue_gt_45)|vnd }}</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            {% if no45.rows|length > 10 %}<div class="no-data">Đang liệt kê 10/{{ no45.rows|length }} khách.</div>{% endif %}
+            <div class="no-data">So với bản chụp công nợ ngày {{ no45.compared_with }}.</div>
+            {% else %}
+            <div class="no-data">Không có khách mới rơi vào nhóm này (so bản chụp ngày {{ no45.compared_with }}).</div>
+            {% endif %}
+
+            {% set od = ins.overdue_ordering or {} %}
+            <div style="font-weight: 700; color: #1f4a22; font-size: 13px; margin: 12px 0 4px;">Khách nợ trên 45 ngày vẫn lên đơn tháng này</div>
+            {% if od.rows %}
+            <table class="data-table">
+                <thead><tr><th>Mã KH</th><th>Tên KH</th><th>Nợ &gt;45 ngày</th><th>Đơn tháng này</th></tr></thead>
+                <tbody>
+                    {% for c in od.rows[:10] %}
+                    <tr><td>{{ c.customer_code }}</td><td>{{ c.customer_name }}</td><td style="color: #ef4444; font-weight: bold;">{{ (c.overdue_gt_45)|vnd }}</td><td>{{ c.new_orders }} đơn &bull; {{ (c.new_order_value)|vnd }}</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            {% if od.rows|length > 10 %}<div class="no-data">Đang liệt kê 10/{{ od.rows|length }} khách.</div>{% endif %}
+            {% else %}
+            <div class="no-data">Không có khách nào.</div>
+            {% endif %}
+            {% if ins.errors %}
+            <div class="no-data">Một phần dữ liệu chưa lấy được lúc dựng báo cáo ({{ ins.errors.keys()|join(', ') }}) — mục tương ứng có thể thiếu.</div>
+            {% endif %}
             {% endif %}
 
             {% if metrics.operational_quality_items %}
@@ -444,7 +492,7 @@ DIGEST_EMAIL_TEMPLATE = """
                     <td width="{{ rev_col_w }}%" valign="top" style="padding: 8px;">
                         <div class="kpi-card">
                             <div class="lbl">Doanh Thu OTC</div>
-                            <div class="val">{{ "{:,.0f}".format(metrics.revenue.otc) }} đ</div>
+                            <div class="val">{{ (metrics.revenue.otc)|vnd }}</div>
                         </div>
                     </td>
                 {% endif %}
@@ -452,14 +500,14 @@ DIGEST_EMAIL_TEMPLATE = """
                     <td width="{{ rev_col_w }}%" valign="top" style="padding: 8px;">
                         <div class="kpi-card">
                             <div class="lbl">Doanh Thu ETC</div>
-                            <div class="val">{{ "{:,.0f}".format(metrics.revenue.etc) }} đ</div>
+                            <div class="val">{{ (metrics.revenue.etc)|vnd }}</div>
                         </div>
                     </td>
                 {% endif %}
                     <td width="{{ rev_col_w }}%" valign="top" style="padding: 8px;">
                         <div class="kpi-card success">
                             <div class="lbl">Tổng Doanh Thu</div>
-                            <div class="val" style="color: #337337;">{{ "{:,.0f}".format(metrics.revenue.total) }} đ</div>
+                            <div class="val" style="color: #337337;">{{ (metrics.revenue.total)|vnd }}</div>
                             {% if metrics.revenue.change_pct is not none %}
                             <div class="{{ 'trend-up' if metrics.revenue.change_pct >= 0 else 'trend-down' }}">
                                 {{ "%+.1f"|format(metrics.revenue.change_pct) }}% so kỳ {{ metrics.revenue.prev_period_label }}
@@ -490,6 +538,24 @@ DIGEST_EMAIL_TEMPLATE = """
                 </tr>
             </table>
 
+            {% if metrics.insights and metrics.insights.month_pace %}
+            <div class="section-title">Tiến Độ Tháng (đến {{ metrics.insights.as_of_display }})</div>
+            <table class="data-table">
+                <thead><tr><th>Kênh</th><th>Lũy kế tháng</th><th>So nhịp thường lệ</th><th>Dự phóng cả tháng</th></tr></thead>
+                <tbody>
+                    {% for ch, p in metrics.insights.month_pace.items() %}{% if p and p.gap_pct is not none %}
+                    <tr>
+                        <td>{{ ch }}</td>
+                        <td>{{ (p.mtd)|vnd }}</td>
+                        <td>{% if p.gap_pct > 0 %}<span class="trend-down">Chậm {{ "%.0f"|format(p.gap_pct) }}%</span>{% else %}<span class="trend-up">Nhanh {{ "%.0f"|format(-p.gap_pct) }}%</span>{% endif %}</td>
+                        <td>{{ (p.projected_full_month)|vnd }} ({{ "%+.0f"|format(p.projected_vs_baseline_pct) }}% so TB {{ metrics.insights.lookback }} tháng)</td>
+                    </tr>
+                    {% endif %}{% endfor %}
+                </tbody>
+            </table>
+            <div class="no-data" style="margin-bottom: 8px;">Nhịp thường lệ = tỷ trọng doanh thu thường đạt tới cùng ngày trong {{ metrics.insights.lookback }} tháng trước (doanh thu dồn cuối tháng), không chia đều theo ngày.</div>
+            {% endif %}
+
             {% if metrics.trend %}
             <!-- Xu hướng trong kỳ Section — weekly: theo NGÀY, monthly: theo TUẦN.
             13/07/2026: bỏ hẳn biểu đồ SVG — Outlook Desktop (dùng engine Word để render HTML
@@ -502,7 +568,7 @@ DIGEST_EMAIL_TEMPLATE = """
                 <thead><tr><th>Giai đoạn</th><th>Doanh thu</th></tr></thead>
                 <tbody>
                     {% for t in metrics.trend %}
-                    <tr><td>{{ t.label }}</td><td>{{ "{:,.0f}".format(t.revenue) }} đ</td></tr>
+                    <tr><td>{{ t.label }}</td><td>{{ (t.revenue)|vnd }}</td></tr>
                     {% endfor %}
                 </tbody>
             </table>
@@ -518,8 +584,8 @@ DIGEST_EMAIL_TEMPLATE = """
                     {% for r in metrics.region_growth %}
                     <tr>
                         <td>{{ r.region }}</td>
-                        <td>{{ "{:,.0f}".format(r.revenue) }} đ</td>
-                        <td>{{ "{:,.0f}".format(r.prev_revenue) }} đ</td>
+                        <td>{{ (r.revenue)|vnd }}</td>
+                        <td>{{ (r.prev_revenue)|vnd }}</td>
                         <td>
                             {% if r.growth_pct is not none %}
                             <span class="{{ 'trend-up' if r.growth_pct >= 0 else 'trend-down' }}">{{ "%+.1f"|format(r.growth_pct) }}%</span>
@@ -538,7 +604,7 @@ DIGEST_EMAIL_TEMPLATE = """
                 <thead><tr><th>Vùng</th><th>Doanh thu</th></tr></thead>
                 <tbody>
                     {% for r in metrics.region_breakdown %}
-                    <tr><td>{{ r.region }}</td><td>{{ "{:,.0f}".format(r.revenue) }} đ</td></tr>
+                    <tr><td>{{ r.region }}</td><td>{{ (r.revenue)|vnd }}</td></tr>
                     {% endfor %}
                 </tbody>
             </table>
@@ -566,7 +632,7 @@ DIGEST_EMAIL_TEMPLATE = """
                     <td width="34%" valign="top" style="padding: 8px;">
                         <div class="kpi-card">
                             <div class="lbl">Tổng Doanh Số Đạt</div>
-                            <div class="val">{{ "{:,.0f}".format(metrics.kpi_summary.total_amount) }} đ</div>
+                            <div class="val">{{ (metrics.kpi_summary.total_amount)|vnd }}</div>
                         </div>
                     </td>
                 </tr>
@@ -579,13 +645,13 @@ DIGEST_EMAIL_TEMPLATE = """
                     <td width="50%" valign="top" style="padding: 8px;">
                         <div class="kpi-card">
                             <div class="lbl">Tổng Chỉ Tiêu Tháng</div>
-                            <div class="val">{{ "{:,.0f}".format(metrics.kpi_summary.total_target) }} đ</div>
+                            <div class="val">{{ (metrics.kpi_summary.total_target)|vnd }}</div>
                         </div>
                     </td>
                     <td width="50%" valign="top" style="padding: 8px;">
                         <div class="kpi-card {{ 'success' if metrics.kpi_summary.total_amount >= metrics.kpi_summary.total_target else 'failed' }}">
                             <div class="lbl">Còn Thiếu Để Đạt 100%</div>
-                            <div class="val">{{ "{:,.0f}".format([metrics.kpi_summary.total_target - metrics.kpi_summary.total_amount, 0]|max) }} đ</div>
+                            <div class="val">{{ ([metrics.kpi_summary.total_target - metrics.kpi_summary.total_amount, 0]|max)|vnd }}</div>
                         </div>
                     </td>
                 </tr>
@@ -610,8 +676,8 @@ DIGEST_EMAIL_TEMPLATE = """
                     {% for qlv in grp.qlvs %}
                     <tr style="background-color: #eef5ea;">
                         <td><strong>{{ qlv.employee_name }}{% if qlv.employee_code %} ({{ qlv.employee_code }}){% endif %} — QLV</strong></td>
-                        <td><strong>{{ "{:,.0f}".format(qlv.target) }} đ</strong></td>
-                        <td><strong>{{ "{:,.0f}".format(qlv.amount) }} đ</strong></td>
+                        <td><strong>{{ (qlv.target)|vnd }}</strong></td>
+                        <td><strong>{{ (qlv.amount)|vnd }}</strong></td>
                         <td><strong>{% if qlv.pct is not none %}{{ "%.1f"|format(qlv.pct) }}%{% else %}—{% endif %}</strong></td>
                     </tr>
                     {% if not qlv.tdvs and qlv.employee_code %}
@@ -623,8 +689,8 @@ DIGEST_EMAIL_TEMPLATE = """
                     {% for tdv in qlv.tdvs %}
                     <tr>
                         <td style="padding-left: 28px;">↳ {{ tdv.employee_name }} ({{ tdv.employee_code }})</td>
-                        <td>{{ "{:,.0f}".format(tdv.target) }} đ</td>
-                        <td>{{ "{:,.0f}".format(tdv.amount) }} đ</td>
+                        <td>{{ (tdv.target)|vnd }}</td>
+                        <td>{{ (tdv.amount)|vnd }}</td>
                         <td>{% if tdv.pct is not none %}{{ "%.1f"|format(tdv.pct) }}%{% else %}—{% endif %}</td>
                     </tr>
                     {% endfor %}
@@ -647,7 +713,7 @@ DIGEST_EMAIL_TEMPLATE = """
                     {% for e in grp.employees %}
                     <tr>
                         <td>{{ e.employee_name }} ({{ e.employee_code }})</td>
-                        <td>{{ "{:,.0f}".format(e.revenue) }} đ</td>
+                        <td>{{ (e.revenue)|vnd }}</td>
                         <td>{{ e.invoices }}</td>
                     </tr>
                     {% endfor %}
@@ -664,13 +730,13 @@ DIGEST_EMAIL_TEMPLATE = """
                     <td width="50%" valign="top" style="padding: 8px;">
                         <div class="kpi-card failed">
                             <div class="lbl">Nợ Quá Hạn</div>
-                            <div class="val" style="color: #ef4444;">{{ "{:,.0f}".format(metrics.receivables.total_overdue) }} đ</div>
+                            <div class="val" style="color: #ef4444;">{{ (metrics.receivables.total_overdue)|vnd }}</div>
                         </div>
                     </td>
                     <td width="50%" valign="top" style="padding: 8px;">
                         <div class="kpi-card">
                             <div class="lbl">Tổng Dư Nợ</div>
-                            <div class="val">{{ "{:,.0f}".format(metrics.receivables.balance_end) }} đ</div>
+                            <div class="val">{{ (metrics.receivables.balance_end)|vnd }}</div>
                         </div>
                     </td>
                 </tr>
@@ -687,8 +753,8 @@ DIGEST_EMAIL_TEMPLATE = """
                     <tr>
                         <td>{{ c.customer_name }}{% if c.region %} <span style="color:#94a3b8;">({{ c.region }})</span>{% endif %}</td>
                         <td>{{ c.channel }}</td>
-                        <td style="color: #ef4444; font-weight: bold;">{{ "{:,.0f}".format(c.overdue) }} đ</td>
-                        <td>{{ "{:,.0f}".format(c.balance) }} đ</td>
+                        <td style="color: #ef4444; font-weight: bold;">{{ (c.overdue)|vnd }}</td>
+                        <td>{{ (c.balance)|vnd }}</td>
                     </tr>
                     {% endfor %}
                 </tbody>
@@ -696,7 +762,7 @@ DIGEST_EMAIL_TEMPLATE = """
             {% if metrics.receivables.aging %}
             <div style="background: #fef2f2; border: 1px solid #fecaca; border-radius: 8px; padding: 10px 14px; margin-top: 10px; font-size: 13px; color: #7f1d1d; text-align: center;">
                 <strong>Cơ cấu tuổi nợ:</strong>
-                {% for a in metrics.receivables.aging %}{% if not loop.first %} &bull;{% endif %} {{ a.label }}: <strong>{{ "{:,.0f}".format(a.amount) }} đ</strong>{% endfor %}
+                {% for a in metrics.receivables.aging %}{% if not loop.first %} &bull;{% endif %} {{ a.label }}: <strong>{{ (a.amount)|vnd }}</strong>{% endfor %}
             </div>
             {% endif %}
             {% endif %}
@@ -739,7 +805,7 @@ DIGEST_EMAIL_TEMPLATE = """
                     <tr>
                         <td><strong>{{ item.item_code }} ({% if item.channel %}{{ item.channel }}{% else %}—{% endif %})</strong></td>
                         <td>{{ item.item_name }}</td>
-                        <td>{{ "{:,.0f}".format(item.closing_value) }} đ</td>
+                        <td>{{ (item.closing_value)|vnd }}</td>
                         <td style="color: #d94e1c; font-weight: bold;">{{ item.months_to_sell }} tháng</td>
                     </tr>
                     {% endfor %}
@@ -956,16 +1022,18 @@ def _digest_preheader(metrics):
     parts = []
     rev = metrics.get("revenue") or {}
     if rev.get("total"):
-        line = f"Doanh thu {rev['total']:,.0f} đ"
+        from src.alerts import format_vietnamese_money
+        line = f"Doanh thu {format_vietnamese_money(rev['total'])}"
         if rev.get("change_pct") is not None:
             line += f" ({rev['change_pct']:+.1f}% so kỳ trước)"
         parts.append(line)
     rec = metrics.get("receivables") or {}
     if rec.get("total_overdue"):
-        parts.append(f"Nợ quá hạn {rec['total_overdue']:,.0f} đ")
-    warns = metrics.get("warning_alerts") or []
-    if warns:
-        parts.append(f"{len(warns)} cảnh báo trong kỳ")
+        from src.alerts import format_vietnamese_money
+        parts.append(f"Nợ quá hạn {format_vietnamese_money(rec['total_overdue'])}")
+    actions = (metrics.get("insights") or {}).get("action_count") or 0
+    if actions:
+        parts.append(f"{actions} việc cần xử lý")
     return " · ".join(parts)
 
 
@@ -984,7 +1052,13 @@ def build_digest_email(metrics, period_label="Daily", audience=None, scope_label
         _flags = load_config().get('report_feature_flags', {})
     except Exception:
         _flags = {}
-    template = Template(DIGEST_EMAIL_TEMPLATE)
+    # 14/09/2026: filter 'vnd' viet tien kieu Viet Nam ("12,35 ty d") thay "12,345,678,900 d" - so
+    # 11-12 chu so trong email kho doc va la dau phay kieu Anh.
+    from jinja2 import Environment
+    from src.alerts import format_vietnamese_money
+    env = Environment()
+    env.filters["vnd"] = lambda value: format_vietnamese_money(float(value or 0))
+    template = env.from_string(DIGEST_EMAIL_TEMPLATE)
     return template.render(
         metrics=metrics,
         period_label=period_label,
@@ -993,7 +1067,6 @@ def build_digest_email(metrics, period_label="Daily", audience=None, scope_label
         chatbot_url=_chatbot_deep_link(),
         dnh_logo_data_uri=_dnh_logo_data_uri(),
         preheader=_digest_preheader(metrics),
-        show_period_warnings=_flags.get('show_period_warnings', True),
         show_receivables_detail=_flags.get('show_receivables_detail', True),
     )
 

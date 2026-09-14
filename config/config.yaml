@@ -155,6 +155,35 @@ thresholds:
     kpi_reconciliation_tolerance_vnd: 0
     kpi_milestone_min_prev: 10000000 # TB lũy kế 5 tháng trước phải > 10 triệu mới xét (tránh chia ~0)
 
+    # 14/09/2026: BỘ CẢNH BÁO ĐÃ KIỂM THỬ NGƯỢC (src/insights.py). main.py chỉ còn gọi bộ này. Các ngưỡng
+    # revenue_drop_pct, overdue_ratio_pct_*, customer_churn_*, concentration_*, return_rate_pct,
+    # kpi_pace_*, kpi_milestone_* phía trên thuộc các cảnh báo cũ đã NGỪNG gọi — chạy lại trên lịch sử
+    # Bravo 01/2025-09/2026 thì chúng bắn gần như liên tục hoặc không bao giờ bắn. Giữ để tham chiếu.
+    # Bỏ trống mục nào thì dùng mặc định trong src/insights.py::DEFAULT_RULES (ghi kèm số kiểm thử).
+    # CHƯA ngưỡng nào được DNH chốt — xem docs/bao_cao_canh_bao_kiem_thu_nguoc_14-09.md.
+    insight_rules:
+      curve_lookback_months: 3
+      channel_pace:          # doanh thu kênh chậm hơn nhịp thường lệ (đường cong lũy kế 3 tháng trước)
+        min_day: {OTC: 10, ETC: 8}
+        max_gap_pct: {OTC: 30, ETC: 20}
+      team_pace:             # đội QLV (>= min_members TDV) dự phóng cuối tháng dưới ngưỡng % chỉ tiêu
+        min_day: 15
+        max_projection_pct: 60
+        min_members: 3
+      silent_customer:       # khách mua đủ lookback_months tháng mà tới ngày min_day chưa có đơn
+        min_day: 20
+        lookback_months: 6
+        min_baseline: {OTC: 50000000, ETC: 100000000}
+      new_over45:            # khách lần đầu có nợ >45 ngày, so bản chụp cách đây compare_days ngày
+        min_value: 50000000
+        compare_days: 7
+      overdue_ordering:      # nợ >45 ngày từ ngưỡng trở lên mà vẫn có đơn trong tháng
+        min_overdue_gt45: 50000000
+      etc_returns:           # hàng trả ETC cửa sổ trượt window_days ngày
+        window_days: 30
+        min_rate_pct: 3.0
+        min_amount: 200000000
+
   # Ngưỡng KPI nhân sự khối kinh doanh OTC MIỀN NAM — trích từ QĐ 0429-2/QĐ-HĐQT.25 (5 phụ lục:
   # TDV, TDV chợ sỉ, Trưởng kênh MT, Trưởng bộ phận, Trưởng phòng). position_code CS/TK suy luận
   # từ số lượng nhân viên thực tế (dim_nhanvien, AreaCode='MN'), CHƯA có bảng chú giải chính thức
@@ -194,7 +223,8 @@ report_feature_flags:
   # thêm phần hiển thị nên bật mặc định; cờ tắt để thu gọn mail nếu người nhận phản hồi nhiễu.
   # LƯU Ý: gate nằm ở build_digest_email() (template), KHÔNG đụng metrics dict — vì main.py
   # (Teams Daily Digest) cũng đọc receivables['aging']/['top_overdue_customers'] từ cùng dict.
-  show_period_warnings: true        # Section "Cảnh Báo Trong Kỳ" (render warning_alerts)
+  # show_period_warnings: NGỪNG DÙNG từ 14/09/2026 - mục "Cảnh Báo Trong Kỳ"/"Điểm Nổi Bật" (đọc lại log
+  # cảnh báo, phần lớn lặp) đã thay bằng "Việc Cần Xử Lý" + "Tiến Độ Tháng" (src/insight_report.py).
   show_receivables_detail: true     # Chi tiết công nợ bản Monthly (top khách nợ + tuổi nợ)
 
 # Bật/tắt các trigger đang bị DATA GAP (thiếu cột nguồn) — tắt để đỡ tốn 1 query Supabase mỗi

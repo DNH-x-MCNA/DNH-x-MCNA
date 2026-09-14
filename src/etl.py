@@ -1508,6 +1508,9 @@ def get_digest_metrics(start_dt, end_dt, period_label, granularity=None, region=
     # 1.4c: Warning alerts trong kỳ
     warning_alerts = _get_period_warning_alerts(start_dt, end_dt, region=region, channel=channel)
 
+    # 14/09/2026: "Tiến độ tháng" + "Việc cần xử lý" (src/insight_report.py) thay cho hiển thị
+    # highlights/warning_alerts/has_critical. Ba khóa cũ vẫn tính để không phá nơi khác đang đọc.
+    from src.insight_report import attach_insights
     result = {
         "date": start_dt.strftime("%d/%m/%Y"),
         "period_range": period_label,
@@ -1540,6 +1543,7 @@ def get_digest_metrics(start_dt, end_dt, period_label, granularity=None, region=
         "highlights": highlights,
         "warning_alerts": warning_alerts,
         "has_critical": has_critical,
+        "insights": attach_insights(region=region, channel=channel),
     }
     if granularity in ("weekly", "monthly"):
         result["trend"] = trend

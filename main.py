@@ -20,34 +20,31 @@ load_env()
 from src.database import get_db_engines, load_config
 from src.etl import get_daily_digest_metrics, get_weekly_digest_metrics, get_monthly_digest_metrics
 from src.notifier import build_digest_email, send_email, flush_critical_teams_queue, send_teams_alert
+from src.insight_report import action_lines, pace_lines
 from src.qlv_digest import (
     build_qlv_digest_metrics,
     build_qlv_period_metrics,
     build_qlv_period_email,
     build_qlv_teams_content,
 )
+from src.insights import build_insight_bundle
 from src.alerts import (
     run_alert_checks,               # bản MOCK (ERP/CRM giả lập) — chỉ dùng ở môi trường 'local'
-    run_smart_business_alerts,      # cảnh báo thật: nợ quá hạn / cháy kho / KPI thấp
-    run_sales_kpi_insights_alert,   # báo cáo phân tích doanh số & KPI theo kênh/chức danh
-    check_revenue_drop_alert,       # doanh thu giảm > ngưỡng so với kỳ trước
     check_credit_limit_exceeded_alert,   # nợ vượt hạn mức tín dụng (no-op nếu thiếu dữ liệu)
-    # --- Trigger mở rộng (nhóm A-G) ---
-    check_company_overdue_ratio_alert,   # A3: tỷ lệ nợ quá hạn toàn công ty
-    check_overdue_customer_new_orders_alert,  # A2: khách quá hạn vẫn được lên đơn mới
-    check_debt_aging_migration_alert,    # A1: nợ mới chuyển nhóm >45 ngày
-    check_dead_stock_alert,              # B2: tồn kho chết / bán chậm
+    check_dead_stock_alert,              # B2: tồn kho chết / bán chậm (đang tắt)
     check_near_expiry_alert,             # B1: cận date (no-op nếu thiếu dữ liệu hạn dùng)
-    check_customer_churn_alert,          # C1: khách lớn sụt giảm / nguy cơ mất khách
-    check_revenue_concentration_alert,   # C2: rủi ro tập trung doanh thu
-    check_return_rate_alert,             # E: tỷ lệ hàng trả về cao (ETC)
     check_zero_sales_rep_alert,          # F: nhân sự doanh số = 0
-    check_kpi_sales_force_risk_alert,    # F2: rủi ro KPI khối OTC miền Nam (QĐ 0429-2, no-op nếu thiếu dữ liệu)
-    check_daily_kpi_pace_alert,          # F3: nhịp KPI ngày từng TDV (đỏ/vàng/xanh, OTC only)
-    check_kpi_milestone_drop_alert,      # F4: mốc ngày 10/20 giảm >5% so TB 5 tháng trước (kênh + từng TDV)
+    check_kpi_sales_force_risk_alert,    # F2: rủi ro KPI khối OTC miền Nam (QĐ 0429-2, đang tắt)
     check_data_sanity_ok,                # G2: guard chặn alert khi dữ liệu rỗng/hỏng
     check_etl_freshness_alert,           # G1: ETL đứng (dữ liệu không refresh)
     check_kpi_revenue_reconciliation_alert,  # G3: doanh thu KPI lệch so với hóa đơn thực tế (OTC)
+    # 14/09/2026 — bộ cảnh báo đã kiểm thử ngược trên lịch sử Bravo (src/insights.py):
+    check_channel_month_pace_alert,      # doanh thu kênh chậm nhịp tháng (thay revenue_drop + mốc 10/20 kênh)
+    check_team_pace_alert,               # đội QLV dự phóng hụt tháng (thay nhịp KPI ngày, mốc TDV, KPI thấp)
+    check_silent_regular_customers_alert,  # khách mua đều chưa có đơn (thay khách lớn sụt giảm)
+    check_new_over45_debtors_alert,      # khách mới vào nợ >45 ngày (so bản chụp tuần trước)
+    check_overdue_over45_still_ordering_alert,  # nợ >45 ngày vẫn lên đơn (thay quá hạn bất kỳ >10tr)
+    check_etc_return_rate_30d_alert,     # hàng trả ETC 30 ngày trượt (thay tỷ lệ tháng đang chạy)
     format_vietnamese_money,
 )
 
@@ -78,17 +75,26 @@ def _is_alert_business_hours(config):
     return start_t <= now < end_t
 
 
+def _run_check_safely(check, *args):
+    """Một cảnh báo lỗi không được làm mất các cảnh báo còn lại trong chu kỳ quét."""
+    try:
+        check(*args)
+    except Exception as e:
+        print(f"[ALERTS] {getattr(check, '__name__', check)} lỗi: {e}")
+
+
 def run_all_alert_checks(config, erp_engine=None, crm_engine=None):
     """
-    Chạy TOÀN BỘ cảnh báo nghiệp vụ THẬT của DNH đọc từ dữ liệu thật:
-      - run_smart_business_alerts(): nợ quá hạn, cháy kho, KPI thấp
-      - run_sales_kpi_insights_alert(): phân tích doanh số & KPI theo kênh/chức danh
-      - check_revenue_drop_alert(): doanh thu giảm > ngưỡng so với kỳ trước
-      - check_credit_limit_exceeded_alert(): nợ vượt hạn mức tín dụng (no-op nếu chưa có dữ liệu)
+    Chạy cảnh báo nghiệp vụ THẬT của DNH đọc từ dữ liệu thật.
 
-    Mỗi hàm tự bọc try/except bên trong nên lỗi 1 loại cảnh báo không làm chết cả vòng lặp.
-    Bản MOCK run_alert_checks(ERP/CRM giả lập) CHỈ chạy khi environment == 'local' để dev test;
-    production KHÔNG bao giờ chạy mock.
+    14/09/2026: chỉ gọi bộ cảnh báo đã kiểm thử ngược trên lịch sử Bravo (src/insights.py). Bộ cũ (nợ
+    quá hạn top 5 lặp mỗi 6 giờ, KPI thấp, doanh thu so cùng ngày tháng trước, tỷ lệ nợ quá hạn, khách
+    lớn sụt giảm, tập trung doanh thu, nhịp KPI ngày, mốc 10/20...) không còn được gọi: chạy lại trên
+    lịch sử thì chúng bắn gần như liên tục hoặc không bao giờ bắn. Hàm cũ vẫn nằm trong src/alerts.py.
+
+    Insight tính MỘT lần mỗi chu kỳ rồi các cảnh báo dùng chung. Không dựng được insight (Bravo lỗi)
+    thì bỏ nhóm dùng insight, không đoán. Bản MOCK run_alert_checks(ERP/CRM giả lập) CHỈ chạy khi
+    environment == 'local' để dev test; production KHÔNG bao giờ chạy mock.
     """
     if not _is_alert_business_hours(config):
         print(f"[ALERTS] Ngoài giờ hành chính ({datetime.now().strftime('%Y-%m-%d %H:%M:%S')}) — bỏ qua chu kỳ quét cảnh báo này.")
@@ -105,27 +111,30 @@ def run_all_alert_checks(config, erp_engine=None, crm_engine=None):
 
     print("[ALERTS] Chạy các cảnh báo nghiệp vụ thật...")
 
-    run_smart_business_alerts()          # nợ quá hạn / cháy kho / KPI thấp
-    run_sales_kpi_insights_alert()       # phân tích doanh số & KPI
-    check_revenue_drop_alert()
+    try:
+        bundle = build_insight_bundle(force=True)
+    except Exception as e:
+        print(f"[ALERTS] Không dựng được insight ({e}) — bỏ nhóm cảnh báo dùng insight kỳ này.")
+        bundle = None
+    if bundle is not None:
+        for part, error in (bundle.get("errors") or {}).items():
+            print(f"[ALERTS][insights] Phần {part} lỗi: {error}")
+        for check in (check_channel_month_pace_alert, check_team_pace_alert,
+                      check_silent_regular_customers_alert, check_new_over45_debtors_alert,
+                      check_overdue_over45_still_ordering_alert):
+            _run_check_safely(check, bundle)
+
     if flags.get('credit_limit_check', True):
-        check_credit_limit_exceeded_alert()
-    check_company_overdue_ratio_alert()
-    check_overdue_customer_new_orders_alert()
-    check_debt_aging_migration_alert()
+        _run_check_safely(check_credit_limit_exceeded_alert)
     if flags.get('dead_stock_check', True):
-        check_dead_stock_alert()
+        _run_check_safely(check_dead_stock_alert)
     if flags.get('near_expiry_check', True):
-        check_near_expiry_alert()
-    check_customer_churn_alert()
-    check_revenue_concentration_alert()
-    check_return_rate_alert()
-    check_zero_sales_rep_alert()
+        _run_check_safely(check_near_expiry_alert)
+    _run_check_safely(check_etc_return_rate_30d_alert)
+    _run_check_safely(check_zero_sales_rep_alert)
     if flags.get('kpi_sales_force_risk_check', True):
-        check_kpi_sales_force_risk_alert()
-    check_daily_kpi_pace_alert()
-    check_kpi_milestone_drop_alert()
-    check_kpi_revenue_reconciliation_alert()
+        _run_check_safely(check_kpi_sales_force_risk_alert)
+    _run_check_safely(check_kpi_revenue_reconciliation_alert)
 
     if str(config.get('environment', 'local')).lower() == 'local' and erp_engine is not None and crm_engine is not None:
         print("[ALERTS] (môi trường 'local') Chạy thêm bộ MOCK ERP/CRM để dev test...")
@@ -137,16 +146,17 @@ load_dotenv()
 
 def _digest_table(metrics):
     headers = ["Chỉ số", "Giá trị"]
-    change_pct = metrics['revenue']['change_pct']
-    prev_label = metrics['revenue'].get('prev_period_label', '')
-    change_str = f"{change_pct:+.1f}% so kỳ {prev_label}" if change_pct is not None else "chưa đủ dữ liệu kỳ trước"
+    # 14/09/2026: bỏ "% so kỳ hôm qua" - Daily gửi 17:45 khi hóa đơn hôm nay còn đang nhập (lần đồng bộ
+    # gần nhất lúc 15:00), so với cả ngày hôm qua là luôn "giảm" giả. Phép so có nghĩa là lũy kế tháng
+    # so nhịp thường lệ (pace_lines, src/insight_report.py).
     scoped_channel = metrics.get('channel')
     rows = []
     if scoped_channel != "ETC":
         rows.append(["Doanh thu OTC", format_vietnamese_money(metrics['revenue']['otc'])])
     if scoped_channel != "OTC":
         rows.append(["Doanh thu ETC", format_vietnamese_money(metrics['revenue']['etc'])])
-    rows.append(["Tổng doanh thu", f"{format_vietnamese_money(metrics['revenue']['total'])} ({change_str})"])
+    rows.append(["Tổng doanh thu hôm nay",
+                 f"{format_vietnamese_money(metrics['revenue']['total'])} (tạm tính tới lần đồng bộ gần nhất)"])
     if scoped_channel != "ETC":
         rows.append(["Số hóa đơn OTC", str(metrics['revenue']['otc_invoice_count'])])
     if scoped_channel != "OTC":
@@ -159,8 +169,7 @@ def _digest_table(metrics):
         
     if metrics.get('inventory', {}).get('near_stockout_available') != False:
         rows.append(["Mặt hàng sắp hết hàng", str(metrics['inventory']['near_stockout_count'])])
-    for h in metrics.get('highlights', []):
-        rows.append([f"Cảnh báo: {h['label']}", f"{h['value_display']} (lúc {h['sent_at_display']})"])
+    rows.extend(pace_lines(metrics.get('insights'), format_vietnamese_money))
 
     return headers, rows
 
@@ -278,19 +287,15 @@ def send_daily_digest(dry_run=False, audience_filter=None, webhook_override=None
             # Build sections (1.4f, GD2g, GD3c)
             sections = []
 
-            # 1.4f: Warning alerts section (collapsed by default, capped at 8)
-            warning_alerts = metrics.get('warning_alerts', [])
-            if warning_alerts:
-                w_items = []
-                for w in warning_alerts[:8]:
-                    cnt = w.get('repeat_count', 1)
-                    note = f" (lặp {cnt} lần)" if cnt > 1 else ""
-                    w_items.append(f"• {w['alert_name']} [{w.get('channel') or 'Multi'}]: {w.get('issue') or 'Bất thường'}{note}")
+            # 14/09/2026: thay "Cảnh báo trong kỳ" (đọc lại log cảnh báo đã gửi, phần lớn lặp) bằng
+            # việc cần xử lý tính trực tiếp theo quy tắc đã kiểm thử ngược - src/insight_report.py.
+            action_items = action_lines(metrics.get('insights'), format_vietnamese_money)
+            if action_items:
                 sections.append({
-                    "id": "section_warning_alerts",
-                    "title": f"⚠️ CẢNH BÁO TRONG KỲ ({len(warning_alerts)})",
-                    "is_collapsed": True,
-                    "items": w_items
+                    "id": "section_action_items",
+                    "title": f"📌 VIỆC CẦN XỬ LÝ ({metrics['insights']['action_count']})",
+                    "is_collapsed": False,
+                    "items": action_items
                 })
 
             # GD2g: Operations section - 11/08/2026: gate bang report_feature_flags.show_operational_quality

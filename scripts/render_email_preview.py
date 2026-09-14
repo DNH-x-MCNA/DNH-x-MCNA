@@ -53,6 +53,30 @@ def _sample_metrics(period_label, channel=None):
             {"label": "Khách lớn sụt giảm doanh số", "sent_at_display": "10:40 20/08",
              "value_display": "-55%"},
         ],
+        # 14/09/2026: mau cho "Viec Can Xu Ly" + "Tien Do Thang" (cung cau truc voi
+        # src/insight_report.py::attach_insights).
+        "insights": {
+            "as_of_display": "20/08/2026", "lookback": 3, "action_count": 4, "errors": {},
+            "month_pace": {ch: p for ch, p in {
+                "OTC": {"mtd": 21_500_000_000, "gap_pct": 18.4, "projected_full_month": 33_000_000_000,
+                        "projected_vs_baseline_pct": -18.4},
+                "ETC": {"mtd": 19_800_000_000, "gap_pct": -6.2, "projected_full_month": 34_100_000_000,
+                        "projected_vs_baseline_pct": 6.2},
+            }.items() if channel in (None, ch)},
+            "team_pace": {"applicable": channel != "ETC", "evaluated": True, "min_day": 15, "threshold_pct": 60.0,
+                          "at_risk": [] if channel == "ETC" else [
+                              {"team_code": "TM23110105", "team_name": "Nguyen Van A", "members": 6,
+                               "achievement_pct": 38.2, "projection_pct": 52.0}]},
+            "silent_customers": {"evaluated": True, "min_day": 20, "rows": [
+                {"customer_code": "HDU00443", "customer_name": "Nha thuoc mau A", "sales_channel": "OTC",
+                 "baseline_monthly": 184_000_000}]},
+            "new_over45": {"available": True, "compared_with": "2026-08-13", "rows": [
+                {"customer_code": "HBI00286", "customer_name": "Benh vien mau B", "sales_channel": "ETC",
+                 "overdue_gt_45": 3_071_770_064}]},
+            "overdue_ordering": {"rows": [
+                {"customer_code": "NDI00720", "customer_name": "Benh vien mau C", "sales_channel": "ETC",
+                 "overdue_gt_45": 120_000_000, "new_orders": 2, "new_order_value": 15_300_000}]},
+        },
         "operational_quality_items": [],
         # 21/08/2026: mẫu cho section "Cảnh Báo Trong Kỳ" (cùng cấu trúc dict với
         # _get_period_warning_alerts trong src/etl.py, gồm cả last_sent_display mới thêm)

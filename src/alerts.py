@@ -204,6 +204,20 @@ def _find_prev_month_snapshot_date(today_str):
     return row[0] if row and row[0] else None
 
 
+def _find_debt_snapshot_on_or_before(date_str):
+    """Ngày snapshot nợ >45 ngày GẦN NHẤT không muộn hơn date_str ('YYYY-MM-DD'); None nếu chưa có.
+
+    14/09/2026: cảnh báo "khách mới vào nhóm >45 ngày" so với bản chụp cách đây một tuần thay vì bản
+    chụp tháng trước. So theo tháng thì phải có bản chụp tháng trước, mà bản chụp chỉ được ghi khi
+    job cảnh báo chạy, nên máy nào ngừng job một tháng là mất hẳn cảnh báo."""
+    _init_debt_aging_snapshot_db()
+    conn = sqlite3.connect(STATE_DB_PATH)
+    row = conn.execute("SELECT MAX(snapshot_date) FROM debt_aging_snapshot WHERE snapshot_date <= ?",
+                       (date_str,)).fetchone()
+    conn.close()
+    return row[0] if row and row[0] else None
+
+
 def clear_alert_state(alert_key):
     """
     Xóa trạng thái cảnh báo khi chỉ số đã trở lại bình thường (để cảnh báo lại ngay lập tức nếu lỗi tái diễn)
@@ -2838,6 +2852,280 @@ def check_kpi_revenue_reconciliation_alert():
     else:
         print("[ALERTS][kpi_reconcile] Doanh thu KPI khớp hóa đơn thực tế trong ngưỡng cho phép.")
 
+
+
+# ---- Nhóm H: cảnh báo đã kiểm thử ngược trên lịch sử Bravo (14/09/2026) ------------------------
+#
+# Thay cho bộ cảnh báo cũ bắn liên tục hoặc không bao giờ bắn (số kiểm thử ở docstring
+# src/insights.py). main.py::run_all_alert_checks chỉ gọi nhóm này; các hàm cũ phía trên còn giữ để
+# tham chiếu nhưng KHÔNG còn được gọi: run_smart_business_alerts, run_sales_kpi_insights_alert,
+# check_revenue_drop_alert, check_company_overdue_ratio_alert, check_overdue_customer_new_orders_alert,
+# check_debt_aging_migration_alert, check_customer_churn_alert, check_revenue_concentration_alert,
+# check_return_rate_alert, check_daily_kpi_pace_alert, check_kpi_milestone_drop_alert.
+#
+# Chống lặp: mỗi đối tượng (kênh-tháng, đội-tháng, khách-tháng, khách) có alert_key riêng. Trong thời
+# gian chờ chỉ gửi lại khi giá trị bậc (insights.worsen_bucket) tăng, tức xấu thêm trọn một bậc.
+# WARNING của nhóm này vẫn gửi Teams (require_critical_for_teams=False): đây là việc cần người xử lý
+# trong tuần, không phải thông tin chỉ để lưu log.
+
+def _group_rows(rows, *fields):
+    groups = {}
+    for row in rows:
+        groups.setdefault(tuple(row.get(f) for f in fields), []).append(row)
+    return groups
+
+
+def _region_label_from_key(region_key):
+    from src.region_map import REGION_NAMES_VI
+    return REGION_NAMES_VI.get(region_key, "Không rõ vùng")
+
+
+def _insight_bundle(bundle):
+    if bundle is not None:
+        return bundle
+    from src.insights import build_insight_bundle
+    return build_insight_bundle()
+
+
+def check_channel_month_pace_alert(bundle=None):
+    """Doanh thu kênh chậm hơn nhịp thường lệ của chính kênh đó.
+
+    Cùng khái niệm "doanh thu sụt giảm" của TRIGGER 4 nhưng so với đường cong lũy kế 3 tháng trước
+    thay vì cùng số ngày tháng trước (cách cũ bắn 27% số ngày OTC, 38% ở tuần đầu tháng)."""
+    from src import insights
+    bundle = _insight_bundle(bundle)
+    rules = bundle.get("rules") or insights.rule_config()
+    rule, lookback, as_of = rules["channel_pace"], int(rules["curve_lookback_months"]), bundle["as_of"]
+    for channel, pace in (bundle.get("channel_pace") or {}).items():
+        if not pace or pace.get("gap_pct") is None:
+            print(f"[ALERTS][channel_pace][{channel}] Chưa đủ lịch sử để tính nhịp tháng — bỏ qua.")
+            continue
+        min_day, max_gap = int(rule["min_day"][channel]), float(rule["max_gap_pct"][channel])
+        print(f"[ALERTS][channel_pace][{channel}] Đến {as_of}: lũy kế {format_vietnamese_money(pace['mtd'])}, "
+              f"chậm nhịp {pace['gap_pct']:.1f}% (báo khi > {max_gap:.0f}% từ ngày {min_day}).")
+        if not insights.channel_pace_breach(pace, min_day, max_gap):
+            continue
+        bucket = insights.worsen_bucket(pace["gap_pct"], 10)
+        alert_key = f"channel_pace:{channel}:{as_of.strftime('%Y-%m')}"
+        if not should_send_alert(alert_key, cooldown_hours=24 * 7, current_value=str(bucket)):
+            continue
+        rows = [
+            [f"Lũy kế 01 - {as_of.strftime('%d/%m')}", format_vietnamese_money(pace["mtd"])],
+            [f"Thường lệ tới cùng ngày (TB {lookback} tháng)", format_vietnamese_money(pace["expected_mtd"])],
+            ["Chậm hơn thường lệ", f"{pace['gap_pct']:.1f}%"],
+            ["Dự phóng cả tháng nếu giữ nhịp",
+             f"{format_vietnamese_money(pace['projected_full_month'])} "
+             f"({pace['projected_vs_baseline_pct']:+.1f}% so TB {lookback} tháng)"],
+        ]
+        if pace.get("vs_prev_month_same_days_pct") is not None:
+            rows.append(["Cùng số ngày tháng trước",
+                         f"{format_vietnamese_money(pace['prev_month_same_days'])} "
+                         f"(tháng này {pace['vs_prev_month_same_days_pct']:+.1f}%)"])
+        send_alert_to_all_channels(
+            alert_name=f"DOANH THU {channel} CHẬM NHỊP THÁNG",
+            severity="CRITICAL",
+            summary=(f"Đến hết {as_of.strftime('%d/%m/%Y')}, doanh thu {channel} thấp hơn {pace['gap_pct']:.0f}% so "
+                     f"với mức thường đạt tới cùng ngày trong {lookback} tháng trước. Mức thường lệ theo đường cong "
+                     f"thật (doanh thu dồn cuối tháng), không chia đều theo ngày, nên đầu tháng không báo động giả."),
+            table_headers=["Chỉ số", "Giá trị"], table_rows=rows, channels=("teams",),
+            period=_month_period_label(as_of, as_of), channel=channel, region="Toàn quốc",
+            issue=(f"Doanh thu {channel} chậm {pace['gap_pct']:.0f}% so với nhịp thường lệ; dự phóng cả tháng "
+                   f"{pace['projected_vs_baseline_pct']:+.0f}% so TB {lookback} tháng"))
+        record_alert_sent(alert_key, str(bucket), region="Toàn quốc")
+
+
+def check_team_pace_alert(bundle=None):
+    """Đội QLV mà nếu giữ nhịp hiện tại thì cuối tháng đạt dưới ngưỡng % chỉ tiêu.
+
+    Thay nhịp KPI ngày từng TDV (TB 78% TDV "Đỏ" mỗi ngày), mốc 10/20 từng TDV (~90 người/tháng, gần
+    như ngẫu nhiên) và top 5 TDV dưới 60% (đầu tháng ai cũng dưới 60%). Gộp theo đội vì một TDV dao
+    động quá mạnh theo từng đơn lớn; mỗi miền một thông báo để định tuyến đúng người quản lý miền."""
+    from src import insights
+    bundle = _insight_bundle(bundle)
+    part = bundle.get("team_pace") or {}
+    rules = bundle.get("rules") or insights.rule_config()
+    as_of, lookback = bundle["as_of"], int(rules["curve_lookback_months"])
+    if not part.get("evaluated"):
+        print(f"[ALERTS][team_pace] Ngày {as_of.day} chưa tới ngày {part.get('min_day')} — chưa đánh giá đội.")
+        return
+    at_risk = part.get("at_risk") or []
+    threshold = float(part.get("threshold_pct") or rules["team_pace"]["max_projection_pct"])
+    print(f"[ALERTS][team_pace] {len(at_risk)}/{len(part.get('teams') or [])} đội dự phóng dưới {threshold:.0f}% chỉ tiêu.")
+    month = as_of.strftime('%Y-%m')
+    for (region_key,), teams in _group_rows(at_risk, "region_key").items():
+        fresh = []
+        for team in teams:
+            key = f"team_pace:{team['team_code']}:{month}"
+            bucket = insights.worsen_bucket(100 - team["projection_pct"], 10)
+            if should_send_alert(key, cooldown_hours=24 * 7, current_value=str(bucket)):
+                fresh.append((key, bucket, team))
+        if not fresh:
+            continue
+        region_label = _region_label_from_key(region_key)
+        table = [[f"{t['team_name']} ({t['team_code']})", str(t["members"]),
+                  f"{t['achievement_pct']:.1f}%", f"{t['projection_pct']:.0f}%"] for _, _, t in fresh]
+        send_alert_to_all_channels(
+            alert_name="ĐỘI QLV CÓ NGUY CƠ HỤT CHỈ TIÊU THÁNG",
+            severity="WARNING",
+            summary=(f"{len(fresh)} đội ở {region_label} nếu giữ nhịp hiện tại thì cuối tháng chỉ đạt dưới "
+                     f"{threshold:.0f}% chỉ tiêu. Dự phóng = mức đạt đến {as_of.strftime('%d/%m')} chia tỷ trọng "
+                     f"doanh thu thường đạt tới cùng ngày (TB {lookback} tháng). Kiểm thử 01-08/2026: 72-90% đội "
+                     f"bị báo thực sự kết thúc tháng dưới 80% chỉ tiêu."),
+            table_headers=["Đội QLV", "Số TDV", "Đạt đến nay", "Dự phóng cuối tháng"], table_rows=table,
+            channels=("teams",), require_critical_for_teams=False,
+            period=_month_period_label(as_of, as_of), channel="OTC", region=region_label,
+            issue=f"{len(fresh)} đội QLV dự phóng cuối tháng dưới {threshold:.0f}% chỉ tiêu")
+        for key, bucket, _ in fresh:
+            record_alert_sent(key, str(bucket), region=region_label)
+
+
+def check_silent_regular_customers_alert(bundle=None):
+    """Khách mua đều nhiều tháng mà tới ngày đánh giá trong tháng chưa có đơn nào.
+
+    Thay "khách lớn giảm >50% so tháng trước" (~120 khách OTC/tháng, đúng 38%, vì so tháng đang chạy
+    dở với cả tháng trước). Mỗi khách chỉ báo một lần trong tháng."""
+    from src import insights
+    bundle = _insight_bundle(bundle)
+    part = bundle.get("silent_customers") or {}
+    rules = bundle.get("rules") or insights.rule_config()
+    rule, as_of = rules["silent_customer"], bundle["as_of"]
+    if not part.get("evaluated"):
+        print(f"[ALERTS][silent_customer] Ngày {as_of.day} chưa tới ngày {rule['min_day']} — chưa đánh giá.")
+        return
+    rows = part.get("rows") or []
+    print(f"[ALERTS][silent_customer] {len(rows)} khách mua đều chưa có đơn tháng này.")
+    month, lookback = as_of.strftime('%Y-%m'), int(rule["lookback_months"])
+    for (channel, region_key), customers in _group_rows(rows, "sales_channel", "region_key").items():
+        fresh = []
+        for c in customers:
+            key = f"silent_customer:{channel}:{c['customer_code']}:{month}"
+            if should_send_alert(key, cooldown_hours=24 * 40, current_value="1"):
+                fresh.append((key, c))
+        if not fresh:
+            continue
+        region_label = _region_label_from_key(region_key)
+        min_baseline = float(rule["min_baseline"][channel])
+        table = [[c["customer_code"], c.get("customer_name") or c["customer_code"],
+                  format_vietnamese_money(c["baseline_monthly"]),
+                  f"{c['months_ordered_by_this_day']}/{lookback}"] for _, c in fresh]
+        send_alert_to_all_channels(
+            alert_name=f"KHÁCH MUA ĐỀU CHƯA CÓ ĐƠN THÁNG NÀY ({channel})",
+            severity="WARNING",
+            summary=(f"{len(fresh)} khách {channel} ở {region_label} mua đủ {lookback}/{lookback} tháng gần nhất "
+                     f"(TB từ {format_vietnamese_money(min_baseline)}/tháng), các tháng trước thường đã có đơn "
+                     f"trước ngày {as_of.day}, nhưng tới hết {as_of.strftime('%d/%m')} tháng này chưa có đơn nào. "
+                     f"Kiểm thử 07/2025-08/2026: ETC 81%, OTC 47% khách bị báo cả tháng chỉ mua dưới 30% mức "
+                     f"thường lệ — nên liên hệ sớm."),
+            table_headers=["Mã KH", "Tên KH", "TB/tháng trước đó", "Tháng đã có đơn trước ngày này"],
+            table_rows=table, channels=("teams",), require_critical_for_teams=False,
+            period=_month_period_label(as_of, as_of), channel=channel, region=region_label,
+            issue=f"{len(fresh)} khách {channel} mua đều nhưng tới ngày {as_of.day} chưa có đơn tháng này")
+        for key, _ in fresh:
+            record_alert_sent(key, "1", region=region_label)
+
+
+def check_new_over45_debtors_alert(bundle=None):
+    """Khách lần đầu có nợ quá hạn >45 ngày vượt ngưỡng, so với bản chụp cách đây một tuần.
+
+    Cùng khái niệm A1 (trigger >45 ngày theo hợp đồng) nhưng so bản chụp tuần trước thay vì tháng
+    trước, và ngưỡng 50tr thay 10tr. 04/08 -> 14/09/2026: 27 khách, 3,76 tỷ (~4-5 khách/tuần)."""
+    bundle = _insight_bundle(bundle)
+    part = bundle.get("new_over45") or {}
+    if not part.get("available"):
+        print("[ALERTS][new_over45] Chưa có bản chụp công nợ đủ cũ để so — hệ thống tự tích lũy mỗi lần chạy.")
+        return
+    rows = part.get("rows") or []
+    print(f"[ALERTS][new_over45] {len(rows)} khách mới vào nhóm >45 ngày (so bản chụp {part.get('compared_with')}).")
+    for (region_key, channel), customers in _group_rows(rows, "region_key", "sales_channel").items():
+        fresh = [(f"new_over45:{c['customer_code']}", c) for c in customers
+                 if should_send_alert(f"new_over45:{c['customer_code']}", cooldown_hours=24 * 30, current_value="1")]
+        if not fresh:
+            continue
+        region_label = _region_label_from_key(region_key)
+        total = sum(c["overdue_gt_45"] for _, c in fresh)
+        send_alert_to_all_channels(
+            alert_name=f"KHÁCH MỚI RƠI VÀO NỢ QUÁ HẠN >45 NGÀY ({channel})",
+            severity="CRITICAL",
+            summary=(f"{len(fresh)} khách {channel} ở {region_label} lần đầu có nợ quá hạn trên 45 ngày vượt "
+                     f"{format_vietnamese_money(part.get('min_value') or 0)} (bản chụp ngày "
+                     f"{part.get('compared_with')} chưa có đồng nào quá 45 ngày). Tổng {format_vietnamese_money(total)}."),
+            table_headers=["Mã KH", "Tên KH", "Nợ >45 ngày"],
+            table_rows=[[c["customer_code"], c.get("customer_name") or "", format_vietnamese_money(c["overdue_gt_45"])]
+                        for _, c in fresh],
+            channels=("teams",), period=f"Tức thời (đến {datetime.now().strftime('%d/%m/%Y')})",
+            channel=channel, region=region_label,
+            issue=f"{len(fresh)} khách lần đầu có nợ >45 ngày, tổng {format_vietnamese_money(total)}")
+        for key, _ in fresh:
+            record_alert_sent(key, "1", region=region_label)
+
+
+def check_overdue_over45_still_ordering_alert(bundle=None):
+    """Khách nợ >45 ngày từ ngưỡng trở lên mà vẫn có đơn mới trong tháng.
+
+    Thay A2 cũ (quá hạn bất kỳ >10tr: 134 khách/tháng, không ai xử lý hết). 14/09/2026: nợ >45 ngày
+    >50tr và có đơn = 14 khách, giá trị đơn 1,42 tỷ. Mỗi khách báo một lần trong tháng."""
+    bundle = _insight_bundle(bundle)
+    rows = (bundle.get("overdue_ordering") or {}).get("rows") or []
+    as_of = bundle["as_of"]
+    print(f"[ALERTS][overdue_ordering] {len(rows)} khách nợ >45 ngày vẫn có đơn trong tháng.")
+    month = as_of.strftime('%Y-%m')
+    for (channel, region_key), customers in _group_rows(rows, "sales_channel", "region_key").items():
+        fresh = [(f"overdue_ordering:{c['customer_code']}:{month}", c) for c in customers
+                 if should_send_alert(f"overdue_ordering:{c['customer_code']}:{month}",
+                                      cooldown_hours=24 * 31, current_value="1")]
+        if not fresh:
+            continue
+        region_label = _region_label_from_key(region_key)
+        send_alert_to_all_channels(
+            alert_name=f"KHÁCH NỢ >45 NGÀY VẪN LÊN ĐƠN MỚI ({channel})",
+            severity="CRITICAL",
+            summary=(f"{len(fresh)} khách {channel} ở {region_label} đang nợ quá hạn trên 45 ngày nhưng vẫn phát "
+                     f"sinh đơn trong tháng {as_of.strftime('%m/%Y')} — cần kiểm duyệt trước khi giao thêm."),
+            table_headers=["Mã KH", "Tên KH", "Nợ >45 ngày", "Số đơn tháng này", "Giá trị đơn"],
+            table_rows=[[c["customer_code"], c.get("customer_name") or "", format_vietnamese_money(c["overdue_gt_45"]),
+                         str(c["new_orders"]), format_vietnamese_money(c["new_order_value"])] for _, c in fresh],
+            channels=("teams",), period=_month_period_label(as_of, as_of), channel=channel, region=region_label,
+            issue=f"{len(fresh)} khách nợ >45 ngày vẫn phát sinh đơn mới trong tháng")
+        for key, _ in fresh:
+            record_alert_sent(key, "1", region=region_label)
+
+
+def check_etc_return_rate_30d_alert():
+    """Hàng trả ETC trong cửa sổ trượt 30 ngày vượt cả ngưỡng tỷ lệ lẫn ngưỡng giá trị.
+
+    Thay tỷ lệ của tháng đang chạy (đầu tháng mẫu số nhỏ). Tỷ lệ tháng 06/2025-08/2026: 0,04-1,15%,
+    riêng 04/2026 là 7,82% (2,2 tỷ) — loại sự kiện cần báo."""
+    from src import insights
+    rule = insights.rule_config()["etc_returns"]
+    try:
+        as_of = _last_complete_data_day() or datetime.now().date()
+        start = as_of - timedelta(days=int(rule["window_days"]) - 1)
+        returns, sales = insights.fetch_etc_returns(start, as_of)
+    except Exception as e:
+        print(f"[ALERTS][etc_returns] Lỗi: {e}")
+        return
+    rate, breach = insights.return_rate_breach(returns, sales, float(rule["min_rate_pct"]), float(rule["min_amount"]))
+    print(f"[ALERTS][etc_returns] {start} - {as_of}: trả {format_vietnamese_money(returns)}, tỷ lệ "
+          f"{'—' if rate is None else f'{rate:.2f}%'} (báo khi > {rule['min_rate_pct']}% và >= "
+          f"{format_vietnamese_money(float(rule['min_amount']))}).")
+    if not breach:
+        return
+    bucket = insights.worsen_bucket(rate, 1)
+    if not should_send_alert("etc_return_rate_30d", cooldown_hours=24 * 7, current_value=str(bucket)):
+        return
+    period = f"{start.strftime('%d/%m')} - {as_of.strftime('%d/%m/%Y')}"
+    send_alert_to_all_channels(
+        alert_name="HÀNG TRẢ ETC TĂNG BẤT THƯỜNG",
+        severity="WARNING",
+        summary=(f"30 ngày {period}: hàng trả ETC {format_vietnamese_money(returns)}, bằng {rate:.2f}% doanh số "
+                 f"trước trả. Mức thường lệ 06/2025-08/2026 dưới 1,2%/tháng."),
+        table_headers=["Chỉ số", "Giá trị"],
+        table_rows=[["Hàng trả (30 ngày)", format_vietnamese_money(returns)],
+                    ["Doanh số ETC sau trả", format_vietnamese_money(sales)], ["Tỷ lệ trả", f"{rate:.2f}%"]],
+        channels=("teams",), require_critical_for_teams=False,
+        period=period, channel="ETC", region="Toàn quốc",
+        issue=f"Hàng trả ETC 30 ngày {rate:.2f}% ({format_vietnamese_money(returns)})")
+    record_alert_sent("etc_return_rate_30d", str(bucket), region="Toàn quốc")
 
 
 if __name__ == '__main__':
