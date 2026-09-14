@@ -423,7 +423,9 @@ DIGEST_EMAIL_TEMPLATE = """
 
             {% set no45 = ins.new_over45 or {} %}
             <div style="font-weight: 700; color: #1f4a22; font-size: 13px; margin: 12px 0 4px;">Khách mới rơi vào nợ quá hạn trên 45 ngày</div>
-            {% if not no45.available %}
+            {% if no45.stale_snapshot %}
+            <div class="no-data">Bản chụp công nợ gần nhất (ngày {{ no45.stale_snapshot }}) đã quá cũ để so sánh — hệ thống đã ghi lại bản chụp hôm nay và sẽ so sánh từ tuần sau.</div>
+            {% elif not no45.available %}
             <div class="no-data">Chưa có bản chụp công nợ đủ cũ để so sánh — hệ thống tự tích lũy mỗi ngày.</div>
             {% elif no45.rows %}
             <table class="data-table">

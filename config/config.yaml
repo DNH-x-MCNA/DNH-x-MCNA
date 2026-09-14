@@ -177,6 +177,7 @@ thresholds:
       new_over45:            # khách lần đầu có nợ >45 ngày, so bản chụp cách đây compare_days ngày
         min_value: 50000000
         compare_days: 7
+        max_snapshot_age_days: 14   # bản chụp cũ hơn thì chưa so (tránh báo dồn sau thời gian mất bản chụp)
       overdue_ordering:      # nợ >45 ngày từ ngưỡng trở lên mà vẫn có đơn trong tháng
         min_overdue_gt45: 50000000
       etc_returns:           # hàng trả ETC cửa sổ trượt window_days ngày
@@ -236,6 +237,14 @@ alert_feature_flags:
   near_expiry_check: false    # cần cột ExpiryDate lô hàng (map lô -> hạn dùng) trong mart tồn kho
   etl_freshness_check: false  # TẠM TẮT: đang trỏ CLOUD_DB_URL sang Supabase dev/test (snapshot
                                # tĩnh, SyncAt không tăng) -> bật lại true khi đổi CLOUD_DB_URL về production
+  # 14/09/2026: bật/tắt từng cảnh báo đã kiểm thử ngược (mặc định bật nếu bỏ trống) - xem
+  # docs/bao_cao_canh_bao_kiem_thu_nguoc_14-09.md.
+  insight_channel_pace: true      # doanh thu kênh chậm nhịp tháng
+  insight_team_pace: true         # đội QLV có nguy cơ hụt chỉ tiêu
+  insight_silent_customer: true   # khách mua đều chưa có đơn tháng này
+  insight_new_over45: true        # khách mới rơi vào nợ >45 ngày
+  insight_overdue_ordering: true  # nợ >45 ngày vẫn lên đơn
+  insight_etc_returns: true       # hàng trả ETC tăng bất thường
   kpi_sales_force_risk_check: false  # 16/07/2026: VẪN TẮT — lý do tắt cũ ("kpi_summary 100% miền
                                       # Bắc") đã không còn đúng (nhánh Bravo chính đã có đủ dữ liệu
                                       # Miền Nam/Trung, xác nhận thực tế 16/07: 33 nhân sự vi phạm,

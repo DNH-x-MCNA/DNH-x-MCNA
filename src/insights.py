@@ -51,7 +51,9 @@ DEFAULT_RULES = {
     "silent_customer": {"min_day": 20, "lookback_months": 6,
                         "min_baseline": {"OTC": 50_000_000, "ETC": 100_000_000}},
     # 04/08 -> 14/09/2026: 27 khách mới vào nhóm >45 ngày với > 50tr (3,76 tỷ), ~4-5 khách/tuần.
-    "new_over45": {"min_value": 50_000_000, "compare_days": 7},
+    # max_snapshot_age_days: ban chup cu hon thi CHUA so. May 24 co ban chup cuoi 10/08/2026 (loi ghi
+    # ban chup tu do); so thang voi hom nay se bao don vai chuc khach "moi" trong mot lan.
+    "new_over45": {"min_value": 50_000_000, "compare_days": 7, "max_snapshot_age_days": 14},
     # 14/09/2026: nợ >45 ngày > 50tr VÀ có đơn trong tháng = 14 khách (đơn 1,42 tỷ);
     # quy tắc cũ (quá hạn bất kỳ > 10tr) = 134 khách.
     "overdue_ordering": {"min_overdue_gt45": 50_000_000},
@@ -501,7 +503,7 @@ def _overdue_ordering_part(as_of, snapshot, rules):
     return {"rows": rows}
 
 
-def _new_over45_part(snapshot, rules):
+def _new_over45_part(snapshot, rules, today=None):
     from src import alerts
     # Nợ >45 ngày gộp theo khách (một khách có thể có cả dòng OTC lẫn ETC). SP công nợ có trả dòng
     # không mã khách (xác nhận 14/09/2026) — bỏ qua, vừa vô nghĩa vừa làm hỏng khóa của bản chụp.
@@ -516,11 +518,15 @@ def _new_over45_part(snapshot, rules):
     # Bản chụp chỉ tích lũy khi có người chạy; báo cáo cũng ghi để lịch sử không phụ thuộc job cảnh báo.
     alerts._save_debt_aging_snapshot([(cc, r["customer_name"], r["overdue_gt_45"]) for cc, r in current.items()])
     rule = rules["new_over45"]
-    before = (dt.date.today() - dt.timedelta(days=int(rule["compare_days"]))).isoformat()
+    today = today or dt.date.today()
+    before = (today - dt.timedelta(days=int(rule["compare_days"]))).isoformat()
     compared_with = alerts._find_debt_snapshot_on_or_before(before)
-    part = {"available": bool(compared_with), "compared_with": compared_with,
+    max_age = int(rule.get("max_snapshot_age_days", 14))
+    stale = bool(compared_with) and (today - _as_date(compared_with)).days > max_age
+    part = {"available": bool(compared_with) and not stale, "compared_with": compared_with,
+            "stale_snapshot": compared_with if stale else None,
             "compare_days": int(rule["compare_days"]), "min_value": float(rule["min_value"]), "rows": []}
-    if compared_with:
+    if part["available"]:
         previous = {cc: amount for cc, (_, amount) in alerts._get_debt_aging_snapshot(compared_with).items()}
         rows = new_over45_debtors(current, previous, float(rule["min_value"]))
         for row in rows:

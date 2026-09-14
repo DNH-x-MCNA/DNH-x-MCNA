@@ -119,10 +119,15 @@ def run_all_alert_checks(config, erp_engine=None, crm_engine=None):
     if bundle is not None:
         for part, error in (bundle.get("errors") or {}).items():
             print(f"[ALERTS][insights] Phần {part} lỗi: {error}")
-        for check in (check_channel_month_pace_alert, check_team_pace_alert,
-                      check_silent_regular_customers_alert, check_new_over45_debtors_alert,
-                      check_overdue_over45_still_ordering_alert):
-            _run_check_safely(check, bundle)
+        # 14/09/2026: moi canh bao moi co co tat rieng trong alert_feature_flags (mac dinh bat), de DNH
+        # tat mot loai ma khong can sua code hay tat ca bo.
+        for flag, check in (('insight_channel_pace', check_channel_month_pace_alert),
+                            ('insight_team_pace', check_team_pace_alert),
+                            ('insight_silent_customer', check_silent_regular_customers_alert),
+                            ('insight_new_over45', check_new_over45_debtors_alert),
+                            ('insight_overdue_ordering', check_overdue_over45_still_ordering_alert)):
+            if flags.get(flag, True):
+                _run_check_safely(check, bundle)
 
     if flags.get('credit_limit_check', True):
         _run_check_safely(check_credit_limit_exceeded_alert)
@@ -130,7 +135,8 @@ def run_all_alert_checks(config, erp_engine=None, crm_engine=None):
         _run_check_safely(check_dead_stock_alert)
     if flags.get('near_expiry_check', True):
         _run_check_safely(check_near_expiry_alert)
-    _run_check_safely(check_etc_return_rate_30d_alert)
+    if flags.get('insight_etc_returns', True):
+        _run_check_safely(check_etc_return_rate_30d_alert)
     _run_check_safely(check_zero_sales_rep_alert)
     if flags.get('kpi_sales_force_risk_check', True):
         _run_check_safely(check_kpi_sales_force_risk_alert)

@@ -100,7 +100,11 @@ def should_send_alert(alert_key, cooldown_hours, current_value):
         conn.execute("COMMIT")
         return should_send
     except Exception:
-        conn.execute("ROLLBACK")
+        # 14/09/2026 (may 24): BEGIN IMMEDIATE that bai vi DB dang bi khoa thi CHUA co giao dich nao;
+        # goi ROLLBACK luc do nem "cannot rollback - no transaction is active", che mat loi goc va
+        # lam dung ca vong quet canh bao (log 13:33:51). Chi rollback khi that su dang trong giao dich.
+        if conn.in_transaction:
+            conn.execute("ROLLBACK")
         raise
     finally:
         conn.close()
@@ -165,16 +169,22 @@ def _save_debt_aging_snapshot(rows):
     """
     _init_debt_aging_snapshot_db()
     today = datetime.now().strftime("%Y-%m-%d")
+    # 14/09/2026 (may 24): SP cong no tra ca dong KHONG co ma khach. INSERT dong do nem loi NOT NULL
+    # giua giao dich va ket noi khong duoc dong -> khoa ghi alerts_state.db, lam cac canh bao sau loi
+    # "database is locked". Ban chup o may 24 dung tu 10/08 vi loi nay. Bo dong khong ma, luon dong.
+    rows = [(code, name, amt) for code, name, amt in rows if code]
     conn = sqlite3.connect(STATE_DB_PATH)
-    conn.executemany('''
+    try:
+        with conn:
+            conn.executemany('''
         INSERT INTO debt_aging_snapshot (snapshot_date, customer_code, customer_name, overdue_gt_45)
         VALUES (?, ?, ?, ?)
         ON CONFLICT(snapshot_date, customer_code) DO UPDATE SET
             customer_name = excluded.customer_name,
             overdue_gt_45 = excluded.overdue_gt_45
     ''', [(today, code, name, amt) for code, name, amt in rows])
-    conn.commit()
-    conn.close()
+    finally:
+        conn.close()
 
 
 def _get_debt_aging_snapshot(snapshot_date):
