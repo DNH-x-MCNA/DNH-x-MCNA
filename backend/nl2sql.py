@@ -1179,7 +1179,17 @@ TEMPLATE_TOOLS = [
                         "CreatedAt la THOI DIEM TAO DON, KHONG phai thoi diem xac nhan don. DNH da xac nhan "
                         "(04/09/2026) do lech CreatedAt-DocDate KHONG mang y nghia nghiep vu; tool KHONG "
                         "kiem tra hay liet ke do lech nay. Tuyet doi khong suy dien 'chay don KPI', backdate, "
-                        "bat thuong/gian lan, va khong neu ten nhan vien tu do lech hai moc ngay.",
+                        "bat thuong/gian lan, va khong neu ten nhan vien tu do lech hai moc ngay. "
+                        "13/09/2026 (C12): cau hoi 'neu loai giao dich bat thuong, tang truong CỐT LOI TUNG "
+                        "THANG con bao nhieu' -> dat group_by_month=true va truyen CA KHOANG NHIEU THANG vao "
+                        "date_from/date_to (vd 12 thang) trong DUNG 1 LAN GOI - se co them "
+                        "core_result_by_month (moi thang x kenh mot dong, kem core_revenue_excluding_flagged). "
+                        "TUYET DOI KHONG goi lai tool nhieu lan cho tung thang rieng le (da tung gay 1 cau "
+                        "hoi phai goi 6-10 vong va het thoi gian request). Khi group_by_month=true, tool TU "
+                        "DONG rut gon top_detail (mac dinh con 3 dong) va bo qua order_fulfillment_exceptions "
+                        "chi tiet de nhuong dung luong cho core_result_by_month - day la CHU DICH, KHONG PHAI "
+                        "mat du lieu; muon xem chi tiet tung don/doi chieu don-hoa don thi goi lai voi "
+                        "group_by_month=false (mac dinh) cho 1 khoang ngay cu the.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -1187,6 +1197,7 @@ TEMPLATE_TOOLS = [
                 "date_to": {"type": "string", "description": "YYYY-MM-DD, cuoi ky can kiem tra. Neu nguoi dung khong neu ky thi BO TRONG; tool tu lay ngay du lieu moi nhat. KHONG hoi lai nguoi dung chi vi thieu ky."},
                 "threshold_days": {"type": "integer", "description": "Tham so cu, giu tuong thich API; hien khong su dung"},
                 "limit": {"type": "integer", "description": "So don hang tra/dieu chinh hoac >3x trung vi tham chieu hien chi tiet; total_flagged khong bi cat."},
+                "group_by_month": {"type": "boolean", "description": "true = tra them core_result_by_month (tach ket qua theo TUNG THANG trong [date_from, date_to], khong can goi lai tool nhieu lan). Dung khi cau hoi can xu huong THEO THANG thay vi 1 con so gop ca giai doan."},
             },
             "required": [],
         },
@@ -1770,6 +1781,24 @@ _SALARY_SENSITIVE_TEMPLATE_NAMES = {
     "get_salary_bonus_policy", "get_salary_data_quality", "get_salary_detail",
     "get_salary_achievement_summary", "get_salary_ranking", "get_salary_aso_detail",
 }
+
+
+def _json_mac_dinh(gia_tri):
+    """Chuyen kieu du lieu JSON khong ho tro khi dong goi ket qua tool gui model.
+
+    14/09/2026: Bravo (pyodbc) tra so dang Decimal va ngay dang date/datetime. Hai cho dong goi
+    payload_str (ask va ask_stream) goi json.dumps KHONG co default, nen chi can MOT tool tra nguyen
+    gia tri Decimal la ca buoc gui ket qua cho model nem TypeError va cau tra loi hong. Da xay ra that
+    voi get_salary_aso_detail (ASOQuantity/ASOBonus) - duoc va tay tren may 24 ngay 13/09. Chan tan
+    goc o day de khong tool doc Bravo nao khac vo theo cung kieu.
+    """
+    import datetime as _dt
+    from decimal import Decimal
+    if isinstance(gia_tri, Decimal):
+        return float(gia_tri)
+    if isinstance(gia_tri, (_dt.datetime, _dt.date)):
+        return gia_tri.isoformat()
+    return str(gia_tri)
 
 
 def _cache_tools(tools: list[dict]) -> list[dict]:
@@ -2784,7 +2813,7 @@ def ask(question: str, session_id: str = "default", username: str = None, scope_
             # input tang tu 7K len 49K tokens cho 1 cau hoi). last_result (dong 804) VAN giu nguyen
             # ket qua day du cho UI frontend - chi phan gui cho AI model bi cat.
             model_payload = _payload_for_model(tu.name, payload, question)
-            payload_str = json.dumps(model_payload, ensure_ascii=False) if isinstance(model_payload, (dict, list)) else str(model_payload)
+            payload_str = json.dumps(model_payload, ensure_ascii=False, default=_json_mac_dinh) if isinstance(model_payload, (dict, list)) else str(model_payload)
             if len(payload_str) > MAX_PAYLOAD_CHARS:
                 payload_str = payload_str[:MAX_PAYLOAD_CHARS] + "\n...(du lieu bi cat bot vi qua dai, phan tren DA DU de tra loi - KHONG can query lai)"
             payload_str += "\n" + query_plan.model_note()
@@ -3167,7 +3196,7 @@ def ask_stream(question: str, session_id: str = "default", username: str = None,
             )
 
             model_payload = _payload_for_model(tu.name, payload, question)
-            payload_str = json.dumps(model_payload, ensure_ascii=False) if isinstance(model_payload, (dict, list)) else str(model_payload)
+            payload_str = json.dumps(model_payload, ensure_ascii=False, default=_json_mac_dinh) if isinstance(model_payload, (dict, list)) else str(model_payload)
             if len(payload_str) > MAX_PAYLOAD_CHARS:
                 payload_str = payload_str[:MAX_PAYLOAD_CHARS] + "\n...(du lieu bi cat bot vi qua dai, phan tren DA DU de tra loi - KHONG can query lai)"
             payload_str += "\n" + query_plan.model_note()

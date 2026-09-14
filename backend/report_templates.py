@@ -6814,9 +6814,9 @@ def _order_fulfillment_exceptions(date_from: str, date_to: str, threshold_days: 
     }
 
 
-def order_timing_check(date_from: str = None, date_to: str = None, threshold_days: int = 2, limit: int = 20,
+def order_timing_check(date_from: str = None, date_to: str = None, threshold_days: int = 2, limit: int = None,
                         scope_area_code: str = None, scope_channel: str = None,
-                        scope_employee_code: str = None) -> dict:
+                        scope_employee_code: str = None, group_by_month: bool = False) -> dict:
     """Kiem tra hang tra/dieu chinh va phan bo gia tri don trong ky.
 
     ``created_at`` la THOI DIEM TAO DON, khong phai thoi diem xac nhan don. DNH xac nhan ngay
@@ -6827,7 +6827,13 @@ def order_timing_check(date_from: str = None, date_to: str = None, threshold_day
     chua/tre hoa don. ``limit`` gioi han so dong chi tiet hang tra/gia tri don; tong so dong co trong
     ``total_flagged`` khong bi cat. ``scope_channel`` va ``scope_employee_code`` ep pham vi o ca hai phan.
     Neu khong truyen ky, mac dinh tu ngay dau thang chua moc du lieu moi nhat den chinh moc do; V33
-    vi vay chay ngay thay vi hoi nguoi dung them mot luot."""
+    vi vay chay ngay thay vi hoi nguoi dung them mot luot.
+
+    group_by_month: 13/09/2026 (C12) - khi True, tra THEM core_result_by_month (danh sach tung
+    thang trong [date_from, date_to], moi thang co core_revenue_excluding_flagged/flagged_revenue
+    theo kenh) trong CUNG 1 lan goi. Dung cho cau hoi 'tang truong COT LOI TUNG THANG neu loai giao
+    dich bat thuong' - TUYET DOI KHONG tu goi lai tool nhieu lan cho tung thang rieng le (da tung
+    gay 1 cau hoi phai goi toi 6-10 vong va het thoi gian request)."""
     period_defaulted = not date_from and not date_to
     latest_day = latest_data_date()[:10]
     raw_to = str(date_to or latest_day)
@@ -6865,8 +6871,18 @@ def order_timing_check(date_from: str = None, date_to: str = None, threshold_day
         "top_detail": [],
         "data_as_of": latest_data_date(),
     }
-    result["order_fulfillment_exceptions"] = _order_fulfillment_exceptions(
-        date_from, date_to, threshold_days, scope_area_code, scope_channel, scope_employee_code)
+    if group_by_month:
+        # 13/09/2026 (C12): doi chieu don-hoa don khong lien quan cau hoi "tang truong cot loi theo
+        # thang" va la phan chiem nhieu dung luong nhat trong response, tung lam core_result_by_month
+        # (thu nguoi dung thuc su can) bi cat mat khoi ket qua tra ve model. Bo qua khi group_by_month.
+        result["order_fulfillment_exceptions"] = {
+            "skipped_reason": "group_by_month=true: bo qua doi chieu don-hoa don de nhuong dung "
+                               "luong cho core_result_by_month. Goi lai voi group_by_month=false "
+                               "neu can xem chi tiet don huy/tre hoa don."
+        }
+    else:
+        result["order_fulfillment_exceptions"] = _order_fulfillment_exceptions(
+            date_from, date_to, threshold_days, scope_area_code, scope_channel, scope_employee_code)
     # Cung mot lan goi tra du phan hang tra va phan bo gia tri don. vhoadon_otc GIU cac dong Amount9 am.
     quality_parts, quality_params = [], []
     if scope_channel != "ETC":
@@ -6930,7 +6946,14 @@ def order_timing_check(date_from: str = None, date_to: str = None, threshold_day
         })
     flagged.sort(key=lambda row: abs(row["order_revenue"]), reverse=True)
     result["total_flagged"] = len(flagged)
-    result["top_detail"] = flagged[:max(1, min(int(limit or 20), 100))]
+    # group_by_month=true: neu model KHONG tu truyen limit rieng, gioi han top_detail con 3 (thay vi
+    # mac dinh 20) de nhuong dung luong cho core_result_by_month - nguoi hoi xu huong theo thang
+    # khong can toan bo chi tiet tung don. Model van co the tu truyen limit khac de ghi de.
+    if limit is None:
+        default_limit = 3 if group_by_month else 20
+    else:
+        default_limit = int(limit)
+    result["top_detail"] = flagged[:max(1, min(default_limit, 100))]
     result["top_detail_truncated"] = len(flagged) > len(result["top_detail"])
     # Tra ve du ca hai ve cua cau hoi V05/M09/C12: don nao bi danh dau va sau khi loai thi
     # con bao nhieu. Day la phep tinh tren CUNG tap don, khong ghep tong doanh thu tu tool khac.
@@ -6954,6 +6977,36 @@ def order_timing_check(date_from: str = None, date_to: str = None, threshold_day
             "large_order_threshold": median_by_channel[channel] * 3,
         })
     result["core_result_by_channel"] = core_by_channel
+    if group_by_month:
+        # Gom lai theo (thang, kenh) tu CUNG tap order_rows/flagged_keys da tinh o tren - khong
+        # query lai Bravo/SQLite, chi nhom lai trong Python.
+        month_channel = {}
+        for row in order_rows:
+            channel = str(row["order_key"]).split(":", 1)[0]
+            ym = str(row["doc_date"])[:7]
+            bucket = month_channel.setdefault((ym, channel), {"gross": 0.0, "flagged": 0.0, "n_total": 0, "n_flagged": 0})
+            rev = _f(row["revenue"])
+            bucket["gross"] += rev
+            bucket["n_total"] += 1
+            if row["order_key"] in flagged_keys:
+                bucket["flagged"] += rev
+                bucket["n_flagged"] += 1
+        core_by_month = []
+        for (ym, channel), b in sorted(month_channel.items()):
+            core_by_month.append({
+                "month": ym, "channel": channel,
+                "total_orders": b["n_total"], "flagged_orders": b["n_flagged"],
+                "revenue_including_flagged": b["gross"],
+                "core_revenue_excluding_flagged": b["gross"] - b["flagged"],
+                "flagged_revenue": b["flagged"],
+                "flagged_revenue_share_pct": (b["flagged"] / b["gross"] * 100 if b["gross"] else None),
+            })
+        result["core_result_by_month"] = core_by_month
+        result["core_result_by_month_note"] = (
+            "Tach theo tung thang trong [date_from, date_to] da yeu cau, cung dinh nghia 'bat "
+            "thuong' voi core_result_by_channel (hang tra/dieu chinh + tren 3x trung vi THAM CHIEU "
+            "cua ca giai doan, khong tinh lai trung vi rieng tung thang)."
+        )
     reference_large_rows = [
         row for row in order_rows
         if _f(row["revenue"]) > median_by_channel.get(str(row["order_key"]).split(":", 1)[0], 0.0) * 3
@@ -9237,9 +9290,12 @@ def salary_aso_detail(year_month: str = None, area_code: str = None, position_co
                      "is_calculated": calculated, "pass_customer_quantity_condition": quantity,
                      "pass_sale_condition": sale, "passed_final": final,
                      "fail_reasons": reasons,
-                     "aso_quantity": r.get("ASOQuantity"), "aso_quantity_target": r.get("ASOQuantityTarget"),
-                     "aso_ratio_raw": ratio, "aso_percent": _f(ratio) * 100 if ratio is not None else None,
-                     "aso_bonus": r.get("ASOBonus"), "is_suspend": flag(r.get("IsSuspend"))})
+                     "aso_quantity": _f(r.get("ASOQuantity")) if r.get("ASOQuantity") is not None else None,
+                     "aso_quantity_target": _f(r.get("ASOQuantityTarget")) if r.get("ASOQuantityTarget") is not None else None,
+                     "aso_ratio_raw": _f(ratio) if ratio is not None else None,
+                     "aso_percent": _f(ratio) * 100 if ratio is not None else None,
+                     "aso_bonus": _f(r.get("ASOBonus")) if r.get("ASOBonus") is not None else None,
+                     "is_suspend": flag(r.get("IsSuspend"))})
     cs_tk_rows = [{"employee_code": r.get("EmployeeCode"), "employee_name": r.get("EmployeeName"),
                    "position_code": r.get("PositionCode")} for r in cs_tk]
     # Doi chi gom CS/TK: phan con lai chi la chinh ma quan ly (ma khung nhu MN1/MN4) va ma do khong
