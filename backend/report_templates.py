@@ -770,11 +770,18 @@ def _uses_is_ac(position_code: str = None) -> bool:
 # DUNG _not_duplicate_sql() thay vi viet tay "COALESCE(is_duplicate,0)<>1" - truoc do viet tay lap lai
 # 6 cho, sua 1 cho quen 5 cho la chuyen som muon.
 _KNOWN_MISFLAGGED_DUPLICATE_CODES = ("MBKV12", "TM25030101")
+# 14/09/2026 (dua ban sua tay may 24 vao repo): nhom/kenh gop MN1 'Kenh MT', MN4 'Cho si' cung mang
+# is_duplicate=1 nhung KHONG duoc them vao danh sach tren - kpi_ranking/revenue_tree dung no de nhan
+# dien la_nhom_kenh. employee_kpi chi mien loc 2 ma nay khi hoi RIENG QLV (bao cao that 14/09: "Mien
+# Nam co 7 nhom/QLV nhung chi lay duoc chi tiet 5/7"); cau hoi moi vai tro/TDV giu nguyen de so dem
+# nhan vien khong bi cong them 2 nhom kenh.
+_KPI_CHANNEL_UNIT_CODES = ("MN1", "MN4")
 
 
-def _not_duplicate_sql(alias: str = "nv") -> str:
-    """Manh SQL loc "khong bi danh dau trung lap", CO ngoai le cho _KNOWN_MISFLAGGED_DUPLICATE_CODES."""
-    codes = ",".join(f"'{c}'" for c in _KNOWN_MISFLAGGED_DUPLICATE_CODES)
+def _not_duplicate_sql(alias: str = "nv", exempt_codes: tuple = None) -> str:
+    """Manh SQL loc "khong bi danh dau trung lap", CO ngoai le cho _KNOWN_MISFLAGGED_DUPLICATE_CODES
+    (hoac exempt_codes truyen rieng)."""
+    codes = ",".join(f"'{c}'" for c in (exempt_codes or _KNOWN_MISFLAGGED_DUPLICATE_CODES))
     p = f"{alias}." if alias else ""
     return f"(COALESCE({p}is_duplicate,0)<>1 OR {p}employee_code IN ({codes}))"
 
@@ -812,8 +819,10 @@ def _kpi_status(pct: float, position_code: str = None) -> str:
 
 def employee_kpi(as_of_date: str, limit: int = 10, order_by: str = "sales", filter: str = "all",
                   position_code: str = None, scope_area_code: str = None,
-                  scope_employee_code: str = None) -> dict:
+                  scope_employee_code: str = None, include_team_detail: bool = False) -> dict:
     """KPI nhan vien: snapshot fact_tonghopkhachhang gan nhat <= as_of_date.
+    include_team_detail: chi co tac dung khi position_code='QLV' - moi dong QLV co them team_detail
+    (TDV/cap duoi truc tiep kem doanh so/target/%) trong cung mot lan goi.
     order_by: 'sales' hoac 'pct' (dung khi filter='all', luon xep TOT NHAT truoc).
     filter: 'all' (top N tot nhat), 'below_target' (CHUA toi muc thuong nhom hang, xep TE NHAT truoc),
             'above_target' (DA toi muc thuong nhom hang, xep TOT NHAT truoc).
@@ -853,6 +862,8 @@ def employee_kpi(as_of_date: str, limit: int = 10, order_by: str = "sales", filt
     fdate = fdate_r[0]["d"] if fdate_r else None
     if fdate is None:
         return {"as_of": None, "total_employees": 0, "count_below_target": 0, "count_above_target": 0, "rows": []}
+    hoi_rieng_qlv = str(position_code or "").strip().upper() == "QLV"
+    exempt = (_KNOWN_MISFLAGGED_DUPLICATE_CODES + _KPI_CHANNEL_UNIT_CODES) if hoi_rieng_qlv else None
     roster_sql, roster_params = _roster_employee_sql(fdate)
     sql = f"""WITH roster AS ({roster_sql}), metrics AS (
                  SELECT e.employee_code, SUM(e.amount_ct) sales,
@@ -861,7 +872,7 @@ def employee_kpi(as_of_date: str, limit: int = 10, order_by: str = "sales", filt
                  FROM fact_tonghopkhachhang e
                  JOIN {_MONTH_LATEST_SUBQ} l ON l.employee_code=e.employee_code AND l.d=e.save_date
                  GROUP BY e.employee_code
-             ) SELECT nv.name name, e.employee_code employee_code,
+             ) SELECT nv.name name, e.employee_code employee_code, nv.is_duplicate is_duplicate,
                     nv.position_code position_code, cv.description position_label,
                     m.sales, m.target, m.new_customers, m.metric_snapshot, m.manager_code,
                     COALESCE(mgr.name, m.manager_code) manager_name
@@ -871,7 +882,7 @@ def employee_kpi(as_of_date: str, limit: int = 10, order_by: str = "sales", filt
              LEFT JOIN dim_chucvu cv ON cv.position_code=nv.position_code
              LEFT JOIN (SELECT employee_code, MAX(name) name FROM dim_nhanvien
                         GROUP BY employee_code) mgr ON mgr.employee_code=m.manager_code
-             WHERE {_not_duplicate_sql('nv')}"""
+             WHERE {_not_duplicate_sql('nv', exempt)}"""
     params = [*roster_params, fdate, fdate]
     if position_code:
         sql += " AND nv.position_code=?"
@@ -925,6 +936,8 @@ def employee_kpi(as_of_date: str, limit: int = 10, order_by: str = "sales", filt
         r["meets_kpi"] = r["pct"] >= KPI_ACHIEVED_THRESHOLD
         r["status"] = _kpi_status(r["pct"], r["position_code"])
         r["meets_full_target"] = r["pct"] >= KPI_FULL_TARGET
+        r["la_nhom_kenh"] = (int(r.pop("is_duplicate", 0) or 0) == 1
+                             and r["employee_code"] not in _KNOWN_MISFLAGGED_DUPLICATE_CODES)
     below = [r for r in rows if r["pct"] < r["threshold"]]
     above = [r for r in rows if r["pct"] >= r["threshold"]]
     if filter == "below_target":
@@ -934,6 +947,21 @@ def employee_kpi(as_of_date: str, limit: int = 10, order_by: str = "sales", filt
     else:
         key = "sales" if order_by == "sales" else "pct"
         selected = sorted(rows, key=lambda r: -r[key])[:limit]
+    if include_team_detail and hoi_rieng_qlv:
+        # 14/09/2026 (ban sua tay may 24): "chi tiet ca 4 quan ly" tung mat 6-7 vong/SQL rieng va hon
+        # 100 giay. Tra san doi cua tung QLV trong CUNG lan goi. Dung _kpi_snapshot (snapshot moi nhat
+        # CUA TUNG NGUOI trong thang) giong revenue_tree; ban sua tay doc save_date=fdate nen giua thang
+        # TDV thuoc mien ghi snapshot vao ngay khac se bi ra doanh so 0.
+        for r in selected:
+            team = []
+            for t in _team_of_qlv(r["employee_code"], fdate):
+                t_kpi = _kpi_snapshot(t["employee_code"], fdate, t.get("position_code") or "TDV")
+                team.append({"employee_code": t["employee_code"], "name": t.get("name"),
+                             "position_code": t.get("position_code"), "sales": t_kpi["sales"],
+                             "target": t_kpi["target"], "pct": round(t_kpi["pct"], 1),
+                             "status": t_kpi["status"]})
+            r["team_detail"] = sorted(team, key=lambda d: -(d["sales"] or 0))
+            r["team_detail_count"] = len(team)
     threshold_summary = [
         {"threshold_pct": threshold,
          "count": sum(1 for r in rows if r["pct"] >= threshold),

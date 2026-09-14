@@ -718,7 +718,13 @@ TEMPLATE_TOOLS = [
                         "LAN voi filter='below_target' hoac filter='all' roi doc san field below_kpi_by_manager "
                         "(da gop san so nguoi duoi 80% + danh sach ten theo tung QLV, xep giam dan) - TUYET DOI "
                         "KHONG tu goi lai get_workforce_productivity/get_revenue_tree nhieu lan voi month_to "
-                        "khac nhau de tu dò (da tung gay timeout do dò 4-5 vong khong ra ket qua).",
+                        "khac nhau de tu dò (da tung gay timeout do dò 4-5 vong khong ra ket qua). "
+                        "14/09/2026: hoi 'chi tiet [N] QLV'/'chi tiet QLV kem doi cua ho' (thuong sau mot cau "
+                        "bao cao vung/mien) -> dat position_code='QLV' VA include_team_detail=true trong CUNG "
+                        "1 lan goi; moi dong QLV co san team_detail (TDV bao cao truc tiep kem doanh so/target/%). "
+                        "Dong co la_nhom_kenh=true (vd MN1 'Kenh MT', MN4 'Cho si') la NHOM/KENH, khong phai ca "
+                        "nhan - goi dung la nhom/kenh. TUYET DOI KHONG tu viet SQL rieng cho tung QLV (da tung "
+                        "mat 6-7 vong va hon 100 giay).",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -728,6 +734,7 @@ TEMPLATE_TOOLS = [
                 "filter": {"type": "string", "enum": ["all", "below_target", "above_target"],
                            "description": "'all'=top N tot nhat (mac dinh), 'below_target'=CHUA toi muc huong thuong (te nhat truoc), 'above_target'=DA toi muc huong thuong (tot nhat truoc). Muc huong thuong lay THEO VAI TRO cua tung nguoi (TDV 65%, quan ly 70%). LUU Y day KHONG phai moc 'dat chi tieu' (=100%) - muon dem so nguoi dat chi tieu thi doc 'count_full_target' trong ket qua"},
                 "position_code": {"type": "string", "description": "Loc theo vai tro cu the: TDV/QLV/CTV/CS/TP/PP/TBP/TK (khong bat buoc - de trong neu hoi chung tat ca vai tro). TP = Truong phong = Giam doc Mien = Giam doc Kenh (cap quan ly mien/kenh). TK = Truong kenh = Truong kenh MT (Modern Trade) - cap QLV, KHONG phai TP. CS = Cho si - cung cap QLV."},
+                "include_team_detail": {"type": "boolean", "description": "true = voi position_code='QLV', moi dong co them team_detail (danh sach TDV/cap duoi truc tiep kem doanh so/target/%). Dung khi hoi 'chi tiet QLV kem doi cua ho', KHONG tu viet SQL rieng cho tung QLV."},
             },
             "required": ["as_of_date"],
         },
@@ -2000,6 +2007,14 @@ def _payload_for_model(tool_name: str, payload, question: str):
                 "pct": round(float(row.get("pct") or 0), 2),
                 "threshold": row.get("threshold"),
                 "status": row.get("status"),
+                **({"la_nhom_kenh": True} if row.get("la_nhom_kenh") else {}),
+                # 14/09/2026: giu team_detail - bo nen nay tung chi giu 8 cot, se xoa mat doi cua QLV
+                # va dua model quay lai do tung QLV bang nhieu vong goi.
+                **({"team_detail_count": row.get("team_detail_count"),
+                    "team_detail": [
+                        {k: t.get(k) for k in ("employee_code", "name", "sales", "target", "pct")}
+                        for t in (row.get("team_detail") or []) if isinstance(t, dict)
+                    ]} if "team_detail" in row else {}),
             })
 
         compact_data = {
@@ -2298,6 +2313,14 @@ live neu tai khoan duoc phep. Tra loi dua tren ket qua da truy van - KHONG duoc 
 Neu cuoc hoi thoai co cac luot truoc do, HAY DUNG NGU CANH DO de hieu cau hoi hien tai (vd neu vua
 hoi "doanh thu thang 6" roi hoi tiep "con thang 5?", hieu la van hoi doanh thu theo kenh/tieu chi
 tuong tu nhung doi sang thang 5) - KHONG hoi lai nguoi dung nhung gi da ro tu ngu canh truoc.
+
+14/09/2026: cau hoi TIEP NOI kieu "chi tiet ca N [doi tuong]", "xem chi tiet di", "con [X] thi sao"
+sau mot bao cao - neu tham so con mo ho (vd "chi tiet" khong noi xep theo doanh so, % dat hay danh
+sach thieu chi tieu) thi CHON MOT cach hieu hop ly nhat theo ngu canh (thuong: xep theo doanh so/gia
+tri chinh cua bao cao truoc), GOI TOOL DUNG 1 LAN, noi ro dang xem theo tieu chi nao va moi nguoi
+dung yeu cau lai neu can. TUYET DOI KHONG goi lai CUNG tool nhieu lan voi tham so khac nhau (vd
+order_by='sales' roi order_by='pct' roi filter='below_target') de do y nguoi dung - vua cham vua
+khong chac dung y.
 
 QUAN TRONG VE CHON TOOL:
 - CTKM: DNH da xac nhan ngay 11/09/2026 chuoi lien ket chuong trinh chi den 09/01/2026.
