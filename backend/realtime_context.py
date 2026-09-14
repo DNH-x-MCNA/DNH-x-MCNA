@@ -19,7 +19,7 @@ GET_CURRENT_DATETIME_TOOL = {
 
 RESOLVE_RELATIVE_DATE_TOOL = {
     "name": "resolve_relative_date",
-    "description": "Chuyen 1 cum tu thoi gian tuong doi tieng Viet (vd 'hom nay', 'tuan nay', 'thang truoc', "
+    "description": "Chuyen 1 cum tu thoi gian tieng Viet (vd 'hom nay', 'tuan nay', 'thang truoc', 'thang 8', "
                     "'quy nay', 'quy truoc', 'cung ky nam ngoai', '6 thang gan nhat', 'nam nay', 'nam ngoai') "
                     "thanh khoang ngay cu the {start_date, end_date} dang YYYY-MM-DD. BAT BUOC dung tool nay "
                     "cho MOI cum tu thoi gian tuong doi trong cau hoi - KHONG tu tinh ngay thang bang suy luan "
@@ -99,6 +99,23 @@ def resolve_relative_date(phrase: str) -> dict:
         y, m = (today.year - 1, 12) if today.month == 1 else (today.year, today.month - 1)
         start, end = _month_range(y, m)
         return r(start, end, "thang truoc")
+
+    # Model da goi tool nay voi "thang 8" du day la moc tuyet doi, lam tool bao loi va planner
+    # chen them "phan chua the kiem chung" vao mot bao cao da co du so. Ho tro ca thang N,
+    # thang N/YYYY va thang N nam YYYY. Neu khong ghi nam, lay lan gan nhat cua thang do.
+    month_match = re.fullmatch(
+        r"th[aá]ng\s+(\d{1,2})(?:\s*(?:/|n[aă]m\s+)(20\d{2}))?",
+        p,
+    )
+    if month_match:
+        month = int(month_match.group(1))
+        if not 1 <= month <= 12:
+            return {"error": f"Thang khong hop le trong cum tu '{phrase}'."}
+        year = int(month_match.group(2)) if month_match.group(2) else (
+            today.year if month <= today.month else today.year - 1
+        )
+        start, end = _month_range(year, month)
+        return r(start, end, f"thang {month}/{year}")
 
     if p in ("quy nay", "quý này"):
         q = _quarter(today)

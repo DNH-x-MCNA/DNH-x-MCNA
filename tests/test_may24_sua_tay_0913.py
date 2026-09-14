@@ -142,9 +142,11 @@ def test_json_mac_dinh_chuyen_decimal_va_ngay():
     assert json.loads(goi) == {"so": 1.5, "ngay": "2026-09-14", "luc": "2026-09-14T08:22:49"}
 
 
-def test_ca_ask_va_ask_stream_deu_dong_goi_bang_json_mac_dinh():
+def test_ca_ask_va_ask_stream_deu_dung_dong_goi_json_co_cau_truc():
     nguon = Path(nl2sql.__file__).read_text(encoding="utf-8")
-    assert nguon.count("default=_json_mac_dinh) if isinstance(model_payload, (dict, list))") == 2
+    assert nguon.count("_serialize_payload_for_model(tu.name, payload, question)") == 2
+    assert "payload_str[:MAX_PAYLOAD_CHARS]" not in nguon
+    assert "default=_json_mac_dinh" in nguon
 
 
 def test_ask_khong_vo_khi_tool_tra_decimal(monkeypatch):

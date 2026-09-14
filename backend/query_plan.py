@@ -165,6 +165,19 @@ def infer_domains(question: str) -> list[dict[str, Any]]:
         any(contains(marker) for marker in spec["markers"])
         or (spec["domain"] == "salary" and any(term in lowered for term in ("lương", "thưởng")))
     )]
+    # Cau noi ngan sau mot bang KPI (vd "danh sach duoi 65%") khong lap lai tu KPI/nhan vien.
+    # Neu de fallback mac dinh, planner gan nham domain revenue va sau khi tool KPI chay xong van
+    # chen footer "Doi chieu doanh thu chua duoc goi". Nguong % + yeu cau danh sach la du dau vet.
+    threshold_list_question = (
+        any(marker in plain for marker in ("duoi", "khong dat", "chua dat"))
+        and re.search(r"\b(?:60|65|70|80|100|120)\s*%", plain)
+        and any(marker in plain for marker in (
+            "nhan vien", "tdv", "qlv", "danh sach", "nhung ai", "ai ",
+        ))
+        and not any(marker in plain for marker in ("khach hang", "san pham", "sku"))
+    )
+    if threshold_list_question:
+        found = [spec for spec in _DOMAIN_SPECS if spec["domain"] == "kpi"]
     # V33: "hóa đơn" trong câu hỏi về hủy/trả/giao chậm là đối tượng cần kiểm tra, không phải
     # yêu cầu tính doanh thu. Trước đây marker rộng "hoa don" sinh thêm một bước revenue, khiến
     # model hỏi lại kỳ và footer báo sai "Đối chiếu doanh thu chưa chạy". Chỉ giữ revenue khi câu
@@ -199,10 +212,15 @@ def infer_period(question: str) -> dict[str, Any]:
     plain = _plain(question)
     month_matches = re.findall(r"thang\s+(\d{1,2})(?:\s*(?:/|nam\s+)\s*(20\d{2}))?", plain)
     fallback_year = next((int(year) for _, year in month_matches if year), None)
+    today = dt.date.today()
     periods: list[dict[str, str]] = []
     for raw_month, raw_year in month_matches:
         month = int(raw_month)
         year = int(raw_year) if raw_year else fallback_year
+        if year is None and 1 <= month <= 12:
+            # "thang 8" trong bao cao nghiep vu la lan gan nhat cua thang do: thang da qua trong
+            # nam nay, hoac nam truoc neu so thang nam o tuong lai so voi ngay hien tai.
+            year = today.year if month <= today.month else today.year - 1
         if year is None or not 1 <= month <= 12:
             continue
         last = calendar.monthrange(year, month)[1]
@@ -625,6 +643,21 @@ class QueryPlan:
             answer,
             flags=re.IGNORECASE,
         )
+
+        # Khong de chi tiet dong goi context noi bo lo ra giao dien. Neu danh sach qua dai, UI da
+        # co last_result day du cho Tai Excel; cau tra loi chi can tong chinh xac va muc uu tien.
+        technical_display_markers = (
+            "du lieu bi cat", "bi cat bot", "gioi han do dai", "gioi han hien thi",
+            "da dat gioi han", "truncated", "returned_count", "not_shown_count",
+            "chi hien thi", "chua hien thi",
+        )
+        answer_lines = []
+        for line in answer.splitlines():
+            plain_line = _plain(line)
+            if any(marker in plain_line for marker in technical_display_markers):
+                continue
+            answer_lines.append(line)
+        answer = "\n".join(answer_lines).strip()
 
         # C29 UAT: payload lifecycle co hai lop dinh nghia (co Bravo va hanh vi suy tu hoa don).
         # Model da tung bo qua invoice_lifecycle_series dung pham vi OTC, roi lay so tu

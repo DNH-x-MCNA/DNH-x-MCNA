@@ -16,6 +16,7 @@ nho lai vai cau hoi/tra loi gan nhat, de cau hoi tiep theo khong can nhac lai tu
 """
 import os
 import json
+import re
 import time
 import unicodedata
 from collections import defaultdict
@@ -143,10 +144,9 @@ def _max_tokens(scope_role: str = None) -> int:
     return MAX_TOKENS_BY_ROLE.get(scope_role, DEFAULT_MAX_TOKENS)
 
 
-MAX_PAYLOAD_CHARS = 6000  # Gioi han ky tu payload gui cho AI (~1500 tokens). Template tools (employee_kpi,
-                          # revenue_tree...) tra JSON KHONG gioi han kich thuoc, truoc day co the len 20K-50K
-                          # chars, gay phình context 7K->49K tokens khi AI goi nhieu tool lien tiep. last_result
-                          # (cho UI) VAN giu nguyen day du, chi phan gui cho AI bi cat.
+MAX_PAYLOAD_CHARS = 6000  # Ngan sach context gui model (~1500 tokens). Ket qua day du van giu trong
+                          # last_result cho UI/Tai Excel; phan gui model duoc tom luoc co cau truc,
+                          # luon la JSON hop le va khong cat chuoi giua dong.
 
 
 def _timeout_env(name: str, default: float, ceiling: float) -> float:
@@ -169,6 +169,31 @@ def _required_tool_for_question(question: str) -> str | None:
         ch for ch in unicodedata.normalize("NFD", (question or "").lower())
         if unicodedata.category(ch) != "Mn"
     ).replace("đ", "d").split())
+
+    # 14/09/2026 - phan hoi nguoi dung that: "nhung nhan vien ... duoi 60%" va cau noi
+    # "danh sach duoi 65%" khong duoc dinh tuyen, model tu do qua nhieu tool KPI/revenue roi
+    # chi xin 15 dong. Day la intent mot nguon: employee_kpi da tinh san tat ca nguong.
+    threshold_list = (
+        any(marker in q for marker in ("duoi", "khong dat", "chua dat"))
+        and re.search(r"\b(?:60|65|70|80|100|120)\s*%", q)
+        and any(marker in q for marker in (
+            "nhan vien", "nhan vien ban hang", "tdv", "qlv", "danh sach", "nhung ai", "ai ",
+        ))
+        and not any(marker in q for marker in ("khach hang", "san pham", "sku"))
+        and not any(marker in q for marker in ("qlv nao co nhieu", "phan hut cua doi tap trung"))
+    )
+    if threshold_list:
+        return "get_employee_kpi"
+
+    # Bao cao hoan thanh chi tieu theo thang/vung co mot composite tool da gom san doanh so,
+    # target va % hoan thanh; ep dung ngay de tranh model do catalog nhieu vong.
+    if (any(marker in q for marker in ("bao cao hoan thanh", "hoan thanh chi tieu"))
+            and "thang" in q):
+        return "get_revenue_tree"
+
+    if (any(marker in q for marker in ("doanh thu", "doanh so", "phat sinh"))
+            and any(marker in q for marker in ("3 mien", "ba mien", "theo mien", "theo vung"))):
+        return "get_revenue_by_region"
     is_team = any(word in q for word in ("doi", "doi toi", "toan doi", "tong doi"))
     # 13/09/2026 (ra soat 126 cau): cau hoi ve CHUOI THANG LIEN TIEP cua nguoi/doi phai vao
     # workforce_productivity - tool duy nhat co decline_streak_months va below_80_streak_months.
@@ -655,8 +680,9 @@ TEMPLATE_TOOLS = [
                         "neu muc thuc dat va noi chua du co so ket luan nhip do binh thuong/bat thuong. "
                         "UU TIEN dung cho MOI cau hoi ve KPI/doanh so nhan vien TONG QUAN/xep hang (ke ca ma "
                         "khu vuc MBKV*/ASM*) - KHONG dung cho KPI THEO NGAY 1 nguoi (dung get_employee_daily_kpi). "
-                        "Voi cau hoi 'ai chua dat KPI/target' -> dung filter='below_target' (KHONG dung limit lon "
-                        "roi tu loc thu cong, gay ton du lieu va co the khong tra loi duoc). "
+                        "Voi cau hoi 'ai chua dat KPI/target' -> dung filter='below_target'. Neu nguoi dung hoi "
+                        "DANH SACH/nhung ai duoi mot moc %, BAT BUOC limit=200 de tra du danh sach trong DUNG "
+                        "mot lan; backend se nen cac cot can thiet truoc khi gui model, khong phan trang/goi lai. "
                         "Voi cau hoi chi dinh ro VAI TRO (vd 'top TDV', 'cac QLV chua dat KPI') -> BAT BUOC dung "
                         "tham so position_code (vd 'TDV','QLV') de loc NGAY TU DAU, TUYET DOI KHONG tu loc thu "
                         "cong ket qua sau khi nhan ve (da tung gay sot du lieu, vd 1 QLV lot vao top TDV). "
@@ -825,8 +851,8 @@ TEMPLATE_TOOLS = [
                         "doanh thu, goi dung ten: doanh_thu_ky_nhin_lai (ky co dinh tinh den hom nay) va "
                         "sau_thang_truoc_khi_ngung (6 thang lich tinh den THANG MUA CUOI cua chinh khach - "
                         "dung khi hoi truoc khi ngung ho mua bao nhieu). BAT BUOC doc "
-                        "total_count/returned_count/truncated/not_shown_count; neu truncated=true phai noi "
-                        "ro con bao nhieu khach chua hien, khong duoc goi cac dong dang thay la toan bo. "
+                        "total_count de ket luan tren toan bo tap; neu bang chi tiet dai thi chi neu cac "
+                        "muc uu tien va huong nguoi dung bam Tai Excel, khong noi ve gioi han ky thuat. "
                         "Moi khach co nhom_im_lang va san_pham_mua_nhieu_nhat. Neu san pham co status hoac "
                         "product_name_status=not_available thi chi noi thieu thong tin san pham, KHONG loai "
                         "khach va KHONG suy dien ten SKU. Kho local chi giu chi tiet hoa don ~12 thang gan "
@@ -853,9 +879,9 @@ TEMPLATE_TOOLS = [
                        "GIAM_MUA, KEO_DAI_CHU_KY - moi khach chi mang MOT nhan, khong cong don. "
                        "PHAI trinh bay du ca ba ve nguoi dung hoi; neu chi neu khach ngung han va bo "
                        "hai nhom con lai thi cau tra loi CHUA DAT. BAT BUOC doc phan_bo_tin_hieu de "
-                       "noi so khach tung nhom, va doc total_count/returned_count/truncated/"
-                       "not_shown_count; neu truncated=true phai noi ro con bao nhieu khach chua "
-                       "hien. Neu ky_chua_tron=true thi KHONG duoc ket luan khach da ngung mua - "
+                       "noi so khach tung nhom, va doc total_count de ket luan tren toan bo tap. Neu "
+                       "bang chi tiet dai thi chi neu cac muc uu tien va huong bam Tai Excel; khong noi "
+                       "ve gioi han ky thuat. Neu ky_chua_tron=true thi KHONG duoc ket luan khach da ngung mua - "
                        "phai noi ro thang chua tron va dan ve thang tron gan nhat. "
                        "chu_ky_chua_do_duoc=true nghia la khach co duoi 3 ngay mua nen chua do duoc "
                        "chu ky, KHONG duoc goi la keo dai chu ky. BAT BUOC doc gioi_han va noi ro "
@@ -1043,8 +1069,8 @@ TEMPLATE_TOOLS = [
                        "nhau de tu do tim, se het ngan sach thoi gian truoc khi tra loi duoc. "
                        "M16/S55 va V13: khi hoi NHAN VIEN giam lien tiep, BAT BUOC goi group_by='employee', "
                        "months_back>=6, limit=200. BAT BUOC noi tong so tu declining_employee_count va dung "
-                       "declining_employees de liet ke; neu declining_employees_truncated=true phai noi ro "
-                       "con bao nhieu nguoi khong hien. 'Giam lien tiep N thang' = decline_streak_months >= N: "
+                       "declining_employees de liet ke; neu danh sach dai thi neu cac muc uu tien va huong "
+                       "bam Tai Excel, khong noi ve gioi han ky thuat. 'Giam lien tiep N thang' = decline_streak_months >= N: "
                        "bao so dung N tu declining_count_by_streak, KHONG gop nhom >=2 thanh 'giam 3 thang'. "
                        "CHI duoc noi 'duy nhat' khi count=1 (dem theo dung N). Nguyen nhan: doc cause tung "
                        "nguoi (khach, don/khach, AOV, yeu_to_giam_manh_nhat); cause=None thi KHONG duoc tu "
@@ -1934,6 +1960,63 @@ def _payload_for_model(tool_name: str, payload, question: str):
         ch for ch in unicodedata.normalize("NFD", (question or "").lower())
         if unicodedata.category(ch) != "Mn"
     ).replace("đ", "d").split())
+
+    if tool_name == "get_employee_kpi":
+        wrapper = payload if isinstance(payload.get("du_lieu"), dict) else None
+        data = payload.get("du_lieu") if wrapper else payload
+        rows = data.get("rows") or []
+        compact_rows = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            compact_rows.append({
+                "employee_code": row.get("employee_code"),
+                "name": row.get("name"),
+                "position_code": row.get("position_code"),
+                "sales": row.get("sales"),
+                "target": row.get("target"),
+                "pct": round(float(row.get("pct") or 0), 2),
+                "threshold": row.get("threshold"),
+                "status": row.get("status"),
+            })
+
+        compact_data = {
+            key: data.get(key) for key in (
+                "as_of", "total_employees", "roster_employees", "unassessed_count",
+                "missing_current_snapshot_count", "unassessed_rows_truncated",
+                "count_below_target", "count_above_target", "count_kpi_achieved",
+                "kpi_threshold_pct", "count_full_target", "full_target_pct",
+                "threshold_summary",
+            )
+        }
+        compact_data["rows_returned"] = len(compact_rows)
+        compact_data["rows"] = compact_rows
+
+        manager_intent = any(marker in normalized for marker in (
+            "qlv nao co nhieu", "theo tung qlv", "theo qlv", "phan hut cua doi tap trung",
+        ))
+        if manager_intent:
+            # M13 chi can xep QLV theo SO NGUOI duoi KPI. Bo ban sao day du cua moi TDV trong
+            # tung manager (danh sach phang da co o rows), chi giu so dem de payload khong lap.
+            compact_data["below_kpi_by_manager"] = [
+                {
+                    "manager_code": item.get("manager_code"),
+                    "manager_name": item.get("manager_name"),
+                    "count_below_kpi": item.get("count_below_kpi"),
+                }
+                for item in (data.get("below_kpi_by_manager") or [])
+                if isinstance(item, dict)
+            ]
+        if data.get("unassessed_rows"):
+            compact_data["unassessed_rows"] = [
+                {key: item.get(key) for key in ("employee_code", "name", "reason")}
+                for item in data["unassessed_rows"]
+                if isinstance(item, dict)
+            ]
+        if wrapper:
+            return {**payload, "du_lieu": compact_data}
+        return compact_data
+
     if tool_name == "get_inventory_expiry_report":
         wrapper = payload if isinstance(payload.get("du_lieu"), dict) else None
         data = payload.get("du_lieu") if wrapper else payload
@@ -2025,6 +2108,144 @@ def _payload_for_model(tool_name: str, payload, question: str):
     if wrapper:
         return {**payload, "du_lieu": compact_data}
     return compact_data
+
+
+def _normalize_tool_input_for_question(tool_name: str, tool_input: dict, question: str) -> dict:
+    """Sua tham so an toan cho cac intent co mot cach goi chuan, truoc khi tao van tay/chay tool.
+
+    Khong thay scope phan quyen. Ham chi ngan model xin limit qua nho o cau hoi can danh sach day du.
+    """
+    args = dict(tool_input or {})
+    q = " ".join("".join(
+        ch for ch in unicodedata.normalize("NFD", (question or "").lower())
+        if unicodedata.category(ch) != "Mn"
+    ).replace("đ", "d").split())
+
+    # Neu nguoi dung noi ro can DANH SACH ma khong dat top N, lay du mot lan o tang tool. Context
+    # gui model van duoc dong goi gon; last_result day du de nut Tai Excel su dung.
+    asks_complete_list = (
+        any(marker in q for marker in ("danh sach", "toan bo", "tat ca", "nhung ai"))
+        and not re.search(r"\btop\s*\d+\b", q)
+    )
+    tool_definition = next((item for item in ALL_TOOLS if item.get("name") == tool_name), None)
+    supports_limit = bool(
+        tool_definition
+        and "limit" in ((tool_definition.get("input_schema") or {}).get("properties") or {})
+    )
+    if asks_complete_list and supports_limit:
+        args["limit"] = max(200, int(args.get("limit") or 0))
+
+    if tool_name != "get_employee_kpi":
+        return args
+    asks_threshold_list = (
+        any(marker in q for marker in ("danh sach", "nhung ai", "nhan vien", "tdv", "qlv"))
+        and any(marker in q for marker in ("duoi", "khong dat", "chua dat"))
+        and re.search(r"\b(?:60|65|70|80|100|120)\s*%", q)
+    )
+    if not asks_threshold_list:
+        return args
+    args["limit"] = max(200, int(args.get("limit") or 0))
+    args["filter"] = "below_target"
+    if not args.get("position_code") and any(marker in q for marker in (
+        "nhan vien ban hang", "trinh duoc vien", "tdv",
+    )):
+        args["position_code"] = "TDV"
+    return args
+
+
+def _compact_collections_for_model(value, max_items: int, path: str, overview: list):
+    """Giu tong/metadata, rut gon cac collection dai ma khong pha JSON."""
+    if isinstance(value, list):
+        shown = min(len(value), max_items)
+        if shown < len(value):
+            overview.append({"path": path or "$", "total": len(value), "shown": shown})
+        return [
+            _compact_collections_for_model(item, max_items, f"{path}[{index}]", overview)
+            for index, item in enumerate(value[:shown])
+        ]
+    if isinstance(value, dict):
+        return {
+            key: _compact_collections_for_model(
+                item, max_items, f"{path}.{key}" if path else key, overview
+            )
+            for key, item in value.items()
+        }
+    if isinstance(value, str) and len(value) > 800:
+        overview.append({"path": path or "$", "total_chars": len(value), "shown_chars": 800})
+        return value[:800]
+    return value
+
+
+def _serialize_payload_for_model(tool_name: str, payload, question: str) -> str:
+    """Dong goi context dung-du-ngan trong MAX_PAYLOAD_CHARS, luon la JSON hop le.
+
+    Payload day du van nam trong ``last_result`` cho UI/Tai Excel. Model nhan tong va metadata
+    chinh xac cung mot bang uu tien vua ngan sach; khong bao gio nhan nua chuoi JSON bi chat giua dong.
+    """
+    model_payload = _payload_for_model(tool_name, payload, question)
+    if not isinstance(model_payload, (dict, list)):
+        return str(model_payload)
+
+    encoded = json.dumps(model_payload, ensure_ascii=False, default=_json_mac_dinh)
+    if len(encoded) <= MAX_PAYLOAD_CHARS:
+        return encoded
+
+    for max_items in (12, 8, 5, 3, 1, 0):
+        overview = []
+        concise = _compact_collections_for_model(model_payload, max_items, "", overview)
+        if isinstance(concise, dict):
+            concise = dict(concise)
+            concise["_model_view"] = {
+                "mode": "concise_priority_view",
+                "collections": overview,
+                "full_result_available_for_download": True,
+                "answer_rule": (
+                    "Dung cac tong/so dem toan bo de ket luan. Neu can liet ke, hien bang muc uu tien "
+                    "va noi 'Tai Excel de xem danh sach chi tiet'; khong noi ve cat payload/gioi han ky thuat."
+                ),
+            }
+        else:
+            concise = {
+                "rows": concise,
+                "_model_view": {
+                    "mode": "concise_priority_view",
+                    "collections": overview,
+                    "full_result_available_for_download": True,
+                },
+            }
+        encoded = json.dumps(concise, ensure_ascii=False, default=_json_mac_dinh)
+        if len(encoded) <= MAX_PAYLOAD_CHARS:
+            return encoded
+
+    # Luoi an toan cuoi: lay cac truong vo huong/metadata o cap dau thay vi cat giua chuoi.
+    # Cac tong/so dem cap dau thuong la can cu chinh de cau tra loi van dung va du y.
+    view = {
+        "mode": "summary_only",
+        "full_result_available_for_download": True,
+        "answer_rule": "Tra loi cac tong da co; huong nguoi dung Tai Excel de xem danh sach chi tiet.",
+    }
+    summary = {"_model_view": view}
+    scalar_items = [
+        (key, value) for key, value in model_payload.items()
+        if not isinstance(value, (dict, list)) and not (isinstance(value, str) and len(value) > 800)
+    ] if isinstance(model_payload, dict) else []
+    priority_markers = (
+        "total", "count", "sum", "revenue", "sales", "target", "status",
+        "period", "date", "month", "as_of", "from", "to", "threshold", "scope",
+    )
+    scalar_items.sort(
+        key=lambda item: (
+            not any(marker in str(item[0]).lower() for marker in priority_markers),
+            str(item[0]),
+        )
+    )
+    for key, value in scalar_items:
+        candidate = dict(summary)
+        candidate[key] = value
+        encoded = json.dumps(candidate, ensure_ascii=False, default=_json_mac_dinh)
+        if len(encoded) <= MAX_PAYLOAD_CHARS:
+            summary = candidate
+    return json.dumps(summary, ensure_ascii=False, default=_json_mac_dinh)
 
 # Beta header can thiet de dung TTL 1h (mac dinh cache_control chi song 5 phut neu khong co header nay).
 # Ap dung cho toan bo request (system + tools) - giup cache song qua nhieu cau hoi lien tiep trong gio
@@ -2226,6 +2447,9 @@ QUAN TRONG VE CHON TOOL:
 - TIET KIEM TOKEN VA TOC DO: VOI BAT KY TOOL NAO (get_salary_detail, get_customer_detail, get_employee_daily_kpi...), KHI CAN XEM NHIEU DOI TUONG (NHIEU NV, NHIEU KHACH HANG) -> TRUYEN DANH SACH CAC MA PHAN CACH BANG DAU PHAY (vd employee_code='NV1,NV2,NV3', customer_code='KH1,KH2,KH3') TRONG DUNG 1 LAN GOI TOOL DUY NHAT. TUYET DOI KHONG GOI TOOL MULTI-ROUNDS TAP LAP LAI DANG LE RA DUNG BANG BULK.
 
 QUAN TRONG VE DO DAI CAU TRA LOI (tiet kiem chi phi - moi token output deu tinh tien):
+- MOI CAU TRA LOI PHAI DAT BA TIEU CHI: DUNG - DU - NGAN GON HET SUC CO THE. DUNG = chi dung so lieu
+  va pham vi da kiem chung. DU = tra loi du cac y nguoi dung hoi va dung tong/so dem cua TOAN BO tap,
+  khong danh dong bang mau uu tien voi toan bo du lieu. NGAN = chon it cau/it cot nhat van truyen du y.
 - Tra loi NGAN GON, DI THANG vao so lieu - KHONG mo dau dai dong, KHONG nhac lai cau hoi, KHONG giai
   thich lai nhung gi tool da tra ve neu nguoi dung khong hoi "tai sao"/"giai thich".
   neu chi 1 con so thi neu ro con so + don vi + ngu canh (vd "ngay nao", "khach hang nao") trong 1-2 cau,
@@ -2237,7 +2461,10 @@ TIET KIEM TOKEN - QUAN TRONG:
 - Sau khi nhan du lieu tu tool, TRA LOI NGAY cho nguoi dung. Chi goi THEM tool khi: (a) tool truoc bao
   LOI/khong co du lieu can thu lai, hoac (b) cau hoi co NHIEU khia canh rieng biet can tool KHAC LOAI.
 - TUYET DOI KHONG goi lai CUNG tool voi tham so tuong tu chi de "kiem tra lai" hay "xac nhan".
-- Du lieu tra ve tu tool co the bi cat bot (neu qua dai) nhung DA DU de tra loi - khong can query lai.
+- Neu payload co `_model_view`, dung tong/so dem toan bo de ket luan; bang chi tiet chi neu cac muc uu
+  tien can hanh dong. Voi cau hoi can danh sach dai, ket thuc bang "Tải Excel để xem danh sách chi tiết".
+- TUYET DOI KHONG noi voi nguoi dung ve payload/context, gioi han ky thuat, so dong bi an, `truncated`,
+  `returned_count`, `not_shown_count`, "bi cat bot", "gioi han hien thi" hoac ten tool noi bo.
 
 THOI DIEM DU LIEU:
 - Backend se tu gan nguon, moc du lieu, moc dong bo va canh bao do moi sau khi cau tra loi hoan tat.
@@ -2650,6 +2877,10 @@ def ask(question: str, session_id: str = "default", username: str = None, scope_
         executed_count = 0
         new_tools_this_round = 0
         for tu in original_tool_uses:
+            normalized_input = _normalize_tool_input_for_question(tu.name, tu.input, question)
+            if isinstance(tu.input, dict) and normalized_input != tu.input:
+                tu.input.clear()
+                tu.input.update(normalized_input)
             if _customer_tool_conflict(tu.name, question):
                 tool_results.append({
                     "type": "tool_result", "tool_use_id": tu.id,
@@ -2808,14 +3039,9 @@ def ask(question: str, session_id: str = "default", username: str = None, scope_
                 timeout_seconds=TOOL_TIMEOUT_SECONDS,
             )
 
-            # Gioi han kich thuoc payload gui cho AI de tranh context phinh to khi goi nhieu tool
-            # lien tiep (truoc day template tools tra JSON 20K-50K chars, cong don qua cac vong lam
-            # input tang tu 7K len 49K tokens cho 1 cau hoi). last_result (dong 804) VAN giu nguyen
-            # ket qua day du cho UI frontend - chi phan gui cho AI model bi cat.
-            model_payload = _payload_for_model(tu.name, payload, question)
-            payload_str = json.dumps(model_payload, ensure_ascii=False, default=_json_mac_dinh) if isinstance(model_payload, (dict, list)) else str(model_payload)
-            if len(payload_str) > MAX_PAYLOAD_CHARS:
-                payload_str = payload_str[:MAX_PAYLOAD_CHARS] + "\n...(du lieu bi cat bot vi qua dai, phan tren DA DU de tra loi - KHONG can query lai)"
+            # Giu ket qua day du cho UI/Tai Excel; model nhan JSON tom luoc co cau truc, khong bao
+            # gio nhan chuoi bi cat giua dong hay thong diep gioi han ky thuat.
+            payload_str = _serialize_payload_for_model(tu.name, payload, question)
             payload_str += "\n" + query_plan.model_note()
             tool_results.append({
                 "type": "tool_result",
@@ -3046,6 +3272,10 @@ def ask_stream(question: str, session_id: str = "default", username: str = None,
         executed_count = 0
         new_tools_this_round = 0
         for tu in original_tool_uses:
+            normalized_input = _normalize_tool_input_for_question(tu.name, tu.input, question)
+            if isinstance(tu.input, dict) and normalized_input != tu.input:
+                tu.input.clear()
+                tu.input.update(normalized_input)
             if _customer_tool_conflict(tu.name, question):
                 tool_results.append({
                     "type": "tool_result", "tool_use_id": tu.id,
@@ -3195,10 +3425,7 @@ def ask_stream(question: str, session_id: str = "default", username: str = None,
                 timeout_seconds=TOOL_TIMEOUT_SECONDS,
             )
 
-            model_payload = _payload_for_model(tu.name, payload, question)
-            payload_str = json.dumps(model_payload, ensure_ascii=False, default=_json_mac_dinh) if isinstance(model_payload, (dict, list)) else str(model_payload)
-            if len(payload_str) > MAX_PAYLOAD_CHARS:
-                payload_str = payload_str[:MAX_PAYLOAD_CHARS] + "\n...(du lieu bi cat bot vi qua dai, phan tren DA DU de tra loi - KHONG can query lai)"
+            payload_str = _serialize_payload_for_model(tu.name, payload, question)
             payload_str += "\n" + query_plan.model_note()
             tool_results.append({
                 "type": "tool_result",
