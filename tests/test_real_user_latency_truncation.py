@@ -93,7 +93,9 @@ def test_payload_lon_bat_ky_van_la_json_hop_le_va_giu_tong():
     assert len(encoded) <= nl2sql.MAX_PAYLOAD_CHARS
     assert decoded["total_count"] == 100
     assert decoded["total_revenue"] == 12_345_678_900
-    assert decoded["_model_view"]["full_result_available_for_download"] is True
+    assert {"path": "rows", "total": 100, "shown": decoded["_model_view"]["collections"][0]["shown"]} \
+        in decoded["_model_view"]["collections"]
+    assert "Dang liet ke N/T" in decoded["_model_view"]["answer_rule"]
     plain = encoded.lower()
     assert "bi cat" not in plain and "bị cắt" not in plain and "truncated" not in plain
 
@@ -139,13 +141,13 @@ def test_lop_cuoi_loai_thong_diep_gioi_han_ky_thuat():
     )
     answer = plan.finalize_answer(
         "Có 100 khách hàng.\nDữ liệu bị cắt bớt do giới hạn hiển thị.\n"
-        "Còn 85 khách chưa hiển thị.\nTải Excel để xem danh sách chi tiết."
+        "Đang liệt kê 15/100 khách im lặng lâu nhất."
     )
 
     assert "Có 100 khách hàng." in answer
-    assert "Tải Excel" in answer
     assert "cắt" not in answer.lower()
-    assert "chưa hiển thị" not in answer.lower()
+    # Dong nay la cach duy nhat nguoi dung biet danh sach chua du: nut Tai Excel chi xuat bang dang hien thi.
+    assert "Đang liệt kê 15/100" in answer
 
 
 def test_danh_sach_duoi_nguong_tu_nang_limit_va_loc_dung_mot_lan():
@@ -194,3 +196,24 @@ def test_nguong_cua_khach_hang_khong_bi_dinh_tuyen_nham_sang_kpi():
     question = "danh sách khách hàng có tỷ lệ mua lại dưới 65%"
     assert nl2sql._required_tool_for_question(question) != "get_employee_kpi"
     assert "customer" in {item["domain"] for item in query_plan.infer_domains(question)}
+
+
+def test_cau_nhieu_thang_khong_bi_luat_duoi_nguong_cuop_sang_kpi_mot_thang():
+    """Ra soat 77694cb: luat "duoi X%" dat truoc luat chuoi thang lam C47/V13 vao tool mot thang."""
+    assert nl2sql._required_tool_for_question(
+        "Những TDV dưới 80% ba tháng liên tiếp là ai?") == "get_workforce_productivity"
+    assert nl2sql._required_tool_for_question("Nhân viên nào dưới 65% hai tháng liên tiếp") != "get_employee_kpi"
+    assert nl2sql._required_tool_for_question(
+        "danh sách TDV dưới 80% trong 3 tháng gần nhất") != "get_employee_kpi"
+    assert [d["domain"] for d in query_plan.infer_domains("Những TDV dưới 80% ba tháng liên tiếp là ai?")] != []
+    # Cau mot thang van duoc ep vao KPI ngay vong dau nhu ban sua goc.
+    assert nl2sql._required_tool_for_question("danh sách TDV dưới 80% tháng 8") == "get_employee_kpi"
+
+
+def test_khong_hua_tai_excel_co_danh_sach_day_du():
+    """Nut Tai Excel chi xuat bang dang hien thi; tool bao cao khong gui du lieu day du xuong giao dien."""
+    from pathlib import Path
+    nguon = Path(nl2sql.__file__).read_text(encoding="utf-8")
+    assert "Tai Excel de xem danh sach chi tiet" not in nguon
+    assert "Tải Excel để xem danh sách chi tiết" not in nguon
+    assert "full_result_available_for_download" not in nguon

@@ -145,8 +145,26 @@ def _max_tokens(scope_role: str = None) -> int:
 
 
 MAX_PAYLOAD_CHARS = 6000  # Ngan sach context gui model (~1500 tokens). Ket qua day du van giu trong
-                          # last_result cho UI/Tai Excel; phan gui model duoc tom luoc co cau truc,
+                          # last_result (log/doi chieu); phan gui model duoc tom luoc co cau truc,
                           # luon la JSON hop le va khong cat chuoi giua dong.
+
+
+# 14/09/2026 (ra soat 77694cb): nut Tai Excel tren giao dien chi xuat BANG DANG HIEN THI
+# (src/app/TableExport.tsx doc tu DOM), con backend chi gui columns/rows day du cho duong SQL tho.
+# Tool bao cao (KPI, khach hang...) vi vay KHONG co file day du de tai. Khi model chi liet ke mot
+# phan thi PHAI noi dang liet ke bao nhieu tren tong; khong duoc hua "Tai Excel de xem day du" va
+# lop loc cuoi (query_plan) khong duoc xoa dong do.
+_QUY_TAC_LIET_KE_MOT_PHAN = (
+    "Dung cac tong/so dem toan bo de ket luan. Neu chi liet ke mot phan, hien cac muc uu tien va ghi "
+    "mot dong 'Dang liet ke N/T <doi tuong>' (N=shown, T=total trong collections). KHONG noi ve "
+    "payload/context/gioi han ky thuat va KHONG hua Tai Excel co danh sach day du."
+)
+_NHIEU_THANG_RE = re.compile(r"\b(?:\d+|hai|ba|bon|nam|sau)\s+thang\b")
+
+
+def _hoi_nhieu_thang(q: str) -> bool:
+    """Cau hoi ve CHUOI/NHIEU thang (q da bo dau, chu thuong): 'lien tiep', 'lien tuc', '3 thang'."""
+    return "lien tiep" in q or "lien tuc" in q or bool(_NHIEU_THANG_RE.search(q))
 
 
 def _timeout_env(name: str, default: float, ceiling: float) -> float:
@@ -181,6 +199,10 @@ def _required_tool_for_question(question: str) -> str | None:
         ))
         and not any(marker in q for marker in ("khach hang", "san pham", "sku"))
         and not any(marker in q for marker in ("qlv nao co nhieu", "phan hut cua doi tap trung"))
+        # 14/09/2026 (ra soat 77694cb): "duoi 80% ba thang lien tiep" la cau CHUOI THANG ma
+        # employee_kpi chi co mot thang. Khong cuop cau nhieu thang cua luat workforce_productivity
+        # ben duoi (C47/V13/M16).
+        and not _hoi_nhieu_thang(q)
     )
     if threshold_list:
         return "get_employee_kpi"
@@ -852,7 +874,7 @@ TEMPLATE_TOOLS = [
                         "sau_thang_truoc_khi_ngung (6 thang lich tinh den THANG MUA CUOI cua chinh khach - "
                         "dung khi hoi truoc khi ngung ho mua bao nhieu). BAT BUOC doc "
                         "total_count de ket luan tren toan bo tap; neu bang chi tiet dai thi chi neu cac "
-                        "muc uu tien va huong nguoi dung bam Tai Excel, khong noi ve gioi han ky thuat. "
+                        "muc uu tien va ghi mot dong 'Dang liet ke N/T khach', khong noi ve gioi han ky thuat. "
                         "Moi khach co nhom_im_lang va san_pham_mua_nhieu_nhat. Neu san pham co status hoac "
                         "product_name_status=not_available thi chi noi thieu thong tin san pham, KHONG loai "
                         "khach va KHONG suy dien ten SKU. Kho local chi giu chi tiet hoa don ~12 thang gan "
@@ -880,7 +902,7 @@ TEMPLATE_TOOLS = [
                        "PHAI trinh bay du ca ba ve nguoi dung hoi; neu chi neu khach ngung han va bo "
                        "hai nhom con lai thi cau tra loi CHUA DAT. BAT BUOC doc phan_bo_tin_hieu de "
                        "noi so khach tung nhom, va doc total_count de ket luan tren toan bo tap. Neu "
-                       "bang chi tiet dai thi chi neu cac muc uu tien va huong bam Tai Excel; khong noi "
+                       "bang chi tiet dai thi chi neu cac muc uu tien va ghi 'Dang liet ke N/T khach'; khong noi "
                        "ve gioi han ky thuat. Neu ky_chua_tron=true thi KHONG duoc ket luan khach da ngung mua - "
                        "phai noi ro thang chua tron va dan ve thang tron gan nhat. "
                        "chu_ky_chua_do_duoc=true nghia la khach co duoi 3 ngay mua nen chua do duoc "
@@ -1069,8 +1091,8 @@ TEMPLATE_TOOLS = [
                        "nhau de tu do tim, se het ngan sach thoi gian truoc khi tra loi duoc. "
                        "M16/S55 va V13: khi hoi NHAN VIEN giam lien tiep, BAT BUOC goi group_by='employee', "
                        "months_back>=6, limit=200. BAT BUOC noi tong so tu declining_employee_count va dung "
-                       "declining_employees de liet ke; neu danh sach dai thi neu cac muc uu tien va huong "
-                       "bam Tai Excel, khong noi ve gioi han ky thuat. 'Giam lien tiep N thang' = decline_streak_months >= N: "
+                       "declining_employees de liet ke; neu danh sach dai thi neu cac muc uu tien va ghi "
+                       "'Dang liet ke N/T nguoi', khong noi ve gioi han ky thuat. 'Giam lien tiep N thang' = decline_streak_months >= N: "
                        "bao so dung N tu declining_count_by_streak, KHONG gop nhom >=2 thanh 'giam 3 thang'. "
                        "CHI duoc noi 'duy nhat' khi count=1 (dem theo dung N). Nguyen nhan: doc cause tung "
                        "nguoi (khach, don/khach, AOV, yeu_to_giam_manh_nhat); cause=None thi KHONG duoc tu "
@@ -2122,7 +2144,7 @@ def _normalize_tool_input_for_question(tool_name: str, tool_input: dict, questio
     ).replace("đ", "d").split())
 
     # Neu nguoi dung noi ro can DANH SACH ma khong dat top N, lay du mot lan o tang tool. Context
-    # gui model van duoc dong goi gon; last_result day du de nut Tai Excel su dung.
+    # gui model van duoc dong goi gon va model phai noi dang liet ke bao nhieu tren tong.
     asks_complete_list = (
         any(marker in q for marker in ("danh sach", "toan bo", "tat ca", "nhung ai"))
         and not re.search(r"\btop\s*\d+\b", q)
@@ -2179,7 +2201,7 @@ def _compact_collections_for_model(value, max_items: int, path: str, overview: l
 def _serialize_payload_for_model(tool_name: str, payload, question: str) -> str:
     """Dong goi context dung-du-ngan trong MAX_PAYLOAD_CHARS, luon la JSON hop le.
 
-    Payload day du van nam trong ``last_result`` cho UI/Tai Excel. Model nhan tong va metadata
+    Payload day du van nam trong ``last_result`` (log/doi chieu). Model nhan tong va metadata
     chinh xac cung mot bang uu tien vua ngan sach; khong bao gio nhan nua chuoi JSON bi chat giua dong.
     """
     model_payload = _payload_for_model(tool_name, payload, question)
@@ -2198,11 +2220,7 @@ def _serialize_payload_for_model(tool_name: str, payload, question: str) -> str:
             concise["_model_view"] = {
                 "mode": "concise_priority_view",
                 "collections": overview,
-                "full_result_available_for_download": True,
-                "answer_rule": (
-                    "Dung cac tong/so dem toan bo de ket luan. Neu can liet ke, hien bang muc uu tien "
-                    "va noi 'Tai Excel de xem danh sach chi tiet'; khong noi ve cat payload/gioi han ky thuat."
-                ),
+                "answer_rule": _QUY_TAC_LIET_KE_MOT_PHAN,
             }
         else:
             concise = {
@@ -2210,7 +2228,7 @@ def _serialize_payload_for_model(tool_name: str, payload, question: str) -> str:
                 "_model_view": {
                     "mode": "concise_priority_view",
                     "collections": overview,
-                    "full_result_available_for_download": True,
+                    "answer_rule": _QUY_TAC_LIET_KE_MOT_PHAN,
                 },
             }
         encoded = json.dumps(concise, ensure_ascii=False, default=_json_mac_dinh)
@@ -2221,8 +2239,8 @@ def _serialize_payload_for_model(tool_name: str, payload, question: str) -> str:
     # Cac tong/so dem cap dau thuong la can cu chinh de cau tra loi van dung va du y.
     view = {
         "mode": "summary_only",
-        "full_result_available_for_download": True,
-        "answer_rule": "Tra loi cac tong da co; huong nguoi dung Tai Excel de xem danh sach chi tiet.",
+        "answer_rule": ("Chi co cac tong/so dem, KHONG co danh sach chi tiet: tra loi bang cac tong va "
+                        "de nghi nguoi dung thu hep pham vi (theo vung/doi/thang) de xem tung dong."),
     }
     summary = {"_model_view": view}
     scalar_items = [
@@ -2462,7 +2480,8 @@ TIET KIEM TOKEN - QUAN TRONG:
   LOI/khong co du lieu can thu lai, hoac (b) cau hoi co NHIEU khia canh rieng biet can tool KHAC LOAI.
 - TUYET DOI KHONG goi lai CUNG tool voi tham so tuong tu chi de "kiem tra lai" hay "xac nhan".
 - Neu payload co `_model_view`, dung tong/so dem toan bo de ket luan; bang chi tiet chi neu cac muc uu
-  tien can hanh dong. Voi cau hoi can danh sach dai, ket thuc bang "Tải Excel để xem danh sách chi tiết".
+  tien can hanh dong. Neu chi liet ke mot phan, ghi mot dong "Đang liệt kê N/T ..." (N = so dong da
+  neu, T = tong). KHONG hua "Tải Excel để xem đầy đủ": nut Tai Excel chi xuat dung bang dang hien thi.
 - TUYET DOI KHONG noi voi nguoi dung ve payload/context, gioi han ky thuat, so dong bi an, `truncated`,
   `returned_count`, `not_shown_count`, "bi cat bot", "gioi han hien thi" hoac ten tool noi bo.
 
@@ -3039,7 +3058,7 @@ def ask(question: str, session_id: str = "default", username: str = None, scope_
                 timeout_seconds=TOOL_TIMEOUT_SECONDS,
             )
 
-            # Giu ket qua day du cho UI/Tai Excel; model nhan JSON tom luoc co cau truc, khong bao
+            # Giu ket qua day du trong last_result; model nhan JSON tom luoc co cau truc, khong bao
             # gio nhan chuoi bi cat giua dong hay thong diep gioi han ky thuat.
             payload_str = _serialize_payload_for_model(tu.name, payload, question)
             payload_str += "\n" + query_plan.model_note()

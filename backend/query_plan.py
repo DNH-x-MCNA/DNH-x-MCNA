@@ -175,6 +175,9 @@ def infer_domains(question: str) -> list[dict[str, Any]]:
             "nhan vien", "tdv", "qlv", "danh sach", "nhung ai", "ai ",
         ))
         and not any(marker in plain for marker in ("khach hang", "san pham", "sku"))
+        # Cau chuoi/nhieu thang ("duoi 80% ba thang lien tiep") khong phai bang KPI mot thang.
+        and "lien tiep" not in plain and "lien tuc" not in plain
+        and not re.search(r"\b(?:\d+|hai|ba|bon|nam|sau)\s+thang\b", plain)
     )
     if threshold_list_question:
         found = [spec for spec in _DOMAIN_SPECS if spec["domain"] == "kpi"]
@@ -645,11 +648,12 @@ class QueryPlan:
         )
 
         # Khong de chi tiet dong goi context noi bo lo ra giao dien. Neu danh sach qua dai, UI da
-        # co last_result day du cho Tai Excel; cau tra loi chi can tong chinh xac va muc uu tien.
+        # chi can tong chinh xac va muc uu tien. KHONG xoa dong "dang liet ke N/T"/"chi hien thi": nut
+        # Tai Excel chi xuat bang dang hien thi, nen dong do la cach duy nhat nguoi dung biet danh sach
+        # chua du (ra soat 77694cb, 14/09/2026).
         technical_display_markers = (
             "du lieu bi cat", "bi cat bot", "gioi han do dai", "gioi han hien thi",
             "da dat gioi han", "truncated", "returned_count", "not_shown_count",
-            "chi hien thi", "chua hien thi",
         )
         answer_lines = []
         for line in answer.splitlines():
