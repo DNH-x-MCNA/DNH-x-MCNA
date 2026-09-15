@@ -1649,7 +1649,7 @@ def check_company_overdue_ratio_alert():
                 record_alert_sent(alert_key, str(round(ratio, 4)), region="Toàn quốc")
 
 
-def _bravo_recent_orders_by_customer(since):
+def _bravo_recent_orders_by_customer(since, until=None, by_channel=False):
     """
     Số đơn/giá trị đơn mới theo mã KH từ ngày `since` (date) — đọc thẳng Bravo (OTC+ETC).
     Truyền `since` dưới dạng chuỗi 'YYYY-MM-DD' (không phải datetime.date) — driver ODBC cũ
@@ -1668,16 +1668,27 @@ def _bravo_recent_orders_by_customer(since):
     engine = _get_bravo_engine()
     if engine is None:
         raise RuntimeError("Không có Bravo engine")
+    # 15/09/2026: `until` (loại trừ) chặn chứng từ đề ngày tương lai - đã có hóa đơn đề 31/08 nằm sẵn
+    # trong Bravo từ giữa tháng, bản cũ đếm là "vẫn lên đơn". `by_channel`: khóa (mã KH, kênh) để
+    # khách nợ quá hạn ở OTC không bị báo "vẫn lên đơn" chỉ vì có đơn ETC (và ngược lại).
     since_str = since.strftime("%Y-%m-%d") if hasattr(since, "strftime") else str(since)
-    sql = text('''
-        SELECT CustomerCode AS cc, COUNT(DISTINCT Stt) AS n, SUM(Amount9) AS amt FROM (
-            SELECT CustomerCode, Stt, Amount9 FROM dbo.vHoaDonTotal WHERE DocDate >= :since
+    params = {"since": since_str}
+    cond = ""
+    if until is not None:
+        cond = " AND DocDate < :until"
+        params["until"] = until.strftime("%Y-%m-%d") if hasattr(until, "strftime") else str(until)
+    ch_col = ", ch" if by_channel else ""
+    sql = text(f'''
+        SELECT CustomerCode AS cc{ch_col}, COUNT(DISTINCT Stt) AS n, SUM(Amount9) AS amt FROM (
+            SELECT CustomerCode, 'OTC' AS ch, Stt, Amount9 FROM dbo.vHoaDonTotal WHERE DocDate >= :since{cond}
             UNION ALL
-            SELECT CustomerCode, Stt, Amount9 FROM dbo.vHoaDonETCTotal WHERE DocDate >= :since
-        ) x GROUP BY CustomerCode
+            SELECT CustomerCode, 'ETC' AS ch, Stt, Amount9 FROM dbo.vHoaDonETCTotal WHERE DocDate >= :since{cond}
+        ) x GROUP BY CustomerCode{ch_col}
     ''')
     with engine.connect() as conn:
-        rows = conn.execute(sql, {"since": since_str}).fetchall()
+        rows = conn.execute(sql, params).fetchall()
+    if by_channel:
+        return {(r.cc, r.ch): (int(r.n), float(r.amt or 0)) for r in rows}
     return {r.cc: (int(r.n), float(r.amt or 0)) for r in rows}
 
 
@@ -3047,8 +3058,10 @@ def check_new_over45_debtors_alert(bundle=None):
     rows = part.get("rows") or []
     print(f"[ALERTS][new_over45] {len(rows)} khách mới vào nhóm >45 ngày (so bản chụp {part.get('compared_with')}).")
     for (region_key, channel), customers in _group_rows(rows, "region_key", "sales_channel").items():
-        fresh = [(f"new_over45:{c['customer_code']}", c) for c in customers
-                 if should_send_alert(f"new_over45:{c['customer_code']}", cooldown_hours=24 * 30, current_value="1")]
+        # 15/09/2026: khóa có kênh - một khách nợ >45 ngày ở cả OTC lẫn ETC nay là hai dòng, gửi hai giám đốc kênh.
+        fresh = [(f"new_over45:{c['customer_code']}:{channel}", c) for c in customers
+                 if should_send_alert(f"new_over45:{c['customer_code']}:{channel}", cooldown_hours=24 * 30,
+                                      current_value="1")]
         if not fresh:
             continue
         region_label = _region_label_from_key(region_key)
@@ -3080,8 +3093,8 @@ def check_overdue_over45_still_ordering_alert(bundle=None):
     print(f"[ALERTS][overdue_ordering] {len(rows)} khách nợ >45 ngày vẫn có đơn trong tháng.")
     month = as_of.strftime('%Y-%m')
     for (channel, region_key), customers in _group_rows(rows, "sales_channel", "region_key").items():
-        fresh = [(f"overdue_ordering:{c['customer_code']}:{month}", c) for c in customers
-                 if should_send_alert(f"overdue_ordering:{c['customer_code']}:{month}",
+        fresh = [(f"overdue_ordering:{c['customer_code']}:{channel}:{month}", c) for c in customers
+                 if should_send_alert(f"overdue_ordering:{c['customer_code']}:{channel}:{month}",
                                       cooldown_hours=24 * 31, current_value="1")]
         if not fresh:
             continue

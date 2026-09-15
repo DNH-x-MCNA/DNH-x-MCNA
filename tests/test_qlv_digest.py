@@ -169,6 +169,34 @@ def test_noi_dung_teams_qlv_khong_co_ton_kho():
     assert "khách hàng cần ưu tiên công nợ" in rendered
 
 
+class _FakeToolsKhoTre(_FakeReportTools):
+    @staticmethod
+    def latest_data_date():
+        return "2026-08-25"
+
+
+@pytest.mark.parametrize("builder,extra", [
+    (build_qlv_digest_metrics, {}),
+    (build_qlv_period_metrics, {"period_type": "weekly"}),
+])
+def test_qlv_ghi_ro_khi_kho_tre_hon_ngay_bao_cao(builder, extra):
+    metrics = builder(employee_code="QLV01", region="MB", channel="OTC", as_of_date="2026-08-27",
+                      report_tools=_FakeToolsKhoTre(), **extra)
+
+    assert "Hóa đơn mới nhất trong kho là ngày 25/08/2026" in metrics["freshness_note"]
+    assert "từ ngày 26/08/2026 đến 27/08/2026 chưa có" in metrics["freshness_note"]
+
+
+def test_qlv_khong_ghi_tre_khi_kho_du_ngay():
+    tools = _FakeReportTools()
+    tools.latest_data_date = lambda: "2026-08-27"
+
+    metrics = build_qlv_digest_metrics(employee_code="QLV01", region="MB", channel="OTC",
+                                       as_of_date="2026-08-27", report_tools=tools)
+
+    assert metrics["freshness_note"] == "Dữ liệu cập nhật đến 16:00 27/08/2026."
+
+
 @pytest.mark.parametrize("period_type,expected_from,expected_previous_from", [
     ("weekly", "2026-08-24", "2026-08-17"),
     ("monthly", "2026-08-01", "2026-07-01"),

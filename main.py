@@ -161,7 +161,8 @@ def _digest_table(metrics):
         rows.append(["Doanh thu OTC", format_vietnamese_money(metrics['revenue']['otc'])])
     if scoped_channel != "OTC":
         rows.append(["Doanh thu ETC", format_vietnamese_money(metrics['revenue']['etc'])])
-    rows.append(["Tổng doanh thu hôm nay",
+    # 15/09/2026: ghi rõ ngày - cùng card có "Lũy kế tháng (đến ngày dữ liệu đủ gần nhất)" là một ngày khác.
+    rows.append([f"Tổng doanh thu hôm nay ({metrics.get('date')})",
                  f"{format_vietnamese_money(metrics['revenue']['total'])} (tạm tính tới lần đồng bộ gần nhất)"])
     if scoped_channel != "ETC":
         rows.append(["Số hóa đơn OTC", str(metrics['revenue']['otc_invoice_count'])])

@@ -92,6 +92,65 @@ def _report_day(value: str | None) -> dt.date:
     return day
 
 
+def _freshness_note(report_tools, day: dt.date) -> str:
+    """Ghi chú độ tươi dữ liệu; nói rõ khi hóa đơn mới nhất trong kho cũ hơn ngày báo cáo.
+
+    Báo cáo chạy theo lịch với ngày hôm nay, nhưng kho có thể trễ (đồng bộ treo, Bravo chưa nhập).
+    Không có ghi chú này, doanh số ngày bằng 0 trông như đội không bán được gì.
+    """
+    note = report_tools.data_freshness_note() if hasattr(report_tools, "data_freshness_note") else ""
+    if not hasattr(report_tools, "latest_data_date"):
+        return note
+    try:
+        latest = dt.date.fromisoformat(str(report_tools.latest_data_date())[:10])
+    except (TypeError, ValueError):
+        return note
+    if latest < day:
+        lag = (
+            f"Hóa đơn mới nhất trong kho là ngày {latest:%d/%m/%Y}; "
+            f"số liệu từ ngày {latest + dt.timedelta(days=1):%d/%m/%Y} đến {day:%d/%m/%Y} chưa có."
+        )
+        note = f"{note} {lag}".strip()
+    return note
+
+
+_TEAM_CUSTOMER_WINDOW_DAYS = 200
+
+
+def _team_customer_codes(report_tools, employee_code: str, day: dt.date) -> set[str]:
+    """Khách thuộc đội QLV, theo phân công KPI (fact_tonghopkhachhang) — 15/09/2026.
+
+    Mỗi khách gắn với đội ở snapshot GẦN NHẤT có chính khách đó (trong ~200 ngày, đủ cho quy tắc khách mua
+    đều 6 tháng): khách đã chuyển sang đội khác thì không còn hiện ở đội cũ. Đo trên kho 15/09/2026: không
+    khách nào thuộc hai đội ở snapshot gần nhất của mình. Không ra khách nào thì dừng, không mở rộng phạm vi.
+    """
+    rows = report_tools._q(
+        "WITH gan AS (SELECT customer_code, MAX(save_date) d FROM fact_tonghopkhachhang "
+        "WHERE save_date<=? AND save_date>=? GROUP BY customer_code) "
+        "SELECT DISTINCT f.customer_code FROM fact_tonghopkhachhang f "
+        "JOIN gan ON gan.customer_code=f.customer_code AND gan.d=f.save_date "
+        "WHERE f.manager_code=? OR f.employee_code=?",
+        (day.isoformat(), (day - dt.timedelta(days=_TEAM_CUSTOMER_WINDOW_DAYS)).isoformat(),
+         employee_code, employee_code),
+    )
+    codes = {str(r.get("customer_code")).strip() for r in rows if r.get("customer_code")}
+    if not codes:
+        raise QLVDigestScopeError(f"Không tìm thấy khách nào gắn với đội {employee_code} trong phân công KPI.")
+    return codes
+
+
+def _team_insights(report_tools, employee_code: str, day: dt.date, insight_builder=None) -> dict:
+    """Việc cần xử lý + dự phóng của riêng đội; lỗi xác định khách thì báo "chưa dựng được"."""
+    try:
+        customers = _team_customer_codes(report_tools, employee_code, day)
+    except Exception as exc:
+        print(f"[QLV] Không xác định được khách của đội {employee_code} ({exc}).")
+        return {"build_error": "chưa xác định được danh sách khách thuộc đội"}
+    if insight_builder is None:
+        from src.insight_report import attach_team_insights as insight_builder
+    return insight_builder(employee_code, customers)
+
+
 def _validate_qlv_identity(report_tools, employee_code: str, area: str) -> None:
     """Kiểm tra mã cấu hình thực sự là QLV đúng miền nếu lớp kho cung cấp truy vấn nội bộ."""
     query = getattr(report_tools, "_q", None)
@@ -148,6 +207,7 @@ def build_qlv_digest_metrics(
     channel: str | None = None,
     as_of_date: str | None = None,
     report_tools=None,
+    insight_builder=None,
 ) -> dict:
     """Dựng dữ liệu báo cáo cho đúng một đội QLV, không gọi LLM và không gửi ra ngoài."""
     code = str(employee_code or "").strip()
@@ -221,11 +281,12 @@ def build_qlv_digest_metrics(
         scope_channel=scoped_channel,
     )
 
-    freshness = ""
-    if hasattr(tools, "data_freshness_note"):
-        freshness = tools.data_freshness_note()
+    freshness = _freshness_note(tools, day)
+    # Việc cần xử lý / dự phóng đội dùng quy tắc Bravo đã kiểm thử ngược; hiện chỉ có cho OTC.
+    team_insights = _team_insights(tools, code, day, insight_builder) if scoped_channel == "OTC" else None
 
     return {
+        "insights": team_insights,
         "report_type": "qlv_team_daily",
         "date": day.isoformat(),
         "month": day.strftime("%Y-%m"),
@@ -284,6 +345,7 @@ def build_qlv_period_metrics(
     channel: str | None = None,
     as_of_date: str | None = None,
     report_tools=None,
+    insight_builder=None,
 ) -> dict:
     """Dựng báo cáo tuần/tháng riêng một đội QLV, không dùng số liệu toàn miền.
 
@@ -358,9 +420,11 @@ def build_qlv_period_metrics(
         scope_employee_code=code,
         scope_channel=scoped_channel,
     )
-    freshness = tools.data_freshness_note() if hasattr(tools, "data_freshness_note") else ""
+    freshness = _freshness_note(tools, day)
+    team_insights = _team_insights(tools, code, day, insight_builder) if scoped_channel == "OTC" else None
 
     return {
+        "insights": team_insights,
         "report_type": f"qlv_team_{window['period_type']}",
         "period_type": window["period_type"],
         "date": day.isoformat(),
@@ -389,12 +453,41 @@ def build_qlv_period_metrics(
     }
 
 
+def _qlv_action_section(metrics: dict, money_formatter: Callable[[float], str], max_rows: int):
+    """Mục "Việc cần xử lý" chỉ gồm khách thuộc đội; dự phóng đội nằm ở mục Tiến độ đội."""
+    view = metrics.get("insights")
+    if view is None:
+        return None
+    from src.insight_report import action_count, action_lines
+    if view.get("build_error"):
+        items = [f"• CHƯA dựng được danh sách việc cần xử lý của đội ({view['build_error']})."]
+        count_text = "chưa đánh giá"
+    else:
+        team = dict(view.get("team_pace") or {})
+        action_view = {**view, "team_pace": {**team, "applicable": False, "at_risk": [], "not_projected": []}}
+        items = []
+        if view.get("as_of_display"):
+            items.append(f"• Tính đến ngày {view['as_of_display']}; chỉ gồm khách gắn với đội trong phân công KPI.")
+        items.extend(action_lines(action_view, money_formatter, max_rows=max_rows))
+        count_text = str(action_count(action_view))
+    return {
+        "id": "section_qlv_action_items",
+        "title": f"📌 VIỆC CẦN XỬ LÝ ({count_text})",
+        "is_collapsed": False,
+        "items": items,
+    }
+
+
 def _build_qlv_sections(
     metrics: dict,
     money_formatter: Callable[[float], str],
+    max_rows: int = 5,
 ) -> list[dict[str, Any]]:
     """Dựng các section dùng chung cho Daily/Weekly/Monthly QLV."""
     sections: list[dict[str, Any]] = []
+    action = _qlv_action_section(metrics, money_formatter, max_rows)
+    if action:
+        sections.append(action)
     kpi = metrics.get("team_kpi") or {}
     if not kpi.get("not_applicable"):
         kpi_items = [
@@ -410,6 +503,9 @@ def _build_qlv_sections(
                 kpi_items.append(f"   - {name}: {float(item.get('pct') or 0.0):.1f}%")
         elif kpi.get("note"):
             kpi_items.append(f"• {kpi['note']}")
+        if metrics.get("insights") is not None:
+            from src.insight_report import team_progress_lines
+            kpi_items.extend(team_progress_lines(metrics["insights"], money_formatter))
         sections.append({
             "id": "section_qlv_team_kpi",
             "title": "📈 TIẾN ĐỘ ĐỘI",
@@ -460,6 +556,7 @@ def _build_qlv_sections(
 def build_qlv_teams_content(
     metrics: dict,
     money_formatter: Callable[[float], str],
+    max_rows: int = 5,
 ) -> tuple[list[str], list[list[str]], list[dict[str, Any]]]:
     """Chuyển dữ liệu QLV thành bảng/section dùng chung với Adaptive Card hiện tại."""
     daily = metrics["daily_revenue"]["total"]
@@ -478,12 +575,13 @@ def build_qlv_teams_content(
             "Mức hoàn thành KPI của QLV",
             f"{float(manager.get('pct') or 0.0):.1f}%",
         ])
-    return ["Chỉ số", "Giá trị"], rows, _build_qlv_sections(metrics, money_formatter)
+    return ["Chỉ số", "Giá trị"], rows, _build_qlv_sections(metrics, money_formatter, max_rows)
 
 
 def build_qlv_period_teams_content(
     metrics: dict,
     money_formatter: Callable[[float], str],
+    max_rows: int = 5,
 ) -> tuple[list[str], list[list[str]], list[dict[str, Any]]]:
     """Chuyển báo cáo tuần/tháng QLV thành bảng/section Adaptive Card."""
     current = (metrics.get("period_revenue") or {}).get("total") or {}
@@ -507,7 +605,7 @@ def build_qlv_period_teams_content(
             f"{float(manager.get('pct') or 0.0):.1f}%",
         ])
 
-    return ["Chỉ số", "Giá trị"], rows, _build_qlv_sections(metrics, money_formatter)
+    return ["Chỉ số", "Giá trị"], rows, _build_qlv_sections(metrics, money_formatter, max_rows)
 
 
 def build_qlv_period_email(
@@ -519,7 +617,8 @@ def build_qlv_period_email(
     Weekly/Monthly là báo cáo email; Teams chỉ dùng cho Daily Digest. Hàm này dùng cùng
     metrics/sections đã khóa phạm vi đội, nhưng không tạo payload hoặc gửi Teams.
     """
-    headers, rows, sections = build_qlv_period_teams_content(metrics, money_formatter)
+    # Email không bị giới hạn khung card Teams nên liệt kê tới 15 dòng mỗi nhóm việc.
+    headers, rows, sections = build_qlv_period_teams_content(metrics, money_formatter, max_rows=15)
     period_type = str(metrics.get("period_type") or "weekly").lower()
     period_label = "TUẦN" if period_type == "weekly" else "THÁNG"
     code = html.escape(str(metrics.get("employee_code") or ""))

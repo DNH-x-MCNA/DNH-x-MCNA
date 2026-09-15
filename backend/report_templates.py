@@ -5772,8 +5772,9 @@ def etc_contract_status(as_of_date: str = None, expiring_days: int = 90, limit: 
 
     NHUNG gia tri hop dong co ban ghi hong: 3/9.135 hop dong chiem 99,88% tong gia tri (HD 115627 ghi
     don gia 295.238.095.239d/don vi). Vi vay tool TACH RIENG cac hop dong co gia tri bat thuong
-    (AmountAfterVat lech qua 5% so voi Quantity*UnitPrice) ra khoi moi con so tong, khong am tham
-    cong vao - nguoi doc thay ca hai phan.
+    (truoc VAT lech qua 5% so voi Quantity*UnitPrice, don gia > 1 ty, hoac sau VAT chenh truoc VAT qua
+    2 lan - xem ghi chu 15/09/2026 trong SQL) ra khoi moi con so tong, khong am tham cong vao - nguoi
+    doc thay ca hai phan.
     """
     as_of_date = (as_of_date or latest_data_date())[:10]
     expiring_days = max(1, min(int(expiring_days or 90), 720))
@@ -5800,15 +5801,32 @@ def etc_contract_status(as_of_date: str = None, expiring_days: int = 90, limit: 
         " SELECT Id, RowId, MAX(CustomerCode) CustomerCode, MAX(DocNo) DocNo,"
         " MAX(FromDate) FromDate, MAX(ToDate) ToDate, MAX(StatusId) StatusId,"
         " MAX(EmpDMSCode1) EmpDMSCode1, MAX(EmpDMSCode2) EmpDMSCode2,"
-        " MAX(AmountAfterVat) AmountAfterVat, MAX(Quantity) Quantity, MAX(UnitPrice) UnitPrice"
+        " MAX(AmountAfterVat) AmountAfterVat, MAX(AmountBefVat) AmountBefVat,"
+        " MAX(Quantity) Quantity, MAX(UnitPrice) UnitPrice"
         " FROM dbo.vHopDongETC GROUP BY Id, RowId"
         "), hd AS ("
         " SELECT Id, MAX(CustomerCode) CustomerCode, MAX(DocNo) DocNo, MAX(FromDate) FromDate,"
         " MAX(ToDate) ToDate, MAX(StatusId) StatusId, MAX(EmpDMSCode1) EmpDMSCode1,"
-        " MAX(EmpDMSCode2) EmpDMSCode2, SUM(AmountAfterVat) GiaTri, COUNT(*) SoDong,"
-        " SUM(CASE WHEN ABS(AmountAfterVat - Quantity*UnitPrice) >"
-        "          0.05*CASE WHEN ABS(AmountAfterVat)>ABS(Quantity*UnitPrice)"
-        "                    THEN ABS(AmountAfterVat) ELSE ABS(Quantity*UnitPrice) END"
+        # 15/09/2026: gia tri lay TRUOC VAT de cung goc voi Amount9 tren hoa don (T8/2026: Amount9 =
+        # Quantity*UnitPrice, VAT nam rieng o Amount3 = 5,0%). Truoc do chia Amount9 cho AmountAfterVat nen
+        # ty le thuc hien thap hon that ~5%.
+        #
+        # Kiem ban ghi hong cung doi (do tren Bravo 15/09, 9.138 hop dong). Cach cu "AmountAfterVat lech
+        # Quantity*UnitPrice >5%" tach 70 hop dong nhung:
+        #   - BO LOT HD 115627 (don gia 295 ty/don vi, so lieu tu khop nhau) -> tong phan "sach" ra
+        #     2,96 trieu ty neu tinh ca hop dong het han;
+        #   - tach oan 9 hop dong thue 8% (sau VAT lech truoc VAT ~7,4% la dung thue).
+        # Luat moi: dong hong khi truoc VAT lech Quantity*UnitPrice >5%, HOAC don gia >1 ty/don vi, HOAC sau
+        # VAT va truoc VAT chenh nhau qua 2 lan. Tach 60 hop dong, bat du 115627/112468/115175/122296; phan
+        # sach tong 3.548 ty, hop dong lon nhat 107 ty.
+        " MAX(EmpDMSCode2) EmpDMSCode2, SUM(AmountBefVat) GiaTri, COUNT(*) SoDong,"
+        " SUM(CASE WHEN ABS(AmountBefVat - Quantity*UnitPrice) >"
+        "          0.05*CASE WHEN ABS(AmountBefVat)>ABS(Quantity*UnitPrice)"
+        "                    THEN ABS(AmountBefVat) ELSE ABS(Quantity*UnitPrice) END"
+        "       OR UnitPrice > 1000000000"
+        "       OR ABS(AmountAfterVat - AmountBefVat) >"
+        "          0.5*CASE WHEN ABS(AmountAfterVat)>ABS(AmountBefVat)"
+        "                   THEN ABS(AmountAfterVat) ELSE ABS(AmountBefVat) END"
         "     THEN 1 ELSE 0 END) SoDongLechGiaTri"
         " FROM dong GROUP BY Id"
         "), hoadon AS ("
@@ -5843,8 +5861,9 @@ def etc_contract_status(as_of_date: str = None, expiring_days: int = 90, limit: 
         }
         if int(r["SoDongLechGiaTri"] or 0) > 0:
             muc["ly_do_bat_thuong"] = (
-                "AmountAfterVat lech qua 5%% so voi Quantity*UnitPrice o %d/%d dong - gia tri hop "
-                "dong KHONG dung de ket luan." % (int(r["SoDongLechGiaTri"]), int(r["SoDong"] or 0)))
+                "Gia tri khong nhat quan o %d/%d dong (truoc VAT lech qua 5%% so voi Quantity*UnitPrice, "
+                "don gia > 1 ty, hoac sau VAT chenh truoc VAT qua 2 lan) - gia tri hop dong KHONG dung "
+                "de ket luan." % (int(r["SoDongLechGiaTri"]), int(r["SoDong"] or 0)))
             bat_thuong.append(muc)
         else:
             hop_dong.append(muc)
@@ -5877,7 +5896,8 @@ def etc_contract_status(as_of_date: str = None, expiring_days: int = 90, limit: 
         "canh_bao": ("Cac hop dong co gia tri bat thuong da duoc TACH RIENG khoi moi con so tong o "
                      "day (do 13/09/2026: 3/9.135 hop dong chiem 99,88% tong gia tri). Khi tra loi "
                      "phai neu ro con so tong khong gom nhung hop dong do va can DNH kiem lai du lieu "
-                     "goc. Ty le thuc hien = tong Amount9 hoa don co ContractId / gia tri hop dong."),
+                     "goc. Ty le thuc hien = tong Amount9 hoa don co ContractId / gia tri hop dong, "
+                     "ca hai deu TRUOC VAT."),
         "data_as_of": latest_data_date(),
     }
 

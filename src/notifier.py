@@ -387,7 +387,9 @@ DIGEST_EMAIL_TEMPLATE = """
             {% set tp = ins.team_pace or {} %}
             {% if tp.applicable %}
             <div style="font-weight: 700; color: #1f4a22; font-size: 13px; margin: 12px 0 4px;">Đội QLV có nguy cơ hụt chỉ tiêu tháng</div>
-            {% if not tp.evaluated %}
+            {% if tp.error %}
+            <div class="no-data">Chưa đánh giá được do lỗi dữ liệu lúc dựng báo cáo.</div>
+            {% elif not tp.evaluated %}
             <div class="no-data">Đánh giá từ ngày {{ tp.min_day or 15 }} hằng tháng (trước đó doanh số còn quá ít để dự phóng).</div>
             {% elif tp.at_risk %}
             <table class="data-table">
@@ -401,11 +403,18 @@ DIGEST_EMAIL_TEMPLATE = """
             {% else %}
             <div class="no-data">Không đội nào dự phóng dưới {{ "%.0f"|format(tp.threshold_pct or 60) }}% chỉ tiêu.</div>
             {% endif %}
+            {% if tp.evaluated and not tp.error and tp.not_projected %}
+            {# 15/09/2026: doi/nhom co chi tieu nhung khong du phong (duoi 3 TDV: Kenh MT, Cho si...) phai
+            neu ten - thang 9/2026 la 18,95/58,14 ty chi tieu OTC. #}
+            <div class="no-data">Không dự phóng {{ tp.not_projected|length }} đội/nhóm dưới 3 TDV (doanh số dồn vài đơn lớn): {% for t in tp.not_projected[:10] %}{% if not loop.first %}; {% endif %}{{ t.team_name }} ({{ (t.target)|vnd }}){% endfor %}. {{ tp.basis_note or '' }}</div>
+            {% endif %}
             {% endif %}
 
             {% set sc = ins.silent_customers or {} %}
             <div style="font-weight: 700; color: #1f4a22; font-size: 13px; margin: 12px 0 4px;">Khách mua đều chưa có đơn tháng này</div>
-            {% if not sc.evaluated %}
+            {% if sc.error %}
+            <div class="no-data">Chưa đánh giá được do lỗi dữ liệu lúc dựng báo cáo.</div>
+            {% elif not sc.evaluated %}
             <div class="no-data">Đánh giá từ ngày {{ sc.min_day or 20 }} hằng tháng.</div>
             {% elif sc.rows %}
             <table class="data-table">
@@ -421,9 +430,46 @@ DIGEST_EMAIL_TEMPLATE = """
             <div class="no-data">Không có khách mua đều nào chưa có đơn.</div>
             {% endif %}
 
+            {% set sku = ins.etc_sku_stops or {} %}
+            {% if sku.enabled and sku.applicable is not false %}
+            <div style="font-weight: 700; color: #1f4a22; font-size: 13px; margin: 12px 0 4px;">Khách ETC ngừng SKU chủ lực</div>
+            {% if sku.error %}
+            <div class="no-data">Chưa đánh giá được do lỗi dữ liệu lúc dựng báo cáo.</div>
+            {% elif not sku.evaluated %}
+            <div class="no-data">Đánh giá từ ngày {{ sku.min_day or 20 }} hằng tháng.</div>
+            {% elif sku.rows %}
+            <table class="data-table">
+                <thead><tr><th>Khách</th><th>SKU</th><th>Thường mua/tháng</th><th>Hợp đồng còn hiệu lực</th></tr></thead>
+                <tbody>{% for c in sku.rows[:10] %}
+                    <tr><td>{{ c.customer_name }} ({{ c.customer_code }})</td><td>{{ c.item_code }}</td><td>{{ (c.baseline_monthly)|vnd }}</td>
+                    <td>{% if c.active_contracts %}{% for hd in c.active_contracts[:3] %}{% if not loop.first %}; {% endif %}{{ hd.doc_no or hd.contract_id }} đến {{ hd.to_date }}{% endfor %}{% else %}Không có{% endif %}</td></tr>
+                {% endfor %}</tbody>
+            </table>
+            {% if sku.rows|length > 10 %}<div class="no-data">Đang liệt kê 10/{{ sku.rows|length }} cặp khách/SKU.</div>{% endif %}
+            {% else %}<div class="no-data">Không có khách ETC nào ngừng SKU chủ lực.</div>{% endif %}
+            {% endif %}
+
+            {% set lap = ins.new_customer_no_repeat or {} %}
+            {% if lap.enabled %}
+            <div style="font-weight: 700; color: #1f4a22; font-size: 13px; margin: 12px 0 4px;">Khách mới chưa mua lại</div>
+            {% if lap.error %}
+            <div class="no-data">Chưa đánh giá được do lỗi dữ liệu lúc dựng báo cáo.</div>
+            {% elif lap.rows %}
+            <table class="data-table">
+                <thead><tr><th>Khách</th><th>Kênh</th><th>Đơn đầu</th><th>Thời gian chưa mua lại</th></tr></thead>
+                <tbody>{% for c in lap.rows[:10] %}
+                    <tr><td>{{ c.customer_name }} ({{ c.customer_code }})</td><td>{{ c.sales_channel }}</td><td>{{ c.first_order_date }} &bull; {{ (c.first_order_value)|vnd }}</td><td>{{ c.wait_days }} ngày</td></tr>
+                {% endfor %}</tbody>
+            </table>
+            {% if lap.rows|length > 10 %}<div class="no-data">Đang liệt kê 10/{{ lap.rows|length }} khách.</div>{% endif %}
+            {% else %}<div class="no-data">Không có khách mới nào vừa chạm thời hạn mà chưa mua lại.</div>{% endif %}
+            {% endif %}
+
             {% set no45 = ins.new_over45 or {} %}
             <div style="font-weight: 700; color: #1f4a22; font-size: 13px; margin: 12px 0 4px;">Khách mới rơi vào nợ quá hạn trên 45 ngày</div>
-            {% if no45.stale_snapshot %}
+            {% if no45.error %}
+            <div class="no-data">Chưa đánh giá được do lỗi dữ liệu công nợ lúc dựng báo cáo.</div>
+            {% elif no45.stale_snapshot %}
             <div class="no-data">Bản chụp công nợ gần nhất (ngày {{ no45.stale_snapshot }}) đã quá cũ để so sánh — hệ thống đã ghi lại bản chụp hôm nay và sẽ so sánh từ tuần sau.</div>
             {% elif not no45.available %}
             <div class="no-data">Chưa có bản chụp công nợ đủ cũ để so sánh — hệ thống tự tích lũy mỗi ngày.</div>
@@ -444,7 +490,9 @@ DIGEST_EMAIL_TEMPLATE = """
 
             {% set od = ins.overdue_ordering or {} %}
             <div style="font-weight: 700; color: #1f4a22; font-size: 13px; margin: 12px 0 4px;">Khách nợ trên 45 ngày vẫn lên đơn tháng này</div>
-            {% if od.rows %}
+            {% if od.error %}
+            <div class="no-data">Chưa đánh giá được do lỗi dữ liệu công nợ/đơn hàng lúc dựng báo cáo.</div>
+            {% elif od.rows %}
             <table class="data-table">
                 <thead><tr><th>Mã KH</th><th>Tên KH</th><th>Nợ &gt;45 ngày</th><th>Đơn tháng này</th></tr></thead>
                 <tbody>
@@ -646,18 +694,21 @@ DIGEST_EMAIL_TEMPLATE = """
                 <tr>
                     <td width="50%" valign="top" style="padding: 8px;">
                         <div class="kpi-card">
-                            <div class="lbl">Tổng Chỉ Tiêu Tháng</div>
+                            <div class="lbl">Tổng Chỉ Tiêu Tháng (OTC)</div>
                             <div class="val">{{ (metrics.kpi_summary.total_target)|vnd }}</div>
                         </div>
                     </td>
                     <td width="50%" valign="top" style="padding: 8px;">
                         <div class="kpi-card {{ 'success' if metrics.kpi_summary.total_amount >= metrics.kpi_summary.total_target else 'failed' }}">
-                            <div class="lbl">Còn Thiếu Để Đạt 100%</div>
+                            <div class="lbl">Còn Thiếu Để Đạt 100% (OTC)</div>
                             <div class="val">{{ ([metrics.kpi_summary.total_target - metrics.kpi_summary.total_amount, 0]|max)|vnd }}</div>
                         </div>
                     </td>
                 </tr>
             </table>
+            <!-- 15/09/2026: khối này đặt ngay sau tổng doanh thu OTC+ETC nên phải ghi rõ chỉ tiêu và doanh
+            số đạt ở đây là OTC (bảng KPI đội ngũ OTC); ETC chưa có chỉ tiêu theo vùng/người. -->
+            <div class="no-data" style="margin-bottom: 8px;">Chỉ tiêu và doanh số đạt ở đây là kênh OTC (bảng KPI đội ngũ bán hàng). Kênh ETC chưa có chỉ tiêu theo vùng/nhân viên nên không tính vào.</div>
             {% endif %}
             {% endif %}
 

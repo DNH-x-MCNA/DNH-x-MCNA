@@ -33,8 +33,112 @@ def attach_insights(region=None, channel=None):
         view["errors"]["month_pace"] = str(exc)
     view["as_of_display"] = bundle["as_of"].strftime("%d/%m/%Y")
     view["lookback"] = int(rules["curve_lookback_months"])
+    mark_errors(view)
     view["action_count"] = action_count(view)
     return view
+
+
+def attach_team_insights(team_code, customer_codes):
+    """View insight cho báo cáo riêng một đội QLV — 15/09/2026.
+
+    Không kèm nhịp doanh thu kênh (đó là số toàn miền). Lỗi dựng không làm hỏng báo cáo và không đưa
+    chi tiết lỗi kỹ thuật ra nội dung gửi QLV; chi tiết chỉ in ra log.
+    """
+    from src import insights
+    try:
+        bundle = insights.build_insight_bundle()
+        view = insights.scope_insight_bundle_to_team(bundle, team_code, customer_codes)
+    except Exception as exc:
+        print(f"[QLV] Không dựng được insight cho đội {team_code} ({exc}).")
+        return {"build_error": "lỗi dữ liệu lúc dựng báo cáo"}
+    view["as_of_display"] = bundle["as_of"].strftime("%d/%m/%Y")
+    mark_errors(view)
+    view["action_count"] = action_count(view)
+    return view
+
+
+def team_progress_lines(view, money):
+    """Dòng tiến độ và dự phóng cuối tháng của CHÍNH đội trong báo cáo QLV."""
+    if not view:
+        return []
+    if view.get("build_error"):
+        return [f"• Dự phóng cuối tháng của đội: CHƯA đánh giá được ({view['build_error']})."]
+    view = mark_errors(dict(view))
+    team = view.get("team_pace") or {}
+    if team.get("applicable") is False:
+        return []
+    if team.get("error"):
+        return ["• Dự phóng cuối tháng của đội: CHƯA đánh giá được (lỗi dữ liệu lúc dựng báo cáo)."]
+    moc = f" (tính đến {view['as_of_display']})" if view.get("as_of_display") else ""
+    own = next(iter(team.get("teams") or []), None)
+    if own:
+        line = (f"• Doanh số TDV trong đội{moc}: {money(own['actual'])}/{money(own['target'])}, "
+                f"đạt {own['achievement_pct']:.0f}% chỉ tiêu")
+        if not team.get("evaluated"):
+            return [f"{line}; dự phóng cuối tháng tính từ ngày {team.get('min_day', 15)}."]
+        line += f"; dự phóng cuối tháng {own['projection_pct']:.0f}%"
+        if any(t.get("team_code") == own.get("team_code") for t in team.get("at_risk") or []):
+            line += f" — DƯỚI ngưỡng {team.get('threshold_pct', 60):.0f}%, nguy cơ hụt chỉ tiêu"
+        lines = [line + "."]
+        if team.get("basis_note"):
+            lines.append(f"   - {team['basis_note']}")
+        return lines
+    if team.get("not_projected"):
+        return [f"• Đội có ít TDV nên không dự phóng cuối tháng (chỉ tiêu "
+                f"{money(team['not_projected'][0]['target'])})."]
+    if team.get("skipped_reason"):
+        return [f"• Dự phóng cuối tháng của đội: {team['skipped_reason']}"]
+    return ["• Dự phóng cuối tháng của đội: chưa có dữ liệu KPI Bravo cho đội này."]
+
+
+# Lỗi trong bundle -> mục "Việc cần xử lý" không đánh giá được. Nhịp OTC hỏng thì không dự phóng được
+# đội; công nợ Bravo hỏng thì mất cả hai mục nợ >45 ngày.
+_MUC_THEO_LOI = {
+    "team_pace": ("team_pace",), "channel_pace": ("team_pace",),
+    "silent_customers": ("silent_customers",),
+    "etc_sku_stops": ("etc_sku_stops",),
+    "new_customer_no_repeat": ("new_customer_no_repeat",),
+    "receivables": ("new_over45", "overdue_ordering"),
+    "new_over45": ("new_over45",), "overdue_ordering": ("overdue_ordering",),
+}
+
+
+def mark_errors(view):
+    """Gắn ``error=True`` cho mục không đánh giá được (idempotent) — 15/09/2026.
+
+    Bản cũ để mặc định ``evaluated=False`` khi phần đó lỗi, nên ngày 22 vẫn in "đánh giá từ ngày 15";
+    mục nợ lỗi thì in "Không có khách nào" như thể đã kiểm mà sạch.
+    """
+    if not view:
+        return view
+    for loi in view.get("errors") or {}:
+        for muc in _MUC_THEO_LOI.get(loi, ()):
+            view[muc] = {**(view.get(muc) or {}), "error": True}
+    team = view.get("team_pace") or {}
+    if team.get("evaluated") and team.get("skipped_reason"):
+        view["team_pace"] = {**team, "error": True}
+    return view
+
+
+def all_evaluated(view):
+    """True khi mọi mục áp dụng cho người nhận đã đánh giá xong: không lỗi, đã tới ngày, có bản chụp."""
+    if not view:
+        return False
+    team = view.get("team_pace") or {}
+    if team.get("applicable", True) and (team.get("error") or not team.get("evaluated")):
+        return False
+    silent = view.get("silent_customers") or {}
+    if silent.get("error") or not silent.get("evaluated"):
+        return False
+    for name in ("etc_sku_stops", "new_customer_no_repeat"):
+        part = view.get(name) or {}
+        if (part.get("enabled") and part.get("applicable", True)
+                and (part.get("error") or not part.get("evaluated"))):
+            return False
+    new_debt = view.get("new_over45") or {}
+    if new_debt.get("error") or not new_debt.get("available"):
+        return False
+    return not (view.get("overdue_ordering") or {}).get("error")
 
 
 def action_count(view):
@@ -42,6 +146,8 @@ def action_count(view):
         return 0
     return (len((view.get("team_pace") or {}).get("at_risk") or [])
             + len((view.get("silent_customers") or {}).get("rows") or [])
+            + len((view.get("etc_sku_stops") or {}).get("rows") or [])
+            + len((view.get("new_customer_no_repeat") or {}).get("rows") or [])
             + len((view.get("new_over45") or {}).get("rows") or [])
             + len((view.get("overdue_ordering") or {}).get("rows") or []))
 
@@ -76,10 +182,13 @@ def action_lines(view, money, max_rows=ACTION_ROWS_TEAMS):
     """Dòng chữ mục "Việc cần xử lý" của card Teams. Mỗi nhóm tối đa max_rows dòng."""
     if not view:
         return []
+    view = mark_errors(dict(view))
     lines = []
     team = view.get("team_pace") or {}
     if team.get("applicable", True):
-        if not team.get("evaluated"):
+        if team.get("error"):
+            lines.append("• Đội QLV nguy cơ hụt chỉ tiêu: CHƯA đánh giá được (lỗi dữ liệu lúc dựng báo cáo).")
+        elif not team.get("evaluated"):
             lines.append(f"• Đội QLV: đánh giá nguy cơ hụt chỉ tiêu từ ngày {team.get('min_day', 15)} hằng tháng.")
         elif team.get("at_risk"):
             lines.append(f"• {len(team['at_risk'])} đội QLV dự phóng cuối tháng dưới "
@@ -87,30 +196,78 @@ def action_lines(view, money, max_rows=ACTION_ROWS_TEAMS):
             _them_danh_sach(lines, team["at_risk"], max_rows,
                             lambda t: f"{t['team_name']}: đạt {t['achievement_pct']:.0f}%, dự phóng "
                                       f"{t['projection_pct']:.0f}%", don_vi="đội")
+        if team.get("evaluated") and not team.get("error") and team.get("not_projected"):
+            ds = team["not_projected"]
+            ten = "; ".join(f"{t['team_name']} ({money(t['target'])})" for t in ds[:max_rows])
+            them = f"; và {len(ds) - max_rows} nhóm khác" if len(ds) > max_rows else ""
+            lines.append(f"   ({len(ds)} đội/nhóm dưới 3 TDV không dự phóng: {ten}{them})")
 
     silent = view.get("silent_customers") or {}
-    if silent.get("evaluated") and silent.get("rows"):
+    if silent.get("error"):
+        lines.append("• Khách mua đều chưa có đơn: CHƯA đánh giá được (lỗi dữ liệu lúc dựng báo cáo).")
+    elif not silent.get("evaluated"):
+        lines.append(f"• Khách mua đều chưa có đơn: đánh giá từ ngày {silent.get('min_day', 20)} hằng tháng.")
+    elif silent.get("rows"):
         lines.append(f"• {len(silent['rows'])} khách mua đều chưa có đơn tháng này:")
         _them_danh_sach(lines, silent["rows"], max_rows,
                         lambda c: f"{c.get('customer_name') or c['customer_code']} ({c['customer_code']}, "
                                   f"{c.get('sales_channel')}): thường mua {money(c['baseline_monthly'])}/tháng")
 
+    sku = view.get("etc_sku_stops") or {}
+    if sku.get("enabled") and sku.get("applicable", True):
+        if sku.get("error"):
+            lines.append("• Khách ETC ngừng SKU chủ lực: CHƯA đánh giá được (lỗi dữ liệu lúc dựng báo cáo).")
+        elif not sku.get("evaluated"):
+            lines.append(f"• Khách ETC ngừng SKU chủ lực: đánh giá từ ngày {sku.get('min_day', 20)} hằng tháng.")
+        elif sku.get("rows"):
+            lines.append(f"• {len(sku['rows'])} khách ETC vẫn mua nhưng chưa lấy SKU chủ lực tới ngày 20:")
+
+            def sku_line(customer):
+                contracts = customer.get("active_contracts") or []
+                contract_text = ", ".join(
+                    f"{contract.get('doc_no') or contract.get('contract_id')} đến {contract.get('to_date')}"
+                    for contract in contracts[:3]) or "không có hợp đồng còn hiệu lực"
+                return (f"{customer.get('customer_name') or customer['customer_code']} "
+                        f"({customer['customer_code']}): SKU {customer['item_code']}, thường mua "
+                        f"{money(customer['baseline_monthly'])}/tháng; HĐ: {contract_text}")
+
+            _them_danh_sach(lines, sku["rows"], max_rows, sku_line, don_vi="cặp khách/SKU")
+
+    repeat = view.get("new_customer_no_repeat") or {}
+    if repeat.get("enabled"):
+        if repeat.get("error"):
+            lines.append("• Khách mới chưa mua lại: CHƯA đánh giá được (lỗi dữ liệu lúc dựng báo cáo).")
+        elif repeat.get("rows"):
+            lines.append(f"• {len(repeat['rows'])} khách mới chưa có đơn thứ hai sau thời hạn:")
+            _them_danh_sach(
+                lines, repeat["rows"], max_rows,
+                lambda c: f"{c.get('customer_name') or c['customer_code']} ({c['customer_code']}, "
+                          f"{c.get('sales_channel')}): đơn đầu {c['first_order_date']} "
+                          f"{money(c['first_order_value'])}, chưa mua lại sau {c['wait_days']} ngày")
+
     new_debt = view.get("new_over45") or {}
-    if new_debt.get("rows"):
+    if new_debt.get("error"):
+        lines.append("• Khách mới nợ quá hạn >45 ngày: CHƯA đánh giá được (lỗi dữ liệu công nợ).")
+    elif not new_debt.get("available"):
+        lines.append("• Khách mới nợ quá hạn >45 ngày: chưa có bản chụp công nợ đủ để so sánh.")
+    elif new_debt.get("rows"):
         lines.append(f"• {len(new_debt['rows'])} khách mới có nợ quá hạn trên 45 ngày:")
         _them_danh_sach(lines, new_debt["rows"], max_rows,
                         lambda c: f"{c.get('customer_name') or c['customer_code']} ({c['customer_code']}): "
                                   f"{money(c['overdue_gt_45'])}")
 
     ordering = view.get("overdue_ordering") or {}
-    if ordering.get("rows"):
+    if ordering.get("error"):
+        lines.append("• Khách nợ >45 ngày vẫn lên đơn: CHƯA đánh giá được (lỗi dữ liệu công nợ/đơn hàng).")
+    elif ordering.get("rows"):
         lines.append(f"• {len(ordering['rows'])} khách nợ trên 45 ngày vẫn lên đơn tháng này:")
         _them_danh_sach(lines, ordering["rows"], max_rows,
                         lambda c: f"{c.get('customer_name') or c['customer_code']} ({c['customer_code']}): "
                                   f"nợ >45 ngày {money(c['overdue_gt_45'])}, {c['new_orders']} đơn "
                                   f"{money(c['new_order_value'])}")
 
-    if not action_count(view):
+    # Chỉ khẳng định "không có việc" khi mọi mục đều đã kiểm thật; mục chưa kiểm đã có dòng riêng ở trên.
+    if not action_count(view) and all_evaluated(view):
         lines.append("• Không có việc nào vượt ngưỡng cảnh báo.")
     if view.get("errors"):
         lines.append("• Một phần dữ liệu chưa lấy được lúc dựng báo cáo: " + ", ".join(view["errors"]) + ".")

@@ -90,6 +90,30 @@ def test_email_khong_dung_duoc_insight_van_gui_phan_con_lai():
     assert "Việc Cần Xử Lý" not in html and "Doanh Thu (OTC + ETC)" in html
 
 
+def test_email_chi_hien_hai_luat_moi_khi_co_duoc_bat():
+    off = notifier.build_digest_email(
+        _metrics(_view(etc_sku_stops={"enabled": False, "rows": []},
+                       new_customer_no_repeat={"enabled": False, "rows": []})), period_label="Weekly")
+    assert "Khách ETC ngừng SKU chủ lực" not in off and "Khách mới chưa mua lại" not in off
+
+    on = _view(
+        etc_sku_stops={"enabled": True, "evaluated": True, "rows": [{
+            "customer_code": "BV1", "customer_name": "Bệnh viện Một", "item_code": "SKU1",
+            "baseline_monthly": 120e6,
+            "active_contracts": [{"doc_no": "HD-01", "to_date": "2026-12-31"}],
+        }]},
+        new_customer_no_repeat={"enabled": True, "evaluated": True, "rows": [{
+            "customer_code": "NT1", "customer_name": "Nhà thuốc Một", "sales_channel": "OTC",
+            "first_order_date": "2026-08-08", "first_order_value": 25e6, "wait_days": 45,
+        }]},
+    )
+    html = notifier.build_digest_email(_metrics(on), period_label="Weekly")
+
+    for expected in ("Khách ETC ngừng SKU chủ lực", "Bệnh viện Một", "SKU1", "HD-01",
+                     "Khách mới chưa mua lại", "Nhà thuốc Một", "45 ngày"):
+        assert expected in html
+
+
 def test_email_kenh_etc_khong_co_muc_doi_qlv():
     view = _view(team_pace={"applicable": False, "evaluated": True, "at_risk": []})
     html = notifier.build_digest_email({**_metrics(view), "channel": "ETC"}, period_label="Weekly")
@@ -115,12 +139,87 @@ def test_action_lines_gioi_han_moi_nhom_va_ghi_so_da_liet_ke():
     assert "• 7 khách mua đều chưa có đơn tháng này:" in lines
     assert "   - Đang liệt kê 5/7 khách." in lines
 
-    empty = _view(team_pace={"applicable": True, "evaluated": True, "at_risk": []},
-                  silent_customers={"evaluated": True, "rows": []}, new_over45={"available": True, "rows": []},
-                  overdue_ordering={"rows": []}, errors={"receivables": "timeout"})
-    lines = insight_report.action_lines(empty, format_vietnamese_money)
-    assert "• Không có việc nào vượt ngưỡng cảnh báo." in lines
+    sach = _view(team_pace={"applicable": True, "evaluated": True, "at_risk": []},
+                 silent_customers={"evaluated": True, "rows": []}, new_over45={"available": True, "rows": []},
+                 overdue_ordering={"rows": []})
+    assert "• Không có việc nào vượt ngưỡng cảnh báo." in insight_report.action_lines(sach, format_vietnamese_money)
+
+    # 15/09/2026: công nợ Bravo lỗi thì hai mục nợ CHƯA được kiểm - không được khẳng định "không có việc".
+    loi_cong_no = {**sach, "errors": {"receivables": "timeout"}}
+    lines = insight_report.action_lines(loi_cong_no, format_vietnamese_money)
+    assert "• Không có việc nào vượt ngưỡng cảnh báo." not in lines
+    assert any(line.startswith("• Khách mới nợ quá hạn >45 ngày: CHƯA đánh giá được") for line in lines)
+    assert any(line.startswith("• Khách nợ >45 ngày vẫn lên đơn: CHƯA đánh giá được") for line in lines)
     assert any("chưa lấy được" in line and "receivables" in line for line in lines)
+
+
+def test_doi_qlv_loi_ngay_22_khong_hien_danh_gia_tu_ngay_15():
+    # Bundle mặc định khi phần đội lỗi: evaluated=False, không có min_day.
+    view = insight_report.mark_errors(_view(team_pace={"applicable": True, "evaluated": False, "at_risk": []},
+                                            errors={"team_pace": "Bravo timeout"}))
+
+    lines = insight_report.action_lines(view, format_vietnamese_money)
+    html = notifier.build_digest_email(_metrics(view), period_label="Weekly")
+
+    assert any("Đội QLV nguy cơ hụt chỉ tiêu: CHƯA đánh giá được" in line for line in lines)
+    assert not any("đánh giá nguy cơ hụt chỉ tiêu từ ngày" in line for line in lines)
+    assert "Đánh giá từ ngày 15" not in html and "Chưa đánh giá được do lỗi dữ liệu" in html
+
+
+def test_thieu_nhip_otc_thi_doi_qlv_la_chua_danh_gia_khong_phai_khong_co_doi_nao():
+    view = insight_report.mark_errors(_view(team_pace={
+        "applicable": True, "evaluated": True, "at_risk": [], "min_day": 15,
+        "skipped_reason": "Chưa có nhịp doanh thu OTC để dự phóng đội."}))
+
+    assert view["team_pace"]["error"] is True
+    assert not insight_report.all_evaluated(view)
+
+
+def test_email_muc_no_loi_khong_ghi_khong_co_khach_nao():
+    view = insight_report.mark_errors(_view(new_over45={"available": False, "rows": []},
+                                            overdue_ordering={"rows": []},
+                                            errors={"receivables": "Bravo timeout"}))
+
+    html = notifier.build_digest_email(_metrics(view), period_label="Monthly")
+
+    assert "Không có khách nào." not in html
+    assert "Chưa đánh giá được do lỗi dữ liệu công nợ lúc dựng báo cáo." in html
+    assert "Chưa đánh giá được do lỗi dữ liệu công nợ/đơn hàng lúc dựng báo cáo." in html
+
+
+def test_chua_toi_ngay_20_khong_khang_dinh_khong_co_viec():
+    view = _view(team_pace={"applicable": True, "evaluated": True, "at_risk": []},
+                 silent_customers={"evaluated": False, "min_day": 20, "rows": []},
+                 new_over45={"available": True, "rows": []}, overdue_ordering={"rows": []})
+
+    lines = insight_report.action_lines(view, format_vietnamese_money)
+
+    assert "• Khách mua đều chưa có đơn: đánh giá từ ngày 20 hằng tháng." in lines
+    assert "• Không có việc nào vượt ngưỡng cảnh báo." not in lines
+
+
+def test_bao_cao_neu_ten_doi_nhom_khong_du_phong():
+    np = [{"team_code": "MN1", "team_name": "Kênh MT", "target": 6_653_790_357},
+          {"team_code": "MN4", "team_name": "Chợ sỉ", "target": 1_700_000_000}]
+    view = _view(team_pace={"applicable": True, "evaluated": True, "min_day": 15, "threshold_pct": 60.0,
+                            "at_risk": [], "not_projected": np,
+                            "basis_note": "Dự phóng tính trên chỉ tiêu và doanh số của TDV trong đội."})
+
+    lines = insight_report.action_lines(view, format_vietnamese_money)
+    html = notifier.build_digest_email(_metrics(view), period_label="Weekly")
+
+    assert any("2 đội/nhóm dưới 3 TDV không dự phóng: Kênh MT" in line for line in lines)
+    assert "Không dự phóng 2 đội/nhóm dưới 3 TDV" in html and "Chợ sỉ" in html
+
+    chua_toi_ngay = _view(team_pace={"applicable": True, "evaluated": False, "min_day": 15,
+                                     "at_risk": [], "not_projected": np})
+    assert not any("không dự phóng" in line
+                   for line in insight_report.action_lines(chua_toi_ngay, format_vietnamese_money))
+
+
+def test_teams_daily_ghi_ngay_cho_doanh_thu_hom_nay():
+    _, rows = main._digest_table(_metrics(_view()))
+    assert any(r[0] == "Tổng doanh thu hôm nay (22/09/2026)" for r in rows)
 
 
 def test_attach_insights_loc_pham_vi_nguoi_nhan_va_loi_khong_lam_hong_bao_cao(monkeypatch):

@@ -930,7 +930,7 @@ def _period_has_critical(start_dt, end_dt, region=None):
         return False
 
 
-def _build_kpi_hierarchy(snap, region):
+def _build_kpi_hierarchy(snap, region, manager_codes=None):
     """Dựng cây Vùng -> QLV -> TDV từ snapshot KPI Bravo (get_bravo_kpi_tdv_snapshot, có
     manager_code từ 21/07/2026) — phục vụ báo cáo Weekly/Monthly của Trưởng kênh OTC/ETC (thấy rõ
     từng vùng) và Quản lý Vùng (thấy rõ từng QLV/TDV trong vùng mình), thay vì chỉ 1 dòng tổng gộp
@@ -978,8 +978,15 @@ def _build_kpi_hierarchy(snap, region):
                 "amount": round(sum(t.month_sale_amount for t in orphans), 2),
                 "pct": None, "tdvs": leaves}
 
-    qlvs = [r for r in snap if r.position_code == 'QLV']
-    tdvs = [r for r in snap if r.position_code == 'TDV']
+    # 15/09/2026: manager_codes = tập người CÓ cấp dưới trên FACT (get_bravo_manager_codes) - cùng tầng
+    # rollup với kpi_summary. Theo chức danh thì mất MN1 "Kênh MT"/MN4 "Chợ sỉ" (cờ trùng) và cấp dưới
+    # TK/CS: tháng 9/2026 cây Miền Nam cộng 6,32 tỷ trong khi tổng KPI ngay trên nó 14,67 tỷ.
+    if manager_codes is None:
+        qlvs = [r for r in snap if r.position_code == 'QLV']
+        tdvs = [r for r in snap if r.position_code == 'TDV']
+    else:
+        qlvs = [r for r in snap if r.employee_code in manager_codes]
+        tdvs = [r for r in snap if r.employee_code not in manager_codes]
     qlv_codes = {q.employee_code for q in qlvs}
     tdvs_by_manager = {}
     orphan_tdvs = []
@@ -1032,6 +1039,102 @@ def _month_tuple(dt):
 
 def _prev_month_tuple(dt):
     return (dt.year - 1, 12) if dt.month == 1 else (dt.year, dt.month - 1)
+
+
+def _previous_period_window(start_dt, end_dt, granularity=None, now=None):
+    """Kỳ liền trước cho "% so kỳ trước" — 15/09/2026. Trả (prev_start, prev_end) nửa mở.
+
+    end_dt đã kẹp tại hết hôm nay. DocDate trên Bravo là NGÀY (không giờ) nên so theo số ngày.
+    - weekly: cùng các thứ của tuần trước.
+    - monthly: cùng số ngày đã qua tính từ ngày 1 tháng trước, KHÔNG lấn sang tháng này; ngày cuối
+      tháng so với NGUYÊN tháng trước. Bản cũ lấy prev_start + period_len: chạy 31/03 ra 01/02-03/03
+      (lấn 3 ngày tháng 3), chạy 30/09 ra 01/08-30/08 (mất 31/08, đúng ngày dồn doanh thu cuối tháng).
+    - Daily (None): liền trước, cùng độ dài.
+    """
+    period_len = end_dt - start_dt
+    if granularity == "weekly":
+        prev_start = start_dt - timedelta(days=7)
+        return prev_start, prev_start + period_len
+    if granularity == "monthly":
+        prev_year, prev_month = _prev_month_tuple(start_dt)
+        prev_start = start_dt.replace(year=prev_year, month=prev_month, day=1)
+        next_month = (start_dt.replace(year=start_dt.year + 1, month=1) if start_dt.month == 12
+                      else start_dt.replace(month=start_dt.month + 1))
+        now = now or datetime.now()
+        het_hom_nay = now.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
+        if het_hom_nay >= next_month:
+            return prev_start, start_dt
+        return prev_start, min(prev_start + period_len, start_dt)
+    return start_dt - period_len, start_dt
+
+
+def _overdue_of(row):
+    return (float(row.overdue_1_15 or 0) + float(row.overdue_15_30 or 0)
+            + float(row.overdue_30_45 or 0) + float(row.overdue_gt_45 or 0))
+
+
+def _build_receivables(snap, region=None, channel=None, now=None):
+    """Mục công nợ của báo cáo từ snapshot Bravo ĐÃ lọc vùng.
+
+    15/09/2026: bản cũ dựng tuổi nợ, top khách nợ và nợ theo vùng từ CẢ HAI kênh rồi chỉ đổi con số
+    tổng, nên Giám đốc kênh OTC thấy khách nợ ETC trong top 5 và tổng các nhóm tuổi nợ không khớp nợ
+    quá hạn đang hiển thị. Nay mọi phần chi tiết lọc đúng kênh người nhận; otc_/etc_ giữ số từng kênh.
+    """
+    now = now or datetime.now()
+    otc_rows = [r for r in snap if r.sales_channel == 'OTC']
+    etc_rows = [r for r in snap if r.sales_channel == 'ETC']
+    scoped = otc_rows if channel == 'OTC' else etc_rows if channel == 'ETC' else list(snap)
+
+    total_overdue = sum(_overdue_of(r) for r in scoped)
+    balance_end = sum(float(r.balance_end or 0) for r in scoped)
+    aging = [
+        {"label": "Từ 1 đến 15 ngày", "amount": round(sum(float(r.overdue_1_15 or 0) for r in scoped), 2)},
+        {"label": "Từ 16 đến 30 ngày", "amount": round(sum(float(r.overdue_15_30 or 0) for r in scoped), 2)},
+        {"label": "Từ 31 đến 45 ngày", "amount": round(sum(float(r.overdue_30_45 or 0) for r in scoped), 2)},
+        {"label": "Trên 45 ngày", "amount": round(sum(float(r.overdue_gt_45 or 0) for r in scoped), 2)},
+    ]
+
+    by_channel = []
+    if channel is None:
+        for ch, rows in (("OTC", otc_rows), ("ETC", etc_rows)):
+            by_channel.append({"channel": ch, "overdue": round(sum(_overdue_of(r) for r in rows), 2),
+                               "balance": round(sum(float(r.balance_end or 0) for r in rows), 2)})
+
+    by_region = []
+    if region is None:
+        agg = {}
+        for r in scoped:
+            name = _region_label(r.area_code)
+            ov_bal = agg.setdefault(name, [0.0, 0.0])
+            ov_bal[0] += _overdue_of(r)
+            ov_bal[1] += float(r.balance_end or 0)
+        for name, (ov, bal) in sorted(agg.items(), key=lambda x: -x[1][0]):
+            by_region.append({"region": name, "overdue": round(ov, 2), "balance": round(bal, 2)})
+
+    overdue_rows = sorted(((_overdue_of(r), r) for r in scoped if _overdue_of(r) > 0),
+                          key=lambda x: x[0], reverse=True)
+    top_customers = [{
+        "customer_code": r.customer_code, "customer_name": r.customer_name,
+        "channel": r.sales_channel, "region": _region_label(r.area_code),
+        "overdue": round(ov, 2), "balance": round(float(r.balance_end or 0), 2),
+    } for ov, r in overdue_rows[:10]]
+
+    stamp = now.strftime("%d/%m/%Y %H:%M")
+    return {
+        "total_overdue": round(total_overdue, 2),
+        "balance_end": round(balance_end, 2),
+        "overdue_pct": round(total_overdue / balance_end * 100, 1) if balance_end > 0 else 0.0,
+        "otc_overdue": round(sum(_overdue_of(r) for r in otc_rows), 2),
+        "otc_balance": round(sum(float(r.balance_end or 0) for r in otc_rows), 2),
+        "etc_overdue": round(sum(_overdue_of(r) for r in etc_rows), 2),
+        "etc_balance": round(sum(float(r.balance_end or 0) for r in etc_rows), 2),
+        "aging": aging,
+        "by_channel": by_channel,
+        "by_region": by_region,
+        "top_overdue_customers": top_customers,
+        "period": f"Tức thời (đến {stamp})",
+        "as_of": stamp,
+    }
 
 
 def _build_etc_revenue_by_employee(start_dt, end_dt, region=None):
@@ -1135,21 +1238,8 @@ def get_digest_metrics(start_dt, end_dt, period_label, granularity=None, region=
     #    region/channel của audience đang xem báo cáo. Tự failover Supabase -> Bravo nội bộ (xem
     #    _period_revenue) nên KHÔNG cần mở connection ở đây nữa.
     otc_rev, etc_rev, otc_invoice_count, etc_invoice_count = _period_revenue(start_dt, end_dt, region=region)
-    period_len = end_dt - start_dt
-    # 14/07/2026: "kỳ trước" phải CĂN THEO LỊCH tuần/tháng (cùng vị trí ngày trong tuần/tháng
-    # trước), không phải lùi lại đúng period_len ngày kể từ start_dt. Bug cũ: start_dt luôn là
-    # thứ 2 đầu tuần/ngày 1 đầu tháng, nên "lùi period_len ngày" cho báo cáo ĐẦU tuần/tháng (còn
-    # ít ngày trôi qua) rơi vào ĐUÔI của tuần/tháng trước (vd thứ 7-CN) thay vì cùng vị trí đầu
-    # tuần/tháng trước — so sánh lệch pha, ngày cuối tuần doanh thu thấp tự nhiên khiến % tăng ảo
-    # rất cao (xác nhận thực tế: +465.5% khi so sai thứ 2-3 với thứ 7-CN tuần trước).
-    if granularity == "weekly":
-        prev_start = start_dt - timedelta(days=7)  # đúng 1 tuần trước, cùng thứ trong tuần
-    elif granularity == "monthly":
-        prev_year, prev_month = _prev_month_tuple(start_dt)
-        prev_start = start_dt.replace(year=prev_year, month=prev_month, day=1)  # ngày 1 tháng trước
-    else:
-        prev_start = start_dt - period_len  # Daily: giữ nguyên "hôm qua"
-    prev_end = prev_start + period_len
+    # 15/09/2026: ky truoc tinh o _previous_period_window (so cung so ngay, khong lan sang thang nay).
+    prev_start, prev_end = _previous_period_window(start_dt, end_dt, granularity)
     prev_otc_rev, prev_etc_rev, _, _ = _period_revenue(prev_start, prev_end, region=region)
     if channel == "OTC":
         etc_rev = prev_etc_rev = 0.0
@@ -1178,100 +1268,10 @@ def get_digest_metrics(start_dt, end_dt, period_label, granularity=None, region=
         if region_markers:
             snap = [r for r in snap if r.area_code in region_markers]
 
-        otc_snap = [r for r in snap if r.sales_channel == 'OTC']
-        etc_snap = [r for r in snap if r.sales_channel == 'ETC']
-        
-        total_overdue = sum(
-            float(r.overdue_1_15 or 0) + float(r.overdue_15_30 or 0) + float(r.overdue_30_45 or 0) + float(r.overdue_gt_45 or 0)
-            for r in snap)
-        balance_end = sum(float(r.balance_end or 0) for r in snap)
-        
-        otc_overdue = sum(
-            float(r.overdue_1_15 or 0) + float(r.overdue_15_30 or 0) + float(r.overdue_30_45 or 0) + float(r.overdue_gt_45 or 0)
-            for r in otc_snap)
-        otc_balance = sum(float(r.balance_end or 0) for r in otc_snap)
-        
-        etc_overdue = sum(
-            float(r.overdue_1_15 or 0) + float(r.overdue_15_30 or 0) + float(r.overdue_30_45 or 0) + float(r.overdue_gt_45 or 0)
-            for r in etc_snap)
-        etc_balance = sum(float(r.balance_end or 0) for r in etc_snap)
-        
-        # GD3a & GD3b: Enrich receivables dict with aging breakdown, channels, regions, top overdue
-        aging_1_15 = sum(float(r.overdue_1_15 or 0) for r in snap)
-        aging_15_30 = sum(float(r.overdue_15_30 or 0) for r in snap)
-        aging_30_45 = sum(float(r.overdue_30_45 or 0) for r in snap)
-        aging_gt_45 = sum(float(r.overdue_gt_45 or 0) for r in snap)
-        overdue_pct = (total_overdue / balance_end * 100) if balance_end > 0 else 0.0
-
-        aging_list = [
-            {"label": "Từ 1 đến 15 ngày", "amount": round(aging_1_15, 2)},
-            {"label": "Từ 16 đến 30 ngày", "amount": round(aging_15_30, 2)},
-            {"label": "Từ 31 đến 45 ngày", "amount": round(aging_30_45, 2)},
-            {"label": "Trên 45 ngày", "amount": round(aging_gt_45, 2)},
-        ]
-
-        by_channel_list = []
-        if channel is None:
-            for ch in ("OTC", "ETC"):
-                ch_rows = [r for r in snap if r.sales_channel == ch]
-                ch_ov = sum(float(r.overdue_1_15 or 0) + float(r.overdue_15_30 or 0) + float(r.overdue_30_45 or 0) + float(r.overdue_gt_45 or 0) for r in ch_rows)
-                ch_bal = sum(float(r.balance_end or 0) for r in ch_rows)
-                by_channel_list.append({"channel": ch, "overdue": round(ch_ov, 2), "balance": round(ch_bal, 2)})
-
-        by_region_list = []
-        if region is None:
-            reg_agg = {}
-            for r in snap:
-                reg_name = _region_label(r.area_code)
-                if reg_name not in reg_agg:
-                    reg_agg[reg_name] = [0.0, 0.0]
-                r_ov = float(r.overdue_1_15 or 0) + float(r.overdue_15_30 or 0) + float(r.overdue_30_45 or 0) + float(r.overdue_gt_45 or 0)
-                reg_agg[reg_name][0] += r_ov
-                reg_agg[reg_name][1] += float(r.balance_end or 0)
-            for reg_name, (ov, bal) in sorted(reg_agg.items(), key=lambda x: -x[1][0]):
-                by_region_list.append({"region": reg_name, "overdue": round(ov, 2), "balance": round(bal, 2)})
-
-        top_customers = []
-        enriched_snap = []
-        for r in snap:
-            r_ov = float(r.overdue_1_15 or 0) + float(r.overdue_15_30 or 0) + float(r.overdue_30_45 or 0) + float(r.overdue_gt_45 or 0)
-            if r_ov > 0:
-                enriched_snap.append((r_ov, r))
-        enriched_snap.sort(key=lambda x: x[0], reverse=True)
-
-        for r_ov, r in enriched_snap[:10]:
-            top_customers.append({
-                "customer_code": r.customer_code,
-                "customer_name": r.customer_name,
-                "channel": r.sales_channel,
-                "region": _region_label(r.area_code),
-                "overdue": round(r_ov, 2),
-                "balance": round(float(r.balance_end or 0), 2)
-            })
-
-        receivables = {
-            "total_overdue": round(total_overdue, 2),
-            "balance_end": round(balance_end, 2),
-            "overdue_pct": round(overdue_pct, 1),
-            "otc_overdue": round(otc_overdue, 2),
-            "otc_balance": round(otc_balance, 2),
-            "etc_overdue": round(etc_overdue, 2),
-            "etc_balance": round(etc_balance, 2),
-            "aging": aging_list,
-            "by_channel": by_channel_list,
-            "by_region": by_region_list,
-            "top_overdue_customers": top_customers,
-            "period": f"Tức thời (đến {datetime.now().strftime('%d/%m/%Y %H:%M')})",
-            "as_of": datetime.now().strftime("%d/%m/%Y %H:%M")
-        }
+        # 15/09/2026: tuoi no, top khach no, no theo vung loc DUNG kenh cua nguoi nhan (xem _build_receivables).
+        receivables = _build_receivables(snap, region=region, channel=channel)
     except Exception as e:
         print(f"[DIGEST] Bravo lỗi khi lấy công nợ ({e}) — bỏ trống mục này.")
-
-    if receivables and channel in ("OTC", "ETC"):
-        receivables["total_overdue"] = receivables[f"{channel.lower()}_overdue"]
-        receivables["balance_end"] = receivables[f"{channel.lower()}_balance"]
-        if receivables["balance_end"] > 0:
-            receivables["overdue_pct"] = round(receivables["total_overdue"] / receivables["balance_end"] * 100, 1)
 
 
     # 4. Tồn kho — 20/07/2026: chuyển sang Bravo-first qua get_bravo_inventory_snapshot() (src/
@@ -1419,7 +1419,20 @@ def get_digest_metrics(start_dt, end_dt, period_label, granularity=None, region=
             # Quản lý Vùng (thấy rõ từng QLV/TDV) — dùng raw_snap (CHƯA lọc target>0, khác
             # kpi_summary ở trên) để không "biến mất" người chỉ vì họ chưa có chỉ tiêu tháng này.
             if raw_snap:
-                kpi_breakdown = _build_kpi_hierarchy(raw_snap, region)
+                # 15/09/2026: nút quản lý lấy từ snapshot GỒM cờ trùng (như kpi_summary), cấp dưới lấy
+                # mọi chức danh bán hàng đã lọc trùng - để tổng cây khớp tổng chỉ tiêu ngay phía trên.
+                from src.alerts import get_bravo_manager_codes
+                tree_managers = get_bravo_manager_codes()
+                tree_nodes = [r for r in get_bravo_kpi_tdv_snapshot(position_codes=('TDV', 'QLV'),
+                                                                     include_duplicates=True)
+                              if r.employee_code in tree_managers]
+                tree_members = [r for r in get_bravo_kpi_tdv_snapshot(position_codes=('TDV', 'CS', 'TK', 'CTV'))
+                                if r.employee_code not in tree_managers]
+                if markers:
+                    tree_nodes = [r for r in tree_nodes if r.area_code in markers]
+                    tree_members = [r for r in tree_members if r.area_code in markers]
+                kpi_breakdown = _build_kpi_hierarchy(tree_nodes + tree_members, region,
+                                                     manager_codes=tree_managers)
         except Exception as e:
             # 20/07/2026: bỏ fallback Supabase kpi_summary — xác nhận bảng đó chỉ có 6/20 QLV
             # thật (import 1 lần từ đầu dự án, không refresh), hiện số liệu đó còn tệ hơn bỏ trống
@@ -1569,7 +1582,7 @@ def get_daily_digest_metrics(region=None, channel=None):
 def get_weekly_digest_metrics(region=None, channel=None):
     """Tổng hợp dữ liệu TUẦN ĐANG CHẠY (thứ 2 tới hiện tại) phục vụ Weekly Report (Email).
     13/07/2026: đổi từ "tuần TRƯỚC đã kết thúc trọn vẹn" sang tuần hiện tại — lịch chạy
-    DNH_Weekly_Report là thứ Bảy 17:45 (scripts/register_digest_schedule.bat), nghĩa là tuần
+    DNH_Weekly_Report là thứ Bảy 18:00 (scripts/register_digest_schedule.bat), nghĩa là tuần
     hiện tại (thứ 2 - hiện tại) CHƯA hết Chủ Nhật; logic cũ lùi thêm 1 tuần nữa để lấy tuần
     "đã kết thúc trọn vẹn", khiến báo cáo trễ tới gần 2 tuần so với thời điểm gửi (vd gửi 11/07
     mà báo cáo tuần 29/06-05/07). ĐÁNH ĐỔI (giống Monthly Report): thiếu dữ liệu chiều/tối thứ
@@ -1605,7 +1618,9 @@ def get_monthly_digest_metrics(region=None, channel=None):
     # cuối tháng)) thay vì luôn ghi hết tháng theo lịch (vd "01/07 - 31/07" khi mới 21/07).
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     last_shown = min(today_start, month_end - timedelta(days=1))
-    running_suffix = " — đang chạy" if today_start < month_end - timedelta(days=1) else ""
+    # 15/09/2026: ngay cuoi thang (lich gui 17:45) van chua tron ngay - ban cu bo nhan, doc nhu so ca thang.
+    running_suffix = (" — đang chạy" if today_start < month_end - timedelta(days=1)
+                      else f" — tạm tính đến {now.strftime('%H:%M')}")
     label = f"Tháng {month_start.strftime('%m/%Y')} ({month_start.strftime('%d/%m')} - {last_shown.strftime('%d/%m/%Y')}{running_suffix})"
     return get_digest_metrics(month_start, month_end, label, granularity="monthly", region=region, channel=channel)
 
