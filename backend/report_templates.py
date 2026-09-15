@@ -1971,16 +1971,32 @@ def revenue_monthly_series(month_to: str = None, months_back: int = 12, include_
         # C02/S02 yeu cau ca mien. Tra san actual + target OTC tung mien trong cung payload de
         # model khong tu ghep target toan cong ty vao MN, hoac cong nham target MN vao tong.
         if scope_channel != "ETC" and not scope_employee_code:
-            region_actuals = revenue_by_region(
-                d_from, d_to, scope_area_code=scope_area_code, channel="OTC",
-            )
             target_by_region = plan.get("otc_by_region") or {}
             region_codes = ([scope_area_code] if scope_area_code else ["MB", "MT", "MN"])
-            invoice_actual_by_region = {row["area"]: _f(row["revenue"]) for row in region_actuals}
             s02_actual_by_region = plan.get("otc_actual_by_region_s02") or {}
-            actual_by_region = s02_actual_by_region or invoice_actual_by_region
-            actual_source = ("FACT_ThongKeTinhLuong_S02" if s02_actual_by_region
-                             else "HOA_DON_OTC_FALLBACK")
+            # 15/09/2026 (review PR #14): (1) ban dau goi revenue_by_region(d_from, d_to) voi bien SOT
+            # tu vong lap truoc -> MOI thang lay doanh thu vung cua month_to; (2) goi ca khi da co S02
+            # (ket qua khong dung); (3) thieu bang vung lam hong ca chuoi thang. Chi goi khi can du phong
+            # hoa don, dung khoang ngay CUA THANG DO, va loi du lieu vung khong lam hong chuoi.
+            region_note = None
+            if s02_actual_by_region:
+                actual_by_region, actual_source = s02_actual_by_region, "FACT_ThongKeTinhLuong_S02"
+            else:
+                month_from, month_to_day = _month_bounds(ym)
+                try:
+                    region_actuals = revenue_by_region(
+                        month_from, month_to_day, scope_area_code=scope_area_code, channel="OTC",
+                    )
+                    actual_by_region = {row["area"]: _f(row["revenue"]) for row in region_actuals}
+                    actual_source = "HOA_DON_OTC_FALLBACK"
+                except sqlite3.OperationalError as exc:
+                    actual_by_region, actual_source = None, None
+                    region_note = (f"Chua tach duoc doanh thu OTC theo mien cho thang nay (thieu du lieu "
+                                   f"vung: {str(exc)[:120]}). KHONG coi cac mien bang 0.")
+        if scope_channel != "ETC" and not scope_employee_code and actual_by_region is None:
+            item["otc_by_region"] = None
+            item["otc_region_note"] = region_note
+        elif scope_channel != "ETC" and not scope_employee_code:
             item["otc_by_region"] = [{
                 "area_code": area,
                 "otc_revenue": actual_by_region.get(area, 0.0),
