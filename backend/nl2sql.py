@@ -218,6 +218,16 @@ def _required_tool_for_question(question: str) -> str | None:
             and "thang" in q):
         return "get_revenue_tree"
 
+    # 15/09/2026 (nhat ky UAT 13:59-14:11): ba cau khach hang/KPI co tool DANH SACH rieng. Truoc day
+    # khong co tool nao nen chatbot mo ta chung, thieu khach hoac khong goi SQL.
+    if any(marker in q for marker in ("khach hang moi", "khach moi")) and any(
+            marker in q for marker in ("danh sach", "ngay ghi nhan")):
+        return "get_new_customer_list"
+    if "tai don" in q and any(marker in q for marker in ("chua dat", "chua tai don", "danh sach")):
+        return "get_reorder_pending_customers"
+    if ("san pham trong tam" in q or ("trong tam" in q and "kpi" in q)) and "sku" not in q \
+            and not any(marker in q for marker in ("dm1", "dm2", "dm3")):
+        return "get_focus_product_kpi"
     # C11/S70 co nhac "top 3 mien/vung" nhung trong tam la muc tap trung dong thoi theo
     # khach + SKU + dia ly va xu huong thang. Phai chan truoc luat doanh thu theo vung rong.
     if any(marker in q for marker in ("phu thuoc top", "phu thuoc vao top", "muc do tap trung")) \
@@ -1154,6 +1164,36 @@ TEMPLATE_TOOLS = [
             "expiring_days": {"type": "integer", "description": "Nguong 'sap het han', mac dinh 90 ngay."},
             "only_active": {"type": "boolean", "description": "Chi xet hop dong con hieu luc (mac dinh true)."},
             "limit": {"type": "integer", "minimum": 1, "maximum": 200}}, "required": []},
+    },
+    {
+        "name": "get_new_customer_list",
+        "description": "DANH SACH KHACH HANG MOI trong thang (co IsNC cua Bravo) kem NGAY GHI NHAN (NCSaveDate - "
+                       "ngay hoa don dau tien), doanh so thang, TDV va QLV phu trach (ma kem ten). BAT BUOC "
+                       "dung khi hoi danh sach khach moi / ngay ghi nhan khach moi. Lay snapshot moi nhat cua "
+                       "TUNG nhan vien trong thang. Khong dung ngay snapshot lam ngay ghi nhan. Chi kenh OTC.",
+        "input_schema": {"type": "object", "properties": {
+            "year_month": {"type": "string", "description": "YYYY-MM; mac dinh thang co snapshot moi nhat."},
+            "limit": {"type": "integer", "minimum": 1, "maximum": 1000}}, "required": []},
+    },
+    {
+        "name": "get_reorder_pending_customers",
+        "description": "DANH SACH KHACH PHAT SINH trong cua so tai don (ROMonth, thuong 3 thang) nhung CHUA TAI "
+                       "DON trong thang (chua duoc tinh vao KPI khach tai don), kem lan mua gan nhat, TDV/QLV "
+                       "phu trach va KPI tai don tung TDV (so khach tai don / chi tieu). BAT BUOC dung khi hoi "
+                       "khach chua dat KPI tai don. Tra DANH SACH khach, khong chi mo ta chung. Chi kenh OTC.",
+        "input_schema": {"type": "object", "properties": {
+            "year_month": {"type": "string", "description": "YYYY-MM; mac dinh thang co snapshot moi nhat."},
+            "limit": {"type": "integer", "minimum": 1, "maximum": 1000}}, "required": []},
+    },
+    {
+        "name": "get_focus_product_kpi",
+        "description": "DOANH SO SAN PHAM TRONG TAM va KPI trong tam theo QUAN LY VUNG: doanh so trong tam, chi "
+                       "tieu, % dat va diem KPI tu ket qua tinh luong Bravo (tang QLV, khong cong cac tang). Tai "
+                       "khoan QLV kem tung thanh vien doi. BAT BUOC dung khi hoi doanh so/KPI san pham trong tam "
+                       "theo QLV/doi. KHONG dung cho % target SKU trong tam theo khach hang.",
+        "input_schema": {"type": "object", "properties": {
+            "year_month": {"type": "string", "description": "YYYY-MM; mac dinh thang moi nhat."},
+            "limit": {"type": "integer", "minimum": 1, "maximum": 500}}, "required": []},
     },
     {
         "name": "get_etc_revenue_by_item_type",

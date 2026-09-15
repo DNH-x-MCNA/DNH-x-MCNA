@@ -153,7 +153,12 @@ CREATE TABLE IF NOT EXISTS fact_tonghopkhachhang (
     employee_code TEXT, customer_code TEXT, amount_ct REAL,
     month_sale_target REAL, save_date TEXT, is_nc INTEGER, manager_code TEXT,
     year_sale_target REAL, amount_cus REAL, is_ro INTEGER, is_ac INTEGER,
-    max_customer_ord_amount REAL, emp_dms_code TEXT
+    max_customer_ord_amount REAL, emp_dms_code TEXT,
+    -- 15/09/2026: nc_save_date = NCSaveDate (ngay ghi nhan khach moi; do tren Bravo trung ngay hoa don
+    -- dau tien trong thang 627/627 khach T8, 195/195 khach T9). ro_* = cua so va trang thai tai don:
+    -- ROMonth (so thang cua so, thuong 3), ROLastDate (lan mua gan nhat), ReOrderStartDate (dau cua so),
+    -- ReOrderSaveDate (ngay ghi nhan da tai don).
+    nc_save_date TEXT, ro_month REAL, ro_last_date TEXT, reorder_start_date TEXT, reorder_save_date TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_ftk_savedate ON fact_tonghopkhachhang(save_date);
 CREATE INDEX IF NOT EXISTS idx_ftk_employee ON fact_tonghopkhachhang(employee_code);
@@ -205,6 +210,7 @@ CREATE TABLE IF NOT EXISTS fact_thongketinhluong (
     v22_amount REAL, v22_percent REAL, v22_bonus REAL,
     v25_amount REAL, v25_percent REAL, v25_bonus REAL,
     target_product_amount REAL, target_product_percent REAL, tpr_point REAL,
+    tpr_target_amount REAL,   -- 15/09/2026: TPRTargetAmount = chi tieu doanh so san pham trong tam
     lunch_amount REAL, transport_amount REAL, phone_amount REAL,
     salary_coeff REAL
 );
@@ -322,7 +328,10 @@ _COLUMN_MIGRATIONS = {
     "brv_tonkhodklot": [("year", "INTEGER")],
     "fact_tonghopkhachhang": [("manager_code", "TEXT"), ("year_sale_target", "REAL"),
                                ("amount_cus", "REAL"), ("is_ro", "INTEGER"), ("is_ac", "INTEGER"),
-                               ("max_customer_ord_amount", "REAL"), ("emp_dms_code", "TEXT")],
+                               ("max_customer_ord_amount", "REAL"), ("emp_dms_code", "TEXT"),
+                               ("nc_save_date", "TEXT"), ("ro_month", "REAL"), ("ro_last_date", "TEXT"),
+                               ("reorder_start_date", "TEXT"), ("reorder_save_date", "TEXT")],
+    "fact_thongketinhluong": [("tpr_target_amount", "REAL")],
 }
 
 

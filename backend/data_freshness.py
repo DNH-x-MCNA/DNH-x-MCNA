@@ -52,6 +52,8 @@ _SOURCES = {
     "sales_otc": _SourceSpec("sales_otc", "warehouse", "Doanh thu OTC", "vhoadon_otc", "doc_date"),
     "sales_etc": _SourceSpec("sales_etc", "warehouse", "Doanh thu ETC", "vhoadon_etc", "doc_date"),
     "kpi": _SourceSpec("kpi", "warehouse", "KPI kinh doanh", "fact_tonghopkhachhang", "save_date", "save_date"),
+    # Dat TRUOC "salary": cung bang, dict _LOCAL_TABLE_SOURCES giu khoa sau cung (salary) cho raw SQL.
+    "kpi_salary_result": _SourceSpec("kpi_salary_result", "warehouse", "KPI tính lương", "fact_thongketinhluong", "save_date", "save_date"),
     "salary": _SourceSpec("salary", "warehouse", "Thưởng và phụ cấp", "fact_thongketinhluong", "save_date", "save_date"),
     "debt": _SourceSpec("debt", "warehouse", "Công nợ khách hàng", "fact_congno_khachhang", "snapshot_at", "snapshot_date"),
     "inventory": _SourceSpec("inventory", "warehouse", "Tồn kho", "brv_tonkhodk"),
@@ -77,6 +79,9 @@ _TEMPLATE_SOURCES = {
     "check_order_timing": ("sales_otc", "sales_etc"),
     "get_revenue_reconciliation": ("sales_otc", "sales_etc", "kpi"),
     "get_employee_kpi": ("kpi",),
+    "get_new_customer_list": ("kpi",),
+    "get_reorder_pending_customers": ("kpi", "kpi_salary_result"),
+    "get_focus_product_kpi": ("kpi_salary_result",),
     "get_employee_daily_kpi": ("sales_otc", "kpi"),
     "get_employee_directory": ("employee",),
     "get_qlv_change_history": ("employee",),

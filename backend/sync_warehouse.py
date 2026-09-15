@@ -328,7 +328,9 @@ def sync_fact_tonghopkhachhang(days=90):
     start = dt.date.today() - dt.timedelta(days=days)
     _, rows = bravo_query(
         "SELECT EmployeeCode, CustomerCode, Amount_CT, MonthSaleTarget, SaveDate, IsNC, ManagerCode, "
-        "YearSaleTarget, Amount_Cus, IsRO, IsAC, MaxCustomerOrdAmount, EmpDMSCode "
+        "YearSaleTarget, Amount_Cus, IsRO, IsAC, MaxCustomerOrdAmount, EmpDMSCode, "
+        # 15/09/2026: ngay ghi nhan khach moi va cua so/trang thai tai don (UAT nhat ky 15/09).
+        "NCSaveDate, ROMonth, ROLastDate, ReOrderStartDate, ReOrderSaveDate "
         "FROM dbo.FACT_TongHopKhachHang WHERE SaveDate >= :a", a=str(start),
     )
     conn = get_conn()
@@ -337,8 +339,9 @@ def sync_fact_tonghopkhachhang(days=90):
         conn.executemany(
             "INSERT INTO fact_tonghopkhachhang (employee_code,customer_code,amount_ct,month_sale_target,"
             "save_date,is_nc,manager_code,year_sale_target,amount_cus,is_ro,is_ac,"
-            "max_customer_ord_amount,emp_dms_code) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)", rows,
+            "max_customer_ord_amount,emp_dms_code,nc_save_date,ro_month,ro_last_date,"
+            "reorder_start_date,reorder_save_date) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", rows,
         )
     conn.commit()
     conn.close()
@@ -370,7 +373,7 @@ def sync_fact_thongketinhluong(days=400):
         "V15Amount, V15Percent_R, V15Bonus, "
         "V22Amount, V22Percent_R, V22Bonus, "
         "V25Amount, V25Percent_R, V25Bonus, "
-        "TargetProductAmount, TargetProductPercent_R, TPRPoint, "
+        "TargetProductAmount, TargetProductPercent_R, TPRPoint, TPRTargetAmount, "
         "LunchAmount_R, TransportAmount_R, PhoneAmount_R, SalaryCoeff "
         "FROM dbo.FACT_ThongKeTinhLuong WHERE SaveDate >= :a", a=str(start),
     )
@@ -385,9 +388,9 @@ def sync_fact_thongketinhluong(days=400):
             "new_cus_quantity,new_cus_target,new_cus_percent,active_cus_quantity,active_cus_target,"
             "active_cus_percent,aso_quantity,aso_percent,aso_bonus,call_quantity,call_target,call_percent,"
             "v15_amount,v15_percent,v15_bonus,v22_amount,v22_percent,v22_bonus,v25_amount,v25_percent,"
-            "v25_bonus,target_product_amount,target_product_percent,tpr_point,lunch_amount,"
-            "transport_amount,phone_amount,salary_coeff) "
-            "VALUES (" + ",".join(["?"] * 52) + ")",
+            "v25_bonus,target_product_amount,target_product_percent,tpr_point,tpr_target_amount,"
+            "lunch_amount,transport_amount,phone_amount,salary_coeff) "
+            "VALUES (" + ",".join(["?"] * 53) + ")",
             rows,
         )
     conn.commit()

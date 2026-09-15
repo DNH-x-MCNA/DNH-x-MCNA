@@ -19,7 +19,8 @@ def test_catalog_smoke_phu_dung_toan_bo_tool_da_dang_ky():
     # salary_aso_detail tu hai nhanh sua tay may 24.
     # 13/09/2026: 45 sau khi them get_etc_contract_status cho C44/M42.
     # 15/09/2026: 46 sau khi them get_etc_revenue_by_item_type (UAT dnh_etc, nhom hang ETC).
-    assert len(cases) == 46
+    # 15/09/2026: 49 sau khi them danh sach khach moi, khach chua tai don, KPI trong tam.
+    assert len(cases) == 49
     assert set(cases) == set(checker.rt.TEMPLATES)
 
 
