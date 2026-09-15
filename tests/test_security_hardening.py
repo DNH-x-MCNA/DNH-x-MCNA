@@ -196,7 +196,10 @@ def test_channel_scope_filters_advertised_tools_and_unknown_role_gets_none():
     }
     assert "get_revenue_by_channel" in etc_names
     assert "get_revenue_reconciliation" not in etc_names
-    assert "get_inventory_by_region" not in etc_names
+    # 15/09/2026: anh Dang chot mo ton kho cho tai khoan gioi han kenh (ton kho khong theo kenh).
+    assert "get_inventory_by_region" in etc_names
+    assert "get_inventory_item_stock" in etc_names
+    assert "get_inventory_expiry_report" not in etc_names   # kem khach mua OTC -> chi tai khoan OTC
     assert "get_salary_ranking" not in etc_names
     assert not (etc_names & set(nl2sql.RAW_SQL_TOOLS))
     assert nl2sql._tools_for_request(scope_role="tp") == []
@@ -231,8 +234,10 @@ def test_channel_policy_is_enforced_again_at_execution(monkeypatch):
         "get_revenue_reconciliation", {}, scope_channel="ETC",
         scope_role="regional_director",
     )
+    # 15/09/2026: get_inventory_by_region da duoc mo cho tai khoan gioi han kenh (anh Dang chot - ton kho
+    # khong theo kenh). Giu y dinh cua test bang mot tool van con chinh sach "blocked".
     blocked_unscoped = rt.call_template(
-        "get_inventory_by_region", {}, scope_channel="OTC",
+        "get_employee_directory", {}, scope_channel="OTC",
         scope_role="regional_director",
     )
 
@@ -240,6 +245,7 @@ def test_channel_policy_is_enforced_again_at_execution(monkeypatch):
     assert seen["scope_channel"] == "ETC"
     assert blocked_otc_only["ok"] is False
     assert blocked_unscoped["ok"] is False
+    assert rt.template_available_for_channel("get_inventory_by_region", "OTC") is True
 
 
 def test_salary_is_blocked_for_regional_director_but_scoped_for_qlv(monkeypatch):

@@ -594,6 +594,8 @@ def _tool_cases_40():
         "get_new_customer_list": ({"year_month": ym, "limit": 10}, dict),
         "get_reorder_pending_customers": ({"year_month": ym, "limit": 10}, dict),
         "get_focus_product_kpi": ({"year_month": ym}, dict),
+        # 15/09/2026: ton kho theo ten san pham (UAT OTC-only C-Level "ton kho bo phe").
+        "get_inventory_item_stock": ({"item_search": "bo phe"}, dict),
         "get_employee_kpi": ({"as_of_date": d_to, "limit": 10}, dict),
         "get_employee_daily_kpi": ({"employee_code": employee, "year_month": ym}, dict),
         "compare_periods": ({"date_from_a": d_from, "date_to_a": d_to,

@@ -8096,6 +8096,93 @@ _EXPIRY_BUCKET_DAYS = [
 ]
 
 
+def inventory_item_stock(item_search: str, area_code: str = None, scope_area_code: str = None,
+                         limit: int = 30) -> dict:
+    """SO LUONG TON KHO THEO SAN PHAM, tim theo ten/ma (khong phan biet hoa thuong va dau tieng Viet).
+
+    15/09/2026 (UAT OTC-only C-Level 14:40 "So luong ton kho bo phe tinh den hom nay"):
+      1. Moi tool ton kho bi chan voi tai khoan gioi han kenh nen chatbot tra loi khong co SQL. Anh Dang
+         chot 15/09: tai khoan gioi han kenh xem duoc ton kho (van giu gioi han vung).
+      2. Khong co tool tim ton theo TEN san pham: inventory_by_region chi co tong theo vung,
+         inventory_expiry_report theo lo/han dung. SQLite LIKE khong gap chu co dau ("Bổ Phế" khac
+         "bổ phế"), nen so khop tai Python sau khi bo dau.
+    Chi tra SO LUONG theo don vi tinh tung ma - khong cong giua cac ma (Lo/Vien/Chiec khac nhau) va
+    khong tra gia tri ton (cot gia tri thieu/am dien rong, xem checker S27)."""
+    search = _fold_question(item_search)
+    if not search:
+        return {"error": "Can ten hoac ma san pham de tra cuu ton kho."}
+    if scope_area_code:
+        area_code = scope_area_code
+    branch_filter = _AREA_TO_BRANCH.get(area_code) if area_code else None
+    if area_code and not branch_filter:
+        return {"error": f"Vung {area_code} khong hop le (MB/MT/MN)."}
+    tokens = search.split()
+    raw_search = str(item_search).strip()
+    matched = {}
+    for p in _q("SELECT code, name, unit, id_code FROM brv_sanpham WHERE id_code IS NOT NULL"):
+        if all(token in _fold_question(p["name"]) for token in tokens) or (
+                raw_search and str(p["code"] or "").startswith(raw_search)):
+            matched[p["id_code"]] = p
+    if not matched:
+        return {"status": "NO_MATCH", "item_search": item_search, "matched_items": 0,
+                "note": "Khong tim thay san pham khop ten/ma trong danh muc; KHONG ket luan ton kho bang 0."}
+    ids = list(matched)
+    ph = ",".join("?" for _ in ids)
+    nam_kd = _nam_moi_nhat("brv_tonkhodk", "fiscal_year")
+    sql = ("SELECT t.item_id, k.branch_code, SUM(t.quantity) qty FROM brv_tonkhodk t "
+           "LEFT JOIN brv_kho k ON k.id_code=t.warehouse_id "
+           f"WHERE t.is_active=1 AND t.item_id IN ({ph})")
+    params = list(ids)
+    if nam_kd is not None:
+        sql += " AND t.fiscal_year=?"
+        params.append(nam_kd)
+    if branch_filter:
+        sql += " AND k.branch_code=?"
+        params.append(branch_filter)
+    by_item = {}
+    for r in _q(sql + " GROUP BY t.item_id, k.branch_code", tuple(params)):
+        by_item.setdefault(r["item_id"], {"kinh_doanh": [], "san_xuat": None})["kinh_doanh"].append({
+            "branch_code": r["branch_code"], "kho": _BRANCH_LABEL.get(r["branch_code"], r["branch_code"]),
+            "so_luong": _f(r["qty"])})
+    nam_sx = None
+    if not area_code:
+        # Kho san xuat khong thuoc vung MB/MT/MN nao - an voi tai khoan bi gioi han vung (nhu inventory_by_region).
+        nam_sx = _nam_moi_nhat("brvsx_tonkhodk", "year")
+        sql_sx = f"SELECT t.item_id, SUM(t.quantity) qty FROM brvsx_tonkhodk t WHERE t.is_active=1 AND t.item_id IN ({ph})"
+        params_sx = list(ids)
+        if nam_sx is not None:
+            sql_sx += " AND t.year=?"
+            params_sx.append(nam_sx)
+        try:
+            for r in _q(sql_sx + " GROUP BY t.item_id", tuple(params_sx)):
+                by_item.setdefault(r["item_id"], {"kinh_doanh": [], "san_xuat": None})["san_xuat"] = _f(r["qty"])
+        except sqlite3.OperationalError:
+            pass
+    rows = []
+    for item_id, p in matched.items():
+        stock = by_item.get(item_id, {"kinh_doanh": [], "san_xuat": None})
+        rows.append({
+            "item_code": p["code"], "item_name": p["name"], "don_vi_tinh": p["unit"],
+            "ton_kho_kinh_doanh": sum(b["so_luong"] for b in stock["kinh_doanh"]),
+            "ton_kinh_doanh_theo_kho": sorted(stock["kinh_doanh"], key=lambda b: str(b["branch_code"] or "")),
+            "ton_kho_san_xuat": None if area_code else stock["san_xuat"],
+            "co_ban_ghi_ton": bool(stock["kinh_doanh"]) or stock["san_xuat"] is not None,
+        })
+    rows.sort(key=lambda r: -(r["ton_kho_kinh_doanh"] + (r["ton_kho_san_xuat"] or 0)))
+    limit = max(1, min(int(limit or 30), 200))
+    return {
+        "item_search": item_search, "matched_items": len(rows), "rows": rows[:limit],
+        "rows_truncated": len(rows) > limit, "scope_area_code": area_code,
+        "nam_tai_chinh_kinh_doanh": nam_kd, "nam_san_xuat": nam_sx,
+        "definition": (
+            "So luong ton theo bang ton kho Bravo, nam moi nhat: he KINH DOANH (kho B01-B04) va he SAN XUAT - "
+            "hai he tach han, khong trung. Moi ma dung don vi tinh rieng, KHONG cong giua cac ma. Khong co "
+            "ban ghi ton (co_ban_ghi_ton=false) nghia la khong co dong ton, khong khang dinh ton bang 0. "
+            "Tai khoan gioi han vung khong thay kho san xuat. Khong tra gia tri ton (cot gia tri thieu/am)."),
+        "data_as_of": latest_data_date(),
+    }
+
+
 def _expiry_bucket(days_left: float) -> str:
     if days_left < 0:
         return "het_han"
@@ -8544,6 +8631,38 @@ def _collection_source_gap() -> dict:
     }
 
 
+def _gan_nguoi_phu_trach_cong_no(rows: list) -> None:
+    """Gan TDV/QLV phu trach (ma kem ten) cho danh sach khach cong no, theo snapshot KPI gan nhat cua
+    TUNG khach. Nguon phan cong chi phu OTC; khach khong co phan cong thi ghi ro, khong bo trong im lang."""
+    codes = [r["customer_code"] for r in rows if r.get("customer_code")]
+    if not codes:
+        return
+    ph = ",".join("?" for _ in codes)
+    try:
+        assignments = _q(
+            "WITH gan AS (SELECT customer_code, MAX(save_date) d FROM fact_tonghopkhachhang "
+            f"WHERE customer_code IN ({ph}) GROUP BY customer_code) "
+            "SELECT f.customer_code, f.employee_code, f.manager_code, nv.position_code, 0 amount_ct "
+            "FROM fact_tonghopkhachhang f JOIN gan ON gan.customer_code=f.customer_code AND gan.d=f.save_date "
+            "LEFT JOIN (SELECT employee_code, MAX(position_code) position_code FROM dim_nhanvien "
+            "GROUP BY employee_code) nv ON nv.employee_code=f.employee_code", tuple(codes))
+    except sqlite3.OperationalError:
+        assignments = []
+    by_customer = {}
+    for row in _prefer_employee_tier(assignments):
+        by_customer.setdefault(row["customer_code"], row)
+    names = _employee_name_map([a["employee_code"] for a in by_customer.values()]
+                               + [a["manager_code"] for a in by_customer.values()])
+    for row in rows:
+        assigned = by_customer.get(row.get("customer_code"))
+        if assigned:
+            row.update(_nguoi_phu_trach(assigned, names))
+        else:
+            row.update(employee_code=None, employee_name=None, manager_code=None, manager_name=None,
+                       nguoi_phu_trach_ghi_chu=("Khong co phan cong KPI (OTC) cho khach nay trong kho; "
+                                                "khach ETC khong co TDV/QLV phu trach tren nguon."))
+
+
 def receivables_overview(top_n: int = 10, scope_area_code: str = None,
                          scope_channel: str = None, scope_employee_code: str = None) -> dict:
     """Tong quan CONG NO tu kho local fact_congno_khachhang (snapshot tuc thoi tu SP goc DNH
@@ -8661,6 +8780,21 @@ def receivables_overview(top_n: int = 10, scope_area_code: str = None,
              tuple(params) + (int(top_n),))
     top_customers = [{"customer_code": r["customer_code"], "customer_name": r["name"],
                       "balance_end": _f(r["bal"]), "total_overdue": _f(r["od"])} for r in top]
+    # 15/09/2026 (UAT OTC C-Level 14:25 "Bo sung nhan vien, quan ly vung tuong ung"): kem TDV/QLV phu
+    # trach theo phan cong KPI cua tung khach - pham vi da loc o tren nen khong mo rong quyen.
+    _gan_nguoi_phu_trach_cong_no(top_customers)
+    # 15/09/2026 (UAT 14:23 "thieu HCM04162, HCM04298"): hai khach nay du no 2,91 ty / 1,06 ty nhung SP goc
+    # ghi qua han = 0 (toan bo o CloseBal0). Top VAN xep theo no qua han (anh Dang chot); liet ke rieng
+    # khach du no lon chua qua han de nguoi doc khong nham la bi bo sot.
+    big_not_overdue = _q(
+        f"SELECT customer_code, MAX(customer_name) name, COALESCE(SUM(balance_end),0) bal "
+        f"FROM fact_congno_khachhang {where} GROUP BY customer_code "
+        f"HAVING COALESCE(SUM(total_overdue),0)=0 AND COALESCE(SUM(balance_end),0)>0 "
+        f"ORDER BY SUM(balance_end) DESC LIMIT 5", tuple(params))
+    large_balance_not_overdue = [{"customer_code": r["customer_code"], "customer_name": r["name"],
+                                  "balance_end": _f(r["bal"]), "total_overdue": 0.0}
+                                 for r in big_not_overdue]
+    _gan_nguoi_phu_trach_cong_no(large_balance_not_overdue)
 
     result = {
         "receivable_status": "ok",
@@ -8683,6 +8817,9 @@ def receivables_overview(top_n: int = 10, scope_area_code: str = None,
         "by_channel": channels,
         "by_region": regions,
         "top_overdue_customers": top_customers,
+        "ranking_basis": ("Top xep theo NO QUA HAN (tong bon nhom tuoi no cua SP goc), khong theo du no. "
+                          "Khach du no lon nhung chua qua han nam o du_no_lon_chua_qua_han."),
+        "du_no_lon_chua_qua_han": large_balance_not_overdue,
         "collection_activity": _collection_source_gap(),
     }
     try:
@@ -11470,6 +11607,7 @@ TEMPLATES = {
     "check_order_timing": order_timing_check,
     "get_inventory_by_region": inventory_by_region,
     "get_inventory_expiry_report": inventory_expiry_report,
+    "get_inventory_item_stock": inventory_item_stock,
     "get_sku_revenue_drop_vs_stock": sku_revenue_drop_vs_stock,
     "get_qlv_change_history": qlv_change_history,
     "get_revenue_tree": revenue_tree,
@@ -11587,6 +11725,9 @@ _CHANNEL_SCOPE_POLICIES = {
         "get_employee_kpi", "get_revenue_tree", "get_kpi_ranking", "get_revenue_reconciliation",
         # 15/09/2026: KPI san pham trong tam tu ket qua tinh luong OTC.
         "get_focus_product_kpi",
+        # 15/09/2026: bao cao lo/han dung kem nhu cau ban va khach mua OTC gan day - mo cho tai khoan
+        # OTC; tai khoan ETC dung get_inventory_by_region/get_inventory_item_stock (khong lo khach OTC).
+        "get_inventory_expiry_report",
     }},
     # Nguoc lai: hop dong/goi thau chi co o kenh ETC (vHopDongETC). Tai khoan gioi han kenh OTC bi chan.
     **{name: "etc_only" for name in {
@@ -11601,7 +11742,7 @@ _CHANNEL_SCOPE_POLICIES = {
     }},
     # Chua co cot/quan he kenh du tin cay: fail-closed thay vi mac dinh xem toan cong ty.
     **{name: "blocked" for name in {
-        "get_employee_directory", "get_inventory_by_region", "get_inventory_expiry_report",
+        "get_employee_directory",
         "get_qlv_change_history",
         # Luon tra ca OTC+ETC gop trong 1 payload, khong co scope_channel de loc rieng kenh -
         # tai khoan bi gioi han 1 kenh se thay ca so kenh khac neu khong chan.
@@ -11610,6 +11751,10 @@ _CHANNEL_SCOPE_POLICIES = {
     # Metadata khong chua so lieu kinh doanh theo kenh, hoac da tu gioi han theo chinh nguoi dung.
     "get_receivables_history_dates": "exempt",
     "get_audit_log": "exempt",
+    # 15/09/2026 (UAT 14:40, anh Dang chot): ton kho khong phai so lieu theo kenh - tai khoan gioi han
+    # kenh xem duoc ton kho; gioi han vung van ep qua scope_area_code.
+    "get_inventory_by_region": "exempt",
+    "get_inventory_item_stock": "exempt",
 }
 
 if set(_CHANNEL_SCOPE_POLICIES) != set(TEMPLATES):

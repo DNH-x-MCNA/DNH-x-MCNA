@@ -88,6 +88,7 @@ _TEMPLATE_SOURCES = {
     "get_revenue_tree": ("sales_otc", "sales_etc", "kpi"),
     "get_kpi_ranking": ("kpi",),
     "get_inventory_by_region": ("inventory",),
+    "get_inventory_item_stock": ("inventory",),
     "get_receivables_overview": ("debt",),
     "get_customer_detail": ("sales_otc", "sales_etc", "debt"),
     "get_customer_revenue_debt_risk": ("sales_otc", "sales_etc", "debt"),

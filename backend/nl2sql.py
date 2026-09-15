@@ -339,6 +339,15 @@ def _required_tool_for_question(question: str) -> str | None:
         return "get_customer_product_coverage"
     # Bao cao tong gia tri ton theo mien van dung inventory_by_region, ke ca khi nguoi dung
     # liet ke them stock-out. Chi dinh tuyen sang SKU risk khi trong tam la SKU/thieu/cham ban.
+    # 15/09/2026 (UAT 14:40 "So luong ton kho bo phe tinh den hom nay"): ton kho cua MOT san pham theo
+    # ten. Loai tru cac y ton kho da co tool rieng (gia tri/so thang ton, han dung, cham ban, thieu hang,
+    # SKU) va cau hoi tong theo vung/mien.
+    if "ton kho" in q and not any(marker in q for marker in (
+        "gia tri ton", "so thang ton", "can date", "han su dung", "het han", "cham ban", "cham luan chuyen",
+        "thieu hang", "kho thieu", "ton cao", "stock-out", "sku", "mien", "vung", "chi nhanh", "tong ton",
+        "doanh thu", "doanh so",
+    )):
+        return "get_inventory_item_stock"
     if "gia tri ton kho" in q:
         return "get_inventory_by_region"
     # C44/M42: kho/hoa don khong co khoa hop dong da xac nhan. Ep vao bao cao co guard
@@ -1164,6 +1173,18 @@ TEMPLATE_TOOLS = [
             "expiring_days": {"type": "integer", "description": "Nguong 'sap het han', mac dinh 90 ngay."},
             "only_active": {"type": "boolean", "description": "Chi xet hop dong con hieu luc (mac dinh true)."},
             "limit": {"type": "integer", "minimum": 1, "maximum": 200}}, "required": []},
+    },
+    {
+        "name": "get_inventory_item_stock",
+        "description": "SO LUONG TON KHO cua MOT san pham/nhom san pham tim theo TEN hoac MA (khong phan biet "
+                       "hoa thuong, dau tieng Viet): ton kho kinh doanh theo tung kho va ton kho san xuat, nam "
+                       "moi nhat, kem don vi tinh. BAT BUOC dung khi hoi ton kho cua san pham cu the (vd 'ton kho "
+                       "bo phe'). Truyen item_search = ten/ma san pham nguoi dung hoi. KHONG cong so luong giua "
+                       "cac ma khac don vi tinh; khong co ban ghi ton KHONG phai la ton bang 0.",
+        "input_schema": {"type": "object", "properties": {
+            "item_search": {"type": "string", "description": "Ten hoac ma san pham, vd 'bo phe'."},
+            "area_code": {"type": "string", "enum": ["MB", "MT", "MN"]},
+            "limit": {"type": "integer", "minimum": 1, "maximum": 200}}, "required": ["item_search"]},
     },
     {
         "name": "get_new_customer_list",
