@@ -92,6 +92,28 @@ def _report_day(value: str | None) -> dt.date:
     return day
 
 
+def _freshness_note(report_tools, day: dt.date) -> str:
+    """Ghi chú độ tươi dữ liệu; nói rõ khi hóa đơn mới nhất trong kho cũ hơn ngày báo cáo.
+
+    Báo cáo chạy theo lịch với ngày hôm nay, nhưng kho có thể trễ (đồng bộ treo, Bravo chưa nhập).
+    Không có ghi chú này, doanh số ngày bằng 0 trông như đội không bán được gì.
+    """
+    note = report_tools.data_freshness_note() if hasattr(report_tools, "data_freshness_note") else ""
+    if not hasattr(report_tools, "latest_data_date"):
+        return note
+    try:
+        latest = dt.date.fromisoformat(str(report_tools.latest_data_date())[:10])
+    except (TypeError, ValueError):
+        return note
+    if latest < day:
+        lag = (
+            f"Hóa đơn mới nhất trong kho là ngày {latest:%d/%m/%Y}; "
+            f"số liệu từ ngày {latest + dt.timedelta(days=1):%d/%m/%Y} đến {day:%d/%m/%Y} chưa có."
+        )
+        note = f"{note} {lag}".strip()
+    return note
+
+
 def _validate_qlv_identity(report_tools, employee_code: str, area: str) -> None:
     """Kiểm tra mã cấu hình thực sự là QLV đúng miền nếu lớp kho cung cấp truy vấn nội bộ."""
     query = getattr(report_tools, "_q", None)
@@ -221,9 +243,7 @@ def build_qlv_digest_metrics(
         scope_channel=scoped_channel,
     )
 
-    freshness = ""
-    if hasattr(tools, "data_freshness_note"):
-        freshness = tools.data_freshness_note()
+    freshness = _freshness_note(tools, day)
 
     return {
         "report_type": "qlv_team_daily",
@@ -358,7 +378,7 @@ def build_qlv_period_metrics(
         scope_employee_code=code,
         scope_channel=scoped_channel,
     )
-    freshness = tools.data_freshness_note() if hasattr(tools, "data_freshness_note") else ""
+    freshness = _freshness_note(tools, day)
 
     return {
         "report_type": f"qlv_team_{window['period_type']}",
