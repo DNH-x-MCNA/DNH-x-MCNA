@@ -76,6 +76,53 @@ def _setup(tmp_path, monkeypatch):
     monkeypatch.setattr(rt.dt, "date", _FixedDate)
 
 
+def test_thieu_bang_vung_van_tra_chuoi_thang_va_khong_tach_mien(tmp_path, monkeypatch):
+    """Review PR #14 15/09/2026: thieu dim_tinhthanhpho tung lam hong CA chuoi thang."""
+    _setup(tmp_path, monkeypatch)
+    r = rt.revenue_monthly_series(month_to="2026-07", months_back=3, include_yoy=False)
+
+    assert [m["revenue"] for m in r["months"]] == [1_000_000, 2_000_000, 3_500_000]
+    assert all(m["otc_by_region"] is None for m in r["months"])
+    assert "KHONG coi cac mien bang 0" in r["months"][-1]["otc_region_note"]
+
+
+def test_du_phong_hoa_don_theo_mien_dung_khoang_ngay_cua_tung_thang(tmp_path, monkeypatch):
+    """Review PR #14: revenue_by_region tung dung d_from/d_to SOT tu vong lap -> moi thang = month_to."""
+    _setup(tmp_path, monkeypatch)
+    conn = sqlite3.connect(local_warehouse.DB_PATH)
+    conn.execute("CREATE TABLE dim_tinhthanhpho (city_id INTEGER, city_name TEXT, area_code TEXT)")
+    conn.execute("INSERT INTO dim_tinhthanhpho VALUES (1,'Ha Noi','MB')")
+    conn.execute("INSERT INTO dms_khachhang VALUES ('KH01','Khach 1',1,1,'NV01','OTC')")
+    conn.commit()
+    conn.close()
+
+    r = rt.revenue_monthly_series(month_to="2026-07", months_back=3, include_yoy=False)
+
+    mb = [next(x for x in m["otc_by_region"] if x["area_code"] == "MB") for m in r["months"]]
+    assert [x["otc_revenue"] for x in mb] == [1_000_000, 2_000_000, 3_000_000]
+    assert all(x["actual_source"] == "HOA_DON_OTC_FALLBACK" for x in mb)
+
+
+def test_co_s02_du_mien_khong_goi_doanh_thu_theo_vung(tmp_path, monkeypatch):
+    _setup(tmp_path, monkeypatch)
+    conn = sqlite3.connect(local_warehouse.DB_PATH)
+    conn.execute("CREATE TABLE fact_thongketinhluong (employee_code TEXT, area_code TEXT, position_code TEXT, "
+                 "month_sale_amount REAL, month_sale_target REAL, save_date TEXT)")
+    conn.executemany("INSERT INTO fact_thongketinhluong VALUES (?,?,'TDV',?,?,'2026-07-31')", [
+        ("A", "MB", 100.0, 200.0), ("B", "MT", 50.0, 100.0), ("C", "MN", 30.0, 60.0)])
+    conn.commit()
+    conn.close()
+    goi_vung = []
+    monkeypatch.setattr(rt, "revenue_by_region", lambda *a, **k: goi_vung.append(a) or [])
+
+    r = rt.revenue_monthly_series(month_to="2026-07", months_back=1, include_yoy=False)
+
+    assert goi_vung == []
+    thang = r["months"][0]
+    assert {x["area_code"]: x["otc_revenue"] for x in thang["otc_by_region"]} == {"MB": 100.0, "MT": 50.0, "MN": 30.0}
+    assert thang["s02_otc_company"]["target"] == 360.0
+
+
 def test_tra_ve_chuoi_tung_thang_va_tinh_dung_mom(tmp_path, monkeypatch):
     _setup(tmp_path, monkeypatch)
     r = rt.revenue_monthly_series(month_to="2026-07", months_back=3, include_yoy=False)
