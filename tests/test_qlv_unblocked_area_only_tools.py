@@ -5,6 +5,9 @@ NHAM trong _PERSON_LEVEL_TEMPLATES. Vi tai khoan QLV LUON co ca scope_area_code 
 scope_employee_code cung luc (xem main.py), nhanh fail-closed trong call_template() CHAN HOAN TOAN
 moi lan QLV goi 4 tool nay - du scope_area_code (co san, dung) la du de gioi han an toan.
 
+15/09/2026: cong no da co bo loc khach theo doi KPI; khong chan vi thieu ho tro scope,
+nhung phai dung neu chua xac dinh duoc phan cong khach.
+
 Test qua DUNG call_template() - duong san xuat that nl2sql.py goi vao - khong goi thang ham, de
 bat dung loai loi (fail-closed o TANG PHAN QUYEN, khac voi loi/thieu du lieu o TANG TRUY VAN)."""
 import os
@@ -58,9 +61,11 @@ def test_get_inventory_by_region_khong_con_bi_chan(tmp_path, monkeypatch):
     assert result.get("ok") is True, f"van con bi chan: {result}"
 
 
-def test_get_receivables_overview_khong_con_bi_chan(tmp_path, monkeypatch):
+def test_get_receivables_overview_thieu_phan_cong_khong_mo_rong_vung(tmp_path, monkeypatch):
     result = _call(monkeypatch, tmp_path, "get_receivables_overview")
-    assert result.get("ok") is True, f"van con bi chan: {result}"
+    assert result.get("ok") is False
+    assert "CHUA danh gia duoc cong no cua doi" in result["error"]
+    assert _BLOCKED_MARKER not in result["error"]
 
 
 def test_get_qlv_change_history_khong_con_bi_chan(tmp_path, monkeypatch):
@@ -83,6 +88,16 @@ def test_get_receivables_overview_van_dung_dung_scope_area_code(tmp_path, monkey
                 "('2026-08-19','2026-08-19T10:00:00','KH_MB','A','OTC','MB',1000000,0,0,0,0,500000)")
     conn.execute("INSERT INTO fact_congno_khachhang VALUES "
                 "('2026-08-19','2026-08-19T10:00:00','KH_MN','B','OTC','MN',9999999,0,0,0,0,9999999)")
+    conn.execute("INSERT INTO fact_congno_khachhang VALUES "
+                "('2026-08-19','2026-08-19T10:00:00','KH_KHAC','C','OTC','MB',8888888,0,0,0,0,8888888)")
+    conn.execute("INSERT INTO fact_congno_khachhang VALUES "
+                "('2026-08-19','2026-08-19T10:00:00','KH_MB','A','ETC','MB',7777777,0,0,0,0,7777777)")
+    today = dt.date.today().isoformat()
+    conn.executemany("INSERT INTO fact_tonghopkhachhang VALUES (?,?,0,0,?,0,?)", [
+        ("TDV01", "KH_MB", today, "QLV01"),
+        ("TDV01", "KH_MN", today, "QLV01"),
+        ("TDV02", "KH_KHAC", today, "QLV02"),
+    ])
     conn.commit()
     conn.close()
     monkeypatch.setattr(local_warehouse, "DB_PATH", str(db_path))
@@ -92,6 +107,10 @@ def test_get_receivables_overview_van_dung_dung_scope_area_code(tmp_path, monkey
 
     assert result["ok"] is True
     assert result["result"]["total_balance_end"] == 1_000_000  # chi vung MB, khong gom MN
+    assert result["result"]["total_overdue"] == 500_000
+    assert result["result"]["scope_channel"] == "OTC"
+    assert result["result"]["team_scope"]["manager_code"] == "QLV01"
+    assert [r["customer_code"] for r in result["result"]["top_overdue_customers"]] == ["KH_MB"]
 
 
 def test_check_order_timing_qlv_chi_thay_doi_minh(tmp_path, monkeypatch):
