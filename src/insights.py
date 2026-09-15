@@ -264,7 +264,8 @@ def overdue_customers_still_ordering(receivables, orders, min_gt45):
     for row in receivables:
         cc = _field(row, "customer_code")
         gt45 = float(_field(row, "overdue_gt_45") or 0)
-        order = orders.get(cc)
+        # ``orders`` khóa (mã KH, kênh) thì chỉ tính đơn CÙNG kênh với dòng nợ; khóa mã KH thì như cũ.
+        order = orders.get((cc, _field(row, "sales_channel")), orders.get(cc))
         if gt45 < min_gt45 or not order or int(order[0] or 0) <= 0:
             continue
         out.append({"customer_code": cc, "customer_name": _field(row, "customer_name"),
@@ -310,6 +311,7 @@ def scope_insight_bundle(bundle, region=None, channel=None):
 
     team = dict(bundle.get("team_pace") or {})
     team["at_risk"] = [] if channel == "ETC" else [r for r in team.get("at_risk", []) if keep(r)]
+    team["not_projected"] = [] if channel == "ETC" else [r for r in team.get("not_projected", []) if keep(r)]
     team["applicable"] = channel != "ETC"
     out = {
         "as_of": bundle.get("as_of"),
@@ -445,11 +447,13 @@ def channel_pace_for_scope(as_of, region=None, channel=None, rules=None):
 
 
 def _team_pace_part(as_of, otc_pace, rules):
-    from src.alerts import get_bravo_kpi_tdv_snapshot
+    from src.alerts import get_bravo_kpi_tdv_snapshot, get_bravo_manager_codes
     rule = rules["team_pace"]
     part = {"evaluated": as_of.day >= int(rule["min_day"]), "min_day": int(rule["min_day"]),
             "threshold_pct": float(rule["max_projection_pct"]), "teams": [], "at_risk": []}
     if not otc_pace or not otc_pace.get("expected_share_pct"):
+        # 15/09/2026: không có nhịp OTC thì KHÔNG dự phóng được - ghi lý do, không để lặng thành "0 đội".
+        part["skipped_reason"] = "Chưa có nhịp doanh thu OTC để dự phóng đội."
         return part
     tdvs = get_bravo_kpi_tdv_snapshot(position_codes=("TDV",))
     # QLV thật có thể bị Bravo gắn nhầm cờ trùng (xem get_bravo_kpi_tdv_snapshot) nên lấy tên kèm cả dòng trùng.
@@ -465,6 +469,31 @@ def _team_pace_part(as_of, otc_pace, rules):
     part["teams"] = teams
     if part["evaluated"]:
         part["at_risk"] = [t for t in teams if t["projection_pct"] < part["threshold_pct"]]
+    # 15/09/2026: đội/nhóm có chỉ tiêu nhưng KHÔNG dự phóng phải nêu tên. Tháng 9/2026 là MBKV12 (Chợ sỉ
+    # MB 7,55 tỷ), MN1 "Kênh MT" 6,65 tỷ, MN4 "Chợ sỉ" 1,70 tỷ - 18,95/58,14 tỷ chỉ tiêu OTC lặng lẽ vắng
+    # mặt. Không dự phóng chúng là ĐÚNG (1-2 người, doanh số dồn vài đơn lớn, đường cong OTC vô nghĩa)
+    # nhưng người đọc phải biết. Dự phóng chỉ gồm phần chỉ tiêu của TDV (ngưỡng đã kiểm thử ngược theo
+    # cách này) - phần QLV tự phụ trách chưa tính, xem basis_note.
+    part["basis_note"] = ("Dự phóng tính trên chỉ tiêu và doanh số của TDV trong đội; phần chỉ tiêu QLV tự "
+                          "phụ trách chưa tính vào.")
+    try:
+        managers = get_bravo_manager_codes()
+        rollup = [r for r in get_bravo_kpi_tdv_snapshot(position_codes=("TDV", "QLV"), include_duplicates=True)
+                  if r.employee_code in managers]
+    except Exception as exc:
+        part["not_projected_error"] = str(exc)
+        rollup = []
+    projected = {t["team_code"] for t in teams}
+    seen = set()
+    not_projected = []
+    for r in rollup:
+        if r.employee_code in projected or r.employee_code in seen or not (r.month_sale_target or 0) > 0:
+            continue
+        seen.add(r.employee_code)
+        not_projected.append({"team_code": r.employee_code, "team_name": r.employee_name or r.employee_code,
+                              "target": float(r.month_sale_target), "sales_channel": "OTC",
+                              "region_key": region_key_of_area(r.area_code)})
+    part["not_projected"] = sorted(not_projected, key=lambda t: -t["target"])
     return part
 
 
@@ -495,7 +524,9 @@ def _label_to_region_key():
 
 def _overdue_ordering_part(as_of, snapshot, rules):
     from src import alerts
-    orders = alerts._bravo_recent_orders_by_customer(as_of.replace(day=1))
+    # 15/09/2026: đơn cùng kênh với dòng nợ, chặn chứng từ đề ngày sau hôm nay.
+    orders = alerts._bravo_recent_orders_by_customer(
+        as_of.replace(day=1), until=dt.date.today() + dt.timedelta(days=1), by_channel=True)
     rows = overdue_customers_still_ordering(snapshot, orders,
                                             float(rules["overdue_ordering"]["min_overdue_gt45"]))
     for row in rows:
@@ -508,13 +539,20 @@ def _new_over45_part(snapshot, rules, today=None):
     # Nợ >45 ngày gộp theo khách (một khách có thể có cả dòng OTC lẫn ETC). SP công nợ có trả dòng
     # không mã khách (xác nhận 14/09/2026) — bỏ qua, vừa vô nghĩa vừa làm hỏng khóa của bản chụp.
     current = {}
+    theo_kenh = {}
     for row in snapshot:
         if not row.customer_code:
             continue
+        amount = float(row.overdue_gt_45 or 0)
         entry = current.setdefault(row.customer_code, {
             "customer_name": row.customer_name, "sales_channel": row.sales_channel,
             "area_code": row.area_code, "overdue_gt_45": 0.0})
-        entry["overdue_gt_45"] += float(row.overdue_gt_45 or 0)
+        entry["overdue_gt_45"] += amount
+        if amount > 0:
+            kenh = theo_kenh.setdefault((row.customer_code, row.sales_channel), {
+                "customer_name": row.customer_name, "sales_channel": row.sales_channel,
+                "area_code": row.area_code, "overdue_gt_45": 0.0})
+            kenh["overdue_gt_45"] += amount
     # Bản chụp chỉ tích lũy khi có người chạy; báo cáo cũng ghi để lịch sử không phụ thuộc job cảnh báo.
     alerts._save_debt_aging_snapshot([(cc, r["customer_name"], r["overdue_gt_45"]) for cc, r in current.items()])
     rule = rules["new_over45"]
@@ -528,9 +566,19 @@ def _new_over45_part(snapshot, rules, today=None):
             "compare_days": int(rule["compare_days"]), "min_value": float(rule["min_value"]), "rows": []}
     if part["available"]:
         previous = {cc: amount for cc, (_, amount) in alerts._get_debt_aging_snapshot(compared_with).items()}
-        rows = new_over45_debtors(current, previous, float(rule["min_value"]))
-        for row in rows:
-            row["region_key"] = region_key_of_area(row.get("area_code"))
+        # Khách "mới vào nhóm >45 ngày" xét trên TỔNG hai kênh (khớp bản chụp theo khách), nhưng mỗi
+        # kênh có nợ >45 ngày là một dòng riêng với đúng số và vùng của kênh đó. 15/09/2026: bản cũ lấy
+        # kênh của dòng đầu, nên nợ ETC có thể gửi nhầm giám đốc OTC kèm số gộp cả hai kênh.
+        rows = []
+        for moi in new_over45_debtors(current, previous, float(rule["min_value"])):
+            cc = moi["customer_code"]
+            for (ma, _kenh), kenh in theo_kenh.items():
+                if ma != cc:
+                    continue
+                rows.append({**kenh, "customer_code": cc,
+                             "overdue_gt_45_all_channels": moi["overdue_gt_45"],
+                             "region_key": region_key_of_area(kenh.get("area_code"))})
+        rows.sort(key=lambda r: -r["overdue_gt_45"])
         part["rows"] = rows
     return part
 

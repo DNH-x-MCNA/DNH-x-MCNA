@@ -260,7 +260,8 @@ alert_feature_flags:
 # DNH_Realtime_Alerts (main.py) chỉ còn vai trò lưới an toàn dự phòng nên có thể để chu kỳ dài.
 # Báo cáo Daily/Weekly/Monthly cũng đã tách sang scheduled task riêng
 # (scripts/register_digest_schedule.bat: DNH_Daily_Digest_1745 17:45 hàng ngày,
-# DNH_Weekly_Report thứ Bảy 18:00, DNH_Monthly_Report ngày 1 hàng tháng 17:45) — 2 dòng cấu hình
+# DNH_Weekly_Report thứ Bảy 18:00, DNH_Monthly_Report NGÀY CUỐI THÁNG 17:45 (LASTDAY; ghi chú cũ
+# "ngày 1 hàng tháng" sai từ khi đổi lịch 10/07/2026 - sửa 15/09/2026) — 2 dòng cấu hình
 # daily_digest_time/weekly_digest_day bên dưới không còn được main.py đọc nữa, giữ lại chỉ để
 # tham khảo giờ đang đăng ký trong Task Scheduler.
 scheduler:

@@ -46,13 +46,7 @@ def _sample_metrics(period_label, channel=None):
         "updated_at": "17:45 21/08/2026",
         "region": None,
         "channel": channel,
-        "has_critical": True,
-        "highlights": [
-            {"label": "Tỷ lệ nợ quá hạn OTC vượt ngưỡng", "sent_at_display": "09:12 21/08",
-             "value_display": "82.4%"},
-            {"label": "Khách lớn sụt giảm doanh số", "sent_at_display": "10:40 20/08",
-             "value_display": "-55%"},
-        ],
+        # 15/09/2026: bo mau highlights/warning_alerts/has_critical - template da thoi hien hai muc nay tu 14/09.
         # 14/09/2026: mau cho "Viec Can Xu Ly" + "Tien Do Thang" (cung cau truc voi
         # src/insight_report.py::attach_insights).
         "insights": {
@@ -78,18 +72,6 @@ def _sample_metrics(period_label, channel=None):
                  "overdue_gt_45": 120_000_000, "new_orders": 2, "new_order_value": 15_300_000}]},
         },
         "operational_quality_items": [],
-        # 21/08/2026: mẫu cho section "Cảnh Báo Trong Kỳ" (cùng cấu trúc dict với
-        # _get_period_warning_alerts trong src/etl.py, gồm cả last_sent_display mới thêm)
-        "warning_alerts": [
-            {"alert_name": "TỶ LỆ NỢ QUÁ HẠN VƯỢT NGƯỠNG", "repeat_count": 3,
-             "last_sent": "2026-08-21 09:12:33", "last_sent_display": "09:12 21/08",
-             "region": "Toàn quốc", "issue": "Tỷ lệ nợ quá hạn OTC 82.4% vượt ngưỡng 30%",
-             "channel": "OTC"},
-            {"alert_name": "KHÁCH LỚN SỤT GIẢM DOANH SỐ", "repeat_count": 1,
-             "last_sent": "2026-08-20 10:40:00", "last_sent_display": "10:40 20/08",
-             "region": "Miền Nam", "issue": "Nhà thuốc ABC giảm -55% so trung bình 4 tuần",
-             "channel": None},
-        ],
         "revenue": {
             "otc": 12345678900, "etc": 5432100000, "total": 17777778900,
             "invoice_count": 321, "otc_invoice_count": 250, "etc_invoice_count": 71,
@@ -118,8 +100,9 @@ def _sample_metrics(period_label, channel=None):
         ),
         "region_breakdown": [],
         "kpi_summary": {
-            "achieved_threshold_pct": 80, "achieved_count": 7, "total_count": 10,
-            "kpi_achieved_count": 6, "kpi_threshold_pct": 90,
+            # 15/09/2026: nguong that - cong thuong nhom hang TDV 65%, dat KPI 80% (mau cu ghi 80/90).
+            "achieved_threshold_pct": 65, "achieved_count": 7, "total_count": 10,
+            "kpi_achieved_count": 6, "kpi_threshold_pct": 80,
             "full_target_count": 4, "team_pct": 87.3,
             "total_amount": 12000000000,
             "total_target": 15000000000 if monthly else None,
