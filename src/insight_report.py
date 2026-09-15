@@ -38,6 +38,59 @@ def attach_insights(region=None, channel=None):
     return view
 
 
+def attach_team_insights(team_code, customer_codes):
+    """View insight cho báo cáo riêng một đội QLV — 15/09/2026.
+
+    Không kèm nhịp doanh thu kênh (đó là số toàn miền). Lỗi dựng không làm hỏng báo cáo và không đưa
+    chi tiết lỗi kỹ thuật ra nội dung gửi QLV; chi tiết chỉ in ra log.
+    """
+    from src import insights
+    try:
+        bundle = insights.build_insight_bundle()
+        view = insights.scope_insight_bundle_to_team(bundle, team_code, customer_codes)
+    except Exception as exc:
+        print(f"[QLV] Không dựng được insight cho đội {team_code} ({exc}).")
+        return {"build_error": "lỗi dữ liệu lúc dựng báo cáo"}
+    view["as_of_display"] = bundle["as_of"].strftime("%d/%m/%Y")
+    mark_errors(view)
+    view["action_count"] = action_count(view)
+    return view
+
+
+def team_progress_lines(view, money):
+    """Dòng tiến độ và dự phóng cuối tháng của CHÍNH đội trong báo cáo QLV."""
+    if not view:
+        return []
+    if view.get("build_error"):
+        return [f"• Dự phóng cuối tháng của đội: CHƯA đánh giá được ({view['build_error']})."]
+    view = mark_errors(dict(view))
+    team = view.get("team_pace") or {}
+    if team.get("applicable") is False:
+        return []
+    if team.get("error"):
+        return ["• Dự phóng cuối tháng của đội: CHƯA đánh giá được (lỗi dữ liệu lúc dựng báo cáo)."]
+    moc = f" (tính đến {view['as_of_display']})" if view.get("as_of_display") else ""
+    own = next(iter(team.get("teams") or []), None)
+    if own:
+        line = (f"• Doanh số TDV trong đội{moc}: {money(own['actual'])}/{money(own['target'])}, "
+                f"đạt {own['achievement_pct']:.0f}% chỉ tiêu")
+        if not team.get("evaluated"):
+            return [f"{line}; dự phóng cuối tháng tính từ ngày {team.get('min_day', 15)}."]
+        line += f"; dự phóng cuối tháng {own['projection_pct']:.0f}%"
+        if any(t.get("team_code") == own.get("team_code") for t in team.get("at_risk") or []):
+            line += f" — DƯỚI ngưỡng {team.get('threshold_pct', 60):.0f}%, nguy cơ hụt chỉ tiêu"
+        lines = [line + "."]
+        if team.get("basis_note"):
+            lines.append(f"   - {team['basis_note']}")
+        return lines
+    if team.get("not_projected"):
+        return [f"• Đội có ít TDV nên không dự phóng cuối tháng (chỉ tiêu "
+                f"{money(team['not_projected'][0]['target'])})."]
+    if team.get("skipped_reason"):
+        return [f"• Dự phóng cuối tháng của đội: {team['skipped_reason']}"]
+    return ["• Dự phóng cuối tháng của đội: chưa có dữ liệu KPI Bravo cho đội này."]
+
+
 # Lỗi trong bundle -> mục "Việc cần xử lý" không đánh giá được. Nhịp OTC hỏng thì không dự phóng được
 # đội; công nợ Bravo hỏng thì mất cả hai mục nợ >45 ngày.
 _MUC_THEO_LOI = {

@@ -325,6 +325,38 @@ def scope_insight_bundle(bundle, region=None, channel=None):
     return out
 
 
+def scope_insight_bundle_to_team(bundle, team_code, customer_codes, channel="OTC"):
+    """Lọc bundle về đúng MỘT đội QLV cho báo cáo riêng của đội — 15/09/2026.
+
+    Tiến độ: chỉ dòng của chính đội ``team_code``. Danh sách khách: chỉ khách trong ``customer_codes``
+    (khách gắn với đội theo phân công KPI) và đúng kênh. Khách không gắn được đội thì ẩn: báo cáo QLV
+    tuyệt đối không được lộ khách của đội khác.
+    """
+    customers = set(customer_codes or ())
+
+    def keep(row):
+        if row.get("customer_code") not in customers:
+            return False
+        return not row.get("sales_channel") or row["sales_channel"] == channel
+
+    source = bundle.get("team_pace") or {}
+    team = {k: v for k, v in source.items() if k not in ("teams", "at_risk", "not_projected")}
+    for name in ("teams", "at_risk", "not_projected"):
+        team[name] = [t for t in source.get(name, []) if t.get("team_code") == team_code]
+    team["applicable"] = channel == "OTC"
+    out = {
+        "as_of": bundle.get("as_of"),
+        "team_code": team_code,
+        "team_pace": team,
+        "errors": dict(bundle.get("errors") or {}),
+    }
+    for name in ("silent_customers", "new_over45", "overdue_ordering"):
+        part = dict(bundle.get(name) or {})
+        part["rows"] = [r for r in part.get("rows", []) if keep(r)]
+        out[name] = part
+    return out
+
+
 # ---------------------------------------------------------------------------------------------
 # Lấy dữ liệu Bravo (CHỈ ĐỌC)
 # ---------------------------------------------------------------------------------------------

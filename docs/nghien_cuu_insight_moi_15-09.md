@@ -239,8 +239,8 @@ Chưa tháng nào đạt trong 20 tháng.
   Cần kiểm thử ngược trước khi đổi.
 - **Code quy tắc A và B** vào `src/insights.py` sau cờ `alert_feature_flags` (mặc định tắt), sau khi DNH chốt ngưỡng
   ở mục 3.
-- **Báo cáo QLV:** chưa có mục Tiến độ tháng / Việc cần xử lý. Chờ chốt đội QLV được xem gì (xem báo cáo gửi anh
-  Đăng 15/09).
+- **Báo cáo QLV:** đã thêm Việc cần xử lý và dự phóng đội (15/09), chỉ gồm khách gắn với đội theo phân công KPI.
+  Khách ETC không gắn được đội nên không hiện trong báo cáo QLV (QLV hiện chỉ phụ trách OTC).
 
 ## 5. Tái lập
 
