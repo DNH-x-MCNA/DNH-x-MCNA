@@ -174,6 +174,15 @@ thresholds:
         min_day: 20
         lookback_months: 6
         min_baseline: {OTC: 50000000, ETC: 100000000}
+      etc_sku_stop:          # khách ETC vẫn mua nhưng dừng SKU chủ lực đã mua >=5/6 tháng
+        min_day: 20
+        lookback_months: 6
+        min_months: 5
+        min_baseline: 100000000
+      new_customer_no_repeat: # đơn đầu >=20tr sau 12 tháng im; chưa có đơn thứ hai khi tới hạn
+        inactivity_days: 365
+        min_first_order: 20000000
+        wait_days: {OTC: 45, ETC: 60}
       new_over45:            # khách lần đầu có nợ >45 ngày, so bản chụp cách đây compare_days ngày
         min_value: 50000000
         compare_days: 7
@@ -242,6 +251,8 @@ alert_feature_flags:
   insight_channel_pace: true      # doanh thu kênh chậm nhịp tháng
   insight_team_pace: true         # đội QLV có nguy cơ hụt chỉ tiêu
   insight_silent_customer: true   # khách mua đều chưa có đơn tháng này
+  insight_etc_sku_stop: false     # CHỜ DNH: khách ETC lớn ngừng một SKU chủ lực
+  insight_new_customer_no_repeat: false  # CHỜ DNH: khách mới chưa mua lại sau 45/60 ngày
   insight_new_over45: true        # khách mới rơi vào nợ >45 ngày
   insight_overdue_ordering: true  # nợ >45 ngày vẫn lên đơn
   insight_etc_returns: true       # hàng trả ETC tăng bất thường

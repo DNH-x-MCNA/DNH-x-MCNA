@@ -50,6 +50,12 @@ DEFAULT_RULES = {
     #   (Quy tắc cũ "tháng này giảm >50% so tháng trước": ~120 khách OTC/tháng, đúng 38%.)
     "silent_customer": {"min_day": 20, "lookback_months": 6,
                         "min_baseline": {"OTC": 50_000_000, "ETC": 100_000_000}},
+    # Kiểm thử 01/2025-07/2026, ETC: ~2,7 cặp/tháng, đúng 59,6% so với nền 13,2%.
+    "etc_sku_stop": {"min_day": 20, "lookback_months": 6, "min_months": 5,
+                     "min_baseline": 100_000_000},
+    # Kiểm thử lịch sử: OTC 45 ngày đúng 42,9% (nền 7,8%); ETC 60 ngày đúng 71,3% (nền 41,9%).
+    "new_customer_no_repeat": {"inactivity_days": 365, "min_first_order": 20_000_000,
+                               "wait_days": {"OTC": 45, "ETC": 60}},
     # 04/08 -> 14/09/2026: 27 khách mới vào nhóm >45 ngày với > 50tr (3,76 tỷ), ~4-5 khách/tuần.
     # max_snapshot_age_days: ban chup cu hon thi CHUA so. May 24 co ban chup cuoi 10/08/2026 (loi ghi
     # ban chup tu do); so thang voi hom nay se bao don vai chuc khach "moi" trong mot lan.
@@ -238,6 +244,80 @@ def silent_regular_customers(history, current_mtd, as_of, lookback=6, min_baseli
     return out
 
 
+def stopped_main_skus(sku_monthly, as_of, lookback=6, min_months=5, min_baseline=100_000_000):
+    """Cặp khách/SKU ETC mua >= ``min_months`` trong ``lookback`` tháng nhưng dừng ở ngày 20.
+
+    ``sku_monthly`` gồm ``(customer, item, (year, month), full_revenue, revenue_upto_day20)``.
+    Khách phải vẫn có doanh thu ETC tới ngày 20; trung bình được chia đủ ``lookback`` tháng, gồm cả
+    tháng không mua. Hàm chỉ tính dữ liệu, không đọc Bravo.
+    """
+    as_of = _as_date(as_of)
+    previous = [month_add(as_of.year, as_of.month, -k) for k in range(1, lookback + 1)]
+    current = (as_of.year, as_of.month)
+    history = defaultdict(lambda: defaultdict(lambda: [0.0, 0.0]))
+    customer_upto20 = defaultdict(float)
+    for customer, item, month, full, upto20 in sku_monthly:
+        month = tuple(month)
+        history[(customer, item)][month][0] += float(full or 0)
+        history[(customer, item)][month][1] += float(upto20 or 0)
+        if month == current:
+            customer_upto20[customer] += float(upto20 or 0)
+    rows = []
+    for (customer, item), months in history.items():
+        values = [months[month][0] for month in previous]
+        baseline = sum(values) / lookback
+        if sum(value > 0 for value in values) < min_months or baseline < min_baseline:
+            continue
+        if customer_upto20[customer] <= 0 or months[current][1] > 0:
+            continue
+        rows.append({"customer_code": customer, "item_code": item,
+                     "baseline_monthly": baseline, "months_bought": sum(value > 0 for value in values),
+                     "lookback_months": lookback})
+    rows.sort(key=lambda row: -row["baseline_monthly"])
+    return rows
+
+
+def new_customers_without_repeat(orders, as_of, wait_days, min_first_order=20_000_000,
+                                 inactivity_days=365, history_start=None):
+    """Khách có đúng một đơn vào ngày chạm ngưỡng chờ, sau >=12 tháng không mua, chưa có đơn hai.
+
+    ``orders`` gồm ``(customer, order_id, order_date, revenue)``. Chỉ xét sự kiện vừa chạm ngưỡng
+    tại ``as_of`` để một khách không nằm mãi trong danh sách báo cáo. Nếu không có đơn cũ trong tập
+    dữ liệu, ``history_start`` phải cách đơn đầu ít nhất ``inactivity_days`` để chứng minh đủ lịch sử.
+    Nhiều mã đơn dương cùng ngày đầu được coi là đã có đơn thứ hai.
+    """
+    as_of = _as_date(as_of)
+    history_start = _as_date(history_start) if history_start else None
+    event_day = as_of - dt.timedelta(days=int(wait_days))
+    grouped = defaultdict(list)
+    for customer, order_id, day, revenue in orders:
+        value = float(revenue or 0)
+        if value > 0:
+            grouped[customer].append((_as_date(day), str(order_id or ""), value))
+    rows = []
+    for customer, customer_orders in grouped.items():
+        customer_orders.sort(key=lambda row: (row[0], row[1]))
+        candidates = [row for row in customer_orders if row[0] == event_day]
+        if len(candidates) != 1:
+            continue
+        first_day, order_id, first_value = candidates[0]
+        if first_value < min_first_order:
+            continue
+        before = [row for row in customer_orders if row[0] < first_day]
+        if before:
+            if (first_day - before[-1][0]).days < inactivity_days:
+                continue
+        elif history_start is None or (first_day - history_start).days < inactivity_days:
+            continue
+        if any(row[0] > first_day and row[0] <= as_of for row in customer_orders):
+            continue
+        rows.append({"customer_code": customer, "first_order_id": order_id,
+                     "first_order_date": first_day.isoformat(), "first_order_value": first_value,
+                     "wait_days": int(wait_days)})
+    rows.sort(key=lambda row: -row["first_order_value"])
+    return rows
+
+
 def new_over45_debtors(current, previous, min_value):
     """Khách có nợ >45 ngày vượt ``min_value`` mà ở bản chụp trước chưa có đồng nợ >45 ngày nào.
 
@@ -313,14 +393,20 @@ def scope_insight_bundle(bundle, region=None, channel=None):
     team["at_risk"] = [] if channel == "ETC" else [r for r in team.get("at_risk", []) if keep(r)]
     team["not_projected"] = [] if channel == "ETC" else [r for r in team.get("not_projected", []) if keep(r)]
     team["applicable"] = channel != "ETC"
+    errors = dict(bundle.get("errors") or {})
+    if channel == "OTC":
+        errors.pop("etc_sku_stops", None)
     out = {
         "as_of": bundle.get("as_of"),
         "team_pace": team,
-        "errors": dict(bundle.get("errors") or {}),
+        "errors": errors,
     }
-    for name in ("silent_customers", "new_over45", "overdue_ordering"):
+    for name in ("silent_customers", "etc_sku_stops", "new_customer_no_repeat",
+                 "new_over45", "overdue_ordering"):
         part = dict(bundle.get(name) or {})
         part["rows"] = [r for r in part.get("rows", []) if keep(r)]
+        if name == "etc_sku_stops":
+            part["applicable"] = channel != "OTC"
         out[name] = part
     return out
 
@@ -344,15 +430,21 @@ def scope_insight_bundle_to_team(bundle, team_code, customer_codes, channel="OTC
     for name in ("teams", "at_risk", "not_projected"):
         team[name] = [t for t in source.get(name, []) if t.get("team_code") == team_code]
     team["applicable"] = channel == "OTC"
+    errors = dict(bundle.get("errors") or {})
+    if channel == "OTC":
+        errors.pop("etc_sku_stops", None)
     out = {
         "as_of": bundle.get("as_of"),
         "team_code": team_code,
         "team_pace": team,
-        "errors": dict(bundle.get("errors") or {}),
+        "errors": errors,
     }
-    for name in ("silent_customers", "new_over45", "overdue_ordering"):
+    for name in ("silent_customers", "etc_sku_stops", "new_customer_no_repeat",
+                 "new_over45", "overdue_ordering"):
         part = dict(bundle.get(name) or {})
         part["rows"] = [r for r in part.get("rows", []) if keep(r)]
+        if name == "etc_sku_stops":
+            part["applicable"] = channel != "OTC"
         out[name] = part
     return out
 
@@ -431,6 +523,82 @@ def fetch_customer_month_history(as_of, lookback):
                     history[row.cc][key] = (float(row.full_rev or 0), float(row.upto_rev or 0))
             out[channel] = {"history": dict(history), "current_mtd": current_mtd, "names": names}
     return out
+
+
+def fetch_etc_sku_activity(as_of, lookback):
+    """Doanh thu ETC theo khách/SKU/tháng, gồm doanh thu tới ngày 20; chỉ đọc Bravo."""
+    from sqlalchemy import text
+    from src.region_map import customer_keep_filter_sql
+
+    as_of = _as_date(as_of)
+    year, month = month_add(as_of.year, as_of.month, -lookback)
+    params = {"f": dt.date(year, month, 1).isoformat(),
+              "t": (as_of + dt.timedelta(days=1)).isoformat()}
+    join, keep = customer_keep_filter_sql("v", "ETC")
+    sql = text(f"""
+        SELECT v.CustomerCode AS cc, MAX(k.Name) AS cname, v.ItemCode AS item,
+               YEAR(v.DocDate) AS y, MONTH(v.DocDate) AS m, SUM(v.Amount9) AS full_rev,
+               SUM(CASE WHEN DAY(v.DocDate) <= 20 THEN v.Amount9 ELSE 0 END) AS upto20
+        FROM dbo.vHoaDonETCTotal v {join}
+        WHERE {keep} AND v.DocDate >= :f AND v.DocDate < :t
+        GROUP BY v.CustomerCode, v.ItemCode, YEAR(v.DocDate), MONTH(v.DocDate)""")
+    rows, names = [], {}
+    with _engine().connect() as conn:
+        for row in conn.execute(sql, params).fetchall():
+            names[row.cc] = row.cname or row.cc
+            rows.append((row.cc, row.item, (int(row.y), int(row.m)),
+                         float(row.full_rev or 0), float(row.upto20 or 0)))
+    return {"rows": rows, "names": names}
+
+
+def fetch_customer_orders(as_of, inactivity_days, wait_days):
+    """Đơn OTC/ETC đủ cửa sổ chứng minh thời gian không mua; gom đúng theo mã đơn Bravo."""
+    from sqlalchemy import text
+    from src.region_map import customer_keep_filter_sql
+
+    as_of = _as_date(as_of)
+    out = {}
+    with _engine().connect() as conn:
+        for channel, view in _VIEWS:
+            start = as_of - dt.timedelta(days=int(inactivity_days) + int(wait_days[channel]))
+            join, keep = customer_keep_filter_sql("v", channel)
+            sql = text(f"""
+                SELECT v.CustomerCode AS cc, MAX(k.Name) AS cname, v.Stt AS order_id,
+                       CAST(MIN(v.DocDate) AS date) AS order_date, SUM(v.Amount9) AS revenue
+                FROM {view} v {join}
+                WHERE {keep} AND v.DocDate >= :f AND v.DocDate < :t
+                GROUP BY v.CustomerCode, v.Stt""")
+            rows, names = [], {}
+            params = {"f": start.isoformat(), "t": (as_of + dt.timedelta(days=1)).isoformat()}
+            for row in conn.execute(sql, params).fetchall():
+                names[row.cc] = row.cname or row.cc
+                rows.append((row.cc, row.order_id, _as_date(row.order_date), float(row.revenue or 0)))
+            out[channel] = {"history_start": start, "rows": rows, "names": names}
+    return out
+
+
+def fetch_active_etc_contracts(customer_codes, as_of):
+    """Hợp đồng ETC đã bắt đầu và chưa hết hạn của các khách; không diễn giải giá trị hợp đồng."""
+    from sqlalchemy import bindparam, text
+
+    customer_codes = tuple(sorted(set(customer_codes or ())))
+    if not customer_codes:
+        return {}
+    sql = text("""
+        SELECT Id AS contract_id, MAX(DocNo) AS doc_no, MAX(CustomerCode) AS cc,
+               CAST(MAX(FromDate) AS date) AS from_date, CAST(MAX(ToDate) AS date) AS to_date
+        FROM dbo.vHopDongETC
+        WHERE CustomerCode IN :codes
+        GROUP BY Id
+        HAVING MAX(FromDate) <= :as_of AND MAX(ToDate) >= :as_of
+        ORDER BY MAX(ToDate), Id""").bindparams(bindparam("codes", expanding=True))
+    out = defaultdict(list)
+    with _engine().connect() as conn:
+        for row in conn.execute(sql, {"codes": customer_codes, "as_of": _as_date(as_of).isoformat()}).fetchall():
+            out[row.cc].append({"contract_id": row.contract_id, "doc_no": row.doc_no,
+                                "from_date": _as_date(row.from_date).isoformat(),
+                                "to_date": _as_date(row.to_date).isoformat()})
+    return dict(out)
 
 
 def fetch_etc_returns(date_from, date_to):
@@ -549,6 +717,55 @@ def _silent_part(as_of, rules):
     return part
 
 
+def _etc_sku_stop_part(as_of, rules):
+    from src.alerts import get_customer_regions_by_code
+
+    rule = rules["etc_sku_stop"]
+    part = {"enabled": True, "evaluated": as_of.day >= int(rule["min_day"]),
+            "min_day": int(rule["min_day"]), "rows": []}
+    if not part["evaluated"]:
+        return part
+    payload = fetch_etc_sku_activity(as_of, int(rule["lookback_months"]))
+    rows = stopped_main_skus(payload["rows"], as_of, int(rule["lookback_months"]),
+                             int(rule["min_months"]), float(rule["min_baseline"]))
+    codes = [row["customer_code"] for row in rows]
+    regions = get_customer_regions_by_code(codes, "ETC") if codes else {}
+    contracts = fetch_active_etc_contracts(codes, as_of) if codes else {}
+    label_to_key = _label_to_region_key()
+    for row in rows:
+        code = row["customer_code"]
+        row.update(customer_name=payload["names"].get(code), sales_channel="ETC",
+                   region_key=label_to_key.get(regions.get(code)),
+                   active_contracts=contracts.get(code, []))
+    part["rows"] = rows
+    return part
+
+
+def _new_customer_no_repeat_part(as_of, rules):
+    from src.alerts import get_customer_regions_by_code
+
+    rule = rules["new_customer_no_repeat"]
+    waits = {key: int(value) for key, value in rule["wait_days"].items()}
+    inactivity = int(rule["inactivity_days"])
+    payloads = fetch_customer_orders(as_of, inactivity, waits)
+    part = {"enabled": True, "evaluated": True, "rows": []}
+    label_to_key = _label_to_region_key()
+    for channel in ("OTC", "ETC"):
+        payload = payloads[channel]
+        rows = new_customers_without_repeat(
+            payload["rows"], as_of, waits[channel], float(rule["min_first_order"]), inactivity,
+            history_start=payload["history_start"])
+        codes = [row["customer_code"] for row in rows]
+        regions = get_customer_regions_by_code(codes, channel) if codes else {}
+        for row in rows:
+            code = row["customer_code"]
+            row.update(customer_name=payload["names"].get(code), sales_channel=channel,
+                       region_key=label_to_key.get(regions.get(code)))
+        part["rows"].extend(rows)
+    part["rows"].sort(key=lambda row: -row["first_order_value"])
+    return part
+
+
 def _label_to_region_key():
     from src.region_map import REGION_NAMES_VI
     return {label: key for key, label in REGION_NAMES_VI.items()}
@@ -615,13 +832,21 @@ def _new_over45_part(snapshot, rules, today=None):
     return part
 
 
-def build_insight_bundle(as_of=None, rules=None, force=False):
+def build_insight_bundle(as_of=None, rules=None, force=False, feature_flags=None):
     """Tính MỘT lần mọi insight cho toàn công ty (cache 10 phút). Mỗi phần tự bắt lỗi và ghi vào
     ``errors`` để báo cáo vẫn dựng được phần còn lại thay vì hỏng cả bản."""
     now = time.time()
     if not force and _BUNDLE_CACHE["data"] is not None and now - _BUNDLE_CACHE["ts"] < _BUNDLE_TTL_SECONDS:
         return _BUNDLE_CACHE["data"]
     rules = rules or rule_config()
+    if feature_flags is None:
+        try:
+            from src.database import load_config
+            feature_flags = (load_config() or {}).get("alert_feature_flags") or {}
+        except Exception:
+            feature_flags = {}
+    sku_enabled = bool(feature_flags.get("insight_etc_sku_stop", False))
+    repeat_enabled = bool(feature_flags.get("insight_new_customer_no_repeat", False))
     if as_of is None:
         from src.alerts import _last_complete_data_day
         as_of = _last_complete_data_day()
@@ -631,6 +856,8 @@ def build_insight_bundle(as_of=None, rules=None, force=False):
     bundle = {"as_of": as_of, "rules": rules, "errors": {},
               "channel_pace": {}, "team_pace": {"evaluated": False, "teams": [], "at_risk": []},
               "silent_customers": {"evaluated": False, "rows": []},
+              "etc_sku_stops": {"enabled": sku_enabled, "evaluated": False, "rows": []},
+              "new_customer_no_repeat": {"enabled": repeat_enabled, "evaluated": False, "rows": []},
               "new_over45": {"available": False, "rows": []}, "overdue_ordering": {"rows": []}}
     try:
         bundle["channel_pace"] = channel_pace_for_scope(as_of, rules=rules)
@@ -644,6 +871,16 @@ def build_insight_bundle(as_of=None, rules=None, force=False):
         bundle["silent_customers"] = _silent_part(as_of, rules)
     except Exception as exc:
         bundle["errors"]["silent_customers"] = str(exc)
+    if sku_enabled:
+        try:
+            bundle["etc_sku_stops"] = _etc_sku_stop_part(as_of, rules)
+        except Exception as exc:
+            bundle["errors"]["etc_sku_stops"] = str(exc)
+    if repeat_enabled:
+        try:
+            bundle["new_customer_no_repeat"] = _new_customer_no_repeat_part(as_of, rules)
+        except Exception as exc:
+            bundle["errors"]["new_customer_no_repeat"] = str(exc)
     try:
         from src.alerts import get_bravo_receivables_snapshot
         snapshot = get_bravo_receivables_snapshot()

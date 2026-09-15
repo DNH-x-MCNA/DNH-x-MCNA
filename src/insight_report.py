@@ -96,6 +96,8 @@ def team_progress_lines(view, money):
 _MUC_THEO_LOI = {
     "team_pace": ("team_pace",), "channel_pace": ("team_pace",),
     "silent_customers": ("silent_customers",),
+    "etc_sku_stops": ("etc_sku_stops",),
+    "new_customer_no_repeat": ("new_customer_no_repeat",),
     "receivables": ("new_over45", "overdue_ordering"),
     "new_over45": ("new_over45",), "overdue_ordering": ("overdue_ordering",),
 }
@@ -128,6 +130,11 @@ def all_evaluated(view):
     silent = view.get("silent_customers") or {}
     if silent.get("error") or not silent.get("evaluated"):
         return False
+    for name in ("etc_sku_stops", "new_customer_no_repeat"):
+        part = view.get(name) or {}
+        if (part.get("enabled") and part.get("applicable", True)
+                and (part.get("error") or not part.get("evaluated"))):
+            return False
     new_debt = view.get("new_over45") or {}
     if new_debt.get("error") or not new_debt.get("available"):
         return False
@@ -139,6 +146,8 @@ def action_count(view):
         return 0
     return (len((view.get("team_pace") or {}).get("at_risk") or [])
             + len((view.get("silent_customers") or {}).get("rows") or [])
+            + len((view.get("etc_sku_stops") or {}).get("rows") or [])
+            + len((view.get("new_customer_no_repeat") or {}).get("rows") or [])
             + len((view.get("new_over45") or {}).get("rows") or [])
             + len((view.get("overdue_ordering") or {}).get("rows") or []))
 
@@ -203,6 +212,38 @@ def action_lines(view, money, max_rows=ACTION_ROWS_TEAMS):
         _them_danh_sach(lines, silent["rows"], max_rows,
                         lambda c: f"{c.get('customer_name') or c['customer_code']} ({c['customer_code']}, "
                                   f"{c.get('sales_channel')}): thường mua {money(c['baseline_monthly'])}/tháng")
+
+    sku = view.get("etc_sku_stops") or {}
+    if sku.get("enabled") and sku.get("applicable", True):
+        if sku.get("error"):
+            lines.append("• Khách ETC ngừng SKU chủ lực: CHƯA đánh giá được (lỗi dữ liệu lúc dựng báo cáo).")
+        elif not sku.get("evaluated"):
+            lines.append(f"• Khách ETC ngừng SKU chủ lực: đánh giá từ ngày {sku.get('min_day', 20)} hằng tháng.")
+        elif sku.get("rows"):
+            lines.append(f"• {len(sku['rows'])} khách ETC vẫn mua nhưng chưa lấy SKU chủ lực tới ngày 20:")
+
+            def sku_line(customer):
+                contracts = customer.get("active_contracts") or []
+                contract_text = ", ".join(
+                    f"{contract.get('doc_no') or contract.get('contract_id')} đến {contract.get('to_date')}"
+                    for contract in contracts[:3]) or "không có hợp đồng còn hiệu lực"
+                return (f"{customer.get('customer_name') or customer['customer_code']} "
+                        f"({customer['customer_code']}): SKU {customer['item_code']}, thường mua "
+                        f"{money(customer['baseline_monthly'])}/tháng; HĐ: {contract_text}")
+
+            _them_danh_sach(lines, sku["rows"], max_rows, sku_line, don_vi="cặp khách/SKU")
+
+    repeat = view.get("new_customer_no_repeat") or {}
+    if repeat.get("enabled"):
+        if repeat.get("error"):
+            lines.append("• Khách mới chưa mua lại: CHƯA đánh giá được (lỗi dữ liệu lúc dựng báo cáo).")
+        elif repeat.get("rows"):
+            lines.append(f"• {len(repeat['rows'])} khách mới chưa có đơn thứ hai sau thời hạn:")
+            _them_danh_sach(
+                lines, repeat["rows"], max_rows,
+                lambda c: f"{c.get('customer_name') or c['customer_code']} ({c['customer_code']}, "
+                          f"{c.get('sales_channel')}): đơn đầu {c['first_order_date']} "
+                          f"{money(c['first_order_value'])}, chưa mua lại sau {c['wait_days']} ngày")
 
     new_debt = view.get("new_over45") or {}
     if new_debt.get("error"):

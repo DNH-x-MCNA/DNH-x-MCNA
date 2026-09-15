@@ -90,6 +90,30 @@ def test_email_khong_dung_duoc_insight_van_gui_phan_con_lai():
     assert "Việc Cần Xử Lý" not in html and "Doanh Thu (OTC + ETC)" in html
 
 
+def test_email_chi_hien_hai_luat_moi_khi_co_duoc_bat():
+    off = notifier.build_digest_email(
+        _metrics(_view(etc_sku_stops={"enabled": False, "rows": []},
+                       new_customer_no_repeat={"enabled": False, "rows": []})), period_label="Weekly")
+    assert "Khách ETC ngừng SKU chủ lực" not in off and "Khách mới chưa mua lại" not in off
+
+    on = _view(
+        etc_sku_stops={"enabled": True, "evaluated": True, "rows": [{
+            "customer_code": "BV1", "customer_name": "Bệnh viện Một", "item_code": "SKU1",
+            "baseline_monthly": 120e6,
+            "active_contracts": [{"doc_no": "HD-01", "to_date": "2026-12-31"}],
+        }]},
+        new_customer_no_repeat={"enabled": True, "evaluated": True, "rows": [{
+            "customer_code": "NT1", "customer_name": "Nhà thuốc Một", "sales_channel": "OTC",
+            "first_order_date": "2026-08-08", "first_order_value": 25e6, "wait_days": 45,
+        }]},
+    )
+    html = notifier.build_digest_email(_metrics(on), period_label="Weekly")
+
+    for expected in ("Khách ETC ngừng SKU chủ lực", "Bệnh viện Một", "SKU1", "HD-01",
+                     "Khách mới chưa mua lại", "Nhà thuốc Một", "45 ngày"):
+        assert expected in html
+
+
 def test_email_kenh_etc_khong_co_muc_doi_qlv():
     view = _view(team_pace={"applicable": False, "evaluated": True, "at_risk": []})
     html = notifier.build_digest_email({**_metrics(view), "channel": "ETC"}, period_label="Weekly")

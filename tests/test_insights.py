@@ -113,6 +113,50 @@ def test_silent_regular_customers_chi_bat_khach_mua_deu_ma_thang_nay_chua_mua():
     assert rows[0]["months_ordered_by_this_day"] == 6
 
 
+def test_stopped_main_skus_can_khach_van_mua_va_sku_du_5_tren_6_thang():
+    as_of = dt.date(2026, 9, 20)
+    rows = []
+    for k in range(1, 7):
+        month = insights.month_add(2026, 9, -k)
+        if k <= 5:
+            rows.append(("DUNG", "SKU-A", month, 120e6, 120e6))
+        if k <= 4:
+            rows.append(("THIEU_THANG", "SKU-B", month, 200e6, 200e6))
+        rows.append(("DA_LAY", "SKU-C", month, 120e6, 120e6))
+        rows.append(("IM_LANG", "SKU-D", month, 120e6, 120e6))
+    rows += [
+        ("DUNG", "SKU-KHAC", (2026, 9), 10e6, 10e6),
+        ("THIEU_THANG", "SKU-KHAC", (2026, 9), 10e6, 10e6),
+        ("DA_LAY", "SKU-C", (2026, 9), 10e6, 10e6),
+    ]
+
+    found = insights.stopped_main_skus(rows, as_of, min_baseline=100e6)
+
+    assert [(row["customer_code"], row["item_code"]) for row in found] == [("DUNG", "SKU-A")]
+    assert found[0]["months_bought"] == 5 and found[0]["baseline_monthly"] == pytest.approx(100e6)
+
+
+def test_new_customers_without_repeat_chi_bat_su_kien_vua_cham_han():
+    as_of = dt.date(2026, 9, 15)
+    event = as_of - dt.timedelta(days=45)
+    orders = [
+        ("DUNG", "D1", event, 25e6),
+        ("DA_LAP", "L1", event, 30e6), ("DA_LAP", "L2", event + dt.timedelta(days=10), 2e6),
+        ("HAI_DON", "H1", event, 15e6), ("HAI_DON", "H2", event, 10e6),
+        ("MOI_MUA", "M1", event + dt.timedelta(days=1), 30e6),
+        ("DON_NHO", "N1", event, 19e6),
+        ("CHUA_DU_12_THANG", "C0", event - dt.timedelta(days=100), 1e6),
+        ("CHUA_DU_12_THANG", "C1", event, 25e6),
+    ]
+
+    found = insights.new_customers_without_repeat(
+        orders, as_of, wait_days=45, min_first_order=20e6, inactivity_days=365,
+        history_start=event - dt.timedelta(days=365))
+
+    assert [row["customer_code"] for row in found] == ["DUNG"]
+    assert found[0]["first_order_date"] == event.isoformat() and found[0]["wait_days"] == 45
+
+
 def test_new_over45_debtors_chi_khach_moi_vuot_nguong():
     current = {
         "MOI": {"customer_name": "A", "sales_channel": "ETC", "area_code": "MN", "overdue_gt_45": 80e6},

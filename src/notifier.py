@@ -430,6 +430,41 @@ DIGEST_EMAIL_TEMPLATE = """
             <div class="no-data">Không có khách mua đều nào chưa có đơn.</div>
             {% endif %}
 
+            {% set sku = ins.etc_sku_stops or {} %}
+            {% if sku.enabled and sku.applicable is not false %}
+            <div style="font-weight: 700; color: #1f4a22; font-size: 13px; margin: 12px 0 4px;">Khách ETC ngừng SKU chủ lực</div>
+            {% if sku.error %}
+            <div class="no-data">Chưa đánh giá được do lỗi dữ liệu lúc dựng báo cáo.</div>
+            {% elif not sku.evaluated %}
+            <div class="no-data">Đánh giá từ ngày {{ sku.min_day or 20 }} hằng tháng.</div>
+            {% elif sku.rows %}
+            <table class="data-table">
+                <thead><tr><th>Khách</th><th>SKU</th><th>Thường mua/tháng</th><th>Hợp đồng còn hiệu lực</th></tr></thead>
+                <tbody>{% for c in sku.rows[:10] %}
+                    <tr><td>{{ c.customer_name }} ({{ c.customer_code }})</td><td>{{ c.item_code }}</td><td>{{ (c.baseline_monthly)|vnd }}</td>
+                    <td>{% if c.active_contracts %}{% for hd in c.active_contracts[:3] %}{% if not loop.first %}; {% endif %}{{ hd.doc_no or hd.contract_id }} đến {{ hd.to_date }}{% endfor %}{% else %}Không có{% endif %}</td></tr>
+                {% endfor %}</tbody>
+            </table>
+            {% if sku.rows|length > 10 %}<div class="no-data">Đang liệt kê 10/{{ sku.rows|length }} cặp khách/SKU.</div>{% endif %}
+            {% else %}<div class="no-data">Không có khách ETC nào ngừng SKU chủ lực.</div>{% endif %}
+            {% endif %}
+
+            {% set lap = ins.new_customer_no_repeat or {} %}
+            {% if lap.enabled %}
+            <div style="font-weight: 700; color: #1f4a22; font-size: 13px; margin: 12px 0 4px;">Khách mới chưa mua lại</div>
+            {% if lap.error %}
+            <div class="no-data">Chưa đánh giá được do lỗi dữ liệu lúc dựng báo cáo.</div>
+            {% elif lap.rows %}
+            <table class="data-table">
+                <thead><tr><th>Khách</th><th>Kênh</th><th>Đơn đầu</th><th>Thời gian chưa mua lại</th></tr></thead>
+                <tbody>{% for c in lap.rows[:10] %}
+                    <tr><td>{{ c.customer_name }} ({{ c.customer_code }})</td><td>{{ c.sales_channel }}</td><td>{{ c.first_order_date }} &bull; {{ (c.first_order_value)|vnd }}</td><td>{{ c.wait_days }} ngày</td></tr>
+                {% endfor %}</tbody>
+            </table>
+            {% if lap.rows|length > 10 %}<div class="no-data">Đang liệt kê 10/{{ lap.rows|length }} khách.</div>{% endif %}
+            {% else %}<div class="no-data">Không có khách mới nào vừa chạm thời hạn mà chưa mua lại.</div>{% endif %}
+            {% endif %}
+
             {% set no45 = ins.new_over45 or {} %}
             <div style="font-weight: 700; color: #1f4a22; font-size: 13px; margin: 12px 0 4px;">Khách mới rơi vào nợ quá hạn trên 45 ngày</div>
             {% if no45.error %}

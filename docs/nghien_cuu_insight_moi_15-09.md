@@ -13,7 +13,8 @@
 - Chỉ dùng dữ liệu trước thời điểm bắn, không nhìn trước.
 
 **Trạng thái:**
-- Mới là số đo, **chưa code quy tắc nào vào bộ cảnh báo, chưa bật gì**.
+- Hai quy tắc A/B đã được code vào bundle báo cáo ngày 15/09, sau cờ
+  `insight_etc_sku_stop` / `insight_new_customer_no_repeat`; cả hai cờ mặc định **false**, chưa bật, chưa deploy.
 - Script tái lập: `scripts/nghien_cuu_insight.py`, test tại `tests/test_nghien_cuu_insight.py`.
 - Dữ liệu kéo về ở `results/nghien_cuu_insight/`, không commit.
 
@@ -62,6 +63,8 @@
 **Rủi ro cần kiểm khi code:** SKU ETC có thể dừng vì gói thầu hết hạn. Nên ghi kèm hợp đồng còn hiệu lực của khách
 (nguồn `vHopDongETC`) để người nhận biết ngay.
 
+**Đã code 15/09:** mỗi dòng kèm danh sách hợp đồng đã bắt đầu và chưa hết hạn của khách; cờ mặc định tắt.
+
 ### B. Khách mới không mua lại
 
 **Quy tắc:**
@@ -87,6 +90,9 @@
 - ETC: ngay cả khách mới lớn cũng mất 42%. Lọc 60 ngày nâng lên 71%, ~3 khách/tháng.
 
 **Điều kiện:** cần DNH chốt ngưỡng đơn đầu và số ngày chờ. Số liệu này chưa trừ khách mở mã mới cho đơn thầu một lần.
+
+**Đã code 15/09:** báo đúng một lần vào ngày vừa chạm mốc 45/60 để khách không nằm mãi trong danh sách; cờ mặc
+định tắt. Đơn được gom theo `Stt`, nên hai đơn dương cùng ngày vẫn được nhận đúng là đã có đơn thứ hai.
 
 ### C. Hợp đồng ETC sắp hết hạn, thực hiện thấp
 
@@ -258,8 +264,6 @@ Giữ cách cộng TDV hiện tại; không đổi code sản phẩm.
 
 ## 4. Chưa làm, để lần sau
 
-- **Code quy tắc A và B** vào `src/insights.py` sau cờ `alert_feature_flags` (mặc định tắt), sau khi DNH chốt ngưỡng
-  ở mục 3.
 - **Báo cáo QLV:** đã thêm Việc cần xử lý và dự phóng đội (15/09), chỉ gồm khách gắn với đội theo phân công KPI.
   Khách ETC không gắn được đội nên không hiện trong báo cáo QLV (QLV hiện chỉ phụ trách OTC).
 
