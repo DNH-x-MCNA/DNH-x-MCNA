@@ -98,6 +98,27 @@ _TEMPLATE_SOURCES = {
     "get_salary_achievement_summary": ("salary",),
     "get_salary_ranking": ("salary",),
     "get_audit_log": ("audit",),
+    # 15/09/2026 (anh Dang: moi cau tra loi co so lieu phai co dong "Nguon du lieu ... du lieu den ...,
+    # dong bo luc ..."): 19 tool duoi day chua khai bao nguon nen cau tra loi dung chung khong co footer.
+    "get_cross_sell_opportunities": ("sales_otc", "sales_etc"),
+    "get_customer_attrition_risk": ("sales_otc", "sales_etc"),
+    "get_customer_cohort_retention": ("sales_otc", "sales_etc"),
+    "get_customer_lifecycle_summary": ("kpi", "sales_otc"),
+    "get_customer_movement": ("sales_otc", "sales_etc"),
+    "get_customer_product_coverage": ("sales_otc", "sales_etc"),
+    "get_customers_silent": ("sales_otc", "sales_etc"),
+    "get_etc_contract_status": ("sql_server",),
+    "get_geography_monthly_performance": ("sales_otc", "sales_etc"),
+    "get_inventory_expiry_report": ("inventory", "sales_otc"),
+    "get_kpi_gap_run_rate": ("kpi_salary_result",),
+    "get_operational_data_quality": ("sales_otc", "sales_etc", "employee", "kpi"),
+    "get_promotion_data_quality": ("promotion_live",),
+    "get_receivables_history_dates": ("debt",),
+    "get_receivables_period_compare": ("debt",),
+    "get_revenue_monthly_series": ("sales_otc", "sales_etc"),
+    "get_revenue_ytd_cumulative": ("sales_otc", "sales_etc"),
+    "get_salary_data_quality": ("salary",),
+    "get_workforce_productivity": ("kpi_salary_result", "sales_otc"),
 }
 
 

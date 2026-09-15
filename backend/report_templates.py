@@ -2505,6 +2505,97 @@ def focus_product_kpi(year_month: str = None, limit: int = 100, scope_area_code:
     return result
 
 
+# 15/09/2026 (anh Dang): moi ma san pham va ma nhan vien trong cau tra loi phai kem ten. (khoa ma,
+# cac khoa ten da co san thi khong gan lai, khoa ten se gan, loai danh muc)
+_MA_CAN_TEN = (
+    ("item_code", ("item_name", "name", "product_name", "ten_san_pham"), "item_name", "product"),
+    ("employee_code", ("employee_name", "name", "ten_nhan_vien"), "employee_name", "employee"),
+    ("manager_code", ("manager_name", "ten_quan_ly"), "manager_name", "employee"),
+)
+_MAX_DICT_GAN_TEN = 5000
+_CHUNK_GAN_TEN = 500
+
+
+def _can_gan_ten(row: dict, code_key: str, name_keys: tuple):
+    code = row.get(code_key)
+    if not isinstance(code, str) or not code.strip() or any(row.get(k) for k in name_keys):
+        return None
+    return code.strip()
+
+
+def _tra_ten_theo_lo(sql_template: str, codes: list, key_cols: tuple) -> dict:
+    names = {}
+    for i in range(0, len(codes), _CHUNK_GAN_TEN):
+        chunk = codes[i:i + _CHUNK_GAN_TEN]
+        ph = ",".join("?" for _ in chunk)
+        params = tuple(chunk) * len(key_cols)
+        for r in _q(sql_template.format(ph=ph), params):
+            for col in key_cols:
+                if r.get(col) and r.get("name") and r[col] not in names:
+                    names[r[col]] = r["name"]
+    return names
+
+
+def _gan_ten_cho_ma(result):
+    """Gan ten cho moi item_code/employee_code/manager_code chua co ten trong ket qua tool.
+
+    Lam MOT LAN o call_template thay vi sua tung tool: 50 tool, nhieu tool tra ma tran. Khong ghi de ten
+    da co, khong tu dat ten khi danh muc khong co. Buoc bo sung - loi o day KHONG duoc lam hong ket qua."""
+    try:
+        stack, rows = [result], []
+        while stack and len(rows) < _MAX_DICT_GAN_TEN:
+            current = stack.pop()
+            if isinstance(current, dict):
+                rows.append(current)
+                stack.extend(v for v in current.values() if isinstance(v, (dict, list)))
+            elif isinstance(current, list):
+                stack.extend(v for v in current if isinstance(v, (dict, list)))
+        need_products, need_employees = set(), set()
+        for row in rows:
+            for code_key, name_keys, _, kind in _MA_CAN_TEN:
+                code = _can_gan_ten(row, code_key, name_keys)
+                if code:
+                    (need_products if kind == "product" else need_employees).add(code)
+        if not need_products and not need_employees:
+            return result
+        product_names, employee_names = {}, {}
+        if need_products:
+            try:
+                product_names = _tra_ten_theo_lo(
+                    "SELECT code, name FROM brv_sanpham WHERE code IN ({ph})", sorted(need_products), ("code",))
+            except sqlite3.OperationalError:
+                pass
+        if need_employees:
+            try:
+                employee_names = _tra_ten_theo_lo(
+                    "SELECT employee_code, dmsid, name FROM dim_nhanvien "
+                    "WHERE employee_code IN ({ph}) OR dmsid IN ({ph}) "
+                    "ORDER BY CASE WHEN COALESCE(is_duplicate,0)=0 THEN 0 ELSE 1 END",
+                    sorted(need_employees), ("employee_code", "dmsid"))
+            except sqlite3.OperationalError:
+                pass
+            con_thieu = sorted(need_employees - set(employee_names))
+            if con_thieu:
+                # Nhan vien rieng phia ETC khong co trong dim_nhanvien (vd DNH00087, Sale01...).
+                try:
+                    for code, name in _tra_ten_theo_lo(
+                            "SELECT code, dmscode, name FROM dmssx_nhanvien WHERE code IN ({ph}) OR dmscode IN ({ph})",
+                            con_thieu, ("code", "dmscode")).items():
+                        employee_names.setdefault(code, name)
+                except sqlite3.OperationalError:
+                    pass
+        for row in rows:
+            for code_key, name_keys, target_key, kind in _MA_CAN_TEN:
+                code = _can_gan_ten(row, code_key, name_keys)
+                name = (product_names if kind == "product" else employee_names).get(code) if code else None
+                if name:
+                    row[target_key] = name
+    except Exception as exc:  # buoc bo sung ten khong duoc lam hong cau tra loi
+        _write_log({"ts": dt.datetime.now().isoformat(), "status": "warn",
+                    "sql": "<gan ten cho ma>", "error": str(exc)[:300]})
+    return result
+
+
 def _customer_names(codes: list) -> dict:
     """Ten khach cho nhieu ma cung luc (1 truy van/bang, khong goi tung dong).
 
@@ -12241,6 +12332,8 @@ def call_template(name: str, args: dict, question: str = "", username: str = Non
                     "loai": "VUNG_MIEN", "ma_vung": scope_area_code,
                     "canh_bao": "So lieu da gioi han theo vung, khong phai toan cong ty.",
                 }
+        # 15/09/2026: ma san pham/nhan vien trong ket qua luon kem ten (yeu cau anh Dang).
+        result = _gan_ten_cho_ma(result)
         entry["status"] = "ok"
         entry["duration_ms"] = int((dt.datetime.now() - t0).total_seconds() * 1000)
         _write_log(entry)
