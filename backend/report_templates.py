@@ -1597,9 +1597,11 @@ def compare_periods(date_from_a: str, date_to_a: str, date_from_b: str, date_to_
 
 def _ytd_plan(year: int, from_month: str, to_month: str, scope_area_code: str = None,
               scope_channel: str = None, scope_employee_code: str = None) -> dict:
-    """Ke hoach luy ke theo nguon chinh thuc; khong suy dien target doi/ETC theo vung khi kho khong co."""
+    """Ke hoach luy ke; target OTC bam dung snapshot/cach khử trùng cua checker S02."""
     period_from = f"{year:04d}-{from_month}-01"
     period_to = f"{year:04d}-{to_month}-{_last_day_of_month(year, int(to_month)):02d}"
+    period_exclusive = (dt.date(year, int(to_month), _last_day_of_month(year, int(to_month)))
+                        + dt.timedelta(days=1)).isoformat()
     channel = str(scope_channel or "ALL").upper()
     if channel not in {"ALL", "OTC", "ETC"}:
         channel = "ALL"
@@ -1618,21 +1620,79 @@ def _ytd_plan(year: int, from_month: str, to_month: str, scope_area_code: str = 
         return _f(rows[0]["amount"]) if rows and rows[0]["amount"] is not None else None
 
     otc = None
+    otc_by_region = None
+    otc_actual_s02 = None
+    otc_actual_by_region_s02 = None
+    target_source = None
+    plan_note_parts = []
     if channel != "ETC":
-        sql = ("SELECT SUM(COALESCE(amount,0)) amount FROM dim_targetvungmien "
-               "WHERE doc_date BETWEEN ? AND ?")
-        params = [period_from, period_to]
+        # S02 chấm theo snapshot mới nhất CUA TUNG NHAN VIEN trong từng tháng, chỉ tầng
+        # TDV/CTV/CS/TK. Trước đây dùng DIM_TargetVungMien; hai nguồn từng khớp nhưng có thể lệch
+        # khi một miền (thực tế MN) cập nhật snapshot sau bảng target vùng.
+        # DENSE_RANK được giữ đúng checker, kể cả trường hợp có nhiều dòng cùng SaveDate mới nhất.
+        salary_sql = (
+            "WITH b AS (SELECT employee_code,area_code,position_code,month_sale_amount,"
+            "month_sale_target,save_date,"
+            "DENSE_RANK() OVER (PARTITION BY substr(save_date,1,7),employee_code "
+            "ORDER BY save_date DESC) snapshot_rank FROM fact_thongketinhluong "
+            "WHERE save_date>=? AND save_date<?) "
+            "SELECT area_code,SUM(COALESCE(month_sale_target,0)) amount,"
+            "SUM(COALESCE(month_sale_amount,0)) actual,"
+            "COUNT(DISTINCT substr(save_date,1,7)) covered_months FROM b "
+            f"WHERE snapshot_rank=1 AND UPPER(position_code) IN ({_tier_ph()})"
+        )
+        salary_params = [period_from, period_exclusive, *_EMPLOYEE_TIER_POSITIONS]
         if scope_area_code:
-            sql += " AND area_code=?"
-            params.append(scope_area_code)
-        otc = _sum(sql, tuple(params))
+            salary_sql += " AND area_code=?"
+            salary_params.append(scope_area_code)
+        salary_sql += " GROUP BY area_code"
+        expected_months = int(to_month) - int(from_month) + 1
+        try:
+            salary_rows = _q(salary_sql, tuple(salary_params))
+        except sqlite3.OperationalError:
+            salary_rows = []
+        required_areas = {scope_area_code} if scope_area_code else {"MB", "MT", "MN"}
+        returned_areas = {row.get("area_code") for row in salary_rows}
+        coverage_by_area = {
+            row.get("area_code"): int(row.get("covered_months") or 0) for row in salary_rows
+        }
+        salary_complete = required_areas.issubset(returned_areas) and all(
+            coverage_by_area.get(area) == expected_months for area in required_areas
+        )
+        if salary_complete:
+            otc_by_region = {row["area_code"]: _f(row["amount"]) for row in salary_rows}
+            otc_actual_by_region_s02 = {
+                row["area_code"]: _f(row["actual"]) for row in salary_rows
+            }
+            otc = sum(otc_by_region.values())
+            otc_actual_s02 = sum(otc_actual_by_region_s02.values())
+            target_source = "FACT_ThongKeTinhLuong_S02"
+        else:
+            sql = ("SELECT area_code,SUM(COALESCE(amount,0)) amount FROM dim_targetvungmien "
+                   "WHERE doc_date BETWEEN ? AND ?")
+            params = [period_from, period_to]
+            if scope_area_code:
+                sql += " AND area_code=?"
+                params.append(scope_area_code)
+            sql += " GROUP BY area_code"
+            try:
+                fallback_rows = _q(sql, tuple(params))
+            except sqlite3.OperationalError:
+                fallback_rows = []
+            if fallback_rows:
+                otc_by_region = {row["area_code"]: _f(row["amount"]) for row in fallback_rows}
+                otc = sum(otc_by_region.values())
+                target_source = "DIM_TargetVungMien_FALLBACK"
+                plan_note_parts.append(
+                    "FACT_ThongKeTinhLuong khong phu du cac thang trong ky; target OTC dang tam lay "
+                    "tu DIM_TargetVungMien va chua duoc doi chieu theo S02."
+                )
 
     # FACT_KeHoachTongETC chi co target toan quoc, khong co vung/QLV. Tra None thay vi chia deu.
     etc = None
-    etc_note = None
     if channel != "OTC":
         if scope_area_code:
-            etc_note = "Ke hoach ETC chua tach theo vung trong nguon hien co."
+            plan_note_parts.append("Ke hoach ETC chua tach theo vung trong nguon hien co.")
         else:
             etc = _sum(
                 "SELECT SUM(COALESCE(amount,0)) amount FROM fact_kehoachtongetc WHERE doc_date BETWEEN ? AND ?",
@@ -1645,7 +1705,14 @@ def _ytd_plan(year: int, from_month: str, to_month: str, scope_area_code: str = 
         total = etc
     else:
         total = otc + etc if otc is not None and etc is not None else None
-    return {"total": total, "otc": otc, "etc": etc, "note": etc_note}
+    return {
+        "total": total, "otc": otc, "etc": etc,
+        "otc_by_region": otc_by_region,
+        "otc_actual_s02": otc_actual_s02,
+        "otc_actual_by_region_s02": otc_actual_by_region_s02,
+        "target_source": target_source,
+        "note": " ".join(plan_note_parts) or None,
+    }
 
 
 def revenue_ytd_cumulative(year_month_to: str, from_month: str = None, years_back: int = 3,
@@ -1892,6 +1959,7 @@ def revenue_monthly_series(month_to: str = None, months_back: int = 12, include_
         item["plan_revenue"] = plan["total"]
         item["plan_otc_revenue"] = plan["otc"]
         item["plan_etc_revenue"] = plan["etc"]
+        item["target_source"] = plan.get("target_source")
         item["achievement_pct"] = (
             item["revenue"] / plan["total"] * 100 if plan["total"] else None
         )
@@ -1900,6 +1968,63 @@ def revenue_monthly_series(month_to: str = None, months_back: int = 12, include_
         )
         if plan.get("note"):
             item["plan_note"] = plan["note"]
+        # C02/S02 yeu cau ca mien. Tra san actual + target OTC tung mien trong cung payload de
+        # model khong tu ghep target toan cong ty vao MN, hoac cong nham target MN vao tong.
+        if scope_channel != "ETC" and not scope_employee_code:
+            region_actuals = revenue_by_region(
+                d_from, d_to, scope_area_code=scope_area_code, channel="OTC",
+            )
+            target_by_region = plan.get("otc_by_region") or {}
+            region_codes = ([scope_area_code] if scope_area_code else ["MB", "MT", "MN"])
+            invoice_actual_by_region = {row["area"]: _f(row["revenue"]) for row in region_actuals}
+            s02_actual_by_region = plan.get("otc_actual_by_region_s02") or {}
+            actual_by_region = s02_actual_by_region or invoice_actual_by_region
+            actual_source = ("FACT_ThongKeTinhLuong_S02" if s02_actual_by_region
+                             else "HOA_DON_OTC_FALLBACK")
+            item["otc_by_region"] = [{
+                "area_code": area,
+                "otc_revenue": actual_by_region.get(area, 0.0),
+                "plan_otc_revenue": target_by_region.get(area),
+                "achievement_pct": (
+                    actual_by_region.get(area, 0.0) / target_by_region[area] * 100
+                    if target_by_region.get(area) else None
+                ),
+                "plan_variance": (
+                    actual_by_region.get(area, 0.0) - target_by_region[area]
+                    if area in target_by_region else None
+                ),
+                "actual_source": actual_source,
+            } for area in region_codes]
+            region_actual_total = sum(actual_by_region.get(area, 0.0) for area in region_codes)
+            region_plan_total = sum(target_by_region.get(area, 0.0) for area in region_codes)
+            s02_company_actual = plan.get("otc_actual_s02")
+            scope_company_actual = (
+                s02_company_actual if s02_company_actual is not None else item["otc_revenue"]
+            )
+            item["s02_otc_company"] = {
+                "actual": scope_company_actual,
+                "target": plan["otc"],
+                "achievement_pct": (
+                    scope_company_actual / plan["otc"] * 100
+                    if scope_company_actual is not None and plan["otc"] else None
+                ),
+                "plan_variance": (
+                    scope_company_actual - plan["otc"]
+                    if scope_company_actual is not None and plan["otc"] is not None else None
+                ),
+                "source": actual_source,
+            }
+            item["otc_region_reconciliation"] = {
+                "revenue_sum_regions": region_actual_total,
+                "revenue_company_otc": scope_company_actual,
+                "revenue_matches": (scope_company_actual is not None
+                                    and abs(region_actual_total - scope_company_actual) <= 1),
+                "invoice_otc_revenue_reference": item["otc_revenue"],
+                "plan_sum_regions": region_plan_total,
+                "plan_company_otc": plan["otc"],
+                "plan_matches": (plan["otc"] is not None
+                                 and abs(region_plan_total - plan["otc"]) <= 1),
+            }
         # Thang NAM TRONG pham vi du lieu nhung khong co hoa don nao: pham vi tong the khong bat
         # duoc truong hop nay. Voi toan cong ty gan nhu chac chan la LO HONG DONG BO (DNH khong the
         # ban 0 dong ca thang); voi 1 doi QLV nho thi co the that. Khong tu ket luan - danh dau de
