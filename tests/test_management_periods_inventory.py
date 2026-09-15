@@ -147,7 +147,7 @@ def _make_inventory_db(path):
         CREATE TABLE brv_kho (id_code INTEGER, branch_code TEXT, code TEXT, name TEXT);
         CREATE TABLE vhoadon_otc (
             doc_date TEXT, customer_code TEXT, item_code TEXT, amount9 REAL,
-            quantity REAL, unit_price REAL
+            quantity REAL, unit_price REAL, employee_code TEXT
         );
         CREATE TABLE dms_khachhang (code TEXT, name TEXT, city_id INTEGER);
         CREATE TABLE dim_tinhthanhpho (city_id INTEGER, area_code TEXT);
@@ -181,11 +181,11 @@ def _make_inventory_db(path):
     ])
     # Fixed date 28/08 -> 3 thang hoan tat gan nhat la T5-T7. SP2 ban 30/thang
     # nhung ton 20, phai duoc danh dau nguy co thieu; SP1 khong ban, la ton cham.
-    conn.executemany("INSERT INTO vhoadon_otc VALUES (?,?,?,?,?,?)", [
-        ("2026-05-10", "KH1", "SP2", 300, 30, 10),
-        ("2026-06-10", "KH1", "SP2", 300, 30, 10),
-        ("2026-07-10", "KH1", "SP2", 300, 30, 10),
-        ("2026-07-10", "KH2", "SP4", 999, 1, 999),
+    conn.executemany("INSERT INTO vhoadon_otc VALUES (?,?,?,?,?,?,?)", [
+        ("2026-05-10", "KH1", "SP2", 300, 30, 10, "DMS01"),
+        ("2026-06-10", "KH1", "SP2", 300, 30, 10, "DMS01"),
+        ("2026-07-10", "KH1", "SP2", 300, 30, 10, "DMS01"),
+        ("2026-07-10", "KH2", "SP4", 999, 1, 999, "DMS02"),
     ])
     conn.commit()
     conn.close()
@@ -283,6 +283,9 @@ def test_v38_v39_backend_tu_chon_trong_tam_khong_phu_thuoc_model(tmp_path, monke
     monkeypatch.setattr(local_warehouse, "DB_PATH", str(db_path))
     monkeypatch.setattr(rt.dt, "date", _FixedDate)
     monkeypatch.setattr(rt, "get_sync_meta", lambda _table: (None, None, None))
+    # Fixture tap trung vao chon focus; cung cap phan cong doi cho bo loc QLV.
+    monkeypatch.setattr(rt, "_fact_date_le", lambda _as_of: "2026-07-31")
+    monkeypatch.setattr(rt, "_get_team_dms_ids", lambda _qlv, _snapshot: ["DMS01"])
 
     shortage = rt.call_template(
         "get_inventory_expiry_report", {},
