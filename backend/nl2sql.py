@@ -181,12 +181,17 @@ TOOL_TIMEOUT_SECONDS = _timeout_env("CHAT_TOOL_TIMEOUT_SECONDS", 40, REQUEST_TIM
 LLM_CALL_TIMEOUT_SECONDS = _timeout_env("CHAT_LLM_TIMEOUT_SECONDS", 45, REQUEST_TIMEOUT_SECONDS)
 
 
-def _required_tool_for_question(question: str) -> str | None:
-    """Ep tool cho cac intent co mot duong du lieu duy nhat, tranh do catalog nhieu vong."""
-    q = " ".join("".join(
+def _fold_for_route(question: str) -> str:
+    """Chuan hoa cau hoi cho router: chu thuong, bo dau, gop khoang trang."""
+    return " ".join("".join(
         ch for ch in unicodedata.normalize("NFD", (question or "").lower())
         if unicodedata.category(ch) != "Mn"
     ).replace("đ", "d").split())
+
+
+def _required_tool_for_question(question: str) -> str | None:
+    """Ep tool cho cac intent co mot duong du lieu duy nhat, tranh do catalog nhieu vong."""
+    q = _fold_for_route(question)
 
     # 14/09/2026 - phan hoi nguoi dung that: "nhung nhan vien ... duoi 60%" va cau noi
     # "danh sach duoi 65%" khong duoc dinh tuyen, model tu do qua nhieu tool KPI/revenue roi
@@ -213,6 +218,16 @@ def _required_tool_for_question(question: str) -> str | None:
             and "thang" in q):
         return "get_revenue_tree"
 
+    # 15/09/2026 (nhat ky UAT 13:59-14:11): ba cau khach hang/KPI co tool DANH SACH rieng. Truoc day
+    # khong co tool nao nen chatbot mo ta chung, thieu khach hoac khong goi SQL.
+    if any(marker in q for marker in ("khach hang moi", "khach moi")) and any(
+            marker in q for marker in ("danh sach", "ngay ghi nhan")):
+        return "get_new_customer_list"
+    if "tai don" in q and any(marker in q for marker in ("chua dat", "chua tai don", "danh sach")):
+        return "get_reorder_pending_customers"
+    if ("san pham trong tam" in q or ("trong tam" in q and "kpi" in q)) and "sku" not in q \
+            and not any(marker in q for marker in ("dm1", "dm2", "dm3")):
+        return "get_focus_product_kpi"
     # C11/S70 co nhac "top 3 mien/vung" nhung trong tam la muc tap trung dong thoi theo
     # khach + SKU + dia ly va xu huong thang. Phai chan truoc luat doanh thu theo vung rong.
     if any(marker in q for marker in ("phu thuoc top", "phu thuoc vao top", "muc do tap trung")) \
@@ -324,6 +339,15 @@ def _required_tool_for_question(question: str) -> str | None:
         return "get_customer_product_coverage"
     # Bao cao tong gia tri ton theo mien van dung inventory_by_region, ke ca khi nguoi dung
     # liet ke them stock-out. Chi dinh tuyen sang SKU risk khi trong tam la SKU/thieu/cham ban.
+    # 15/09/2026 (UAT 14:40 "So luong ton kho bo phe tinh den hom nay"): ton kho cua MOT san pham theo
+    # ten. Loai tru cac y ton kho da co tool rieng (gia tri/so thang ton, han dung, cham ban, thieu hang,
+    # SKU) va cau hoi tong theo vung/mien.
+    if "ton kho" in q and not any(marker in q for marker in (
+        "gia tri ton", "so thang ton", "can date", "han su dung", "het han", "cham ban", "cham luan chuyen",
+        "thieu hang", "kho thieu", "ton cao", "stock-out", "sku", "mien", "vung", "chi nhanh", "tong ton",
+        "doanh thu", "doanh so",
+    )):
+        return "get_inventory_item_stock"
     if "gia tri ton kho" in q:
         return "get_inventory_by_region"
     # C44/M42: kho/hoa don khong co khoa hop dong da xac nhan. Ep vao bao cao co guard
@@ -332,6 +356,10 @@ def _required_tool_for_question(question: str) -> str | None:
     # doanh thu thuc hien, khong co gia tri hop dong/con lai/han) nen ca hai deu CHUA DAT voi ly do
     # "chua co khoa lien ket hoa don - hop dong". Kiem lai 13/09: khoa CO that, ContractId phu 100%
     # dong hoa don ETC va khop 1.037/1.037 hop dong -> dung tool hop dong.
+    # 15/09/2026 (UAT dnh_etc 14:43): doanh so ETC theo nhom hang co tool rieng. Cau khong ghi "ETC"
+    # tu tai khoan kenh ETC duoc bat o _required_tool_for_request (can biet kenh cua tai khoan).
+    if _hoi_doanh_so_theo_nhom_hang(q) and "etc" in q.split():
+        return "get_etc_revenue_by_item_type"
     if any(marker in q for marker in (
         "hop dong etc", "hop dong/goi thau", "hop dong goi thau", "goi thau nao",
         "sap het hieu luc", "gia tri lon chua giai ngan", "ty le thuc hien thap",
@@ -1147,6 +1175,61 @@ TEMPLATE_TOOLS = [
             "limit": {"type": "integer", "minimum": 1, "maximum": 200}}, "required": []},
     },
     {
+        "name": "get_inventory_item_stock",
+        "description": "SO LUONG TON KHO cua MOT san pham/nhom san pham tim theo TEN hoac MA (khong phan biet "
+                       "hoa thuong, dau tieng Viet): ton kho kinh doanh theo tung kho va ton kho san xuat, nam "
+                       "moi nhat, kem don vi tinh. BAT BUOC dung khi hoi ton kho cua san pham cu the (vd 'ton kho "
+                       "bo phe'). Truyen item_search = ten/ma san pham nguoi dung hoi. KHONG cong so luong giua "
+                       "cac ma khac don vi tinh; khong co ban ghi ton KHONG phai la ton bang 0.",
+        "input_schema": {"type": "object", "properties": {
+            "item_search": {"type": "string", "description": "Ten hoac ma san pham, vd 'bo phe'."},
+            "area_code": {"type": "string", "enum": ["MB", "MT", "MN"]},
+            "limit": {"type": "integer", "minimum": 1, "maximum": 200}}, "required": ["item_search"]},
+    },
+    {
+        "name": "get_new_customer_list",
+        "description": "DANH SACH KHACH HANG MOI trong thang (co IsNC cua Bravo) kem NGAY GHI NHAN (NCSaveDate - "
+                       "ngay hoa don dau tien), doanh so thang, TDV va QLV phu trach (ma kem ten). BAT BUOC "
+                       "dung khi hoi danh sach khach moi / ngay ghi nhan khach moi. Lay snapshot moi nhat cua "
+                       "TUNG nhan vien trong thang. Khong dung ngay snapshot lam ngay ghi nhan. Chi kenh OTC.",
+        "input_schema": {"type": "object", "properties": {
+            "year_month": {"type": "string", "description": "YYYY-MM; mac dinh thang co snapshot moi nhat."},
+            "limit": {"type": "integer", "minimum": 1, "maximum": 1000}}, "required": []},
+    },
+    {
+        "name": "get_reorder_pending_customers",
+        "description": "DANH SACH KHACH PHAT SINH trong cua so tai don (ROMonth, thuong 3 thang) nhung CHUA TAI "
+                       "DON trong thang (chua duoc tinh vao KPI khach tai don), kem lan mua gan nhat, TDV/QLV "
+                       "phu trach va KPI tai don tung TDV (so khach tai don / chi tieu). BAT BUOC dung khi hoi "
+                       "khach chua dat KPI tai don. Tra DANH SACH khach, khong chi mo ta chung. Chi kenh OTC.",
+        "input_schema": {"type": "object", "properties": {
+            "year_month": {"type": "string", "description": "YYYY-MM; mac dinh thang co snapshot moi nhat."},
+            "limit": {"type": "integer", "minimum": 1, "maximum": 1000}}, "required": []},
+    },
+    {
+        "name": "get_focus_product_kpi",
+        "description": "DOANH SO SAN PHAM TRONG TAM va KPI trong tam theo QUAN LY VUNG: doanh so trong tam, chi "
+                       "tieu, % dat va diem KPI tu ket qua tinh luong Bravo (tang QLV, khong cong cac tang). Tai "
+                       "khoan QLV kem tung thanh vien doi. BAT BUOC dung khi hoi doanh so/KPI san pham trong tam "
+                       "theo QLV/doi. KHONG dung cho % target SKU trong tam theo khach hang.",
+        "input_schema": {"type": "object", "properties": {
+            "year_month": {"type": "string", "description": "YYYY-MM; mac dinh thang moi nhat."},
+            "limit": {"type": "integer", "minimum": 1, "maximum": 500}}, "required": []},
+    },
+    {
+        "name": "get_etc_revenue_by_item_type",
+        "description": "DOANH SO ETC THEO NHOM HANG (Hang dau tu, khai thac, duoc lieu, lao, truc tiep - danh "
+                       "muc DIM_KeyClass nhom ItemTypeETC) trong 1 khoang ngay. BAT BUOC dung khi hoi doanh "
+                       "so/doanh thu ETC theo nhom hang. Liet ke du moi nhom trong danh muc, ke ca nhom = 0. "
+                       "Ma nhom khong co ten trong danh muc thi giu nguyen ma, KHONG tu dat ten (vd khong tu "
+                       "goi la 'Khac'). Payload co bravo_sql_doi_chieu: khi nguoi dung muon kiem tra so lieu, "
+                       "dua nguyen van cau lenh do.",
+        "input_schema": {"type": "object", "properties": {
+            "date_from": {"type": "string", "description": "YYYY-MM-DD"},
+            "date_to": {"type": "string", "description": "YYYY-MM-DD"}},
+            "required": ["date_from", "date_to"]},
+    },
+    {
         "name": "get_operational_data_quality",
         "description": "CHAT LUONG DU LIEU VAN HANH: nhan vien thieu manager/target/danh muc, ma "
                        "trung, khach hoa don mo coi, thieu mapping tinh, thieu ma NV va dong ghi ngay "
@@ -1908,10 +1991,22 @@ _SALARY_FALLBACK_NOTE = (
 )
 
 
-def _required_tool_for_request(question: str, tools_for_request: list[dict]) -> tuple:
+def _hoi_doanh_so_theo_nhom_hang(q_folded: str) -> bool:
+    """Cau hoi doanh so/doanh thu theo nhom hang (da bo dau)."""
+    return "nhom hang" in q_folded and any(marker in q_folded for marker in ("doanh so", "doanh thu"))
+
+
+def _required_tool_for_request(question: str, tools_for_request: list[dict],
+                               scope_channel: str = None) -> tuple:
     """(tool bat buoc, ghi chu them vao system dong) theo cau hoi VA danh sach tool cua vai tro."""
     tool = _required_tool_for_question(question)
     names = {t["name"] for t in tools_for_request}
+    # 15/09/2026: tai khoan kenh ETC hoi "doanh so thang nay theo cac nhom hang" (khong ghi ETC) - nhom
+    # hang cua kenh ETC la ItemTypeETC. Chi ap cho tai khoan ETC de khong cuop cau nhom hang cua OTC.
+    if (tool is None and str(scope_channel or "").strip().upper() == "ETC"
+            and "get_etc_revenue_by_item_type" in names
+            and _hoi_doanh_so_theo_nhom_hang(_fold_for_route(question))):
+        return "get_etc_revenue_by_item_type", ""
     if (tool in _SALARY_SENSITIVE_TEMPLATE_NAMES and tool not in names
             and _SALARY_FALLBACK_TOOL in names):
         return _SALARY_FALLBACK_TOOL, "\n\n" + _SALARY_FALLBACK_NOTE
@@ -2532,6 +2627,12 @@ TIET KIEM TOKEN - QUAN TRONG:
 - TUYET DOI KHONG noi voi nguoi dung ve payload/context, gioi han ky thuat, so dong bi an, `truncated`,
   `returned_count`, `not_shown_count`, "bi cat bot", "gioi han hien thi" hoac ten tool noi bo.
 
+MA KEM TEN (15/09/2026):
+- MOI ma san pham (item_code) va ma nhan vien/QLV (employee_code, manager_code) hien thi cho nguoi dung
+  PHAI kem ten, dang "ma - ten" (vd "TM25010183 - Nguyen Thi Hong Thuy", "31190000680 - Siro thuoc ho bo
+  phe Nam Ha"). Lay ten tu ket qua tool (item_name, employee_name, manager_name, name). Neu ket qua khong
+  co ten thi ghi "chua co ten trong danh muc", KHONG tu dat ten.
+
 THOI DIEM DU LIEU:
 - Backend se tu gan nguon, moc du lieu, moc dong bo va canh bao do moi sau khi cau tra loi hoan tat.
 - KHONG tu viet dong "Du lieu cap nhat den...", KHONG chep timestamp tu lich su hoi thoai va KHONG
@@ -2843,7 +2944,7 @@ def ask(question: str, session_id: str = "default", username: str = None, scope_
         scope_area_code, scope_channel, scope_role, scope_employee_code
     )
     tools_for_request = _tools_for_question(tools_for_request, question)
-    required_tool, luu_y_quyen = _required_tool_for_request(question, tools_for_request)
+    required_tool, luu_y_quyen = _required_tool_for_request(question, tools_for_request, scope_channel)
     max_rounds = _max_tool_rounds(scope_role)
     query_plan = build_query_plan(
         question,
@@ -3235,7 +3336,7 @@ def ask_stream(question: str, session_id: str = "default", username: str = None,
         scope_area_code, scope_channel, scope_role, scope_employee_code
     )
     tools_for_request = _tools_for_question(tools_for_request, question)
-    required_tool, luu_y_quyen = _required_tool_for_request(question, tools_for_request)
+    required_tool, luu_y_quyen = _required_tool_for_request(question, tools_for_request, scope_channel)
     max_rounds = _max_tool_rounds(scope_role)
     query_plan = build_query_plan(
         question,

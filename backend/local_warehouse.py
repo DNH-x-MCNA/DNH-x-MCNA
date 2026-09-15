@@ -38,7 +38,9 @@ CREATE INDEX IF NOT EXISTS idx_otc_channel ON vhoadon_otc(channel_code);
 CREATE TABLE IF NOT EXISTS vhoadon_etc (
     doc_date TEXT NOT NULL, customer_code TEXT, item_code TEXT,
     amount9 REAL, quantity REAL, unit_price REAL, stt TEXT, employee_code TEXT,
-    created_at TEXT, discount_rate REAL, doc_code TEXT
+    created_at TEXT, discount_rate REAL, doc_code TEXT,
+    -- 15/09/2026: vHoaDonETCTotal.GroupCode = ma nhom hang ETC, noi DIM_KeyClass (GroupCode='ItemTypeETC').
+    group_code TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_etc_docdate ON vhoadon_etc(doc_date);
 CREATE INDEX IF NOT EXISTS idx_etc_customer ON vhoadon_etc(customer_code);
@@ -86,6 +88,10 @@ CREATE INDEX IF NOT EXISTS idx_dcv_code ON dim_chucvu(position_code);
 CREATE TABLE IF NOT EXISTS brv_sanpham (code TEXT, name TEXT, group_code TEXT, unit TEXT, id_code INTEGER);
 CREATE INDEX IF NOT EXISTS idx_bsp_code ON brv_sanpham(code);
 CREATE INDEX IF NOT EXISTS idx_bsp_idcode ON brv_sanpham(id_code);
+
+-- 15/09/2026: danh muc ma phan loai Bravo (DIM_KeyClass). GroupCode='ItemTypeETC' la nhom hang ETC
+-- (0 Hang dau tu, 1 Hang khai thac, 2 Hang duoc lieu, 3 Hang lao, 4 Hang truc tiep - do tren Bravo 15/09).
+CREATE TABLE IF NOT EXISTS dim_keyclass (group_code TEXT, code TEXT, name TEXT);
 
 -- Ton kho THAT tu Bravo (thay Supabase inventory - cot warehouse ben do 100% NULL). branch_code tren
 -- brv_kho: B01=San xuat, B02=Kinh doanh Mien Bac, B03=Kinh doanh Mien Trung, B04=Kinh doanh Mien Nam
@@ -147,7 +153,12 @@ CREATE TABLE IF NOT EXISTS fact_tonghopkhachhang (
     employee_code TEXT, customer_code TEXT, amount_ct REAL,
     month_sale_target REAL, save_date TEXT, is_nc INTEGER, manager_code TEXT,
     year_sale_target REAL, amount_cus REAL, is_ro INTEGER, is_ac INTEGER,
-    max_customer_ord_amount REAL, emp_dms_code TEXT
+    max_customer_ord_amount REAL, emp_dms_code TEXT,
+    -- 15/09/2026: nc_save_date = NCSaveDate (ngay ghi nhan khach moi; do tren Bravo trung ngay hoa don
+    -- dau tien trong thang 627/627 khach T8, 195/195 khach T9). ro_* = cua so va trang thai tai don:
+    -- ROMonth (so thang cua so, thuong 3), ROLastDate (lan mua gan nhat), ReOrderStartDate (dau cua so),
+    -- ReOrderSaveDate (ngay ghi nhan da tai don).
+    nc_save_date TEXT, ro_month REAL, ro_last_date TEXT, reorder_start_date TEXT, reorder_save_date TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_ftk_savedate ON fact_tonghopkhachhang(save_date);
 CREATE INDEX IF NOT EXISTS idx_ftk_employee ON fact_tonghopkhachhang(employee_code);
@@ -199,6 +210,7 @@ CREATE TABLE IF NOT EXISTS fact_thongketinhluong (
     v22_amount REAL, v22_percent REAL, v22_bonus REAL,
     v25_amount REAL, v25_percent REAL, v25_bonus REAL,
     target_product_amount REAL, target_product_percent REAL, tpr_point REAL,
+    tpr_target_amount REAL,   -- 15/09/2026: TPRTargetAmount = chi tieu doanh so san pham trong tam
     lunch_amount REAL, transport_amount REAL, phone_amount REAL,
     salary_coeff REAL
 );
@@ -297,7 +309,7 @@ def get_conn() -> sqlite3.Connection:
 # chua duoc --full lai sau khi SCHEMA doi).
 _COLUMN_MIGRATIONS = {
     "vhoadon_otc": [("channel_code", "TEXT"), ("discount_rate", "REAL"), ("doc_code", "TEXT")],
-    "vhoadon_etc": [("discount_rate", "REAL"), ("doc_code", "TEXT")],
+    "vhoadon_etc": [("discount_rate", "REAL"), ("doc_code", "TEXT"), ("group_code", "TEXT")],
     "dms_khachhang": [("is_active", "INTEGER")],
     # Mot so warehouse.db cu tao bang nay truc tiep tu ten cot Bravo (AreaCode/ChannelCode/DocDate).
     # Schema moi dung snake_case va tao index tren doc_date; CREATE TABLE IF NOT EXISTS khong doi
@@ -316,7 +328,10 @@ _COLUMN_MIGRATIONS = {
     "brv_tonkhodklot": [("year", "INTEGER")],
     "fact_tonghopkhachhang": [("manager_code", "TEXT"), ("year_sale_target", "REAL"),
                                ("amount_cus", "REAL"), ("is_ro", "INTEGER"), ("is_ac", "INTEGER"),
-                               ("max_customer_ord_amount", "REAL"), ("emp_dms_code", "TEXT")],
+                               ("max_customer_ord_amount", "REAL"), ("emp_dms_code", "TEXT"),
+                               ("nc_save_date", "TEXT"), ("ro_month", "REAL"), ("ro_last_date", "TEXT"),
+                               ("reorder_start_date", "TEXT"), ("reorder_save_date", "TEXT")],
+    "fact_thongketinhluong": [("tpr_target_amount", "REAL")],
 }
 
 
