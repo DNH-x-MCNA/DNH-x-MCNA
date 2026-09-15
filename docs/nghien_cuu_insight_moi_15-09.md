@@ -130,9 +130,20 @@
 **Lưu ý dữ liệu:**
 - Tổng giá trị không đáng tin vì còn hợp đồng ghi giá trị hỏng. Ví dụ khách TBI00509 có 25,8 tỷ không xuất đồng
   nào. Nên đọc theo **số hợp đồng**, không theo tổng tiền.
-- Công cụ hợp đồng ETC hiện có trong `backend/report_templates.py` chia hóa đơn trước VAT cho giá trị hợp đồng
-  **sau VAT**. Tỷ lệ thực hiện vì vậy đang thấp hơn thật khoảng 5%.
-- Chưa sửa vì file đó đang nằm trong nhánh Codex `codex/cum-c-f-1509`. Cần sửa sau khi nhánh đó được gộp.
+- Công cụ hợp đồng ETC trong `backend/report_templates.py` từng chia hóa đơn trước VAT cho giá trị hợp đồng
+  **sau VAT**, nên tỷ lệ thực hiện thấp hơn thật khoảng 5%.
+  **Đã sửa 15/09** (sau khi nhánh Codex được gộp): giá trị hợp đồng lấy `AmountBefVat`.
+- Bộ kiểm tra bản ghi hỏng của công cụ đó cũng đã sửa, đo trên 9.138 hợp đồng:
+
+  | | Cách cũ | Luật mới |
+  |---|---|---|
+  | Quy tắc | sau VAT lệch `Quantity×UnitPrice` > 5% | trước VAT lệch `Quantity×UnitPrice` > 5%, hoặc đơn giá > 1 tỷ, hoặc sau/trước VAT chênh quá 2 lần |
+  | Số hợp đồng bị tách | 70 | 60 |
+  | Bắt HD 115627 (đơn giá 295 tỷ) | Không | Có |
+  | Tách oan hợp đồng thuế 8% | 9 | 0 |
+  | Tổng phần "sạch", kể cả hết hạn | 2,96 triệu tỷ | 3.548 tỷ (lớn nhất 107 tỷ) |
+- Script nghiên cứu này kiểm tra bản ghi hỏng theo `AmountBefVat`, không bắt được hợp đồng hỏng nào. Vì vậy các
+  bảng mục C ở trên chỉ đọc theo số hợp đồng.
 
 ### D. Nợ sắp chạm 45 ngày (loại)
 
@@ -228,8 +239,8 @@ Chưa tháng nào đạt trong 20 tháng.
   Cần kiểm thử ngược trước khi đổi.
 - **Code quy tắc A và B** vào `src/insights.py` sau cờ `alert_feature_flags` (mặc định tắt), sau khi DNH chốt ngưỡng
   ở mục 3.
-- **Sửa tỷ lệ thực hiện hợp đồng ETC** (trước/sau VAT) trong `backend/report_templates.py`, sau khi nhánh Codex được
-  gộp.
+- **Báo cáo QLV:** chưa có mục Tiến độ tháng / Việc cần xử lý. Chờ chốt đội QLV được xem gì (xem báo cáo gửi anh
+  Đăng 15/09).
 
 ## 5. Tái lập
 

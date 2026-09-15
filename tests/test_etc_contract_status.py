@@ -82,6 +82,28 @@ def test_only_active_false_thi_tinh_ca_hop_dong_het_han(monkeypatch):
     assert r["so_hop_dong_chua_xuat_hoa_don_nao"] == 1
 
 
+def test_gia_tri_hop_dong_truoc_vat_cung_goc_hoa_don_kiem_tra_hong_giu_nguyen(monkeypatch):
+    bat = {}
+
+    def _gia_q(sql, params=None):
+        bat["sql"] = sql
+        return [_dong(1, 1000.0, 400.0, 200)]
+
+    monkeypatch.setattr(rt, "_q_bravo", _gia_q)
+    monkeypatch.setattr(rt, "latest_data_date", lambda: "2026-09-13")
+    r = rt.etc_contract_status(as_of_date="2026-09-13")
+
+    assert "SUM(AmountBefVat) GiaTri" in bat["sql"]
+    assert "SUM(AmountAfterVat) GiaTri" not in bat["sql"]
+    assert "TRUOC VAT" in r["canh_bao"]
+    # Kiem ban ghi hong (do Bravo 15/09): cach cu "AmountAfterVat lech Quantity*UnitPrice >5%" bo lot HD 115627
+    # (don gia 295 ty) va tach oan hop dong thue 8%.
+    assert "ABS(AmountAfterVat - Quantity*UnitPrice)" not in bat["sql"]
+    assert "ABS(AmountBefVat - Quantity*UnitPrice)" in bat["sql"]
+    assert "UnitPrice > 1000000000" in bat["sql"]
+    assert "ABS(AmountAfterVat - AmountBefVat) >" in bat["sql"]
+
+
 def test_tai_khoan_chi_xem_otc_bi_chan_tool_hop_dong_etc():
     assert rt.template_available_for_channel("get_etc_contract_status", "OTC") is False
     assert rt.template_available_for_channel("get_etc_contract_status", "ETC") is True
