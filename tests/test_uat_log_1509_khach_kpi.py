@@ -61,7 +61,12 @@ def _kho(tmp_path):
     fact("TDV_MT", "KH_MT", 300.0, "2026-07-28", "QLV2", nc="1", nc_date="2026-07-20")
     fact("TDV_MB", "KH_CU", 100.0, "2026-07-27", "QLV1", ro="0", ro_last="2026-06-05")
     fact("TDV_MB", "KH_RO", 100.0, "2026-07-27", "QLV1", ro="1", ro_last="2026-07-02")
+    # Dong rollup QLV mang IsRO=0 cho khach TDV da tai don (do that tren Bravo 15/09) - khong duoc lot.
+    fact("QLV1", "KH_RO", 100.0, "2026-07-27", "TP1", ro="0")
     fact("TDV_DOI2", "KH_DOI2", 100.0, "2026-07-27", "QLV3", ro="0", ro_last="2026-05-20")
+    # TDV moi: dong TDV IsNC=0, dong rollup QLV IsNC=1 kem NCSaveDate -> van la khach moi, gan cho TDV.
+    fact("TDV_MB", "KH_MOI_TDV_MOI", 200.0, "2026-07-27", "QLV1", nc="0")
+    fact("QLV1", "KH_MOI_TDV_MOI", 200.0, "2026-07-27", "TP1", nc="1", nc_date="2026-07-15")
     # Snapshot cu hon trong thang cua TDV_MB khong duoc tinh.
     fact("TDV_MB", "KH_CU_SNAP", 999.0, "2026-07-10", "QLV1", nc="1", nc_date="2026-07-05")
 
@@ -85,22 +90,24 @@ def test_khach_moi_lay_snapshot_tung_nhan_vien_va_ngay_ghi_nhan_ncsavedate(tmp_p
     kq = _goi(monkeypatch, _kho(tmp_path), "get_new_customer_list", scope_role="c_level")
 
     r = kq["result"]
-    assert r["total_new_customers"] == 2                    # KH_MB (27/07) va KH_MT (28/07)
+    assert r["total_new_customers"] == 3                    # KH_MB (27/07), KH_MT (28/07), KH_MOI_TDV_MOI
     theo_kh = {row["customer_code"]: row for row in r["rows"]}
-    assert set(theo_kh) == {"KH_MB", "KH_MT"}               # KH_CU_SNAP o snapshot cu bi loai
+    assert set(theo_kh) == {"KH_MB", "KH_MT", "KH_MOI_TDV_MOI"}   # KH_CU_SNAP o snapshot cu bi loai
+    moi = theo_kh["KH_MOI_TDV_MOI"]
+    assert (moi["employee_code"], moi["ngay_ghi_nhan"]) == ("TDV_MB", "2026-07-15")
     assert theo_kh["KH_MB"]["ngay_ghi_nhan"] == "2026-07-12"
     assert theo_kh["KH_MB"]["employee_code"] == "TDV_MB"    # dong rollup QLV khong nhan doi
     assert theo_kh["KH_MB"]["employee_name"] == "TDV Bac"
     assert theo_kh["KH_MB"]["manager_name"] == "Quan Ly Mot"
     assert theo_kh["KH_MB"]["customer_name"] == "Nha thuoc Bac"
-    assert r["tong_doanh_so_thang"] == 800.0
+    assert r["tong_doanh_so_thang"] == 1000.0
 
 
 def test_khach_moi_qlv_chi_thay_doi_minh_va_etc_khong_ap_dung(tmp_path, monkeypatch):
     path = _kho(tmp_path)
     kq = _goi(monkeypatch, path, "get_new_customer_list", scope_role="qlv",
               scope_area_code="MB", scope_employee_code="QLV1")
-    assert [row["customer_code"] for row in kq["result"]["rows"]] == ["KH_MB"]
+    assert {row["customer_code"] for row in kq["result"]["rows"]} == {"KH_MB", "KH_MOI_TDV_MOI"}   # khong KH_MT
     assert kq["result"]["pham_vi_du_lieu"]["loai"] == "DOI_CUA_QLV"
 
     etc = _goi(monkeypatch, path, "get_new_customer_list", scope_role="regional_director", scope_channel="ETC")
@@ -115,9 +122,12 @@ def test_khach_chua_tai_don_tra_danh_sach_va_kpi_tung_tdv(tmp_path, monkeypatch)
     ma = [row["customer_code"] for row in r["rows"]]
     assert "KH_CU" in ma and "KH_RO" not in ma and "KH_DOI2" not in ma
     cu = next(row for row in r["rows"] if row["customer_code"] == "KH_CU")
-    assert cu["lan_mua_gan_nhat"] == "2026-06-05" and cu["so_thang_cua_so"] == 3
+    assert cu["ro_last_date_bravo"] == "2026-06-05" and cu["so_thang_cua_so"] == 3
+    assert all(row["employee_code"] != "QLV1" for row in r["rows"])
     kpi = {k["employee_code"]: k for k in r["kpi_tai_don_theo_nhan_vien"]}
     assert kpi["TDV_MB"]["khach_da_tai_don"] == 5 and kpi["TDV_MB"]["chi_tieu_khach_tai_don"] == 10
+    # ReOrderCusTarget cua Bravo la he so (1.0), chi tieu so khach suy tu so tai don / ty le dat.
+    assert kpi["TDV_MB"]["ty_le_dat_kpi_tai_don_pct"] == 50.0
 
 
 def test_kpi_trong_tam_theo_qlv_chi_tang_qlv_kem_doi_khi_la_qlv(tmp_path, monkeypatch):

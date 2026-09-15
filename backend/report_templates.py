@@ -2308,6 +2308,11 @@ def _prefer_employee_tier(rows: list) -> list:
     return chosen
 
 
+def _co_bat(value) -> bool:
+    """Co Bravo luu '1'/'0' (TEXT) hoac 1/0 - so sanh an toan."""
+    return str(value).strip() in {"1", "1.0", "True", "true"}
+
+
 def _nguoi_phu_trach(row: dict, emp_names: dict) -> dict:
     return {"employee_code": row["employee_code"], "employee_name": emp_names.get(row["employee_code"]),
             "manager_code": row.get("manager_code"), "manager_name": emp_names.get(row.get("manager_code"))}
@@ -2326,11 +2331,21 @@ def new_customer_list(year_month: str = None, limit: int = 200, scope_area_code:
                 "error": "Nguon khach moi (FACT_TongHopKhachHang) hien chi phu kenh OTC."}
     limit = max(1, min(int(limit or 200), 1000))
     has_nc_date = "nc_save_date" in _table_columns("fact_tonghopkhachhang")
-    extra = ", f.nc_save_date" if has_nc_date else ", NULL nc_save_date"
-    ym, rows = _kpi_customer_month_rows(year_month, "f.is_nc=1", extra, scope_area_code, scope_employee_code)
+    extra = (", f.nc_save_date" if has_nc_date else ", NULL nc_save_date") + ", f.is_nc"
+    # Co khach moi tinh theo KHACH (OR tren moi dong): do tren kho 15/09, 4 khach cua TDV moi TM26081401
+    # co dong TDV IsNC=0 nhung dong rollup QLV IsNC=1 kem NCSaveDate - la khach moi that (checker S93 dem).
+    # Nguoi phu trach van lay dong tang nhan vien; ngay ghi nhan lay tu dong mang co.
+    ym, rows = _kpi_customer_month_rows(year_month, "1=1", extra, scope_area_code, scope_employee_code)
     if ym is None:
         return {"error": "Kho chua co snapshot KPI khach hang nao."}
-    rows = _prefer_employee_tier(rows)
+    nc_dates = {}
+    for r in rows:
+        if _co_bat(r.get("is_nc")):
+            current = nc_dates.get(r["customer_code"])
+            value = str(r["nc_save_date"])[:10] if r.get("nc_save_date") else None
+            nc_dates[r["customer_code"]] = min(filter(None, (current, value)), default=None)
+    rows = [dict(r, nc_save_date=nc_dates[r["customer_code"]])
+            for r in _prefer_employee_tier(rows) if r["customer_code"] in nc_dates]
     customer_names = _customer_names([r["customer_code"] for r in rows])
     emp_names = _employee_name_map([r["employee_code"] for r in rows] + [r["manager_code"] for r in rows])
     items = [{
@@ -2378,25 +2393,29 @@ def reorder_pending_customers(year_month: str = None, limit: int = 200, scope_ar
             "Kho chua dong bo cua so tai don (ROMonth/ROLastDate). Chua lap duoc danh sach; "
             "KHONG ket luan khach nao da hay chua tai don.")}
     limit = max(1, min(int(limit or 200), 1000))
+    # 15/09/2026 (do tren Bravo): dong rollup QLV mang IsRO=0 cho CHINH cac khach ma dong TDV da IsRO=1
+    # (doi TM23100148: 144/144 dong QLV trung khach dong TDV). Loc co truoc khi khu trung se bo dong TDV
+    # va gan nham khach "chua tai don" cho QLV -> khu trung TRUOC, loc co SAU.
     ym, rows = _kpi_customer_month_rows(
-        year_month, "(f.is_ro IS NULL OR f.is_ro<>1) AND f.ro_month IS NOT NULL",
-        ", f.ro_month, f.ro_last_date, f.reorder_start_date", scope_area_code, scope_employee_code)
+        year_month, "f.ro_month IS NOT NULL",
+        ", f.ro_month, f.ro_last_date, f.reorder_start_date, f.is_ro", scope_area_code, scope_employee_code)
     if ym is None:
         return {"error": "Kho chua co snapshot KPI khach hang nao."}
-    rows = _prefer_employee_tier(rows)
+    reordered = {r["customer_code"] for r in rows if _co_bat(r.get("is_ro"))}
+    rows = [r for r in _prefer_employee_tier(rows) if r["customer_code"] not in reordered]
     customer_names = _customer_names([r["customer_code"] for r in rows])
     emp_names = _employee_name_map([r["employee_code"] for r in rows] + [r["manager_code"] for r in rows])
     items = [{
         "customer_code": r["customer_code"],
         "customer_name": customer_names.get(r["customer_code"]) or "(chua co ten trong danh muc)",
-        "lan_mua_gan_nhat": str(r["ro_last_date"])[:10] if r.get("ro_last_date") else None,
+        "ro_last_date_bravo": str(r["ro_last_date"])[:10] if r.get("ro_last_date") else None,
         "cua_so_tai_don_tu": str(r["reorder_start_date"])[:10] if r.get("reorder_start_date") else None,
         "so_thang_cua_so": int(_f(r["ro_month"])) if r.get("ro_month") is not None else None,
         "doanh_so_thang": _f(r["amount_ct"]),
         "snapshot_date": str(r["save_date"])[:10],
         **_nguoi_phu_trach(r, emp_names),
     } for r in rows]
-    items.sort(key=lambda i: (i["employee_code"] or "", i["lan_mua_gan_nhat"] or ""))
+    items.sort(key=lambda i: (i["employee_code"] or "", i["customer_code"] or ""))
 
     kpi_by_employee = []
     employee_codes = sorted({i["employee_code"] for i in items if i["employee_code"]})
@@ -2407,7 +2426,7 @@ def reorder_pending_customers(year_month: str = None, limit: int = 200, scope_ar
             kpi_rows = _q(
                 "WITH s AS (SELECT employee_code, MAX(save_date) d FROM fact_thongketinhluong "
                 "WHERE save_date<=? AND substr(save_date,1,7)=? GROUP BY employee_code) "
-                "SELECT f.employee_code, f.reorder_cus_quantity q, f.reorder_cus_target t, f.reorder_percent p "
+                "SELECT f.employee_code, f.position_code, f.reorder_cus_quantity q, f.reorder_percent p "
                 "FROM fact_thongketinhluong f JOIN s ON s.employee_code=f.employee_code AND s.d=f.save_date "
                 f"WHERE f.employee_code IN ({ph})", (fdate, ym, *employee_codes))
         except sqlite3.OperationalError:
@@ -2416,11 +2435,22 @@ def reorder_pending_customers(year_month: str = None, limit: int = 200, scope_ar
         for item in items:
             pending[item["employee_code"]] = pending.get(item["employee_code"], 0) + 1
         for r in kpi_rows:
-            kpi_by_employee.append({
+            quantity, ratio = _f(r["q"]), _f(r["p"])
+            is_manager = str(r["position_code"] or "").upper() not in _EMPLOYEE_TIER_POSITIONS
+            row = {
                 "employee_code": r["employee_code"], "employee_name": emp_names.get(r["employee_code"]),
-                "khach_da_tai_don": _f(r["q"]), "chi_tieu_khach_tai_don": _f(r["t"]),
-                "ty_le_tai_don_goc": r["p"], "so_khach_chua_tai_don": pending.get(r["employee_code"], 0),
-            })
+                "position_code": r["position_code"],
+                "khach_da_tai_don": quantity,
+                # 15/09/2026 (do tren Bravo): ReOrderCusTarget = 1.0 la HE SO, KHONG phai so khach. Chi tieu so
+                # khach la FACT_PhatSinhNhanVien.ReOrderTarget va ROPercent_R = ROCustomerQuantity/ReOrderTarget
+                # (TM23100128: 18/27 = 0,66667; TM25030305: 26/29 = 0,89655) - suy nguoc tu hai cot da dong bo.
+                "chi_tieu_khach_tai_don": round(quantity / ratio) if ratio > 0 and not is_manager else None,
+                "ty_le_dat_kpi_tai_don_pct": ratio * 100 if not is_manager else None,
+                "so_khach_chua_tai_don": pending.get(r["employee_code"], 0),
+            }
+            if is_manager:
+                row["ghi_chu"] = "Dong quan ly la so tong hop, khong cham KPI tai don rieng."
+            kpi_by_employee.append(row)
     return {
         "month": ym,
         "total_pending_customers": len({i["customer_code"] for i in items}),
@@ -2430,8 +2460,12 @@ def reorder_pending_customers(year_month: str = None, limit: int = 200, scope_ar
         "kpi_tai_don_theo_nhan_vien": kpi_by_employee,
         "definition": (
             "Khach phat sinh trong cua so tai don (ROMonth thang, tu cua_so_tai_don_tu) cua snapshot moi "
-            "nhat tung nhan vien, CHUA co co IsRO trong thang = chua tinh vao KPI khach tai don. "
-            "KPI tai don tung TDV lay tu ket qua tinh luong (so khach tai don / chi tieu)."),
+            "nhat tung nhan vien, CHUA co co IsRO trong thang = chua tinh vao KPI khach tai don. Do tren "
+            "Bravo 15/09: moi dong IsRO=0 deu co hoa don trong thang - la khach DA mua nhung chua dat dieu "
+            "kien tai don cua Bravo (ReOrderCond), KHONG phai khach ngung mua. ro_last_date_bravo la cot "
+            "ROLastDate cua Bravo (co the rong), khong phai ngay mua gan nhat. "
+            "KPI tai don tung TDV lay tu ket qua tinh luong: so khach da tai don va ty le dat; chi tieu so "
+            "khach = so khach da tai don / ty le dat (khop ReOrderTarget cua Bravo)."),
         "pham_vi_kenh": "OTC",
         "data_as_of": latest_data_date(),
     }
