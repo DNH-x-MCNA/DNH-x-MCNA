@@ -588,6 +588,8 @@ def _tool_cases_40():
         "get_operational_data_quality": ({"as_of_date": d_to, "sample_limit": 10}, dict),
         # 13/09/2026: hop dong ETC (C44/M42) - doc Bravo, chi lay danh sach ngan de smoke.
         "get_etc_contract_status": ({"as_of_date": d_to, "limit": 5}, dict),
+        # 15/09/2026: doanh so ETC theo nhom hang (DIM_KeyClass ItemTypeETC), UAT dnh_etc.
+        "get_etc_revenue_by_item_type": ({"date_from": d_from, "date_to": d_to}, dict),
         "get_employee_kpi": ({"as_of_date": d_to, "limit": 10}, dict),
         "get_employee_daily_kpi": ({"employee_code": employee, "year_month": ym}, dict),
         "compare_periods": ({"date_from_a": d_from, "date_to_a": d_to,

@@ -84,7 +84,8 @@ def _detail_cutoff_date(today: dt.date = None) -> dt.date:
 
 
 # ==================== BANG HOA DON (lon, co lich su) ====================
-def sync_hoadon_full(table_bravo, table_local, has_city, has_channel=False, channel_label=""):
+def sync_hoadon_full(table_bravo, table_local, has_city, has_channel=False, channel_label="",
+                     has_group=False):
     print(f"[{table_local}] Dong bo FULL lich su...")
     cols_sql, rows = bravo_query(f"SELECT MIN(DocDate) mn, MAX(DocDate) mx FROM dbo.{table_bravo}")
     mn, mx = rows[0]
@@ -108,7 +109,9 @@ def sync_hoadon_full(table_bravo, table_local, has_city, has_channel=False, chan
         cols = ("DocDate, CustomerCode, ItemCode, Amount9, Quantity, UnitPrice, Stt, EmpDMSCode"
                 + (", CityId" if has_city else "") + ", CreatedAt"
                 + (", EmpDMSCode2" if has_channel else "")
-                + ", DiscountRate, DocCode")
+                + ", DiscountRate, DocCode"
+                # 15/09/2026: GroupCode (nhom hang ETC, noi DIM_KeyClass ItemTypeETC) - CHI ETC.
+                + (", GroupCode" if has_group else ""))
         _, rows = bravo_query(
             f"SELECT {cols} FROM dbo.{table_bravo} WHERE DocDate BETWEEN :a AND :b",
             a=str(a), b=str(b),
@@ -124,12 +127,13 @@ def sync_hoadon_full(table_bravo, table_local, has_city, has_channel=False, chan
             print(f"  {a} -> {b}: {len(rows)} dong -> NEN thanh {n_compressed} dong KH x thang "
                   f"(tong nen {total_compressed}, {time.time()-t0:.0f}s)")
             continue
-        n_cols = 11 + (1 if has_city else 0) + (1 if has_channel else 0)
+        n_cols = 11 + (1 if has_city else 0) + (1 if has_channel else 0) + (1 if has_group else 0)
         placeholders = ",".join(["?"] * n_cols)
         cols_local = ("doc_date,customer_code,item_code,amount9,quantity,unit_price,stt,employee_code"
                       + (",city_id" if has_city else "") + ",created_at"
                       + (",channel_code" if has_channel else "")
-                      + ",discount_rate,doc_code")
+                      + ",discount_rate,doc_code"
+                      + (",group_code" if has_group else ""))
         conn.executemany(
             f"INSERT INTO {table_local} ({cols_local}) VALUES ({placeholders})", rows,
         )
@@ -165,14 +169,16 @@ def _compress_rows_to_summary(conn, rows, channel_label: str, year_month: str) -
     return len(agg)
 
 
-def sync_hoadon_recent(table_bravo, table_local, has_city, days=N_RECENT_DAYS, has_channel=False):
+def sync_hoadon_recent(table_bravo, table_local, has_city, days=N_RECENT_DAYS, has_channel=False,
+                       has_group=False):
     today = dt.date.today()
     start = today - dt.timedelta(days=days)
     print(f"[{table_local}] Refresh gia tang {start} -> {today}...")
     cols = ("DocDate, CustomerCode, ItemCode, Amount9, Quantity, UnitPrice, Stt, EmpDMSCode"
             + (", CityId" if has_city else "") + ", CreatedAt"
             + (", EmpDMSCode2" if has_channel else "")
-            + ", DiscountRate, DocCode")
+            + ", DiscountRate, DocCode"
+            + (", GroupCode" if has_group else ""))
     _, rows = bravo_query(
         f"SELECT {cols} FROM dbo.{table_bravo} WHERE DocDate >= :a", a=str(start),
     )
@@ -182,12 +188,13 @@ def sync_hoadon_recent(table_bravo, table_local, has_city, days=N_RECENT_DAYS, h
         conn.execute("BEGIN IMMEDIATE")
         conn.execute(f"DELETE FROM {table_local} WHERE doc_date >= ?", (str(start),))
         if rows:
-            n_cols = 11 + (1 if has_city else 0) + (1 if has_channel else 0)
+            n_cols = 11 + (1 if has_city else 0) + (1 if has_channel else 0) + (1 if has_group else 0)
             placeholders = ",".join(["?"] * n_cols)
             cols_local = ("doc_date,customer_code,item_code,amount9,quantity,unit_price,stt,employee_code"
                           + (",city_id" if has_city else "") + ",created_at"
                           + (",channel_code" if has_channel else "")
-                          + ",discount_rate,doc_code")
+                          + ",discount_rate,doc_code"
+                          + (",group_code" if has_group else ""))
             conn.executemany(
                 f"INSERT INTO {table_local} ({cols_local}) VALUES ({placeholders})", rows,
             )
@@ -220,6 +227,8 @@ SMALL_TABLES = [
      "EmployeeCode, Name, IsDuplicate, PositionCode, AreaCode, DMSId, StartDate, EndDate, IsResigned, ManagerAreaCode",
      "employee_code,name,is_duplicate,position_code,area_code,dmsid,start_date,end_date,is_resigned,manager_area_code"),
     ("BRV_SanPham", "brv_sanpham", "Id, Code, Name, GroupCode, Unit", "id_code,code,name,group_code,unit"),
+    # 15/09/2026: ten nhom hang ETC (GroupCode='ItemTypeETC') cho vhoadon_etc.group_code.
+    ("DIM_KeyClass", "dim_keyclass", "GroupCode, Code, Name", "group_code,code,name"),
     ("BRVSX_TraLai", "brvsx_tralai", "DocDate, Amount9, IsActive, Stt, CustomerCode", "doc_date,amount9,is_active,stt,customer_code"),
     ("DIM_ChucVu", "dim_chucvu", "DISTINCT PositionCode, Description", "position_code,description"),
     # Ton kho THAT (thay the Supabase inventory - cot "warehouse" ben do 100% NULL, khong dung duoc).
@@ -502,10 +511,11 @@ def main():
     # thieu cac dong dieu chinh/hoan (DocCode='HC'), da xac nhan lech ~1.13 ty rieng nam 2025 toan quoc.
     if a.full:
         sync_hoadon_full("vHoaDonTotal", "vhoadon_otc", has_city=False, has_channel=True, channel_label="OTC")
-        sync_hoadon_full("vHoaDonETCTotal", "vhoadon_etc", has_city=False, channel_label="ETC")
+        sync_hoadon_full("vHoaDonETCTotal", "vhoadon_etc", has_city=False, channel_label="ETC",
+                         has_group=True)
     else:
         sync_hoadon_recent("vHoaDonTotal", "vhoadon_otc", has_city=False, has_channel=True)
-        sync_hoadon_recent("vHoaDonETCTotal", "vhoadon_etc", has_city=False)
+        sync_hoadon_recent("vHoaDonETCTotal", "vhoadon_etc", has_city=False, has_group=True)
         # Dong bo incremental chi cham N_RECENT_DAYS gan nhat, KHONG tu dong nen - goi rieng o day de
         # don dan cac thang da "gia" khoi cua so 12 thang gan nhat ke tu lan --full truoc.
         compress_aged_out_months()

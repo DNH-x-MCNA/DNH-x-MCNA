@@ -38,7 +38,9 @@ CREATE INDEX IF NOT EXISTS idx_otc_channel ON vhoadon_otc(channel_code);
 CREATE TABLE IF NOT EXISTS vhoadon_etc (
     doc_date TEXT NOT NULL, customer_code TEXT, item_code TEXT,
     amount9 REAL, quantity REAL, unit_price REAL, stt TEXT, employee_code TEXT,
-    created_at TEXT, discount_rate REAL, doc_code TEXT
+    created_at TEXT, discount_rate REAL, doc_code TEXT,
+    -- 15/09/2026: vHoaDonETCTotal.GroupCode = ma nhom hang ETC, noi DIM_KeyClass (GroupCode='ItemTypeETC').
+    group_code TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_etc_docdate ON vhoadon_etc(doc_date);
 CREATE INDEX IF NOT EXISTS idx_etc_customer ON vhoadon_etc(customer_code);
@@ -86,6 +88,10 @@ CREATE INDEX IF NOT EXISTS idx_dcv_code ON dim_chucvu(position_code);
 CREATE TABLE IF NOT EXISTS brv_sanpham (code TEXT, name TEXT, group_code TEXT, unit TEXT, id_code INTEGER);
 CREATE INDEX IF NOT EXISTS idx_bsp_code ON brv_sanpham(code);
 CREATE INDEX IF NOT EXISTS idx_bsp_idcode ON brv_sanpham(id_code);
+
+-- 15/09/2026: danh muc ma phan loai Bravo (DIM_KeyClass). GroupCode='ItemTypeETC' la nhom hang ETC
+-- (0 Hang dau tu, 1 Hang khai thac, 2 Hang duoc lieu, 3 Hang lao, 4 Hang truc tiep - do tren Bravo 15/09).
+CREATE TABLE IF NOT EXISTS dim_keyclass (group_code TEXT, code TEXT, name TEXT);
 
 -- Ton kho THAT tu Bravo (thay Supabase inventory - cot warehouse ben do 100% NULL). branch_code tren
 -- brv_kho: B01=San xuat, B02=Kinh doanh Mien Bac, B03=Kinh doanh Mien Trung, B04=Kinh doanh Mien Nam
@@ -297,7 +303,7 @@ def get_conn() -> sqlite3.Connection:
 # chua duoc --full lai sau khi SCHEMA doi).
 _COLUMN_MIGRATIONS = {
     "vhoadon_otc": [("channel_code", "TEXT"), ("discount_rate", "REAL"), ("doc_code", "TEXT")],
-    "vhoadon_etc": [("discount_rate", "REAL"), ("doc_code", "TEXT")],
+    "vhoadon_etc": [("discount_rate", "REAL"), ("doc_code", "TEXT"), ("group_code", "TEXT")],
     "dms_khachhang": [("is_active", "INTEGER")],
     # Mot so warehouse.db cu tao bang nay truc tiep tu ten cot Bravo (AreaCode/ChannelCode/DocDate).
     # Schema moi dung snake_case va tao index tren doc_date; CREATE TABLE IF NOT EXISTS khong doi

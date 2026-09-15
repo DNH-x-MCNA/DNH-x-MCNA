@@ -5761,6 +5761,121 @@ def _trang_thai_nguon_don_hang() -> dict:
     return value
 
 
+_ETC_ITEM_TYPE_GROUP = "ItemTypeETC"
+_BRAVO_SQL_ETC_ITEM_TYPE = (
+    "SELECT v.GroupCode, k.Name AS NhomHang, SUM(v.Amount9) AS DoanhThu, COUNT(DISTINCT v.Stt) AS SoHoaDon\n"
+    "FROM dbo.vHoaDonETCTotal v\n"
+    "LEFT JOIN dbo.DIM_KeyClass k ON k.GroupCode = 'ItemTypeETC' AND k.Code = v.GroupCode\n"
+    "WHERE v.DocDate >= '{tu}' AND v.DocDate < '{den}'\n"
+    "GROUP BY v.GroupCode, k.Name\n"
+    "ORDER BY DoanhThu DESC;"
+)
+
+
+def _etc_group_code(value) -> str:
+    """Chuan hoa ma nhom: Bravo/SQLite co the tra 0, '0' hoac 0.0 cho cung mot ma."""
+    if value is None or str(value).strip() == "":
+        return None
+    text_value = str(value).strip()
+    try:
+        number = float(text_value)
+        if number.is_integer():
+            return str(int(number))
+    except ValueError:
+        pass
+    return text_value
+
+
+def etc_revenue_by_item_type(date_from: str, date_to: str, scope_area_code: str = None,
+                             scope_channel: str = None) -> dict:
+    """Doanh so ETC theo NHOM HANG (DIM_KeyClass, GroupCode='ItemTypeETC') trong [date_from, date_to].
+
+    15/09/2026 (UAT dnh_etc 14:43 "Doanh so thang nay theo cac nhom hang"): kho truoc day KHONG co
+    GroupCode tren hoa don ETC va khong co DIM_KeyClass, nen khong tool nao tra loi duoc - chatbot tra
+    loi khong goi SQL va thieu Dau tu/Khai thac/Duoc lieu/Lao. Moi nhom trong danh muc deu duoc liet ke,
+    ke ca doanh thu 0. Ma nhom tren hoa don KHONG co trong danh muc thi giu nguyen ma, KHONG tu dat ten:
+    nhom "Khac" nguoi cham neu chua duoc DNH xac nhan tuong ung ma nao.
+    Kem bravo_sql_doi_chieu: cau lenh chi doc tren Bravo de nguoi cham tu chay doi chieu."""
+    if scope_channel and str(scope_channel).strip().upper() != "ETC":
+        return {"not_applicable": True, "error": "Nhom hang ItemTypeETC chi co tren hoa don ETC."}
+    day_from, day_to = str(date_from)[:10], str(date_to)[:10]
+    den = (dt.date.fromisoformat(day_to) + dt.timedelta(days=1)).isoformat()
+    result = {
+        "date_from": day_from, "date_to": day_to,
+        "nguon": "Hoa don ETC (vHoaDonETCTotal.GroupCode) noi danh muc DIM_KeyClass nhom ItemTypeETC",
+        "bravo_sql_doi_chieu": _BRAVO_SQL_ETC_ITEM_TYPE.format(tu=day_from, den=den),
+        "scope_area_code": scope_area_code,
+        "data_as_of": latest_data_date(),
+    }
+    if "group_code" not in {r["name"] for r in _q("PRAGMA table_info(vhoadon_etc)")}:
+        result.update(status="SOURCE_NOT_SYNCED", error=(
+            "Kho chua dong bo ma nhom hang tren hoa don ETC. Chua the tach doanh so theo nhom; "
+            "KHONG duoc ket luan nhom nao bang 0."))
+        return result
+    try:
+        names = {_etc_group_code(r["code"]): r["name"] for r in _q(
+            "SELECT code, name FROM dim_keyclass WHERE group_code=?", (_ETC_ITEM_TYPE_GROUP,))}
+    except sqlite3.OperationalError:
+        names = {}
+    rows = _q("SELECT v.group_code gc, v.stt stt, v.customer_code cc, tp.area_code area, SUM(v.amount9) rev "
+              "FROM vhoadon_etc v LEFT JOIN dmssx_khachhang kh ON kh.code=v.customer_code "
+              "LEFT JOIN dim_tinhthanhpho tp ON tp.city_id=kh.city_id "
+              "WHERE v.doc_date BETWEEN ? AND ? "
+              "GROUP BY v.group_code, v.stt, v.customer_code, tp.area_code", (date_from, date_to))
+    markers = None
+    if scope_area_code:
+        region_key = next((k for k, ms in REGION_SQL_MARKERS.items() if scope_area_code in ms), None)
+        markers = set(REGION_SQL_MARKERS.get(region_key, [scope_area_code]))
+    revenue, invoices, all_invoices = {}, {}, set()
+    for r in rows:
+        area = r["area"] or region_from_customer_code(r["cc"])
+        if markers is not None and area not in markers:
+            continue
+        code = _etc_group_code(r["gc"])
+        revenue[code] = revenue.get(code, 0.0) + _f(r["rev"])
+        invoices.setdefault(code, set()).add(r["stt"])
+        all_invoices.add(r["stt"])
+    total = sum(revenue.values())
+
+    def _row(code, name, note=None):
+        value = revenue.get(code, 0.0)
+        item = {"group_code": code, "group_name": name, "revenue": value,
+                "invoices": len(invoices.get(code, ())),
+                "share_pct": (value / total * 100) if total else 0.0}
+        if note:
+            item["ghi_chu"] = note
+        return item
+
+    def _sort_key(code):
+        return (0, int(code)) if str(code).isdigit() else (1, str(code))
+
+    groups = [_row(code, names[code]) for code in sorted(names, key=_sort_key)]
+    groups += [_row(code, None, "Ma nhom khong co trong danh muc DIM_KeyClass ItemTypeETC - chua co ten, "
+                                "can DNH xac nhan; khong tu dat ten.")
+               for code in sorted((c for c in revenue if c is not None and c not in names), key=_sort_key)]
+    if None in revenue:
+        groups.append(_row(None, None, "Dong hoa don chua co ma nhom trong kho (dong bo truoc khi co cot "
+                                       "hoac nguon de trong)."))
+    groups.sort(key=lambda g: -g["revenue"])
+    missing_share = (revenue.get(None, 0.0) / total * 100) if total else 0.0
+    status = "OK"
+    if not names:
+        status = "PARTIAL_KEYCLASS_NOT_SYNCED"
+        result["canh_bao_danh_muc"] = "Danh muc ten nhom (DIM_KeyClass) chua dong bo; chi co ma nhom."
+    if revenue.get(None):
+        status = "PARTIAL_GROUP_CODE_MISSING"
+        result["canh_bao_ma_nhom"] = (
+            f"{missing_share:.1f}% doanh thu ETC trong ky chua co ma nhom trong kho - can dong bo lai "
+            "hoa don ETC; phan nay KHONG duoc chia vao nhom nao.")
+    if day_from < _detail_cutoff():
+        status = "PARTIAL_OLDER_THAN_DETAIL_WINDOW"
+        result["canh_bao_ky"] = (
+            f"Chi co ma nhom tren hoa don chi tiet tu {_detail_cutoff()}; phan truoc do da nen theo "
+            "khach x thang, khong tach duoc nhom hang.")
+    result.update(status=status, total_revenue=total, total_invoices=len(all_invoices), groups=groups)
+    return result
+
+
 def etc_contract_status(as_of_date: str = None, expiring_days: int = 90, limit: int = 50,
                         only_active: bool = True, scope_area_code: str = None,
                         scope_channel: str = None, scope_employee_code: str = None) -> dict:
@@ -11071,6 +11186,7 @@ TEMPLATES = {
     "get_workforce_productivity": workforce_productivity,
     "get_operational_data_quality": operational_data_quality,
     "get_etc_contract_status": etc_contract_status,
+    "get_etc_revenue_by_item_type": etc_revenue_by_item_type,
     "get_employee_kpi": employee_kpi,
     "get_employee_daily_kpi": employee_daily_kpi,
     "compare_periods": compare_periods,
@@ -11133,6 +11249,8 @@ _PERSON_LEVEL_TEMPLATES = {
     "get_promotion_effectiveness",
     "get_promotion_data_quality",
     "get_customer_revenue_debt_risk",
+    # 15/09/2026: doanh so ETC theo nhom hang chua co loc theo doi QLV -> QLV bi chan fail-closed.
+    "get_etc_revenue_by_item_type",
     # 19/08: inventory_by_region/qlv_change_history/revenue_reconciliation chi loc vung.
     # 15/09 V40: receivables_overview da ho tro loc khach theo doi, dang ky o CA HAI tap
     # de backend ep pham vi QLV ma khong chan nham tool nhu truoc day.
@@ -11191,6 +11309,8 @@ _CHANNEL_SCOPE_POLICIES = {
     # Nguoc lai: hop dong/goi thau chi co o kenh ETC (vHopDongETC). Tai khoan gioi han kenh OTC bi chan.
     **{name: "etc_only" for name in {
         "get_etc_contract_status",
+        # 15/09/2026: nhom hang ItemTypeETC chi co tren hoa don ETC.
+        "get_etc_revenue_by_item_type",
     }},
     # Du lieu luong chi duoc mo cho tai khoan QLV da co scope nhan vien; regional channel-only bi chan.
     **{name: "employee" for name in {

@@ -181,12 +181,17 @@ TOOL_TIMEOUT_SECONDS = _timeout_env("CHAT_TOOL_TIMEOUT_SECONDS", 40, REQUEST_TIM
 LLM_CALL_TIMEOUT_SECONDS = _timeout_env("CHAT_LLM_TIMEOUT_SECONDS", 45, REQUEST_TIMEOUT_SECONDS)
 
 
-def _required_tool_for_question(question: str) -> str | None:
-    """Ep tool cho cac intent co mot duong du lieu duy nhat, tranh do catalog nhieu vong."""
-    q = " ".join("".join(
+def _fold_for_route(question: str) -> str:
+    """Chuan hoa cau hoi cho router: chu thuong, bo dau, gop khoang trang."""
+    return " ".join("".join(
         ch for ch in unicodedata.normalize("NFD", (question or "").lower())
         if unicodedata.category(ch) != "Mn"
     ).replace("đ", "d").split())
+
+
+def _required_tool_for_question(question: str) -> str | None:
+    """Ep tool cho cac intent co mot duong du lieu duy nhat, tranh do catalog nhieu vong."""
+    q = _fold_for_route(question)
 
     # 14/09/2026 - phan hoi nguoi dung that: "nhung nhan vien ... duoi 60%" va cau noi
     # "danh sach duoi 65%" khong duoc dinh tuyen, model tu do qua nhieu tool KPI/revenue roi
@@ -332,6 +337,10 @@ def _required_tool_for_question(question: str) -> str | None:
     # doanh thu thuc hien, khong co gia tri hop dong/con lai/han) nen ca hai deu CHUA DAT voi ly do
     # "chua co khoa lien ket hoa don - hop dong". Kiem lai 13/09: khoa CO that, ContractId phu 100%
     # dong hoa don ETC va khop 1.037/1.037 hop dong -> dung tool hop dong.
+    # 15/09/2026 (UAT dnh_etc 14:43): doanh so ETC theo nhom hang co tool rieng. Cau khong ghi "ETC"
+    # tu tai khoan kenh ETC duoc bat o _required_tool_for_request (can biet kenh cua tai khoan).
+    if _hoi_doanh_so_theo_nhom_hang(q) and "etc" in q.split():
+        return "get_etc_revenue_by_item_type"
     if any(marker in q for marker in (
         "hop dong etc", "hop dong/goi thau", "hop dong goi thau", "goi thau nao",
         "sap het hieu luc", "gia tri lon chua giai ngan", "ty le thuc hien thap",
@@ -1147,6 +1156,19 @@ TEMPLATE_TOOLS = [
             "limit": {"type": "integer", "minimum": 1, "maximum": 200}}, "required": []},
     },
     {
+        "name": "get_etc_revenue_by_item_type",
+        "description": "DOANH SO ETC THEO NHOM HANG (Hang dau tu, khai thac, duoc lieu, lao, truc tiep - danh "
+                       "muc DIM_KeyClass nhom ItemTypeETC) trong 1 khoang ngay. BAT BUOC dung khi hoi doanh "
+                       "so/doanh thu ETC theo nhom hang. Liet ke du moi nhom trong danh muc, ke ca nhom = 0. "
+                       "Ma nhom khong co ten trong danh muc thi giu nguyen ma, KHONG tu dat ten (vd khong tu "
+                       "goi la 'Khac'). Payload co bravo_sql_doi_chieu: khi nguoi dung muon kiem tra so lieu, "
+                       "dua nguyen van cau lenh do.",
+        "input_schema": {"type": "object", "properties": {
+            "date_from": {"type": "string", "description": "YYYY-MM-DD"},
+            "date_to": {"type": "string", "description": "YYYY-MM-DD"}},
+            "required": ["date_from", "date_to"]},
+    },
+    {
         "name": "get_operational_data_quality",
         "description": "CHAT LUONG DU LIEU VAN HANH: nhan vien thieu manager/target/danh muc, ma "
                        "trung, khach hoa don mo coi, thieu mapping tinh, thieu ma NV va dong ghi ngay "
@@ -1908,10 +1930,22 @@ _SALARY_FALLBACK_NOTE = (
 )
 
 
-def _required_tool_for_request(question: str, tools_for_request: list[dict]) -> tuple:
+def _hoi_doanh_so_theo_nhom_hang(q_folded: str) -> bool:
+    """Cau hoi doanh so/doanh thu theo nhom hang (da bo dau)."""
+    return "nhom hang" in q_folded and any(marker in q_folded for marker in ("doanh so", "doanh thu"))
+
+
+def _required_tool_for_request(question: str, tools_for_request: list[dict],
+                               scope_channel: str = None) -> tuple:
     """(tool bat buoc, ghi chu them vao system dong) theo cau hoi VA danh sach tool cua vai tro."""
     tool = _required_tool_for_question(question)
     names = {t["name"] for t in tools_for_request}
+    # 15/09/2026: tai khoan kenh ETC hoi "doanh so thang nay theo cac nhom hang" (khong ghi ETC) - nhom
+    # hang cua kenh ETC la ItemTypeETC. Chi ap cho tai khoan ETC de khong cuop cau nhom hang cua OTC.
+    if (tool is None and str(scope_channel or "").strip().upper() == "ETC"
+            and "get_etc_revenue_by_item_type" in names
+            and _hoi_doanh_so_theo_nhom_hang(_fold_for_route(question))):
+        return "get_etc_revenue_by_item_type", ""
     if (tool in _SALARY_SENSITIVE_TEMPLATE_NAMES and tool not in names
             and _SALARY_FALLBACK_TOOL in names):
         return _SALARY_FALLBACK_TOOL, "\n\n" + _SALARY_FALLBACK_NOTE
@@ -2843,7 +2877,7 @@ def ask(question: str, session_id: str = "default", username: str = None, scope_
         scope_area_code, scope_channel, scope_role, scope_employee_code
     )
     tools_for_request = _tools_for_question(tools_for_request, question)
-    required_tool, luu_y_quyen = _required_tool_for_request(question, tools_for_request)
+    required_tool, luu_y_quyen = _required_tool_for_request(question, tools_for_request, scope_channel)
     max_rounds = _max_tool_rounds(scope_role)
     query_plan = build_query_plan(
         question,
@@ -3235,7 +3269,7 @@ def ask_stream(question: str, session_id: str = "default", username: str = None,
         scope_area_code, scope_channel, scope_role, scope_employee_code
     )
     tools_for_request = _tools_for_question(tools_for_request, question)
-    required_tool, luu_y_quyen = _required_tool_for_request(question, tools_for_request)
+    required_tool, luu_y_quyen = _required_tool_for_request(question, tools_for_request, scope_channel)
     max_rounds = _max_tool_rounds(scope_role)
     query_plan = build_query_plan(
         question,
