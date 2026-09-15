@@ -21,6 +21,7 @@ import json
 import os
 import sys
 from collections import defaultdict
+from statistics import median
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CACHE = os.path.join(ROOT, "results", "nghien_cuu_insight")
@@ -439,6 +440,144 @@ def phan_tich_do_phu_doi(nhan_su_thang, khach_nv_thang, thang_list, nguong_giam=
     return out
 
 
+def phan_tich_du_phong_doi(fact_rows, customer_daily, thang_list, ngay_list=(15, 20),
+                            lookback=3, min_nv=3, nguong_du_phong=0.60,
+                            nguong_ket_cuc=0.80):
+    """So hai cach du phong doi tren cung tap doi-thang va cung ket cuc rollup cuoi thang.
+
+    ``fact_rows``: (ym, employee, position, manager, area, target, customer, full_actual) tu snapshot
+    cuoi tung nguoi/thang cua FACT_TongHopKhachHang. ``customer_daily``: doanh thu OTC theo khach/ngay.
+    Do FACT chi giu snapshot cuoi thang trong lich su, doanh thu tai ngay 15/20 duoc tai tao bang cach
+    noi tap khach cua snapshot voi hoa don theo ngay; ket qua kem doi soat voi Amount_Cus cuoi thang.
+
+    Hai cach chi khac tu/mau so: ``tdv`` cong cac dong PositionCode=TDV co ManagerCode; ``rollup``
+    dung dong EmployeeCode cua chinh QLV. Ket cuc xau chung = rollup cuoi thang < ``nguong_ket_cuc``.
+    """
+    employee = {}
+    managers = defaultdict(set)
+    for ym, emp, position, manager, area, target, customer, full_actual in fact_rows:
+        ym = tuple(ym)
+        key = (ym, emp)
+        row = employee.setdefault(key, {
+            "employee": emp, "position": str(position or "").upper(),
+            "manager": manager or "", "area": area or "", "target": 0.0,
+            "full_actual": 0.0, "customers": set(),
+        })
+        row["target"] = max(row["target"], float(target or 0))
+        row["full_actual"] += float(full_actual or 0)
+        if customer:
+            row["customers"].add(customer)
+        if manager:
+            managers[ym].add(manager)
+
+    customer_by_month_day = defaultdict(lambda: defaultdict(float))
+    total_by_month_day = defaultdict(lambda: defaultdict(float))
+    for customer, day, revenue in customer_daily:
+        day = _as_date(day)
+        ym = (day.year, day.month)
+        value = float(revenue or 0)
+        customer_by_month_day[(ym, customer)][day.day] += value
+        total_by_month_day[ym][day.day] += value
+
+    def expected_share(month, cutoff):
+        shares = []
+        for offset in range(1, lookback + 1):
+            previous = month_add(month[0], month[1], -offset)
+            days = total_by_month_day.get(previous, {})
+            full = sum(days.values())
+            if full > 0:
+                shares.append(sum(value for day, value in days.items() if day <= cutoff) / full)
+        return sum(shares) / len(shares) if len(shares) >= 2 else None
+
+    def revenue_for(month, customers, cutoff=None):
+        return sum(
+            value
+            for customer in customers
+            for day, value in customer_by_month_day.get((month, customer), {}).items()
+            if cutoff is None or day <= cutoff
+        )
+
+    observations = {day: [] for day in ngay_list}
+    reconciliation = {"tdv": [], "rollup": []}
+    for month in map(tuple, thang_list):
+        month_employees = {emp: row for (ym, emp), row in employee.items() if ym == month}
+        for team_code in managers.get(month, set()):
+            tdvs = [row for row in month_employees.values()
+                    if row["position"] == "TDV" and row["manager"] == team_code]
+            rollup = month_employees.get(team_code)
+            if len(tdvs) < min_nv or not rollup or rollup["target"] <= 0:
+                continue
+            tdv_target = sum(row["target"] for row in tdvs)
+            if tdv_target <= 0:
+                continue
+            tdv_customers = set().union(*(row["customers"] for row in tdvs))
+            rollup_customers = rollup["customers"]
+            tdv_fact_full = sum(row["full_actual"] for row in tdvs)
+            rollup_fact_full = rollup["full_actual"]
+            tdv_invoice_full = revenue_for(month, tdv_customers)
+            rollup_invoice_full = revenue_for(month, rollup_customers)
+            reconciliation["tdv"].append((tdv_invoice_full, tdv_fact_full))
+            reconciliation["rollup"].append((rollup_invoice_full, rollup_fact_full))
+            bad_outcome = rollup_fact_full / rollup["target"] < nguong_ket_cuc
+            for cutoff in ngay_list:
+                share = expected_share(month, cutoff)
+                if not share or share <= 0:
+                    continue
+                tdv_projection = revenue_for(month, tdv_customers, cutoff) / share / tdv_target
+                rollup_projection = revenue_for(month, rollup_customers, cutoff) / share / rollup["target"]
+                observations[cutoff].append({
+                    "month": month, "team": team_code, "bad_outcome": bad_outcome,
+                    "tdv_projection": tdv_projection, "rollup_projection": rollup_projection,
+                })
+
+    def method_result(rows, method):
+        key = f"{method}_projection"
+        fired = [row for row in rows if row[key] < nguong_du_phong]
+        true = [row for row in fired if row["bad_outcome"]]
+        per_month = defaultdict(int)
+        for row in fired:
+            per_month[row["month"]] += 1
+        return {
+            "so_lan_ban": len(fired), "dung": len(true),
+            "do_chinh_xac_pct": pct(len(true), len(fired)),
+            "tb_moi_thang": round(len(fired) / len(thang_list), 1) if thang_list else None,
+            "thang_nhieu_nhat": max(per_month.values()) if per_month else 0,
+        }
+
+    def reconciliation_result(pairs):
+        usable = [(invoice, fact) for invoice, fact in pairs if fact != 0]
+        diffs = [abs(invoice - fact) / abs(fact) for invoice, fact in usable]
+        return {
+            "so_doi_thang": len(pairs),
+            "khop_trong_1pct": sum(diff <= 0.01 for diff in diffs),
+            "ty_le_khop_trong_1pct": pct(sum(diff <= 0.01 for diff in diffs), len(diffs)),
+            "sai_lech_tuyet_doi_trung_vi_pct": (
+                round(median(diffs) * 100, 2) if diffs else None
+            ),
+        }
+
+    by_day = []
+    for cutoff in ngay_list:
+        rows = observations[cutoff]
+        bad = sum(row["bad_outcome"] for row in rows)
+        by_day.append({
+            "ngay": cutoff, "so_doi_thang": len(rows),
+            "ket_cuc_duoi_80": bad, "ty_le_nen_pct": pct(bad, len(rows)),
+            "tdv": method_result(rows, "tdv"),
+            "rollup": method_result(rows, "rollup"),
+        })
+    return {
+        "tu_thang": f"{thang_list[0][0]:04d}-{thang_list[0][1]:02d}" if thang_list else None,
+        "den_thang": f"{thang_list[-1][0]:04d}-{thang_list[-1][1]:02d}" if thang_list else None,
+        "nguong_du_phong_pct": nguong_du_phong * 100,
+        "nguong_ket_cuc_pct": nguong_ket_cuc * 100,
+        "theo_ngay": by_day,
+        "doi_soat_hoa_don_voi_fact": {
+            method: reconciliation_result(pairs) for method, pairs in reconciliation.items()
+        },
+    }
+
+
 # --------------------------------------------------------------------------------------------------
 # 5. Chỉ tiêu còn lại vượt năng lực bán lịch sử
 # --------------------------------------------------------------------------------------------------
@@ -618,6 +757,16 @@ def keo_du_lieu(force=False):
         "SELECT l.ym, f.EmployeeCode, MAX(f.EmpDMSCode), MAX(f.ManagerCode), MAX(f.MonthSaleTarget), "
         "SUM(f.Amount_Cus) FROM dbo.FACT_TongHopKhachHang f JOIN l ON l.EmployeeCode = f.EmployeeCode "
         "AND l.d = f.SaveDate GROUP BY l.ym, f.EmployeeCode")
+    keo("team_pace_fact", ["ym", "employee", "position", "manager", "area", "target", "customer", "actual"],
+        "WITH l AS (SELECT EmployeeCode, CONVERT(varchar(7), SaveDate, 120) ym, MAX(SaveDate) d "
+        "FROM dbo.FACT_TongHopKhachHang WHERE SaveDate >= '2025-07-01' "
+        "GROUP BY EmployeeCode, CONVERT(varchar(7), SaveDate, 120)), "
+        "n AS (SELECT EmployeeCode, MAX(PositionCode) PositionCode FROM dbo.DIM_NhanVien GROUP BY EmployeeCode) "
+        "SELECT l.ym, f.EmployeeCode, MAX(n.PositionCode), MAX(f.ManagerCode), MAX(f.AreaCode), "
+        "MAX(f.MonthSaleTarget), f.CustomerCode, SUM(f.Amount_Cus) "
+        "FROM dbo.FACT_TongHopKhachHang f JOIN l ON l.EmployeeCode=f.EmployeeCode AND l.d=f.SaveDate "
+        "LEFT JOIN n ON n.EmployeeCode=f.EmployeeCode "
+        "GROUP BY l.ym, f.EmployeeCode, f.CustomerCode")
     keo("khach_nv_thang", ["ym", "dms", "cc"],
         "SELECT CONVERT(varchar(7), DocDate, 120), EmpDMSCode, CustomerCode FROM dbo.vHoaDonTotal "
         "WHERE DocDate >= '2025-01-01' AND DocDate < :end AND EmpDMSCode IS NOT NULL "
@@ -690,6 +839,17 @@ def phan_tich():
           for r in csv_rows("nhan_su_thang")]
     kn = [((int(r["ym"][:4]), int(r["ym"][5:7])), r["dms"], r["cc"]) for r in csv_rows("khach_nv_thang")]
     ket_qua["do_phu_doi"] = phan_tich_do_phu_doi(ns, kn, _thang_giua((2025, 4), month_add(*thang_tron_cuoi, -1)))
+
+    team_fact = [
+        ((int(r["ym"][:4]), int(r["ym"][5:7])), r["employee"], r["position"], r["manager"],
+         r["area"], r["target"], r["customer"], r["actual"])
+        for r in csv_rows("team_pace_fact")
+    ]
+    otc_daily = [(r["cc"], r["d"], r["rev"]) for r in csv_rows("khach_ngay_OTC")]
+    team_months = _thang_giua((2025, 7), thang_tron_cuoi)
+    ket_qua["team_pace_tdv_vs_rollup"] = phan_tich_du_phong_doi(
+        team_fact, otc_daily, team_months, ngay_list=(15, 20)
+    )
 
     dt_ngay = defaultdict(lambda: defaultdict(float))
     for r in csv_rows("doanh_thu_ngay_vung_OTC"):

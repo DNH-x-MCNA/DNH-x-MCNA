@@ -30,6 +30,7 @@
 | E | Đội QLV mất độ phủ khách | Loại | Chỉ lặp lại "đội đang yếu thì tháng sau yếu" |
 | F | Chỉ tiêu còn lại vượt năng lực lịch sử | Loại | OTC toàn quốc **chưa tháng nào đạt 100%** trong 20 tháng: báo "sẽ hụt" không thêm thông tin |
 | G | Hàng trả OTC bất thường theo khách | Loại | Đo ở bước khảo sát: dòng trả trên hóa đơn OTC quá nhỏ để có tín hiệu |
+| H | Dự phóng đội bằng rollup QLV | Giữ cách cộng TDV | Rollup không tăng độ chính xác ở ngày 15 hoặc 20 |
 
 ---
 
@@ -218,6 +219,28 @@ Chưa tháng nào đạt trong 20 tháng.
 - Đo 12 tháng ở bước khảo sát: dòng âm trên `vHoaDonTotal` rất nhỏ so với doanh thu.
 - OTC không có nguồn trả hàng riêng như ETC. Không đủ tín hiệu để dựng cảnh báo theo khách.
 
+### H. Dự phóng tiến độ đội: cộng TDV so với rollup QLV
+
+**Mục đích:** kiểm tra có nên đổi `_team_pace_part` từ tổng các dòng TDV sang dòng rollup của QLV. Hai cách
+được chấm trên cùng 262 lượt đội-tháng, cùng kết cục xấu là rollup QLV cuối tháng đạt dưới 80% chỉ tiêu.
+
+**Kỳ đánh giá:** 07/2025–08/2026, đội có ít nhất 3 TDV. `FACT_TongHopKhachHang` không lưu bản chụp lịch sử
+đúng ngày 15/20, nên doanh thu tại hai mốc được tái tạo bằng tập khách của snapshot cuối tháng nối với hóa đơn
+OTC theo ngày. Tỷ lệ doanh thu kỳ vọng tới mốc lấy trung bình ba tháng trước, đúng cách `_team_pace_part` đang
+dùng. Việc đối soát cuối tháng cho thấy hóa đơn khớp FACT trong 1% ở 247/262 lượt theo cách cộng TDV (94,3%)
+và 262/262 lượt theo rollup (100%); sai lệch tuyệt đối trung vị đều là 0%.
+
+| Mốc | Lượt đội-tháng | Kết cục <80% / tỷ lệ nền | Cách | Bắn | Đúng | Độ chính xác | TB bắn/tháng | Cao nhất/tháng |
+|---|---:|---:|---|---:|---:|---:|---:|---:|
+| Ngày 15 | 262 | 130 / 49,6% | Cộng TDV | 78 | 56 | **71,8%** | 5,6 | 14 |
+| Ngày 15 | 262 | 130 / 49,6% | Rollup QLV | 83 | 59 | 71,1% | 5,9 | 14 |
+| Ngày 20 | 262 | 130 / 49,6% | Cộng TDV | 52 | 45 | **86,5%** | 3,7 | 11 |
+| Ngày 20 | 262 | 130 / 49,6% | Rollup QLV | 58 | 50 | 86,2% | 4,1 | 12 |
+
+**Kết luận:** rollup bắn thêm 5 lượt ở ngày 15 và 6 lượt ở ngày 20 nhưng độ chính xác thấp hơn lần lượt 0,7
+và 0,3 điểm phần trăm. Chênh lệch 66%/59% của MBKV1 tháng 9 không chuyển thành lợi thế rõ trên lịch sử.
+Giữ cách cộng TDV hiện tại; không đổi code sản phẩm.
+
 ---
 
 ## 3. Việc cần DNH chốt
@@ -235,8 +258,6 @@ Chưa tháng nào đạt trong 20 tháng.
 
 ## 4. Chưa làm, để lần sau
 
-- **Team pace:** so cách dự phóng đội theo rollup QLV với cộng từng TDV. Ví dụ MBKV1 đổi từ 66% sang 59% tháng 9.
-  Cần kiểm thử ngược trước khi đổi.
 - **Code quy tắc A và B** vào `src/insights.py` sau cờ `alert_feature_flags` (mặc định tắt), sau khi DNH chốt ngưỡng
   ở mục 3.
 - **Báo cáo QLV:** đã thêm Việc cần xử lý và dự phóng đội (15/09), chỉ gồm khách gắn với đội theo phân công KPI.

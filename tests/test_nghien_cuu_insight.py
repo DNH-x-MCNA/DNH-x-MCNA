@@ -73,6 +73,39 @@ def test_do_phu_doi_tach_doi_da_yeu_va_doi_dang_tot():
     assert kq["khi_thang_nay_tren_80"]["ban"] == 1
 
 
+def test_so_sanh_team_pace_dung_cung_ket_cuc_rollup_va_cung_tap_doi():
+    facts = []
+    for team, customers, rollup_customer, rollup_target, rollup_actual in (
+        ("Q1", ("A", "B", "C"), "R", 400.0, 360.0),
+        ("Q2", ("D", "E", "F"), "S", 300.0, 150.0),
+    ):
+        for customer in customers:
+            facts.append(((2026, 7), customer, "TDV", team, "MB", 100.0,
+                          customer, 60.0 if team == "Q1" else 30.0))
+        facts.append(((2026, 7), team, "QLV", "", "MB", rollup_target,
+                      rollup_customer, rollup_actual))
+
+    daily = []
+    for month in (4, 5, 6):
+        daily += [("HIST", D(2026, month, 10), 50.0),
+                  ("HIST", D(2026, month, 25), 50.0)]
+    for customer in ("A", "B", "C"):
+        daily += [(customer, D(2026, 7, 10), 10.0),
+                  (customer, D(2026, 7, 25), 50.0)]
+    for customer in ("D", "E", "F"):
+        daily += [(customer, D(2026, 7, 10), 5.0),
+                  (customer, D(2026, 7, 25), 25.0)]
+    daily += [("R", D(2026, 7, 10), 120.0), ("R", D(2026, 7, 25), 240.0),
+              ("S", D(2026, 7, 10), 30.0), ("S", D(2026, 7, 25), 120.0)]
+
+    result = nc.phan_tich_du_phong_doi(facts, daily, [(2026, 7)], ngay_list=(15,))
+
+    day15 = result["theo_ngay"][0]
+    assert (day15["so_doi_thang"], day15["ty_le_nen_pct"]) == (2, 50.0)
+    assert (day15["tdv"]["so_lan_ban"], day15["tdv"]["do_chinh_xac_pct"]) == (2, 50.0)
+    assert (day15["rollup"]["so_lan_ban"], day15["rollup"]["do_chinh_xac_pct"]) == (1, 100.0)
+
+
 def test_chi_tieu_bao_khong_the_dat_khi_ban_o_nhip_cao_nhat_van_thieu():
     doanh_thu = {}
     for y, m in [(2025, i) for i in range(1, 13)]:
