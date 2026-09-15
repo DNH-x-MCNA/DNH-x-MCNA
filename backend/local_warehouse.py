@@ -26,7 +26,7 @@ SCHEMA = r"""
 CREATE TABLE IF NOT EXISTS vhoadon_otc (
     doc_date TEXT NOT NULL, customer_code TEXT, item_code TEXT,
     amount9 REAL, quantity REAL, unit_price REAL, stt TEXT, city_id INTEGER, employee_code TEXT,
-    created_at TEXT, channel_code TEXT
+    created_at TEXT, channel_code TEXT, discount_rate REAL, doc_code TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_otc_docdate ON vhoadon_otc(doc_date);
 CREATE INDEX IF NOT EXISTS idx_otc_customer ON vhoadon_otc(customer_code);
@@ -38,7 +38,7 @@ CREATE INDEX IF NOT EXISTS idx_otc_channel ON vhoadon_otc(channel_code);
 CREATE TABLE IF NOT EXISTS vhoadon_etc (
     doc_date TEXT NOT NULL, customer_code TEXT, item_code TEXT,
     amount9 REAL, quantity REAL, unit_price REAL, stt TEXT, employee_code TEXT,
-    created_at TEXT
+    created_at TEXT, discount_rate REAL, doc_code TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_etc_docdate ON vhoadon_etc(doc_date);
 CREATE INDEX IF NOT EXISTS idx_etc_customer ON vhoadon_etc(customer_code);
@@ -64,7 +64,7 @@ CREATE INDEX IF NOT EXISTS idx_dmssxnv_dmscode ON dmssx_nhanvien(dmscode);
 CREATE INDEX IF NOT EXISTS idx_dmssxnv_code ON dmssx_nhanvien(code);
 -- emp_code = EmpDMSCode1 (ma NV DMS duoc GAN de phu trach khach hang nay - khac EmpDMSCode2 tren
 -- hoa don la NV THUC TE ban hang; 2 ma co the khac nhau).
-CREATE TABLE IF NOT EXISTS dms_khachhang (code TEXT, name TEXT, city_id INTEGER, id_code INTEGER, emp_code TEXT, kenh_bh TEXT);
+CREATE TABLE IF NOT EXISTS dms_khachhang (code TEXT, name TEXT, city_id INTEGER, id_code INTEGER, emp_code TEXT, kenh_bh TEXT, is_active INTEGER);
 CREATE INDEX IF NOT EXISTS idx_dms_code ON dms_khachhang(code);
 -- position_code: TDV=Trinh duoc vien, QLV=Quan ly vung, CTV/CS/TP/PP/TBP/TK = cac vai tro khac
 -- (xem dim_chucvu de dich sang ten tieng Viet). area_code: MB/MT/MN.
@@ -296,7 +296,9 @@ def get_conn() -> sqlite3.Connection:
 # them vao day (chu KHONG duoc quen - da tung gay loi thieu dmsid/start_date/... khi warehouse.db cu
 # chua duoc --full lai sau khi SCHEMA doi).
 _COLUMN_MIGRATIONS = {
-    "vhoadon_otc": [("channel_code", "TEXT")],
+    "vhoadon_otc": [("channel_code", "TEXT"), ("discount_rate", "REAL"), ("doc_code", "TEXT")],
+    "vhoadon_etc": [("discount_rate", "REAL"), ("doc_code", "TEXT")],
+    "dms_khachhang": [("is_active", "INTEGER")],
     # Mot so warehouse.db cu tao bang nay truc tiep tu ten cot Bravo (AreaCode/ChannelCode/DocDate).
     # Schema moi dung snake_case va tao index tren doc_date; CREATE TABLE IF NOT EXISTS khong doi
     # cau truc bang cu, nen service/sync se chet ngay luc khoi dong neu khong them ba cot nay truoc.

@@ -107,7 +107,8 @@ def sync_hoadon_full(table_bravo, table_local, has_city, has_channel=False, chan
         # "kenh ao" nhu Modern Trade (xem local_warehouse.py va report_templates.py revenue_by_region()).
         cols = ("DocDate, CustomerCode, ItemCode, Amount9, Quantity, UnitPrice, Stt, EmpDMSCode"
                 + (", CityId" if has_city else "") + ", CreatedAt"
-                + (", EmpDMSCode2" if has_channel else ""))
+                + (", EmpDMSCode2" if has_channel else "")
+                + ", DiscountRate, DocCode")
         _, rows = bravo_query(
             f"SELECT {cols} FROM dbo.{table_bravo} WHERE DocDate BETWEEN :a AND :b",
             a=str(a), b=str(b),
@@ -123,11 +124,12 @@ def sync_hoadon_full(table_bravo, table_local, has_city, has_channel=False, chan
             print(f"  {a} -> {b}: {len(rows)} dong -> NEN thanh {n_compressed} dong KH x thang "
                   f"(tong nen {total_compressed}, {time.time()-t0:.0f}s)")
             continue
-        n_cols = 9 + (1 if has_city else 0) + (1 if has_channel else 0)
+        n_cols = 11 + (1 if has_city else 0) + (1 if has_channel else 0)
         placeholders = ",".join(["?"] * n_cols)
         cols_local = ("doc_date,customer_code,item_code,amount9,quantity,unit_price,stt,employee_code"
                       + (",city_id" if has_city else "") + ",created_at"
-                      + (",channel_code" if has_channel else ""))
+                      + (",channel_code" if has_channel else "")
+                      + ",discount_rate,doc_code")
         conn.executemany(
             f"INSERT INTO {table_local} ({cols_local}) VALUES ({placeholders})", rows,
         )
@@ -169,7 +171,8 @@ def sync_hoadon_recent(table_bravo, table_local, has_city, days=N_RECENT_DAYS, h
     print(f"[{table_local}] Refresh gia tang {start} -> {today}...")
     cols = ("DocDate, CustomerCode, ItemCode, Amount9, Quantity, UnitPrice, Stt, EmpDMSCode"
             + (", CityId" if has_city else "") + ", CreatedAt"
-            + (", EmpDMSCode2" if has_channel else ""))
+            + (", EmpDMSCode2" if has_channel else "")
+            + ", DiscountRate, DocCode")
     _, rows = bravo_query(
         f"SELECT {cols} FROM dbo.{table_bravo} WHERE DocDate >= :a", a=str(start),
     )
@@ -179,11 +182,12 @@ def sync_hoadon_recent(table_bravo, table_local, has_city, days=N_RECENT_DAYS, h
         conn.execute("BEGIN IMMEDIATE")
         conn.execute(f"DELETE FROM {table_local} WHERE doc_date >= ?", (str(start),))
         if rows:
-            n_cols = 9 + (1 if has_city else 0) + (1 if has_channel else 0)
+            n_cols = 11 + (1 if has_city else 0) + (1 if has_channel else 0)
             placeholders = ",".join(["?"] * n_cols)
             cols_local = ("doc_date,customer_code,item_code,amount9,quantity,unit_price,stt,employee_code"
                           + (",city_id" if has_city else "") + ",created_at"
-                          + (",channel_code" if has_channel else ""))
+                          + (",channel_code" if has_channel else "")
+                          + ",discount_rate,doc_code")
             conn.executemany(
                 f"INSERT INTO {table_local} ({cols_local}) VALUES ({placeholders})", rows,
             )
@@ -207,7 +211,7 @@ SMALL_TABLES = [
     # Nhan vien rieng phia SX/ETC, KHONG co trong DIM_NhanVien - xac nhan 20/07/2026 (vd ma DNH00087,
     # DNH00268, Sale01-Sale15...). Xem local_warehouse.py va report_templates.py _resolve_employee_identity().
     ("DMSSX_NhanVien", "dmssx_nhanvien", "Id, Name, DMSCode, Code, IsActive", "id_code,name,dmscode,code,is_active"),
-    ("DMS_KhachHang", "dms_khachhang", "Code, Name, CityId, Id, EmpDMSCode1, KenhBH", "code,name,city_id,id_code,emp_code,kenh_bh"),
+    ("DMS_KhachHang", "dms_khachhang", "Code, Name, CityId, Id, EmpDMSCode1, KenhBH, IsActive", "code,name,city_id,id_code,emp_code,kenh_bh,is_active"),
     # StartDate/EndDate/IsResigned: lich su dam nhiem (Bravo giu lai ban ghi cu, KHONG xoa khi doi
     # nguoi) - dung de dung lai timeline "ai phu trach luc nao". ManagerAreaCode: ma khu vuc nho
     # (V01-V22) - TDV mang ma nay de biet thuoc "to" nao, ban ghi "bong" cua QLV (ten co hau to
