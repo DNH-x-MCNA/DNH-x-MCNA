@@ -16,6 +16,7 @@ import unicodedata
 from statistics import median
 from sqlalchemy import text
 from local_warehouse import get_conn, get_sync_meta
+from customer_scope import TEAM_CUSTOMER_WINDOW_DAYS, team_customer_codes
 from query_engine import _write_log, _get_engine
 from region_map import region_from_customer_code, REGION_SQL_MARKERS, REGION_NAMES_VI
 import org_hierarchy as oh
@@ -7725,7 +7726,8 @@ def _expiry_bucket(days_left: float) -> str:
 
 
 def _inventory_supply_risk(stock_by_item: dict, item_names: dict, area_code: str,
-                           limit: int = 30, focus: str = "all") -> dict:
+                           limit: int = 30, focus: str = "all",
+                           scope_employee_code: str = None) -> dict:
     """So sanh TON HIEN CO voi nhu cau OTC 3 thang da chot gan nhat.
 
     Day la canh bao suy dien de tra loi S47/S28, khong phai bang chung khach da dat
@@ -7739,11 +7741,15 @@ def _inventory_supply_risk(stock_by_item: dict, item_names: dict, area_code: str
     today = dt.date.today()
     last_complete = today.replace(day=1) - dt.timedelta(days=1)
     month_end = last_complete.isoformat()
+    month_exclusive_end = today.replace(day=1).isoformat()
     month_start = f"{_month_add(last_complete.strftime('%Y-%m'), -2)}-01"
+    # Cung phan cong ManagerCode -> DMSId voi cac tool doanh thu. Chot doi o cuoi ky
+    # va dung lai cho CA nhu cau SKU LAN khach mua, khong roi ve toan vung khi thieu doi.
+    emp_sql, emp_params = _employee_scope_clause(scope_employee_code, "v", as_of=month_end)
     item_codes = sorted(stock_by_item)
     placeholders = ",".join("?" for _ in item_codes)
-    conditions = ["v.doc_date BETWEEN ? AND ?", f"v.item_code IN ({placeholders})"]
-    params = [month_start, month_end, *item_codes]
+    conditions = ["v.doc_date>=? AND v.doc_date<?", f"v.item_code IN ({placeholders})"]
+    params = [month_start, month_exclusive_end, *item_codes]
     joins = "LEFT JOIN dms_khachhang kh ON kh.code=v.customer_code"
     if area_code:
         joins += " LEFT JOIN dim_tinhthanhpho tp ON tp.city_id=kh.city_id"
@@ -7755,9 +7761,9 @@ def _inventory_supply_risk(stock_by_item: dict, item_names: dict, area_code: str
             "SELECT v.item_code, "
             "SUM(CASE WHEN COALESCE(v.unit_price,0)>0 THEN COALESCE(v.quantity,0) ELSE 0 END) qty_3m, "
             "SUM(COALESCE(v.amount9,0)) revenue_3m "
-            f"FROM vhoadon_otc v {joins} WHERE {' AND '.join(conditions)} "
+            f"FROM vhoadon_otc v {joins} WHERE {' AND '.join(conditions)}{emp_sql} "
             "GROUP BY v.item_code",
-            tuple(params),
+            (*params, *emp_params),
         )
     except (sqlite3.Error, OSError):
         # Kho cu/test database chua co hoa don chi tiet: bao ro nguon khong san sang,
@@ -7828,8 +7834,8 @@ def _inventory_supply_risk(stock_by_item: dict, item_names: dict, area_code: str
     ][:10]
     if candidate_codes:
         candidate_marks = ",".join("?" for _ in candidate_codes)
-        buyer_conditions = ["v.doc_date BETWEEN ? AND ?", f"v.item_code IN ({candidate_marks})"]
-        buyer_params = [month_start, month_end, *candidate_codes]
+        buyer_conditions = ["v.doc_date>=? AND v.doc_date<?", f"v.item_code IN ({candidate_marks})"]
+        buyer_params = [month_start, month_exclusive_end, *candidate_codes]
         buyer_joins = "LEFT JOIN dms_khachhang kh ON kh.code=v.customer_code"
         if area_code:
             buyer_joins += " LEFT JOIN dim_tinhthanhpho tp ON tp.city_id=kh.city_id"
@@ -7838,10 +7844,11 @@ def _inventory_supply_risk(stock_by_item: dict, item_names: dict, area_code: str
         try:
             buyers = _q(
                 "SELECT v.item_code, v.customer_code, COALESCE(kh.name,v.customer_code) customer_name, "
-                "SUM(COALESCE(v.quantity,0)) qty_3m, SUM(COALESCE(v.amount9,0)) revenue_3m "
-                f"FROM vhoadon_otc v {buyer_joins} WHERE {' AND '.join(buyer_conditions)} "
+                "SUM(CASE WHEN COALESCE(v.unit_price,0)>0 THEN COALESCE(v.quantity,0) ELSE 0 END) qty_3m, "
+                "SUM(COALESCE(v.amount9,0)) revenue_3m "
+                f"FROM vhoadon_otc v {buyer_joins} WHERE {' AND '.join(buyer_conditions)}{emp_sql} "
                 "GROUP BY v.item_code,v.customer_code,kh.name ORDER BY v.item_code, revenue_3m DESC",
-                tuple(buyer_params),
+                (*buyer_params, *emp_params),
             )
             per_item = {}
             for buyer in buyers:
@@ -7868,7 +7875,11 @@ def _inventory_supply_risk(stock_by_item: dict, item_names: dict, area_code: str
         "recent_customer_candidates": buyer_candidates,
         "definition": (
             "Canh bao suy dien tu ton hien co so voi binh quan ban OTC 3 thang da chot. "
-            "Khong co du lieu don cho xu ly/chia ton/khach cam ket nen KHONG ket luan da mat don hay doanh thu."),
+            "Khong co du lieu don cho xu ly/chia ton/khach cam ket nen KHONG ket luan da mat don hay doanh thu. "
+            + ("Binh quan ban va khach mua gan day CHI thuoc doi QLV; ton kho van la ton dung chung "
+               "trong pham vi vung da loc, chua phan bo cho doi. So thang du ban tinh theo suc ban cua doi; "
+               "TON_KHONG_BAN_3_THANG chi nghia la doi nay khong ban, khong ket luan ca vung khong ban."
+               if scope_employee_code else "")),
     }
 
 
@@ -7974,7 +7985,7 @@ def sku_revenue_drop_vs_stock(months_back: int = 3, area_code: str = None,
 
 def inventory_expiry_report(area_code: str = None, max_bucket: str = None, limit: int = 30,
                              focus: str = "all",
-                             scope_area_code: str = None) -> dict:
+                             scope_area_code: str = None, scope_employee_code: str = None) -> dict:
     """Bao cao TON KHO THEO LO + HAN SU DUNG - tra loi cau hoi "hang nao sap het han/can date/da het
     han", KHAC voi inventory_by_region() (chi co TONG so luong/gia tri theo vung, KHONG biet lo/han
     su dung). Nguon: brv_tonkhodklot (ton kho tung lo) JOIN brv_lot (ngay san xuat/het han theo lo) -
@@ -7996,6 +8007,7 @@ def inventory_expiry_report(area_code: str = None, max_bucket: str = None, limit
     duoi_3_thang, 3_6_thang, 6_9_thang, 9_12_thang, 12_18_thang, tren_18_thang (dung dung ten nay,
     KHONG tu doi dinh dang).
     scope_area_code: EP GHI DE area_code khi tai khoan bi gioi han vung (giong inventory_by_region).
+    scope_employee_code: loc nhu cau ban va khach mua theo doi QLV; ton kho dung chung theo vung.
 
     LUU Y QUAN TRONG: du lieu chi co O CAC LO CON HOAT DONG (is_active=1) va CON SO LUONG TON >0 -
     lo da xuat het/ngung theo doi se KHONG xuat hien, day la BINH THUONG (khong phai thieu du lieu).
@@ -8081,6 +8093,7 @@ def inventory_expiry_report(area_code: str = None, max_bucket: str = None, limit
     detail.sort(key=lambda d: d["days_left"])
     supply_risk = _inventory_supply_risk(
         stock_by_item, item_names, area_code, limit=limit, focus=focus,
+        scope_employee_code=scope_employee_code,
     )
 
     # Canh bao do moi dong bo - cung nguong 6 gio voi cong no (_customer_receivable/receivables_overview).
@@ -8145,7 +8158,7 @@ def _collection_source_gap() -> dict:
 
 
 def receivables_overview(top_n: int = 10, scope_area_code: str = None,
-                         scope_channel: str = None) -> dict:
+                         scope_channel: str = None, scope_employee_code: str = None) -> dict:
     """Tong quan CONG NO tu kho local fact_congno_khachhang (snapshot tuc thoi tu SP goc DNH
     usp_DeptAccDueDate_GetData): tong du no, tong qua han, ty le qua han, tach theo KENH (OTC/ETC)
     va theo VUNG, top N khach no qua han nhieu nhat.
@@ -8154,6 +8167,8 @@ def receivables_overview(top_n: int = 10, scope_area_code: str = None,
     han (regional_director/qlv) - dung REGION_SQL_MARKERS de gom ca MB va MB2 cho mien Bac.
     scope_channel: EP LOC OTC/ETC ngay trong SQL cho tai khoan Giam doc Kenh/OTC-only; khong chi
     an breakdown sau khi da tinh tong, de tong/top khach/bucket deu khong the lot kenh khac.
+    scope_employee_code: khach phan cong cho doi QLV theo KPI, cung nguon voi bao cao QLV.
+    Nguon phan cong nay chi phu OTC; khong gan no ETC cua khach trung ma vao doi OTC.
 
     Ket qua LUON kem "aging_bucket_note" (xem _AGING_BUCKET_NOTE) canh bao 4 bucket overdue_1_15/
     15_30/30_45/gt_45 lay THANG tu SP goc, co the khac moc Excel noi bo DNH hay dung.
@@ -8165,6 +8180,35 @@ def receivables_overview(top_n: int = 10, scope_area_code: str = None,
     (khong co trang thai no_data rieng: neu co du lieu ma vung nay = 0 thi cac tong = 0, van la 'ok'.)
     """
     conditions, params = [], []
+    team_scope = None
+    if scope_employee_code:
+        if scope_channel and str(scope_channel).strip().upper() != "OTC":
+            raise KhongXacDinhDuocDoi(
+                "Chua co phan cong khach ETC theo doi QLV de loc cong no; "
+                "khong the dung phan cong OTC hay cong no ca vung thay the."
+            )
+        scope_channel = "OTC"
+        assignment_day = dt.date.today()
+        customer_codes = sorted(team_customer_codes(_q, scope_employee_code, assignment_day))
+        if not customer_codes:
+            raise KhongXacDinhDuocDoi(
+                f"Khong xac dinh duoc khach thuoc doi {scope_employee_code} trong phan cong KPI; "
+                "CHUA danh gia duoc cong no cua doi, khong ket luan khong co no."
+            )
+        conditions.append(f"customer_code IN ({','.join('?' for _ in customer_codes)})")
+        params.extend(customer_codes)
+        team_scope = {
+            "manager_code": scope_employee_code,
+            "assignment_as_of": assignment_day.isoformat(),
+            "assignment_window_days": TEAM_CUSTOMER_WINDOW_DAYS,
+            "assigned_customers": len(customer_codes),
+            "source": "FACT_TongHopKhachHang.ManagerCode/EmployeeCode",
+            "definition": (
+                "Khach thuoc doi theo snapshot gan nhat cua TUNG khach, gom khach QLV tu phu trach. "
+                "Khach da chuyen doi khong con o doi cu; khong chi lay khach co hoa don trong thang. "
+                "Chi phu OTC. Khach khong con phan cong trong cua so du lieu khong the gan ve doi."
+            ),
+        }
     if scope_area_code:
         region_key = next((k for k, ms in REGION_SQL_MARKERS.items() if scope_area_code in ms), None)
         markers = REGION_SQL_MARKERS.get(region_key, [scope_area_code])
@@ -8190,6 +8234,7 @@ def receivables_overview(top_n: int = 10, scope_area_code: str = None,
                 "receivable_warning": (
                     "Chua tra cuu duoc cong no trong pham vi tai khoan tai thoi diem nay."),
                 "scope_area_code": scope_area_code, "scope_channel": channel,
+                "scope_employee_code": scope_employee_code, "team_scope": team_scope,
                 "collection_activity": _collection_source_gap()}
 
     snapshot_at = meta[0]["at"]
@@ -8236,6 +8281,12 @@ def receivables_overview(top_n: int = 10, scope_area_code: str = None,
         "receivable_as_of": snapshot_at,
         "scope_area_code": scope_area_code,
         "scope_channel": channel,
+        "scope_employee_code": scope_employee_code,
+        "team_scope": team_scope,
+        "receivable_definition": (
+            "Du no/no qua han tai ngay receivable_as_of cua snapshot SP; khong phai so chot cuoi "
+            "thang nguoi dung dang hoi. No qua han khong tu dong la no xau; khong suy so tien da thu."
+        ),
         "total_balance_end": total_balance,
         "total_overdue": total_overdue,
         "overdue_pct": (total_overdue / total_balance * 100) if total_balance else 0.0,
@@ -8255,6 +8306,8 @@ def receivables_overview(top_n: int = 10, scope_area_code: str = None,
     except Exception:
         pass
     scope_parts = []
+    if scope_employee_code:
+        scope_parts.append(f"khach cua doi QLV {scope_employee_code}")
     if scope_area_code:
         scope_parts.append(f"vung {scope_area_code}")
     if channel:
@@ -11065,6 +11118,9 @@ _AREA_EXEMPT_TEMPLATES = {
 }
 
 _PERSON_LEVEL_TEMPLATES = {
+    "get_receivables_overview",
+    # Ton kho theo vung, nhung nhu cau va danh sach khach mua phai gioi han theo doi.
+    "get_inventory_expiry_report",
     "get_sku_revenue_drop_vs_stock", "get_revenue_view_reconciliation",
     "get_revenue_tree", "get_kpi_ranking", "get_employee_kpi",
     "get_employee_daily_kpi", "check_order_timing",
@@ -11077,17 +11133,9 @@ _PERSON_LEVEL_TEMPLATES = {
     "get_promotion_effectiveness",
     "get_promotion_data_quality",
     "get_customer_revenue_debt_risk",
-    # 19/08/2026: BO get_inventory_by_region/get_receivables_overview/get_qlv_change_history/
-    # get_revenue_reconciliation KHOI day - phan loai SAI tu truoc: ca 4 tool nay KHONG co cot nao
-    # gan voi TUNG NHAN VIEN ca nhan (ton kho theo vung/san pham, cong no theo khach hang/vung, lich
-    # su QLV theo to/vung, doi soat doanh thu toan vung) - khong co du lieu hieu suat ca nhan nao can
-    # bao ve giua cac dong nghiep. scope_area_code (da co san, dung dan) la CO CHE GIOI HAN DU cho ca
-    # 4 tool. Nam trong day khien nhanh "scope_employee_code and name in _PERSON_LEVEL_TEMPLATES" tai
-    # call_template() FAIL-CLOSED chan HOAN TOAN moi tai khoan QLV goi 4 tool nay (QLV luon co ca
-    # scope_area_code LAN scope_employee_code cung luc, xem main.py) - vi ca 4 ham KHONG nhan tham so
-    # scope_employee_code nen KHONG THE nam trong _EMPLOYEE_SCOPED_TEMPLATES, chi con duong fail-closed.
-    # Xac nhan bang test: goi qua call_template() truoc sua bi chan, sau sua thanh cong VA
-    # scope_area_code van duoc ap dung dung (khong mo khoa vung).
+    # 19/08: inventory_by_region/qlv_change_history/revenue_reconciliation chi loc vung.
+    # 15/09 V40: receivables_overview da ho tro loc khach theo doi, dang ky o CA HAI tap
+    # de backend ep pham vi QLV ma khong chan nham tool nhu truoc day.
     # 19/08/2026: THEM get_salary_ranking - truoc do CHI 3 tool luong kia o day, ham nay dung
     # chung _ROLE_SCOPED_TEMPLATES/_AREA_EXEMPT_TEMPLATES voi 3 tool do (deu bo qua scope_area_code
     # de nhuong cho co che theo doi tinh hon), nhung thieu mat o day khien nhanh ep
@@ -11100,6 +11148,8 @@ _PERSON_LEVEL_TEMPLATES = {
 }
 
 _EMPLOYEE_SCOPED_TEMPLATES = {
+    "get_receivables_overview",
+    "get_inventory_expiry_report",
     "get_sku_revenue_drop_vs_stock",
     "get_revenue_tree", "get_kpi_ranking", "get_employee_kpi",
     "get_employee_daily_kpi", "get_revenue_by_channel", "get_top_customers",
@@ -11621,7 +11671,18 @@ def call_template(name: str, args: dict, question: str = "", username: str = Non
                         "Giao chậm: nguồn hiện chưa có mốc giao hàng thực tế; chỉ đối chiếu được "
                         "ngày đơn với ngày hóa đơn đầu tiên."
                     ]
-            if scope_employee_code and name in _EMPLOYEE_SCOPED_TEMPLATES:
+            if scope_employee_code and name == "get_inventory_expiry_report":
+                result["pham_vi_du_lieu"] = {
+                    "loai": "TON_KHO_CHUNG_NHU_CAU_DOI",
+                    "ma_qlv": scope_employee_code,
+                    "ma_vung": result.get("area_code"),
+                    "canh_bao": (
+                        "Binh quan ban va khach mua gan day CHI cua doi QLV tren. "
+                        "Ton kho la ton dung chung trong pham vi da loc, chua phan bo cho doi. "
+                        "So thang du ban so sanh ton chung voi suc ban cua doi, khong phai suc ban ca vung."
+                    ),
+                }
+            elif scope_employee_code and name in _EMPLOYEE_SCOPED_TEMPLATES:
                 result["pham_vi_du_lieu"] = {
                     "loai": "DOI_CUA_QLV",
                     "ma_qlv": scope_employee_code,

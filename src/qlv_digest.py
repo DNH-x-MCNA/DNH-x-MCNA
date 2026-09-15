@@ -17,6 +17,8 @@ import sys
 from pathlib import Path
 from typing import Any, Callable
 
+from backend.customer_scope import TEAM_CUSTOMER_WINDOW_DAYS, team_customer_codes
+
 
 class QLVDigestScopeError(ValueError):
     """Cấu hình không đủ để giới hạn báo cáo vào đúng một đội QLV."""
@@ -114,7 +116,7 @@ def _freshness_note(report_tools, day: dt.date) -> str:
     return note
 
 
-_TEAM_CUSTOMER_WINDOW_DAYS = 200
+_TEAM_CUSTOMER_WINDOW_DAYS = TEAM_CUSTOMER_WINDOW_DAYS
 
 
 def _team_customer_codes(report_tools, employee_code: str, day: dt.date) -> set[str]:
@@ -124,16 +126,9 @@ def _team_customer_codes(report_tools, employee_code: str, day: dt.date) -> set[
     đều 6 tháng): khách đã chuyển sang đội khác thì không còn hiện ở đội cũ. Đo trên kho 15/09/2026: không
     khách nào thuộc hai đội ở snapshot gần nhất của mình. Không ra khách nào thì dừng, không mở rộng phạm vi.
     """
-    rows = report_tools._q(
-        "WITH gan AS (SELECT customer_code, MAX(save_date) d FROM fact_tonghopkhachhang "
-        "WHERE save_date<=? AND save_date>=? GROUP BY customer_code) "
-        "SELECT DISTINCT f.customer_code FROM fact_tonghopkhachhang f "
-        "JOIN gan ON gan.customer_code=f.customer_code AND gan.d=f.save_date "
-        "WHERE f.manager_code=? OR f.employee_code=?",
-        (day.isoformat(), (day - dt.timedelta(days=_TEAM_CUSTOMER_WINDOW_DAYS)).isoformat(),
-         employee_code, employee_code),
+    codes = team_customer_codes(
+        report_tools._q, employee_code, day, window_days=_TEAM_CUSTOMER_WINDOW_DAYS,
     )
-    codes = {str(r.get("customer_code")).strip() for r in rows if r.get("customer_code")}
     if not codes:
         raise QLVDigestScopeError(f"Không tìm thấy khách nào gắn với đội {employee_code} trong phân công KPI.")
     return codes
