@@ -1199,6 +1199,10 @@ TEMPLATE_TOOLS = [
                        "TUNG nhan vien trong thang. Khong dung ngay snapshot lam ngay ghi nhan. Chi kenh OTC.",
         "input_schema": {"type": "object", "properties": {
             "year_month": {"type": "string", "description": "YYYY-MM; mac dinh thang co snapshot moi nhat."},
+            "manager_code": {"type": "string", "description": "Ma QLV khi cau hoi gioi han MOT DOI (vd 'doi qlv "
+                                                               "TM23100148'). BAT BUOC truyen thay vi tu loc tren "
+                                                               "danh sach toan cong ty. Tai khoan QLV bi ep doi cua "
+                                                               "chinh ho, tham so nay bi bo qua."},
             "limit": {"type": "integer", "minimum": 1, "maximum": 1000}}, "required": []},
     },
     {
@@ -1209,6 +1213,10 @@ TEMPLATE_TOOLS = [
                        "khach chua dat KPI tai don. Tra DANH SACH khach, khong chi mo ta chung. Chi kenh OTC.",
         "input_schema": {"type": "object", "properties": {
             "year_month": {"type": "string", "description": "YYYY-MM; mac dinh thang co snapshot moi nhat."},
+            "manager_code": {"type": "string", "description": "Ma QLV khi cau hoi gioi han MOT DOI (vd 'doi qlv "
+                                                               "TM23100148'). BAT BUOC truyen thay vi tu loc tren "
+                                                               "danh sach toan cong ty. Tai khoan QLV bi ep doi cua "
+                                                               "chinh ho, tham so nay bi bo qua."},
             "limit": {"type": "integer", "minimum": 1, "maximum": 1000}}, "required": []},
     },
     {
@@ -1219,6 +1227,9 @@ TEMPLATE_TOOLS = [
                        "theo QLV/doi. KHONG dung cho % target SKU trong tam theo khach hang.",
         "input_schema": {"type": "object", "properties": {
             "year_month": {"type": "string", "description": "YYYY-MM; mac dinh thang moi nhat."},
+            "manager_code": {"type": "string", "description": "Ma QLV khi cau hoi gioi han MOT DOI (vd 'doi qlv "
+                                                               "TM23100148') - tra dong QLV do kem tung thanh vien "
+                                                               "doi. Tai khoan QLV bi ep doi cua chinh ho."},
             "limit": {"type": "integer", "minimum": 1, "maximum": 500}}, "required": []},
     },
     {
