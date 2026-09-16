@@ -61,7 +61,7 @@ def _kpi_payload(row_count=24):
     }
 
 
-def test_kpi_payload_giu_du_24_nguoi_va_nam_duoi_tran_6000_ky_tu():
+def test_kpi_payload_giu_du_24_nguoi_va_nam_duoi_tran_payload():
     encoded = nl2sql._serialize_payload_for_model(
         "get_employee_kpi", _kpi_payload(), "danh sách TDV dưới 65% tháng 8"
     )

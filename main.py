@@ -5,6 +5,14 @@ import argparse
 from datetime import datetime
 from dotenv import load_dotenv
 
+# Scheduled Tasks redirect stdout/stderr to log files.  Force UTF-8 here so the
+# Vietnamese operational log stays readable regardless of the SYSTEM account's
+# active Windows code page.
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8")
+
 def load_env():
     root_dir = os.path.dirname(os.path.abspath(__file__))
     for env_name in [".env", "backend/.env", "config/.env"]:
@@ -288,7 +296,7 @@ def send_daily_digest(dry_run=False, audience_filter=None, webhook_override=None
             title = f"BÁO CÁO TỔNG HỢP HÀNG NGÀY ({metrics['date']})" + (f" — {audience}" if audience else "")
             summary = (
                 f"Tổng hợp hoạt động ERP/CRM ngày {metrics['date']}."
-                f" Dữ liệu cập nhật lúc {metrics.get('updated_at', 'N/A')}."
+                f" {metrics.get('freshness_note') or ('Dữ liệu truy vấn lúc ' + metrics.get('updated_at', 'N/A'))}"
             )
 
             # Build sections (1.4f, GD2g, GD3c)
@@ -341,18 +349,21 @@ def send_daily_digest(dry_run=False, audience_filter=None, webhook_override=None
             # GD3c: Receivables detail section (top 5)
             receivables = metrics.get('receivables')
             if receivables:
+                show_daily_receivables_detail = config.get('report_feature_flags', {}).get(
+                    'show_daily_receivables_detail', False)
                 rec_items = []
                 rec_items.append(f"• Tổng dư nợ: {format_vietnamese_money(receivables['balance_end'])} | Nợ quá hạn: {format_vietnamese_money(receivables['total_overdue'])} ({receivables.get('overdue_pct', 0.0)}%)")
-                if receivables.get('aging'):
+                if show_daily_receivables_detail and receivables.get('aging'):
                     aging_str = " · ".join([f"{a['label']}: {format_vietnamese_money(a['amount'])}" for a in receivables['aging']])
                     rec_items.append(f"• Phân loại tuổi nợ: {aging_str}")
-                if receivables.get('top_overdue_customers'):
+                if show_daily_receivables_detail and receivables.get('top_overdue_customers'):
                     rec_items.append("• Top 5 khách nợ quá hạn cao nhất:")
                     for c in receivables['top_overdue_customers'][:5]:
                         rec_items.append(f"   - {c['customer_name']} ({c['customer_code']}) [{c['region']} - {c['channel']}]: Nợ {format_vietnamese_money(c['overdue'])} / Tổng dư nợ {format_vietnamese_money(c['balance'])}")
                 sections.append({
                     "id": "section_receivables_detail",
-                    "title": "💳 CHI TIẾT CÔNG NỢ & TUỔI NỢ",
+                    "title": ("💳 CHI TIẾT CÔNG NỢ & TUỔI NỢ" if show_daily_receivables_detail
+                              else "💳 TỔNG QUAN CÔNG NỢ"),
                     "is_collapsed": False,
                     "items": rec_items
                 })
@@ -362,6 +373,8 @@ def send_daily_digest(dry_run=False, audience_filter=None, webhook_override=None
                 print(f" - Title: {title}")
                 print(f" - Table Rows: {len(rows)}")
                 print(f" - Sections: {len(sections)}")
+                if metrics.get('freshness_note'):
+                    print(f" - Freshness: {metrics['freshness_note']}")
                 continue
 
             sent = send_teams_alert(
@@ -631,20 +644,24 @@ def main():
             print(f"[{datetime.now()}] Cảnh báo: không tạo được mock ERP/CRM engine (bỏ qua bản mock): {e}")
 
     if args.send_daily:
-        send_daily_digest(dry_run=args.dry_run, audience_filter=args.audience, webhook_override=args.teams_webhook_override)
-        sys.exit(0)
+        ok = send_daily_digest(
+            dry_run=args.dry_run,
+            audience_filter=args.audience,
+            webhook_override=args.teams_webhook_override,
+        )
+        sys.exit(0 if ok else 1)
     if args.send_weekly:
-        send_weekly_report(
+        ok = send_weekly_report(
             dry_run=args.dry_run,
             audience_filter=args.audience,
         )
-        sys.exit(0)
+        sys.exit(0 if ok else 1)
     if args.send_monthly:
-        send_monthly_report(
+        ok = send_monthly_report(
             dry_run=args.dry_run,
             audience_filter=args.audience,
         )
-        sys.exit(0)
+        sys.exit(0 if ok else 1)
 
     if args.once:
         print(f"[{datetime.now()}] Bắt đầu quét cảnh báo nghiệp vụ DNH một lần...")

@@ -5,6 +5,7 @@ hop (tach kenh, tach vung, top N) truoc 19/08/2026, chi co test cho phan dong bo
 "Tach OTC/ETC", "Khach hai kenh khong bi cong sai", "Top no dung dung mau so".
 """
 import io
+import json
 import os
 import sqlite3
 import sys
@@ -14,6 +15,7 @@ if BACKEND not in sys.path:
     sys.path.append(BACKEND)
 
 import local_warehouse
+import nl2sql
 import report_templates
 
 
@@ -109,6 +111,64 @@ def test_khach_2_kenh_khong_bi_cong_sai_va_top_no_dung_mau_so(tmp_path, monkeypa
     assert result["top_overdue_customers"][0]["customer_code"] == "C2"
     # C3 khong qua han -> KHONG duoc xuat hien trong top (HAVING SUM(total_overdue) > 0)
     assert "C3" not in top
+
+
+def test_top_10_khong_bi_payload_cat_xuong_5_hoac_3(tmp_path, monkeypatch):
+    db_path = tmp_path / "warehouse.db"
+    _make_db(db_path)
+    conn = sqlite3.connect(db_path)
+    rows = [
+        ("2026-09-16", "2026-09-16T09:10:00", f"E{i:02d}",
+         f"Benh vien da khoa co ten rat dai so {i:02d}", "ETC", "MN",
+         20_000_000 - i, 10_000_000 - i, 0, 0, 0, 10_000_000 - i)
+        for i in range(1, 13)
+    ]
+    conn.executemany(
+        "INSERT INTO fact_congno_khachhang VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", rows
+    )
+    conn.commit()
+    conn.close()
+    monkeypatch.setattr(local_warehouse, "DB_PATH", str(db_path))
+
+    result = report_templates.receivables_overview(top_n=10, scope_channel="ETC")
+    encoded = nl2sql._serialize_payload_for_model(
+        "get_receivables_overview", result, "Top 10 khach hang co cong no qua han kenh ETC"
+    )
+    context = json.loads(encoded)
+
+    assert len(encoded) <= nl2sql.MAX_PAYLOAD_CHARS
+    assert result["top_overdue_eligible_count"] == 13  # 12 dong moi + C1/ETC trong fixture
+    assert result["top_overdue_returned_count"] == 10
+    assert len(context["top_overdue_customers"]) == 10
+    assert context["top_overdue_requested_count"] == 10
+    assert context["top_overdue_returned_count"] == 10
+    assert "PHAI liet ke du 10 dong" in context["top_overdue_display_rule"]
+
+
+def test_top_n_trong_cau_hoi_ghi_de_tham_so_model_va_it_hon_n_thi_noi_ro():
+    args = nl2sql._normalize_tool_input_for_question(
+        "get_receivables_overview", {"top_n": 5},
+        "Top 10 khach hang co cong no qua han",
+    )
+    assert args["top_n"] == 10
+
+    payload = {
+        "receivable_status": "ok",
+        "top_overdue_requested_count": 10,
+        "top_overdue_eligible_count": 3,
+        "top_overdue_returned_count": 3,
+        "top_overdue_customers": [
+            {"customer_code": f"KH{i}", "customer_name": f"Khach {i}",
+             "balance_end": i, "total_overdue": i}
+            for i in range(3)
+        ],
+    }
+    context = json.loads(nl2sql._serialize_payload_for_model(
+        "get_receivables_overview", payload, "top 10 khach no qua han"
+    ))
+    assert len(context["top_overdue_customers"]) == 3
+    assert "Chi co 3 khach co no qua han" in context["top_overdue_display_rule"]
+    assert "3/10" not in context["top_overdue_display_rule"]
 
 
 def test_scope_area_code_chi_loc_dung_vung(tmp_path, monkeypatch):

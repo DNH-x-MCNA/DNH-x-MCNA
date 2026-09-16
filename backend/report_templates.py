@@ -9044,6 +9044,11 @@ def receivables_overview(top_n: int = 10, scope_area_code: str = None,
       - ok: binh thuong.
     (khong co trang thai no_data rieng: neu co du lieu ma vung nay = 0 thi cac tong = 0, van la 'ok'.)
     """
+    try:
+        requested_top_n = min(100, max(1, int(top_n)))
+    except (TypeError, ValueError):
+        requested_top_n = 10
+
     conditions, params = [], []
     team_scope = None
     if scope_employee_code:
@@ -9133,12 +9138,14 @@ def receivables_overview(top_n: int = 10, scope_area_code: str = None,
                    for lbl, (b, o) in sorted(agg.items(), key=lambda x: -x[1][1])]
 
     top = _q(f"SELECT customer_code, MAX(customer_name) name, "
-             f"COALESCE(SUM(balance_end),0) bal, COALESCE(SUM(total_overdue),0) od "
+             f"COALESCE(SUM(balance_end),0) bal, COALESCE(SUM(total_overdue),0) od, "
+             f"COUNT(*) OVER() eligible_n "
              f"FROM fact_congno_khachhang {where} GROUP BY customer_code "
              f"HAVING SUM(total_overdue) > 0 ORDER BY SUM(total_overdue) DESC LIMIT ?",
-             tuple(params) + (int(top_n),))
+             tuple(params) + (requested_top_n,))
     top_customers = [{"customer_code": r["customer_code"], "customer_name": r["name"],
                       "balance_end": _f(r["bal"]), "total_overdue": _f(r["od"])} for r in top]
+    eligible_top_count = int(top[0]["eligible_n"]) if top else 0
     # 15/09/2026 (UAT OTC C-Level 14:25 "Bo sung nhan vien, quan ly vung tuong ung"): kem TDV/QLV phu
     # trach theo phan cong KPI cua tung khach - pham vi da loc o tren nen khong mo rong quyen.
     _gan_nguoi_phu_trach_cong_no(top_customers)
@@ -9176,6 +9183,9 @@ def receivables_overview(top_n: int = 10, scope_area_code: str = None,
         "by_channel": channels,
         "by_region": regions,
         "top_overdue_customers": top_customers,
+        "top_overdue_requested_count": requested_top_n,
+        "top_overdue_eligible_count": eligible_top_count,
+        "top_overdue_returned_count": len(top_customers),
         "ranking_basis": ("Top xep theo NO QUA HAN (tong bon nhom tuoi no cua SP goc), khong theo du no. "
                           "Khach du no lon nhung chua qua han nam o du_no_lon_chua_qua_han."),
         "du_no_lon_chua_qua_han": large_balance_not_overdue,

@@ -17,11 +17,11 @@
 :: (production chinh) vi script nay chu yeu chay tren may 24; doi lai neu chay tren may khac.
 
 set PYTHON_PATH=C:\Program Files\Python312\python.exe
-set MAIN_PATH=%~dp0..\main.py
+set RUNNER_PATH=%~dp0run_digest_task.py
 
-schtasks /create /tn "DNH_Daily_Digest_1745" /tr "\"%PYTHON_PATH%\" \"%MAIN_PATH%\" --send-daily" /sc weekly /d MON,TUE,WED,THU,FRI /st 17:45 /ru SYSTEM /rl HIGHEST /f
-schtasks /create /tn "DNH_Weekly_Report" /tr "\"%PYTHON_PATH%\" \"%MAIN_PATH%\" --send-weekly" /sc weekly /d SAT /st 18:00 /ru SYSTEM /rl HIGHEST /f
-schtasks /create /tn "DNH_Monthly_Report" /tr "\"%PYTHON_PATH%\" \"%MAIN_PATH%\" --send-monthly" /sc monthly /mo LASTDAY /m * /st 17:45 /ru SYSTEM /rl HIGHEST /f
+schtasks /create /tn "DNH_Daily_Digest_1745" /tr "\"%PYTHON_PATH%\" \"%RUNNER_PATH%\" daily" /sc weekly /d MON,TUE,WED,THU,FRI /st 17:45 /ru SYSTEM /rl HIGHEST /f
+schtasks /create /tn "DNH_Weekly_Report" /tr "\"%PYTHON_PATH%\" \"%RUNNER_PATH%\" weekly" /sc weekly /d SAT /st 18:00 /ru SYSTEM /rl HIGHEST /f
+schtasks /create /tn "DNH_Monthly_Report" /tr "\"%PYTHON_PATH%\" \"%RUNNER_PATH%\" monthly" /sc monthly /mo LASTDAY /m * /st 17:45 /ru SYSTEM /rl HIGHEST /f
 
 echo.
 echo ============================================================

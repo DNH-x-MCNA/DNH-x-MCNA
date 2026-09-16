@@ -79,6 +79,65 @@ def _company_wide_alert_visible_to(alert_region, audience_region):
     return alert_region == target_label
 
 
+def _warehouse_report_freshness():
+    """Mốc dữ liệu của kho báo cáo; tách thời điểm sync khỏi ngày chứng từ mới nhất."""
+    try:
+        from src.alerts import _warehouse_sync_status
+        status = _warehouse_sync_status(stale_minutes=float("inf"))
+    except Exception as exc:
+        return {"available": False, "note": f"Chưa đọc được mốc cập nhật kho báo cáo ({exc})."}
+    if not status.get("available"):
+        return {"available": False,
+                "note": f"Chưa đọc được mốc cập nhật kho báo cáo ({status.get('error')})."}
+    rows = status.get("rows") or []
+    if not rows:
+        return {"available": False, "note": "Kho báo cáo chưa có mốc cập nhật."}
+    # Báo mốc cũ hơn trong hai kênh: tới thời điểm này có thể khẳng định cả OTC và ETC đều đã sync.
+    complete_at = min(row["last_synced_at"] for row in rows)
+    dates = [str(row.get("latest_synced_date"))[:10] for row in rows if row.get("latest_synced_date")]
+    data_date = min(dates) if dates else None
+    note = f"Kho dữ liệu cập nhật đủ OTC/ETC đến {complete_at:%H:%M %d/%m/%Y}"
+    if data_date:
+        try:
+            shown = datetime.strptime(data_date, "%Y-%m-%d").strftime("%d/%m/%Y")
+        except ValueError:
+            shown = data_date
+        note += f"; hóa đơn mới nhất đến {shown}"
+    return {"available": True, "updated_at": complete_at.strftime("%H:%M %d/%m/%Y"),
+            "data_date": data_date, "note": note + "."}
+
+
+def _monthly_etc_contracts(region=None, report_tools=None, min_remaining=500_000_000):
+    """Hợp đồng ETC sắp hết hạn còn giá trị lớn; dùng cho Monthly, không phát alert."""
+    try:
+        if report_tools is None:
+            from src.qlv_digest import _load_report_tools
+            report_tools = _load_report_tools()
+        area = {"bac": "MB", "nam": "MN", "trung": "MT"}.get(region)
+        raw = report_tools.etc_contract_status(
+            expiring_days=90,
+            limit=200,
+            only_active=True,
+            scope_area_code=area,
+            scope_channel="ETC",
+        )
+        rows = [row for row in (raw.get("hop_dong_sap_het_han") or [])
+                if float(row.get("con_lai") or 0) >= float(min_remaining)]
+        rows.sort(key=lambda row: (int(row.get("con_lai_ngay") or 0), -float(row.get("con_lai") or 0)))
+        return {
+            "available": True,
+            "as_of": raw.get("as_of"),
+            "min_remaining": float(min_remaining),
+            "rows": rows[:15],
+            "total_rows": len(rows),
+            "total_remaining": sum(float(row.get("con_lai") or 0) for row in rows),
+            "invalid_contract_count": int(raw.get("so_hop_dong_gia_tri_bat_thuong") or 0),
+        }
+    except Exception as exc:
+        print(f"[DIGEST] Không dựng được bảng hợp đồng ETC sắp hết hạn: {exc}")
+        return {"available": False, "error": str(exc), "rows": []}
+
+
 def _get_period_warning_alerts(start_dt, end_dt, region=None, channel=None):
     """Truy vấn các cảnh báo severity WARNING trong khoảng [start_dt, end_dt) từ alert_severity_log.
     Nhóm theo alert_name, đếm số lần lặp và lấy thông tin mới nhất."""
@@ -1524,10 +1583,14 @@ def get_digest_metrics(start_dt, end_dt, period_label, granularity=None, region=
     # 14/09/2026: "Tiến độ tháng" + "Việc cần xử lý" (src/insight_report.py) thay cho hiển thị
     # highlights/warning_alerts/has_critical. Ba khóa cũ vẫn tính để không phá nơi khác đang đọc.
     from src.insight_report import attach_insights
+    freshness = _warehouse_report_freshness()
     result = {
         "date": start_dt.strftime("%d/%m/%Y"),
         "period_range": period_label,
-        "updated_at": datetime.now().strftime("%H:%M %d/%m/%Y"),
+        "updated_at": freshness.get("updated_at") or datetime.now().strftime("%H:%M %d/%m/%Y"),
+        "generated_at": datetime.now().strftime("%H:%M %d/%m/%Y"),
+        "data_date": freshness.get("data_date"),
+        "freshness_note": freshness.get("note"),
         "region": region,
         "channel": channel,
         "revenue": {
@@ -1567,6 +1630,9 @@ def get_digest_metrics(start_dt, end_dt, period_label, granularity=None, region=
     if granularity == "monthly":
         result["region_growth"] = region_growth
         result["channel_share"] = channel_share
+        if channel != "OTC" and config.get("report_feature_flags", {}).get(
+                "show_etc_contract_expiry", False):
+            result["etc_contracts_expiring"] = _monthly_etc_contracts(region=region)
     return result
 
 def get_daily_digest_metrics(region=None, channel=None):

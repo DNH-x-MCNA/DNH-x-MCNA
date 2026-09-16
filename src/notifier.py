@@ -372,7 +372,9 @@ DIGEST_EMAIL_TEMPLATE = """
                 Báo cáo dành cho: <strong>{{ audience }}</strong>{% if scope_label %} &bull; Phạm vi: {{ scope_label }}{% endif %}
             </p>
             {% endif %}
-            {% if metrics.updated_at %}
+            {% if metrics.freshness_note %}
+            <p style="margin: 4px 0 0 0; font-size: 12px; opacity: 0.85;">{{ metrics.freshness_note }}</p>
+            {% elif metrics.updated_at %}
             <p style="margin: 4px 0 0 0; font-size: 12px; opacity: 0.75;">Dữ liệu cập nhật lúc {{ metrics.updated_at }}</p>
             {% endif %}
         </div>
@@ -773,6 +775,26 @@ DIGEST_EMAIL_TEMPLATE = """
                 </tbody>
             </table>
             {% endfor %}
+            {% endif %}
+
+            {% if period_label == 'Monthly' and metrics.etc_contracts_expiring %}
+            {% set hd = metrics.etc_contracts_expiring %}
+            <div class="section-title">Hợp Đồng ETC Sắp Hết Hạn, Còn Giá Trị Lớn</div>
+            {% if not hd.available %}
+            <div class="no-data">CHƯA đánh giá được do lỗi dữ liệu hợp đồng ETC.</div>
+            {% elif hd.rows %}
+            <div class="no-data">Hợp đồng còn hiệu lực, hết hạn trong 90 ngày và còn từ {{ (hd.min_remaining)|vnd }} chưa thực hiện. Đây là danh sách rà soát gói thầu kỳ sau, không phải cảnh báo doanh thu chắc chắn mất.</div>
+            <table class="data-table">
+                <thead><tr><th>Hợp đồng</th><th>Khách hàng</th><th>Ngày hết hạn</th><th>Còn lại</th><th>Thực hiện</th></tr></thead>
+                <tbody>{% for row in hd.rows %}
+                    <tr><td>{{ row.so_hop_dong or row.contract_id }}</td><td>{{ row.customer_code }}</td><td>{{ row.den_ngay }} ({{ row.con_lai_ngay }} ngày)</td><td>{{ (row.con_lai)|vnd }}</td><td>{% if row.ty_le_thuc_hien_pct is not none %}{{ "%.1f"|format(row.ty_le_thuc_hien_pct) }}%{% else %}—{% endif %}</td></tr>
+                {% endfor %}</tbody>
+            </table>
+            {% if hd.total_rows > hd.rows|length %}<div class="no-data">Đang liệt kê {{ hd.rows|length }}/{{ hd.total_rows }} hợp đồng.</div>{% endif %}
+            {% if hd.invalid_contract_count %}<div class="no-data">Có {{ hd.invalid_contract_count }} hợp đồng giá trị bất thường đã tách khỏi toàn bộ con số và cần kiểm tra dữ liệu gốc.</div>{% endif %}
+            {% else %}
+            <div class="no-data">Không có hợp đồng ETC nào đồng thời sắp hết hạn và còn từ {{ (hd.min_remaining)|vnd }} chưa thực hiện.</div>
+            {% endif %}
             {% endif %}
 
             {% if metrics.receivables %}
