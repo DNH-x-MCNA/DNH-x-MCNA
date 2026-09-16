@@ -99,6 +99,27 @@ def test_bo_qua_dong_khoi_tao_dau_thang_lay_dung_snapshot_da_chot(tmp_path, monk
     assert result["total_bonus"] == 2_000_000 + 300_000 + 500_000 + 800_000 + 1_000_000
 
 
+def test_goi_bang_ten_nhan_vien_van_tra_dung_nguoi(tmp_path, monkeypatch):
+    """16/09/2026: nguoi dung nho TEN chu khong nho ma - truoc day tool tu choi vi schema bat ma.
+    Ten duy nhat thi tu quy ve ma; ten trung nhieu nguoi phai hoi lai, KHONG duoc tu chon."""
+    db_path = tmp_path / "warehouse.db"
+    _make_db(db_path)
+    conn = sqlite3.connect(db_path)
+    _insert(conn, employee_code="TDV01", employee_name="Nguyen Van Danh", position_code="TDV",
+            save_date="2026-07-31", v25_percent=0.9, dm_bonus=100_000)
+    conn.execute("INSERT INTO dim_nhanvien VALUES ('TDV01','Nguyễn Văn Danh',0,'TDV','MB','dms01')")
+    conn.execute("INSERT INTO dim_nhanvien VALUES ('TDV02','Trần Văn Hùng',0,'TDV','MB','dms02')")
+    conn.commit()
+    conn.close()
+    monkeypatch.setattr(local_warehouse, "DB_PATH", str(db_path))
+
+    result = rt.salary_detail(employee_code="nguyen van danh", scope_role="c_level")
+
+    assert "error" not in result
+    assert result["employee_code"] == "TDV01"
+    assert result["dm_bonus"] == 100_000
+
+
 def test_total_bonus_khong_gom_phu_cap(tmp_path, monkeypatch):
     """'Phan biet thuong va phu cap' - total_bonus CHI gom DM+ASO+V15+V22+V25, KHONG duoc cong them
     an ca/xang xe/dien thoai vao chung."""

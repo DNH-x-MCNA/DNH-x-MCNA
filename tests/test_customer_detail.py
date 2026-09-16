@@ -11,6 +11,7 @@ if BACKEND not in sys.path:
     sys.path.append(BACKEND)
 
 import local_warehouse
+import nl2sql
 import report_templates as rt
 
 
@@ -186,3 +187,117 @@ def test_goi_hang_loat_nhieu_ma_1_loi_khong_lam_hong_ca_lo_nhung_khong_duoc_im_l
     assert by_requested["KH_MB"].get("customer_code") == "KH_MB"
     assert "error" not in by_requested["KH_MB"]
     assert "error" in by_requested["KH_MN"]  # KH_MN bi tu choi (ngoai vung) NHUNG van duoc bao ro ly do
+
+
+def test_tra_ten_benh_vien_mo_ho_tra_danh_sach_ma_de_chon(tmp_path, monkeypatch):
+    db_path = tmp_path / "warehouse.db"
+    _make_db(db_path)
+    conn = sqlite3.connect(db_path)
+    conn.executemany(
+        "INSERT INTO dmssx_khachhang VALUES (?,?,?,?,?)",
+        [
+            ("BNI00003", "Bệnh viện đa khoa tỉnh Bắc Ninh", 1, 1, "GT"),
+            ("BNI00017", "Bệnh viện y học cổ truyền và phục hồi chức năng tỉnh Bắc Ninh", 1, 2, "GT"),
+            ("BGI00699", "Bệnh viện Đa khoa tỉnh Bắc Giang", 1, 3, "GT"),
+        ],
+    )
+    conn.commit()
+    conn.close()
+    monkeypatch.setattr(local_warehouse, "DB_PATH", str(db_path))
+
+    result = rt.customer_detail(
+        customer_code="Bệnh viện Bắc Ninh",
+        date_from="2026-01-01", date_to="2026-09-16",
+    )
+
+    assert result["customer_lookup_status"] == "ambiguous"
+    assert {row["customer_code"] for row in result["customer_candidates"]} == {
+        "BNI00003", "BNI00017",
+    }
+    assert all(row["customer_code"] != "BGI00699" for row in result["customer_candidates"])
+
+
+def test_tra_ten_day_du_duy_nhat_tu_dong_tra_cong_no(tmp_path, monkeypatch):
+    db_path = tmp_path / "warehouse.db"
+    _make_db(db_path)
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        "INSERT INTO dmssx_khachhang VALUES ('BNI00003','Bệnh viện đa khoa tỉnh Bắc Ninh',1,1,'GT')"
+    )
+    conn.execute(
+        "INSERT INTO fact_congno_khachhang VALUES "
+        "('2026-09-16','2026-09-16T10:07:00','BNI00003','Bệnh viện đa khoa tỉnh Bắc Ninh',"
+        "'ETC','MB',700000000,100000000,0,0,500000000,600000000)"
+    )
+    conn.commit()
+    conn.close()
+    monkeypatch.setattr(local_warehouse, "DB_PATH", str(db_path))
+
+    result = rt.customer_detail(
+        customer_code="Bệnh viện đa khoa tỉnh Bắc Ninh",
+        date_from="2026-01-01", date_to="2026-09-16",
+    )
+
+    assert result["customer_code"] == "BNI00003"
+    assert result["customer_name"] == "Bệnh viện đa khoa tỉnh Bắc Ninh"
+    assert result["balance_end"] == 700_000_000
+    assert result["total_overdue"] == 600_000_000
+
+
+def test_ma_khach_luon_kem_quy_tac_doi_chieu_ten_va_route_cau_no_theo_ten(tmp_path, monkeypatch):
+    db_path = tmp_path / "warehouse.db"
+    _make_db(db_path)
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        "INSERT INTO dmssx_khachhang VALUES ('BGI00699','Bệnh viện Đa khoa tỉnh Bắc Giang',1,1,'GT')"
+    )
+    conn.commit()
+    conn.close()
+    monkeypatch.setattr(local_warehouse, "DB_PATH", str(db_path))
+
+    result = rt.customer_detail(
+        customer_code="BGI00699", date_from="2026-01-01", date_to="2026-09-16",
+    )
+
+    assert "Bệnh viện Đa khoa tỉnh Bắc Giang" in result["identity_check"]
+    assert nl2sql._required_tool_for_question(
+        "Bệnh viện Bắc Ninh còn nợ bao nhiêu"
+    ) == "get_customer_detail"
+
+
+def test_ma_trung_hai_danh_muc_chon_ten_theo_kenh_cong_no(tmp_path, monkeypatch):
+    """BGI00699 that tren kho: OTC ghi Bac Giang, ETC/cong no ghi Bac Ninh."""
+    db_path = tmp_path / "warehouse.db"
+    _make_db(db_path)
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        "INSERT INTO dms_khachhang VALUES "
+        "('BGI00699','Bệnh viện đa khoa Tỉnh Bắc Giang',1,1,NULL,'GT')"
+    )
+    conn.execute(
+        "INSERT INTO dmssx_khachhang VALUES "
+        "('BGI00699','Bệnh viện đa khoa Bắc Ninh số 1',1,2,'GT')"
+    )
+    conn.execute(
+        "INSERT INTO vhoadon_etc VALUES "
+        "('2026-06-12','BGI00699','SP01',42000000,1,42000000,'HD1',1,'NV1','2026-06-12')"
+    )
+    conn.execute(
+        "INSERT INTO fact_congno_khachhang VALUES "
+        "('2026-09-16','2026-09-16T10:07:00','BGI00699','Bệnh viện đa khoa Bắc Ninh số 1',"
+        "'ETC','MB',647788000,17388000,0,0,630400000,647788000)"
+    )
+    conn.commit()
+    conn.close()
+    monkeypatch.setattr(local_warehouse, "DB_PATH", str(db_path))
+
+    result = rt.customer_detail(
+        customer_code="BGI00699", date_from="2026-01-01", date_to="2026-09-16",
+    )
+
+    assert result["channel"] == "ETC"
+    assert result["customer_name"] == "Bệnh viện đa khoa Bắc Ninh số 1"
+    assert result["balance_end"] == 647_788_000
+    assert result["catalog_identity_warning"]["OTC"] == "Bệnh viện đa khoa Tỉnh Bắc Giang"
+    assert result["catalog_identity_warning"]["ETC"] == "Bệnh viện đa khoa Bắc Ninh số 1"
+    assert result["catalog_identity_warning"]["selected_channel"] == "ETC"
