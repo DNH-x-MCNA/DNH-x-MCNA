@@ -135,6 +135,7 @@ thresholds:
     concentration_top_n: 3        # Rủi ro tập trung: top N khách...
     concentration_pct: 0.50       # ...chiếm > 50% tổng doanh thu kỳ
     return_rate_pct: 0.05         # Tỷ lệ giá trị hàng trả về / doanh số ETC vượt 5%
+    warehouse_stale_minutes: 90   # Kho local chạy mỗi 60 phút; quá 90 phút thì cảnh báo tiến trình sync
     bravo_stale_days: 2           # Meta-alert: hóa đơn Bravo mới nhất không mới quá 2 ngày -> nghi Bravo/ETL đứng
     # etl_stale_hours: 3          # [DEPRECATED] Dùng bravo_stale_days thay thế
 
@@ -244,8 +245,7 @@ alert_feature_flags:
   dead_stock_check: false     # Ẩn/tắt cảnh báo tồn kho chết
   credit_limit_check: false   # cần cột hạn mức tín dụng trong dms_khachhang/receivable_detail
   near_expiry_check: false    # cần cột ExpiryDate lô hàng (map lô -> hạn dùng) trong mart tồn kho
-  etl_freshness_check: false  # TẠM TẮT: đang trỏ CLOUD_DB_URL sang Supabase dev/test (snapshot
-                               # tĩnh, SyncAt không tăng) -> bật lại true khi đổi CLOUD_DB_URL về production
+  etl_freshness_check: true   # Kiểm cả sync_meta của warehouse.db production và ngày hóa đơn Bravo mới nhất
   # 14/09/2026: bật/tắt từng cảnh báo đã kiểm thử ngược (mặc định bật nếu bỏ trống) - xem
   # docs/bao_cao_canh_bao_kiem_thu_nguoc_14-09.md.
   insight_channel_pace: true      # doanh thu kênh chậm nhịp tháng

@@ -17,6 +17,7 @@ if hasattr(sys.stderr, 'reconfigure'):
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 STATE_DB_DIR = os.path.join(PROJECT_ROOT, 'data')
 STATE_DB_PATH = os.path.join(STATE_DB_DIR, 'alerts_state.db')
+WAREHOUSE_DB_PATH = os.path.join(PROJECT_ROOT, 'backend', 'warehouse.db')
 
 AGING_BUCKET_LABELS = {
     "overdue_1_15": "Từ 1 đến 15 ngày",
@@ -2742,6 +2743,66 @@ def check_kpi_milestone_drop_alert():
 
 # ---- Nhóm G: Meta-alert vận hành / chất lượng dữ liệu ----------------------
 
+
+def _business_days_since(last_day, today):
+    """Số ngày làm việc sau ``last_day`` tới ``today`` (không tính thứ Bảy/Chủ nhật)."""
+    if not last_day or last_day >= today:
+        return 0
+    current = last_day + timedelta(days=1)
+    total = 0
+    while current <= today:
+        if current.weekday() < 5:
+            total += 1
+        current += timedelta(days=1)
+    return total
+
+
+def _warehouse_sync_status(db_path=None, stale_minutes=90, now=None):
+    """Đọc mốc đồng bộ thật của hai bảng hóa đơn trong kho local.
+
+    Trả cấu trúc thuần để alert và test dùng chung. Không suy mốc đồng bộ từ ngày hóa đơn vì cuối
+    tuần/ngày nghỉ có thể không phát sinh chứng từ dù tiến trình sync vẫn chạy bình thường.
+    """
+    path = db_path or WAREHOUSE_DB_PATH
+    now = now or datetime.now()
+    result = {"available": False, "stale": [], "rows": [], "error": None}
+    if not os.path.exists(path):
+        result["error"] = f"không tìm thấy kho local: {path}"
+        return result
+    try:
+        conn = sqlite3.connect(f"file:{os.path.abspath(path)}?mode=ro", uri=True)
+        try:
+            rows = conn.execute(
+                "SELECT table_name, last_synced_at FROM sync_meta "
+                "WHERE table_name IN ('vhoadon_otc','vhoadon_etc')"
+            ).fetchall()
+        finally:
+            conn.close()
+    except Exception as exc:
+        result["error"] = str(exc)
+        return result
+
+    by_table = {name: synced_at for name, synced_at in rows}
+    missing = [name for name in ("vhoadon_otc", "vhoadon_etc") if not by_table.get(name)]
+    if missing:
+        result["error"] = "thiếu mốc sync_meta: " + ", ".join(missing)
+        return result
+
+    for name in ("vhoadon_otc", "vhoadon_etc"):
+        raw = by_table[name]
+        try:
+            synced_at = datetime.fromisoformat(raw)
+        except (TypeError, ValueError):
+            result["error"] = f"mốc last_synced_at không hợp lệ cho {name}: {raw}"
+            return result
+        age_minutes = max(0.0, (now - synced_at).total_seconds() / 60.0)
+        row = {"table": name, "last_synced_at": synced_at, "age_minutes": age_minutes}
+        result["rows"].append(row)
+        if age_minutes > float(stale_minutes):
+            result["stale"].append(row)
+    result["available"] = True
+    return result
+
 def check_data_sanity_ok():
     """
     G2 (guard): Kiểm tra dữ liệu có "lành" không TRƯỚC khi chạy các alert nghiệp vụ.
@@ -2785,7 +2846,7 @@ def check_data_sanity_ok():
 
 def check_etl_freshness_alert():
     """
-    G1: Meta-alert — kiểm tra Bravo có còn NHẬN DỮ LIỆU MỚI không.
+    G1: Meta-alert — kiểm tra cả tiến trình đồng bộ kho local và ngày dữ liệu nguồn Bravo.
 
     20/07/2026: đổi hẳn sang kiểm tra Bravo trực tiếp (bỏ Supabase). TRƯỚC ĐÂY đọc MAX(SyncAt) của
     bảng brv_hoadonct trên Supabase để biết pipeline Bravo->Supabase có đứng không — nhưng báo cáo/
@@ -2794,8 +2855,49 @@ def check_etl_freshness_alert():
     không (nếu ngày hóa đơn mới nhất quá cũ so với hôm nay -> nghi hệ thống nguồn/kết nối có vấn
     đề, hoặc đơn giản là kỳ nghỉ). Dùng chung _last_complete_data_day() (đã Bravo-only).
     """
-    # Ngưỡng theo NGÀY cho dữ liệu nguồn Bravo (khác ngưỡng giờ của sync cũ) — hóa đơn không phát
-    # sinh liên tục 24/7, cuối tuần/lễ có thể vài ngày không có; mặc định 2 ngày (config: bravo_stale_days).
+    warehouse_stale_minutes = float(_biz_threshold('warehouse_stale_minutes', 90))
+    warehouse = _warehouse_sync_status(stale_minutes=warehouse_stale_minutes)
+    if not warehouse["available"]:
+        print(f"[ALERTS][etl_freshness] Không đọc được mốc đồng bộ kho local: {warehouse['error']}")
+        if should_send_alert("warehouse_sync_unavailable", cooldown_hours=6,
+                             current_value=str(warehouse["error"])):
+            send_alert_to_all_channels(
+                alert_name="CẢNH BÁO HỆ THỐNG: KHÔNG KIỂM TRA ĐƯỢC KHO BÁO CÁO",
+                severity="CRITICAL",
+                summary=("Không đọc được mốc sync_meta của warehouse.db nên chưa xác nhận được kho báo cáo "
+                         f"có đang đồng bộ: {warehouse['error']}."),
+                table_headers=["Nguồn", "Trạng thái"],
+                table_rows=[["warehouse.db", "Không đọc được sync_meta"]],
+                channels=("teams",), period=datetime.now().strftime("%d/%m/%Y %H:%M"),
+                region="Toàn quốc (hệ thống)",
+                issue="Không kiểm tra được mốc đồng bộ warehouse.db")
+    elif warehouse["stale"]:
+        oldest = max(row["age_minutes"] for row in warehouse["stale"])
+        print(f"[ALERTS][etl_freshness] Kho local trễ {oldest:.0f} phút "
+              f"(ngưỡng {warehouse_stale_minutes:.0f} phút).")
+        if should_send_alert("warehouse_sync_stale", cooldown_hours=6,
+                             current_value=str(int(oldest))):
+            send_alert_to_all_channels(
+                alert_name="CẢNH BÁO HỆ THỐNG: KHO BÁO CÁO NGỪNG ĐỒNG BỘ",
+                severity="CRITICAL",
+                summary=(f"warehouse.db chưa cập nhật quá {warehouse_stale_minutes:.0f} phút. "
+                         "Báo cáo/chatbot có thể đang dùng dữ liệu cũ dù Bravo vẫn hoạt động."),
+                table_headers=["Bảng", "Lần đồng bộ gần nhất", "Đã trễ"],
+                table_rows=[[row["table"], row["last_synced_at"].strftime("%H:%M %d/%m/%Y"),
+                             f"{row['age_minutes']:.0f} phút"] for row in warehouse["stale"]],
+                channels=("teams",), period=datetime.now().strftime("%d/%m/%Y %H:%M"),
+                region="Toàn quốc (hệ thống)",
+                issue=f"Kho báo cáo chưa đồng bộ trong {oldest:.0f} phút")
+            record_alert_sent("warehouse_sync_stale", str(int(oldest)),
+                              region="Toàn quốc (hệ thống)")
+    else:
+        newest = min(row["age_minutes"] for row in warehouse["rows"])
+        print(f"[ALERTS][etl_freshness] Kho local đang cập nhật (mốc gần nhất cách {newest:.0f} phút).")
+        clear_alert_state("warehouse_sync_stale")
+        clear_alert_state("warehouse_sync_unavailable")
+
+    # Ngưỡng theo NGÀY LÀM VIỆC cho dữ liệu nguồn Bravo. Hóa đơn không phát sinh liên tục 24/7;
+    # dùng ngày lịch sẽ báo giả vào sáng thứ Hai sau cuối tuần.
     stale_days = float(_biz_threshold('bravo_stale_days', 2))
     try:
         last_day = _last_complete_data_day()
@@ -2805,23 +2907,26 @@ def check_etl_freshness_alert():
     if last_day is None:
         print("[ALERTS][etl_freshness] Không có mốc dữ liệu Bravo để đánh giá.")
         return
-    age_days = (datetime.now().date() - last_day).days
-    print(f"[ALERTS][etl_freshness] Ngày hóa đơn Bravo mới nhất (đã đồng bộ xong): {last_day} — cách đây {age_days} ngày (ngưỡng {stale_days:.0f} ngày).")
+    age_days = _business_days_since(last_day, datetime.now().date())
+    print(f"[ALERTS][etl_freshness] Ngày hóa đơn Bravo mới nhất: {last_day} — cách đây "
+          f"{age_days} ngày làm việc (ngưỡng {stale_days:.0f}).")
     if age_days > stale_days:
         alert_key = "etl_stale"
         if should_send_alert(alert_key, cooldown_hours=6, current_value=str(int(age_days))):
             send_alert_to_all_channels(
                 alert_name="CẢNH BÁO HỆ THỐNG: BRAVO CÓ THỂ NGỪNG NHẬN DỮ LIỆU",
                 severity="CRITICAL",
-                summary=(f"Hóa đơn Bravo mới nhất đã {age_days} ngày không phát sinh thêm "
-                         f"(ngưỡng {stale_days:.0f} ngày). Kiểm tra hệ thống nguồn/kết nối Bravo (hoặc kỳ nghỉ)."),
+                summary=(f"Hóa đơn Bravo mới nhất đã {age_days} ngày làm việc không phát sinh thêm "
+                         f"(ngưỡng {stale_days:.0f}). Kiểm tra hệ thống nguồn/kết nối Bravo."),
                 table_headers=["Ngày dữ liệu mới nhất", "Đã cũ"],
-                table_rows=[[str(last_day), f"{age_days} ngày"]],
+                table_rows=[[str(last_day), f"{age_days} ngày làm việc"]],
                 channels=("teams",),
                 period=datetime.now().strftime("%d/%m/%Y %H:%M"), region="Toàn quốc (hệ thống)",
-                issue=f"Hóa đơn Bravo mới nhất đã {age_days} ngày không phát sinh — nghi hệ thống nguồn/kết nối bị đứng"
+                issue=f"Hóa đơn Bravo mới nhất đã {age_days} ngày làm việc không phát sinh — nghi hệ thống nguồn/kết nối bị đứng"
             )
             record_alert_sent(alert_key, str(int(age_days)), region="Toàn quốc (hệ thống)")
+    else:
+        clear_alert_state("etl_stale")
 
 
 def check_kpi_revenue_reconciliation_alert():
