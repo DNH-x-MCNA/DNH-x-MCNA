@@ -475,6 +475,15 @@ def _required_tool_for_question(question: str) -> str | None:
     if ("chu so huu" in q or "nguoi chiu trach nhiem" in q) and any(
             marker in q for marker in ("deadline", "han hoan thanh", "cam ket hanh dong", "hanh dong")):
         return "get_operational_data_quality"
+    # Mot khach cu the hoi du no: dung customer_detail, ke ca khi nguoi dung chi nho TEN.
+    # Dat truoc nhanh cong no tong hop de "Benh vien Bac Ninh con no bao nhieu" khong roi vao
+    # receivables_overview hoac bi bot tu choi vi thieu ma.
+    if any(marker in q for marker in ("con no", "du no", "no bao nhieu")) and not any(
+            marker in q for marker in (
+                "tong no", "top ", "khach nao", "nhung khach", "theo vung", "theo mien",
+                "toan cong ty", "toan kenh", "ty le no",
+            )):
+        return "get_customer_detail"
     if any(marker in q for marker in (
         "tong no", "no qua han", "dso", "thu tien", "no xau", "bop ban", "thu hoi",
     )):
@@ -805,7 +814,7 @@ TEMPLATE_TOOLS = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "employee_code": {"type": "string", "description": "Ma TDV ban hang ca nhan, vd 'TM25010199' (KHONG dung ma quan ly QLV/TP/PP hay ma khu vuc)"},
+                "employee_code": {"type": "string", "description": "Ma HOAC TEN TDV ban hang ca nhan, vd 'TM25010199' hoac 'Nguyen Van Danh' (KHONG dung ma quan ly QLV/TP/PP hay ma khu vuc). Truyen thang ten nguoi dung noi - KHONG duoc tra loi rang chi tra cuu duoc theo ma; neu ten trung nhieu nguoi, tool tra employee_candidates de hoi lai"},
                 "year_month": {"type": "string", "description": "Thang can xem, dinh dang YYYY-MM"},
             },
             "required": ["employee_code", "year_month"],
@@ -1278,13 +1287,18 @@ TEMPLATE_TOOLS = [
     },
     {
         "name": "get_customer_detail",
-        "description": "Chi tiet 1 khach hang cu the (theo ma khach hang): gop doanh thu thuc te trong "
+        "description": "Chi tiet 1 khach hang cu the (theo MA HOAC TEN khach hang): gop doanh thu thuc te trong "
                         "1 khoang ngay + so don hang + gia tri TB/don, CUNG LUC voi du no cuoi ky/no qua han "
                         "(snapshot ky gan nhat, KHONG theo khoang ngay da chon) va thong tin mapping: tinh/"
                         "thanh pho, mien (area_code MB/MT/MN), ma+ten+VAI TRO cua nhan vien phu trach "
                         "(position_label: vd 'Trinh duoc vien'/'Quan ly vung'). "
-                        "UU TIEN dung tool nay cho moi cau hoi ve 1 khach hang cu the (vd 'khach hang X doanh "
-                        "thu bao nhieu, ai phu trach, con no khong'). "
+                        "UU TIEN dung tool nay cho moi cau hoi ve 1 khach hang cu the (vd 'Benh vien Bac Ninh "
+                        "con no bao nhieu', 'khach hang X doanh thu bao nhieu, ai phu trach'). KHONG duoc "
+                        "noi la chi tra duoc theo ma: truyen thang ten nguoi dung cung cap vao customer_code. "
+                        "Neu ten trung nhieu don vi, tool tra customer_lookup_status='ambiguous' va danh sach "
+                        "customer_candidates: PHAI liet ke ma+ten de nguoi dung chon, KHONG doan. "
+                        "Khi da co ma, doc identity_check va doi chieu ten chinh thuc voi ten trong hoi thoai; "
+                        "neu khac dia danh/don vi thi PHAI noi ro truoc khi tra so. "
                         "LUU Y: kenh ETC KHONG co NV phu trach truc tiep gan tren khach hang (chi OTC co) - "
                         "voi khach ETC thuan tuy, cac truong employee_code/employee_name/position_label se rong, "
                         "KHONG phai loi. "
@@ -1302,7 +1316,7 @@ TEMPLATE_TOOLS = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "customer_code": {"type": "string", "description": "Ma khach hang can xem chi tiet, hoac nhieu ma cach nhau dau phay"},
+                "customer_code": {"type": "string", "description": "Ma HOAC TEN khach hang can xem chi tiet; nhieu MA thi cach nhau dau phay"},
                 "date_from": {"type": "string", "description": "YYYY-MM-DD, dau ky tinh doanh thu"},
                 "date_to": {"type": "string", "description": "YYYY-MM-DD, cuoi ky tinh doanh thu"},
             },

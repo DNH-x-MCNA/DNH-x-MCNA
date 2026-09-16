@@ -11,6 +11,7 @@ lan dong bo gan nhat.
 import contextvars
 import datetime as dt
 import os
+import re
 import sqlite3
 import unicodedata
 from statistics import median
@@ -1411,6 +1412,8 @@ def employee_daily_kpi(employee_code: str, year_month: str, scope_area_code: str
     scope_employee_code: CHI danh cho tai khoan qlv - chi cho xem nhan vien THUOC DOI ho (hoac chinh
     ho); nguoi ngoai doi bi tu choi (them 23/07/2026 cung dot va R-F, xem docstring employee_kpi)."""
     ident = _resolve_employee_identity(employee_code)
+    if ident.get("name_candidates"):
+        return _ung_vien_ten_nhan_vien_loi(ident, employee_code)
     resolved_code = ident["code"]
     dms_code = ident["dmsid"]
     if scope_area_code:
@@ -1522,7 +1525,79 @@ def employee_daily_kpi(employee_code: str, year_month: str, scope_area_code: str
     }
 
 
-def _resolve_employee_identity(code: str) -> dict:
+def _employee_name_candidates(query: str, limit: int = 10) -> list:
+    """Tim nhan vien theo TEN (bo dau, khong phan biet hoa/thuong) trong dim_nhanvien + dmssx_nhanvien.
+
+    16/09/2026 (yeu cau anh Dang): nguoi dung nho TEN chu khong nho ma, nhung cac tool KPI/luong
+    truoc day CHI nhan ma nen bot tra loi "can ma nhan vien" du kho co du danh muc. Loc bang Python
+    chu khong bang LIKE cua SQLite vi SQLite khong bo dau tieng Viet ("Danh" khong khop "Dánh") -
+    cung ly do da dung o inventory_item_stock().
+    CHI tra ve ung vien: khi ten ung voi nhieu nguoi thi nguoi goi phai hoi lai, KHONG duoc tu chon.
+    """
+    q = str(query or "").strip()
+    if len(q) < 3 or not any(ch.isalpha() for ch in q):
+        return []
+    if " " not in q and any(ch.isdigit() for ch in q):
+        return []          # 'TM25010199' la ma, khong phai ten - khong doan mo
+    tokens = [t for t in _fold_question(q).split() if t]
+    if not tokens:
+        return []
+
+    rows = []
+    try:
+        rows += _q("SELECT employee_code, name, position_code, area_code, dmsid, is_duplicate "
+                   "FROM dim_nhanvien WHERE name IS NOT NULL AND TRIM(name)<>''")
+    except sqlite3.OperationalError:
+        pass
+    try:
+        rows += [dict(r, position_code=None, area_code=None, is_duplicate=0)
+                 for r in _q("SELECT dmscode employee_code, name, code dmsid FROM dmssx_nhanvien "
+                             "WHERE name IS NOT NULL AND TRIM(name)<>''")]
+    except sqlite3.OperationalError:
+        pass
+
+    folded_query = " ".join(tokens)
+    found = {}
+    for r in rows:
+        code = str(r.get("employee_code") or r.get("dmsid") or "").strip()
+        name = str(r.get("name") or "").strip()
+        if not code or not name:
+            continue
+        folded_name = _fold_question(name)
+        if folded_name == folded_query:
+            score = 1000
+        elif all(token in folded_name.split() for token in tokens):
+            score = 900
+        else:
+            continue
+        # Trung ma trong dim_nhanvien: dong is_duplicate=1 thuong la nguoi that, dong kia co the la
+        # vi tri trong ("Trong QLV MK3") - xem employee_directory().
+        score += 1 if r.get("is_duplicate") else 0
+        cu = found.get(code.upper())
+        if cu and cu["_score"] >= score:
+            continue
+        found[code.upper()] = {"employee_code": code, "employee_name": name,
+                               "position_code": r.get("position_code"),
+                               "area_code": r.get("area_code"),
+                               "dmsid": r.get("dmsid") or code, "_score": score}
+
+    best = sorted(found.values(), key=lambda x: (-x["_score"], x["employee_name"]))
+    return [{k: v for k, v in item.items() if k != "_score"}
+            for item in best[:max(1, int(limit or 10))]]
+
+
+def _ung_vien_ten_nhan_vien_loi(ident: dict, query: str) -> dict:
+    """Loi chuan khi mot TEN nhan vien ung voi nhieu nguoi - bat AI hoi lai thay vi doan."""
+    return {
+        "error": f"Ten '{query}' ung voi {len(ident['name_candidates'])} nhan vien - chua xac dinh "
+                 "duoc nguoi can xem.",
+        "employee_candidates": ident["name_candidates"],
+        "answer_rule": ("Liet ke ma + ten + vai tro cua cac ung vien de nguoi dung chon. TUYET DOI "
+                        "khong tu chon mot nguoi va khong noi he thong chi tra cuu duoc theo ma."),
+    }
+
+
+def _resolve_employee_identity(code: str, _tim_theo_ten: bool = True) -> dict:
     """Tra danh tinh 1 nhan vien tu 1 ma (EmployeeCode HOAC DMSId): thu dim_nhanvien (OTC) truoc -
     neu co nhieu dong trung ma, uu tien dong is_duplicate=1 (thuong la nguoi that, xem
     employee_directory()). Neu KHONG co trong dim_nhanvien, thu tiep dmssx_nhanvien (bang nhan vien
@@ -1555,6 +1630,21 @@ def _resolve_employee_identity(code: str) -> dict:
     if sx:
         return {"code": sx[0]["dmscode"] or code, "name": sx[0]["name"], "position_code": None,
                 "area_code": None, "dmsid": sx[0]["code"] or code}
+    # Khong khop ma nao: thu hieu chuoi vao nhu TEN nhan vien (16/09/2026). Chi nhan khi ten ung
+    # voi DUNG MOT nguoi; trung ten thi tra "name_candidates" de ham goi hoi lai, khong duoc doan.
+    if _tim_theo_ten:
+        ung_vien = _employee_name_candidates(code)
+        if len(ung_vien) == 1:
+            ident = _resolve_employee_identity(ung_vien[0]["employee_code"], _tim_theo_ten=False)
+            ident["resolved_from_name"] = code
+            if not ident.get("name"):
+                ident["name"] = ung_vien[0]["employee_name"]
+            if not ident.get("dmsid") or ident["dmsid"] == ung_vien[0]["employee_code"]:
+                ident["dmsid"] = ung_vien[0]["dmsid"] or ident.get("dmsid") or code
+            return ident
+        if len(ung_vien) > 1:
+            return {"code": code, "name": None, "position_code": None, "area_code": None,
+                    "dmsid": code, "name_candidates": ung_vien}
     return {"code": code, "name": None, "position_code": None, "area_code": None, "dmsid": code}
 
 
@@ -7724,6 +7814,105 @@ def receivables_period_compare(snapshot_date_a: str, snapshot_date_b: str,
     }
 
 
+def _customer_code_exists(value: str) -> bool:
+    """Ma co that trong danh muc, hoa don hoac snapshot cong no."""
+    rows = _q(
+        "SELECT 1 found FROM dms_khachhang WHERE UPPER(code)=UPPER(?) "
+        "UNION ALL SELECT 1 FROM dmssx_khachhang WHERE UPPER(code)=UPPER(?) "
+        "UNION ALL SELECT 1 FROM vhoadon_otc WHERE UPPER(customer_code)=UPPER(?) "
+        "UNION ALL SELECT 1 FROM vhoadon_etc WHERE UPPER(customer_code)=UPPER(?) "
+        "UNION ALL SELECT 1 FROM fact_congno_khachhang WHERE UPPER(customer_code)=UPPER(?) LIMIT 1",
+        (value, value, value, value, value),
+    )
+    return bool(rows)
+
+
+def _customer_name_candidates(query: str, scope_area_code: str = None,
+                              scope_channel: str = None, limit: int = 20) -> list[dict]:
+    """Tim ma khach theo ten trong danh muc va snapshot cong no, co loc pham vi truoc khi tra ve."""
+    raw_words = [word.strip(".,;:()[]{}\"'") for word in str(query or "").split()]
+    raw_words = [word for word in raw_words if len(word) >= 2]
+    search_word = raw_words[-1] if raw_words else str(query or "").strip()
+    like = f"%{search_word}%"
+    channel_scope = str(scope_channel or "").strip().upper()
+    region_key = next((key for key, markers in REGION_SQL_MARKERS.items()
+                       if scope_area_code in markers), None)
+    area_markers = REGION_SQL_MARKERS.get(region_key, [scope_area_code]) if scope_area_code else []
+
+    rows = []
+    for table, channel in (("dms_khachhang", "OTC"), ("dmssx_khachhang", "ETC")):
+        if channel_scope and channel_scope != channel:
+            continue
+        area_sql = ""
+        params = [like]
+        if area_markers:
+            area_sql = f" AND tp.area_code IN ({','.join('?' for _ in area_markers)})"
+            params.extend(area_markers)
+        rows.extend(_q(
+            f"SELECT kh.code,kh.name,'{channel}' channel,tp.area_code "
+            f"FROM {table} kh LEFT JOIN dim_tinhthanhpho tp ON tp.city_id=kh.city_id "
+            f"WHERE kh.name LIKE ?{area_sql} LIMIT 500",
+            tuple(params),
+        ))
+
+    debt_conditions = ["customer_name LIKE ?"]
+    debt_params = [like]
+    if channel_scope:
+        debt_conditions.append("UPPER(sales_channel)=?")
+        debt_params.append(channel_scope)
+    if area_markers:
+        debt_conditions.append(f"area_code IN ({','.join('?' for _ in area_markers)})")
+        debt_params.extend(area_markers)
+    rows.extend(_q(
+        "SELECT customer_code code,MAX(customer_name) name,MAX(sales_channel) channel,"
+        "MAX(area_code) area_code FROM fact_congno_khachhang WHERE "
+        + " AND ".join(debt_conditions)
+        + " GROUP BY customer_code,sales_channel LIMIT 500",
+        tuple(debt_params),
+    ))
+
+    folded_query = _fold_question(query)
+    query_tokens = [token for token in folded_query.split() if len(token) >= 2]
+    merged = {}
+    for row in rows:
+        code = str(row.get("code") or "").strip()
+        name = str(row.get("name") or "").strip()
+        if not code or not name:
+            continue
+        folded_name = _fold_question(name)
+        matched = sum(token in folded_name for token in query_tokens)
+        if folded_name == folded_query:
+            score = 1000
+        elif folded_query and folded_query in folded_name:
+            score = 900
+        elif query_tokens and matched == len(query_tokens):
+            score = 800 + matched
+        else:
+            continue
+        item = merged.setdefault(code.upper(), {
+            "customer_code": code,
+            "customer_name": name,
+            "channels": set(),
+            "area_code": row.get("area_code"),
+            "_score": score,
+        })
+        item["channels"].add(str(row.get("channel") or "").upper())
+        if score > item["_score"]:
+            item["_score"] = score
+            item["customer_name"] = name
+            item["area_code"] = row.get("area_code") or item.get("area_code")
+
+    result = sorted(merged.values(), key=lambda item: (
+        -item["_score"], item["customer_name"].lower(), item["customer_code"]
+    ))
+    return [{
+        "customer_code": item["customer_code"],
+        "customer_name": item["customer_name"],
+        "channel": "+".join(sorted(ch for ch in item["channels"] if ch)) or None,
+        "area_code": item["area_code"],
+    } for item in result[:max(1, min(int(limit or 20), 50))]]
+
+
 def customer_detail(customer_code: str, date_from: str, date_to: str, scope_area_code: str = None,
                      scope_channel: str = None) -> dict:
     """Chi tiet 1 khach hang: gop doanh thu thuc te (kho local, tu Bravo) + du no/qua han (Supabase) +
@@ -7743,6 +7932,9 @@ def customer_detail(customer_code: str, date_from: str, date_to: str, scope_area
     (vd ngoai vung, khach thuan kenh khac) khoi ket qua ma KHONG bao ly do - nguoi dung hoi 3 ma nhung
     chi thay 1 ket qua ma khong biet 2 ma kia bi gi. Sua theo dung pattern salary_detail(): giu lai loi
     kem 'requested_customer_code' thay vi im lang bo qua."""
+    customer_code = str(customer_code or "").strip()
+    original_customer_query = customer_code
+    resolved_lookup_channel = None
     if customer_code and "," in customer_code:
         codes = [c.strip() for c in customer_code.split(",") if c.strip()]
         results = []
@@ -7752,6 +7944,31 @@ def customer_detail(customer_code: str, date_from: str, date_to: str, scope_area
             r_single["requested_customer_code"] = code
             results.append(r_single)
         return {"is_bulk": True, "count": len(results), "customers": results}
+
+    # Nguoi dung thuong nho TEN, khong nho ma. Truoc day schema bat ma nen bot tu choi du kho co
+    # danh muc. Neu input khong phai ma da biet, tim ten trong dung pham vi; chi tu chon khi duy nhat.
+    looks_like_code = bool(re.fullmatch(r"[A-Za-z0-9_-]+", customer_code)
+                           and any(ch.isdigit() or ch == "_" for ch in customer_code))
+    if not _customer_code_exists(customer_code) and not looks_like_code:
+        candidates = _customer_name_candidates(
+            customer_code, scope_area_code=scope_area_code, scope_channel=scope_channel,
+        )
+        if len(candidates) != 1:
+            status = "ambiguous" if candidates else "not_found"
+            return {
+                "customer_lookup_status": status,
+                "customer_query": customer_code,
+                "candidate_count": len(candidates),
+                "customer_candidates": candidates,
+                "answer_rule": (
+                    "Neu ambiguous: liet ke cac ung vien kem ma/ten/kenh va hoi nguoi dung chon; "
+                    "khong doan mot khach. Neu not_found: noi khong tim thay trong danh muc thuoc "
+                    "pham vi tai khoan; khong noi he thong chi tra duoc theo ma."
+                ),
+            }
+        customer_code = candidates[0]["customer_code"]
+        if candidates[0].get("channel") in {"OTC", "ETC"}:
+            resolved_lookup_channel = candidates[0]["channel"]
     if scope_area_code:
         c = _q("""SELECT tp.area_code a FROM dms_khachhang kh
                   LEFT JOIN dim_tinhthanhpho tp ON tp.city_id=kh.city_id WHERE kh.code=?
@@ -7771,8 +7988,9 @@ def customer_detail(customer_code: str, date_from: str, date_to: str, scope_area
         return {"error": f"Ban khong co quyen xem khach hang nay - day la khach hang kenh ETC, tai khoan cua ban chi duoc xem kenh {scope_channel}."}
     if scope_channel == "ETC" and real_etc_hd == 0 and real_otc_hd > 0:
         return {"error": f"Ban khong co quyen xem khach hang nay - day la khach hang kenh OTC, tai khoan cua ban chi duoc xem kenh {scope_channel}."}
-    otc_rev, otc_hd = (0.0, 0) if scope_channel == "ETC" else (_f(o["rev"]), real_otc_hd)
-    etc_rev, etc_hd = (0.0, 0) if scope_channel == "OTC" else (_f(e["rev"]), real_etc_hd)
+    effective_channel = str(scope_channel or "").strip().upper() or resolved_lookup_channel
+    otc_rev, otc_hd = (0.0, 0) if effective_channel == "ETC" else (_f(o["rev"]), real_otc_hd)
+    etc_rev, etc_hd = (0.0, 0) if effective_channel == "OTC" else (_f(e["rev"]), real_etc_hd)
 
     if otc_hd and etc_hd:
         channel = "OTC+ETC"
@@ -7781,19 +7999,54 @@ def customer_detail(customer_code: str, date_from: str, date_to: str, scope_area
     elif etc_hd:
         channel = "ETC"
     else:
-        channel = None
+        channel = effective_channel if effective_channel in {"OTC", "ETC"} else None
 
     revenue = otc_rev + etc_rev
     orders = otc_hd + etc_hd
     avg_order_value = (revenue / orders) if orders else 0.0
 
-    dms = _q("SELECT name, city_id, id_code, emp_code, kenh_bh FROM dms_khachhang WHERE code=? LIMIT 1", (customer_code,))
-    lookup_src = "OTC"
-    if not dms:
-        d2 = _q("SELECT name, city_id, id_code, kenh_bh FROM dmssx_khachhang WHERE code=? LIMIT 1", (customer_code,))
-        if d2:
-            dms = [{**d2[0], "emp_code": None}]
-            lookup_src = "ETC"
+    dms_otc = _q(
+        "SELECT name, city_id, id_code, emp_code, kenh_bh FROM dms_khachhang "
+        "WHERE code=? LIMIT 1", (customer_code,))
+    dms_etc_raw = _q(
+        "SELECT name, city_id, id_code, kenh_bh FROM dmssx_khachhang WHERE code=? LIMIT 1",
+        (customer_code,))
+    dms_etc = [{**dms_etc_raw[0], "emp_code": None}] if dms_etc_raw else []
+    debt_channels = {
+        str(row["sales_channel"] or "").strip().upper()
+        for row in _q(
+            "SELECT DISTINCT sales_channel FROM fact_congno_khachhang WHERE customer_code=?",
+            (customer_code,))
+        if row.get("sales_channel")
+    }
+    preferred_channel = effective_channel or channel
+    if preferred_channel not in {"OTC", "ETC"} and len(debt_channels) == 1:
+        preferred_channel = next(iter(debt_channels))
+
+    # Cung mot ma co the co ten khac nhau o hai danh muc. Chon danh muc theo kenh cua hoa don/cong
+    # no dang tra de ten hien thi khop voi so lieu, khong uu tien OTC vo dieu kien (BGI00699: DMS
+    # ghi "Bac Giang", danh muc SX/cong no ETC ghi "Bac Ninh").
+    # 16/09/2026 - anh Dang xac nhan day KHONG phai gan nham: tinh Bac Giang da sap nhap vao Bac
+    # Ninh, hai ten la cung MOT benh vien. Vi vay chi neu ten con lai de doi chieu, tuyet doi khong
+    # dien giai thanh hai khach khac nhau.
+    if preferred_channel == "ETC":
+        dms, lookup_src = (dms_etc or dms_otc), ("ETC" if dms_etc else "OTC")
+    else:
+        dms, lookup_src = (dms_otc or dms_etc), ("OTC" if dms_otc else "ETC")
+    catalog_identity_warning = None
+    if dms_otc and dms_etc and _fold_question(dms_otc[0].get("name")) != _fold_question(
+            dms_etc[0].get("name")):
+        catalog_identity_warning = {
+            "OTC": dms_otc[0].get("name"),
+            "ETC": dms_etc[0].get("name"),
+            "selected_channel": lookup_src,
+            "answer_rule": (
+                "Cung MOT ma khach nhung hai danh muc ghi ten khac nhau - thuong do doi ten hoac "
+                "sap nhap don vi hanh chinh (Bac Giang nay thuoc Bac Ninh), KHONG PHAI hai khach "
+                "khac nhau. Dung ten cua selected_channel cho so lieu dang tra, va neu ten con lai "
+                "de nguoi dung doi chieu."
+            ),
+        }
 
     name = city_name = area_code = emp_code = emp_name = position_code = position_label = id_code = kenh_bh = None
     if dms:
@@ -7822,7 +8075,21 @@ def customer_detail(customer_code: str, date_from: str, date_to: str, scope_area
         "revenue": revenue, "orders": orders, "avg_order_value": avg_order_value,
         **receivable,
         "data_as_of": latest_data_date(),
+        "identity_check": (
+            f"Ma {customer_code} co ten trong kho la '{name}'. Neu ten nguoi dung goi khac ten nay "
+            "thi PHAI noi ro ten dang luu trong kho truoc khi trinh bay so lieu. KHONG duoc ket luan "
+            "day la khach khac chi vi khac dia danh: sau sap nhap don vi hanh chinh 2025 (vd Bac "
+            "Giang nay thuoc Bac Ninh) danh muc con giu ten tinh cu, van la MOT khach."
+        ),
     }
+    if catalog_identity_warning:
+        result["catalog_identity_warning"] = catalog_identity_warning
+    if original_customer_query != customer_code:
+        result["customer_lookup"] = {
+            "query": original_customer_query,
+            "resolved_customer_code": customer_code,
+            "resolved_channel": resolved_lookup_channel,
+        }
     if scope_channel:
         result["channel_scope"] = f"Tai khoan chi duoc xem kenh {scope_channel} - so lieu kenh khac (neu co) KHONG duoc hien thi."
     return result
@@ -11471,6 +11738,15 @@ def _salary_detail_one(employee_code: str = None, save_date: str = None,
                         scope_employee_code: str = None, scope_role: str = None) -> dict:
     """Logic that cho DUNG 1 nhan vien - tach rieng tu salary_detail() de dung chung cho ca duong
     don-nguoi va duong hang loat (employee_code voi nhieu ma cach nhau dau phay, xem salary_detail)."""
+    # Quy TEN ve MA ngay tu dau (16/09/2026): phai lam TRUOC phan kiem tra quan he quan ly ben duoi,
+    # vi doi chieu manager_code bang mot chuoi ten se khong khop va bi tu choi nham thanh "khong co
+    # quyen" thay vi "chua xac dinh duoc nguoi".
+    if employee_code:
+        ident_ten = _resolve_employee_identity(employee_code)
+        if ident_ten.get("name_candidates"):
+            return _ung_vien_ten_nhan_vien_loi(ident_ten, employee_code)
+        if ident_ten.get("resolved_from_name"):
+            employee_code = ident_ten["code"]
     # 03/08/2026 (phat hien qua kiem thu QLV Bui Khac Dung hoi V15/V22/V25/ASO cho 4 TDV cua minh):
     # TRUOC DAY chi C-Level moi duoc xem nguoi khac - QLV hoi ve CHINH DOI CUA MINH bi tu choi chung
     # chung, khien AI (dung docstring cu "C-Level/QLV xem doi minh" nhung code khong lam dieu do) bao
