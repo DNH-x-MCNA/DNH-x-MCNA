@@ -2126,6 +2126,74 @@ def _payload_for_model(tool_name: str, payload, question: str):
         if unicodedata.category(ch) != "Mn"
     ).replace("đ", "d").split())
 
+    if tool_name == "get_receivables_overview":
+        wrapper = payload if isinstance(payload.get("du_lieu"), dict) else None
+        data = payload.get("du_lieu") if wrapper else payload
+        if data.get("receivable_status") != "ok":
+            return payload
+        top_rows = data.get("top_overdue_customers") or []
+        compact_top = []
+        missing_assignment = False
+        for row in top_rows:
+            if not isinstance(row, dict):
+                continue
+            compact_top.append({
+                key: row.get(key) for key in (
+                    "customer_code", "customer_name", "balance_end", "total_overdue",
+                    "employee_code", "employee_name", "manager_code", "manager_name",
+                )
+            })
+            missing_assignment = missing_assignment or not row.get("employee_code")
+
+        requested = int(data.get("top_overdue_requested_count") or len(compact_top))
+        returned = int(data.get("top_overdue_returned_count") or len(compact_top))
+        eligible = int(data.get("top_overdue_eligible_count") or returned)
+        if returned < requested:
+            display_rule = (
+                f"Chi co {returned} khach co no qua han trong pham vi (nguoi dung yeu cau top "
+                f"{requested}); noi ro day la toan bo {returned} khach tim thay, khong dien dat "
+                "nhu the danh sach bi cat."
+            )
+        else:
+            display_rule = (
+                f"Nguoi dung yeu cau top {requested}; PHAI liet ke du {returned} dong trong "
+                "top_overdue_customers, khong tu rut gon con top 5/top 3."
+            )
+
+        compact_data = {
+            key: data.get(key) for key in (
+                "receivable_status", "receivable_source", "receivable_as_of",
+                "receivable_warning", "scope_area_code", "scope_channel",
+                "scope_employee_code", "scope_note", "total_balance_end", "total_overdue",
+                "overdue_pct", "overdue_1_15", "overdue_15_30", "overdue_30_45",
+                "overdue_gt_45", "aging_bucket_note", "by_channel", "by_region",
+                "ranking_basis",
+            )
+        }
+        compact_data.update({
+            "top_overdue_requested_count": requested,
+            "top_overdue_eligible_count": eligible,
+            "top_overdue_returned_count": returned,
+            "top_overdue_customers": compact_top,
+            "top_overdue_display_rule": display_rule,
+        })
+        if missing_assignment:
+            compact_data["assignment_note"] = (
+                "Khach khong co employee_code/manager_code thi ghi ro chua co phan cong KPI OTC; "
+                "khach ETC khong co TDV/QLV truc tiep tren nguon."
+            )
+        if any(marker in normalized for marker in (
+            "chua qua han", "khong qua han", "bo sot", "du no lon",
+        )):
+            compact_data["du_no_lon_chua_qua_han"] = data.get("du_no_lon_chua_qua_han") or []
+        if any(marker in normalized for marker in (
+            "da thu", "ke hoach thu", "cam ket thu",
+        )):
+            compact_data["collection_activity"] = data.get("collection_activity")
+        if wrapper:
+            return {**payload, "du_lieu": compact_data}
+        return compact_data
+
     if tool_name == "get_employee_kpi":
         wrapper = payload if isinstance(payload.get("du_lieu"), dict) else None
         data = payload.get("du_lieu") if wrapper else payload
@@ -2307,6 +2375,14 @@ def _normalize_tool_input_for_question(tool_name: str, tool_input: dict, questio
     )
     if asks_complete_list and supports_limit:
         args["limit"] = max(200, int(args.get("limit") or 0))
+
+    if tool_name == "get_receivables_overview":
+        # So luong nguoi dung noi ro la hop dong cua cau hoi. Neu model gui top_n nho hon cho cau
+        # "top 10", ep lai o backend de khong phu thuoc cach model goi.
+        requested_top = re.search(r"\btop\s*(\d{1,3})\b", q)
+        if requested_top:
+            args["top_n"] = min(100, max(1, int(requested_top.group(1))))
+        return args
 
     if tool_name != "get_employee_kpi":
         return args
