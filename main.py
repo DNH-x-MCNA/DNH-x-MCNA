@@ -5,6 +5,14 @@ import argparse
 from datetime import datetime
 from dotenv import load_dotenv
 
+# Scheduled Tasks redirect stdout/stderr to log files.  Force UTF-8 here so the
+# Vietnamese operational log stays readable regardless of the SYSTEM account's
+# active Windows code page.
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8")
+
 def load_env():
     root_dir = os.path.dirname(os.path.abspath(__file__))
     for env_name in [".env", "backend/.env", "config/.env"]:
@@ -631,20 +639,24 @@ def main():
             print(f"[{datetime.now()}] Cảnh báo: không tạo được mock ERP/CRM engine (bỏ qua bản mock): {e}")
 
     if args.send_daily:
-        send_daily_digest(dry_run=args.dry_run, audience_filter=args.audience, webhook_override=args.teams_webhook_override)
-        sys.exit(0)
+        ok = send_daily_digest(
+            dry_run=args.dry_run,
+            audience_filter=args.audience,
+            webhook_override=args.teams_webhook_override,
+        )
+        sys.exit(0 if ok else 1)
     if args.send_weekly:
-        send_weekly_report(
+        ok = send_weekly_report(
             dry_run=args.dry_run,
             audience_filter=args.audience,
         )
-        sys.exit(0)
+        sys.exit(0 if ok else 1)
     if args.send_monthly:
-        send_monthly_report(
+        ok = send_monthly_report(
             dry_run=args.dry_run,
             audience_filter=args.audience,
         )
-        sys.exit(0)
+        sys.exit(0 if ok else 1)
 
     if args.once:
         print(f"[{datetime.now()}] Bắt đầu quét cảnh báo nghiệp vụ DNH một lần...")
