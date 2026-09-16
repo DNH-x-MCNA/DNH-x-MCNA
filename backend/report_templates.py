@@ -2469,7 +2469,20 @@ def _area_markers(scope_area_code: str) -> list:
     return list(REGION_SQL_MARKERS.get(region_key, [scope_area_code]))
 
 
-def _kpi_customer_month_rows(year_month, where_sql, extra_cols, scope_area_code, scope_employee_code):
+def _ma_doi_hieu_luc(scope_employee_code, manager_code):
+    """Ma doi duoc dung: pham vi server (tai khoan QLV) LUON thang tham so model truyen vao.
+
+    16/09/2026 (nhat ky UAT 15:16 - C-Level hoi "... doi qlv TM23100148" bi LOI sau 114 giay): ba tool
+    danh sach chi loc doi khi TAI KHOAN la QLV, khong co tham so cho C-Level hoi ve MOT doi cu the, nen
+    model phai loc tay tren danh sach toan cong ty (523 khach, payload ~105k ky tu) roi cham tran thoi
+    gian. Them manager_code, nhung tai khoan QLV khong the dung no de xem doi khac."""
+    if scope_employee_code:
+        return scope_employee_code
+    return str(manager_code or "").strip() or None
+
+
+def _kpi_customer_month_rows(year_month, where_sql, extra_cols, scope_area_code, scope_employee_code,
+                             manager_code=None):
     """Dong khach x nhan vien cua snapshot MOI NHAT CUA TUNG NHAN VIEN trong thang.
 
     15/09/2026 (UAT 13:59 thieu khach moi): ghim MOT MAX(save_date) chung cho ca thang (cach cua
@@ -2488,9 +2501,10 @@ def _kpi_customer_month_rows(year_month, where_sql, extra_cols, scope_area_code,
            "FROM dim_nhanvien GROUP BY employee_code) nv ON nv.employee_code=f.employee_code "
            f"WHERE {where_sql}")
     params = [fdate, fdate]
-    if scope_employee_code:
+    team_code = _ma_doi_hieu_luc(scope_employee_code, manager_code)
+    if team_code:
         sql += " AND (f.manager_code=? OR f.employee_code=?)"
-        params += [scope_employee_code, scope_employee_code]
+        params += [team_code, team_code]
     if scope_area_code:
         markers = _area_markers(scope_area_code)
         sql += f" AND nv.area_code IN ({','.join('?' for _ in markers)})"
@@ -2528,8 +2542,9 @@ def _nguoi_phu_trach(row: dict, emp_names: dict) -> dict:
             "manager_code": row.get("manager_code"), "manager_name": emp_names.get(row.get("manager_code"))}
 
 
-def new_customer_list(year_month: str = None, limit: int = 200, scope_area_code: str = None,
-                      scope_employee_code: str = None, scope_channel: str = None) -> dict:
+def new_customer_list(year_month: str = None, limit: int = 200, manager_code: str = None,
+                      scope_area_code: str = None, scope_employee_code: str = None,
+                      scope_channel: str = None) -> dict:
     """DANH SACH khach hang moi (IsNC Bravo) trong thang kem ngay ghi nhan, doanh so thang va nguoi
     phu trach.
 
@@ -2545,7 +2560,9 @@ def new_customer_list(year_month: str = None, limit: int = 200, scope_area_code:
     # Co khach moi tinh theo KHACH (OR tren moi dong): do tren kho 15/09, 4 khach cua TDV moi TM26081401
     # co dong TDV IsNC=0 nhung dong rollup QLV IsNC=1 kem NCSaveDate - la khach moi that (checker S93 dem).
     # Nguoi phu trach van lay dong tang nhan vien; ngay ghi nhan lay tu dong mang co.
-    ym, rows = _kpi_customer_month_rows(year_month, "1=1", extra, scope_area_code, scope_employee_code)
+    team_code = _ma_doi_hieu_luc(scope_employee_code, manager_code)
+    ym, rows = _kpi_customer_month_rows(year_month, "1=1", extra, scope_area_code, scope_employee_code,
+                                        manager_code)
     if ym is None:
         return {"error": "Kho chua co snapshot KPI khach hang nao."}
     nc_dates = {}
@@ -2569,6 +2586,7 @@ def new_customer_list(year_month: str = None, limit: int = 200, scope_area_code:
     items.sort(key=lambda i: (i["ngay_ghi_nhan"] or "", i["doanh_so_thang"]), reverse=True)
     result = {
         "month": ym,
+        "ma_doi": team_code,
         "total_new_customers": len({i["customer_code"] for i in items}),
         "total_rows": len(items),
         "tong_doanh_so_thang": sum(i["doanh_so_thang"] for i in items),
@@ -2588,8 +2606,9 @@ def new_customer_list(year_month: str = None, limit: int = 200, scope_area_code:
     return result
 
 
-def reorder_pending_customers(year_month: str = None, limit: int = 200, scope_area_code: str = None,
-                              scope_employee_code: str = None, scope_channel: str = None) -> dict:
+def reorder_pending_customers(year_month: str = None, limit: int = 200, manager_code: str = None,
+                              scope_area_code: str = None, scope_employee_code: str = None,
+                              scope_channel: str = None) -> dict:
     """DANH SACH khach phat sinh trong cua so tai don (ROMonth, thuong 3 thang) nhung CHUA tai don
     trong thang (IsRO<>1), kem lan mua gan nhat va KPI tai don cua tung TDV.
 
@@ -2606,9 +2625,11 @@ def reorder_pending_customers(year_month: str = None, limit: int = 200, scope_ar
     # 15/09/2026 (do tren Bravo): dong rollup QLV mang IsRO=0 cho CHINH cac khach ma dong TDV da IsRO=1
     # (doi TM23100148: 144/144 dong QLV trung khach dong TDV). Loc co truoc khi khu trung se bo dong TDV
     # va gan nham khach "chua tai don" cho QLV -> khu trung TRUOC, loc co SAU.
+    team_code = _ma_doi_hieu_luc(scope_employee_code, manager_code)
     ym, rows = _kpi_customer_month_rows(
         year_month, "f.ro_month IS NOT NULL",
-        ", f.ro_month, f.ro_last_date, f.reorder_start_date, f.is_ro", scope_area_code, scope_employee_code)
+        ", f.ro_month, f.ro_last_date, f.reorder_start_date, f.is_ro", scope_area_code, scope_employee_code,
+        manager_code)
     if ym is None:
         return {"error": "Kho chua co snapshot KPI khach hang nao."}
     reordered = {r["customer_code"] for r in rows if _co_bat(r.get("is_ro"))}
@@ -2663,6 +2684,7 @@ def reorder_pending_customers(year_month: str = None, limit: int = 200, scope_ar
             kpi_by_employee.append(row)
     return {
         "month": ym,
+        "ma_doi": team_code,
         "total_pending_customers": len({i["customer_code"] for i in items}),
         "total_rows": len(items),
         "rows": items[:limit],
@@ -2681,8 +2703,8 @@ def reorder_pending_customers(year_month: str = None, limit: int = 200, scope_ar
     }
 
 
-def focus_product_kpi(year_month: str = None, limit: int = 100, scope_area_code: str = None,
-                      scope_employee_code: str = None) -> dict:
+def focus_product_kpi(year_month: str = None, limit: int = 100, manager_code: str = None,
+                      scope_area_code: str = None, scope_employee_code: str = None) -> dict:
     """DOANH SO SAN PHAM TRONG TAM va KPI trong tam theo QUAN LY VUNG (tang QLV) tu FACT_ThongKeTinhLuong.
 
     15/09/2026 (UAT 14:10-14:11 "Doanh so san pham trong tam theo quan ly vung" - thieu KPI san pham
@@ -2722,11 +2744,12 @@ def focus_product_kpi(year_month: str = None, limit: int = 100, scope_area_code:
                 "ty_le_goc_bravo": r["pct_goc"], "diem_kpi_trong_tam": r["diem"],
                 "snapshot_date": str(r["save_date"])[:10]}
 
+    team_code = _ma_doi_hieu_luc(scope_employee_code, manager_code)
     managers = [r for r in rows if str(r["position_code"] or "").upper() == "QLV"]
     members = [r for r in rows if str(r["position_code"] or "").upper() in _EMPLOYEE_TIER_POSITIONS]
-    if scope_employee_code:
-        managers = [r for r in managers if r["employee_code"] == scope_employee_code]
-        members = [r for r in members if r["manager_code"] == scope_employee_code]
+    if team_code:
+        managers = [r for r in managers if r["employee_code"] == team_code]
+        members = [r for r in members if r["manager_code"] == team_code]
     manager_items = sorted((_item(r) for r in managers),
                            key=lambda i: (i["pct_dat"] is None, i["pct_dat"] or 0))
     result = {
@@ -2740,7 +2763,8 @@ def focus_product_kpi(year_month: str = None, limit: int = 100, scope_area_code:
         "pham_vi_kenh": "OTC",
         "data_as_of": latest_data_date(),
     }
-    if scope_employee_code:
+    if team_code:
+        result["ma_doi"] = team_code
         result["thanh_vien_doi"] = sorted((_item(r) for r in members),
                                           key=lambda i: (i["pct_dat"] is None, i["pct_dat"] or 0))[:limit]
     if target_col == "NULL":
