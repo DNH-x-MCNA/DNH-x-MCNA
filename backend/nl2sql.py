@@ -712,9 +712,11 @@ TEMPLATE_TOOLS = [
                         "'MT'=Mien Trung (trung chu viet tat ngau nhien). Neu nguoi dung hoi 've doanh thu "
                         "Kenh MT/Modern Trade/MN1' thi VAN goi tool NAY (KHONG phai get_revenue_by_channel, "
                         "tool do chi biet OTC/ETC toan quoc khong tach vung) - dong ket qua cua Mien Nam se "
-                        "co them truong 'channel_breakdown' (danh sach {name, revenue}) chua san doanh thu "
-                        "Kenh MT da tach rieng (SO NAY DA NAM SAN trong 'revenue' cua Mien Nam, KHONG duoc "
-                        "cong them) - lay so tu day de tra loi. TUYET DOI KHONG tra loi 'he thong khong co "
+                        "co them truong 'channel_breakdown' (danh sach {name, revenue, plan_revenue, "
+                        "achievement_pct}) chua san doanh thu, KE HOACH va % thuc hien Kenh MT da tach rieng "
+                        "(SO NAY DA NAM SAN trong 'revenue' cua Mien Nam, KHONG duoc cong them) - lay so tu "
+                        "day de tra loi; ke hoach chi co khi khoang hoi tron thang (xem plan_note). Hoi kenh MT "
+                        "NHIEU THANG thi dung get_revenue_monthly_series (otc_special_channels tung thang).TUYET DOI KHONG tra loi 'he thong khong co "
                         "kenh MT' hay tu dong hieu nham sang doanh thu vung Mien Trung khi nguoi dung noi ro "
                         "la 'kenh'.",
         "input_schema": {

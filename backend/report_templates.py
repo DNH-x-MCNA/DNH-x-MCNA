@@ -726,6 +726,34 @@ def _channel_sub_buckets():
               "WHERE position_code='QLV' AND is_duplicate=1 AND name LIKE 'Kênh%' AND dmsid IS NOT NULL")
 
 
+def _special_channel_plan(bucket_name: str, area_code: str, date_from: str, date_to: str) -> tuple:
+    """(ke hoach, ghi chu) cua kenh dac biet (vd 'Kênh MT') trong khoang ngay.
+
+    15/09/2026 (UAT OTC-Only C-Level 14:20 "bo sung ke hoach va % thuc hien" thieu target kenh MT):
+    DIM_TargetVungMien co dong ChannelCode='MT' (Modern Trade, mien Nam) - do tren kho 15/09 khop tuyet
+    doi chi tieu dong MN1 'Kênh MT' cua FACT_ThongKeTinhLuong moi thang 2026 (T9: 6.653.790.357d). Chi
+    tieu la theo THANG nen chi tinh khi khoang hoi tron thang."""
+    if "kenh mt" not in _fold_question(bucket_name):
+        return None, "Kenh nay chua co chi tieu rieng trong bang chi tieu vung."
+    day_from, day_to = str(date_from)[:10], str(date_to)[:10]
+    try:
+        end = dt.date.fromisoformat(day_to)
+        dt.date.fromisoformat(day_from)
+    except ValueError:
+        return None, "Khoang ngay khong hop le."
+    if day_from[8:10] != "01" or end.day != _last_day_of_month(end.year, end.month):
+        return None, "Khoang hoi khong tron thang; chi tieu kenh tinh theo thang nen khong tinh % thuc hien."
+    try:
+        rows = _q("SELECT SUM(COALESCE(amount,0)) amount, COUNT(*) n FROM dim_targetvungmien "
+                  "WHERE channel_code='MT' AND area_code=? AND substr(doc_date,1,7) BETWEEN ? AND ?",
+                  (area_code, day_from[:7], day_to[:7]))
+    except sqlite3.OperationalError:
+        return None, "Kho chua dong bo bang chi tieu vung."
+    if not rows or not rows[0]["n"]:
+        return None, "Khong co chi tieu kenh MT cho khoang nay."
+    return _f(rows[0]["amount"]), None
+
+
 def revenue_by_region(date_from: str, date_to: str, scope_area_code: str = None, channel: str = "ALL",
                        scope_channel: str = None, scope_employee_code: str = None) -> list:
     """Doanh thu theo vung mien (MB/MT/MN). channel: 'ALL' (mac dinh, gop OTC+ETC), 'OTC', hoac 'ETC' -
@@ -855,7 +883,14 @@ def revenue_by_region(date_from: str, date_to: str, scope_area_code: str = None,
                 for b in row_buckets:
                     r = _q("SELECT COALESCE(SUM(amount9),0) rev FROM vhoadon_otc WHERE channel_code=? "
                            "AND doc_date BETWEEN ? AND ?", (b["dmsid"], max(date_from, cutoff), date_to))
-                    breakdown.append({"name": b["name"], "revenue": _f(r[0]["rev"])})
+                    bucket_revenue = _f(r[0]["rev"])
+                    # 15/09/2026: kem ke hoach kenh (DIM_TargetVungMien ChannelCode='MT') va % thuc hien.
+                    plan, plan_note = _special_channel_plan(b["name"], b["area_code"], date_from, date_to)
+                    entry = {"name": b["name"], "revenue": bucket_revenue, "plan_revenue": plan,
+                             "achievement_pct": (bucket_revenue / plan * 100) if plan else None}
+                    if plan_note:
+                        entry["plan_note"] = plan_note
+                    breakdown.append(entry)
                 row["channel_breakdown"] = breakdown
                 if date_from < cutoff:
                     row["channel_breakdown_note"] = (
@@ -2041,6 +2076,40 @@ def revenue_monthly_series(month_to: str = None, months_back: int = 12, include_
                 "plan_matches": (plan["otc"] is not None
                                  and abs(region_plan_total - plan["otc"]) <= 1),
             }
+        # 15/09/2026 (UAT OTC-Only C-Level 14:17-14:20 "doanh so kenh MT cac thang" roi "bo sung ke
+        # hoach va % thuc hien"): tra san doanh thu + ke hoach + % dat kenh dac biet (Kenh MT) tung thang
+        # trong CUNG payload. So nay DA NAM SAN trong doanh thu OTC mien Nam, khong cong them.
+        if scope_channel != "ETC" and not scope_employee_code:
+            month_from, month_last_day = _month_bounds(ym)
+            try:
+                buckets = _channel_sub_buckets()
+            except sqlite3.OperationalError:
+                buckets = []
+            special = []
+            for b in buckets:
+                if scope_area_code and b["area_code"] not in _area_markers(scope_area_code):
+                    continue
+                if month_from < _detail_cutoff():
+                    bucket_revenue = None   # phan da nen khong con ma kenh, khong tach duoc
+                else:
+                    bucket_revenue = _f(_q(
+                        "SELECT COALESCE(SUM(amount9),0) rev FROM vhoadon_otc WHERE channel_code=? "
+                        "AND doc_date BETWEEN ? AND ?",
+                        (b["dmsid"], month_from, f"{month_last_day} 23:59:59"))[0]["rev"])
+                plan, plan_note = _special_channel_plan(b["name"], b["area_code"], month_from, month_last_day)
+                entry = {"name": b["name"], "area_code": b["area_code"], "revenue": bucket_revenue,
+                         "plan_revenue": plan,
+                         "achievement_pct": (bucket_revenue / plan * 100)
+                         if plan and bucket_revenue is not None else None}
+                if bucket_revenue is None:
+                    entry["revenue_note"] = "Thang nay da nen theo khach x thang, khong con tach duoc kenh."
+                if plan_note:
+                    entry["plan_note"] = plan_note
+                if ym == latest:
+                    entry["thang_dang_chay"] = "Doanh thu tinh den ngay du lieu moi nhat; ke hoach la ca thang."
+                special.append(entry)
+            if special:
+                item["otc_special_channels"] = special
         # Thang NAM TRONG pham vi du lieu nhung khong co hoa don nao: pham vi tong the khong bat
         # duoc truong hop nay. Voi toan cong ty gan nhu chac chan la LO HONG DONG BO (DNH khong the
         # ban 0 dong ca thang); voi 1 doi QLV nho thi co the that. Khong tu ket luan - danh dau de
