@@ -8,10 +8,10 @@ import src.alerts as alerts
 
 def _warehouse(path, otc_at, etc_at):
     conn = sqlite3.connect(path)
-    conn.execute("CREATE TABLE sync_meta (table_name TEXT, last_synced_at TEXT)")
+    conn.execute("CREATE TABLE sync_meta (table_name TEXT, last_synced_at TEXT, latest_synced_date TEXT)")
     conn.executemany(
-        "INSERT INTO sync_meta VALUES (?, ?)",
-        [("vhoadon_otc", otc_at), ("vhoadon_etc", etc_at)],
+        "INSERT INTO sync_meta VALUES (?, ?, ?)",
+        [("vhoadon_otc", otc_at, "2026-09-15"), ("vhoadon_etc", etc_at, "2026-09-15")],
     )
     conn.commit()
     conn.close()

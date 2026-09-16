@@ -2773,7 +2773,7 @@ def _warehouse_sync_status(db_path=None, stale_minutes=90, now=None):
         conn = sqlite3.connect(f"file:{os.path.abspath(path)}?mode=ro", uri=True)
         try:
             rows = conn.execute(
-                "SELECT table_name, last_synced_at FROM sync_meta "
+                "SELECT table_name, last_synced_at, latest_synced_date FROM sync_meta "
                 "WHERE table_name IN ('vhoadon_otc','vhoadon_etc')"
             ).fetchall()
         finally:
@@ -2782,21 +2782,22 @@ def _warehouse_sync_status(db_path=None, stale_minutes=90, now=None):
         result["error"] = str(exc)
         return result
 
-    by_table = {name: synced_at for name, synced_at in rows}
-    missing = [name for name in ("vhoadon_otc", "vhoadon_etc") if not by_table.get(name)]
+    by_table = {name: (synced_at, latest_date) for name, synced_at, latest_date in rows}
+    missing = [name for name in ("vhoadon_otc", "vhoadon_etc") if not by_table.get(name, (None,))[0]]
     if missing:
         result["error"] = "thiếu mốc sync_meta: " + ", ".join(missing)
         return result
 
     for name in ("vhoadon_otc", "vhoadon_etc"):
-        raw = by_table[name]
+        raw, latest_date = by_table[name]
         try:
             synced_at = datetime.fromisoformat(raw)
         except (TypeError, ValueError):
             result["error"] = f"mốc last_synced_at không hợp lệ cho {name}: {raw}"
             return result
         age_minutes = max(0.0, (now - synced_at).total_seconds() / 60.0)
-        row = {"table": name, "last_synced_at": synced_at, "age_minutes": age_minutes}
+        row = {"table": name, "last_synced_at": synced_at, "latest_synced_date": latest_date,
+               "age_minutes": age_minutes}
         result["rows"].append(row)
         if age_minutes > float(stale_minutes):
             result["stale"].append(row)
