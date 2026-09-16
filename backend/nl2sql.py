@@ -144,7 +144,7 @@ def _max_tokens(scope_role: str = None) -> int:
     return MAX_TOKENS_BY_ROLE.get(scope_role, DEFAULT_MAX_TOKENS)
 
 
-MAX_PAYLOAD_CHARS = 6000  # Ngan sach context gui model (~1500 tokens). Ket qua day du van giu trong
+MAX_PAYLOAD_CHARS = 10000  # Ngan sach context gui model (~2500 tokens). Ket qua day du van giu trong
                           # last_result (log/doi chieu); phan gui model duoc tom luoc co cau truc,
                           # luon la JSON hop le va khong cat chuoi giua dong.
 
