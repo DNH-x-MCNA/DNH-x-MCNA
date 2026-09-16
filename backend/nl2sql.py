@@ -2196,14 +2196,97 @@ def _payload_for_model(tool_name: str, payload, question: str):
                 "Khach khong co employee_code/manager_code thi ghi ro chua co phan cong KPI OTC; "
                 "khach ETC khong co TDV/QLV truc tiep tren nguon."
             )
-        if any(marker in normalized for marker in (
-            "chua qua han", "khong qua han", "bo sot", "du no lon",
-        )):
-            compact_data["du_no_lon_chua_qua_han"] = data.get("du_no_lon_chua_qua_han") or []
+        # 16/09/2026: LUON kem danh sach du no lon chua qua han, bo dieu kien tu khoa. Nhat ky UAT
+        # 15/09: nguoi cham hoi "vi sao thieu HCM04162" - cau do khong chua tu khoa nao trong bo loc
+        # cu nen model KHONG he nhin thay danh sach va tra loi rang khach do khong co no. Tool da
+        # gioi han san top 5 nen khong lam phinh payload.
+        compact_data["du_no_lon_chua_qua_han"] = (data.get("du_no_lon_chua_qua_han") or [])[:5]
         if any(marker in normalized for marker in (
             "da thu", "ke hoach thu", "cam ket thu",
         )):
             compact_data["collection_activity"] = data.get("collection_activity")
+        if wrapper:
+            return {**payload, "du_lieu": compact_data}
+        return compact_data
+
+    if tool_name == "get_geography_monthly_performance":
+        wrapper = payload if isinstance(payload.get("du_lieu"), dict) else None
+        data = payload.get("du_lieu") if wrapper else payload
+        rows = data.get("rows")
+        if not isinstance(rows, list) or not rows:
+            return payload
+
+        # 16/09/2026 (nhat ky UAT 14:02 - "Tinh/vung do phu khach thap; co hoi trang o dau" chay 110
+        # giay, 15.126 dong): tool tra 166 dong (thang x dia ban) = 103k ky tu, va tool nay CHUA co
+        # nhanh thu gon nen luoi an toan cat mu con 12 dong DAU - khong phai 12 dia ban yeu nhat.
+        # Model ket luan "tinh nao do phu kem" tren 7% du lieu MA VAN NOI CHAC CHAN. Thu gon co chu
+        # dich: giu DU danh sach dia ban (tong ca ky) de khong dia ban nao bien mat am tham, cong
+        # bang xep hang thang cuoi theo DUNG tieu chi cau hoi dang hoi.
+        def _so(value):
+            try:
+                return float(value or 0)
+            except (TypeError, ValueError):
+                return 0.0
+
+        chi_tieu = "customers" if any(marker in normalized for marker in (
+            "do phu", "phu khach", "co hoi trang", "it khach", "khach thap",
+        )) else "revenue"
+        thang_cuoi = str(data.get("month_to") or "")[:7]
+        dong_thang_cuoi = [r for r in rows if isinstance(r, dict)
+                           and str(r.get("month") or "")[:7] == thang_cuoi]
+        if not dong_thang_cuoi:
+            dong_thang_cuoi = [r for r in rows if isinstance(r, dict)]
+
+        def _tron(value):
+            """Lam tron de tiet kiem cho: '17867631804.0' ton gan gap ruoi '17867631804'."""
+            so = _so(value)
+            return int(so) if abs(so) >= 1 else round(so, 2)
+
+        def _gon(row):
+            gon = {key: row.get(key) for key in ("unit", "area_code", "month") if row.get(key)}
+            for key in ("revenue", "customers", "invoices", "revenue_per_customer"):
+                if row.get(key) is not None:
+                    gon[key] = _tron(row.get(key))
+            return gon
+
+        xep = sorted(dong_thang_cuoi, key=lambda r: _so(r.get(chi_tieu)))
+        khach_thang_cuoi = {r.get("unit"): _tron(r.get("customers")) for r in dong_thang_cuoi}
+        tong_ky = {}
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            muc = tong_ky.setdefault(row.get("unit"), {
+                "unit": row.get("unit"), "so_thang": 0, "revenue_ca_ky": 0.0,
+            })
+            muc["so_thang"] += 1
+            muc["revenue_ca_ky"] += _so(row.get("revenue"))
+
+        compact_data = {key: data.get(key) for key in (
+            "month_from", "month_to", "dimension", "customer_count_definition",
+            "so_dia_ban_khong_hien", "unavailable_dimensions", "unavailable_metrics",
+            "target_gap_note", "canh_bao", "data_as_of", "month_to_is_partial",
+        ) if data.get(key) is not None}
+        compact_data.update({
+            "tieu_chi_xep_hang": chi_tieu,
+            "tong_so_dia_ban": len(tong_ky),
+            "tong_so_dong_goc": len(rows),
+            "thap_nhat_thang_cuoi": [_gon(r) for r in xep[:10]],
+            "cao_nhat_thang_cuoi": [_gon(r) for r in reversed(xep[-5:])],
+            # Danh sach nay PHAI DU (64 tinh that tren may 24). Giu dang gon nhat co the - so nguyen,
+            # bo cot thua - de tong payload nam duoi MAX_PAYLOAD_CHARS: neu vuot, luoi an toan se cat
+            # xuong 12 dia ban va tai dien dung loi dang di sua.
+            "tong_ca_ky_theo_dia_ban": [
+                {"unit": m["unit"], "revenue_ca_ky": _tron(m["revenue_ca_ky"]),
+                 "khach_thang_cuoi": khach_thang_cuoi.get(m["unit"])}
+                for m in sorted(tong_ky.values(), key=lambda m: -m["revenue_ca_ky"])
+            ],
+            "display_rule": (
+                f"thap_nhat_thang_cuoi/cao_nhat_thang_cuoi la xep hang thang {thang_cuoi} theo "
+                f"'{chi_tieu}'. tong_ca_ky_theo_dia_ban liet ke DU {len(tong_ky)} dia ban nen KHONG "
+                "duoc ket luan thieu dia ban nao. Chuoi tung thang cua tung dia ban khong gui kem; "
+                "can thi goi lai tool voi pham vi hep hon (it dia ban hoac it thang), KHONG doan."
+            ),
+        })
         if wrapper:
             return {**payload, "du_lieu": compact_data}
         return compact_data
