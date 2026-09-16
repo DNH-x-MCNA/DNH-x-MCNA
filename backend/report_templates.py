@@ -1840,7 +1840,7 @@ def _ytd_plan(year: int, from_month: str, to_month: str, scope_area_code: str = 
     }
 
 
-def revenue_ytd_cumulative(year_month_to: str, from_month: str = None, years_back: int = 3,
+def revenue_ytd_cumulative(year_month_to: str = None, from_month: str = None, years_back: int = 3,
                             scope_area_code: str = None, scope_channel: str = None,
                             scope_employee_code: str = None) -> dict:
     """LUY KE doanh thu tu dau ky den 1 thang chi dinh, SO SANH cung khoang do giua nhieu nam gan nhat
@@ -1860,7 +1860,16 @@ def revenue_ytd_cumulative(year_month_to: str, from_month: str = None, years_bac
 
     Day la du lieu THUC TE DA PHAT SINH (khong phai du bao) - KHONG bi chinh sach khoa tinh nang tuong
     lai chan (xem feature_policy.py), dung tu do."""
-    if not year_month_to or len(str(year_month_to)) != 7 or str(year_month_to)[4] != "-":
+    # 16/09/2026: thieu year_month_to KHONG duoc nem TypeError nua. Truoc day day la tham so BAT
+    # BUOC nen moi duong goi quen truyen (script, tool test, model bo sot) deu vo thanh "Loi khi chay
+    # bao cao chuan". Mac dinh ve thang du lieu gan nhat giong cac tool chuoi thang khac; chi bao loi
+    # khi nguoi goi truyen gia tri SAI DINH DANG.
+    if not year_month_to:
+        _, thang_du_lieu_moi_nhat = _revenue_data_month_range()
+        if not thang_du_lieu_moi_nhat:
+            return {"error": "Kho chua co hoa don de tinh luy ke."}
+        year_month_to = str(thang_du_lieu_moi_nhat)[:7]
+    if len(str(year_month_to)) != 7 or str(year_month_to)[4] != "-":
         return {"error": f"year_month_to phai o dang YYYY-MM (nhan duoc: {year_month_to})."}
     year_to = int(str(year_month_to)[:4])
     month_to = str(year_month_to)[5:7]
