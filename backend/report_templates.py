@@ -6780,6 +6780,11 @@ def etc_contract_status(as_of_date: str = None, expiring_days: int = 90, limit: 
         "so_hop_dong_sap_het_han": len(sap_het),
         "gia_tri_con_lai_cua_hop_dong_sap_het_han": sum(x["con_lai"] for x in sap_het),
         "so_hop_dong_chua_xuat_hoa_don_nao": len(chua_xuat),
+        # 17/09/2026: THEM so dem. Moi danh sach khac trong ham nay deu co truong dem di kem
+        # (so_hop_dong_sap_het_han, so_hop_dong_chua_xuat_hoa_don_nao...) rieng danh sach nay thi
+        # khong - nen khi bi cat o limit, model doc duoc 50 dong va bao "co 50 hop dong duoi 50%"
+        # nhu the do la tong that (UAT 17/09, cau C44). Cung lop loi voi "hoi top 10 tra top 3".
+        "so_hop_dong_thuc_hien_duoi_50_pct": len(thuc_hien_thap),
         "hop_dong_thuc_hien_duoi_50_pct": thuc_hien_thap[:limit],
         "hop_dong_sap_het_han": sorted(sap_het, key=lambda x: x["con_lai_ngay"])[:limit],
         "so_hop_dong_gia_tri_bat_thuong": len(bat_thuong),
