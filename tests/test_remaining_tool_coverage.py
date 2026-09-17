@@ -78,11 +78,22 @@ def test_employee_directory_tim_duoc_nhan_vien_etc_chi_co_o_dmssx(tmp_path, monk
 
 
 def _make_receivables_db(path):
+    # 17/09/2026: fixture dung DUNG schema that cua bang lich su. Truoc day chi co mot cot
+    # snapshot_date vi tool khi do chi liet ke NGAY; nay tool tra ca so lieu tung moc nen phai co
+    # du cac cot so tien va cot pham vi (kenh/vung) de kiem duoc ca phan gioi han pham vi.
     conn = sqlite3.connect(path)
-    conn.execute("CREATE TABLE fact_congno_khachhang_history (snapshot_date TEXT)")
-    conn.executemany("INSERT INTO fact_congno_khachhang_history VALUES (?)", [
-        ("2026-08-21",), ("2026-08-22",), ("2026-08-22",), ("2026-08-27",),
-    ])
+    conn.execute("""CREATE TABLE fact_congno_khachhang_history (
+        snapshot_date TEXT, snapshot_at TEXT, customer_code TEXT, customer_name TEXT,
+        sales_channel TEXT, area_code TEXT, balance_end REAL, overdue_1_15 REAL,
+        overdue_15_30 REAL, overdue_30_45 REAL, overdue_gt_45 REAL, total_overdue REAL)""")
+    conn.executemany(
+        "INSERT INTO fact_congno_khachhang_history VALUES (?,'2026-08-27T09:00:00',?,?,?,?,?,0,0,0,?,?)",
+        [
+            ("2026-08-21", "KH_MB_ETC", "Khach MB ETC", "ETC", "MB", 1000.0, 100.0, 100.0),
+            ("2026-08-22", "KH_MB_ETC", "Khach MB ETC", "ETC", "MB", 1100.0, 150.0, 150.0),
+            ("2026-08-22", "KH_MN_OTC", "Khach MN OTC", "OTC", "MN", 500.0, 50.0, 50.0),
+            ("2026-08-27", "KH_MB_ETC", "Khach MB ETC", "ETC", "MB", 1200.0, 200.0, 200.0),
+        ])
     conn.commit()
     conn.close()
 
@@ -119,8 +130,13 @@ def test_receivables_history_dates_exempt_scope_khong_bi_ep_tham_so_la(tmp_path,
         scope_area_code="MB", scope_channel="ETC", scope_role="regional_director",
     )
 
+    # 17/09/2026: tool nay truoc kia duoc MIEN TRU pham vi vi chi liet ke ngay. Nay no tra ca so
+    # lieu cong no nen pham vi vung/kenh PHAI duoc ap that su - khong con mien tru.
     assert wrapped["ok"] is True
     assert wrapped["result"]["cac_ngay"] == ["2026-08-27", "2026-08-22"]
+    assert wrapped["result"]["pham_vi"] == {"scope_area_code": "MB", "scope_channel": "ETC"}
+    # KH_MN_OTC (vung MN, kenh OTC) bi loai - tong tung moc chi con phan MB/ETC.
+    assert [r["total_overdue"] for r in wrapped["result"]["chuoi_theo_moc"]] == [150.0, 200.0]
 
 
 def _write_jsonl(path, rows):
