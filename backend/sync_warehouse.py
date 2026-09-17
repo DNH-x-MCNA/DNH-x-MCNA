@@ -489,6 +489,152 @@ def sync_fact_congno():
           f"(du no {tot:,.0f}, qua han {tot_od:,.0f})")
 
 
+def _warehouse_code_to_id(local_kho_table: str) -> dict:
+    """Anh xa WarehouseCode (dung tren vTheKhoLot) -> (warehouse_id, branch_code) tu bang kho da
+    dong bo o buoc truoc trong CUNG lan chay nay - khong can hoi lai Bravo."""
+    conn = get_conn()
+    try:
+        rows = conn.execute(f"SELECT code, id_code, branch_code FROM {local_kho_table}").fetchall()
+    finally:
+        conn.close()
+    return {code: (wid, branch) for code, wid, branch in rows if code}
+
+
+def sync_tonkho_hien_tai(as_of: dt.date = None):
+    """Cong don bien dong nhap-xuat tu dau nam tai chinh den ngay dong bo VAO ton dau nam da nap o
+    SMALL_TABLES, de brv_tonkhodk/brvsx_tonkhodk/brv_tonkhodklot phan anh TON HIEN TAI thay vi dung
+    im o TON DAU NAM.
+
+    17/09/2026 - LOI NANG PHAT HIEN (khac va NANG HON ban sua 04/09 - ban do chi giai quyet cong don
+    nham 3 nam tai chinh, chua giai quyet viec BAN THAN nam moi nhat cung dung im): BRV_TonKhoDK/
+    BRVSX_TonKhoDK dung ten da noi ro "DK" = Dau Ky (dau NAM tai chinh), Bravo KHONG cap nhat lai
+    trong nam - xac nhan truc tiep tren Bravo: ModifiedAt gan nhat cua FiscalYear=2026 la 27/01/2026,
+    tuc 234 ngay truoc thoi diem phat hien (17/09/2026). Moi cau hoi ton kho truoc ban sua nay deu
+    tra loi bang so cuoi thang 1, khong phai so hien tai - "lech nhieu" dung nhu nguoi dung phan anh.
+
+    Cong thuc lay NGUYEN VAN tu chinh thu tuc Bravo dbo.usp_StockLotFinance_Report (doc definition
+    qua OBJECT_DEFINITION, khong sua gi, chi doc):
+        Ton hien tai = Ton dau nam (vTonKhoDKLot) + SUM(ReceiptQuantity - IssueQuantity den ngay)
+                       tu dbo.vTheKhoLot, cung ClassCode ('TM'=kinh doanh, 'SX'=san xuat).
+
+    Da kiem chung truoc khi viet ham nay (doc-only, tuan tu, khong sua Bravo):
+      - vTheKhoLot co du lieu lien tuc den 16/09/2026 (hom truoc ngay phat hien), ca ClassCode='TM'
+        (502.059 dong) va 'SX' (48.787 dong) - khac han BRV_TonKhoDK dung im tu 27/01.
+      - WarehouseCode khop 24/24 voi BRV_Kho.Code.
+      - ItemId khop 100% voi BRV_SanPham.Id (130/130, phia TM) va BRVSX_SanPham.Id (324/324, phia
+        SX) - KHONG can bang anh xa moi, dung thang ItemId cua view.
+      - Mau thu 1 ma hang (Goi muoi Seakit, ItemId 222841, SX): ton dau nam 68.340 + bien dong
+        99.240 = 167.580 - hop ly voi mot mat hang co phat sinh san xuat/nhap trong nam.
+
+    Bang tong hop (brv_tonkhodk/brvsx_tonkhodk): MOI consumer trong report_templates.py deu doc
+    bang SUM(quantity) GROUP BY item/kho (kiem lai truoc khi viet ham nay, khong co noi nao doc 1
+    dong don le) - an toan khi CHEN THEM 1 dong bien dong cho moi cap (kho, ma hang), khong can
+    UPDATE dong cu.
+
+    Bang theo lo (brv_tonkhodklot): KHAC - inventory_expiry_report() doc TUNG DONG rieng le (khong
+    SUM), moi dong = 1 lo vat ly. Chen them dong se lam 1 lo bi dem 2 lan. Phai XOA cac dong cu cua
+    dung cap (kho, ma hang, ma lo) roi GHI LAI DUNG MOT dong da cong don, giu nguyen cac lo khong co
+    bien dong trong nam.
+
+    Chi co brv_tonkhodklot ben kinh doanh (TM) - khong co bang theo-lo cho san xuat, giu dung pham
+    vi hien co (khong tu them bang moi ngoai yeu cau)."""
+    as_of = as_of or dt.date.today()
+    year = as_of.year
+
+    ket_qua = {"tm": 0, "sx": 0, "tm_lot": 0}
+
+    # --- Kinh doanh (TM): bang tong hop ---
+    kho_tm = _warehouse_code_to_id("brv_kho")
+    try:
+        _, rows = bravo_query(
+            "SELECT WarehouseCode, ItemId, SUM(ReceiptQuantity - IssueQuantity) delta_qty "
+            "FROM dbo.vTheKhoLot WHERE ClassCode='TM' AND FiscalYear=:yr AND DocDate<=:as_of "
+            "GROUP BY WarehouseCode, ItemId HAVING SUM(ReceiptQuantity - IssueQuantity) <> 0",
+            yr=str(year), as_of=as_of.isoformat())
+    except Exception as e:
+        print(f"[tonkho_hien_tai] Khong doc duoc vTheKhoLot (TM): {e} - GIU nguyen ton dau nam.")
+        rows = []
+    conn = get_conn()
+    try:
+        for wcode, item_id, delta in rows:
+            mapped = kho_tm.get(wcode)
+            if not mapped or not delta:
+                continue
+            wid, _branch = mapped
+            conn.execute(
+                "INSERT INTO brv_tonkhodk (warehouse_id, item_id, quantity, amount, is_active, fiscal_year) "
+                "VALUES (?,?,?,?,1,?)", (wid, item_id, delta, None, year))
+            ket_qua["tm"] += 1
+        conn.commit()
+    finally:
+        conn.close()
+
+    # --- San xuat (SX): bang tong hop ---
+    kho_sx = _warehouse_code_to_id("brvsx_kho")
+    try:
+        _, rows = bravo_query(
+            "SELECT WarehouseCode, ItemId, SUM(ReceiptQuantity - IssueQuantity) delta_qty "
+            "FROM dbo.vTheKhoLot WHERE ClassCode='SX' AND FiscalYear=:yr AND DocDate<=:as_of "
+            "GROUP BY WarehouseCode, ItemId HAVING SUM(ReceiptQuantity - IssueQuantity) <> 0",
+            yr=str(year), as_of=as_of.isoformat())
+    except Exception as e:
+        print(f"[tonkho_hien_tai] Khong doc duoc vTheKhoLot (SX): {e} - GIU nguyen ton dau nam.")
+        rows = []
+    conn = get_conn()
+    try:
+        for wcode, item_id, delta in rows:
+            mapped = kho_sx.get(wcode)
+            if not mapped or not delta:
+                continue
+            wid, branch = mapped
+            conn.execute(
+                "INSERT INTO brvsx_tonkhodk (branch_code, warehouse_id, item_id, quantity, amount, "
+                "is_active, year) VALUES (?,?,?,?,?,1,?)", (branch, wid, item_id, delta, None, year))
+            ket_qua["sx"] += 1
+        conn.commit()
+    finally:
+        conn.close()
+
+    # --- Kinh doanh (TM): bang theo LO - phai xoa+ghi lai dung 1 dong/lo, khong duoc chen them ---
+    try:
+        _, rows = bravo_query(
+            "SELECT WarehouseCode, ItemId, ItemLotCode, SUM(ReceiptQuantity - IssueQuantity) delta_qty "
+            "FROM dbo.vTheKhoLot WHERE ClassCode='TM' AND FiscalYear=:yr AND DocDate<=:as_of "
+            "GROUP BY WarehouseCode, ItemId, ItemLotCode "
+            "HAVING SUM(ReceiptQuantity - IssueQuantity) <> 0",
+            yr=str(year), as_of=as_of.isoformat())
+    except Exception as e:
+        print(f"[tonkho_hien_tai] Khong doc duoc vTheKhoLot theo lo (TM): {e} - GIU nguyen ton dau nam.")
+        rows = []
+    conn = get_conn()
+    try:
+        for wcode, item_id, lot_code, delta in rows:
+            mapped = kho_tm.get(wcode)
+            if not mapped or not delta or not lot_code:
+                continue
+            wid, branch = mapped
+            existing = conn.execute(
+                "SELECT COALESCE(SUM(quantity),0) FROM brv_tonkhodklot "
+                "WHERE warehouse_id=? AND item_id=? AND item_lot_code=? AND year=?",
+                (wid, item_id, lot_code, year)).fetchone()[0]
+            conn.execute(
+                "DELETE FROM brv_tonkhodklot WHERE warehouse_id=? AND item_id=? AND item_lot_code=? AND year=?",
+                (wid, item_id, lot_code, year))
+            moi = existing + delta
+            if moi != 0:
+                conn.execute(
+                    "INSERT INTO brv_tonkhodklot (branch_code, warehouse_id, item_id, item_lot_code, "
+                    "quantity, is_active, year) VALUES (?,?,?,?,?,1,?)",
+                    (branch, wid, item_id, lot_code, moi, year))
+            ket_qua["tm_lot"] += 1
+        conn.commit()
+    finally:
+        conn.close()
+
+    print(f"[tonkho_hien_tai] Da cong bien dong den {as_of}: {ket_qua['tm']} cap (kho,ma hang) kinh "
+          f"doanh, {ket_qua['sx']} cap san xuat, {ket_qua['tm_lot']} lo kinh doanh.")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--full", action="store_true", help="Dong bo toan bo lich su (thay vi chi gan day)")
@@ -525,6 +671,16 @@ def main():
 
     for bravo_tbl, local_tbl, bravo_cols, local_cols in SMALL_TABLES:
         sync_small_table(bravo_tbl, local_tbl, bravo_cols, local_cols)
+
+    # Ton kho: BRV_TonKhoDK/BRVSX_TonKhoDK vua nap o tren la TON DAU NAM (dung nghia "DK"), Bravo
+    # khong cap nhat lai trong nam (xac nhan 17/09/2026: dung im tu 27/01/2026). Cong them bien dong
+    # nhap-xuat tu vTheKhoLot de phan anh ton HIEN TAI - boc try/except rieng nhu cac buoc du lieu
+    # nhay cam khac o duoi: loi (quyen/VPN) KHONG duoc lam hong phan sync con lai, va GIU nguyen
+    # ton dau nam (van dung, chi cu) thay vi de trong.
+    try:
+        sync_tonkho_hien_tai()
+    except Exception as e:
+        print(f"[CANH BAO] sync_tonkho_hien_tai loi, GIU nguyen ton dau nam (bo qua lan nay): {e}")
 
     sync_fact_tonghopkhachhang()
 
