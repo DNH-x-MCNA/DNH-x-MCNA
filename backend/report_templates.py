@@ -10915,7 +10915,12 @@ def customer_revenue_debt_risk(as_of_date: str = None, recent_months: int = 3,
         )
         SELECT r.customer_code, d.customer_name, r.rev_recent, r.rev_prior,
                CASE WHEN r.rev_prior<>0 THEN (r.rev_recent-r.rev_prior)*100.0/r.rev_prior END pct_change,
-               d.balance_end, d.overdue, d.snapshot_at
+               d.balance_end, d.overdue, d.snapshot_at,
+               -- 17/09/2026: tong so khach THOA DIEU KIEN truoc khi cat theo LIMIT. Truoc day
+               -- customer_count = len(danh sach DA CAT), nen tool bao "co 20 khach" du thuc te co
+               -- the hang tram - cung lop loi voi "hoi top 10 tra top 3" (cong no) va "50 hop dong
+               -- duoi 50%" (ETC) da sua cung ngay.
+               COUNT(*) OVER() total_matching
         FROM revenue r INNER JOIN debt d ON d.customer_code=r.customer_code
         WHERE r.rev_recent>=? AND d.overdue>=? AND r.rev_recent<r.rev_prior
         ORDER BY d.overdue DESC, r.rev_recent DESC
@@ -10940,8 +10945,17 @@ def customer_revenue_debt_risk(as_of_date: str = None, recent_months: int = 3,
         "prior_period": {"from": str(prior_start), "to": str(prior_end)},
         "revenue_threshold": float(min_revenue),
         "overdue_threshold": float(min_overdue),
-        "customer_count": len(customers),
+        # Lui ve len(customers) neu vi ly do gi cot total_matching khong co - tha bao thieu con
+        # hon vo ca bao cao.
+        "customer_count": int(rows[0].get("total_matching") or len(customers)) if rows else 0,
+        "returned_count": len(customers),
         "customers": customers,
+        "display_rule": (
+            "customer_count la TONG so khach thoa dieu kien; customers chi la {0} dong dau (cat theo "
+            "limit). Neu customer_count > returned_count PHAI noi ro danh sach la mot phan va nen "
+            "con bao nhieu khach chua liet ke - KHONG duoc trinh bay nhu the day la toan bo, va "
+            "KHONG duoc cong tien cua phan da liet ke roi goi do la tong so tien can thu."
+        ).format(len(customers)),
         "receivable_snapshot_at": rows[0].get("snapshot_at") if rows else None,
         "note": "Danh sach chi gom khach dong thoi dat nguong doanh thu, no qua han va doanh thu giam.",
     }
