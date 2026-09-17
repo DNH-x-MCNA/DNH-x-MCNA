@@ -8793,12 +8793,27 @@ def inventory_by_region(area_code: str = None, scope_area_code: str = None) -> l
         return []
     sql += " GROUP BY k.branch_code ORDER BY k.branch_code"
     rows = _q(sql, tuple(params))
+    # 17/09/2026: SO LUONG da duoc cong bien dong nhap-xuat den hom nay (xem sync_tonkho_hien_tai
+    # trong sync_warehouse.py), nhung GIA TRI thi KHONG: view nguon vTheKhoLot chi co cot so luong
+    # nhap/xuat, khong co cot tien, nen cac dong bien dong de amount rong va SUM(amount) bo qua
+    # chung. Hau qua neu khong noi ro: nguoi doc ghep "so luong thang 9" voi "gia tri thang 1" thanh
+    # mot cau tra loi nghe rat tron (vd kho SX giam 18% so luong nhung gia tri van nguyen 175 ty).
+    # Phai gan canh bao vao DUNG dong du lieu, khong de o cho khac.
+    gia_tri_chi_dau_ky = bool(_q(
+        "SELECT 1 FROM brv_tonkhodk WHERE amount IS NULL AND quantity <> 0 LIMIT 1"))
     for r in rows:
         r["area_label"] = _BRANCH_LABEL.get(r["area_code"], r["area_code"])
         r["tong_so_luong"] = _f(r["tong_so_luong"])
         r["tong_gia_tri"] = _f(r["tong_gia_tri"])
         r["nam_tai_chinh"] = nam_moi_nhat
         r["he_thong"] = "KINH_DOANH"
+        if gia_tri_chi_dau_ky:
+            r["gia_tri_moc_thoi_gian"] = "DAU_NAM"
+            r["canh_bao_gia_tri"] = (
+                "tong_so_luong la ton HIEN TAI (da cong nhap-xuat den moc du lieu), nhung "
+                "tong_gia_tri CHI la gia tri DAU NAM TAI CHINH - nguon bien dong khong co cot tien. "
+                "KHONG duoc trinh bay tong_gia_tri nhu gia tri ton kho hien tai, va KHONG duoc chia "
+                "tong_gia_tri cho tong_so_luong de suy ra don gia.")
         if nam_moi_nhat is None:
             r["canh_bao"] = ("Kho chua dong bo cot fiscal_year - so lieu nay co the dang CONG DON "
                              "nhieu nam tai chinh (dem trung). Can chay lai sync_warehouse.py "
@@ -8823,12 +8838,20 @@ def inventory_by_region(area_code: str = None, scope_area_code: str = None) -> l
             if nam_sx is not None:
                 sql_sx += " AND t.year = ?"; ps.append(nam_sx)
             sql_sx += " GROUP BY COALESCE(NULLIF(TRIM(k.branch_code),''),'SX') ORDER BY 1"
+            gia_tri_sx_dau_ky = bool(_q(
+                "SELECT 1 FROM brvsx_tonkhodk WHERE amount IS NULL AND quantity <> 0 LIMIT 1"))
             for r in _q(sql_sx, tuple(ps)):
                 r["area_label"] = "San xuat" if r["area_code"] == "SX" else "San xuat - %s" % r["area_code"]
                 r["tong_so_luong"] = _f(r["tong_so_luong"])
                 r["tong_gia_tri"] = _f(r["tong_gia_tri"])
                 r["nam_tai_chinh"] = nam_sx
                 r["he_thong"] = "SAN_XUAT"
+                if gia_tri_sx_dau_ky:
+                    r["gia_tri_moc_thoi_gian"] = "DAU_NAM"
+                    r["canh_bao_gia_tri"] = (
+                        "tong_so_luong la ton HIEN TAI, nhung tong_gia_tri CHI la gia tri DAU NAM "
+                        "TAI CHINH - nguon bien dong khong co cot tien. KHONG trinh bay tong_gia_tri "
+                        "nhu gia tri ton kho hien tai, KHONG chia ra don gia.")
                 rows.append(r)
         except Exception:
             # Kho cu chua co bang BRVSX - tra ve phan kinh doanh kem canh bao thay vi sap bao cao.
