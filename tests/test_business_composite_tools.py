@@ -150,6 +150,9 @@ def test_customer_revenue_debt_risk_is_one_composite_query(monkeypatch):
             "rev_recent": 200_000_000, "rev_prior": 400_000_000,
             "pct_change": -50.0, "balance_end": 300_000_000,
             "overdue": 100_000_000, "snapshot_at": "2026-08-14T10:45:00",
+            # 17/09/2026: truy van that co them COUNT(*) OVER() de biet TONG so khach thoa dieu kien
+            # TRUOC khi cat theo LIMIT - ban gia phai co cot nay thi moi kiem dung hanh vi that.
+            "total_matching": 137,
         }]
 
     monkeypatch.setattr(rt, "_q", fake_q)
@@ -158,7 +161,9 @@ def test_customer_revenue_debt_risk_is_one_composite_query(monkeypatch):
     assert result["recent_period"] == {"from": "2026-05-01", "to": "2026-07-31"}
     assert result["prior_period"] == {"from": "2026-02-01", "to": "2026-04-30"}
     assert result["customers"][0]["change_pct"] == -50.0
-    assert len(captured) == 1
+    # Tong khach lay tu COUNT(*) OVER() cua chinh truy van do, KHONG phai so dong da bi cat.
+    assert result["customer_count"] == 137 and result["returned_count"] == 1
+    assert len(captured) == 1          # VAN chi MOT truy van gop, khong them query dem rieng
     assert "revenue" in captured[0][0]
     assert "debt" in captured[0][0]
 
