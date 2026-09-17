@@ -6789,11 +6789,17 @@ def etc_contract_status(as_of_date: str = None, expiring_days: int = 90, limit: 
         "hop_dong_sap_het_han": sorted(sap_het, key=lambda x: x["con_lai_ngay"])[:limit],
         "so_hop_dong_gia_tri_bat_thuong": len(bat_thuong),
         "hop_dong_gia_tri_bat_thuong": sorted(bat_thuong, key=lambda x: -x["gia_tri_hop_dong"])[:20],
-        "canh_bao": ("Cac hop dong co gia tri bat thuong da duoc TACH RIENG khoi moi con so tong o "
-                     "day (do 13/09/2026: 3/9.135 hop dong chiem 99,88% tong gia tri). Khi tra loi "
-                     "phai neu ro con so tong khong gom nhung hop dong do va can DNH kiem lai du lieu "
-                     "goc. Ty le thuc hien = tong Amount9 hoa don co ContractId / gia tri hop dong, "
-                     "ca hai deu TRUOC VAT."),
+        # 17/09/2026: cau chu PHAI dung so SONG. Ban cu ghi cung "3/9.135 hop dong" - con so do la
+        # ket qua do ngay 13/09 voi luat phat hien CU; luat sua 15/09 (them don gia > 1 ty va sau
+        # VAT chenh truoc VAT qua 2 lan) nay tach 60 hop dong. Chatbot doc cau chu nay va bao "co 3
+        # hop dong gia tri bat thuong" trong khi truong so_hop_dong_gia_tri_bat_thuong ngay canh do
+        # ghi 60 (UAT 17/09, cau C44). So ghi cung trong van ban se lac hau am tham moi lan doi luat.
+        "canh_bao": (f"{len(bat_thuong)} hop dong co gia tri bat thuong da duoc TACH RIENG khoi moi "
+                     "con so tong o day (dau hieu: truoc VAT lech Quantity*UnitPrice qua 5%, don gia "
+                     "tren 1 ty/don vi, hoac sau VAT chenh truoc VAT qua 2 lan - vd HD 115627). Khi "
+                     "tra loi phai neu ro con so tong khong gom nhung hop dong do va can DNH kiem lai "
+                     "du lieu goc. Ty le thuc hien = tong Amount9 hoa don co ContractId / gia tri hop "
+                     "dong, ca hai deu TRUOC VAT."),
         "data_as_of": latest_data_date(),
     }
 

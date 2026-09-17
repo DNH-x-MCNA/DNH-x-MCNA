@@ -63,3 +63,19 @@ def test_hop_dong_gia_tri_bat_thuong_khong_bi_tinh_vao_dem(monkeypatch):
 
     assert kq["so_hop_dong_thuc_hien_duoi_50_pct"] == 3
     assert kq["so_hop_dong_gia_tri_bat_thuong"] == 3
+
+
+def test_canh_bao_dung_so_song_khong_ghi_cung(monkeypatch):
+    """17/09/2026 cau C44: chatbot bao "co 3 hop dong gia tri bat thuong" trong khi truong so lieu
+    ngay canh do ghi 60. Nguyen nhan: cau chu canh_bao ghi cung "3/9.135 hop dong" - ket qua do
+    ngay 13/09 voi luat phat hien CU, khong doi theo khi luat sua 15/09. So ghi cung trong van ban
+    se lac hau am tham moi lan doi luat, va model doc van ban chu khong doc truong so."""
+    rows = ([_dong(i, 1_000_000.0, 100_000.0) for i in range(1, 4)]
+            + [_dong(90 + i, 1_000_000.0, 0.0, so_dong_lech=1) for i in range(7)])
+    monkeypatch.setattr(rt, "_q_bravo", lambda sql, params=None: rows)
+
+    kq = rt.etc_contract_status()
+
+    assert kq["so_hop_dong_gia_tri_bat_thuong"] == 7
+    assert kq["canh_bao"].startswith("7 hop dong")      # cau chu khop truong so lieu
+    assert "3/9.135" not in kq["canh_bao"]              # khong con so ghi cung cua ban cu
