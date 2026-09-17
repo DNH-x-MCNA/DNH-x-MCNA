@@ -67,15 +67,29 @@ tổng giảm từ 70 xuống 60.
 có doanh thu thực hiện, không có giá trị hợp đồng/còn lại/hạn) — đúng nguyên nhân "SQL trả về
 không đúng trọng tâm" trong sổ 11/09. Nay route thẳng vào `get_etc_contract_status`.
 
-**Lưu ý cho người chấm — C43 KHÔNG cùng loại với C44/M42:** C43 hỏi "kế hoạch thầu, giá trị tham
-gia, giá trị TRÚNG, tỷ lệ TRÚNG thầu" — đây là dữ liệu đấu thầu (tham gia thầu nhưng có thể trượt),
-khác với "thực hiện hợp đồng đã ký" mà `get_etc_contract_status` đang mô hình hóa. Router hiện
-KHÔNG đưa C43 vào tool này (đúng, không phải bug định tuyến) vì tool chưa có khái niệm "trượt
-thầu". Nếu dữ liệu bidding không tồn tại trong Bravo, C43 nên xếp diện "ĐẠT — giới hạn nguồn đã
-xác nhận" chứ không phải "chờ sửa thêm" — cần DNH xác nhận Bravo có lưu lịch sử đấu thầu (thắng/
-trượt) hay chỉ có hợp đồng đã ký.
+**C43 đã tra trực tiếp trên Bravo (17/09, đọc-only, tuần tự) — KẾT LUẬN: nguồn không tồn tại,
+không phải việc cần sửa code.** C43 hỏi "giá trị THAM GIA đấu thầu, giá trị TRÚNG thầu, TỶ LỆ
+trúng" — nghĩa là cần biết cả những gói thầu đã tham gia nhưng KHÔNG trúng. Đã kiểm toàn bộ 4 object
+Bravo có tên liên quan hợp đồng/thầu:
 
-**Cách chấm lại:** C43/C44 trên C-Level (kênh ETC), M42 trên GĐ kênh ETC.
+| Object | Có gì | Có trả lời được C43 không |
+|---|---|---|
+| `DMSSX_HopDongHdr` / `vHopDongETC` | `StatusId` (0 Chưa chốt / 1 Đã chốt / 2 Đã chuyển đơn hàng / 3 Hoàn tất — tra qua `DIM_KeyClass.GroupCode='ContractStatus'`) | Không — đây là VÒNG ĐỜI hợp đồng ĐÃ KÝ, không phải kết quả thắng/thua thầu |
+| `DMSSX_HopDongHdr.OpenDate`/`PassDate` | Chỉ 68/6.815 và 117/1.380 dòng có giá trị (~1–8%) | Không — quá thưa để dùng làm nguồn hệ thống, nhiều khả năng nhập tay lẻ tẻ |
+| `FACT_DuDKHopDongETC` | 2.816 dòng, chỉ một mốc `DocDate='2026-01-01'`, đúng 1.544 hợp đồng | Không — là bảng KẾ HOẠCH GIAO HÀNG của hợp đồng ĐÃ TỒN TẠI, không phải kế hoạch tham gia thầu. Xác minh: cả 1.544/1.544 `ContractId` đều khớp thẳng vào `DMSSX_HopDongHdr` — 0 hợp đồng "chỉ có trong kế hoạch mà không thành hợp đồng thật", tức bảng này không hề chứa trường hợp "tham gia nhưng trượt" |
+
+Bravo chỉ ghi nhận hợp đồng SAU KHI đã ký — đúng bản chất một ERP (ghi nhận nghiệp vụ đã xảy ra),
+không phải CRM/hệ thống theo dõi đấu thầu (ghi nhận cả cơ hội đã tham gia nhưng không thắng). Không
+có mẫu số ("đã tham gia bao nhiêu gói") thì không tính được tỷ lệ trúng thầu từ nguồn này.
+
+**Kết luận đề xuất:** xếp C43 vào "ĐẠT — giới hạn nguồn đã xác nhận". Chatbot nên trả lời được phần
+"doanh thu thực hiện theo tháng/quý" (đã có qua `get_etc_contract_status`/`get_etc_revenue_by_item_type`)
+và nêu rõ "giá trị tham gia thầu, tỷ lệ trúng thầu" không có trong Bravo — không suy luận từ số hợp
+đồng đã ký (số đó không phải mẫu số của tỷ lệ trúng). Nếu DNH thực sự cần chỉ số này, phải bổ sung
+nguồn dữ liệu đấu thầu riêng (CRM hoặc file quản lý thầu thủ công), ngoài phạm vi sửa chatbot.
+
+**Cách chấm lại:** C44 trên C-Level (kênh ETC), M42 trên GĐ kênh ETC. C43 chấm theo tiêu chí
+"ĐẠT — giới hạn nguồn" ở trên, không chờ sửa thêm.
 
 ---
 
