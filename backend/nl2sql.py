@@ -1490,8 +1490,15 @@ TEMPLATE_TOOLS = [
     },
     {
         "name": "get_receivables_period_compare",
-        "description": "SO SANH cong no (du no + no qua han) giua 2 NGAY snapshot lich su - dung cho cau hoi "
-                        "'cong no hom nay so voi tuan/thang truoc the nao', 'no qua han tang hay giam so voi ngay X'. "
+        "description": "SO SANH cong no giua 2 NGAY snapshot lich su - dung cho cau hoi 'cong no hom nay so voi "
+                        "tuan/thang truoc the nao', 'no qua han tang hay giam', 'co cau tuoi no/kenh/mien thay doi "
+                        "ra sao', 'rui ro tap trung cong no tang hay giam'. "
+                        "TRA VE DAY DU tai CA HAI moc: tong du no, tong qua han, ty le qua han, 4 NHOM TUOI NO "
+                        "(aging), theo KENH (by_channel), theo VUNG (by_region), TOP 10 KHACH no qua han, va do TAP "
+                        "TRUNG top10/top20 - kem chenh lech tung phan. "
+                        "KHONG duoc noi rang lich su 'chi co tong du no/tong qua han' hay de nghi DNH bo sung luu "
+                        "snapshot chi tiet theo khach: he thong DA luu day du tung khach/kenh/vung/tuoi no tu "
+                        "21/08/2026. Gioi han THAT chi la SO MOC NGAY dang co, khong phai do chi tiet. "
                         "KHAC voi get_receivables_overview (chi co snapshot HIEN TAI DUY NHAT, khong so sanh duoc). "
                         "NEU CHUA CHAC ngay nao co du lieu, goi get_receivables_history_dates TRUOC. He thong moi bat "
                         "dau luu lich su tu 21/08/2026 nen CHI so sanh duoc trong pham vi tu ngay do tro di - KHONG "

@@ -7827,7 +7827,13 @@ def receivables_period_compare(snapshot_date_a: str, snapshot_date_b: str,
     rang thay vi so sanh voi 0.
 
     21/08/2026: bang lich su moi duoc them nen CHI so sanh duoc trong pham vi tu ngay bat dau ghi -
-    KHONG the so sanh voi cac ky xa hon (vd "cung ky nam ngoai") nhu doanh thu da lam duoc."""
+    KHONG the so sanh voi cac ky xa hon (vd "cung ky nam ngoai") nhu doanh thu da lam duoc.
+
+    17/09/2026: tra ve DAY DU cac chieu co san trong bang lich su tai CA HAI moc - 4 nhom tuoi no
+    (aging), theo kenh (by_channel), theo vung (by_region), top 10 khach no qua han va do tap trung
+    top10/top20 - kem chenh lech tuong ung. Ban truoc chi tra 2 con so tong moi moc, khien chatbot
+    hieu nham la du lieu KHONG CO cac chieu do va di bao voi nguoi dung nhu vay (xem ghi chu chi
+    tiet trong _snapshot)."""
     conditions, params = [], []
     if scope_area_code:
         region_key = next((k for k, ms in REGION_SQL_MARKERS.items() if scope_area_code in ms), None)
@@ -7843,10 +7849,67 @@ def receivables_period_compare(snapshot_date_a: str, snapshot_date_b: str,
     where = "".join(f" AND {condition}" for condition in conditions)
 
     def _snapshot(d):
-        r = _q(f"SELECT COALESCE(SUM(balance_end),0) bal, COALESCE(SUM(total_overdue),0) od, COUNT(*) n "
+        # 17/09/2026 - SUA THIEU SOT NANG: ban cu CHI tra SUM(balance_end)+SUM(total_overdue), vut
+        # bo 4 nhom tuoi no, chieu kenh, chieu vung va chi tiet tung khach - DU CA BON deu nam san
+        # trong chinh bang dang query (xem schema fact_congno_khachhang_history). Hau qua thuc te
+        # (nhat ky UAT 17/09, cau C37 va C40): chatbot tuong day la GIOI HAN DU LIEU va tuyen bo
+        # voi nguoi dung rang "cac moc snapshot lich su cu chi co tong du no & tong qua han, khong
+        # tach duoc kenh/mien/co cau tuoi no", C40 con khuyen DNH "bo sung luu snapshot chi tiet
+        # theo khach hang" - trong khi he thong DA luu day du tu 21/08/2026. Bao cao thieu nang luc
+        # minh dang co la sai nghiem trong hon bao loi ky thuat.
+        r = _q(f"SELECT COALESCE(SUM(balance_end),0) bal, COALESCE(SUM(total_overdue),0) od, "
+               f"COALESCE(SUM(overdue_1_15),0) b1, COALESCE(SUM(overdue_15_30),0) b2, "
+               f"COALESCE(SUM(overdue_30_45),0) b3, COALESCE(SUM(overdue_gt_45),0) b4, COUNT(*) n, "
+               f"SUM(CASE WHEN total_overdue > 0 THEN 1 ELSE 0 END) n_qh "
                f"FROM fact_congno_khachhang_history WHERE snapshot_date=?{where}", (d, *params))[0]
-        return {"snapshot_date": d, "balance_end": _f(r["bal"]), "total_overdue": _f(r["od"]),
-                "so_dong": int(r["n"])}
+        bal, od = _f(r["bal"]), _f(r["od"])
+        snap = {"snapshot_date": d, "balance_end": bal, "total_overdue": od,
+                "overdue_pct": (od / bal * 100) if bal else 0.0,
+                "so_dong": int(r["n"]), "so_khach_qua_han": int(r["n_qh"] or 0),
+                "aging": {"overdue_1_15": _f(r["b1"]), "overdue_15_30": _f(r["b2"]),
+                          "overdue_30_45": _f(r["b3"]), "overdue_gt_45": _f(r["b4"])}}
+        if not snap["so_dong"]:
+            return snap
+
+        by_channel = _q(f"SELECT sales_channel, COALESCE(SUM(balance_end),0) bal, "
+                        f"COALESCE(SUM(total_overdue),0) od FROM fact_congno_khachhang_history "
+                        f"WHERE snapshot_date=?{where} GROUP BY sales_channel", (d, *params))
+        snap["by_channel"] = [
+            {"channel": c["sales_channel"], "balance_end": _f(c["bal"]),
+             "total_overdue": _f(c["od"]),
+             "overdue_pct": (_f(c["od"]) / _f(c["bal"]) * 100) if _f(c["bal"]) else 0.0}
+            for c in by_channel]
+
+        if not scope_area_code:     # da scope roi thi chi con 1 vung, tach lai khong con y nghia
+            by_area = _q(f"SELECT area_code, COALESCE(SUM(balance_end),0) bal, "
+                         f"COALESCE(SUM(total_overdue),0) od FROM fact_congno_khachhang_history "
+                         f"WHERE snapshot_date=?{where} GROUP BY area_code", (d, *params))
+            agg = {}
+            for c in by_area:
+                label = _AREA_TO_REGION_VI.get(c["area_code"], "Khac/chua xac dinh")
+                b, o = agg.get(label, (0.0, 0.0))
+                agg[label] = (b + _f(c["bal"]), o + _f(c["od"]))
+            snap["by_region"] = [
+                {"region": lbl, "balance_end": b, "total_overdue": o,
+                 "overdue_pct": (o / b * 100) if b else 0.0}
+                for lbl, (b, o) in sorted(agg.items(), key=lambda x: -x[1][1])]
+
+        top = _q(f"SELECT customer_code, MAX(customer_name) name, COALESCE(SUM(balance_end),0) bal, "
+                 f"COALESCE(SUM(total_overdue),0) od FROM fact_congno_khachhang_history "
+                 f"WHERE snapshot_date=?{where} GROUP BY customer_code "
+                 f"HAVING SUM(total_overdue) > 0 ORDER BY SUM(total_overdue) DESC LIMIT 20",
+                 (d, *params))
+        snap["top_overdue_customers"] = [
+            {"customer_code": c["customer_code"], "customer_name": c["name"],
+             "balance_end": _f(c["bal"]), "total_overdue": _f(c["od"])} for c in top[:10]]
+        if od:
+            # Do TAP TRUNG tai tung moc - de tra loi duoc "rui ro tap trung TANG hay GIAM" thay vi
+            # bao "khong co lich su chi tiet theo khach" (C40 17/09/2026).
+            snap["tap_trung_no_qua_han"] = {
+                "top10_share_pct": sum(_f(c["od"]) for c in top[:10]) / od * 100,
+                "top20_share_pct": sum(_f(c["od"]) for c in top) / od * 100,
+            }
+        return snap
 
     a, b = _snapshot(snapshot_date_a), _snapshot(snapshot_date_b)
     missing = [d for d, s in ((snapshot_date_a, a), (snapshot_date_b, b)) if s["so_dong"] == 0]
@@ -7856,16 +7919,31 @@ def receivables_period_compare(snapshot_date_a: str, snapshot_date_b: str,
 
     delta_balance = a["balance_end"] - b["balance_end"]
     delta_overdue = a["total_overdue"] - b["total_overdue"]
-    return {
+    ket_qua = {
         "ky_a": a, "ky_b": b,
         "delta_balance_end": delta_balance,
         "delta_total_overdue": delta_overdue,
         "pct_change_balance_end": (delta_balance / b["balance_end"] * 100) if b["balance_end"] else None,
         "pct_change_total_overdue": (delta_overdue / b["total_overdue"] * 100) if b["total_overdue"] else None,
+        "delta_overdue_pct_diem": a["overdue_pct"] - b["overdue_pct"],
+        "delta_aging": {k: a["aging"][k] - b["aging"][k] for k in a["aging"]},
         "aging_bucket_note": _AGING_BUCKET_NOTE,
         "scope_area_code": scope_area_code,
         "scope_channel": str(scope_channel).strip().upper() if scope_channel else None,
     }
+    tt_a, tt_b = a.get("tap_trung_no_qua_han"), b.get("tap_trung_no_qua_han")
+    if tt_a and tt_b:
+        ket_qua["delta_tap_trung_diem"] = {
+            "top10_share_pct": tt_a["top10_share_pct"] - tt_b["top10_share_pct"],
+            "top20_share_pct": tt_a["top20_share_pct"] - tt_b["top20_share_pct"],
+        }
+    ket_qua["answer_rule"] = (
+        "Du lieu lich su nay CO DU chieu kenh, vung, 4 nhom tuoi no va tung khach hang tai MOI moc "
+        "- KHONG duoc noi rang lich su chi co tong du no/tong qua han, va KHONG duoc de nghi DNH "
+        "'bo sung luu snapshot chi tiet' vi he thong DA luu tu 21/08/2026. Gioi han THAT chi la SO "
+        "MOC ngay dang co (xem get_receivables_history_dates), khong phai do chi tiet."
+    )
+    return ket_qua
 
 
 def _customer_code_exists(value: str) -> bool:
