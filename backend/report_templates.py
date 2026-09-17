@@ -1940,6 +1940,51 @@ def revenue_ytd_cumulative(year_month_to: str = None, from_month: str = None, ye
         "tu_thang": from_month, "den_thang": month_to, "cac_nam": years,
         "data_as_of": latest_data_date(),
     }
+
+    # 17/09/2026 - SUA PHEP SO "CUNG KY" KHONG CUNG KY (UAT that, cau C03): date_to o tren LUON la
+    # ngay CUOI THANG cua tung nam, nen khi thang dang chay chua tron, nam nay chi co du lieu den
+    # ngay 17 nhung nam truoc duoc tinh TRON ca thang. Ket qua: chatbot bao "YTD 2026 thap hon cung
+    # ky 2025 -8,7%" trong khi mot phan muc giam chi la do thieu 13 ngay cuoi thang 9/2026. Tool CHI
+    # canh bao ve ke hoach (ke hoach tron thang), KHONG canh bao ve phep so cung ky nen model khong
+    # co cach nao biet. Cac tool anh em da co co che nay (month_to_is_partial o geography/kpi,
+    # comparison_valid o compare_periods) - rieng ham nay con thieu.
+    # Giu nguyen cac_nam de khong pha gi dang dung; THEM khoi so cung ky CAT DUNG NGAY.
+    moc_du_lieu = latest_data_date()
+    nam_moi_nhat = years[0]["year"] if years else None
+    if moc_du_lieu and nam_moi_nhat and moc_du_lieu[:7] == f"{nam_moi_nhat:04d}-{month_to}":
+        ngay_cat = int(moc_du_lieu[8:10])
+        if ngay_cat < _last_day_of_month(nam_moi_nhat, int(month_to)):
+            cung_ky = []
+            for row in years:
+                y = row["year"]
+                ngay = min(ngay_cat, _last_day_of_month(y, int(month_to)))
+                d_from, d_to = f"{y:04d}-{from_month}-01", f"{y:04d}-{month_to}-{ngay:02d}"
+                r = revenue_by_channel(d_from, d_to, scope_area_code, scope_channel,
+                                       scope_employee_code)
+                cung_ky.append({"year": y, "date_from": d_from, "date_to": d_to,
+                                "revenue": r["total"]["revenue"],
+                                "otc_revenue": r["otc"]["revenue"],
+                                "etc_revenue": r["etc"]["revenue"]})
+            for idx in range(len(cung_ky) - 1):
+                truoc = cung_ky[idx + 1]["revenue"]      # cac_nam da sap xep giam dan theo nam
+                cung_ky[idx]["pct_change_vs_prev_year"] = (
+                    (cung_ky[idx]["revenue"] - truoc) / truoc * 100 if truoc else None)
+            result["ky_chua_tron"] = True
+            result["du_lieu_den_ngay"] = moc_du_lieu
+            result["so_cung_ky_dung_ngay"] = {
+                "cat_den_ngay": ngay_cat,
+                "cac_nam": cung_ky,
+                "giai_thich": (f"Cac nam deu cat den ngay {ngay_cat} cua thang {month_to} de so "
+                               "CUNG SO NGAY. Day moi la phep so cung ky dung."),
+            }
+            result["answer_rule_cung_ky"] = (
+                "Thang cuoi cua ky nay CHUA TRON (du lieu den " + moc_du_lieu + "). Khi noi ve tang/"
+                "giam SO VOI CUNG KY NAM TRUOC, BAT BUOC dung so trong so_cung_ky_dung_ngay - so "
+                "trong cac_nam lay het thang cho MOI nam nen nam truoc duoc tinh du thang con nam "
+                "nay chi co mot phan, khong phai cung ky. Rieng % ke hoach van doc o cac_nam (ke "
+                "hoach von theo tron thang) va phai noi ro ky chua tron."
+            )
+
     if any(not row["revenue_history_complete"] for row in years):
         result["canh_bao_thieu_lich_su_doanh_thu"] = (
             "Co ky YTD thieu du lieu doanh thu truoc moc kho hien co. Cac cot % ke hoach, gap va "
