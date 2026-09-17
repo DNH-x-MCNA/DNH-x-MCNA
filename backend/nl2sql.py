@@ -1477,9 +1477,15 @@ TEMPLATE_TOOLS = [
     },
     {
         "name": "get_receivables_history_dates",
-        "description": "Liet ke cac NGAY da co snapshot cong no LICH SU - dung TRUOC get_receivables_period_compare "
-                        "de biet co ngay nao de so sanh, hoac khi hoi 'cong no co du lieu tu bao gio'. He thong bat dau "
-                        "luu lich su cong no tu 21/08/2026, KHONG co du lieu truoc do (khac doanh thu co nhieu nam).",
+        "description": "CHUOI cong no theo tung MOC snapshot lich su: moi moc co tong du no, tong no qua han, "
+                        "ty le qua han va chenh lech so voi moc lien truoc - dung cho MOI cau hoi dang 'cong no thay "
+                        "doi the nao qua thoi gian', 'no qua han tang hay giam', hoac khi can biet co nhung ngay nao "
+                        "de so sanh. TRA CA CHUOI TRONG MOT LAN GOI: KHONG duoc goi "
+                        "get_receivables_period_compare lap lai cho tung cap ngay de dung duong xu huong, va KHONG "
+                        "duoc chi lay vai moc roi trinh bay nhu the do la toan bo du lieu dang co. Can tach theo "
+                        "kenh/vung/tuoi no hoac tung khach tai HAI moc cu the thi moi dung get_receivables_period_compare. "
+                        "He thong bat dau luu lich su cong no tu 21/08/2026, KHONG co du lieu truoc do (khac doanh thu "
+                        "co nhieu nam). Pham vi vung/kenh/doi duoc backend ep tu tai khoan.",
         "input_schema": {
             "type": "object",
             "properties": {

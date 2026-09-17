@@ -7797,26 +7797,125 @@ def _customer_receivable(customer_code: str, channel: str) -> dict:
     return result
 
 
-def receivables_history_dates(limit: int = 30) -> dict:
+def _loc_pham_vi_cong_no_lich_su(conditions: list, params: list, scope_area_code: str,
+                                 scope_channel: str, scope_employee_code: str) -> tuple:
+    """Gom dieu kien loc pham vi (vung / kenh / DOI QLV) cho hai tool doc bang lich su cong no.
+
+    17/09/2026 - VA LO PHAM VI DOI: truoc do receivables_period_compare KHONG nhan
+    scope_employee_code va KHONG nam trong _PERSON_LEVEL_TEMPLATES, nen chot fail-closed trong
+    call_template() khong he kich hoat voi tai khoan QLV - tool chay voi pham vi CA VUNG. Khi tool
+    chi tra 2 con so tong thi hau qua con nho; nhung tu ban 17/09 no tra them TOP 10 KHACH kem ten
+    va so no, tuc QLV se doc duoc khach cua doi khac. Dung dieu ma chinh chot fail-closed trong
+    call_template() goi la khong chap nhan duoc ("Tha tu choi con hon lo ... cua doi khac").
+
+    Dung DUNG ngu nghia cua receivables_overview de hai bao cao khong lech dinh nghia "doi":
+    khach thuoc doi lay tu phan cong KPI (FACT_TongHopKhachHang), va khach ETC thi CHUA co phan
+    cong theo doi nen tu choi thang thay vi lay cong no ca vung thay the."""
+    if scope_area_code:
+        region_key = next((k for k, ms in REGION_SQL_MARKERS.items() if scope_area_code in ms), None)
+        markers = REGION_SQL_MARKERS.get(region_key, [scope_area_code])
+        conditions.append(f"area_code IN ({','.join(['?'] * len(markers))})")
+        params.extend(markers)
+
+    team_scope = None
+    if scope_employee_code:
+        if scope_channel and str(scope_channel).strip().upper() != "OTC":
+            raise KhongXacDinhDuocDoi(
+                "Chua co phan cong khach ETC theo doi QLV de loc cong no lich su; "
+                "khong the dung phan cong OTC hay cong no ca vung thay the.")
+        scope_channel = "OTC"
+        ngay_phan_cong = dt.date.today()
+        ma_khach = sorted(team_customer_codes(_q, scope_employee_code, ngay_phan_cong))
+        if not ma_khach:
+            raise KhongXacDinhDuocDoi(
+                f"Khong xac dinh duoc khach thuoc doi {scope_employee_code} trong phan cong KPI; "
+                "CHUA danh gia duoc cong no lich su cua doi, khong ket luan khong co no.")
+        conditions.append(f"customer_code IN ({','.join('?' for _ in ma_khach)})")
+        params.extend(ma_khach)
+        team_scope = {
+            "manager_code": scope_employee_code,
+            "assignment_as_of": ngay_phan_cong.isoformat(),
+            "assigned_customers": len(ma_khach),
+            "source": "FACT_TongHopKhachHang.ManagerCode/EmployeeCode",
+        }
+
+    if scope_channel:
+        channel = str(scope_channel).strip().upper()
+        if channel not in {"OTC", "ETC"}:
+            raise ValueError(f"scope_channel khong hop le: {scope_channel}")
+        conditions.append("UPPER(TRIM(sales_channel))=?")
+        params.append(channel)
+    return scope_channel, team_scope
+
+
+def receivables_history_dates(limit: int = 30, scope_area_code: str = None,
+                              scope_channel: str = None,
+                              scope_employee_code: str = None) -> dict:
     """Liet ke cac NGAY da co snapshot cong no LICH SU (fact_congno_khachhang_history) - dung TRUOC
     khi goi get_receivables_period_compare de biet co ngay nao de so sanh chua, hoac khi nguoi dung
     hoi 'cong no co du lieu tu bao gio', 'co the so sanh cong no voi ngay nao'.
 
     21/08/2026: bang lich su MOI duoc them (xem sync_fact_congno trong sync_warehouse.py) - CHI co
     du lieu TU NGAY BAT DAU GHI TRO DI, KHONG co lich su cong no truoc do (khac han doanh thu co du
-    lieu nhieu nam). PHAI noi ro dieu nay neu danh sach ngay con it/moi bat dau."""
+    lieu nhieu nam). PHAI noi ro dieu nay neu danh sach ngay con it/moi bat dau.
+
+    17/09/2026 - TRA LUON SO LIEU TUNG MOC, khong chi liet ke ngay. Ly do tu UAT that (cau C37):
+    ban cu chi tra danh sach ngay, muon ve duoc duong xu huong thi model phai goi
+    get_receivables_period_compare cho TUNG CAP ngay - voi ~27 moc la bat kha thi trong han muc
+    MAX_TOOL_ROUNDS, nen model chi lay 4 moc roi trinh bay nhu the do la toan bo du lieu co. Mot
+    lan goi duy nhat o day tra ca chuoi (moi moc 4 con so, payload rat nho) la du dung duong xu
+    huong that."""
     limit = max(1, min(int(limit or 30), 100))
-    rows = _q("SELECT DISTINCT snapshot_date FROM fact_congno_khachhang_history "
-              "ORDER BY snapshot_date DESC LIMIT ?", (limit,))
-    dates = [r["snapshot_date"] for r in rows]
-    return {"so_ngay_co_du_lieu": len(dates), "cac_ngay": dates,
-            "ghi_chu": ("He thong bat dau luu lich su cong no tu 21/08/2026 - CHUA co du lieu cong "
-                        "no cua cac ky truoc ngay do, khac voi doanh thu (co du lieu nhieu nam).")}
+    conditions, params = [], []
+    scope_channel, team_scope = _loc_pham_vi_cong_no_lich_su(
+        conditions, params, scope_area_code, scope_channel, scope_employee_code)
+    where = "".join(f" AND {condition}" for condition in conditions)
+
+    rows = _q(
+        "SELECT snapshot_date, COALESCE(SUM(balance_end),0) bal, COALESCE(SUM(total_overdue),0) od, "
+        "COUNT(*) so_dong FROM fact_congno_khachhang_history "
+        f"WHERE 1=1{where} GROUP BY snapshot_date ORDER BY snapshot_date DESC LIMIT ?",
+        (*params, limit))
+    chuoi = []
+    for r in rows:
+        bal, od = _f(r["bal"]), _f(r["od"])
+        chuoi.append({"snapshot_date": r["snapshot_date"], "balance_end": bal,
+                      "total_overdue": od,
+                      "overdue_pct": (od / bal * 100) if bal else 0.0,
+                      "so_dong": int(r["so_dong"])})
+    # cac_ngay GIU nguyen hop dong cu: moi nhat truoc (nhieu noi dang dua vao thu tu nay).
+    # Rieng chuoi_theo_moc dao lai tang dan de doc duong xu huong cho tu nhien.
+    ngay_moi_truoc = [r["snapshot_date"] for r in chuoi]
+    chuoi.reverse()
+    for idx in range(1, len(chuoi)):
+        truoc = chuoi[idx - 1]
+        chuoi[idx]["delta_total_overdue"] = chuoi[idx]["total_overdue"] - truoc["total_overdue"]
+        chuoi[idx]["delta_overdue_pct_diem"] = chuoi[idx]["overdue_pct"] - truoc["overdue_pct"]
+
+    ket_qua = {
+        "so_ngay_co_du_lieu": len(chuoi),
+        "cac_ngay": ngay_moi_truoc,
+        "chuoi_theo_moc": chuoi,
+        "ghi_chu": ("He thong bat dau luu lich su cong no tu 21/08/2026 - CHUA co du lieu cong "
+                    "no cua cac ky truoc ngay do, khac voi doanh thu (co du lieu nhieu nam)."),
+        "answer_rule": (
+            "chuoi_theo_moc da co DU cac moc dang luu kem tong du no/qua han/ty le tung moc - dung "
+            "TRUC TIEP de dung duong xu huong, KHONG can goi get_receivables_period_compare cho "
+            "tung cap ngay va KHONG duoc chi lay vai moc roi trinh bay nhu the do la toan bo du "
+            "lieu. Can tach theo kenh/vung/tuoi no hay tung khach tai hai moc cu the thi moi goi "
+            "get_receivables_period_compare."),
+    }
+    if team_scope:
+        ket_qua["pham_vi_doi"] = team_scope
+    if scope_area_code or scope_channel:
+        ket_qua["pham_vi"] = {"scope_area_code": scope_area_code, "scope_channel": scope_channel}
+    return ket_qua
 
 
 def receivables_period_compare(snapshot_date_a: str, snapshot_date_b: str,
                                 scope_area_code: str = None,
-                                scope_channel: str = None) -> dict:
+                                scope_channel: str = None,
+                                scope_employee_code: str = None) -> dict:
     """SO SANH cong no giua 2 NGAY snapshot lich su (fact_congno_khachhang_history) - dung khi cau
     hoi dang "cong no hom nay so voi tuan truoc/thang truoc the nao", "no qua han tang hay giam so
     voi ngay X". KHAC voi get_receivables_overview (chi tra ve snapshot HIEN TAI DUY NHAT, khong so
@@ -7835,17 +7934,8 @@ def receivables_period_compare(snapshot_date_a: str, snapshot_date_b: str,
     hieu nham la du lieu KHONG CO cac chieu do va di bao voi nguoi dung nhu vay (xem ghi chu chi
     tiet trong _snapshot)."""
     conditions, params = [], []
-    if scope_area_code:
-        region_key = next((k for k, ms in REGION_SQL_MARKERS.items() if scope_area_code in ms), None)
-        markers = REGION_SQL_MARKERS.get(region_key, [scope_area_code])
-        conditions.append(f"area_code IN ({','.join(['?'] * len(markers))})")
-        params.extend(markers)
-    if scope_channel:
-        channel = str(scope_channel).strip().upper()
-        if channel not in {"OTC", "ETC"}:
-            raise ValueError(f"scope_channel khong hop le: {scope_channel}")
-        conditions.append("UPPER(TRIM(sales_channel))=?")
-        params.append(channel)
+    scope_channel, team_scope = _loc_pham_vi_cong_no_lich_su(
+        conditions, params, scope_area_code, scope_channel, scope_employee_code)
     where = "".join(f" AND {condition}" for condition in conditions)
 
     def _snapshot(d):
@@ -12440,14 +12530,17 @@ _ROLE_SCOPED_TEMPLATES = {
 _AREA_EXEMPT_TEMPLATES = {
     "get_audit_log", "get_salary_detail", "get_salary_achievement_summary", "get_salary_ranking",
     "get_salary_bonus_policy", "get_salary_data_quality",
-    # 21/08/2026: get_receivables_history_dates chi liet ke NGAY co du lieu (khong co so lieu cong
-    # no nao), khong nhan tham so scope_area_code trong chu ky ham - PHAI o day neu khong call_template
-    # se ep them tham so ma ham khong khai bao, gay TypeError.
-    "get_receivables_history_dates",
+    # 17/09/2026: get_receivables_history_dates DA BO khoi day. Tu ban nay no tra SO LIEU cong no
+    # tung moc (khong con chi la danh sach ngay) nen BAT BUOC chiu gioi han vung nhu moi bao cao
+    # cong no khac - ham da nhan scope_area_code/scope_channel/scope_employee_code.
 }
 
 _PERSON_LEVEL_TEMPLATES = {
     "get_receivables_overview",
+    # 17/09/2026: hai tool lich su cong no tra danh sach khach (top no qua han) nen phai chiu
+    # gioi han theo doi y het receivables_overview - truoc do KHONG co o day nen chot fail-closed
+    # cua call_template khong kich hoat voi tai khoan QLV.
+    "get_receivables_period_compare", "get_receivables_history_dates",
     # Ton kho theo vung, nhung nhu cau va danh sach khach mua phai gioi han theo doi.
     "get_inventory_expiry_report",
     "get_sku_revenue_drop_vs_stock", "get_revenue_view_reconciliation",
@@ -12482,6 +12575,10 @@ _PERSON_LEVEL_TEMPLATES = {
 
 _EMPLOYEE_SCOPED_TEMPLATES = {
     "get_receivables_overview",
+    # 17/09/2026: ca hai tool lich su cong no da ho tro loc khach theo doi (cung nguon phan cong
+    # KPI voi receivables_overview) nen dang ky o CA HAI tap - QLV van dung duoc, chi bi ep dung
+    # pham vi doi minh thay vi bi tu choi thang.
+    "get_receivables_period_compare", "get_receivables_history_dates",
     "get_inventory_expiry_report",
     "get_sku_revenue_drop_vs_stock",
     "get_revenue_tree", "get_kpi_ranking", "get_employee_kpi",
@@ -12516,6 +12613,7 @@ _CHANNEL_SCOPE_POLICIES = {
         "check_order_timing", "get_revenue_by_region", "get_promotion_effectiveness",
         "get_promotion_data_quality", "get_customer_revenue_debt_risk",
         "get_receivables_overview", "get_receivables_period_compare", "get_employee_daily_kpi",
+        "get_receivables_history_dates",
         "get_sku_revenue_drop_vs_stock",
         # 15/09/2026: tu tra not_applicable voi kenh ETC (nguon KPI khach chi phu OTC).
         "get_new_customer_list", "get_reorder_pending_customers",
@@ -12549,7 +12647,7 @@ _CHANNEL_SCOPE_POLICIES = {
         "get_revenue_view_reconciliation",
     }},
     # Metadata khong chua so lieu kinh doanh theo kenh, hoac da tu gioi han theo chinh nguoi dung.
-    "get_receivables_history_dates": "exempt",
+
     "get_audit_log": "exempt",
     # 15/09/2026 (UAT 14:40, anh Dang chot): ton kho khong phai so lieu theo kenh - tai khoan gioi han
     # kenh xem duoc ton kho; gioi han vung van ep qua scope_area_code.
