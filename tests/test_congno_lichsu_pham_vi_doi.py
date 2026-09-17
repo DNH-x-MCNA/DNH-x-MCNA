@@ -117,3 +117,57 @@ def test_hai_tool_da_dang_ky_gioi_han_doi_o_ca_hai_tap():
         assert ten in rt._EMPLOYEE_SCOPED_TEMPLATES
         assert ten not in rt._AREA_EXEMPT_TEMPLATES
         assert rt._CHANNEL_SCOPE_POLICIES[ten] == "filter"
+
+
+def _kho_tuoi_no(tmp_path):
+    """Hai moc: KH_GIA di tu nhom 15-30 sang 30-45; KH_YEN giu nguyen nhom 1-15."""
+    path = tmp_path / "warehouse.db"
+    conn = sqlite3.connect(path)
+    conn.executescript("""
+        CREATE TABLE fact_congno_khachhang_history (snapshot_date TEXT, snapshot_at TEXT,
+            customer_code TEXT, customer_name TEXT, sales_channel TEXT, area_code TEXT,
+            balance_end REAL, overdue_1_15 REAL, overdue_15_30 REAL, overdue_30_45 REAL,
+            overdue_gt_45 REAL, total_overdue REAL);
+        CREATE TABLE fact_tonghopkhachhang (employee_code TEXT, customer_code TEXT, manager_code TEXT,
+            save_date TEXT, amount_ct REAL, month_sale_target REAL, is_nc INTEGER);
+    """)
+    conn.executemany(
+        "INSERT INTO fact_congno_khachhang_history VALUES (?,'2026-09-15T10:00:00',?,?,'OTC','MB',?,?,?,?,?,?)",
+        [
+            # moc CU: KH_GIA dang o nhom 15-30
+            ("2026-09-01", "KH_GIA", "Khach gia di", 900.0, 0.0, 300.0, 0.0, 0.0, 300.0),
+            ("2026-09-01", "KH_YEN", "Khach yen", 500.0, 200.0, 0.0, 0.0, 0.0, 200.0),
+            # moc MOI: KH_GIA da chuyen sang 30-45 (tien khong doi - dung cai bay cua meo suy luan)
+            ("2026-09-15", "KH_GIA", "Khach gia di", 900.0, 0.0, 0.0, 300.0, 0.0, 300.0),
+            ("2026-09-15", "KH_YEN", "Khach yen", 500.0, 200.0, 0.0, 0.0, 0.0, 200.0),
+        ])
+    conn.commit()
+    conn.close()
+    return str(path)
+
+
+def test_chi_ra_khach_gia_di_bang_doi_chieu_khong_phai_suy_luan(tmp_path, monkeypatch):
+    """V35 17/09/2026: chatbot tung phai suy luan tu 'so tien qua han khong doi' vi tool khong tra
+    nhom tuoi theo tung khach. KH_GIA co so tien Y NGUYEN 300 nhung da chuyen 15-30 -> 30-45: chi
+    doi chieu nhom tuoi moi thay, meo 'tien khong doi' thi KHONG phan biet duoc voi KH_YEN."""
+    monkeypatch.setattr(local_warehouse, "DB_PATH", _kho_tuoi_no(tmp_path))
+
+    kq = rt.receivables_period_compare("2026-09-15", "2026-09-01")
+
+    gia_di = kq["khach_chuyen_nhom_tuoi_xau_hon"]
+    assert [k["customer_code"] for k in gia_di] == ["KH_GIA"]
+    assert gia_di[0]["nhom_tuoi_truoc"] == "overdue_15_30"
+    assert gia_di[0]["nhom_tuoi_sau"] == "overdue_30_45"
+    assert gia_di[0]["total_overdue_truoc"] == gia_di[0]["total_overdue_sau"]   # tien khong doi
+    assert "KHONG suy luan" in kq["pham_vi_so_sanh_khach"]
+
+
+def test_tung_khach_co_nhom_tuoi_va_bo_nhom_bang_khong(tmp_path, monkeypatch):
+    monkeypatch.setattr(local_warehouse, "DB_PATH", _kho_tuoi_no(tmp_path))
+
+    kq = rt.receivables_period_compare("2026-09-15", "2026-09-01")
+
+    theo_ma = {c["customer_code"]: c for c in kq["ky_a"]["top_overdue_customers"]}
+    assert theo_ma["KH_GIA"]["nhom_tuoi_xau_nhat"] == "overdue_30_45"
+    assert theo_ma["KH_GIA"]["aging"] == {"overdue_30_45": 300}    # bo cac nhom bang 0
+    assert theo_ma["KH_YEN"]["aging"] == {"overdue_1_15": 200}

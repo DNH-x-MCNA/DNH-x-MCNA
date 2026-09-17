@@ -7802,6 +7802,27 @@ def _customer_receivable(customer_code: str, channel: str) -> dict:
     return result
 
 
+_THU_TU_NHOM_TUOI = (("overdue_1_15", "b1", 1), ("overdue_15_30", "b2", 2),
+                     ("overdue_30_45", "b3", 3), ("overdue_gt_45", "b4", 4))
+
+
+def _nhom_tuoi_xau_nhat(row) -> str:
+    """Nhom tuoi no XAU NHAT con du tien cua mot khach tai mot moc. Dung de tra loi "khach nao
+    chuyen sang nhom xau hon" bang DOI CHIEU thay vi suy luan."""
+    xau = None
+    for ten, khoa, _bac in _THU_TU_NHOM_TUOI:
+        if _f(row[khoa]) > 0:
+            xau = ten
+    return xau
+
+
+def _bac_nhom_tuoi(ten_nhom: str) -> int:
+    for ten, _khoa, bac in _THU_TU_NHOM_TUOI:
+        if ten == ten_nhom:
+            return bac
+    return 0
+
+
 def _loc_pham_vi_cong_no_lich_su(conditions: list, params: list, scope_area_code: str,
                                  scope_channel: str, scope_employee_code: str) -> tuple:
     """Gom dieu kien loc pham vi (vung / kenh / DOI QLV) cho hai tool doc bang lich su cong no.
@@ -7989,14 +8010,28 @@ def receivables_period_compare(snapshot_date_a: str, snapshot_date_b: str,
                  "overdue_pct": (o / b * 100) if b else 0.0}
                 for lbl, (b, o) in sorted(agg.items(), key=lambda x: -x[1][1])]
 
+        # 17/09/2026 (UAT that, cau V35 "khach nao moi chuyen sang nhom tuoi no xau hon" va C39):
+        # ban truoc chi tra ma/ten/du no/qua han cho tung khach, KHONG tra 4 nhom tuoi no - trong khi
+        # bang lich su co du. Chatbot vi the bao "he thong chua luu lich su bucket rieng le theo
+        # khach" (SAI ve du lieu, dung ve cong cu) roi TU SUY LUAN khach nao gia di bang meo "so tien
+        # qua han khong doi", va neu ten 4 khach kem nhom tuoi nhu mot ket luan. Suy luan thay cho
+        # doi chieu la dung dieu khong duoc phep. Tra thang 4 nhom tuoi tung khach de khong phai doan.
         top = _q(f"SELECT customer_code, MAX(customer_name) name, COALESCE(SUM(balance_end),0) bal, "
-                 f"COALESCE(SUM(total_overdue),0) od FROM fact_congno_khachhang_history "
+                 f"COALESCE(SUM(total_overdue),0) od, COALESCE(SUM(overdue_1_15),0) b1, "
+                 f"COALESCE(SUM(overdue_15_30),0) b2, COALESCE(SUM(overdue_30_45),0) b3, "
+                 f"COALESCE(SUM(overdue_gt_45),0) b4 FROM fact_congno_khachhang_history "
                  f"WHERE snapshot_date=?{where} GROUP BY customer_code "
                  f"HAVING SUM(total_overdue) > 0 ORDER BY SUM(total_overdue) DESC LIMIT 20",
                  (d, *params))
         snap["top_overdue_customers"] = [
             {"customer_code": c["customer_code"], "customer_name": c["name"],
-             "balance_end": _f(c["bal"]), "total_overdue": _f(c["od"])} for c in top[:10]]
+             "balance_end": _f(c["bal"]), "total_overdue": _f(c["od"]),
+             # Chi giu nhom CO tien va lam tron: 10 khach x 2 moc x 4 nhom day du day payload
+             # len 9.550/10.000 ky tu, sat tran den muc luoi an toan se cat mat chinh phan nay.
+             # Nhom vang mat = 0 dong (da noi ro trong aging_bucket_note o cap tren).
+             "aging": {ten: int(_f(c[khoa])) for ten, khoa, _b in _THU_TU_NHOM_TUOI
+                       if _f(c[khoa]) > 0},
+             "nhom_tuoi_xau_nhat": _nhom_tuoi_xau_nhat(c)} for c in top[:10]]
         if od:
             # Do TAP TRUNG tai tung moc - de tra loi duoc "rui ro tap trung TANG hay GIAM" thay vi
             # bao "khong co lich su chi tiet theo khach" (C40 17/09/2026).
@@ -8026,6 +8061,35 @@ def receivables_period_compare(snapshot_date_a: str, snapshot_date_b: str,
         "scope_area_code": scope_area_code,
         "scope_channel": str(scope_channel).strip().upper() if scope_channel else None,
     }
+    # 17/09/2026: tinh san danh sach khach GIA DI giua hai moc - dung cau hoi cua V35/C39. Tinh o
+    # day (doi chieu nhom tuoi xau nhat cua tung khach tai hai moc) de model KHONG phai suy luan tu
+    # "so tien qua han khong doi" nhu no da lam.
+    truoc_theo_ma = {c["customer_code"]: c for c in (b.get("top_overdue_customers") or [])}
+    gia_di = []
+    for c in a.get("top_overdue_customers") or []:
+        cu_ = truoc_theo_ma.get(c["customer_code"])
+        if not cu_:
+            continue
+        bac_moi, bac_cu = _bac_nhom_tuoi(c["nhom_tuoi_xau_nhat"]), _bac_nhom_tuoi(cu_["nhom_tuoi_xau_nhat"])
+        if bac_moi > bac_cu:
+            gia_di.append({
+                "customer_code": c["customer_code"], "customer_name": c["customer_name"],
+                "nhom_tuoi_truoc": cu_["nhom_tuoi_xau_nhat"], "nhom_tuoi_sau": c["nhom_tuoi_xau_nhat"],
+                "total_overdue_truoc": cu_["total_overdue"], "total_overdue_sau": c["total_overdue"],
+            })
+    ket_qua["khach_chuyen_nhom_tuoi_xau_hon"] = gia_di
+    # Danh sach khach o moc CU chi con dung lam boi canh: phan so sanh gia di va do tap trung deu da
+    # tinh san o tren tu top 20 day du. Giu 10 dong o CA HAI moc day payload len 9.430/10.000 ky tu -
+    # sat tran den muc luoi an toan se cat mat chinh phan vua them. Rut moc cu con 5 dong.
+    if len(b.get("top_overdue_customers") or []) > 5:
+        b["top_overdue_customers"] = b["top_overdue_customers"][:5]
+        b["ghi_chu_top"] = ("Chi giu 5 khach lam boi canh; so sanh gia di va do tap trung da tinh "
+                            "san tu danh sach day du.")
+    ket_qua["pham_vi_so_sanh_khach"] = (
+        "khach_chuyen_nhom_tuoi_xau_hon va cac chi so theo khach chi xet trong TOP 20 khach no qua "
+        "han cua MOI moc (da loc dung pham vi tai khoan) - KHONG phai toan bo khach. Noi ro dieu nay "
+        "khi tra loi, va KHONG suy luan khach nao gia di tu viec 'so tien khong doi'.")
+
     tt_a, tt_b = a.get("tap_trung_no_qua_han"), b.get("tap_trung_no_qua_han")
     if tt_a and tt_b:
         ket_qua["delta_tap_trung_diem"] = {
