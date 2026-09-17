@@ -12911,6 +12911,31 @@ def call_template(name: str, args: dict, question: str = "", username: str = Non
         entry["status"] = "no_team"; entry["error"] = str(e)[:300]
         _write_log(entry)
         return {"ok": False, "error": str(e)}
+    except TypeError as e:
+        # 17/09/2026 (UAT that: cau C37 "Du no... month-by-month", model tu goi them
+        # get_customer_detail() de "doi chieu cong no" nhung KHONG truyen tham so nao - truoc day
+        # roi thang xuong nhanh Exception ben duoi, tra nguyen van loi Python cho nguoi dung:
+        # "get_customer_detail() missing 3 required positional arguments: 'customer_code',
+        # 'date_from', and 'date_to'" - lo ten tham so noi bo, doc nhu loi he thong hong thay vi
+        # loi model goi thieu tham so. Cac tool nhu customer_detail/salary_detail KHONG the co gia
+        # tri mac dinh hop ly cho ma khach/nhan vien (khac revenue_ytd_cumulative da sua rieng
+        # 16/09/2026, noi thang thieu co the suy ve thang gan nhat) - o day dung cach xu ly chung:
+        # nhan dien DUNG loai TypeError "thieu tham so bat buoc" (khong bat nham TypeError khac,
+        # vd loi cong None+so ben trong ham), tra thong diep ro cho model biet PHAI hoi lai nguoi
+        # dung de co doi tuong cu the, khong duoc tu doan hay bao loi he thong.
+        msg = str(e)
+        thieu_tham_so = re.search(r"missing \d+ required (positional |keyword-only )?argument", msg)
+        if not thieu_tham_so:
+            entry["status"] = "error"; entry["error"] = msg[:300]
+            _write_log(entry)
+            return {"ok": False, "error": f"Loi khi chay bao cao chuan '{name}': {msg[:300]}"}
+        entry["status"] = "missing_args"; entry["error"] = msg[:300]
+        _write_log(entry)
+        return {"ok": False, "error": (
+            f"Cong cu '{name}' can them thong tin de chay ({msg.split('missing', 1)[-1].strip()}). "
+            "KHONG duoc tu suy dien hay bo qua phan nay - hoi lai nguoi dung de biet ro doi tuong cu "
+            "the (vd ten/ma khach hang, ten/ma nhan vien) truoc khi goi lai cong cu nay."
+        )}
     except Exception as e:
         entry["status"] = "error"; entry["error"] = str(e)[:300]
         _write_log(entry)
