@@ -1097,8 +1097,10 @@ TEMPLATE_TOOLS = [
                        "C28/S91: mode='assignment_change' tach khach giu nguyen NV chinh, doi NV, moi va "
                        "roi bo tren OTC; day la ket qua PARTIAL vi khong co lich su assignment dia ban chot chuan. "
                        "C34/M34/S22: BAT BUOC mode='product_first_observed', lookback_months=12. "
-                       "first_observed_sale_month KHONG phai ngay ra mat; chi dung dong co "
-                       "valid_for_launch_age_analysis=true. Kho chua co master launch date va target SKU, "
+                       "first_observed_sale_month KHONG phai ngay ra mat; chi xep hang va so sanh dong co "
+                       "valid_for_launch_age_analysis=true. SKU ghi nhan dau o thang hien tai CHUA TRON "
+                       "da bi dat valid=false (doanh thu moi mot phan thang) - neu rieng, khong dua vao "
+                       "bang so sanh. Kho chua co master launch date va target SKU, "
                        "nen KHONG tinh % ke hoach va phai noi ro gioi han.",
         "input_schema": {"type": "object", "properties": {
             "as_of_date": {"type": "string"}, "lookback_months": {"type": "integer"},
