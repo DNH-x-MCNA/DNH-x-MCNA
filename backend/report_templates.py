@@ -1661,9 +1661,11 @@ def employee_directory(search: str = None, position_code: str = None, area_code:
     dmsid de nguoi goi tu phan biet khi trung: DA XAC NHAN THAT tren du lieu dmsid co the trung giua
     nhieu employee_code/vai tro khac nhau (vd DMSId 'DNH00601' vua la employee_code cua 1 dong TDV
     (is_duplicate=1) vua la dmsid cua 1 dong QLV khac (is_duplicate=0)) - VA is_duplicate=0 KHONG PHAI
-    luon la dong "dung hon": vi du TM24060301, dong is_duplicate=0 la vi tri TRONG ("Trong QLV MK3"),
-    dong is_duplicate=1 moi la ten nguoi that. Khi ket qua co NHIEU dong cho cung 1 ma tra cuu, PHAI
-    liet ke HET, KHONG tu chon 1 dong.
+    luon la dong "dung hon". Do lai 18/09/2026 tren kho that, co is_duplicate KHONG he phan biet duoc
+    o trong voi nguoi that: TM24060301 co CA HAI dong deu is_duplicate=1 (mot la "Trong QLV MK3",
+    mot la Truong Ho Minh Luan), con TM24100101 thi chinh dong O TRONG moi mang is_duplicate=1
+    (nguoi that Nguyen Ngoc Quoc Hung mang 0). Dau hieu dung la TEN - xem _la_vi_tri_trong().
+    Khi ket qua co NHIEU dong cho cung 1 ma tra cuu, PHAI liet ke HET, KHONG tu chon 1 dong.
     NEU co "search" VA KHONG loc position_code/area_code: ket qua CO THE gom them nhan vien tu
     dmssx_nhanvien (bang rieng phia SX/ETC, xac nhan 20/07/2026 - vd ma DNH00087, Sale01-Sale15...
     hoan toan khong co trong dim_nhanvien) - cac dong nay se co position_code/position_label/area_code
@@ -2528,8 +2530,18 @@ def customer_lifecycle_summary(year_month: str = None, months_back: int = 1,
             team = _team_of_qlv(scope_employee_code, snap)
             allowed = [scope_employee_code] + [t["employee_code"] for t in team]
             roster_snapshot = snap
+        # 18/09/2026 - cau M24: bo loc TANG NHAN VIEN ra khoi cac cot DEM.
+        # COUNT(DISTINCT customer_code) von da mien nhiem voi chuyen dong QLV chong len dong TDV, nen
+        # loc tang o WHERE khong chong duoc gi ma chi lam MAT khach chi xuat hien tren dong QLV -
+        # tuc khach do chinh QLV ban truc tiep, khong co TDV nao duoi quyen ghi nhan. Do that snapshot
+        # 31/08/2026: 627 khach moi that, ban cu bao 612; 15 khach bi mat deu nam tron tren mot dong
+        # QLV duy nhat (Do Thi Thuy 7 khach, Tran Thien Khiem 2, Nguyen Thi Hong Thuy 2...).
+        # Thang 7 la 613 vs 605, thang 6 la 765 vs 752 - lech co he thong chu khong phai ngau nhien.
+        # Loc tang VAN CAN cho hai cot SUM(amount_ct) vi tien thi that su bi cong hai lan.
         sql = (f"SELECT COUNT(DISTINCT f.customer_code) tong_khach, "
                f"COUNT(DISTINCT CASE WHEN f.is_nc=1 THEN f.customer_code END) khach_moi, "
+               f"COUNT(DISTINCT CASE WHEN f.is_nc=1 AND nv.position_code IN ({pos_ph}) "
+               f"THEN f.customer_code END) khach_moi_co_tang_nhan_vien, "
                f"COUNT(DISTINCT CASE WHEN f.is_ro=1 THEN f.customer_code END) so_is_ro, "
                f"COUNT(DISTINCT CASE WHEN f.is_ac=1 "
                f"AND UPPER(COALESCE(nv.position_code,'')) IN ('CS','TK') "
@@ -2539,17 +2551,23 @@ def customer_lifecycle_summary(year_month: str = None, months_back: int = 1,
                # gia tri. Nhung COALESCE(f.is_nc,0) la BIEU THUC - bieu thuc KHONG co affinity, nen
                # COALESCE(...)=0 thanh so sanh TEXT voi INTEGER va LUON SAI: dem ra 0 thay vi 646.
                # Vi vay phai so sanh TRUC TIEP tren cot, xu ly NULL bang IS NULL rieng.
-               f"COUNT(DISTINCT CASE WHEN (f.is_nc IS NULL OR f.is_nc<>1) "
-               f"     AND (f.is_ro IS NULL OR f.is_ro<>1) THEN f.customer_code END) khach_khong_mang_co, "
-               f"SUM(CASE WHEN f.is_nc=1 THEN COALESCE(f.amount_ct,0) ELSE 0 END) doanh_so_khach_moi, "
-               f"SUM(COALESCE(f.amount_ct,0)) doanh_so_tang_nhan_vien "
+               #
+               # 18/09/2026: phai dem KHACH CO MANG CO roi tru ra, KHONG duoc dem dong "khong mang co
+               # nao". Ke tu khi bo loc tang nhan vien, moi khach deu co them mot dong rollup QLV va
+               # dong do thuong de trong ca hai co - dem theo dong thi gan nhu ca kho roi vao nhom
+               # "khong mang co" (do that: 6.344 thay vi 734).
+               f"COUNT(DISTINCT CASE WHEN f.is_nc=1 OR f.is_ro=1 THEN f.customer_code END) khach_co_mang_co, "
+               f"SUM(CASE WHEN f.is_nc=1 AND nv.position_code IN ({pos_ph}) "
+               f"THEN COALESCE(f.amount_ct,0) ELSE 0 END) doanh_so_khach_moi, "
+               f"SUM(CASE WHEN nv.position_code IN ({pos_ph}) "
+               f"THEN COALESCE(f.amount_ct,0) ELSE 0 END) doanh_so_tang_nhan_vien "
                f"FROM fact_tonghopkhachhang f "
                f"LEFT JOIN dim_nhanvien nv ON nv.employee_code=f.employee_code "
                # Loc ban ghi nhan vien trung: so DEM khach thi khong bi anh huong (da COUNT DISTINCT
                # customer_code) nhung 2 truong doanh so dung SUM(amount_ct) thi SE bi thoi phong.
-               f"WHERE f.save_date=? AND nv.position_code IN ({pos_ph}) "
-               f"  AND {_not_duplicate_sql('nv')}")
-        params = [snap, *_EMPLOYEE_TIER_POSITIONS]
+               f"WHERE f.save_date=? AND {_not_duplicate_sql('nv')}")
+        params = [*_EMPLOYEE_TIER_POSITIONS, *_EMPLOYEE_TIER_POSITIONS,
+                  *_EMPLOYEE_TIER_POSITIONS, snap]
         if scope_area_code:
             sql += " AND nv.area_code=?"
             params.append(scope_area_code)
@@ -2561,9 +2579,11 @@ def customer_lifecycle_summary(year_month: str = None, months_back: int = 1,
             "month": ym, "snapshot_date": snap,
             "tong_khach": int(r["tong_khach"] or 0),
             "khach_moi": int(r["khach_moi"] or 0),
+            "khach_moi_do_qlv_ban_truc_tiep": (int(r["khach_moi"] or 0)
+                                               - int(r["khach_moi_co_tang_nhan_vien"] or 0)),
             "so_is_ro": int(r["so_is_ro"] or 0),
             "so_is_ac": int(r["so_is_ac"] or 0),
-            "khach_khong_mang_co": int(r["khach_khong_mang_co"] or 0),
+            "khach_khong_mang_co": (int(r["tong_khach"] or 0) - int(r["khach_co_mang_co"] or 0)),
             "doanh_so_khach_moi": _f(r["doanh_so_khach_moi"]),
             "doanh_so_tang_nhan_vien": _f(r["doanh_so_tang_nhan_vien"]),
         }
@@ -2574,8 +2594,12 @@ def customer_lifecycle_summary(year_month: str = None, months_back: int = 1,
     missing = [m["month"] for m in months if m.get("khong_co_du_lieu")]
     result = {
         "months": months,
-        "tang_du_lieu": "Chi dem TANG NHAN VIEN (TDV/CTV/CS), COUNT(DISTINCT khach) - da loai dong "
-                         "rollup QLV chong len de khong dem doi.",
+        "tang_du_lieu": (
+            "Cac cot DEM khach lay tren TOAN BO dong cua snapshot (COUNT DISTINCT customer_code nen "
+            "dong rollup QLV chong len dong TDV khong lam sai). khach_moi_do_qlv_ban_truc_tiep la so "
+            "khach chi xuat hien tren dong QLV - QLV tu ban, khong co TDV duoi quyen ghi nhan; day la "
+            "khach THAT, da nam trong khach_moi. Rieng hai cot doanh so chi cong TANG NHAN VIEN "
+            "(TDV/CTV/CS/TK) vi tien thi bi cong hai lan that."),
         "canh_bao_dinh_nghia": _customer_flag_caveat(),
         "pham_vi_kenh": "OTC (nguon FACT_TongHopKhachHang noi qua DIM_NhanVien chi phu nhan vien OTC)",
         "data_as_of": latest_data_date(),
@@ -2583,6 +2607,19 @@ def customer_lifecycle_summary(year_month: str = None, months_back: int = 1,
     result["invoice_lifecycle_series"] = _invoice_customer_lifecycle_series(
         year_month, months_back, scope_area_code, scope_employee_code,
     )
+    # 18/09/2026 - cau "thang nay co bao nhieu khach dang hoat dong": so_is_ac chi 28-46 khach/thang
+    # vi day la co Bravo danh RIENG cho CS/Cho si va TK/kenh MT, khong phai phep dem khach con mua.
+    # Con so dung nam o invoice_lifecycle_series, cach do mot cap nested - du xa de bi doc nham.
+    # Dat thang canh so_is_ac trong cung mot dong thang de khong the nham nua.
+    _theo_thang = {m.get("month"): m for m in result["invoice_lifecycle_series"].get("months", [])}
+    for m in months:
+        nguon = _theo_thang.get(m.get("month")) or {}
+        if nguon.get("invoice_active_customers") is not None:
+            m["khach_co_hoa_don_trong_thang"] = nguon["invoice_active_customers"]
+            m["y_nghia_so_is_ac"] = (
+                f"so_is_ac={m.get('so_is_ac')} la CO CS/TK cua Bravo, KHONG phai so khach dang hoat "
+                f"dong. Muon tra loi 'bao nhieu khach con mua' thi dung "
+                f"khach_co_hoa_don_trong_thang={nguon['invoice_active_customers']}.")
     if missing:
         result["canh_bao_thieu_lich_su"] = (
             f"Khong co snapshot cho {len(missing)}/{len(months)} thang: {', '.join(missing)}. "
@@ -3698,8 +3735,28 @@ def customer_cohort_retention(month_to: str = None, months_back: int = 6,
     }
 
 
+def _la_vi_tri_trong(name: str) -> bool:
+    """Dong danh muc khong phai mot con nguoi ma la O TRONG dang cho tuyen ("Trong QLV MK3").
+
+    Phai nhan ra bang TEN. Co is_duplicate KHONG phan biet duoc: TM24060301 co CA HAI dong deu
+    is_duplicate=1 (mot la o trong, mot la nguoi that), con TM24100101 thi chinh dong o trong moi
+    mang is_duplicate=1. Xem them _EMPLOYEE_TIER_POSITIONS va employee_directory()."""
+    return _fold_question(name or "").strip().startswith("trong ")
+
+
 def _nv_theo_dms(dms_ids: list) -> dict:
-    """{DMSId: {'employee_code','employee_name'}} - hoa don ghi theo DMSId, bao cao can ma nhan vien."""
+    """{DMSId: {'employee_code','employee_name'}} - hoa don ghi theo DMSId, bao cao can ma nhan vien.
+
+    Hai bay da bat duoc ngay 18/09/2026 khi cham cau M24:
+      1. Chi tra dim_nhanvien la BO SOT toan bo nhan vien ETC/SX - ho chi ton tai trong
+         dmssx_nhanvien (vd DNH00087, DNH00268, Sale02...). Do that tren kho: 26/194 dong
+         by_employee cua thang 8 ra ma tran khong co ten, om 35 khach moi + 186 khach tai kich hoat.
+         _resolve_employee_identity() da tra bang nay tu 20/07/2026; o day thi chua.
+      2. Khi mot DMSId ung voi nhieu dong danh muc, ban cu chi ORDER BY is_duplicate DESC roi lay
+         dong dau - va cham vao dung O TRONG: TM24060301 ra "Trong QLV MK3" thay vi Truong Ho Minh
+         Luan, TM24100101 ra "Trong QLV" thay vi Nguyen Ngoc Quoc Hung. Cong viec ban hang cua
+         nguoi that bi gan cho mot cho ngoi chua co nguoi.
+    """
     ids = [x for x in dict.fromkeys(dms_ids) if x]
     if not ids:
         return {}
@@ -3707,9 +3764,23 @@ def _nv_theo_dms(dms_ids: list) -> dict:
     for i in range(0, len(ids), 300):
         chunk = ids[i:i + 300]
         ph = ",".join(["?"] * len(chunk))
-        for r in _q(f"SELECT dmsid, employee_code, name FROM dim_nhanvien WHERE dmsid IN ({ph}) "
-                    "ORDER BY COALESCE(is_duplicate,0) DESC", tuple(chunk)):
-            out.setdefault(r["dmsid"], {"employee_code": r["employee_code"], "employee_name": r["name"]})
+        ung_vien = {}
+        for r in _q(f"SELECT dmsid, employee_code, name, is_duplicate FROM dim_nhanvien "
+                    f"WHERE dmsid IN ({ph})", tuple(chunk)):
+            ung_vien.setdefault(r["dmsid"], []).append(r)
+        for dmsid, rows in ung_vien.items():
+            # Nguoi that truoc o trong; trong so nguoi that thi giu uu tien is_duplicate=1 cu
+            # (dong duoc danh dau trung thuong moi la nguoi dang lam viec - xem employee_directory).
+            rows.sort(key=lambda r: (_la_vi_tri_trong(r["name"]),
+                                     -(int(r["is_duplicate"] or 0)),
+                                     str(r["employee_code"] or "")))
+            out[dmsid] = {"employee_code": rows[0]["employee_code"], "employee_name": rows[0]["name"]}
+        con_thieu = [x for x in chunk if x not in out]
+        if con_thieu:
+            ph2 = ",".join(["?"] * len(con_thieu))
+            for r in _q(f"SELECT code, name FROM dmssx_nhanvien WHERE code IN ({ph2})",
+                        tuple(con_thieu)):
+                out.setdefault(r["code"], {"employee_code": r["code"], "employee_name": r["name"]})
     return out
 
 
