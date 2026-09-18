@@ -365,7 +365,14 @@ class FreshnessCollector:
             # Moc bao phu phai doc RIENG tung bang. Khong de data_as_of chung cua tool doanh thu
             # (hien duoc tinh tu OTC) vo tinh gan sang ETC.
             business_date = local_business or business_date
-            snapshot_date = snapshot_date or local_snapshot
+            # 18/09/2026 (cau C29): moc snapshot cua nguon kho phai do CHINH bang do tra ra, khong
+            # duoc boc tu payload cua tool. _first_value() duyet ca cay ket qua va lay khoa
+            # "snapshot_date" DAU TIEN gap duoc - voi customer_lifecycle_summary thi do la months[0],
+            # tuc thang CU NHAT. Chan trang vi the ghi "KPI kinh doanh (snapshot 30/06/2026)" trong
+            # khi bang ngay tren co so den 18/09, va con dan cung moc do sang ca "Doanh thu OTC" -
+            # mot nguon khong he co cot snapshot. business_date von da uu tien local, cot nay thi
+            # chua; day la cho khong nhat quan.
+            snapshot_date = local_snapshot if spec.snapshot_column else None
             sync_completed = sync_completed or local_sync
 
         warnings = []

@@ -9341,7 +9341,37 @@ def _inventory_supply_risk(stock_by_item: dict, item_names: dict, area_code: str
     # trong 3 thang. Khong co du lieu nhu cau/chao hang de khang dinh se mua.
     # Chi dua khach cho 10 SKU uu tien dau de payload khong phinh thanh hang tram dong,
     # nhung van tra tong so SKU va thong ke trang thai o ben duoi.
-    shown_rows = actionable[:max(1, min(int(limit or 30), 50))]
+    # 18/09/2026 (cau C42): truoc day cat thang theo thu tu uu tien cua focus, nen mot NHOM
+    # TRANG THAI co the bi day het ra ngoai limit du status_counts van bao no ton tai. Do that
+    # focus='overstock', limit=30: 55 SKU cho xu ly (16 thieu hang / 28 cham luan chuyen / 11 ton
+    # khong ban) - 30 dong tra ve KHONG co lay mot dong thieu hang nao. Chatbot doc duoc con so 16
+    # roi phai tu noi "he thong danh dau 16 SKU nhung toi chua lay duoc danh sach chi tiet".
+    # Nay danh han han ngach cho tung nhom truoc, phan con lai moi lap theo uu tien.
+    limit_n = max(1, min(int(limit or 30), 50))
+    _nhom_theo_trang_thai = {}
+    for row in actionable:           # actionable da sap theo _priority nen tung nhom cung dung thu tu
+        _nhom_theo_trang_thai.setdefault(row["status"], []).append(row)
+    # Nhom nao dang duoc focus uu tien thi duoc chon truoc trong moi vong.
+    _thu_tu_nhom = sorted(_nhom_theo_trang_thai, key=lambda tt: _priority(_nhom_theo_trang_thai[tt][0]))
+    _han_ngach = max(3, limit_n // 6)
+    shown_rows, _da_chon = [], set()
+    for _vong in range(_han_ngach):
+        _them_duoc = False
+        for _tt in _thu_tu_nhom:
+            _ds = _nhom_theo_trang_thai[_tt]
+            if _vong < len(_ds) and len(shown_rows) < limit_n:
+                shown_rows.append(_ds[_vong])
+                _da_chon.add(id(_ds[_vong]))
+                _them_duoc = True
+        if not _them_duoc:
+            break
+    for row in actionable:
+        if len(shown_rows) >= limit_n:
+            break
+        if id(row) not in _da_chon:
+            shown_rows.append(row)
+            _da_chon.add(id(row))
+    shown_rows.sort(key=_priority)
     buyer_candidates = []
     candidate_codes = [
         r["item_code"] for r in shown_rows if r["average_monthly_qty_3m"] > 0
@@ -9386,6 +9416,17 @@ def _inventory_supply_risk(stock_by_item: dict, item_names: dict, area_code: str
             )
         },
         "rows": shown_rows,
+        "so_dong_da_hien": len(shown_rows),
+        "so_dong_chua_hien_theo_trang_thai": {
+            tt: len(ds) - sum(1 for r in shown_rows if r["status"] == tt)
+            for tt, ds in _nhom_theo_trang_thai.items()
+            if len(ds) > sum(1 for r in shown_rows if r["status"] == tt)
+        },
+        "answer_rule": (
+            "Moi trang thai co trong status_counts deu DA co it nhat vai dong mau trong rows. "
+            "Neu so_dong_chua_hien_theo_trang_thai con so du cho mot trang thai, day la danh sach BI "
+            "CAT theo limit - noi ro con bao nhieu SKU chua liet ke va co the goi lai voi limit lon "
+            "hon hoac focus='shortage'/'overstock'. TUYET DOI khong noi la khong lay duoc danh sach."),
         "recent_customer_candidates": buyer_candidates,
         "definition": (
             "Canh bao suy dien tu ton hien co so voi binh quan ban OTC 3 thang da chot. "
