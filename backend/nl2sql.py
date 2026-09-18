@@ -2325,6 +2325,76 @@ def _payload_for_model(tool_name: str, payload, question: str):
             return {**payload, "du_lieu": compact_data}
         return compact_data
 
+    if tool_name == "get_customer_product_coverage" and payload.get("mode") == "product":
+        # 18/09/2026 (cau M33): payload tho cua nhanh nay do duoc 500.156 ky tu - gap 50 lan ngan
+        # sach 10.000. Bo rut gon chung ha dan 12 -> 8 -> 5 -> 3 -> 1 -> 0 dong, va o buoc 0 thi MOI
+        # danh sach SKU thanh mang rong trong khi cac so dem vo huong van con. Chatbot vi the bao
+        # dung "cong cu tra ve tong so dem (68 giam, 94 tang, 68 mat ty trong) nhung khong kem danh
+        # sach chi tiet tung ma SKU" - lan thu NAM cua lop loi danh sach bi cat am tham.
+        # Phinh vi sau danh sach cung chua LAI ca dong day du ~40 truong cua cung mot SKU.
+        # Cau hoi that la "SKU nao giam VI SAO", nen gom thang theo nguyen nhan chinh thay vi tra
+        # sau danh sach chong cheo.
+        def _so(value):
+            try:
+                return float(value or 0)
+            except (TypeError, ValueError):
+                return 0.0
+
+        def _tron(value):
+            so = _so(value)
+            return int(so) if abs(so) >= 1 else round(so, 2)
+
+        def _gon(row):
+            ten = str(row.get("name") or "")
+            return {
+                "ma": row.get("code"),
+                "ten": (ten[:44] + "...") if len(ten) > 47 else ten,
+                "doanh_thu": _tron(row.get("revenue")),
+                "thay_doi": _tron(row.get("revenue_delta")),
+                "khach_thay_doi": _tron(row.get("customers_delta")),
+                "don_thay_doi": _tron(row.get("orders_delta")),
+            }
+
+        giam = [r for r in (payload.get("largest_revenue_declines") or []) if isinstance(r, dict)]
+        tang = [r for r in (payload.get("largest_revenue_increases") or []) if isinstance(r, dict)]
+        mat_ty_trong = [r for r in (payload.get("largest_internal_share_losses") or [])
+                        if isinstance(r, dict)]
+        theo_nguyen_nhan = {}
+        for row in giam:
+            khoa = row.get("primary_decline_driver") or "OTHER_OR_MIXED"
+            muc = theo_nguyen_nhan.setdefault(khoa, {"so_sku": 0, "tong_muc_giam": 0.0, "dan_dau": []})
+            muc["so_sku"] += 1
+            muc["tong_muc_giam"] += _so(row.get("revenue_delta"))
+        for khoa, muc in theo_nguyen_nhan.items():
+            cung_nhom = [r for r in giam if (r.get("primary_decline_driver") or "OTHER_OR_MIXED") == khoa]
+            cung_nhom.sort(key=lambda r: _so(r.get("revenue_delta")))
+            muc["dan_dau"] = [_gon(r) for r in cung_nhom[:8]]
+            muc["so_sku_chua_liet_ke"] = max(0, muc["so_sku"] - len(muc["dan_dau"]))
+            muc["tong_muc_giam"] = _tron(muc["tong_muc_giam"])
+
+        compact = {key: payload.get(key) for key in (
+            "mode", "window_days", "current_period", "previous_period", "comparison_basis",
+            "scope_totals", "reconciliation", "customer_count_definition",
+            "decline_driver_definition", "canh_bao", "data_as_of",
+        ) if payload.get(key) is not None}
+        compact.update({
+            "so_sku_giam": len(giam),
+            "so_sku_tang": len(tang),
+            "so_sku_mat_ty_trong_noi_bo": len(mat_ty_trong),
+            "sku_giam_theo_nguyen_nhan": dict(sorted(
+                theo_nguyen_nhan.items(), key=lambda kv: kv[1]["tong_muc_giam"])),
+            "sku_tang_dan_dau": [_gon(r) for r in tang[:8]],
+            "sku_mat_ty_trong_dan_dau": [
+                {**_gon(r), "ty_trong_giam_diem": round(_so(r.get("internal_share_delta_pct_points")), 2)}
+                for r in mat_ty_trong[:8]],
+            "display_rule": (
+                f"Da co DU danh sach {len(giam)} SKU giam, gom theo nguyen nhan chinh; moi nhom cho "
+                "toi da 8 ma giam manh nhat kem so_sku_chua_liet_ke. PHAI tra loi bang cac ma cu the "
+                "nay - TUYET DOI khong noi la khong co danh sach chi tiet. Muon xem het mot nhom thi "
+                "goi lai tool voi pham vi hep hon (it thang hon hoac mot vung), KHONG doan."),
+        })
+        return compact
+
     if tool_name == "get_employee_kpi":
         wrapper = payload if isinstance(payload.get("du_lieu"), dict) else None
         data = payload.get("du_lieu") if wrapper else payload
