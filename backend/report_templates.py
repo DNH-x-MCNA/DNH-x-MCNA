@@ -2011,6 +2011,13 @@ def _month_add(year_month: str, delta: int) -> str:
     return f"{total // 12:04d}-{total % 12 + 1:02d}"
 
 
+def _month_diff(year_month_from: str, year_month_to: str) -> int:
+    """So thang tu 'YYYY-MM' den 'YYYY-MM' (am neu moc den nam truoc moc tu)."""
+    yf, mf = int(year_month_from[:4]), int(year_month_from[5:7])
+    yt, mt = int(year_month_to[:4]), int(year_month_to[5:7])
+    return (yt * 12 + mt) - (yf * 12 + mf)
+
+
 def _month_bounds(year_month: str) -> tuple:
     """('YYYY-MM') -> ('YYYY-MM-01', 'YYYY-MM-<ngay cuoi thang>')."""
     y, m = int(year_month[:4]), int(year_month[5:7])
@@ -4380,12 +4387,23 @@ def product_first_observed_performance(as_of_date: str = None, lookback_months: 
                 "target_status": "not_available", "target_achievement_pct": None,
             })
         first_row = months[first_observed]
+        first_month_complete = first_observed <= complete_through_month
+        months_before = _month_diff(earliest_history_month, first_observed)
+        ly_do_khong_dung = []
+        if left_censored:
+            ly_do_khong_dung.append("thang ghi nhan dau trung bien trai lich su")
+        if not first_month_complete:
+            ly_do_khong_dung.append(
+                f"thang ghi nhan dau {first_observed} CHUA TRON (du lieu moi den {as_of_date})")
         products.append({
             "item_code": code, "item_name": product_names.get(code) or code,
             "first_observed_sale_month": first_observed,
             "first_observed_is_launch_date": False,
             "first_observed_is_left_censored": left_censored,
-            "valid_for_launch_age_analysis": not left_censored,
+            "first_observed_month_complete": first_month_complete,
+            "months_of_history_before_first_sale": months_before,
+            "valid_for_launch_age_analysis": not left_censored and first_month_complete,
+            "ly_do_khong_dung_cho_phan_tich_tuoi": ly_do_khong_dung,
             "first_observed_customers": int(first_row.get("customers") or 0),
             "first_observed_revenue": _f(first_row.get("revenue")),
             "age_results": age_results,
@@ -4399,6 +4417,8 @@ def product_first_observed_performance(as_of_date: str = None, lookback_months: 
         "complete_through_month": complete_through_month,
         "total_count": total, "returned_count": len(returned),
         "truncated": total > len(returned), "not_shown_count": max(0, total - len(returned)),
+        "so_sku_thang_dau_chua_tron": sum(1 for r in products if not r["first_observed_month_complete"]),
+        "so_sku_dung_cho_phan_tich_tuoi": sum(1 for r in products if r["valid_for_launch_age_analysis"]),
         "products": returned,
         "launch_date_source": "not_available", "sku_target_source": "not_available",
         "definition": ("first_observed_sale_month la thang ban dau tien QUAN SAT DUOC trong dung "
@@ -4406,7 +4426,16 @@ def product_first_observed_performance(as_of_date: str = None, lookback_months: 
         "limitations": [
             "SKU o history_boundary_month bi left-censored va khong duoc dung de ket luan tuoi san pham.",
             "Kho chua co master launch date va target theo SKU; khong tinh % ke hoach.",
+            "SKU co first_observed_sale_month = thang hien tai chua tron thi doanh thu thang dau chi "
+            "la mot phan thang; KHONG duoc xep chung bang voi SKU do tron thang.",
+            "months_of_history_before_first_sale la so thang co du lieu TRUOC moc ghi nhan dau. So "
+            "nay cang nho thi bang chung 'SKU moi' cang yeu - co the chi la SKU ban lai sau mot thoi "
+            "gian nghi.",
         ],
+        "answer_rule": (
+            "Chi xep hang va so sanh cac dong co valid_for_launch_age_analysis=true. Cac dong con lai "
+            "phai neu rieng kem ly_do_khong_dung_cho_phan_tich_tuoi, KHONG duoc dua vao bang so sanh "
+            "doanh thu thang dau."),
         "data_as_of": latest_data_date(),
     }
 
