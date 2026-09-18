@@ -998,7 +998,12 @@ TEMPLATE_TOOLS = [
                        "tien trong doi; ky co ky_da_du=false tra None, KHONG coi la 0% - xet theo "
                        "latest_complete_month (thang TRON gan nhat, khong phai thang hien tai neu thang "
                        "do moi la MTD) nen thang vua qua CHUA CO du lieu se luon la None chu khong phai "
-                       "0%. DNH van can chot dinh nghia 'khach mo moi' truoc khi dung lam KPI chinh thuc.",
+                       "0%. M23/S67: cau 'tung vung ... ty le giu chan sau 3/6 thang' PHAI truyen "
+                       "group_by='area' va age_months=[3,6], VA goi them "
+                       "get_customer_lifecycle_summary de lay khoi theo_vung cho ve dau cua cau hoi - "
+                       "thieu mot trong hai la tra loi nua cau. Cua so cohort tu noi rong de tuoi lon "
+                       "nhat co so that; neu cohort_from_da_mo_rong=true thi neu ly_do_mo_rong_cua_so. "
+                       "DNH van can chot dinh nghia 'khach mo moi' truoc khi dung lam KPI chinh thuc.",
         "input_schema": {"type": "object", "properties": {
             "month_to": {"type": "string", "description": "YYYY-MM, thang cohort cuoi."},
             "months_back": {"type": "integer", "description": "So thang cohort, mac dinh 6, toi da 24."},
@@ -1422,7 +1427,13 @@ TEMPLATE_TOOLS = [
                         "sach day du - neu 'note' bao con thieu, PHAI noi ro voi nguoi dung day chi la mot "
                         "phan, khong phai toan bo). Truong 'supply_risk' so sanh ton hien co voi binh quan "
                         "ban OTC 3 thang da chot: dung cho cau hoi SKU ton cao, cham luan chuyen, kho thieu "
-                        "va nguy co hut hang. 'recent_customer_candidates' chi la khach da mua gan day de "
+                        "va nguy co hut hang. supply_risk.months_of_cover KHONG phai so thang - ton dem "
+                        "theo VIEN con hoa don ban theo HOP nen ty le bi thoi phong bang he so quy cach "
+                        "(do that: Hysdin ra 155 trong khi quy ve hop chi khoang 6,8). CHI dung de xep "
+                        "hang tuong doi, TUYET DOI khong viet thanh 'ton X thang'; phai nhac "
+                        "canh_bao_don_vi. Moi trang thai trong status_counts deu co dong mau trong rows; "
+                        "so_dong_chua_hien_theo_trang_thai cho biet con bao nhieu chua liet ke - khong "
+                        "duoc noi la khong lay duoc danh sach. 'recent_customer_candidates' chi la khach da mua gan day de "
                         "goi y lien he. Voi QLV, binh quan ban va khach mua chi cua doi; ton kho dung chung "
                         "theo vung, chua phan bo cho doi. So thang du ban tinh theo suc ban cua doi. "
                         "PHAI noi ro day la CANH BAO SUY DIEN, khong co du lieu don cho xu ly/"
