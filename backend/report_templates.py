@@ -7050,15 +7050,20 @@ def etc_contract_status(as_of_date: str = None, expiring_days: int = 90, limit: 
             ",".join(cho), ",".join(cho))
     sql = (
         "WITH dong AS ("
-        " SELECT Id, RowId, MAX(CustomerCode) CustomerCode, MAX(DocNo) DocNo,"
-        " MAX(FromDate) FromDate, MAX(ToDate) ToDate, MAX(StatusId) StatusId,"
+        " SELECT Id, RowId, MAX(Id0) Id0, MAX(ParentId) ParentId,"
+        " MAX(CustomerCode) CustomerCode, MAX(DocNo0) DocNo0,"
+        " MAX(FromDate0) FromDate0, MAX(ToDate0) ToDate0, MAX(StatusId) StatusId,"
         " MAX(EmpDMSCode1) EmpDMSCode1, MAX(EmpDMSCode2) EmpDMSCode2,"
         " MAX(AmountAfterVat) AmountAfterVat, MAX(AmountBefVat) AmountBefVat,"
         " MAX(Quantity) Quantity, MAX(UnitPrice) UnitPrice"
         " FROM dbo.vHopDongETC GROUP BY Id, RowId"
         "), hd AS ("
-        " SELECT Id, MAX(CustomerCode) CustomerCode, MAX(DocNo) DocNo, MAX(FromDate) FromDate,"
-        " MAX(ToDate) ToDate, MAX(StatusId) StatusId, MAX(EmpDMSCode1) EmpDMSCode1,"
+        # Id0 la hop dong goc; Id khac Id0 la phu luc/phien ban con (910 ho hop dong co phu luc,
+        # kiem tra Bravo 21/09/2026). Phai cuon gia tri va hoa don cua moi Id con ve Id0. Neu group
+        # theo Id, cung mot hop dong bi tach thanh nhieu dong va ty le thuc hien sai.
+        " SELECT Id0 Id, MAX(CustomerCode) CustomerCode, MAX(DocNo0) DocNo,"
+        " MIN(FromDate0) FromDate, MAX(ToDate0) ToDate, MAX(StatusId) StatusId,"
+        " MAX(EmpDMSCode1) EmpDMSCode1,"
         # 15/09/2026: gia tri lay TRUOC VAT de cung goc voi Amount9 tren hoa don (T8/2026: Amount9 =
         # Quantity*UnitPrice, VAT nam rieng o Amount3 = 5,0%). Truoc do chia Amount9 cho AmountAfterVat nen
         # ty le thuc hien thap hon that ~5%.
@@ -7072,6 +7077,8 @@ def etc_contract_status(as_of_date: str = None, expiring_days: int = 90, limit: 
         # VAT va truoc VAT chenh nhau qua 2 lan. Tach 60 hop dong, bat du 115627/112468/115175/122296; phan
         # sach tong 3.548 ty, hop dong lon nhat 107 ty.
         " MAX(EmpDMSCode2) EmpDMSCode2, SUM(AmountBefVat) GiaTri, COUNT(*) SoDong,"
+        " COUNT(DISTINCT Id) SoPhienBan,"
+        " COUNT(DISTINCT CASE WHEN Id<>Id0 OR ParentId IS NOT NULL THEN Id END) SoPhuLuc,"
         " SUM(CASE WHEN ABS(AmountBefVat - Quantity*UnitPrice) >"
         "          0.05*CASE WHEN ABS(AmountBefVat)>ABS(Quantity*UnitPrice)"
         "                    THEN ABS(AmountBefVat) ELSE ABS(Quantity*UnitPrice) END"
@@ -7080,12 +7087,17 @@ def etc_contract_status(as_of_date: str = None, expiring_days: int = 90, limit: 
         "          0.5*CASE WHEN ABS(AmountAfterVat)>ABS(AmountBefVat)"
         "                   THEN ABS(AmountAfterVat) ELSE ABS(AmountBefVat) END"
         "     THEN 1 ELSE 0 END) SoDongLechGiaTri"
-        " FROM dong GROUP BY Id"
+        " FROM dong GROUP BY Id0"
+        "), map_hop_dong AS ("
+        " SELECT DISTINCT Id ContractId, Id0 HopDongGocId FROM dong"
         "), hoadon AS ("
-        " SELECT ContractId, SUM(Amount9) DaXuat, COUNT(DISTINCT Stt) SoHoaDon,"
-        " MAX(DocDate) LanXuatCuoi FROM dbo.vHoaDonETCTotal"
-        " WHERE ContractId IS NOT NULL GROUP BY ContractId"
+        " SELECT m.HopDongGocId ContractId, SUM(s.Amount9) DaXuat,"
+        " COUNT(DISTINCT s.Stt) SoHoaDon, MAX(s.DocDate) LanXuatCuoi"
+        " FROM dbo.vHoaDonETCTotal s"
+        " JOIN map_hop_dong m ON m.ContractId=s.ContractId"
+        " WHERE s.ContractId IS NOT NULL GROUP BY m.HopDongGocId"
         ") SELECT hd.Id, hd.DocNo, hd.CustomerCode, hd.StatusId, hd.SoDong, hd.SoDongLechGiaTri,"
+        " hd.SoPhienBan, hd.SoPhuLuc,"
         " CONVERT(varchar(10), hd.FromDate, 120) FromDate,"
         " CONVERT(varchar(10), hd.ToDate, 120) ToDate,"
         " hd.GiaTri, ISNULL(h.DaXuat, 0) DaXuat, ISNULL(h.SoHoaDon, 0) SoHoaDon,"
@@ -7103,6 +7115,8 @@ def etc_contract_status(as_of_date: str = None, expiring_days: int = 90, limit: 
         muc = {
             "contract_id": r["Id"], "so_hop_dong": r["DocNo"], "customer_code": r["CustomerCode"],
             "tu_ngay": r["FromDate"], "den_ngay": r["ToDate"], "status_id": r["StatusId"],
+            "so_phien_ban_hop_dong": int(r.get("SoPhienBan") or 1),
+            "so_phu_luc": int(r.get("SoPhuLuc") or 0),
             "gia_tri_hop_dong": gia_tri, "da_xuat_hoa_don": da_xuat,
             "con_lai": gia_tri - da_xuat,
             "ty_le_thuc_hien_pct": (da_xuat / gia_tri * 100) if gia_tri else None,
@@ -7130,7 +7144,8 @@ def etc_contract_status(as_of_date: str = None, expiring_days: int = 90, limit: 
     return {
         "as_of": as_of_date, "nguong_sap_het_han_ngay": expiring_days,
         "chi_xet_hop_dong_con_hieu_luc": only_active,
-        "nguon": "vHopDongETC + vHoaDonETCTotal.ContractId (Bravo)",
+        "nguon": ("vHopDongETC cuon hop dong/phu luc theo Id0 + "
+                  "vHoaDonETCTotal.ContractId (Bravo)"),
         "do_phu_khoa": ("ContractId co tren 100% dong hoa don ETC T7-T8/2026 va khop 1.037/1.037 ma "
                         "hop dong - kiem chung 13/09/2026."),
         "tong_so_hop_dong": len(hop_dong) + len(bat_thuong),
@@ -7150,7 +7165,9 @@ def etc_contract_status(as_of_date: str = None, expiring_days: int = 90, limit: 
         "hop_dong_sap_het_han": sorted(sap_het, key=lambda x: x["con_lai_ngay"])[:limit],
         "so_hop_dong_gia_tri_bat_thuong": len(bat_thuong),
         "hop_dong_gia_tri_bat_thuong": sorted(bat_thuong, key=lambda x: -x["gia_tri_hop_dong"])[:20],
-        "canh_bao": ("Cac hop dong co gia tri bat thuong da duoc TACH RIENG khoi moi con so tong o "
+        "canh_bao": ("Hop dong goc va phu luc da duoc cuon theo Id0; hoa don noi qua dung "
+                     "ContractId cua tung phien ban, khong ghep gan dung theo khach/SKU/thoi gian. "
+                     "Cac hop dong co gia tri bat thuong da duoc TACH RIENG khoi moi con so tong o "
                      "day (do 13/09/2026: 3/9.135 hop dong chiem 99,88% tong gia tri). Khi tra loi "
                      "phai neu ro con so tong khong gom nhung hop dong do va can DNH kiem lai du lieu "
                      "goc. Ty le thuc hien = tong Amount9 hoa don co ContractId / gia tri hop dong, "
