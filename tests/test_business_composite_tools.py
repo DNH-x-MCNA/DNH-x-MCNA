@@ -535,6 +535,8 @@ def test_v39_payload_uu_tien_ton_cao_khach_goi_y_va_van_duoi_gioi_han():
     assert compact["supply_risk"]["focus"] == "overstock"
     assert compact["supply_risk"]["rows_shown_to_model"] == 6
     assert compact["supply_risk"]["rows_not_shown_to_model"] == 16
+    assert all("months_of_cover" not in row for row in compact["supply_risk"]["rows"])
+    assert "months_of_cover" not in encoded
     assert len(compact["supply_risk"]["recent_customer_candidates"]) == 3
     assert len(compact["expiry_rows"]) == 3
 

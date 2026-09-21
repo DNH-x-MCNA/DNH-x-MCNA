@@ -209,6 +209,7 @@ def test_canh_bao_ton_va_ban_khong_cung_don_vi(tmp_path, monkeypatch):
     assert kq["don_vi_hai_ve_khong_khop"] is True
     assert "KHONG phai so thang" in kq["canh_bao_don_vi"]
     assert "KHONG duoc XEP HANG cac SKU" in kq["canh_bao_don_vi"]
+    assert "155" not in kq["canh_bao_don_vi"]
     assert "TON_KHONG_BAN_3_THANG khong bi anh huong" in kq["canh_bao_don_vi"]
     # 155 va 100 la hai ti le chua quy doi; thu tu chi theo ma, khong theo ti le.
     assert [row["item_code"] for row in kq["rows"]] == ["SP0", "SP1"]

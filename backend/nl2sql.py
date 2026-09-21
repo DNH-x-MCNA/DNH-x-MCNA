@@ -1449,14 +1449,14 @@ TEMPLATE_TOOLS = [
                         "phan, khong phai toan bo). Truong 'supply_risk' so sanh ton hien co voi binh quan "
                         "ban OTC 3 thang da chot: dung cho cau hoi SKU ton cao, cham luan chuyen, kho thieu "
                         "va nguy co hut hang. supply_risk.months_of_cover KHONG phai so thang - ton dem "
-                        "theo VIEN con hoa don ban theo HOP nen ty le bi thoi phong bang he so quy cach "
-                        "(do that: Hysdin ra 155 trong khi quy ve hop chi khoang 6,8). CHI dung de xep "
-                        "hang tuong doi, TUYET DOI khong viet thanh 'ton X thang'; phai nhac "
+                        "theo VIEN con hoa don ban theo HOP nen ty le bi thoi phong bang he so quy cach. KHONG dung "
+                        "ty le nay de xep hang SKU hay viet thanh 'ton X thang'; phai nhac "
                         "canh_bao_don_vi. Moi trang thai trong status_counts deu co dong mau trong rows; "
                         "so_dong_chua_hien_theo_trang_thai cho biet con bao nhieu chua liet ke - khong "
                         "duoc noi la khong lay duoc danh sach. 'recent_customer_candidates' chi la khach da mua gan day de "
                         "goi y lien he. Voi QLV, binh quan ban va khach mua chi cua doi; ton kho dung chung "
-                        "theo vung, chua phan bo cho doi. So thang du ban tinh theo suc ban cua doi. "
+                        "theo vung, chua phan bo cho doi. Chua tinh duoc so thang du ban khi thieu "
+                        "quy doi don vi ton va ban. "
                         "PHAI noi ro day la CANH BAO SUY DIEN, khong co du lieu don cho xu ly/"
                         "phan bo ton nen KHONG duoc ket luan da mat don, da mat doanh thu hay khach chac chan "
                         "can mua. Neu nguoi dung hoi CHUNG CHUNG 'hang nao sap het han' "
@@ -2525,7 +2525,12 @@ def _payload_for_model(tool_name: str, payload, question: str):
         supply = data.get("supply_risk") or {}
         risk_rows = supply.get("rows") if isinstance(supply, dict) else []
         risk_rows = risk_rows if isinstance(risk_rows, list) else []
-        shown_risks = risk_rows[:6]
+        # Ty le ton/ban chua quy doi don vi va co the lech khac nhau theo tung SKU.
+        # Giu trong ket qua goc de doi chieu, nhung khong dua con so nay cho model.
+        shown_risks = [
+            {key: value for key, value in row.items() if key != "months_of_cover"}
+            for row in risk_rows[:6] if isinstance(row, dict)
+        ]
         shown_codes = {row.get("item_code") for row in shown_risks if isinstance(row, dict)}
         candidates = supply.get("recent_customer_candidates") or []
         shown_candidates = [item for item in candidates if (

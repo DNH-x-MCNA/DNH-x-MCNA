@@ -9698,8 +9698,8 @@ def _inventory_supply_risk(stock_by_item: dict, item_names: dict, area_code: str
         "don_vi_hai_ve_khong_khop": True,
         "canh_bao_don_vi": (
             "months_of_cover KHONG phai so thang. Ton kho dem theo don vi le cua danh muc (thuong la "
-            "VIEN) con hoa don ban theo HOP, nen ty le nay bi thoi phong dung bang he so quy cach - do "
-            "that tren Hysdin: tool ra 155 trong khi quy ve hop chi khoang 6,8 thang. KHONG duoc "
+            "VIEN) con hoa don ban theo HOP, nen ty le nay bi thoi phong theo he so quy cach cua tung "
+            "SKU. KHONG duoc "
             "XEP HANG cac SKU theo ty le nay vi he so quy doi khac nhau; thu tu rows chi de hien thi. "
             "TUYET DOI khong doc thanh 'ton X thang' hay 'du ban X thang'. "
             "Nhom TON_KHONG_BAN_3_THANG khong bi anh huong (ban bang 0 thi don vi nao cung la "
@@ -9710,7 +9710,8 @@ def _inventory_supply_risk(stock_by_item: dict, item_names: dict, area_code: str
             "Canh bao suy dien tu ton hien co so voi binh quan ban OTC 3 thang da chot. "
             "Khong co du lieu don cho xu ly/chia ton/khach cam ket nen KHONG ket luan da mat don hay doanh thu. "
             + ("Binh quan ban va khach mua gan day CHI thuoc doi QLV; ton kho van la ton dung chung "
-               "trong pham vi vung da loc, chua phan bo cho doi. So thang du ban tinh theo suc ban cua doi; "
+               "trong pham vi vung da loc, chua phan bo cho doi. Chua tinh duoc so thang du ban khi "
+               "thieu quy doi don vi ton va ban; "
                "TON_KHONG_BAN_3_THANG chi nghia la doi nay khong ban, khong ket luan ca vung khong ban."
                if scope_employee_code else "")),
     }
