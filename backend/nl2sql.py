@@ -998,7 +998,12 @@ TEMPLATE_TOOLS = [
                        "tien trong doi; ky co ky_da_du=false tra None, KHONG coi la 0% - xet theo "
                        "latest_complete_month (thang TRON gan nhat, khong phai thang hien tai neu thang "
                        "do moi la MTD) nen thang vua qua CHUA CO du lieu se luon la None chu khong phai "
-                       "0%. DNH van can chot dinh nghia 'khach mo moi' truoc khi dung lam KPI chinh thuc.",
+                       "0%. M23/S67: cau 'tung vung ... ty le giu chan sau 3/6 thang' PHAI truyen "
+                       "group_by='area' va age_months=[3,6], VA goi them "
+                       "get_customer_lifecycle_summary de lay khoi theo_vung cho ve dau cua cau hoi - "
+                       "thieu mot trong hai la tra loi nua cau. Cua so cohort tu noi rong de tuoi lon "
+                       "nhat co so that; neu cohort_from_da_mo_rong=true thi neu ly_do_mo_rong_cua_so. "
+                       "DNH van can chot dinh nghia 'khach mo moi' truoc khi dung lam KPI chinh thuc.",
         "input_schema": {"type": "object", "properties": {
             "month_to": {"type": "string", "description": "YYYY-MM, thang cohort cuoi."},
             "months_back": {"type": "integer", "description": "So thang cohort, mac dinh 6, toi da 24."},
@@ -1017,7 +1022,11 @@ TEMPLATE_TOOLS = [
                        "summary_all_customers; summary_on_returned_top_rows chi la top-N de minh hoa. "
                        "V15/S61b: SO KHACH THEO TUNG TDV phai lay o by_employee (tinh tren toan bo tap "
                        "khach, quy khach cho nguoi ban nhieu nhat trong chinh thang do) - TUYET DOI khong "
-                       "tu dem tren danh sach customers da cat top-N. first_purchase_month la thang mua "
+                       "tu dem tren danh sach customers da cat top-N. "
+                       "V22 'khach moi da co don lap lai chua': cau tra loi nam san o by_employee - "
+                       "khach_moi_co_mua_lai va ty_le_mua_lai_khach_moi_pct, tinh tren TOAN BO khach moi "
+                       "chu khong phai mau. KHONG duoc tra cung tung khach roi ket luan tren vai dong "
+                       "rui tham, va KHONG duoc noi la chua kiem chung du. first_purchase_month la thang mua "
                        "dau tien that; khach da tung mua truoc do luon la REACTIVATED, khong duoc goi la "
                        "khach mo moi. V23: voi dong REACTIVATED, dung cac truong pre_stop_* va recovery_* "
                        "de so doanh thu thang quay lai voi binh quan CHUOI THANG LIEN TIEP co mua ngay "
@@ -1422,7 +1431,13 @@ TEMPLATE_TOOLS = [
                         "sach day du - neu 'note' bao con thieu, PHAI noi ro voi nguoi dung day chi la mot "
                         "phan, khong phai toan bo). Truong 'supply_risk' so sanh ton hien co voi binh quan "
                         "ban OTC 3 thang da chot: dung cho cau hoi SKU ton cao, cham luan chuyen, kho thieu "
-                        "va nguy co hut hang. 'recent_customer_candidates' chi la khach da mua gan day de "
+                        "va nguy co hut hang. supply_risk.months_of_cover KHONG phai so thang - ton dem "
+                        "theo VIEN con hoa don ban theo HOP nen ty le bi thoi phong bang he so quy cach "
+                        "(do that: Hysdin ra 155 trong khi quy ve hop chi khoang 6,8). CHI dung de xep "
+                        "hang tuong doi, TUYET DOI khong viet thanh 'ton X thang'; phai nhac "
+                        "canh_bao_don_vi. Moi trang thai trong status_counts deu co dong mau trong rows; "
+                        "so_dong_chua_hien_theo_trang_thai cho biet con bao nhieu chua liet ke - khong "
+                        "duoc noi la khong lay duoc danh sach. 'recent_customer_candidates' chi la khach da mua gan day de "
                         "goi y lien he. Voi QLV, binh quan ban va khach mua chi cua doi; ton kho dung chung "
                         "theo vung, chua phan bo cho doi. So thang du ban tinh theo suc ban cua doi. "
                         "PHAI noi ro day la CANH BAO SUY DIEN, khong co du lieu don cho xu ly/"
@@ -2310,9 +2325,122 @@ def _payload_for_model(tool_name: str, payload, question: str):
             return {**payload, "du_lieu": compact_data}
         return compact_data
 
+    if tool_name == "get_customer_product_coverage" and payload.get("mode") == "product":
+        # 18/09/2026 (cau M33): payload tho cua nhanh nay do duoc 500.156 ky tu - gap 50 lan ngan
+        # sach 10.000. Bo rut gon chung ha dan 12 -> 8 -> 5 -> 3 -> 1 -> 0 dong, va o buoc 0 thi MOI
+        # danh sach SKU thanh mang rong trong khi cac so dem vo huong van con. Chatbot vi the bao
+        # dung "cong cu tra ve tong so dem (68 giam, 94 tang, 68 mat ty trong) nhung khong kem danh
+        # sach chi tiet tung ma SKU" - lan thu NAM cua lop loi danh sach bi cat am tham.
+        # Phinh vi sau danh sach cung chua LAI ca dong day du ~40 truong cua cung mot SKU.
+        # Cau hoi that la "SKU nao giam VI SAO", nen gom thang theo nguyen nhan chinh thay vi tra
+        # sau danh sach chong cheo.
+        def _so(value):
+            try:
+                return float(value or 0)
+            except (TypeError, ValueError):
+                return 0.0
+
+        def _tron(value):
+            so = _so(value)
+            return int(so) if abs(so) >= 1 else round(so, 2)
+
+        def _gon(row):
+            ten = str(row.get("name") or "")
+            return {
+                "ma": row.get("code"),
+                "ten": (ten[:44] + "...") if len(ten) > 47 else ten,
+                "doanh_thu": _tron(row.get("revenue")),
+                "thay_doi": _tron(row.get("revenue_delta")),
+                "khach_thay_doi": _tron(row.get("customers_delta")),
+                "don_thay_doi": _tron(row.get("orders_delta")),
+            }
+
+        giam = [r for r in (payload.get("largest_revenue_declines") or []) if isinstance(r, dict)]
+        tang = [r for r in (payload.get("largest_revenue_increases") or []) if isinstance(r, dict)]
+        mat_ty_trong = [r for r in (payload.get("largest_internal_share_losses") or [])
+                        if isinstance(r, dict)]
+        theo_nguyen_nhan = {}
+        for row in giam:
+            khoa = row.get("primary_decline_driver") or "OTHER_OR_MIXED"
+            muc = theo_nguyen_nhan.setdefault(khoa, {"so_sku": 0, "tong_muc_giam": 0.0, "dan_dau": []})
+            muc["so_sku"] += 1
+            muc["tong_muc_giam"] += _so(row.get("revenue_delta"))
+        for khoa, muc in theo_nguyen_nhan.items():
+            cung_nhom = [r for r in giam if (r.get("primary_decline_driver") or "OTHER_OR_MIXED") == khoa]
+            cung_nhom.sort(key=lambda r: _so(r.get("revenue_delta")))
+            muc["dan_dau"] = [_gon(r) for r in cung_nhom[:8]]
+            muc["so_sku_chua_liet_ke"] = max(0, muc["so_sku"] - len(muc["dan_dau"]))
+            muc["tong_muc_giam"] = _tron(muc["tong_muc_giam"])
+
+        compact = {key: payload.get(key) for key in (
+            "mode", "window_days", "current_period", "previous_period", "comparison_basis",
+            "scope_totals", "reconciliation", "customer_count_definition",
+            "decline_driver_definition", "canh_bao", "data_as_of",
+        ) if payload.get(key) is not None}
+        compact.update({
+            "so_sku_giam": len(giam),
+            "so_sku_tang": len(tang),
+            "so_sku_mat_ty_trong_noi_bo": len(mat_ty_trong),
+            "sku_giam_theo_nguyen_nhan": dict(sorted(
+                theo_nguyen_nhan.items(), key=lambda kv: kv[1]["tong_muc_giam"])),
+            "sku_tang_dan_dau": [_gon(r) for r in tang[:8]],
+            "sku_mat_ty_trong_dan_dau": [
+                {**_gon(r), "ty_trong_giam_diem": round(_so(r.get("internal_share_delta_pct_points")), 2)}
+                for r in mat_ty_trong[:8]],
+            "display_rule": (
+                f"Da co DU danh sach {len(giam)} SKU giam, gom theo nguyen nhan chinh; moi nhom cho "
+                "toi da 8 ma giam manh nhat kem so_sku_chua_liet_ke. PHAI tra loi bang cac ma cu the "
+                "nay - TUYET DOI khong noi la khong co danh sach chi tiet. Muon xem het mot nhom thi "
+                "goi lai tool voi pham vi hep hon (it thang hon hoac mot vung), KHONG doan."),
+        })
+        return compact
+
     if tool_name == "get_employee_kpi":
         wrapper = payload if isinstance(payload.get("du_lieu"), dict) else None
         data = payload.get("du_lieu") if wrapper else payload
+        monthly_key = next((key for key in (
+            "monthly_threshold_summary", "monthly_team_threshold_summary"
+        ) if isinstance(data.get(key), dict)), None)
+        if monthly_key:
+            # C45/M12: call_template da tinh bang tung thang nhung ban nen cu bo mat ca
+            # khoi nay, chi gui danh sach nhan vien cua MOT snapshot. Dong goi theo cot
+            # de giu du moi thang/vung/chuc danh trong ngan sach 10.000 ky tu.
+            monthly = data[monthly_key]
+            columns = ["month", "manager_code"] if monthly_key == "monthly_team_threshold_summary" else [
+                "month", "area_code", "position_code"]
+            columns += ["employees_with_target", "count_gate", "count_80", "count_100", "count_120",
+                        "pct_gate", "pct_80", "pct_100", "pct_120"]
+            if monthly_key == "monthly_team_threshold_summary":
+                columns += ["pct_gate_change_vs_previous_month", "pct_gate_rolling_3_month_avg"]
+
+            def _cell(row, key):
+                value = row.get(key)
+                return round(value, 2) if key.startswith("pct_") and isinstance(value, (int, float)) else value
+
+            compact_monthly = {
+                "month_from": monthly.get("month_from"),
+                "month_to": monthly.get("month_to"),
+                "group_by": monthly.get("group_by"),
+                "channel_scope": monthly.get("channel_scope"),
+                "columns": columns,
+                "rows": [[_cell(row, key) for key in columns]
+                         for row in monthly.get("rows", []) if isinstance(row, dict)],
+                "definition": monthly.get("definition"),
+            }
+            compact_data = {
+                "as_of": data.get("as_of"),
+                monthly_key: compact_monthly,
+                "pham_vi_du_lieu": data.get("pham_vi_du_lieu"),
+                "answer_rule": (
+                    "Dung bang theo tung thang o tren lam nguon cho cau hoi nay; columns la ten cot "
+                    "cua tung mang trong rows. Mau so la employees_with_target cua CHINH thang/vung/"
+                    "chuc danh (hoac doi). KHONG lay total_employees/threshold_summary cua snapshot "
+                    "mot ngay de thay cho chuoi thang. Kenh du lieu chi la OTC neu channel_scope=OTC."
+                ),
+            }
+            if wrapper:
+                return {**payload, "du_lieu": compact_data}
+            return compact_data
         rows = data.get("rows") or []
         compact_rows = []
         for row in rows:

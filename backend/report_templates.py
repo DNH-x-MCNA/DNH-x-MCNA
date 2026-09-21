@@ -2477,6 +2477,59 @@ def _invoice_customer_lifecycle_series(month_to: str, months_back: int,
     }
 
 
+def _vong_doi_khach_theo_vung(snap: str, scope_area_code: str = None,
+                              allowed: list = None) -> list:
+    """Tach so khach theo VUNG cho mot snapshot KPI - dung quy tac cua checker S67.
+
+    18/09/2026 (cau M23): cau hoi la "so khach moi/tai kich hoat/mua lai/ngung mua cua TUNG VUNG",
+    nhung tool chi co scope_area_code de LOC, khong co truc vung - nen chatbot tra ve mot dong toan
+    quoc va bo han ve dau cua cau hoi.
+
+    Khong duoc group thang theo nv.area_code: mot khach co nhieu dong (TDV cua ho va dong rollup
+    QLV) va hai dong do co the mang area khac nhau, cong lai se vuot tong. Quy tac cua S67: khach
+    thuoc vung cua dong TANG NHAN VIEN; chi khach KHONG co dong tang nao moi lay vung cua dong QLV
+    (QLV tu ban khi dia ban trong, vd LCH00074 do QLV Vu Xuan Phong TM25010129 ban truc tiep).
+    Do lai 18/09 tren kho: MB 4.859 / MN 1.080 / MT 987, tong 6.926 - khop 100% so da chot cua S67,
+    va ca bon cot cong lai bang dung so toan quoc."""
+    pos_ph = ",".join(["?"] * len(_EMPLOYEE_TIER_POSITIONS))
+    sql = (f"SELECT nv.area_code area_code, f.customer_code customer_code, "
+           f"MAX(CASE WHEN nv.position_code IN ({pos_ph}) THEN 1 ELSE 0 END) la_tang, "
+           f"MAX(CASE WHEN f.is_nc=1 THEN 1 ELSE 0 END) nc, "
+           f"MAX(CASE WHEN f.is_ro=1 THEN 1 ELSE 0 END) ro "
+           f"FROM fact_tonghopkhachhang f "
+           f"LEFT JOIN dim_nhanvien nv ON nv.employee_code=f.employee_code "
+           f"WHERE f.save_date=? AND {_not_duplicate_sql('nv')}")
+    params = [*_EMPLOYEE_TIER_POSITIONS, snap]
+    if scope_area_code:
+        sql += " AND nv.area_code=?"
+        params.append(scope_area_code)
+    if allowed is not None:
+        sql += f" AND f.employee_code IN ({','.join(['?'] * len(allowed))})"
+        params.extend(allowed)
+    sql += " GROUP BY nv.area_code, f.customer_code"
+
+    chon = {}
+    for row in _q(sql, tuple(params)):
+        vung = row["area_code"] or "KHONG_XAC_DINH"
+        cu = chon.get(row["customer_code"])
+        # Uu tien dong tang nhan vien; hoa thi chot theo ten vung de ket qua on dinh giua cac lan chay.
+        if cu is None or (row["la_tang"] and not cu["la_tang"]) or (
+                row["la_tang"] == cu["la_tang"] and vung < cu["area_code"]):
+            chon[row["customer_code"]] = {"area_code": vung, "la_tang": row["la_tang"],
+                                          "nc": row["nc"], "ro": row["ro"]}
+    gop = {}
+    for row in chon.values():
+        muc = gop.setdefault(row["area_code"], {
+            "area_code": row["area_code"], "tong_khach": 0, "khach_moi": 0,
+            "so_is_ro": 0, "khach_khong_mang_co": 0})
+        muc["tong_khach"] += 1
+        muc["khach_moi"] += int(row["nc"] or 0)
+        muc["so_is_ro"] += int(row["ro"] or 0)
+        if not row["nc"] and not row["ro"]:
+            muc["khach_khong_mang_co"] += 1
+    return sorted(gop.values(), key=lambda r: -r["tong_khach"])
+
+
 def customer_lifecycle_summary(year_month: str = None, months_back: int = 1,
                                 scope_area_code: str = None,
                                 scope_employee_code: str = None,
@@ -2589,6 +2642,7 @@ def customer_lifecycle_summary(year_month: str = None, months_back: int = 1,
         }
         if roster_snapshot:
             month_result["team_roster_snapshot"] = roster_snapshot
+        month_result["theo_vung"] = _vong_doi_khach_theo_vung(snap, scope_area_code, allowed)
         months.append(month_result)
 
     missing = [m["month"] for m in months if m.get("khong_co_du_lieu")]
@@ -2599,7 +2653,11 @@ def customer_lifecycle_summary(year_month: str = None, months_back: int = 1,
             "dong rollup QLV chong len dong TDV khong lam sai). khach_moi_do_qlv_ban_truc_tiep la so "
             "khach chi xuat hien tren dong QLV - QLV tu ban, khong co TDV duoi quyen ghi nhan; day la "
             "khach THAT, da nam trong khach_moi. Rieng hai cot doanh so chi cong TANG NHAN VIEN "
-            "(TDV/CTV/CS/TK) vi tien thi bi cong hai lan that."),
+            "(TDV/CTV/CS/TK) vi tien thi bi cong hai lan that. "
+            "theo_vung tach dung bon cot dem do theo tung vung, moi khach thuoc DUNG MOT vung "
+            "(vung cua dong tang nhan vien; khach khong co dong tang nao moi lay vung cua dong QLV) "
+            "nen cac vung cong lai bang dung so toan quoc - dung khoi nay cho cau hoi 'tung vung', "
+            "KHONG goi lai tool ba lan theo tung vung."),
         "canh_bao_dinh_nghia": _customer_flag_caveat(),
         "pham_vi_kenh": "OTC (nguon FACT_TongHopKhachHang noi qua DIM_NhanVien chi phu nhan vien OTC)",
         "data_as_of": latest_data_date(),
@@ -3661,6 +3719,21 @@ def customer_cohort_retention(month_to: str = None, months_back: int = 6,
     # TRON gan nhat (giong customer_movement da lam) de xet "da du ky", khong dung thang cua ngay du
     # lieu tho.
     latest_complete = _latest_complete_revenue_month()
+    # 18/09/2026 (cau M23 "ty le giu chan sau 3/6 thang"): voi months_back mac dinh 6, cua so cohort
+    # bat dau o thang_to - 5, trong khi mot cohort phai lui it nhat 6 thang truoc thang TRON gan nhat
+    # moi cham duoc tuoi 6. Ket qua: cot tuoi 6 rong 100% - khong phai vi thieu du lieu (kho co lich
+    # su tu 2022) ma vi cua so tu chon sai. Do that: months_back=6 -> 0/6 cohort co so o tuoi 6;
+    # months_back=12 -> 5/12 cohort co so. Model doc duoc mot cot toan None roi ket luan "chua du ky"
+    # cho tat ca, hoac bo luon ve nay cua cau hoi.
+    # Noi rong cua so vua du de it nhat 3 cohort cham duoc tuoi lon nhat duoc hoi.
+    cohort_from_da_hoi = cohort_from
+    tuoi_lon_nhat = max(ages) if ages else 0
+    if latest_complete and tuoi_lon_nhat:
+        can_lui_den = _month_add(latest_complete, -(tuoi_lon_nhat + 2))
+        if can_lui_den < cohort_from:
+            cohort_from = max(earliest, can_lui_den)
+            if _month_diff(cohort_from, month_to) + 1 > 18:      # chan payload phinh
+                cohort_from = _month_add(month_to, -17)
     rows = _customer_monthly_activity(
         earliest, activity_to, scope_area_code, scope_channel, scope_employee_code)
 
@@ -3714,6 +3787,12 @@ def customer_cohort_retention(month_to: str = None, months_back: int = 6,
     return {
         "definition": "Cohort = thang co hoa don dau tien QUAN SAT DUOC trong kho; retained = co hoa don o dung thang tuoi.",
         "cohort_from": cohort_from, "cohort_to": month_to, "group_by": group_by,
+        "cohort_from_da_mo_rong": cohort_from < cohort_from_da_hoi,
+        "ly_do_mo_rong_cua_so": (
+            f"months_back duoc hoi chi lui den {cohort_from_da_hoi}, nhung mot cohort phai lui it nhat "
+            f"{tuoi_lon_nhat} thang truoc thang tron gan nhat ({latest_complete}) moi cham duoc tuoi "
+            f"{tuoi_lon_nhat}. Da noi rong ve {cohort_from} de cot tuoi lon nhat co so that thay vi "
+            "rong hoan toan." if cohort_from < cohort_from_da_hoi else None),
         "ages": ages, "cohorts": cohorts,
         "left_censored_cohort_months": left_censored_months,
         "valid_cohort_count": sum(1 for c in cohorts if c["valid_new_customer_cohort"]),
@@ -9320,20 +9399,18 @@ def _inventory_supply_risk(stock_by_item: dict, item_names: dict, area_code: str
 
     def _priority(row):
         status = row["status"]
-        cover = row["months_of_cover"]
         if focus == "overstock":
-            # V39: ton khong ban va ton >6 thang phai len dau. Sap xep ton khong ban theo luong
-            # ton giam dan; nhom cham luan chuyen theo so thang du hang giam dan.
+            # Uu tien nhom ma nguoi dung hoi. Khi chua co he so quy doi don vi,
+            # khong xep hang SKU trong nhom bang so thang ton hay so luong ton.
             rank = {
                 "TON_KHONG_BAN_3_THANG": 0,
                 "CHAM_LUAN_CHUYEN_DERIVED": 1,
                 "CO_NGUY_CO_THIEU_HANG_DERIVED": 2,
             }.get(status, 3)
-            metric = -(cover or 0) if status == "CHAM_LUAN_CHUYEN_DERIVED" else -row["stock_qty"]
-            return rank, metric, -row["stock_qty"]
-        # V38/all: nhom thieu hang uu tien so thang du hang thap nhat.
+            return rank, row["item_code"]
+        # V38/all: nhom thieu hang duoc uu tien, trong nhom chi sap theo ma.
         rank = 0 if status == "CO_NGUY_CO_THIEU_HANG_DERIVED" else 1
-        return rank, cover if cover is not None else float("inf"), -row["stock_qty"]
+        return rank, row["item_code"]
 
     actionable.sort(key=_priority)
 
@@ -9428,6 +9505,25 @@ def _inventory_supply_risk(stock_by_item: dict, item_names: dict, area_code: str
             "CAT theo limit - noi ro con bao nhieu SKU chua liet ke va co the goi lai voi limit lon "
             "hon hoac focus='shortage'/'overstock'. TUYET DOI khong noi la khong lay duoc danh sach."),
         "recent_customer_candidates": buyer_candidates,
+        # 18/09/2026 (cau M40): hai ve cua phep chia KHONG cung don vi. brv_sanpham.unit cua cac ma
+        # nay la "Vien" va ton kho theo lo dem bang vien, trong khi hoa don ban theo HOP - don gia
+        # 17.143d cua Hysdin la gia mot hop (Hop x 2 vi x 10 vien), khong phai gia mot vien. Vi vay
+        # months_of_cover bi thoi phong dung bang he so quy cach: Hysdin ra 155 thang trong khi quy
+        # ve hop la 5.730/848 = khoang 6,8 thang - sai hon 20 lan.
+        # KHONG tu suy he so tu ten quy cach: "Kien x 80 hop x 1 tui x 5 vi x 12 vien" khong cho biet
+        # hoa don tinh theo Kien hay theo Hop (doi chieu don gia thi la Hop, tuc 60 chu khong phai
+        # 4.800). Kho local khong co bang quy doi nao. Cho DNH chot nguon he so truoc khi sua cong thuc.
+        "don_vi_hai_ve_khong_khop": True,
+        "canh_bao_don_vi": (
+            "months_of_cover KHONG phai so thang. Ton kho dem theo don vi le cua danh muc (thuong la "
+            "VIEN) con hoa don ban theo HOP, nen ty le nay bi thoi phong dung bang he so quy cach - do "
+            "that tren Hysdin: tool ra 155 trong khi quy ve hop chi khoang 6,8 thang. KHONG duoc "
+            "XEP HANG cac SKU theo ty le nay vi he so quy doi khac nhau; thu tu rows chi de hien thi. "
+            "TUYET DOI khong doc thanh 'ton X thang' hay 'du ban X thang'. "
+            "Nhom TON_KHONG_BAN_3_THANG khong bi anh huong (ban bang 0 thi don vi nao cung la "
+            "0); nhom CO_NGUY_CO_THIEU_HANG_DERIVED van dang tin theo huong THAN TRONG (ton dang bi "
+            "tinh cao hon thuc te ma van bao thieu, tuc thieu that); rieng CHAM_LUAN_CHUYEN_DERIVED "
+            "bi bao nhieu hon thuc te."),
         "definition": (
             "Canh bao suy dien tu ton hien co so voi binh quan ban OTC 3 thang da chot. "
             "Khong co du lieu don cho xu ly/chia ton/khach cam ket nen KHONG ket luan da mat don hay doanh thu. "
