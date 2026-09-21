@@ -531,7 +531,7 @@ def _required_tool_for_question(question: str) -> str | None:
     if "mua vu" in q:
         # C08: phai bat dau bang chuoi thang, de tool tu danh dau thang khong du du lieu
         # thay vi model tu suy dien tinh mua vu tu vai ngay/1-2 thang hien co.
-        return "get_revenue_monthly_series"
+        return "get_revenue_seasonality"
     if any(marker in q for marker in ("theo thang", "3/6 thang", "3 thang", "6 thang", "xu huong")) \
             and any(marker in q for marker in ("tdv", "nhan vien")) \
             and any(marker in q for marker in ("target", "% hoan thanh", "xep hang", "doanh so")):
@@ -886,6 +886,22 @@ TEMPLATE_TOOLS = [
                 "month_to": {"type": "string", "description": "YYYY-MM, thang CUOI cua chuoi (mac dinh: thang co du lieu moi nhat)"},
                 "months_back": {"type": "integer", "description": "So thang tra ve tinh ca month_to (mac dinh 12, toi da 24)"},
                 "include_yoy": {"type": "boolean", "description": "Tu dong lay them 12 thang truoc de tinh YoY (mac dinh true)"},
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "get_revenue_seasonality",
+        "description": "C08/S80: Tinh mua vu doanh thu theo tung kenh (OTC, ETC) va theo thang duong lich (calendar month 1-12). "
+                       "Tinh chi so mua vu (seasonal index = average revenue cua thang / average revenue chung), "
+                       "xac dinh thang cao nhat/thap nhat, va do lech so voi mua vu. Danh dau ro trang thai du lieu "
+                       "(READY neu co >=24 thang tron va du >=2 quan sat cho moi thang; INSUFFICIENT_HISTORY neu thieu). "
+                       "Khong keo target/YoY/tach mien phuc tap nhu get_revenue_monthly_series, tranh timeout.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "month_to": {"type": "string", "description": "YYYY-MM, thang cuoi cua chuoi (mac dinh thang co du lieu moi nhat)"},
+                "months_back": {"type": "integer", "description": "So thang tra ve (mac dinh 24, toi da 24)"},
             },
             "required": [],
         },

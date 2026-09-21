@@ -2076,7 +2076,9 @@ def _revenue_period_coverage(date_from: str, date_to: str) -> dict:
 
 def revenue_monthly_series(month_to: str = None, months_back: int = 12, include_yoy: bool = True,
                             scope_area_code: str = None, scope_channel: str = None,
-                            scope_employee_code: str = None) -> dict:
+                            scope_employee_code: str = None, include_plans: bool = True,
+                            include_region_breakdown: bool = True,
+                            include_special_channels: bool = True) -> dict:
     """CHUOI DOANH THU THEO TUNG THANG (moi thang 1 dong) kem MoM va YoY - dung cho MOI cau hoi dang
     "doanh thu 12 thang gan nhat", "theo tung thang", "xu huong thang qua thang", "thang nao tang/
     giam", "trung binh truot 3/6 thang". CHi CAN GOI 1 LAN cho ca chuoi.
@@ -2140,25 +2142,26 @@ def revenue_monthly_series(month_to: str = None, months_back: int = 12, include_
             "revenue": r["total"]["revenue"], "invoices": r["total"]["invoices"],
         }
         # C02: tra san target/%/chenh lech cua DUNG thang de model khong tu ghep doanh thu va
-        # target tu hai query roi cong nham kenh. Voi doi QLV hoac ETC theo vung, nguon khong co
-        # target lich su du cap chi tiet nen _ytd_plan tra None + ly do, khong chia deu/suy dien.
-        plan = _ytd_plan(int(ym[:4]), ym[5:7], ym[5:7],
-                         scope_area_code, scope_channel, scope_employee_code)
-        item["plan_revenue"] = plan["total"]
-        item["plan_otc_revenue"] = plan["otc"]
-        item["plan_etc_revenue"] = plan["etc"]
-        item["target_source"] = plan.get("target_source")
-        item["achievement_pct"] = (
-            item["revenue"] / plan["total"] * 100 if plan["total"] else None
-        )
-        item["plan_variance"] = (
-            item["revenue"] - plan["total"] if plan["total"] is not None else None
-        )
-        if plan.get("note"):
-            item["plan_note"] = plan["note"]
+        # target tu hai query roi cong nham kenh. C08 chi can doanh thu lich su; bo qua toan bo
+        # phan nay de khong lap 24 lan truy van target/phan ra mien roi timeout.
+        if include_plans:
+            plan = _ytd_plan(int(ym[:4]), ym[5:7], ym[5:7],
+                             scope_area_code, scope_channel, scope_employee_code)
+            item["plan_revenue"] = plan["total"]
+            item["plan_otc_revenue"] = plan["otc"]
+            item["plan_etc_revenue"] = plan["etc"]
+            item["target_source"] = plan.get("target_source")
+            item["achievement_pct"] = (
+                item["revenue"] / plan["total"] * 100 if plan["total"] else None
+            )
+            item["plan_variance"] = (
+                item["revenue"] - plan["total"] if plan["total"] is not None else None
+            )
+            if plan.get("note"):
+                item["plan_note"] = plan["note"]
         # C02/S02 yeu cau ca mien. Tra san actual + target OTC tung mien trong cung payload de
         # model khong tu ghep target toan cong ty vao MN, hoac cong nham target MN vao tong.
-        if scope_channel != "ETC" and not scope_employee_code:
+        if include_plans and include_region_breakdown and scope_channel != "ETC" and not scope_employee_code:
             target_by_region = plan.get("otc_by_region") or {}
             region_codes = ([scope_area_code] if scope_area_code else ["MB", "MT", "MN"])
             s02_actual_by_region = plan.get("otc_actual_by_region_s02") or {}
@@ -2181,10 +2184,10 @@ def revenue_monthly_series(month_to: str = None, months_back: int = 12, include_
                     actual_by_region, actual_source = None, None
                     region_note = (f"Chua tach duoc doanh thu OTC theo mien cho thang nay (thieu du lieu "
                                    f"vung: {str(exc)[:120]}). KHONG coi cac mien bang 0.")
-        if scope_channel != "ETC" and not scope_employee_code and actual_by_region is None:
+        if include_plans and include_region_breakdown and scope_channel != "ETC" and not scope_employee_code and actual_by_region is None:
             item["otc_by_region"] = None
             item["otc_region_note"] = region_note
-        elif scope_channel != "ETC" and not scope_employee_code:
+        elif include_plans and include_region_breakdown and scope_channel != "ETC" and not scope_employee_code:
             item["otc_by_region"] = [{
                 "area_code": area,
                 "otc_revenue": actual_by_region.get(area, 0.0),
@@ -2232,7 +2235,7 @@ def revenue_monthly_series(month_to: str = None, months_back: int = 12, include_
         # 15/09/2026 (UAT OTC-Only C-Level 14:17-14:20 "doanh so kenh MT cac thang" roi "bo sung ke
         # hoach va % thuc hien"): tra san doanh thu + ke hoach + % dat kenh dac biet (Kenh MT) tung thang
         # trong CUNG payload. So nay DA NAM SAN trong doanh thu OTC mien Nam, khong cong them.
-        if scope_channel != "ETC" and not scope_employee_code:
+        if include_special_channels and scope_channel != "ETC" and not scope_employee_code:
             month_from, month_last_day = _month_bounds(ym)
             try:
                 buckets = _channel_sub_buckets()
@@ -2313,6 +2316,147 @@ def revenue_monthly_series(month_to: str = None, months_back: int = 12, include_
     if scope_channel:
         result["channel_scope"] = f"Tai khoan chi duoc xem kenh {scope_channel} - so lieu kenh khac KHONG duoc hien thi."
     return result
+
+
+def revenue_seasonality(month_to: str = None, months_back: int = 24,
+                        scope_area_code: str = None, scope_channel: str = None,
+                        scope_employee_code: str = None) -> dict:
+    """C08/S80: mua vu doanh thu theo kenh, khong keo target/YoY/tach mien cua C02.
+
+    C08 tung dung get_revenue_monthly_series mac dinh: 24 thang x target x mien x kenh dac biet
+    lam tool timeout truoc khi model co du lieu de tra loi. O day chi lay chuoi doanh thu can thiet
+    va danh dau ro khi kho chua du it nhat hai quan sat cho moi thang duong lich.
+    """
+    months_back = max(12, min(int(months_back or 24), 24))
+    series = revenue_monthly_series(
+        month_to=month_to, months_back=months_back, include_yoy=False,
+        scope_area_code=scope_area_code, scope_channel=scope_channel,
+        scope_employee_code=scope_employee_code, include_plans=False,
+        include_region_breakdown=False, include_special_channels=False,
+    )
+    if series.get("error"):
+        return series
+
+    latest_day = str(series.get("data_as_of") or latest_data_date())[:10]
+    latest_month = latest_day[:7]
+    today_month_end = _last_day_of_month(int(latest_month[:4]), int(latest_month[5:7]))
+    current_month_complete = latest_day >= f"{latest_month}-{today_month_end:02d}"
+    complete_rows = [
+        row for row in series["months"]
+        if not row.get("khong_co_du_lieu")
+        and (row["month"] != latest_month or current_month_complete)
+    ]
+
+    def _channel_result(channel: str, field: str):
+        values = [row for row in complete_rows if row.get(field) is not None]
+        by_calendar_month = {}
+        for row in values:
+            by_calendar_month.setdefault(int(row["month"][5:7]), []).append(_f(row[field]))
+        if not values:
+            return {"channel": channel, "status": "NO_DATA_IN_SCOPE", "months": []}
+        monthly_average = {month: sum(amounts) / len(amounts) for month, amounts in by_calendar_month.items()}
+        overall_average = sum(monthly_average.values()) / len(monthly_average) if monthly_average else None
+        current = next((row for row in series["months"] if row["month"] == latest_month), None)
+        current_value = _f(current[field]) if current and current.get(field) is not None else None
+        expected = monthly_average.get(int(latest_month[5:7]))
+        observations = len(by_calendar_month.get(int(latest_month[5:7]), []))
+        enough_history = len(values) >= 24 and all(len(by_calendar_month.get(month, [])) >= 2 for month in range(1, 13))
+        rows = []
+        for month in sorted(monthly_average):
+            average = monthly_average[month]
+            rows.append({
+                "calendar_month": month,
+                "observations": len(by_calendar_month[month]),
+                "average_revenue": average,
+                "seasonal_index_pct": average / overall_average * 100 if overall_average else None,
+            })
+        return {
+            "channel": channel,
+            "status": "READY" if enough_history else "INSUFFICIENT_HISTORY_FOR_SEASONAL_CONCLUSION",
+            "complete_months_observed": len(values),
+            "required_complete_months": 24,
+            "months": rows,
+            "highest_calendar_month": max(rows, key=lambda row: row["seasonal_index_pct"]) if rows else None,
+            "lowest_calendar_month": min(rows, key=lambda row: row["seasonal_index_pct"]) if rows else None,
+            "current_month": latest_month,
+            "current_month_revenue": current_value,
+            "expected_full_month_revenue": expected,
+            "current_month_observations_in_baseline": observations,
+            "deviation_from_seasonal": (
+                current_value - expected if current_month_complete and current_value is not None and expected is not None else None
+            ),
+            "deviation_pct": (
+                (current_value - expected) / expected * 100
+                if current_month_complete and current_value is not None and expected else None
+            ),
+            "current_month_note": (
+                "Thang dang chay chua tron; khong so sanh doanh thu luy ke voi muc binh quan cua thang tron."
+                if not current_month_complete else None
+            ),
+        }
+
+    channels = []
+    if scope_channel != "ETC":
+        channels.append(_channel_result("OTC", "otc_revenue"))
+    if scope_channel != "OTC":
+        channels.append(_channel_result("ETC", "etc_revenue"))
+
+    # Nhom hang ETC co tren hoa don chi tiet. OTC khong co GroupCode du tin cay; khong lay ten SKU
+    # hay chuoi quy cach de tu gan nhom. Lich su chi tiet co cua so rieng nen ket qua nay la tham khao,
+    # khong duoc noi la mua vu nhieu nam.
+    etc_groups = []
+    etc_group_status = "NOT_APPLICABLE_CHANNEL_SCOPE" if scope_channel == "OTC" else None
+    if scope_channel != "OTC":
+        join = _etc_area_join("v", scope_area_code)
+        scope_sql, scope_params = _scope_clause(scope_area_code)
+        emp_sql, emp_params = _employee_scope_clause(scope_employee_code, "v", as_of=latest_day)
+        try:
+            rows = _q(
+                "SELECT substr(v.doc_date,1,7) month,COALESCE(NULLIF(TRIM(v.group_code),''),'UNKNOWN') group_code,"
+                "SUM(v.amount9) revenue FROM vhoadon_etc v " + join +
+                " WHERE v.doc_date>=? AND v.doc_date<=?" + scope_sql + emp_sql +
+                " GROUP BY substr(v.doc_date,1,7),COALESCE(NULLIF(TRIM(v.group_code),''),'UNKNOWN')",
+                (_detail_cutoff(), latest_day, *scope_params, *emp_params),
+            )
+            names = {str(row["code"]): row["name"] for row in _q(
+                "SELECT code,name FROM dim_keyclass WHERE group_code=?", (_ETC_ITEM_TYPE_GROUP,)
+            )}
+            per_group = {}
+            for row in rows:
+                per_group.setdefault(str(row["group_code"]), []).append(row)
+            for code, values in sorted(per_group.items()):
+                etc_groups.append({
+                    "group_code": code, "group_name": names.get(code) or code,
+                    "months_observed": len({row["month"] for row in values}),
+                    "revenue_by_month": values,
+                })
+            etc_group_status = (
+                "INSUFFICIENT_DETAIL_HISTORY_FOR_SEASONAL_CONCLUSION"
+                if len({row["month"] for row in rows}) < 24 else "READY"
+            )
+        except sqlite3.Error as exc:
+            etc_group_status = f"SOURCE_UNAVAILABLE: {str(exc)[:120]}"
+
+    return {
+        "status": "READY" if all(row.get("status") == "READY" for row in channels) else "PARTIAL_HISTORY",
+        "as_of": latest_day,
+        "month_from": series["month_from"], "month_to": series["month_to"],
+        "seasonality_by_channel": channels,
+        "product_groups": {
+            "otc_status": "SOURCE_GAP_OTC_PRODUCT_GROUP_NOT_CLASSIFIED",
+            "etc_status": etc_group_status,
+            "etc_groups": etc_groups,
+            "definition": (
+                "Nhom hang ETC chi co trong cua so hoa don chi tiet. OTC khong co ma nhom san pham "
+                "du tin cay trong kho, nen khong tu suy dien tu ten SKU."
+            ),
+        },
+        "definition": (
+            "Chi so mua vu = doanh thu binh quan cua mot thang duong lich / binh quan cac thang duong lich. "
+            "Ket luan cao/thap chi dung khi moi thang duong lich co it nhat 2 quan sat nam va co >=24 thang tron."
+        ),
+        "data_as_of": series.get("data_as_of"),
+    }
 
 
 # ===================== VONG DOI KHACH HANG =====================
@@ -12793,6 +12937,7 @@ TEMPLATES = {
     "get_revenue_by_region": revenue_by_region,
     "get_revenue_ytd_cumulative": revenue_ytd_cumulative,
     "get_revenue_monthly_series": revenue_monthly_series,
+    "get_revenue_seasonality": revenue_seasonality,
     "get_customer_lifecycle_summary": customer_lifecycle_summary,
     "get_customers_silent": customers_silent,
     "get_new_customer_list": new_customer_list,
@@ -12868,6 +13013,7 @@ _PERSON_LEVEL_TEMPLATES = {
     "get_employee_daily_kpi", "check_order_timing",
     "get_revenue_by_channel", "get_revenue_by_region", "get_top_customers",
     "get_top_products", "compare_periods", "get_revenue_ytd_cumulative", "get_revenue_monthly_series",
+    "get_revenue_seasonality",
     "get_customer_lifecycle_summary", "get_customers_silent", "get_customer_attrition_risk",
     "get_customer_cohort_retention", "get_customer_movement", "get_kpi_gap_run_rate",
     "get_cross_sell_opportunities", "get_customer_product_coverage", "get_geography_monthly_performance",
@@ -12904,7 +13050,7 @@ _EMPLOYEE_SCOPED_TEMPLATES = {
     "get_revenue_tree", "get_kpi_ranking", "get_employee_kpi",
     "get_employee_daily_kpi", "get_revenue_by_channel", "get_top_customers",
     "get_top_products", "get_revenue_by_region", "compare_periods", "get_revenue_ytd_cumulative",
-    "get_revenue_monthly_series", "get_customer_lifecycle_summary", "get_customers_silent",
+    "get_revenue_monthly_series", "get_revenue_seasonality", "get_customer_lifecycle_summary", "get_customers_silent",
     "get_customer_attrition_risk",
     "get_customer_cohort_retention", "get_customer_movement", "get_kpi_gap_run_rate",
     "get_cross_sell_opportunities", "get_customer_product_coverage", "get_geography_monthly_performance",
@@ -12925,6 +13071,7 @@ _CHANNEL_SCOPE_POLICIES = {
     **{name: "filter" for name in {
         "get_revenue_by_channel", "get_top_products", "get_top_customers",
         "compare_periods", "get_revenue_ytd_cumulative", "get_revenue_monthly_series",
+        "get_revenue_seasonality",
         "get_customer_lifecycle_summary", "get_customers_silent", "get_customer_attrition_risk",
         "get_customer_cohort_retention",
         "get_customer_movement", "get_kpi_gap_run_rate", "get_cross_sell_opportunities",

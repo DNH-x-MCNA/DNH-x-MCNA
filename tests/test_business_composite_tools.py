@@ -384,7 +384,7 @@ def test_high_risk_intents_force_their_single_verified_tool():
     ) == "get_receivables_overview"
     assert nl2sql._required_tool_for_question(
         "Tháng mùa vụ cao/thấp; tháng hiện tại lệch mô hình bao nhiêu"
-    ) == "get_revenue_monthly_series"
+    ) == "get_revenue_seasonality"
     assert nl2sql._required_tool_for_question(
         "Khuyến mãi nào có nhiều khách tham gia nhưng không tạo tăng trưởng"
     ) == "get_promotion_effectiveness"

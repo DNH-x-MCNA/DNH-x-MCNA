@@ -116,6 +116,7 @@ _TEMPLATE_SOURCES = {
     "get_receivables_history_dates": ("debt",),
     "get_receivables_period_compare": ("debt",),
     "get_revenue_monthly_series": ("sales_otc", "sales_etc"),
+    "get_revenue_seasonality": ("sales_otc", "sales_etc"),
     "get_revenue_ytd_cumulative": ("sales_otc", "sales_etc"),
     "get_salary_data_quality": ("salary",),
     "get_workforce_productivity": ("kpi_salary_result", "sales_otc"),
