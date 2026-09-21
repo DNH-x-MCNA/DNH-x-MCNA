@@ -112,6 +112,49 @@ def test_v15_khach_tung_mua_ngoai_cua_so_khong_duoc_goi_la_khach_moi(tmp_path, m
     assert r["summary_all_customers"]["counts"]["NEW_OR_FIRST_OBSERVED"] == 1
 
 
+def test_c31_cua_so_24_thang_tach_rieng_voi_lich_su_day_du(tmp_path, monkeypatch):
+    """C31/S90 dung #sales 24 thang: khach cu hon cua so la 'lan dau quan sat', khong phai V15."""
+    _setup(tmp_path, monkeypatch)
+
+    full_history = rt.customer_movement(month="2026-08", history_months=6)
+    c31 = rt.customer_movement(month="2026-08", classification_basis="observed_window_24m")
+
+    assert _theo_ma(full_history)["KH_QUAY_NGOAI_CUA_SO"]["movement"] == "REACTIVATED"
+    assert _theo_ma(c31)["KH_QUAY_NGOAI_CUA_SO"]["movement"] == "NEW_OR_FIRST_OBSERVED"
+    assert c31["history_from"] == "2024-09"
+    assert c31["classification_basis"] == "observed_window_24m"
+    assert "dinh nghia C31/S90" in c31["canh_bao"]
+
+
+def test_c31_doanh_thu_am_la_giam_khong_phai_ngung_mua(tmp_path, monkeypatch):
+    """S90 chi xet Cur=0 la ngung mua; Cur<0 la dieu chinh/tra hang va phai tach ra."""
+    path = _setup(tmp_path, monkeypatch)
+    with sqlite3.connect(path) as con:
+        con.execute("INSERT INTO dms_khachhang VALUES ('KH_AM','Khach am',1,1,'D1','OTC')")
+        con.execute("INSERT INTO vhoadon_otc VALUES "
+                    "('2026-07-10','KH_AM','A',100,1,100,'AM7',1,'D1','2026-07-10','OTC')")
+        con.execute("INSERT INTO vhoadon_otc VALUES "
+                    "('2026-08-10','KH_AM','A',-20,1,-20,'AM8',1,'D1','2026-08-10','OTC')")
+
+    c31 = rt.customer_movement(month="2026-08", classification_basis="observed_window_24m")
+
+    assert _theo_ma(c31)["KH_AM"]["movement"] == "DECLINING"
+    assert c31["summary_all_customers"]["lost_previous_revenue"] == 0
+
+
+def test_call_template_tu_ep_dinh_nghia_c31(tmp_path, monkeypatch):
+    _setup(tmp_path, monkeypatch)
+
+    result = rt.call_template(
+        "get_customer_movement", {},
+        question="Khách mới và tái kích hoạt bù doanh thu khách ngừng mua được bao nhiêu?",
+        scope_role="c_level",
+    )
+
+    assert result["ok"] is True
+    assert result["result"]["classification_basis"] == "observed_window_24m"
+
+
 def test_v23_binh_quan_truoc_khi_ngung_tinh_tren_chuoi_lien_tiep_ngoai_cua_so(tmp_path, monkeypatch):
     _setup(tmp_path, monkeypatch)
 

@@ -4086,7 +4086,8 @@ def _chuoi_truoc_khi_ngung(thang_doanh_thu: dict, month: str, prev_month: str) -
 def customer_movement(month: str = None, history_months: int = 12,
                       movement_filter: str = "all", limit: int = 50,
                       scope_area_code: str = None, scope_channel: str = None,
-                      scope_employee_code: str = None) -> dict:
+                      scope_employee_code: str = None,
+                      classification_basis: str = "full_history") -> dict:
     """Luon khach giua thang hien tai va thang truoc: moi quan sat/tai kich hoat/ngung/tang/giam."""
     earliest, latest = _revenue_data_month_range()
     if not earliest or not latest:
@@ -4096,7 +4097,13 @@ def customer_movement(month: str = None, history_months: int = 12,
     # du lieu moi nhat, nen ngay 08/09 co the am tham so 8 ngay T9 voi ca thang T8. Model co luc tu
     # lui ve T8, co luc khong, lam cung mot cau UAT thay doi ky giua cac lan chay.
     month = ((_latest_complete_revenue_month() if used_default_month else month) or latest)[:7]
-    history_months = max(2, min(int(history_months or 6), 24))
+    if classification_basis not in {"full_history", "observed_window_24m"}:
+        return {"error": "classification_basis khong hop le."}
+    observed_window = classification_basis == "observed_window_24m"
+    # C31/S90 dinh nghia #sales la cua so 24 thang: "lan dau quan sat" chi co nghia la chua
+    # xuat hien trong cua so nay. V15/V23 can lich su day du de khong goi nham khach cu la moi,
+    # nen chi C31 duoc call_template ep sang basis nay; khong dung chung mot nhan cho hai bai toan.
+    history_months = 24 if observed_window else max(2, min(int(history_months or 6), 24))
     limit = max(1, min(int(limit or 50), 200))
     start = max(earliest, _month_add(month, -(history_months - 1)))
     prev_month = _month_add(month, -1)
@@ -4119,8 +4126,11 @@ def customer_movement(month: str = None, history_months: int = 12,
     ung_vien = [ma for ma, c in customers.items()
                 if c["months"].get(month, {"revenue": 0.0})["revenue"] > 0
                 and c["months"].get(prev_month, {"revenue": 0.0})["revenue"] <= 0]
-    lich_su_day_du = _lich_su_thang_cua_khach(ung_vien, prev_month, scope_area_code, scope_channel,
-                                              scope_employee_code)
+    lich_su_day_du = (
+        _lich_su_thang_cua_khach(ung_vien, prev_month, scope_area_code, scope_channel,
+                                 scope_employee_code)
+        if not observed_window else {}
+    )
     detail = []
     for code, c in customers.items():
         cur = c["months"].get(month, {"revenue": 0.0, "orders": 0})
@@ -4128,10 +4138,15 @@ def customer_movement(month: str = None, history_months: int = 12,
         earlier = sum(v["revenue"] for k, v in c["months"].items() if k < prev_month)
         truoc_day = lich_su_day_du.get(code) or {}
         thang_mua_dau = min(truoc_day) if truoc_day else None
-        if cur["revenue"] > 0 and prev["revenue"] <= 0:
+        # S90/C31 dung dung dau so cua checker: chi CURRENT = 0 moi la ngung mua. Dong am (tra
+        # hang/dieu chinh) la DECLINING, khong duoc day vao doanh thu mat do khach ngung mua.
+        cur_absent = cur["revenue"] == 0 if observed_window else cur["revenue"] <= 0
+        prev_absent = prev["revenue"] == 0 if observed_window else prev["revenue"] <= 0
+        if cur["revenue"] > 0 and prev_absent:
             # Lan dau mua that su (ke ca phan ngoai cua so) moi duoc goi la khach moi.
-            movement = "REACTIVATED" if (truoc_day or earlier > 0) else "NEW_OR_FIRST_OBSERVED"
-        elif cur["revenue"] <= 0 and prev["revenue"] > 0:
+            movement = "REACTIVATED" if ((truoc_day or earlier > 0) if not observed_window
+                                          else earlier > 0) else "NEW_OR_FIRST_OBSERVED"
+        elif cur_absent and prev["revenue"] > 0:
             movement = "STOPPED"
         elif cur["revenue"] > prev["revenue"]:
             movement = "GROWING"
@@ -4173,7 +4188,10 @@ def customer_movement(month: str = None, history_months: int = 12,
             "earlier_revenue_in_window": earlier,
             "employee_code": emp, "employee_code_this_month": emp_thang_nay,
             "channels": sorted(c["channels"]), "areas": sorted(c["areas"]),
-            "first_purchase_month": thang_mua_dau or (month if cur["revenue"] > 0 and not prev["revenue"] else None),
+            "first_purchase_month": (
+                min(c["months"]) if observed_window and cur["revenue"] > 0 and not prev["revenue"]
+                else thang_mua_dau or (month if cur["revenue"] > 0 and not prev["revenue"] else None)
+            ),
             **reactivation_fields,
         })
     detail.sort(key=lambda x: abs(x["delta"]), reverse=True)
@@ -4215,7 +4233,9 @@ def customer_movement(month: str = None, history_months: int = 12,
             "added_revenue": added,
             "lost_previous_revenue": lost,
             "net_offset": added - lost,
-            "compensation_pct_of_lost_revenue": round(added / lost * 100, 1) if lost else None,
+            # Khong lam tron som: S90/C31 doi chieu ty le voi SQL tra day du phan thap phan.
+            # Tang hien thi co the tu chon 1-2 chu so, nhung payload khong duoc mat chenh lech.
+            "compensation_pct_of_lost_revenue": added / lost * 100 if lost else None,
             "like_for_like_customer_count": len(lfl_rows),
             "like_for_like_current_revenue": lfl_current,
             "like_for_like_previous_revenue": lfl_previous,
@@ -4266,15 +4286,20 @@ def customer_movement(month: str = None, history_months: int = 12,
     )
     return {
         "month": month, "previous_month": prev_month, "history_from": start,
+        "classification_basis": classification_basis,
         "period_selection": ("THANG_TRON_GAN_NHAT" if used_default_month else "THANG_DUOC_CHI_DINH"),
         "summary_all_customers": summary_all,
         "by_employee": by_employee,
         "summary_all_products": product_summary,
         "summary_on_returned_top_rows": _movement_summary(returned_detail),
         "customers": returned_detail,
-        "canh_bao": ("NEW_OR_FIRST_OBSERVED = lan dau mua tren TOAN BO lich su kho trong pham vi tai "
+        "canh_bao": (("NEW_OR_FIRST_OBSERVED = lan dau xuat hien trong cua so 24 thang tu "
+                      f"{start} den {month}, dung dinh nghia C31/S90. Khong duoc goi la khach moi trong doi; "
+                      "khach co mua trong cua so truoc thang nay la REACTIVATED. "
+                      if observed_window else
+                      "NEW_OR_FIRST_OBSERVED = lan dau mua tren TOAN BO lich su kho trong pham vi tai "
                       "khoan (13/09/2026), khong con phu thuoc history_months; first_purchase_month cua "
-                      "tung dong la bang chung. Khach tung mua truoc do luon la REACTIVATED. "
+                      "tung dong la bang chung. Khach tung mua truoc do luon la REACTIVATED. ") +
                       "pre_stop_* lay ca phan ngoai cua so hien thi: pre_stop_average_monthly_revenue la "
                       "trung binh cua CHUOI THANG LIEN TIEP co mua ngay truoc ky nghi. "
                       "So khach theo tung TDV BAT BUOC lay o by_employee (tinh tren toan bo tap khach, "
@@ -13298,6 +13323,13 @@ def call_template(name: str, args: dict, question: str = "", username: str = Non
         if scope_channel and _CHANNEL_SCOPE_POLICIES[name] == "filter":
             call_args["scope_channel"] = scope_channel
         q_folded = _fold_question(question)
+        if name == "get_customer_movement" and (
+                "bu" in q_folded and "ngung mua" in q_folded
+                and any(marker in q_folded for marker in ("khach moi", "tai kich hoat"))):
+            # C31/S90: query doi chieu dung #sales cua so 24 thang, nen "moi" la lan dau QUAN SAT
+            # trong cua so. Khong ap dung cho V15/V23, vi hai cau do can truy ca lich su de phan biet
+            # lan mua dau that voi khach quay lai sau nhieu nam.
+            call_args["classification_basis"] = "observed_window_24m"
         concentration_question = (
             name == "get_top_customers"
             and any(marker in q_folded for marker in ("phu thuoc top", "muc do tap trung"))
