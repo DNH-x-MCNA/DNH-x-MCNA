@@ -60,8 +60,8 @@ email:
 #     sách audience này (không hard-code lại quy ước vùng/kênh ở nơi khác).
 # region: null (không lọc) hoặc "bac"/"nam"/"trung" — khớp đúng DNHChatbot._REGION_SQL_MARKERS.
 # channel: null (không lọc) hoặc "OTC"/"ETC".
-# emails: CHƯA có email thật cho từng manager — tạm route tất cả về 1 địa chỉ hiện có, điền
-# email thật vào đây khi có, KHÔNG cần sửa code (main.py/src/etl.py đã đọc thẳng danh sách này).
+# emails: C-Level đã dùng email thật của người nhận; các audience còn lại vẫn giữ hộp thư UAT
+# cho tới khi DNH cung cấp danh sách quản lý tương ứng.
 #
 # Báo cáo RIÊNG cho từng QLV (Daily Digest qua một Flow Teams dùng chung) thêm bốn trường bắt buộc:
 #   role: "qlv"
@@ -84,7 +84,7 @@ report_recipients:
   - audience: "C-Level (Toàn quốc)"
     region: null
     channel: null
-    emails: ["levietdang1902@outlook.com.vn"]
+    emails: ["long.tran@namhapharma.com"]
     teams_webhook: "https://default44841e983bfb4f7091c1f177b036a1.f3.environment.api.powerplatform.com:443/powerautomate/automations/direct/cu/30/workflows/77995731b9a84a0ca215405a9a0aa44a/triggers/manual/paths/invoke?api-version=1&sp=%2Ftriggers%2Fmanual%2Frun&sv=1.0&sig=ua0ANvQq4GN3pX8LVmOJ0z124HWtaLB3rAWdZ5V6cpo"
   - audience: "Quản lý Miền Bắc"
     region: "bac"
