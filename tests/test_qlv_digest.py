@@ -523,6 +523,49 @@ def test_weekly_monthly_chi_co_qlv_thi_dung_khong_fallback_toan_quoc(monkeypatch
     ) is True
 
 
+def test_email_override_gui_ca_sau_audience_chi_toi_hop_thu_kiem_thu(monkeypatch):
+    recipients = [
+        {
+            "audience": f"Audience {index}",
+            "region": None,
+            "channel": None,
+            "emails": [f"nguoi-that-{index}@example.test"],
+        }
+        for index in range(6)
+    ]
+    monkeypatch.setattr(main, "load_config", lambda: {
+        "report_feature_flags": {},
+        "report_recipients": recipients,
+    })
+    monkeypatch.setattr(
+        main,
+        "build_digest_email",
+        lambda *args, **kwargs: "<html>test</html>",
+    )
+    sent = []
+    monkeypatch.setattr(
+        main,
+        "send_email",
+        lambda subject, html, recipient_override=None, importance=None: sent.append(
+            (subject, recipient_override)
+        ) or True,
+    )
+
+    result = main._send_periodic_email_report(
+        lambda **scope: {"date": "2026-09-21", "period_range": "Kỳ test"},
+        "Weekly",
+        "Báo cáo tuần",
+        email_override="linh.nguyen4@namhapharma.com",
+    )
+
+    assert result is True
+    assert len(sent) == 6
+    assert all(
+        addresses == ["linh.nguyen4@namhapharma.com"]
+        for _subject, addresses in sent
+    )
+
+
 def test_discover_qlv_tu_snapshot_khong_can_mapping_teams():
     class DiscoveryTools:
         @staticmethod

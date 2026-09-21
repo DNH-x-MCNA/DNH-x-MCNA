@@ -410,7 +410,14 @@ def _scope_label(region, channel):
         parts.append(f"Kênh {channel}")
     return " — ".join(parts) if parts else "Toàn quốc, tất cả kênh"
 
-def _send_periodic_email_report(get_metrics_fn, period_label, report_title, dry_run=False, audience_filter=None):
+def _send_periodic_email_report(
+    get_metrics_fn,
+    period_label,
+    report_title,
+    dry_run=False,
+    audience_filter=None,
+    email_override=None,
+):
     # 11/08/2026: gate cung report_feature_flags.show_operational_quality voi GD2g o send_daily_digest().
     # LUU Y CO CHU DINH (khong phai loi): day la SNAPSHOT-CUOI-KY (dung y het du lieu Nhip KPI ngay/Doi
     # chieu OTC/Tra hang ETC cua NGAY GAN NHAT), KHONG PHAI gop/trung binh ca tuan/thang - vi khong co
@@ -462,7 +469,8 @@ def _send_periodic_email_report(get_metrics_fn, period_label, report_title, dry_
         audience = r.get('audience')
         region = r.get('region')
         channel = r.get('channel')
-        emails = [e for e in (r.get('emails') or []) if e]
+        configured_emails = [e for e in (r.get('emails') or []) if e]
+        emails = [email_override.strip()] if email_override and email_override.strip() else configured_emails
         print(f"[{datetime.now()}] Đang chuẩn bị {report_title} cho '{audience or 'mặc định'}'...")
         try:
             metrics = get_metrics_fn(region=region, channel=channel)
@@ -516,6 +524,7 @@ def _send_qlv_periodic_email_report(
     period_type,
     dry_run=False,
     audience_filter=None,
+    email_override=None,
 ):
     """Gửi Weekly/Monthly riêng từng đội QLV qua email.
 
@@ -546,7 +555,10 @@ def _send_qlv_periodic_email_report(
         code = str(r.get('employee_code') or '').strip()
         region = r.get('region')
         channel = r.get('channel') or 'OTC'
-        emails = [str(e).strip() for e in (r.get('emails') or []) if str(e).strip()]
+        configured_emails = [str(e).strip() for e in (r.get('emails') or []) if str(e).strip()]
+        emails = ([email_override.strip()]
+                  if email_override and email_override.strip()
+                  else configured_emails)
         try:
             if not code:
                 raise ValueError("Người nhận QLV thiếu employee_code; đã dừng để không mở rộng phạm vi.")
@@ -591,34 +603,38 @@ def _send_qlv_periodic_email_report(
     return overall_ok
 
 
-def send_weekly_report(dry_run=False, audience_filter=None):
+def send_weekly_report(dry_run=False, audience_filter=None, email_override=None):
     email_ok = _send_periodic_email_report(
         get_weekly_digest_metrics,
         "Weekly",
         "Báo cáo tổng hợp TUẦN",
         dry_run=dry_run,
         audience_filter=audience_filter,
+        email_override=email_override,
     )
     qlv_ok = _send_qlv_periodic_email_report(
         "weekly",
         dry_run=dry_run,
         audience_filter=audience_filter,
+        email_override=email_override,
     )
     return email_ok and qlv_ok
 
 
-def send_monthly_report(dry_run=False, audience_filter=None):
+def send_monthly_report(dry_run=False, audience_filter=None, email_override=None):
     email_ok = _send_periodic_email_report(
         get_monthly_digest_metrics,
         "Monthly",
         "Báo cáo tổng hợp THÁNG",
         dry_run=dry_run,
         audience_filter=audience_filter,
+        email_override=email_override,
     )
     qlv_ok = _send_qlv_periodic_email_report(
         "monthly",
         dry_run=dry_run,
         audience_filter=audience_filter,
+        email_override=email_override,
     )
     return email_ok and qlv_ok
 
@@ -631,6 +647,8 @@ def main():
     parser.add_argument('--dry-run', action='store_true', help='Chạy thử không gửi mail/webhook thật, chỉ in payload/log')
     parser.add_argument('--audience', type=str, help='Lọc chạy báo cáo cho duy nhất 1 audience (vd: "Quản lý Miền Bắc")')
     parser.add_argument('--teams-webhook-override', type=str, help='Ghi đè Webhook URL Teams để gửi test')
+    parser.add_argument('--email-override', type=str,
+                        help='Ghi đè email người nhận Weekly/Monthly cho lần chạy kiểm thử')
     args = parser.parse_args()
 
     config = load_config()
@@ -654,12 +672,14 @@ def main():
         ok = send_weekly_report(
             dry_run=args.dry_run,
             audience_filter=args.audience,
+            email_override=args.email_override,
         )
         sys.exit(0 if ok else 1)
     if args.send_monthly:
         ok = send_monthly_report(
             dry_run=args.dry_run,
             audience_filter=args.audience,
+            email_override=args.email_override,
         )
         sys.exit(0 if ok else 1)
 

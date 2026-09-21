@@ -39,8 +39,17 @@ def test_task_runner_tra_dung_trang_thai_va_truyen_scope():
     assert run_digest_task.run_digest(
         "daily", dry_run=True, audience="C-Level", webhook_override="DRY_RUN", app_module=app,
     ) is True
-    assert run_digest_task.run_digest("weekly", audience="Miền Bắc", app_module=app) is False
+    assert run_digest_task.run_digest(
+        "weekly",
+        audience="Miền Bắc",
+        email_override="linh.nguyen4@namhapharma.com",
+        app_module=app,
+    ) is False
     assert calls == [
         ("daily", {"dry_run": True, "audience_filter": "C-Level", "webhook_override": "DRY_RUN"}),
-        ("weekly", {"dry_run": False, "audience_filter": "Miền Bắc"}),
+        ("weekly", {
+            "dry_run": False,
+            "audience_filter": "Miền Bắc",
+            "email_override": "linh.nguyen4@namhapharma.com",
+        }),
     ]
