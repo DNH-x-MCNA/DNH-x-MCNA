@@ -25,7 +25,7 @@ SCHEMA = r"""
 -- suy dien backdate, bat thuong, gian lan hay "chay don KPI".
 CREATE TABLE IF NOT EXISTS vhoadon_otc (
     doc_date TEXT NOT NULL, customer_code TEXT, item_code TEXT,
-    amount9 REAL, quantity REAL, unit_price REAL, stt TEXT, city_id INTEGER, employee_code TEXT,
+    amount9 REAL, quantity REAL, unit TEXT, unit_price REAL, stt TEXT, city_id INTEGER, employee_code TEXT,
     created_at TEXT, channel_code TEXT, discount_rate REAL, doc_code TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_otc_docdate ON vhoadon_otc(doc_date);
@@ -37,7 +37,7 @@ CREATE INDEX IF NOT EXISTS idx_otc_channel ON vhoadon_otc(channel_code);
 
 CREATE TABLE IF NOT EXISTS vhoadon_etc (
     doc_date TEXT NOT NULL, customer_code TEXT, item_code TEXT,
-    amount9 REAL, quantity REAL, unit_price REAL, stt TEXT, employee_code TEXT,
+    amount9 REAL, quantity REAL, unit TEXT, unit_price REAL, stt TEXT, employee_code TEXT,
     created_at TEXT, discount_rate REAL, doc_code TEXT,
     -- 15/09/2026: vHoaDonETCTotal.GroupCode = ma nhom hang ETC, noi DIM_KeyClass (GroupCode='ItemTypeETC').
     group_code TEXT
@@ -88,6 +88,28 @@ CREATE INDEX IF NOT EXISTS idx_dcv_code ON dim_chucvu(position_code);
 CREATE TABLE IF NOT EXISTS brv_sanpham (code TEXT, name TEXT, group_code TEXT, unit TEXT, id_code INTEGER);
 CREATE INDEX IF NOT EXISTS idx_bsp_code ON brv_sanpham(code);
 CREATE INDEX IF NOT EXISTS idx_bsp_idcode ON brv_sanpham(id_code);
+
+-- Danh muc don vi va quy doi cua Bravo. BRV_SanPham la danh muc kho kinh doanh, con BRVSX_*
+-- chua quy doi giua don vi ban/hien thi va don vi co so. Can ca hai de so sanh ton kho voi luong
+-- ban ma khong doi Vien thanh Hop mot cach vo can cu.
+CREATE TABLE IF NOT EXISTS brvsx_sanpham (
+    id_code INTEGER, code TEXT, unit TEXT, unit_dms TEXT, convert_rate_dms REAL, is_item_with_lot INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_sxsp_code ON brvsx_sanpham(code);
+CREATE INDEX IF NOT EXISTS idx_sxsp_id ON brvsx_sanpham(id_code);
+CREATE TABLE IF NOT EXISTS brvsx_sanphamdvt (
+    item_id INTEGER, unit TEXT, convert_rate REAL, is_active INTEGER, is_unit_dms INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_sxspdvt_item_unit ON brvsx_sanphamdvt(item_id, unit);
+
+-- Target SKU hien co trong Bravo chi la SL: ETC 2026 va MN 2025. Khong duoc doc thanh target
+-- doanh thu toan cong ty, nhung can luu de tool noi dung dung pham vi thay vi ket luan thieu het.
+CREATE TABLE IF NOT EXISTS dim_targetsanphametc (item_code TEXT, doc_date TEXT, unit TEXT, quantity REAL);
+CREATE INDEX IF NOT EXISTS idx_target_sku_etc_month ON dim_targetsanphametc(doc_date, item_code);
+CREATE TABLE IF NOT EXISTS fact_targetsanphammn2025 (
+    item_code TEXT, area_code INTEGER, month INTEGER, quantity REAL, value REAL
+);
+CREATE INDEX IF NOT EXISTS idx_target_sku_mn_month ON fact_targetsanphammn2025(month, item_code);
 
 -- 15/09/2026: danh muc ma phan loai Bravo (DIM_KeyClass). GroupCode='ItemTypeETC' la nhom hang ETC
 -- (0 Hang dau tu, 1 Hang khai thac, 2 Hang duoc lieu, 3 Hang lao, 4 Hang truc tiep - do tren Bravo 15/09).
@@ -308,8 +330,8 @@ def get_conn() -> sqlite3.Connection:
 # them vao day (chu KHONG duoc quen - da tung gay loi thieu dmsid/start_date/... khi warehouse.db cu
 # chua duoc --full lai sau khi SCHEMA doi).
 _COLUMN_MIGRATIONS = {
-    "vhoadon_otc": [("channel_code", "TEXT"), ("discount_rate", "REAL"), ("doc_code", "TEXT")],
-    "vhoadon_etc": [("discount_rate", "REAL"), ("doc_code", "TEXT"), ("group_code", "TEXT")],
+    "vhoadon_otc": [("unit", "TEXT"), ("channel_code", "TEXT"), ("discount_rate", "REAL"), ("doc_code", "TEXT")],
+    "vhoadon_etc": [("unit", "TEXT"), ("discount_rate", "REAL"), ("doc_code", "TEXT"), ("group_code", "TEXT")],
     "dms_khachhang": [("is_active", "INTEGER")],
     # Mot so warehouse.db cu tao bang nay truc tiep tu ten cot Bravo (AreaCode/ChannelCode/DocDate).
     # Schema moi dung snake_case va tao index tren doc_date; CREATE TABLE IF NOT EXISTS khong doi
@@ -332,6 +354,7 @@ _COLUMN_MIGRATIONS = {
                                ("nc_save_date", "TEXT"), ("ro_month", "REAL"), ("ro_last_date", "TEXT"),
                                ("reorder_start_date", "TEXT"), ("reorder_save_date", "TEXT")],
     "fact_thongketinhluong": [("tpr_target_amount", "REAL")],
+    "dim_targetsanphametc": [("item_code", "TEXT"), ("doc_date", "TEXT")],
 }
 
 
@@ -348,6 +371,12 @@ def init_schema():
                 if col_name not in existing:
                     conn.execute(f"ALTER TABLE {table} ADD COLUMN {col_name} {col_type}")
                     conn.commit()
+            if table == "dim_targetsanphametc":
+                if "ItemCode" in existing:
+                    conn.execute("UPDATE dim_targetsanphametc SET item_code = ItemCode WHERE item_code IS NULL")
+                if "DocDate" in existing:
+                    conn.execute("UPDATE dim_targetsanphametc SET doc_date = DocDate WHERE doc_date IS NULL")
+                conn.commit()
         conn.executescript(SCHEMA)
         conn.commit()
     finally:
