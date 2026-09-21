@@ -62,7 +62,7 @@ def _db(path):
         con.execute("INSERT INTO vhoadon_otc VALUES (?,?,?,?,?,?,?,?,?,?,?)",
                     (ngay, ma_kh, "A", tien, 1, tien, ngay + ma_kh, 1, nv, ngay, "OTC"))
 
-    # Chi tiet hoa don chi giu 12 thang gan nhat (cutoff 2025-09-01 voi hom nay 13/09/2026).
+    # Kho giu chi tiet tu 01/2024.
     hoa_don("2026-08-05", "KH_MOI", 500, "D2")           # lan dau mua that su
     hoa_don("2026-08-20", "KH_MOI", 300, "D2")           # co mua lai ngay trong thang
     hoa_don("2026-03-10", "KH_QUAY_TRONG_CUA_SO", 900)   # tung mua trong cua so
@@ -73,14 +73,12 @@ def _db(path):
     hoa_don("2026-01-20", "KH_IM_LANG", 120)             # lan mua cuoi -> im lang tu do
     hoa_don("2025-12-15", "KH_IM_LANG", 180)
     hoa_don("2025-11-11", "KH_IM_LANG", 200)
-    # Lich su cu hon cua so CHI ton tai o bang nen - day la phan cach cu bo qua.
-    con.executemany("INSERT INTO monthly_customer_summary VALUES (?,?,?,?,?,?)", [
-        ("2024-05", "OTC", "KH_QUAY_NGOAI_CUA_SO", "D1", 600.0, 1),
-        ("2024-06", "OTC", "KH_QUAY_NGOAI_CUA_SO", "D1", 800.0, 1),
-        ("2024-07", "OTC", "KH_QUAY_NGOAI_CUA_SO", "D1", 1000.0, 1),
-        ("2024-02", "OTC", "KH_QUAY_NGOAI_CUA_SO", "D1", 5000.0, 1),  # cu hon, KHONG lien tiep
-        ("2025-08", "OTC", "KH_IM_LANG", "D1", 300.0, 1),
-    ])
+    # Lich su SKU/khach tu 2024 nam trong hoa don chi tiet, khong con phai suy tu bang nen.
+    hoa_don("2024-05-10", "KH_QUAY_NGOAI_CUA_SO", 600)
+    hoa_don("2024-06-10", "KH_QUAY_NGOAI_CUA_SO", 800)
+    hoa_don("2024-07-10", "KH_QUAY_NGOAI_CUA_SO", 1000)
+    hoa_don("2024-02-10", "KH_QUAY_NGOAI_CUA_SO", 5000)  # cu hon, KHONG lien tiep
+    hoa_don("2025-08-10", "KH_IM_LANG", 300)
     con.commit()
     con.close()
 
@@ -193,10 +191,10 @@ def test_v21_doanh_thu_sau_thang_truoc_lan_mua_cuoi(tmp_path, monkeypatch):
     kh = {x["customer_code"]: x for x in r["khach_im_lang"]}["KH_IM_LANG"]
     assert kh["lan_mua_cuoi"] == "2026-01-20"
     # Ky nhin lai CO DINH (10/2025-09/2026) chi thay 500d; con 6 thang truoc khi ngung la 800d vi co
-    # ca thang 08/2025 nam ngoai ky do (lay tu bang nen). Hai con so nay KHONG duoc dung lan nhau.
+    # ca thang 08/2025 nam ngoai ky do. Hai con so nay KHONG duoc dung lan nhau.
     assert kh["doanh_thu_ky_nhin_lai"] == 500
     truoc = kh["sau_thang_truoc_khi_ngung"]
-    # 6 thang lich den 01/2026: 08/2025 (300, tu bang nen) + 11,12/2025 + 01/2026 = 800
+    # 6 thang lich den 01/2026: 08/2025 (300) + 11,12/2025 + 01/2026 = 800
     assert (truoc["tu_thang"], truoc["den_thang"]) == ("2025-08", "2026-01")
     assert truoc["doanh_thu"] == 800
     assert truoc["so_thang_co_mua"] == 4

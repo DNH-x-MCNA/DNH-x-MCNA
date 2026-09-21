@@ -183,8 +183,8 @@ def data_freshness_note() -> str:
 
     return f"Du lieu cap nhat den ngay {latest_data_date()}."
 
-# Hoa don CU HON 12 THANG duoc nen thanh KH x thang trong monthly_customer_summary (khong con
-# item_code/quantity/unit_price/stt tung dong) - xem sync_warehouse.py::DETAIL_WINDOW_MONTHS/
+# Hoa don TRUOC 01/01/2024 duoc nen thanh KH x thang trong monthly_customer_summary (khong con
+# item_code/quantity/unit_price/stt tung dong) - xem sync_warehouse.py::DETAIL_HISTORY_START/
 # _detail_cutoff_date(). Cac ham chi can TONG doanh thu/so hoa don (revenue_by_channel, top_customers,
 # revenue_by_region, compare_periods qua revenue_by_channel) UNION them nguon nen nay khi khoang ngay
 # duoc hoi vuot qua 12 thang gan nhat, de van ra dung so cho ca giai doan xa (vd "so voi cung ky nam
@@ -192,12 +192,9 @@ def data_freshness_note() -> str:
 # KHONG the bu duoc bang nguon nen - xem canh bao rieng trong 2 ham do.
 
 def _detail_cutoff() -> str:
-    today = dt.date.today()
-    y, m = today.year, today.month - 12
-    while m <= 0:
-        m += 12
-        y -= 1
-    return f"{y:04d}-{m:02d}-01"
+    # Phai dong bo voi sync_warehouse.DETAIL_HISTORY_START. Khong import file sync de tranh no
+    # tai ket noi Bravo khi service chatbot khoi dong.
+    return "2024-01-01"
 
 
 def _monthly_summary_scope_clause(scope_area_code: str, channel: str):
@@ -4620,18 +4617,51 @@ def cross_sell_opportunities(as_of_date: str = None, lookback_months: int = 3,
     }
 
 
-def product_first_observed_performance(as_of_date: str = None, lookback_months: int = 12,
+def product_first_observed_performance(as_of_date: str = None, lookback_months: int = 24,
                                        limit: int = 100, scope_area_code: str = None,
                                        scope_channel: str = None,
                                        scope_employee_code: str = None) -> dict:
-    """C34/M34: hieu suat SKU sau moc ban dau tien QUAN SAT DUOC trong dung pham vi.
+    """C34/M34: hieu suat SKU theo moc dau tien quan sat duoc trong 24 thang tron.
 
-    Kho khong co master launch date va target theo SKU. Ham co y khong goi MIN(doc_date)
-    la ngay ra mat; SKU o bien trai lich su bi gan left-censored.
+    C34 can 12 thang truoc moc danh gia de phan biet SKU moi voi SKU da ban tu truoc cua so.
+    Kho giu hoa don chi tiet tu 01/01/2024; neu chua dong bo lai du moc nay thi fail-closed.
     """
     as_of_date = (as_of_date or latest_data_date())[:10]
-    lookback_months = max(1, min(int(lookback_months or 12), 24))
+    # Cau C34 hoi toi tuoi 12 thang, nen bat buoc cua so 24 thang; khong cho AI rut xuong 12 thang.
+    lookback_months = 24
     limit = max(1, min(int(limit or 100), 500))
+    ay, am, ad = (int(x) for x in as_of_date.split("-"))
+    latest_month = as_of_date[:7]
+    complete_through_month = (
+        latest_month if ad == _last_day_of_month(ay, am) else _month_add(latest_month, -1)
+    )
+    candidate_from = _month_add(complete_through_month, -(lookback_months - 1))
+    ey, em = (int(x) for x in complete_through_month.split("-"))
+    analysis_date_to = f"{complete_through_month}-{_last_day_of_month(ey, em):02d}"
+
+    detail_starts = []
+    for table in ("vhoadon_otc", "vhoadon_etc"):
+        try:
+            row = _q(f"SELECT MIN(doc_date) d FROM {table}")[0]
+            if row.get("d"):
+                detail_starts.append(str(row["d"])[:7])
+        except sqlite3.OperationalError:
+            continue
+    detail_start = min(detail_starts) if detail_starts else None
+    if not detail_start or detail_start > candidate_from:
+        return {
+            "mode": "product_first_observed", "as_of": as_of_date,
+            "candidate_from": candidate_from, "complete_through_month": complete_through_month,
+            "status": "HISTORY_INCOMPLETE", "products": [], "total_count": 0,
+            "returned_count": 0, "history_source": "invoice_detail",
+            "history_source_start": detail_start, "history_complete": False,
+            "note": ("Lich su hoa don chi tiet chua du tu " + candidate_from +
+                     "; chua the xac dinh SKU moi mot cach dung. "
+                     "Can dong bo lai kho bang python backend/sync_warehouse.py --full."),
+            "launch_date_source": "not_available", "sku_target_source": "not_available",
+            "data_as_of": latest_data_date(),
+        }
+
     scope_sql, scope_params = _scope_clause(scope_area_code)
     emp_sql, emp_params = _employee_scope_clause(scope_employee_code, "v", as_of=as_of_date)
     suffix, suffix_params = scope_sql + emp_sql, scope_params + emp_params
@@ -4640,18 +4670,18 @@ def product_first_observed_performance(as_of_date: str = None, lookback_months: 
         join = _otc_area_join("v", scope_area_code)
         parts.append(
             "SELECT v.doc_date,v.item_code,v.customer_code,v.amount9 FROM vhoadon_otc v "
-            f"{join} WHERE v.doc_date<=? AND v.item_code IS NOT NULL "
+            f"{join} WHERE v.doc_date BETWEEN ? AND ? AND v.item_code IS NOT NULL "
             f"AND TRIM(v.item_code)<>''{suffix}"
         )
-        params.extend((as_of_date,) + suffix_params)
+        params.extend((f"{candidate_from}-01", analysis_date_to) + suffix_params)
     if scope_channel != "OTC":
         join = _etc_area_join("v", scope_area_code)
         parts.append(
             "SELECT v.doc_date,v.item_code,v.customer_code,v.amount9 FROM vhoadon_etc v "
-            f"{join} WHERE v.doc_date<=? AND v.item_code IS NOT NULL "
+            f"{join} WHERE v.doc_date BETWEEN ? AND ? AND v.item_code IS NOT NULL "
             f"AND TRIM(v.item_code)<>''{suffix}"
         )
-        params.extend((as_of_date,) + suffix_params)
+        params.extend((f"{candidate_from}-01", analysis_date_to) + suffix_params)
     if not parts:
         return {"error": "Khong co kenh nao kha dung."}
 
@@ -4665,17 +4695,10 @@ def product_first_observed_performance(as_of_date: str = None, lookback_months: 
     if not monthly:
         return {"mode": "product_first_observed", "products": [],
                 "status": "NO_DATA_IN_SCOPE", "data_as_of": latest_data_date()}
-    earliest_history_month = min(r["month"] for r in monthly)
-    latest_month = as_of_date[:7]
-    ay, am, ad = (int(x) for x in as_of_date.split("-"))
-    complete_through_month = (
-        latest_month if ad == _last_day_of_month(ay, am) else _month_add(latest_month, -1)
-    )
-    candidate_from = _month_add(latest_month, -(lookback_months - 1))
+
     by_product = {}
     for row in monthly:
         by_product.setdefault(row["item_code"], {})[row["month"]] = row
-
     codes = list(by_product)
     product_names = {}
     if codes:
@@ -4690,9 +4713,7 @@ def product_first_observed_performance(as_of_date: str = None, lookback_months: 
     products = []
     for code, months in by_product.items():
         first_observed = min(months)
-        if first_observed < candidate_from or first_observed > latest_month:
-            continue
-        left_censored = first_observed == earliest_history_month
+        left_censored = first_observed == candidate_from
         age_results = []
         for age in (1, 3, 6, 12):
             target_month = _month_add(first_observed, age)
@@ -4706,22 +4727,15 @@ def product_first_observed_performance(as_of_date: str = None, lookback_months: 
                 "target_status": "not_available", "target_achievement_pct": None,
             })
         first_row = months[first_observed]
-        first_month_complete = first_observed <= complete_through_month
-        months_before = _month_diff(earliest_history_month, first_observed)
-        ly_do_khong_dung = []
-        if left_censored:
-            ly_do_khong_dung.append("thang ghi nhan dau trung bien trai lich su")
-        if not first_month_complete:
-            ly_do_khong_dung.append(
-                f"thang ghi nhan dau {first_observed} CHUA TRON (du lieu moi den {as_of_date})")
+        ly_do_khong_dung = (["thang ghi nhan dau trung bien trai lich su"] if left_censored else [])
         products.append({
             "item_code": code, "item_name": product_names.get(code) or code,
             "first_observed_sale_month": first_observed,
             "first_observed_is_launch_date": False,
             "first_observed_is_left_censored": left_censored,
-            "first_observed_month_complete": first_month_complete,
-            "months_of_history_before_first_sale": months_before,
-            "valid_for_launch_age_analysis": not left_censored and first_month_complete,
+            "first_observed_month_complete": True,
+            "months_of_history_before_first_sale": _month_diff(candidate_from, first_observed),
+            "valid_for_launch_age_analysis": not left_censored,
             "ly_do_khong_dung_cho_phan_tich_tuoi": ly_do_khong_dung,
             "first_observed_customers": int(first_row.get("customers") or 0),
             "first_observed_revenue": _f(first_row.get("revenue")),
@@ -4732,11 +4746,13 @@ def product_first_observed_performance(as_of_date: str = None, lookback_months: 
     returned = products[:limit]
     return {
         "mode": "product_first_observed", "as_of": as_of_date,
-        "candidate_from": candidate_from, "history_boundary_month": earliest_history_month,
+        "candidate_from": candidate_from, "history_boundary_month": candidate_from,
         "complete_through_month": complete_through_month,
+        "history_source": "invoice_detail", "history_source_start": detail_start,
+        "history_complete": True,
         "total_count": total, "returned_count": len(returned),
         "truncated": total > len(returned), "not_shown_count": max(0, total - len(returned)),
-        "so_sku_thang_dau_chua_tron": sum(1 for r in products if not r["first_observed_month_complete"]),
+        "so_sku_thang_dau_chua_tron": 0,
         "so_sku_dung_cho_phan_tich_tuoi": sum(1 for r in products if r["valid_for_launch_age_analysis"]),
         "products": returned,
         "launch_date_source": "not_available", "sku_target_source": "not_available",
@@ -4745,11 +4761,9 @@ def product_first_observed_performance(as_of_date: str = None, lookback_months: 
         "limitations": [
             "SKU o history_boundary_month bi left-censored va khong duoc dung de ket luan tuoi san pham.",
             "Kho chua co master launch date va target theo SKU; khong tinh % ke hoach.",
-            "SKU co first_observed_sale_month = thang hien tai chua tron thi doanh thu thang dau chi "
-            "la mot phan thang; KHONG duoc xep chung bang voi SKU do tron thang.",
+            "Thang hien tai chua tron duoc loai khoi cua so phan tich de doanh thu thang dau luon la thang tron.",
             "months_of_history_before_first_sale la so thang co du lieu TRUOC moc ghi nhan dau. So "
-            "nay cang nho thi bang chung 'SKU moi' cang yeu - co the chi la SKU ban lai sau mot thoi "
-            "gian nghi.",
+            "nay cang nho thi bang chung 'SKU moi' cang yeu - co the chi la SKU ban lai sau mot thoi gian nghi.",
         ],
         "answer_rule": (
             "Chi xep hang va so sanh cac dong co valid_for_launch_age_analysis=true. Cac dong con lai "
@@ -4757,7 +4771,6 @@ def product_first_observed_performance(as_of_date: str = None, lookback_months: 
             "doanh thu thang dau."),
         "data_as_of": latest_data_date(),
     }
-
 
 def dual_channel_customer_summary(as_of_date: str = None, lookback_months: int = 6,
                                   limit: int = 100, scope_area_code: str = None,
@@ -13451,7 +13464,7 @@ def call_template(name: str, args: dict, question: str = "", username: str = Non
                 "do phu", "sau 1", "sau 3", "sau 6", "sau 12", "ra mat",
             )):
                 call_args["mode"] = "product_first_observed"
-                call_args["lookback_months"] = 12
+                call_args["lookback_months"] = 24
             elif any(marker in q_folded for marker in (
                 "loai anh huong", "loai tru anh huong",
             )) and any(marker in q_folded for marker in (

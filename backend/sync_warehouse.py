@@ -69,18 +69,17 @@ def month_ranges(start: dt.date, end: dt.date):
         cur = nxt
 
 
-DETAIL_WINDOW_MONTHS = 12  # so thang gan nhat giu CHI TIET tung dong hoa don - xa hon bi NEN
+DETAIL_HISTORY_START = dt.date(2024, 1, 1)
 
 
 def _detail_cutoff_date(today: dt.date = None) -> dt.date:
-    """Ngay dau tien cua thang batdau cua-so 12 thang gan nhat - hoa don TRUOC ngay nay bi nen,
-    TU ngay nay tro di van giu chi tiet nhu cu."""
-    today = today or dt.date.today()
-    y, m = today.year, today.month - DETAIL_WINDOW_MONTHS
-    while m <= 0:
-        m += 12
-        y -= 1
-    return dt.date(y, m, 1)
+    """Moc luu hoa don chi tiet: 01/01/2024.
+
+    Cac cau SKU can doi chieu 9 thang voi cung ky va xac dinh lan xuat hien dau khong the dung
+    bang nen KH x thang. Giu chi tiet tu 2024, nen phan truoc moc nay de bao ve dung luong kho.
+    ``today`` giu lai de tuong thich loi goi cu.
+    """
+    return DETAIL_HISTORY_START
 
 
 # ==================== BANG HOA DON (lon, co lich su) ====================

@@ -62,7 +62,11 @@ def _make_db(path):
                      (day, "KH01", "SP01", amount, 10, 100_000, stt, 1, "NV01", day, "ASM01"))
     conn.execute("INSERT INTO vhoadon_etc VALUES (?,?,?,?,?,?,?,?,?,?)",
                  ("2026-07-12", "KH02", "SP01", 500_000, 5, 100_000, "HD7E", 1, "NV02", "2026-07-12"))
-    # Phan da nen: 2025-07 lam moc YoY cho 2026-07.
+    # Tu khi kho giu chi tiet tu 01/2024, 2025-07 la hoa don chi tiet lam moc YoY cho 2026-07.
+    conn.execute("INSERT INTO vhoadon_otc VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                 ("2025-07-10", "KH01", "SP01", 1_750_000, 10, 175_000, "HD25", 1, "NV01",
+                  "2025-07-10", "ASM01"))
+    # Van giu dong nen de fixture phan anh kho cu; code moi khong duoc cong trung dong nay.
     conn.execute("INSERT INTO monthly_customer_summary VALUES (?,?,?,?,?,?)",
                  ("2025-07", "OTC", "KH01", "NV01", 1_750_000, 3))
     conn.commit()
