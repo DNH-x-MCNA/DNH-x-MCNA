@@ -9,6 +9,8 @@ nen moi con so tong phai TACH RIENG nhom bat thuong. Test dung du lieu gia, khon
 import os
 import sys
 
+import pytest
+
 BACKEND = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "backend")
 if BACKEND not in sys.path:
     sys.path.append(BACKEND)
@@ -102,6 +104,31 @@ def test_gia_tri_hop_dong_truoc_vat_cung_goc_hoa_don_kiem_tra_hong_giu_nguyen(mo
     assert "ABS(AmountBefVat - Quantity*UnitPrice)" in bat["sql"]
     assert "UnitPrice > 1000000000" in bat["sql"]
     assert "ABS(AmountAfterVat - AmountBefVat) >" in bat["sql"]
+
+
+def test_cuon_phu_luc_ve_hop_dong_goc_va_noi_hoa_don_bang_contract_id(monkeypatch):
+    bat = {}
+    row = _dong(119761, 3_342_727_514.4, 3_341_737_148.0, 1)
+    row.update({"DocNo": "239/DKTHG-DNH", "SoPhienBan": 2, "SoPhuLuc": 1})
+
+    def _gia_q(sql, params=None):
+        bat["sql"] = sql
+        return [row]
+
+    monkeypatch.setattr(rt, "_q_bravo", _gia_q)
+    monkeypatch.setattr(rt, "latest_data_date", lambda: "2026-09-21")
+
+    kq = rt.etc_contract_status(as_of_date="2026-09-21")
+    hd = kq["hop_dong_sap_het_han"][0]
+
+    assert hd["so_phu_luc"] == 1
+    assert hd["so_phien_ban_hop_dong"] == 2
+    assert hd["con_lai"] == pytest.approx(990_366.4)
+    assert hd["ty_le_thuc_hien_pct"] == pytest.approx(99.9703725)
+    assert "FROM dong GROUP BY Id0" in bat["sql"]
+    assert "JOIN map_hop_dong m ON m.ContractId=s.ContractId" in bat["sql"]
+    assert "s.CustomerCode" not in bat["sql"]
+    assert "s.ItemCode" not in bat["sql"]
 
 
 def test_tai_khoan_chi_xem_otc_bi_chan_tool_hop_dong_etc():
