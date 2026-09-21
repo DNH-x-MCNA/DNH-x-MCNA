@@ -48,7 +48,8 @@ class _Tee:
 
 
 def run_digest(period: str, *, dry_run: bool = False, audience: str | None = None,
-               webhook_override: str | None = None, app_module: Any | None = None) -> bool:
+               webhook_override: str | None = None, email_override: str | None = None,
+               app_module: Any | None = None) -> bool:
     """Run exactly one report period and return its aggregate delivery status."""
     app = app_module or importlib.import_module("main")
     if period == "daily":
@@ -58,9 +59,17 @@ def run_digest(period: str, *, dry_run: bool = False, audience: str | None = Non
             webhook_override=webhook_override,
         ))
     if period == "weekly":
-        return bool(app.send_weekly_report(dry_run=dry_run, audience_filter=audience))
+        return bool(app.send_weekly_report(
+            dry_run=dry_run,
+            audience_filter=audience,
+            email_override=email_override,
+        ))
     if period == "monthly":
-        return bool(app.send_monthly_report(dry_run=dry_run, audience_filter=audience))
+        return bool(app.send_monthly_report(
+            dry_run=dry_run,
+            audience_filter=audience,
+            email_override=email_override,
+        ))
     raise ValueError(f"Kỳ báo cáo không hợp lệ: {period}")
 
 
@@ -70,6 +79,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--audience")
     parser.add_argument("--teams-webhook-override")
+    parser.add_argument("--email-override")
     args = parser.parse_args(argv)
 
     if hasattr(sys.stdout, "reconfigure"):
@@ -91,6 +101,7 @@ def main(argv: list[str] | None = None) -> int:
                     dry_run=args.dry_run,
                     audience=args.audience,
                     webhook_override=args.teams_webhook_override,
+                    email_override=args.email_override,
                 )
             except Exception:
                 traceback.print_exc()
