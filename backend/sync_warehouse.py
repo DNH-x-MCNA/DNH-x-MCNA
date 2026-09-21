@@ -259,7 +259,10 @@ SMALL_TABLES = [
     ("BRVSX_SanPham", "brvsx_sanpham", "Id, Code, Unit, UnitDMS, ConvertRateDMS, IsItemWithLot", "id_code,code,unit,unit_dms,convert_rate_dms,is_item_with_lot"),
     ("BRVSX_SanPhamDvt", "brvsx_sanphamdvt", "ItemId, Unit, ConvertRate, IsActive, IsUnitDMS", "item_id,unit,convert_rate,is_active,is_unit_dms"),
     ("DIM_TargetSanPhamETC", "dim_targetsanphametc", "ItemCode, DocDate, Unit, Quantity", "item_code,doc_date,unit,quantity"),
-    ("FACT_TargetSanPhamMN2025", "fact_targetsanphammn2025", "ItemCode, AreaCode, Month, Quantity, Value", "item_code,area_code,month,quantity,value"),
+    # Ten cot tren Bravo THAT (kiem tra 21/09/2026): MaSp, MaNhom, MaVungMN, Month, SL, GT.
+    # MaVungMN co cac gia tri 0/1/2; giu nguyen vao area_code de khong tu suy dien ten mien.
+    ("FACT_TargetSanPhamMN2025", "fact_targetsanphammn2025", "MaSp, MaVungMN, Month, SL, GT",
+     "item_code,area_code,month,quantity,value"),
 ]
 
 
