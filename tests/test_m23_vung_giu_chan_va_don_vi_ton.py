@@ -192,7 +192,11 @@ def test_canh_bao_ton_va_ban_khong_cung_don_vi(tmp_path, monkeypatch):
     conn.execute("INSERT INTO dms_khachhang VALUES ('KH1','Khach',1)")
     conn.execute("INSERT INTO brv_sanpham VALUES ('SP1','Hysdin (Hop x 2 vi x 10 vien)','G','Vien',1)")
     conn.execute("INSERT INTO brv_tonkhodklot VALUES ('B02',2,1,'LO1',96420,1)")
+    conn.execute("INSERT INTO brv_sanpham VALUES ('SP0','SKU co quy cach khac','G','Vien',2)")
+    conn.execute("INSERT INTO brv_tonkhodklot VALUES ('B02',2,2,'LO2',1000,1)")
     conn.executemany("INSERT INTO vhoadon_otc VALUES (?,'KH1','SP1',10000,621,17143,'DMS01')",
+                     [("2026-05-10",), ("2026-06-10",), ("2026-07-10",)])
+    conn.executemany("INSERT INTO vhoadon_otc VALUES (?,'KH1','SP0',10000,10,10000,'DMS01')",
                      [("2026-05-10",), ("2026-06-10",), ("2026-07-10",)])
     conn.commit()
     conn.close()
@@ -204,4 +208,7 @@ def test_canh_bao_ton_va_ban_khong_cung_don_vi(tmp_path, monkeypatch):
 
     assert kq["don_vi_hai_ve_khong_khop"] is True
     assert "KHONG phai so thang" in kq["canh_bao_don_vi"]
+    assert "KHONG duoc XEP HANG cac SKU" in kq["canh_bao_don_vi"]
     assert "TON_KHONG_BAN_3_THANG khong bi anh huong" in kq["canh_bao_don_vi"]
+    # 155 va 100 la hai ti le chua quy doi; thu tu chi theo ma, khong theo ti le.
+    assert [row["item_code"] for row in kq["rows"]] == ["SP0", "SP1"]

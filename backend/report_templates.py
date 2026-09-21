@@ -9399,20 +9399,18 @@ def _inventory_supply_risk(stock_by_item: dict, item_names: dict, area_code: str
 
     def _priority(row):
         status = row["status"]
-        cover = row["months_of_cover"]
         if focus == "overstock":
-            # V39: ton khong ban va ton >6 thang phai len dau. Sap xep ton khong ban theo luong
-            # ton giam dan; nhom cham luan chuyen theo so thang du hang giam dan.
+            # Uu tien nhom ma nguoi dung hoi. Khi chua co he so quy doi don vi,
+            # khong xep hang SKU trong nhom bang so thang ton hay so luong ton.
             rank = {
                 "TON_KHONG_BAN_3_THANG": 0,
                 "CHAM_LUAN_CHUYEN_DERIVED": 1,
                 "CO_NGUY_CO_THIEU_HANG_DERIVED": 2,
             }.get(status, 3)
-            metric = -(cover or 0) if status == "CHAM_LUAN_CHUYEN_DERIVED" else -row["stock_qty"]
-            return rank, metric, -row["stock_qty"]
-        # V38/all: nhom thieu hang uu tien so thang du hang thap nhat.
+            return rank, row["item_code"]
+        # V38/all: nhom thieu hang duoc uu tien, trong nhom chi sap theo ma.
         rank = 0 if status == "CO_NGUY_CO_THIEU_HANG_DERIVED" else 1
-        return rank, cover if cover is not None else float("inf"), -row["stock_qty"]
+        return rank, row["item_code"]
 
     actionable.sort(key=_priority)
 
@@ -9519,9 +9517,10 @@ def _inventory_supply_risk(stock_by_item: dict, item_names: dict, area_code: str
         "canh_bao_don_vi": (
             "months_of_cover KHONG phai so thang. Ton kho dem theo don vi le cua danh muc (thuong la "
             "VIEN) con hoa don ban theo HOP, nen ty le nay bi thoi phong dung bang he so quy cach - do "
-            "that tren Hysdin: tool ra 155 trong khi quy ve hop chi khoang 6,8 thang. CHI duoc dung de "
-            "XEP HANG tuong doi giua cac SKU, TUYET DOI khong doc thanh 'ton X thang' hay 'du ban X "
-            "thang'. Nhom TON_KHONG_BAN_3_THANG khong bi anh huong (ban bang 0 thi don vi nao cung la "
+            "that tren Hysdin: tool ra 155 trong khi quy ve hop chi khoang 6,8 thang. KHONG duoc "
+            "XEP HANG cac SKU theo ty le nay vi he so quy doi khac nhau; thu tu rows chi de hien thi. "
+            "TUYET DOI khong doc thanh 'ton X thang' hay 'du ban X thang'. "
+            "Nhom TON_KHONG_BAN_3_THANG khong bi anh huong (ban bang 0 thi don vi nao cung la "
             "0); nhom CO_NGUY_CO_THIEU_HANG_DERIVED van dang tin theo huong THAN TRONG (ton dang bi "
             "tinh cao hon thuc te ma van bao thieu, tuc thieu that); rieng CHAM_LUAN_CHUYEN_DERIVED "
             "bi bao nhieu hon thuc te."),
