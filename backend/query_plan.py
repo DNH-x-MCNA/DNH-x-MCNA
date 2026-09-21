@@ -39,6 +39,7 @@ _DOMAIN_SPECS = (
         "tools": ("get_revenue_by_channel", "get_revenue_by_region", "get_revenue_tree",
                   "get_revenue_reconciliation", "get_revenue_view_reconciliation",
                   "get_sku_revenue_drop_vs_stock", "get_revenue_monthly_series",
+                  "get_revenue_seasonality",
                   "get_revenue_ytd_cumulative", "compare_periods",
                   "get_geography_monthly_performance", "get_workforce_productivity",
                   "get_customer_product_coverage", "get_customer_movement",

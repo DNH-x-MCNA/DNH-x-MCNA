@@ -170,6 +170,9 @@ def test_cohort_retention_dem_thang_cuoi_khi_thang_do_da_tron(tmp_path, monkeypa
 def test_c34_first_observed_khong_bi_goi_la_launch_va_khong_bia_target(tmp_path, monkeypatch):
     db_path = _setup(tmp_path, monkeypatch)
     with sqlite3.connect(db_path) as con:
+        # Bien trai 24 thang cua C34; dung khach/SKU rieng de khong doi cohort cua C1.
+        con.execute("INSERT INTO vhoadon_otc VALUES "
+                    "('2024-04-05','HIST','HISTORY_EDGE',50,1,50,'OOLD',1,'D1','2024-04-05','OTC')")
         con.execute("INSERT INTO brv_sanpham VALUES ('C','San pham C','G2','hop',3)")
         con.execute("INSERT INTO vhoadon_otc VALUES "
                     "('2026-03-07','C1','C',400,1,400,'OC1',1,'D1','2026-03-07','OTC')")
@@ -180,8 +183,8 @@ def test_c34_first_observed_khong_bi_goi_la_launch_va_khong_bia_target(tmp_path,
         as_of_date="2026-04-20", lookback_months=12, mode="product_first_observed",
     )
     by_code = {x["item_code"]: x for x in result["products"]}
-    assert by_code["A"]["first_observed_is_left_censored"] is True
-    assert by_code["A"]["valid_for_launch_age_analysis"] is False
+    assert by_code["HISTORY_EDGE"]["first_observed_is_left_censored"] is True
+    assert by_code["HISTORY_EDGE"]["valid_for_launch_age_analysis"] is False
     assert by_code["C"]["first_observed_sale_month"] == "2026-03"
     assert by_code["C"]["first_observed_is_launch_date"] is False
     age1 = next(x for x in by_code["C"]["age_results"] if x["age_month"] == 1)

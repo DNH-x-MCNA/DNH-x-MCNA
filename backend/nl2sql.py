@@ -531,7 +531,7 @@ def _required_tool_for_question(question: str) -> str | None:
     if "mua vu" in q:
         # C08: phai bat dau bang chuoi thang, de tool tu danh dau thang khong du du lieu
         # thay vi model tu suy dien tinh mua vu tu vai ngay/1-2 thang hien co.
-        return "get_revenue_monthly_series"
+        return "get_revenue_seasonality"
     if any(marker in q for marker in ("theo thang", "3/6 thang", "3 thang", "6 thang", "xu huong")) \
             and any(marker in q for marker in ("tdv", "nhan vien")) \
             and any(marker in q for marker in ("target", "% hoan thanh", "xep hang", "doanh so")):
@@ -891,6 +891,22 @@ TEMPLATE_TOOLS = [
         },
     },
     {
+        "name": "get_revenue_seasonality",
+        "description": "C08/S80: Tinh mua vu doanh thu theo tung kenh (OTC, ETC) va theo thang duong lich (calendar month 1-12). "
+                       "Tinh chi so mua vu (seasonal index = average revenue cua thang / average revenue chung), "
+                       "xac dinh thang cao nhat/thap nhat, va do lech so voi mua vu. Danh dau ro trang thai du lieu "
+                       "(READY neu co >=24 thang tron va du >=2 quan sat cho moi thang; INSUFFICIENT_HISTORY neu thieu). "
+                       "Khong keo target/YoY/tach mien phuc tap nhu get_revenue_monthly_series, tranh timeout.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "month_to": {"type": "string", "description": "YYYY-MM, thang cuoi cua chuoi (mac dinh thang co du lieu moi nhat)"},
+                "months_back": {"type": "integer", "description": "So thang tra ve (mac dinh 24, toi da 24)"},
+            },
+            "required": [],
+        },
+    },
+    {
         "name": "get_customer_lifecycle_summary",
         "description": "DEM SO KHACH HANG theo cac co vong doi cua Bravo theo TUNG THANG (khach moi "
                         "trong thang, va 2 co is_ro/is_ac) tu snapshot KPI - dung cho 'thang nay co bao "
@@ -1017,7 +1033,9 @@ TEMPLATE_TOOLS = [
                        "REACTIVATED, STOPPED, GROWING, DECLINING; kem doanh thu, delta, so don, co don "
                        "lap lai va NV phu trach. BAT BUOC dung cho khach moi co lap don, tai kich hoat, "
                        "khach ngung/tang/giam va doanh thu them-mat. NEW_OR_FIRST_OBSERVED chi la lan dau "
-                       "thay trong cua so kho, KHONG tu goi chac chan la khach moi trong doi. Khi hoi "
+                       "thay trong cua so kho, KHONG tu goi chac chan la khach moi trong doi. RIENG C31 "
+                       "'khach moi va tai kich hoat bu doanh thu khach ngung mua': backend tu ep cua so "
+                       "quan sat 24 thang de khop S90; khong dung dinh nghia nay cho V15/V23. Khi hoi "
                        "tong doanh thu them/mat hay ty le bu doanh thu, BAT BUOC dung "
                        "summary_all_customers; summary_on_returned_top_rows chi la top-N de minh hoa. "
                        "V15/S61b: SO KHACH THEO TUNG TDV phai lay o by_employee (tinh tren toan bo tap "
@@ -1109,11 +1127,10 @@ TEMPLATE_TOOLS = [
                        "revenue_up_coverage_down da tinh tren tap day du truoc khi cat limit. "
                        "C28/S91: mode='assignment_change' tach khach giu nguyen NV chinh, doi NV, moi va "
                        "roi bo tren OTC; day la ket qua PARTIAL vi khong co lich su assignment dia ban chot chuan. "
-                       "C34/M34/S22: BAT BUOC mode='product_first_observed', lookback_months=12. "
+                       "C34/M34/S22: BAT BUOC mode='product_first_observed', lookback_months=24. "
                        "first_observed_sale_month KHONG phai ngay ra mat; chi xep hang va so sanh dong co "
-                       "valid_for_launch_age_analysis=true. SKU ghi nhan dau o thang hien tai CHUA TRON "
-                       "da bi dat valid=false (doanh thu moi mot phan thang) - neu rieng, khong dua vao "
-                       "bang so sanh. Kho chua co master launch date va target SKU, "
+                       "valid_for_launch_age_analysis=true. Thang hien tai CHUA TRON bi loai khoi cua so "
+                       "de doanh thu thang dau luon cua mot thang tron. Kho chua co master launch date va target SKU, "
                        "nen KHONG tinh % ke hoach va phai noi ro gioi han.",
         "input_schema": {"type": "object", "properties": {
             "as_of_date": {"type": "string"}, "lookback_months": {"type": "integer"},

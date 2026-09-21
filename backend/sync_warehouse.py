@@ -69,18 +69,17 @@ def month_ranges(start: dt.date, end: dt.date):
         cur = nxt
 
 
-DETAIL_WINDOW_MONTHS = 12  # so thang gan nhat giu CHI TIET tung dong hoa don - xa hon bi NEN
+DETAIL_HISTORY_START = dt.date(2024, 1, 1)
 
 
 def _detail_cutoff_date(today: dt.date = None) -> dt.date:
-    """Ngay dau tien cua thang batdau cua-so 12 thang gan nhat - hoa don TRUOC ngay nay bi nen,
-    TU ngay nay tro di van giu chi tiet nhu cu."""
-    today = today or dt.date.today()
-    y, m = today.year, today.month - DETAIL_WINDOW_MONTHS
-    while m <= 0:
-        m += 12
-        y -= 1
-    return dt.date(y, m, 1)
+    """Moc luu hoa don chi tiet: 01/01/2024.
+
+    Cac cau SKU can doi chieu 9 thang voi cung ky va xac dinh lan xuat hien dau khong the dung
+    bang nen KH x thang. Giu chi tiet tu 2024, nen phan truoc moc nay de bao ve dung luong kho.
+    ``today`` giu lai de tuong thich loi goi cu.
+    """
+    return DETAIL_HISTORY_START
 
 
 # ==================== BANG HOA DON (lon, co lich su) ====================
@@ -106,7 +105,7 @@ def sync_hoadon_full(table_bravo, table_local, has_city, has_channel=False, chan
         # doanh thu hoa don vs KPI khi join qua EmpDMSCode<->DMSId, sai lech 0 dong cho tat ca).
         # EmpDMSCode2 (has_channel, CHI OTC) duoc luu rieng vao channel_code - dung de nhan dien cac
         # "kenh ao" nhu Modern Trade (xem local_warehouse.py va report_templates.py revenue_by_region()).
-        cols = ("DocDate, CustomerCode, ItemCode, Amount9, Quantity, UnitPrice, Stt, EmpDMSCode"
+        cols = ("DocDate, CustomerCode, ItemCode, Amount9, Quantity, Unit, UnitPrice, Stt, EmpDMSCode"
                 + (", CityId" if has_city else "") + ", CreatedAt"
                 + (", EmpDMSCode2" if has_channel else "")
                 + ", DiscountRate, DocCode"
@@ -127,9 +126,9 @@ def sync_hoadon_full(table_bravo, table_local, has_city, has_channel=False, chan
             print(f"  {a} -> {b}: {len(rows)} dong -> NEN thanh {n_compressed} dong KH x thang "
                   f"(tong nen {total_compressed}, {time.time()-t0:.0f}s)")
             continue
-        n_cols = 11 + (1 if has_city else 0) + (1 if has_channel else 0) + (1 if has_group else 0)
+        n_cols = 12 + (1 if has_city else 0) + (1 if has_channel else 0) + (1 if has_group else 0)
         placeholders = ",".join(["?"] * n_cols)
-        cols_local = ("doc_date,customer_code,item_code,amount9,quantity,unit_price,stt,employee_code"
+        cols_local = ("doc_date,customer_code,item_code,amount9,quantity,unit,unit_price,stt,employee_code"
                       + (",city_id" if has_city else "") + ",created_at"
                       + (",channel_code" if has_channel else "")
                       + ",discount_rate,doc_code"
@@ -150,11 +149,11 @@ def _compress_rows_to_summary(conn, rows, channel_label: str, year_month: str) -
     """Gop danh sach dong hoa don THO (tuple tu bravo_query, cung thu tu cot nhu sync_hoadon_full/
     sync_hoadon_recent) thanh {(customer_code, employee_code): (revenue, so_hoa_don_distinct)} roi
     INSERT vao monthly_customer_summary. Vi tri cot: 0=DocDate,1=CustomerCode,2=ItemCode,3=Amount9,
-    4=Quantity,5=UnitPrice,6=Stt,7=EmpDMSCode (cac cot sau la CityId/CreatedAt/EmpDMSCode2 tuy bang,
+    4=Quantity,5=Unit,6=UnitPrice,7=Stt,8=EmpDMSCode (cac cot sau la CityId/CreatedAt/EmpDMSCode2 tuy bang,
     KHONG can cho buoc nen nay)."""
     agg = {}
     for r in rows:
-        customer_code, amount9, stt, employee_code = r[1], r[3], r[6], r[7]
+        customer_code, amount9, stt, employee_code = r[1], r[3], r[7], r[8]
         key = (customer_code, employee_code)
         rev, stts = agg.get(key, (0.0, set()))
         agg[key] = (rev + (float(amount9) if amount9 is not None else 0.0), stts | {stt})
@@ -174,7 +173,7 @@ def sync_hoadon_recent(table_bravo, table_local, has_city, days=N_RECENT_DAYS, h
     today = dt.date.today()
     start = today - dt.timedelta(days=days)
     print(f"[{table_local}] Refresh gia tang {start} -> {today}...")
-    cols = ("DocDate, CustomerCode, ItemCode, Amount9, Quantity, UnitPrice, Stt, EmpDMSCode"
+    cols = ("DocDate, CustomerCode, ItemCode, Amount9, Quantity, Unit, UnitPrice, Stt, EmpDMSCode"
             + (", CityId" if has_city else "") + ", CreatedAt"
             + (", EmpDMSCode2" if has_channel else "")
             + ", DiscountRate, DocCode"
@@ -188,9 +187,9 @@ def sync_hoadon_recent(table_bravo, table_local, has_city, days=N_RECENT_DAYS, h
         conn.execute("BEGIN IMMEDIATE")
         conn.execute(f"DELETE FROM {table_local} WHERE doc_date >= ?", (str(start),))
         if rows:
-            n_cols = 11 + (1 if has_city else 0) + (1 if has_channel else 0) + (1 if has_group else 0)
+            n_cols = 12 + (1 if has_city else 0) + (1 if has_channel else 0) + (1 if has_group else 0)
             placeholders = ",".join(["?"] * n_cols)
-            cols_local = ("doc_date,customer_code,item_code,amount9,quantity,unit_price,stt,employee_code"
+            cols_local = ("doc_date,customer_code,item_code,amount9,quantity,unit,unit_price,stt,employee_code"
                           + (",city_id" if has_city else "") + ",created_at"
                           + (",channel_code" if has_channel else "")
                           + ",discount_rate,doc_code"
@@ -257,6 +256,10 @@ SMALL_TABLES = [
     ("BRVSX_TonKhoDK", "brvsx_tonkhodk",
      "BranchCode, WarehouseId, ItemId, Quantity, Amount, IsActive, Year",
      "branch_code,warehouse_id,item_id,quantity,amount,is_active,year"),
+    ("BRVSX_SanPham", "brvsx_sanpham", "Id, Code, Unit, UnitDMS, ConvertRateDMS, IsItemWithLot", "id_code,code,unit,unit_dms,convert_rate_dms,is_item_with_lot"),
+    ("BRVSX_SanPhamDvt", "brvsx_sanphamdvt", "ItemId, Unit, ConvertRate, IsActive, IsUnitDMS", "item_id,unit,convert_rate,is_active,is_unit_dms"),
+    ("DIM_TargetSanPhamETC", "dim_targetsanphametc", "ItemCode, DocDate, Unit, Quantity", "item_code,doc_date,unit,quantity"),
+    ("FACT_TargetSanPhamMN2025", "fact_targetsanphammn2025", "ItemCode, AreaCode, Month, Quantity, Value", "item_code,area_code,month,quantity,value"),
 ]
 
 
@@ -293,7 +296,7 @@ def compress_aged_out_months():
     conn = get_conn()
     for table_local, channel_label in (("vhoadon_otc", "OTC"), ("vhoadon_etc", "ETC")):
         rows = conn.execute(
-            f"SELECT doc_date, customer_code, item_code, amount9, quantity, unit_price, stt, employee_code "
+            f"SELECT doc_date, customer_code, item_code, amount9, quantity, unit, unit_price, stt, employee_code "
             f"FROM {table_local} WHERE doc_date < ?", (str(cutoff),),
         ).fetchall()
         if not rows:
