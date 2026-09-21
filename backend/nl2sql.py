@@ -2398,6 +2398,49 @@ def _payload_for_model(tool_name: str, payload, question: str):
     if tool_name == "get_employee_kpi":
         wrapper = payload if isinstance(payload.get("du_lieu"), dict) else None
         data = payload.get("du_lieu") if wrapper else payload
+        monthly_key = next((key for key in (
+            "monthly_threshold_summary", "monthly_team_threshold_summary"
+        ) if isinstance(data.get(key), dict)), None)
+        if monthly_key:
+            # C45/M12: call_template da tinh bang tung thang nhung ban nen cu bo mat ca
+            # khoi nay, chi gui danh sach nhan vien cua MOT snapshot. Dong goi theo cot
+            # de giu du moi thang/vung/chuc danh trong ngan sach 10.000 ky tu.
+            monthly = data[monthly_key]
+            columns = ["month", "manager_code"] if monthly_key == "monthly_team_threshold_summary" else [
+                "month", "area_code", "position_code"]
+            columns += ["employees_with_target", "count_gate", "count_80", "count_100", "count_120",
+                        "pct_gate", "pct_80", "pct_100", "pct_120"]
+            if monthly_key == "monthly_team_threshold_summary":
+                columns += ["pct_gate_change_vs_previous_month", "pct_gate_rolling_3_month_avg"]
+
+            def _cell(row, key):
+                value = row.get(key)
+                return round(value, 2) if key.startswith("pct_") and isinstance(value, (int, float)) else value
+
+            compact_monthly = {
+                "month_from": monthly.get("month_from"),
+                "month_to": monthly.get("month_to"),
+                "group_by": monthly.get("group_by"),
+                "channel_scope": monthly.get("channel_scope"),
+                "columns": columns,
+                "rows": [[_cell(row, key) for key in columns]
+                         for row in monthly.get("rows", []) if isinstance(row, dict)],
+                "definition": monthly.get("definition"),
+            }
+            compact_data = {
+                "as_of": data.get("as_of"),
+                monthly_key: compact_monthly,
+                "pham_vi_du_lieu": data.get("pham_vi_du_lieu"),
+                "answer_rule": (
+                    "Dung bang theo tung thang o tren lam nguon cho cau hoi nay; columns la ten cot "
+                    "cua tung mang trong rows. Mau so la employees_with_target cua CHINH thang/vung/"
+                    "chuc danh (hoac doi). KHONG lay total_employees/threshold_summary cua snapshot "
+                    "mot ngay de thay cho chuoi thang. Kenh du lieu chi la OTC neu channel_scope=OTC."
+                ),
+            }
+            if wrapper:
+                return {**payload, "du_lieu": compact_data}
+            return compact_data
         rows = data.get("rows") or []
         compact_rows = []
         for row in rows:
