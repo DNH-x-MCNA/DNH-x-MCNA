@@ -2993,15 +2993,167 @@ def _nguoi_phu_trach(row: dict, emp_names: dict) -> dict:
             "manager_code": row.get("manager_code"), "manager_name": emp_names.get(row.get("manager_code"))}
 
 
+def _is_new_customer_quality_question(question: str) -> bool:
+    q = _fold_question(question)
+    return (any(marker in q for marker in ("khach moi", "khach hang moi"))
+            and any(marker in q for marker in ("mo nhieu", "chat luong", "dt/khach",
+                                               "doanh thu/khach", "doanh thu tren moi khach"))
+            and "mua lai" in q)
+
+
+def _dem_don_khach_trong_ky(customer_codes, start, end, channels) -> dict:
+    """So don cua TUNG khach trong ky. OrderKey = kenh + Stt: hai kenh co the trung Stt (gop lai se
+    dem thieu don), con mot Stt nhieu dong SKU van chi la MOT don."""
+    counts = {}
+    codes = sorted(customer_codes)
+    for i in range(0, len(codes), 400):
+        chunk = codes[i:i + 400]
+        ph = ",".join("?" for _ in chunk)
+        parts, params = [], []
+        for table, channel in channels:
+            parts.append(f"SELECT customer_code, '{channel}|' || COALESCE(stt,'') order_key "
+                         f"FROM {table} WHERE doc_date>=? AND doc_date<? AND customer_code IN ({ph})")
+            params.extend([start, end, *chunk])
+        for r in _q("SELECT customer_code, COUNT(DISTINCT order_key) n FROM "
+                    f"({' UNION ALL '.join(parts)}) GROUP BY customer_code", tuple(params)):
+            counts[r["customer_code"]] = r["n"]
+    return counts
+
+
+def _new_customer_quality(year_month=None, limit=200, manager_code=None,
+                          scope_area_code=None, scope_employee_code=None, scope_channel=None):
+    """M24: khach moi = co IsNC cua Bravo trong snapshot moi nhat cua TUNG nhan vien; khong suy tu hoa don.
+
+    22/09/2026 - do tren kho ngay 21/09, ky 8/2026:
+      - Co IsNC phai OR tren MOI dong cua khach roi moi gan nguoi phu trach (dung quy tac 15/09 cua
+        new_customer_list va checker S93: co khach chi mang co o dong rollup QLV con dong TDV IsNC=0).
+        Chi dem dong TDV ra 611 khach, OR moi dong ra 627 - khop "627/627 khach T8" ghi o
+        local_warehouse.py::SCHEMA. 625/627 khach co dong tang nhan vien de gan, 2 khach chi co dong
+        quan ly thi giu dong quan ly (giong _prefer_employee_tier cua cac tool danh sach).
+      - Tang nhan vien lay theo _EMPLOYEE_TIER_POSITIONS (TDV/CTV/CS/TK), KHONG chep cung 'TDV':
+        thang 8 co 1 khach cua CTV, chep cung la mat khach do (dung bay da mac ngay 03/09 voi chuc
+        danh TK, xem _tier_ph).
+      - Pham vi doi loc theo (manager_code OR employee_code) nhu cac tool danh sach khac. Loc moi
+        manager_code thi tai khoan TDV khong khop dong nao va bi tra ve "0 khach moi" - dung dieu ma
+        tool nay cam ket khong bao gio lam."""
+    if scope_channel and str(scope_channel).strip().upper() != "OTC":
+        return {"not_applicable": True, "channel_scope": str(scope_channel).strip().upper(),
+                "error": "Nguon khach moi (FACT_TongHopKhachHang) hien chi phu kenh OTC."}
+    latest = _q("SELECT MAX(save_date) d FROM fact_tonghopkhachhang")
+    if not latest or not latest[0]["d"]:
+        return {"error": "CHUA danh gia duoc: kho chua co snapshot KPI khach hang."}
+    month = (year_month or str(latest[0]["d"]))[:7]
+    start = _month_bounds(month)[0]
+    end = _month_bounds(_month_add(month, 1))[0]
+    if "area_code" not in _table_columns("fact_tonghopkhachhang"):
+        return {"error": "CHUA danh gia duoc M24: can dong bo lai KPI khach hang de co AreaCode cua snapshot."}
+    if not _q("SELECT 1 FROM fact_tonghopkhachhang WHERE save_date>=? AND save_date<? LIMIT 1", (start, end)):
+        return {"error": f"CHUA danh gia duoc M24: khong co snapshot ky {month}."}
+    missing = _q("SELECT COUNT(*) n FROM fact_tonghopkhachhang "
+                 "WHERE save_date>=? AND save_date<? AND (area_code IS NULL OR TRIM(area_code)='')",
+                 (start, end))
+    if missing[0]["n"]:
+        return {"error": "CHUA danh gia duoc M24: snapshot con thieu AreaCode; can dong bo lai KPI khach hang."}
+    team = _ma_doi_hieu_luc(scope_employee_code, manager_code)
+    params = [start, end]
+    filters = ""
+    if scope_area_code:
+        markers = _area_markers(scope_area_code)
+        filters += f" AND f.area_code IN ({','.join('?' for _ in markers)})"
+        params.extend(markers)
+    if team:
+        filters += " AND (f.manager_code=? OR f.employee_code=?)"
+        params.extend([team, team])
+    rows = _q(f"""WITH latest_snap AS (
+        SELECT employee_code,MAX(save_date) d FROM fact_tonghopkhachhang
+        WHERE save_date>=? AND save_date<? GROUP BY employee_code
+    ), nv AS (
+        SELECT employee_code,MAX(position_code) position_code FROM dim_nhanvien GROUP BY employee_code
+    )
+    SELECT f.employee_code,f.customer_code,f.amount_ct,f.is_nc,f.save_date,f.area_code,nv.position_code
+    FROM fact_tonghopkhachhang f JOIN latest_snap s
+      ON s.employee_code=f.employee_code AND s.d=f.save_date
+    LEFT JOIN nv ON nv.employee_code=f.employee_code
+    WHERE 1=1{filters}""", tuple(params))
+    nc_customers = {r["customer_code"] for r in rows if _co_bat(r.get("is_nc"))}
+    pairs = [(r["employee_code"], r["customer_code"]) for r in rows if r["customer_code"] in nc_customers]
+    if len(pairs) != len(set(pairs)):
+        return {"error": "CHUA danh gia duoc M24: snapshot trung cap TDV/khach; can doi chieu nguon truoc khi cong doanh thu."}
+    chosen = [r for r in _prefer_employee_tier(rows) if r["customer_code"] in nc_customers]
+    # Scope ap tren snapshot TRUOC khi noi don. Chi truy hoa don cua cac khach duoc phep; tai khoan
+    # chi OTC khong duoc dem don ETC cua khach chung hai kenh.
+    channels = [("vhoadon_otc", "OTC")] + ([] if scope_channel else [("vhoadon_etc", "ETC")])
+    orders = _dem_don_khach_trong_ky(nc_customers, start, end, channels)
+    emp_names = _employee_name_map([r["employee_code"] for r in chosen])
+    by_emp, by_area = {}, {}
+    for r in chosen:
+        mua_lai = 1 if orders.get(r["customer_code"], 0) > 1 else 0
+        doanh_thu = _f(r["amount_ct"])
+        e = by_emp.setdefault((r["employee_code"], r["area_code"]), {
+            "employee_code": r["employee_code"], "employee_name": emp_names.get(r["employee_code"]),
+            "position_code": r["position_code"], "area_code": r["area_code"],
+            "snapshot_date": str(r["save_date"])[:10], "khach_moi": 0, "doanh_thu_khach_moi": 0.0,
+            "khach_moi_co_mua_lai": 0})
+        e["snapshot_date"] = min(e["snapshot_date"], str(r["save_date"])[:10])
+        e["khach_moi"] += 1
+        e["doanh_thu_khach_moi"] += doanh_thu
+        e["khach_moi_co_mua_lai"] += mua_lai
+        a = by_area.setdefault(r["area_code"], {
+            "area_code": r["area_code"], "so_nhan_vien": 0, "so_luot_khach_moi_theo_nhan_vien": 0,
+            "so_khach_moi_duy_nhat": 0, "doanh_thu_khach_moi": 0.0, "so_luot_mua_lai": 0,
+            "_khach": set(), "_nv": set()})
+        a["so_luot_khach_moi_theo_nhan_vien"] += 1
+        a["doanh_thu_khach_moi"] += doanh_thu
+        a["so_luot_mua_lai"] += mua_lai
+        a["_khach"].add(r["customer_code"])
+        a["_nv"].add(r["employee_code"])
+    items = sorted(by_emp.values(), key=lambda r: (-r["khach_moi"], r["employee_code"]))
+    for r in items:
+        r["doanh_thu_binh_quan_khach_moi"] = r["doanh_thu_khach_moi"] / r["khach_moi"]
+        r["ty_le_mua_lai_khach_moi_pct"] = 100 * r["khach_moi_co_mua_lai"] / r["khach_moi"]
+    for a in by_area.values():
+        a["so_khach_moi_duy_nhat"] = len(a.pop("_khach"))
+        a["so_nhan_vien"] = len(a.pop("_nv"))
+        a["doanh_thu_binh_quan_khach_moi"] = (a["doanh_thu_khach_moi"]
+                                              / a["so_luot_khach_moi_theo_nhan_vien"])
+        a["ty_le_mua_lai_khach_moi_pct"] = (100 * a["so_luot_mua_lai"]
+                                            / a["so_luot_khach_moi_theo_nhan_vien"])
+    limit = max(1, min(int(limit or 200), 1000))
+    return {"month": month, "mode": "quality", "classification_basis": "BRAVO_ISNC_SNAPSHOT",
+            "scope_area_code": scope_area_code, "manager_code": team,
+            "invoice_channels": [channel for _, channel in channels],
+            "by_employee": items[:limit],
+            "by_area": sorted(by_area.values(), key=lambda a: -a["so_luot_khach_moi_theo_nhan_vien"]),
+            "tong_khach_moi_duy_nhat": len(nc_customers),
+            "total_count": len(items), "returned_count": len(items[:limit]), "truncated": len(items) > limit,
+            "snapshot_dates": sorted({r["snapshot_date"] for r in items}),
+            "definition": "Khach moi = co IsNC=1 cua Bravo tren BAT KY dong nao cua khach trong snapshot "
+                          "moi nhat tung nhan vien trong thang (dong TDV hoac dong rollup QLV), sau do gan "
+                          "cho dong tang nhan vien (TDV/CTV/CS/TK); khach chi co dong quan ly thi giu dong "
+                          "quan ly. Doanh thu = Amount_CT cua snapshot trong CHINH thang do; mua lai = tren 1 OrderKey "
+                          "(kenh + Stt) cung trong thang do. KHAC checker S92: S92 dem tren hoa don "
+                          "(Amount9) trong cua so 3 thang va tinh mua lai la co tu 2 NGAY mua tro len, "
+                          "nen ty le mua lai va DT/khach cua S92 cao hon han - phai neu ro moc nao khi tra loi. "
+                          "Mapping theo EmployeeCode KPI, KHONG theo nguoi ban tren hoa don. Khong tron voi "
+                          "khach lan dau mua quan sat tu hoa don/nhan vien ETC. Tong theo mien la luot "
+                          "khach-nhan vien; so khach duy nhat o so_khach_moi_duy_nhat. Khong tu ket luan mo "
+                          "nhieu nhung kem neu cac chi so khong chung minh dieu do."}
+
+
 def new_customer_list(year_month: str = None, limit: int = 200, manager_code: str = None,
                       scope_area_code: str = None, scope_employee_code: str = None,
-                      scope_channel: str = None) -> dict:
+                      scope_channel: str = None, mode: str = "list") -> dict:
     """DANH SACH khach hang moi (IsNC Bravo) trong thang kem ngay ghi nhan, doanh so thang va nguoi
     phu trach.
 
     15/09/2026 (UAT 13:59 "danh sach khach hang moi, ngay ghi nhan va doanh so phat sinh thang nay" -
     thieu khach, ngay ghi nhan sai): chua co tool DANH SACH, va snapshot bi ghim mot MAX(save_date).
     Ngay ghi nhan = NCSaveDate, KHONG dung ngay snapshot (ngay snapshot giong nhau cho moi khach)."""
+    if mode == "quality":
+        return _new_customer_quality(year_month, limit, manager_code, scope_area_code,
+                                     scope_employee_code, scope_channel)
+    if mode != "list":
+        return {"error": "mode chi nhan list/quality."}
     if scope_channel and str(scope_channel).strip().upper() != "OTC":
         return {"not_applicable": True, "channel_scope": str(scope_channel).strip().upper(),
                 "error": "Nguon khach moi (FACT_TongHopKhachHang) hien chi phu kenh OTC."}
@@ -13469,6 +13621,8 @@ def call_template(name: str, args: dict, question: str = "", username: str = Non
         if scope_channel and _CHANNEL_SCOPE_POLICIES[name] == "filter":
             call_args["scope_channel"] = scope_channel
         q_folded = _fold_question(question)
+        if name == "get_new_customer_list" and _is_new_customer_quality_question(question):
+            call_args["mode"] = "quality"
         if name == "get_customer_movement" and (
                 "bu" in q_folded and "ngung mua" in q_folded
                 and any(marker in q_folded for marker in ("khach moi", "tai kich hoat"))):

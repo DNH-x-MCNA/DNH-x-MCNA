@@ -64,6 +64,10 @@ backend/*.txt
 /bao-cao-canh-bao/scripts/*.db
 /bao-cao-canh-bao/scripts/*.db-wal
 /bao-cao-canh-bao/scripts/*.db-shm
+# 22/09/2026: chay script/test tu thu muc goc sinh warehouse.db o root (kho that ~160MB).
+/warehouse.db
+/warehouse.db-wal
+/warehouse.db-shm
 
 # Python cache o MOI thu muc (truoc day chi chan backend/, nen __pycache__ o root,
 # ai_agent/, scripts/, src/, tests/ van hien trong git status)

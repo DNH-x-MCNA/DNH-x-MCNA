@@ -328,15 +328,14 @@ def sync_fact_tonghopkhachhang(days=90):
     Bang goc ben Bravo co 27 cot, truoc do kho chi keo 7 - 20 cot con lai deu phu du lieu 100% chu
     khong rong. Y nghia tung cot va ly do chon: xem local_warehouse.py::SCHEMA phan bang nay.
     Chi phi khong dang ke: kho chi giu 90 ngay ~ 3 ky x 13.000 dong.
-    LUU Y: AreaCode CO Y khong keo o day du no cung co san va phu 100% - bang fact_thongketinhluong
-    (Trieu them 30/07, ce6aeea) DA co cot do roi. Keo ve ca 2 noi se de 2 nguon lech nhau ma khong
-    biet tin ben nao."""
+    22/09/2026: AreaCode can cho M24 de loc mien tren chinh snapshot khach hang trong ky.
+    Khong thay bang mien hien tai cua nhan vien hoac snapshot luong khac ngay."""
     start = dt.date.today() - dt.timedelta(days=days)
     _, rows = bravo_query(
         "SELECT EmployeeCode, CustomerCode, Amount_CT, MonthSaleTarget, SaveDate, IsNC, ManagerCode, "
         "YearSaleTarget, Amount_Cus, IsRO, IsAC, MaxCustomerOrdAmount, EmpDMSCode, "
         # 15/09/2026: ngay ghi nhan khach moi va cua so/trang thai tai don (UAT nhat ky 15/09).
-        "NCSaveDate, ROMonth, ROLastDate, ReOrderStartDate, ReOrderSaveDate "
+        "NCSaveDate, ROMonth, ROLastDate, ReOrderStartDate, ReOrderSaveDate, AreaCode "
         "FROM dbo.FACT_TongHopKhachHang WHERE SaveDate >= :a", a=str(start),
     )
     conn = get_conn()
@@ -346,8 +345,8 @@ def sync_fact_tonghopkhachhang(days=90):
             "INSERT INTO fact_tonghopkhachhang (employee_code,customer_code,amount_ct,month_sale_target,"
             "save_date,is_nc,manager_code,year_sale_target,amount_cus,is_ro,is_ac,"
             "max_customer_ord_amount,emp_dms_code,nc_save_date,ro_month,ro_last_date,"
-            "reorder_start_date,reorder_save_date) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", rows,
+            "reorder_start_date,reorder_save_date,area_code) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", rows,
         )
     conn.commit()
     conn.close()

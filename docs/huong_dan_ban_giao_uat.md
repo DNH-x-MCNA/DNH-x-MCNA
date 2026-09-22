@@ -93,6 +93,15 @@ Không gửi `.env`, API key, chuỗi kết nối, database hoặc log có thôn
 > trực tiếp được** cho tới khi DNH chốt câu A10 (định nghĩa "khách mở mới"). Không chấm trượt bên nào
 > vì chênh lệch này.
 
+> **Cảnh báo cho người chấm — M24 (chất lượng khách mới):** chatbot trả bằng `get_new_customer_list`
+> `mode=quality`, đo trên **snapshot KPI của chính tháng được hỏi**: khách mới = cờ `IsNC` (T8/2026 ra
+> **627** khách, khớp số ghi trong `local_warehouse.py`), DT/khách = `Amount_CT` của tháng đó, mua lại =
+> khách có **trên 1 đơn trong cùng tháng**. Checker `S92` lại đo trên hóa đơn (`Amount9`) trong **cửa sổ
+> 3 tháng** và coi mua lại là có **từ 2 ngày mua trở lên**, nên hai chỉ số của S92 cao hơn hẳn: S92 đo
+> 04/09 ra MB 7,6 tr/khách và 42,1% mua lại, còn chatbot đo 22/09 trên kho local ra toàn công ty ~2,0
+> tr/khách và 9,1% mua lại. **Không so trực tiếp hai con số này**; chấm theo đúng mốc mà chatbot đã nêu
+> trong câu trả lời. Chọn mốc nào làm chuẩn là việc cần DNH chốt cùng câu A10.
+
 > **Cảnh báo cho người chấm — C29, M08, V22 (vòng đời khách):** các dòng của truy vấn thứ nhất trong
 > `S18` là `COUNT(DISTINCT)` theo (tháng × vùng × QLV) — **cộng lại là đếm trùng**, phải dùng truy vấn
 > tổng thứ hai. Đo trên Bravo T8/2026: khách mới thật **627**, chatbot báo **612** (đúng bằng nhóm có
