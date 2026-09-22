@@ -1,13 +1,17 @@
 # -*- coding: utf-8 -*-
 """
-Module gui email mat khau tu dong qua Outlook / Office365 SMTP hoac Gmail.
-Hỗ trợ fallback ghi log local khi đang thử nghiệm môi trường Local Test hoặc khi SMTP bị chặn.
+Gui email tai khoan qua SMTP da cau hinh. Khong ghi mat khau vao log.
 """
 import os
-import smtplib
 import logging
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+
+if __package__:
+    from .mail_transport import smtp_settings, send_smtp_message, mail_failure_reason
+else:
+    # uvicorn main:app runs with backend/ as its working directory on machine 24.
+    from mail_transport import smtp_settings, send_smtp_message, mail_failure_reason
 
 logger = logging.getLogger(__name__)
 
@@ -29,24 +33,11 @@ def _load_env_file():
 
 def get_smtp_config():
     _load_env_file()
-    return {
-        "user": os.environ.get("SMTP_USER", "").strip(),
-        "password": os.environ.get("SMTP_PASSWORD", "").strip(),
-        "sender": os.environ.get("SENDER_EMAIL", os.environ.get("SMTP_USER", "")).strip(),
-        "server": os.environ.get("SMTP_SERVER", "smtp.office365.com").strip(),
-        "port": int(os.environ.get("SMTP_PORT", "587")),
-    }
+    return smtp_settings()
 
 
 def send_password_email(to_email: str, password: str, is_reset: bool = False) -> bool:
     """Gui email mat khau khoi tao / cap lai mat khau cho nhan vien qua SMTP Office365 hoac Gmail."""
-    config = get_smtp_config()
-    smtp_user = config["user"]
-    smtp_password = config["password"]
-    sender_email = config["sender"]
-    smtp_server = config["server"]
-    smtp_port = config["port"]
-
     # 29/07/2026 - TUYET DOI KHONG ghi mat khau ra log/stdout.
     # Ban truoc co ham _log_local_fallback() ghi mat khau DANG CHU THUONG vao
     # backend/logs/sent_passwords.log va print ra stdout, chay trong CA HAI truong hop: chua cau hinh
@@ -61,9 +52,12 @@ def send_password_email(to_email: str, password: str, is_reset: bool = False) ->
         logger.warning(f"Khong gui duoc email mat khau toi {to_email}: {reason}")
         print(f"[MAILER] Khong gui duoc email toi {to_email}: {reason}")
 
-    if not smtp_user or not smtp_password or smtp_user == "hophu_email@namhapharma.com":
-        _log_failure("Chua cau hinh SMTP_USER/SMTP_PASSWORD trong backend/.env")
+    try:
+        config = get_smtp_config()
+    except Exception as e:
+        _log_failure(mail_failure_reason(e))
         return False
+    sender_email = config["sender"]
 
     action_title = "Cấp lại mật khẩu tài khoản" if is_reset else "Tài khoản đăng ký mới & Mật khẩu khởi tạo"
     subject = f"[Dược Nam Hà] {action_title}"
@@ -104,16 +98,10 @@ def send_password_email(to_email: str, password: str, is_reset: bool = False) ->
     msg.attach(MIMEText(html_content, "html", "utf-8"))
 
     try:
-        server = smtplib.SMTP(smtp_server, smtp_port, timeout=15)
-        server.ehlo()
-        server.starttls()
-        server.ehlo()
-        server.login(smtp_user, smtp_password)
-        server.sendmail(sender_email, [to_email], msg.as_string())
-        server.quit()
+        send_smtp_message(msg, [to_email], config)
         logger.info(f"✅ Gửi email thành công tới: {to_email}")
         print(f"[SMTP SUCCESS] Da gui email thanh cong toi {to_email}")
         return True
     except Exception as e:
-        _log_failure(f"SMTP error: {e}")
+        _log_failure(mail_failure_reason(e))
         return False

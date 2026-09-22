@@ -2,7 +2,6 @@ import os
 import sys
 import time
 import sqlite3
-import smtplib
 from datetime import datetime
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
@@ -12,6 +11,9 @@ from src.database import load_config
 import json
 import urllib.request
 from urllib.parse import quote
+from backend.mail_transport import (
+    report_email_provider, smtp_settings, send_smtp_message, mail_failure_reason,
+)
 
 # Đảm bảo terminal/log ghi nhận được tiếng Việt có dấu
 if hasattr(sys.stdout, 'reconfigure'):
@@ -997,24 +999,32 @@ def send_email_via_sendgrid(subject, html_content, recipient_override=None, impo
 
 def send_email(subject, html_content, recipient_override=None, importance=None):
     """
-    Gửi email báo cáo: Ưu tiên dùng SendGrid Web API nếu có API Key,
-    nếu không có sẽ tự động fallback sang SMTP Outlook truyền thống.
+    Gửi email báo cáo theo EMAIL_PROVIDER=auto|smtp|sendgrid. Mặc định auto giữ
+    cách chọn cũ: có SendGrid key thì dùng SendGrid, nếu không thì dùng SMTP.
+    Chọn smtp luôn dùng SMTP dù còn SendGrid key; lỗi gửi không đổi nhà cung cấp.
     recipient_override: nếu truyền vào (list email không rỗng) thì gửi tới danh sách này thay vì
     RECIPIENT_EMAILS/.env hay config.yaml — dùng cho báo cáo đã phân quyền theo audience
     (xem main.py::_send_periodic_email_report).
     importance: "high" -> gắn header Importance/X-Priority để Outlook hiện cờ đỏ "Mức độ quan
     trọng cao" trong hộp thư — dùng cho alert CRITICAL (xem send_alert_to_all_channels).
     """
-    if os.getenv("SENDGRID_API_KEY"):
+    try:
+        provider = report_email_provider()
+    except Exception as e:
+        print(f"[EMAIL] {mail_failure_reason(e)}")
+        return False
+    if provider == "sendgrid":
         return send_email_via_sendgrid(subject, html_content, recipient_override=recipient_override,
                                         importance=importance)
 
     config = load_config()
 
-    # Ưu tiên lấy cấu hình SMTP từ file .env cho bảo mật, nếu không có mới lấy từ config.yaml
-    smtp_user = os.getenv("SMTP_USER") or config['email'].get('smtp_user')
-    smtp_pass = os.getenv("SMTP_PASSWORD") or config['email'].get('smtp_password')
-    sender_email = os.getenv("SENDER_EMAIL") or config['email'].get('sender_email') or smtp_user
+    try:
+        settings = smtp_settings(config['email'])
+    except Exception as e:
+        print(f"[EMAIL] {mail_failure_reason(e)}")
+        return False
+    sender_email = settings["sender"]
 
     if recipient_override:
         recipient_emails = list(recipient_override)
@@ -1029,18 +1039,10 @@ def send_email(subject, html_content, recipient_override=None, importance=None):
     # Loại bỏ các email trống
     recipient_emails = [r for r in recipient_emails if r]
     
-    if not smtp_user or not smtp_pass:
-        print(f"[WARNING] SMTP credentials are not set. Cannot send email for subject: {subject}")
-        print("Vui long cap nhat SMTP_USER va SMTP_PASSWORD trong file .env")
-        return False
-        
     if not recipient_emails:
         print(f"[WARNING] No recipient emails configured. Cannot send email.")
         return False
         
-    smtp_server = os.getenv("SMTP_SERVER") or config['email'].get('smtp_server', 'smtp.office365.com')
-    smtp_port = int(os.getenv("SMTP_PORT") or config['email'].get('smtp_port', 587))
-    use_tls = config['email'].get('use_tls', True)
     sender_name = config['email'].get('sender_name', 'Alerting System')
     
     # Thiết lập email
@@ -1056,23 +1058,14 @@ def send_email(subject, html_content, recipient_override=None, importance=None):
         msg['X-Priority'] = '1'
         msg['X-MSMail-Priority'] = 'High'
 
-    msg.attach(MIMEText(html_content, 'html'))
+    msg.attach(MIMEText(html_content, 'html', 'utf-8'))
     
     try:
-        # Kết nối đến SMTP Server
-        server = smtplib.SMTP(smtp_server, smtp_port)
-        server.ehlo()
-        if use_tls:
-            server.starttls() # Enable TLS
-            server.ehlo()
-            
-        server.login(smtp_user, smtp_pass)
-        server.sendmail(sender_email, recipient_emails, msg.as_string())
-        server.quit()
+        send_smtp_message(msg, recipient_emails, settings)
         print(f"[EMAIL] Gui email thanh cong: '{subject}' toi {', '.join(recipient_emails)}")
         return True
     except Exception as e:
-        print(f"[ERROR] Gui email that bai: {e}")
+        print(f"[EMAIL] {mail_failure_reason(e)}")
         return False
 
 def build_alert_email(alert_name, severity, summary, table_headers, table_rows):
