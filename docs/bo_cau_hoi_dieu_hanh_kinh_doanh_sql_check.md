@@ -4165,6 +4165,29 @@ khách như vậy ra **hai dòng**. Thay bằng:
       SUM(CASE WHEN Cur<=0 AND Prev>0 THEN Prev ELSE 0 END) [DT_mat_do_ngung]
     FROM c;
 
+**Cảnh báo 22/09/2026 — biến thể "S61c" dùng `IsNC` để loại khách mới là SAI, đừng dùng để chấm V15.**
+Có một bản viết lại nhanh hơn, lấy `(Prev=0, Cur>0)` rồi trừ đi khách mang cờ `IsNC=1` trong tháng.
+`IsNC` là cờ KPI khách mới của Bravo trong kỳ, **không phải lần đầu mua trong lịch sử** — đúng cái lỗi
+đã chốt sửa ngày 13/09 ở đầu mục này. Đo trên kho ngày 21/09, kênh OTC, kỳ 8/2026 toàn công ty:
+
+| Nhóm | Số khách |
+|---|---:|
+| Có mua T8, không mua T7 (ứng viên) | 2.876 |
+| Trong đó mang cờ `IsNC=1` — S61c loại sạch | 627 |
+| Trong đó đã từng mua trước T7 — S61b/chatbot gọi là tái kích hoạt | 2.434 |
+| **Vừa có `IsNC=1` vừa ĐÃ mua trước T7 → S61c loại nhầm** | **189** |
+| Không `IsNC` và chưa từng mua bao giờ → S61c đếm nhầm | 4 |
+
+189 là **cận dưới**: kho đo chỉ có hóa đơn từ 03/09/2025, còn máy 24 giữ chi tiết từ 2024 nên số thật
+cao hơn. Ngược lại phần S61c đếm dôi chỉ 4 khách. Dùng `FirstEver` từ bảng gốc như S61b, đừng dùng `IsNC`.
+
+Kiểm cùng lần: **quy tắc chủ khách không phải nguồn lệch** — trên 2.434 khách tái kích hoạt, quy tắc
+"người bán nhiều nhất trong tháng" (S61b, chatbot) và "người bán ở hóa đơn cuối cùng" (S61c) chỉ cho ra
+người khác nhau ở **1 khách**. Nếu số theo từng TDV còn lệch sau khi bỏ `IsNC`, hãy soi hai chỗ còn lại:
+S61b tính `Cur`/`Prev` **trong phạm vi đội** (`pham_vi` đã lọc `EmpDMSCode` thuộc đội) còn S61c tính trên
+toàn công ty rồi mới lọc `ManagerCode` ở bước cuối; và `#sales` của S61c gồm cả ETC trong khi tài khoản
+QLV kênh OTC chỉ thấy OTC.
+
 Phần theo từng TDV dùng lại `team`/`goc`/`pham_vi`/`c` ở trên, chủ khách của tháng là **người bán nhiều
 nhất cho khách đó trong chính tháng đang xét**, hòa thì lấy mã nhỏ hơn — đúng quy tắc `by_employee` của
 chatbot nên hai bên so được trực tiếp:
