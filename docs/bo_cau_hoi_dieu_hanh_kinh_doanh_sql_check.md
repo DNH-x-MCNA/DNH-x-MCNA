@@ -549,6 +549,27 @@ Lưu ý khi đối chiếu: **không dùng quy tắc "đơn phải ≥ khách" �
 tập đơn đã xuất hóa đơn, còn `Customers` đếm trên TOÀN BỘ đơn gắn CTKM, nên 313 < 333 là hoàn toàn
 hợp lệ. Chỉ được kết luận bằng cách so trực tiếp từng con số với checker này.
 
+**Cảnh báo 22/09/2026 — khi `@AreaCode` khác NULL thì KHÔNG được lấy `inv` từ `#sales`.** Block mục 2
+kết thúc bằng `DELETE FROM #sales WHERE ... AreaCode <> @AreaCode`, mà `AreaCode` của `#sales` tính theo
+khách trên **dòng hóa đơn**, còn `po` lọc theo khách trên **đơn hàng**. Đơn nào xuất hóa đơn cho mã khách
+khác miền (NPP/chi nhánh) vẫn được đếm ở `Orders` nhưng doanh thu đã bị xóa khỏi `#sales` — `Orders` đúng
+còn `AssociatedRevenue` thiếu. Đo trên Bravo 22/09/2026, `Q4.2025_SIRO_10_RV.KENH.` (ProgId 118970) kỳ
+12/2025 phạm vi MB: 857 đơn, 369 khách, 685 đơn đã xuất HĐ, doanh thu đúng **23,83 tỷ**; lấy `inv` từ
+`#sales` đã lọc miền chỉ còn **18,13 tỷ**, thiếu **5,70 tỷ** nằm gọn ở **17 đơn** có mã khách trên hóa đơn
+khác mã khách trên đơn. Chatbot trả 23,83 tỷ là **đúng**, không được chấm trượt bằng con số 18,13 tỷ. Muốn
+lọc miền thì giữ `#sales` nguyên vẹn và chỉ lọc ở vế `po`, hoặc đọc thẳng `vHoaDonTotal`/`vHoaDonETCTotal`
+cho `inv`.
+
+Cùng lần đo đó, hai khác biệt hay bị nghi ngờ đều bằng **0 đồng** ở kỳ 12/2025: không có hóa đơn nào của
+đơn tháng 12 xuất sau 31/12 (nên việc chatbot ghim cửa sổ hóa đơn bằng cửa sổ đơn hàng chưa gây lệch), và
+không đơn gắn CTKM nào dính hóa đơn ETC (nên việc `#sales` gộp thêm ETC cũng chưa gây lệch). Đừng lấy hai
+điểm này ra giải thích chênh lệch khi chưa đo lại.
+
+**Phạm vi miền phải nêu trong câu trả lời.** Bảng chatbot ngày 22/09 chỉ là phần Miền Bắc mà không dòng nào
+nói ra, nên người đối chiếu lấy số toàn quốc (`Q4.2025_SIRO_10_RV.KENH.`: 1.056 đơn / 30,05 tỷ) ra so với
+857 đơn / 23,83 tỷ và tưởng chatbot sai. Tool nay trả `scope_area_code` + `scope_note`; khi chấm phải chạy
+checker với đúng `@AreaCode` mà tài khoản hỏi đang bị ép.
+
 **Tên chương trình bị trùng giữa các kỳ** (`T9.2025_BPNGAM_10_TQ`, `Q4.2025_BPNGAM_10_TQ`,
 `Q1.2026_BPNGAM_10_TQ` đều tên "Bổ phế Ngậm mua 10 tặng 01"). Luôn hiển thị kèm `Code` và `MonthEnd`;
 gộp theo `Name` là trộn lẫn các đợt khác nhau.

@@ -1038,6 +1038,39 @@ def test_m35_mo_ta_tool_buoc_phan_biet_ma_trung_ten():
     assert "same_name_program_codes" in d
 
 
+def test_m35_pham_vi_mien_phai_hien_trong_payload(monkeypatch):
+    """22/09/2026: bang M35 ky 12/2025 chi la phan Mien Bac (857 don/23,83 ty) nhung khong dong nao
+    noi ra; nguoi doi chieu lay so toan quoc (1.056 don/30,05 ty) ra so va tuong chatbot sai."""
+    seen = []
+
+    def fake_bravo(sql, params=None):
+        if "LinkRowId" in sql:
+            return [{"CoverageDate": "2026-01-09", "LinkSyncedAt": "2026-01-09", "LinkRowId": 9}]
+        seen.append(params or {})
+        return [{"ProgramId": 1, "ProgramCode": "KM01", "ProgramName": "Mua 10 tang 1", "Orders": 857,
+                 "Customers": 369, "AssociatedRevenue": 23_830_000_000, "OrdersWithoutInvoice": 172,
+                 "PaidProductOccurrences": 8, "GiftProductCount": 1, "ConfiguredProductCount": 1}]
+
+    monkeypatch.setattr(rt, "_q_bravo", fake_bravo)
+    result = rt.promotion_effectiveness(scope_area_code="MB")
+
+    assert seen[0]["scope_area_code"] == "MB"
+    assert result["scope_area_code"] == "MB"
+    assert "MB" in result["scope_note"] and "toan quoc" in result["scope_note"]
+    assert rt.promotion_effectiveness()["scope_note"] is None
+    tool = next(t for t in nl2sql.TEMPLATE_TOOLS if t["name"] == "get_promotion_effectiveness")
+    assert "scope_note" in tool["description"]
+
+
+def test_m35_mo_ta_tool_buoc_hien_don_da_xuat_hoa_don():
+    """22/09/2026: bang tra loi M35 ky 12/2025 hien 857 don canh 34,78 trieu/don, nhung mau so that
+    la 685 don DA XUAT HOA DON - nguoi doc chia 23,83 ty / 857 ra so khac va tuong chatbot sai so."""
+    tool = next(t for t in nl2sql.TEMPLATE_TOOLS if t["name"] == "get_promotion_effectiveness")
+    d = tool["description"]
+    assert "invoiced_orders" in d
+    assert "SO THIEU" in d
+
+
 def test_a9_tuan_trong_thang_phai_hoi_lai_chua_duoc_tu_chon():
     import schema_context
     ctx = schema_context.SCHEMA_CONTEXT
