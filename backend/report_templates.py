@@ -11887,6 +11887,22 @@ def promotion_effectiveness(date_from: str = None, date_to: str = None, limit: i
         prog["same_name_program_codes"] = sorted(trung) if len(trung) > 1 else []
         prog["name_is_ambiguous"] = len(trung) > 1
 
+    # 22/09/2026 (doi chieu M35 ky 12/2025): chieu NGUOC LAI cung xay ra - MOT ma ung voi NHIEU
+    # chuong trinh. DMS_CTKM.Code bi cat ngan nen hai chuong trinh khac nhau ve chung mot ma:
+    # 'Q4.2025_NHOM_BOPHE_SIRO_' co hai dong 4.251 don va 644 don, khac ten, khac ProgId. Tool gom
+    # theo ProgId nen van ra hai dong dung, nhung hai dong do hien ra CUNG MOT MA - nhin nhu bang bi
+    # lap, va cong lai thi thanh mot chuong trinh khong co that.
+    _ma = {}
+    for prog in programs:
+        _ma.setdefault(prog["program_code"], []).append(prog)
+    for prog in programs:
+        trung_ma = _ma.get(prog["program_code"], [])
+        prog["code_is_ambiguous"] = len(trung_ma) > 1
+        prog["same_code_programs"] = sorted(
+            ({"program_id": other["program_id"], "program_name": other["program_name"]}
+             for other in trung_ma if other["program_id"] != prog["program_id"]),
+            key=lambda item: str(item["program_id"])) if len(trung_ma) > 1 else []
+
     warning = None
     if requested_to > coverage_date:
         warning = (f"Du lieu lien ket don hang-chuong trinh moi den {coverage_date}; "
@@ -11900,6 +11916,14 @@ def promotion_effectiveness(date_from: str = None, date_to: str = None, limit: i
         "period": {"from": str(report_from), "to": str(report_to)},
         "promotion_link_coverage_to": str(coverage_date),
         "promotion_link_synced_at": str(coverage_rows[0].get("LinkSyncedAt") or ""),
+        # 22/09/2026 (doi chieu M35 ky 12/2025): bang tra loi chi co so cua MIEN BAC ma khong cau nao
+        # noi ra, nen nguoi doi chieu lay so toan quoc ra so va tuong chatbot sai doanh thu. Do that
+        # tren Bravo: Q4.2025_SIRO_10_RV.KENH. toan quoc 1.056 don / 30,05 ty, rieng MB 857 don /
+        # 23,83 ty - dung y con so chatbot da tra.
+        "scope_area_code": scope_area_code,
+        "scope_note": (
+            f"Tat ca so trong bao cao nay CHI tinh don cua khach thuoc mien {scope_area_code}, "
+            "khong phai toan quoc." if scope_area_code else None),
         "warning": warning,
         "interpretation_note": (
             "associated_revenue la doanh thu cua don hang co gan chuong trinh. Mot don co the dung "
