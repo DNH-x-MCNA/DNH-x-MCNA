@@ -2070,7 +2070,11 @@ _SALARY_FALLBACK_NOTE = (
     "LUU Y QUYEN CHO CAU NAY: tai khoan khong duoc xem luong/thuong CA NHAN chi tiet. KHONG tu choi ca "
     "cau: tra loi day du phan KPI tu get_employee_kpi (% dat chi tieu, dat KPI 80%, nguong thuong nhom "
     "hang TDV 65%/QLV 70%, ai duoi nguong, QLV nao co nhieu nguoi duoi KPI), roi noi ro so tien "
-    "luong/thuong tung nguoi chi C-Level hoac QLV cua chinh doi do xem duoc."
+    "luong/thuong tung nguoi chi C-Level hoac QLV cua chinh doi do xem duoc. "
+    "Rieng M20: dung comparison_threshold_summary de lap bang KPI TDV; mau so "
+    "denominator_all_tdv gom ca nguoi thieu target, employees_with_target chi la so nguoi "
+    "du target duoc phan loai moc. "
+    "Neu co nguoi thieu target thi neu ro, KHONG tinh ho vao nhom duoi moc 65%."
 )
 
 
@@ -2488,7 +2492,8 @@ def _payload_for_model(tool_name: str, payload, question: str):
                 "missing_current_snapshot_count", "unassessed_rows_truncated",
                 "count_below_target", "count_above_target", "count_kpi_achieved",
                 "kpi_threshold_pct", "count_full_target", "full_target_pct",
-                "threshold_summary",
+                "threshold_summary", "kpi_source", "position_code", "comparison_basis",
+                "comparison_threshold_summary",
             )
         }
         compact_data["rows_returned"] = len(compact_rows)
