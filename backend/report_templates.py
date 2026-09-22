@@ -3515,15 +3515,18 @@ def customer_attrition_risk(month: str = None, lookback_months: int = 12,
     thang nay voi thang lien truoc, khong co chu ky mua). Cau M22 hoi CA BA ve; tra loi chi mot ve
     la CHUA DAT.
 
+    Chi danh gia nua tren cua tap khach co doanh thu cua so duong (Revenue12M >= median), dung nghia
+    "khach lon" cua checker M22. Median duoc tinh SAU khi ep scope vung/kenh/nhan vien.
+
     Ba tin hieu:
-      NGUNG_MUA        Cur=0 nhung 3 thang truoc con mua.
+      NGUNG_MUA        Cur=0 va co mua it nhat 2/3 thang truoc.
       NGUNG_MUA_DA_LAU Cur=0 va ca 3 thang truoc cung =0, chi con doanh thu xa hon trong cua so.
-      GIAM_MUA         Cur>0 nhung < 60% muc trung binh thang cua baseline 3 thang.
+      GIAM_MUA         Cur>0 nhung < 60% binh quan cac thang co ban ghi trong baseline 3 thang.
       KEO_DAI_CHU_KY   So ngay im lang > 2 lan khoang cach mua trung binh cua CHINH khach do.
 
-    Baseline 3 thang (Prior3M/3) de khu nhieu chu ky dat hang; nguong chu ky la dong theo tung
-    khach (AvgGapDays) chu khong phai mot moc cung - moc cung 45 ngay tung lam ve thu ba ra 0 dong.
-    AvgGapDays chi tinh khi khach co tu 3 ngay mua tro len, duoi muc do chu ky chua co nghia."""
+    Nguong chu ky la dong theo tung khach (AvgGapDays) chu khong phai mot moc cung - moc cung 45 ngay
+    tung lam ve thu ba ra 0 dong. AvgGapDays chi tinh khi khach co tu 3 ngay mua tro len, duoi muc do
+    chu ky chua co nghia."""
     earliest, latest = _revenue_data_month_range()
     if not earliest or not latest:
         return {"error": "Kho chua co hoa don de phan tich rui ro mat khach."}
@@ -3541,6 +3544,7 @@ def customer_attrition_risk(month: str = None, lookback_months: int = 12,
     cur_start, cur_end = _month_bounds(month)
     prior_start, _ = _month_bounds(_month_add(month, -3))
     prior_end = (dt.date.fromisoformat(cur_start) - dt.timedelta(days=1)).isoformat()
+    prior_month_bounds = [_month_bounds(_month_add(month, offset)) for offset in (-3, -2, -1)]
     data_day = str(latest_data_date())[:10]
     as_of_date = min(data_day, cur_end)
     as_of = dt.date.fromisoformat(as_of_date)
@@ -3571,22 +3575,39 @@ def customer_attrition_risk(month: str = None, lookback_months: int = 12,
             SELECT customer_code,
                    SUM(amount9) rev_window,
                    SUM(CASE WHEN doc_date>=? AND doc_date<=? THEN amount9 ELSE 0 END) cur_revenue,
-                   SUM(CASE WHEN doc_date>=? AND doc_date<=? THEN amount9 ELSE 0 END) prior3m_revenue,
+                   SUM(CASE WHEN doc_date>=? AND doc_date<=? THEN amount9 ELSE 0 END) prior_m1_revenue,
+                   SUM(CASE WHEN doc_date>=? AND doc_date<=? THEN amount9 ELSE 0 END) prior_m2_revenue,
+                   SUM(CASE WHEN doc_date>=? AND doc_date<=? THEN amount9 ELSE 0 END) prior_m3_revenue,
+                   SUM(CASE WHEN doc_date>=? AND doc_date<=? THEN 1 ELSE 0 END) prior_m1_rows,
+                   SUM(CASE WHEN doc_date>=? AND doc_date<=? THEN 1 ELSE 0 END) prior_m2_rows,
+                   SUM(CASE WHEN doc_date>=? AND doc_date<=? THEN 1 ELSE 0 END) prior_m3_rows,
                    MAX(doc_date) last_buy, MIN(doc_date) first_buy,
                    COUNT(DISTINCT substr(doc_date,1,10)) buy_days
             FROM base
             GROUP BY customer_code
             HAVING SUM(amount9)>0""",
         tuple(p for pp in part_params for p in pp)
-        + (cur_start, cur_end, prior_start, prior_end),
+        + (cur_start, cur_end)
+        + tuple(value for bounds in prior_month_bounds for value in bounds)
+        + tuple(value for bounds in prior_month_bounds for value in bounds),
     )
 
+    large_customer_threshold = median([_f(r["rev_window"]) for r in rows]) if rows else None
     detail = []
     for r in rows:
         rev_window = _f(r["rev_window"])
+        if large_customer_threshold is None or rev_window < large_customer_threshold:
+            continue
         cur = _f(r["cur_revenue"])
-        prior3m = _f(r["prior3m_revenue"])
-        baseline = prior3m / 3.0 if prior3m > 0 else None
+        observed_prior_months = [
+            _f(r[f"prior_m{i}_revenue"])
+            for i in range(1, 4)
+            if int(r[f"prior_m{i}_rows"] or 0) > 0
+        ]
+        prior3m = sum(observed_prior_months)
+        active_prior3_months = sum(value > 0 for value in observed_prior_months)
+        baseline = (sum(observed_prior_months) / len(observed_prior_months)
+                    if observed_prior_months else None)
         last_buy = str(r["last_buy"])[:10]
         first_buy = str(r["first_buy"])[:10]
         buy_days = int(r["buy_days"] or 0)
@@ -3596,13 +3617,13 @@ def customer_attrition_risk(month: str = None, lookback_months: int = 12,
             span = (dt.date.fromisoformat(last_buy) - dt.date.fromisoformat(first_buy)).days
             avg_gap = span / (buy_days - 1) if span > 0 else None
         # Thu tu nhanh giu dung CASE cua S88: mot khach chi mang mot tin hieu, khong dem trung.
-        if cur <= 0 and prior3m > 0:
+        if cur <= 0 and active_prior3_months >= 2:
             signal = "NGUNG_MUA"
-        elif cur <= 0 and prior3m <= 0 and rev_window > 0:
+        elif cur <= 0 and active_prior3_months == 0:
             signal = "NGUNG_MUA_DA_LAU"
         elif cur > 0 and baseline and cur < 0.6 * baseline:
             signal = "GIAM_MUA"
-        elif avg_gap is not None and silent_days > 2 * avg_gap and silent_days >= 14:
+        elif cur > 0 and avg_gap is not None and silent_days > 2 * avg_gap:
             signal = "KEO_DAI_CHU_KY"
         else:
             continue
@@ -3612,6 +3633,7 @@ def customer_attrition_risk(month: str = None, lookback_months: int = 12,
             "doanh_thu_cua_so": rev_window,
             "doanh_thu_ky": cur,
             "doanh_thu_3_thang_truoc": prior3m,
+            "so_thang_co_mua_trong_3_thang_truoc": active_prior3_months,
             "muc_trung_binh_thang_baseline": baseline,
             "pct_so_baseline": (round((cur - baseline) / baseline * 100, 1)
                                 if baseline else None),
@@ -3661,12 +3683,15 @@ def customer_attrition_risk(month: str = None, lookback_months: int = 12,
         "baseline_3_thang": {"tu": prior_start[:7], "den": prior_end[:7]},
         "as_of": as_of_date,
         "dinh_nghia_tin_hieu": {
-            "NGUNG_MUA": "Ky nay khong mua, 3 thang truoc con mua.",
+            "NGUNG_MUA": "Ky nay khong mua, co mua it nhat 2/3 thang truoc.",
             "NGUNG_MUA_DA_LAU": "Ky nay va ca 3 thang truoc deu khong mua, chi con doanh thu xa hon.",
-            "GIAM_MUA": "Ky nay co mua nhung duoi 60% muc trung binh thang cua baseline 3 thang.",
+            "GIAM_MUA": "Ky nay co mua nhung duoi 60% binh quan cac thang co ban ghi trong baseline 3 thang.",
             "KEO_DAI_CHU_KY": "So ngay im lang > 2 lan khoang cach mua trung binh cua chinh khach do "
-                              "va >= 14 ngay.",
+                              "(va ky nay van co mua).",
         },
+        "dinh_nghia_khach_lon": "Doanh thu cua so >= trung vi cua cac khach co doanh thu duong trong cung pham vi.",
+        "nguong_doanh_thu_khach_lon": large_customer_threshold,
+        "so_khach_co_doanh_thu_duong": len(rows),
         "so_khach_rui_ro": total_count,
         "phan_bo_tin_hieu": counts,
         "doanh_thu_cua_so_theo_tin_hieu": revenue_at_risk,

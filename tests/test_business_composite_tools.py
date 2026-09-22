@@ -857,30 +857,37 @@ def test_workforce_question_auto_applies_uat_mode_and_employee_scope(monkeypatch
     assert decline["result"]["seen"]["limit"] == 200
 
 
+def _attrition_row(code, rev_window, cur, previous_months, last_buy, first_buy, buy_days):
+    row = {
+        "customer_code": code, "rev_window": rev_window, "cur_revenue": cur,
+        "last_buy": last_buy, "first_buy": first_buy, "buy_days": buy_days,
+    }
+    for index, value in enumerate(previous_months, start=1):
+        row[f"prior_m{index}_revenue"] = value or 0.0
+        row[f"prior_m{index}_rows"] = 0 if value is None else 1
+    return row
+
+
 def _attrition_rows():
-    # rev_window / cur / prior3m / last_buy / first_buy / buy_days
+    # rev_window / cur / prior3m / active months / avg observed month / last_buy / first_buy / buy_days.
+    # Cac dong cung rev_window de tat ca deu nam trong nua tren theo median.
     return [
-        # Ngung mua: ky nay 0 nhung baseline 3 thang con mua.
-        {"customer_code": "C_STOP", "rev_window": 900.0, "cur_revenue": 0.0,
-         "prior3m_revenue": 300.0, "last_buy": "2026-07-20", "first_buy": "2025-09-02",
-         "buy_days": 10},
-        # Giam mua: con mua nhung duoi 60% muc trung binh thang cua baseline (600/3=200 -> 100<120).
-        {"customer_code": "C_DROP", "rev_window": 2000.0, "cur_revenue": 100.0,
-         "prior3m_revenue": 600.0, "last_buy": "2026-08-05", "first_buy": "2025-09-01",
-         "buy_days": 12},
+        # Ngung mua: ky nay 0 va co mua it nhat 2/3 thang truoc.
+        _attrition_row("C_STOP", 5000.0, 0.0, (150.0, 150.0, None),
+                       "2026-07-20", "2025-09-02", 10),
+        # Giam mua: con mua nhung duoi 60% binh quan CAC THANG CO BAN GHI (600/2=300 -> 100<180).
+        _attrition_row("C_DROP", 5000.0, 100.0, (300.0, 300.0, None),
+                       "2026-08-05", "2025-09-01", 12),
         # Keo dai chu ky: van mua deu muc baseline nhung im lang gap hon 2 lan khoang cach thuong le.
         # first->last = 300 ngay, 31 ngay mua -> avg gap 10 ngay; im lang 26 ngay > 20 va >= 14.
-        {"customer_code": "C_GAP", "rev_window": 5000.0, "cur_revenue": 300.0,
-         "prior3m_revenue": 900.0, "last_buy": "2026-08-05", "first_buy": "2025-10-09",
-         "buy_days": 31},
+        _attrition_row("C_GAP", 5000.0, 300.0, (300.0, 300.0, 300.0),
+                       "2026-08-05", "2025-10-09", 31),
         # Binh thuong: mua dung nhip, khong dat tin hieu nao -> phai bi loai khoi danh sach.
-        {"customer_code": "C_OK", "rev_window": 4000.0, "cur_revenue": 400.0,
-         "prior3m_revenue": 900.0, "last_buy": "2026-08-30", "first_buy": "2025-09-01",
-         "buy_days": 30},
+        _attrition_row("C_OK", 5000.0, 400.0, (300.0, 300.0, 300.0),
+                       "2026-08-30", "2025-09-01", 30),
         # Duoi 3 ngay mua: chua do duoc chu ky, khong duoc gan nhan keo dai chu ky.
-        {"customer_code": "C_THIN", "rev_window": 150.0, "cur_revenue": 0.0,
-         "prior3m_revenue": 0.0, "last_buy": "2026-04-10", "first_buy": "2026-04-03",
-         "buy_days": 2},
+        _attrition_row("C_THIN", 5000.0, 0.0, (None, None, None),
+                       "2026-04-10", "2026-04-03", 2),
     ]
 
 
@@ -920,6 +927,20 @@ def test_m22_khach_duoi_ba_ngay_mua_khong_bi_goi_la_keo_dai_chu_ky(monkeypatch):
     assert thin["tin_hieu"] != "KEO_DAI_CHU_KY"
 
 
+def test_m22_hai_ngay_mua_khong_du_de_suy_ra_chu_ky(monkeypatch):
+    rows = [_attrition_row(
+        "TWO_DAYS", 1000.0, 1000.0, (None, None, None),
+        # Mot khoang cach duy nhat 2 ngay khong phai lich su chu ky du tin cay.
+        "2026-08-14", "2026-08-12", 2,
+    )]
+    _patch_attrition(monkeypatch, rows)
+
+    out = rt.customer_attrition_risk()
+
+    assert out["total_count"] == 0
+    assert out["khach_rui_ro"] == []
+
+
 def test_m22_tong_hop_tinh_trong_toan_tap_truoc_khi_cat_top_n(monkeypatch):
     _patch_attrition(monkeypatch)
     full = rt.customer_attrition_risk()
@@ -944,6 +965,36 @@ def test_m22_mac_dinh_khong_lay_thang_dang_chay_dang_do(monkeypatch):
     _patch_attrition(monkeypatch)
     # Du lieu moi nhat la 10/09 nhung mac dinh phai lui ve thang tron gan nhat.
     assert rt.customer_attrition_risk()["ky"] == "2026-08"
+
+
+def test_m22_chi_tong_hop_khach_lon_tu_median_trong_dung_scope(monkeypatch):
+    rows = [
+        _attrition_row("LARGE_RISK", 1000.0, 0.0, (100.0, 100.0, 100.0),
+                       "2026-07-20", "2025-09-02", 10),
+        _attrition_row("MEDIAN_OK", 900.0, 300.0, (300.0, 300.0, 300.0),
+                       "2026-08-30", "2025-09-01", 30),
+        _attrition_row("SMALL_RISK", 100.0, 0.0, (30.0, 30.0, 30.0),
+                       "2026-07-20", "2025-09-02", 10),
+    ]
+    _patch_attrition(monkeypatch, rows)
+
+    out = rt.customer_attrition_risk(scope_area_code="MB")
+
+    assert out["nguong_doanh_thu_khach_lon"] == 900.0
+    assert out["so_khach_co_doanh_thu_duong"] == 3
+    assert out["total_count"] == 1
+    assert [r["customer_code"] for r in out["khach_rui_ro"]] == ["LARGE_RISK"]
+
+
+def test_m22_mot_tren_ba_thang_truoc_khong_bi_goi_la_ngung_mua(monkeypatch):
+    rows = [_attrition_row("IRREGULAR", 1000.0, 0.0, (None, 300.0, None),
+                           "2026-07-20", "2025-09-02", 10)]
+    _patch_attrition(monkeypatch, rows)
+
+    out = rt.customer_attrition_risk()
+
+    assert out["total_count"] == 0
+    assert out["khach_rui_ro"] == []
 
 
 def test_m22_tool_duoc_cong_bo_cho_model_va_co_trong_dispatch():
