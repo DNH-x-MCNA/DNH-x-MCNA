@@ -94,3 +94,52 @@ def test_cau_phan_kpi_con_thieu_phai_duoc_chi_sang_tool_luong():
     assert "PHAI liet ke ro cau phan nao chua co" in d
     # Quy tac da chot: khong duoc doi thuong V25 tu ky 07/2026.
     assert "V25" in d and "01/07/2026" in d
+
+
+def test_payload_gui_model_giu_rank_va_bao_vung_chua_gan():
+    """22/09 cham lai: thu tu da dung nhung bang theo vung VAN bo dong 'Khac/chua xac dinh' (0,81 ty).
+    Ly do: _payload_for_model loc trang cot, rank va by_region_note bi cat truoc khi toi model."""
+    payload = {
+        "receivable_status": "ok", "total_overdue": 62.94e9, "total_balance_end": 160.54e9,
+        "by_region": [{"region": "Mien Bac", "total_overdue": 30.29e9},
+                      {"region": "Mien Nam", "total_overdue": 25.41e9},
+                      {"region": "Mien Trung", "total_overdue": 6.43e9},
+                      {"region": "Khac/chua xac dinh", "total_overdue": 0.81e9}],
+        "by_region_note": "by_region da gom DU moi vung",
+        "ranking_basis": "Top xep theo NO QUA HAN, in theo rank",
+        "top_overdue_requested_count": 2, "top_overdue_returned_count": 2,
+        "top_overdue_eligible_count": 9,
+        "top_overdue_customers": [
+            {"rank": 1, "customer_code": "KH2", "customer_name": "B", "balance_end": 2.42e9,
+             "total_overdue": 1.94e9, "employee_code": None},
+            {"rank": 2, "customer_code": "KH3", "customer_name": "C", "balance_end": 4.32e9,
+             "total_overdue": 1.90e9, "employee_code": None}],
+    }
+
+    goi = nl2sql._payload_for_model("get_receivables_overview", payload, "top 10 khach no qua han")
+
+    assert [r["rank"] for r in goi["top_overdue_customers"]] == [1, 2]
+    assert "by_region_note" in goi
+    assert "810000000" in goi["by_region_warning"].replace(".", "")
+    assert "MOT DONG rieng" in goi["by_region_warning"]
+    # Khong co nhom chua gan thi khong duoc canh bao thua.
+    sach = dict(payload, by_region=payload["by_region"][:3])
+    assert "by_region_warning" not in nl2sql._payload_for_model(
+        "get_receivables_overview", sach, "top 10 khach no qua han")
+
+
+def test_payload_kpi_liet_ke_cau_phan_con_thieu():
+    payload = {"as_of": "2026-09-22", "total_employees": 1,
+               "rows": [{"employee_code": "TM23100153", "name": "CS", "position_code": "CS",
+                         "sales": 108_500_000, "target": 1_700_000_000, "pct": 6.38}]}
+
+    goi = nl2sql._payload_for_model("get_employee_kpi", payload,
+                                    "tinh hinh thuc hien kpi cua cac trinh duoc vien")
+
+    cau_phan = goi["cau_phan_kpi_ngoai_tool_nay"]
+    assert "V15" in cau_phan["chua_co_trong_ket_qua_nay"]
+    assert "get_salary_achievement_summary" in cau_phan["lay_o_dau"]
+    assert "01/07/2026" in cau_phan["answer_rule"]
+    # Cau hoi khong ve KPI thi khong gan them nhieu chu vao payload.
+    assert "cau_phan_kpi_ngoai_tool_nay" not in nl2sql._payload_for_model(
+        "get_employee_kpi", payload, "doanh so thang nay cua doi")
