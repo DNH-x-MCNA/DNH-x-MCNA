@@ -1,0 +1,19 @@
+{
+  "type": "message",
+  "recipient": "THAY_BANG_UPN_TEAMS_DUOC_DUYET",
+  "audience": "C-Level (Toàn quốc)",
+  "attachments": [
+    {
+      "contentType": "application/vnd.microsoft.card.adaptive",
+      "content": {
+        "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+        "type": "AdaptiveCard",
+        "version": "1.4",
+        "body": [
+          {"type": "TextBlock", "text": "KIỂM TRA FLOW CHUNG DNH", "weight": "Bolder", "wrap": true},
+          {"type": "TextBlock", "text": "Đây là card kiểm tra định tuyến, không chứa số liệu kinh doanh.", "wrap": true}
+        ]
+      }
+    }
+  ]
+}

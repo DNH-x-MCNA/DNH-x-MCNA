@@ -90,6 +90,7 @@ backend/health_watchdog_state.json
 # Environment-specific SQL allowlist and sensitive-data classification supplied by DNH.
 # Commit only the redacted example, never the production policy.
 config/sql_catalog_policy.local.json
+config/teams_recipients.local.json
 
 # 18/08/2026 - phat hien khi kiem lai viec ngay 17-19: 3 file/thu muc nay khong nam trong bat
 # ky luat ignore nao o tren nen "git add -A" vo tinh se stage duoc. Ket qua cong cu (JSON/MD tu

@@ -8,6 +8,7 @@ from email.mime.multipart import MIMEMultipart
 from jinja2 import Template
 from dotenv import load_dotenv
 from src.database import load_config
+from src.teams_routing import delivery_mode, load_shared_routes, resolve_destination
 import json
 import urllib.request
 from urllib.parse import quote
@@ -1440,7 +1441,7 @@ def send_teams_alert(title, summary, table_headers=None, table_rows=None, severi
                   "khong chac chan card da hien thi trong Teams." % response.status)
             return True
     except Exception as e:
-        print(f"[TEAMS] Loi gui Teams: {e}")
+        print(f"[TEAMS] Loi gui Teams: {type(e).__name__}")
         return False
 
 
@@ -1458,22 +1459,23 @@ def _resolve_teams_webhooks(region_label, channel_label):
     "OTC + ETC") chỉ khớp các audience không giới hạn tương ứng — tránh gửi nhầm alert đa vùng/đa
     kênh vào 1 webhook vùng/kênh cụ thể.
 
-    Mỗi audience khớp có teams_webhook riêng (đã điền) hoặc rỗng (CHƯA có Flow riêng -> dùng
-    chung TEAMS_WEBHOOK_URL mặc định). Trả về danh sách ĐÃ KHỬ TRÙNG theo URL, để không gửi lặp
-    khi nhiều audience còn trỏ chung 1 webhook (vd lúc chưa điền webhook riêng, tất cả audience
-    khớp cùng rơi về đúng 1 URL mặc định -> chỉ gửi 1 lần, y hệt hành vi cũ trước khi có Phần 3).
-    Nếu config chưa có report_recipients (môi trường cũ) -> trả về đúng 1 webhook mặc định.
+    Legacy: mỗi audience dùng teams_webhook riêng hoặc TEAMS_WEBHOOK_URL mặc định.
+    Shared: cùng webhook, UPN lấy từ bảng local đã kiểm đủ trước khi gửi.
+    Cả hai chế độ khử trùng theo (URL, UPN). Nếu config legacy chưa có
+    report_recipients -> trả về đúng 1 webhook mặc định.
 
     Trả về list các bộ ba (url, audience, recipient). `recipient` lấy từ trường TUỲ CHỌN
-    `teams_recipient` của audience — để trống thì payload không có trường đó và Flow hoạt động y
-    như cũ. Điền vào thì payload kèm theo, cho phép MỘT Flow duy nhất tự định tuyến nhiều người
-    nhận thay vì phải dựng một Flow cho mỗi người.
+    Ở legacy, `teams_recipient` vẫn tùy chọn. Ở shared, UPN phải có trong bảng
+    local và payload luôn kèm theo để Flow định tuyến đến đúng chat cá nhân.
     """
     default_webhook = os.getenv("TEAMS_WEBHOOK_URL")
     try:
         config = load_config()
     except Exception:
+        if delivery_mode() == "shared":
+            raise
         config = {}
+    shared_routes = load_shared_routes(config)
     recipients = config.get('report_recipients') or []
     if not recipients:
         return [(default_webhook, None, None)] if default_webhook else []
@@ -1498,7 +1500,7 @@ def _resolve_teams_webhooks(region_label, channel_label):
         channel_ok = (not aud_channel) or (aud_channel == alert_channel_key)
         if not (region_ok and channel_ok):
             continue
-        url = (r.get('teams_webhook') or '').strip() or default_webhook
+        url, recipient = resolve_destination(r, shared_routes)
         if not url:
             continue
         # 26/08/2026: KHU TRUNG THEO CAP (url, nguoi_nhan), truoc day chi theo url.
@@ -1513,7 +1515,6 @@ def _resolve_teams_webhooks(region_label, channel_label):
         #
         # TUONG THICH NGUOC: khi chua ai dien teams_recipient thi recipient=None cho tat ca, cap
         # (url, None) khu trung y het hanh vi cu - 6 Flow hien tai khong doi mot chut nao.
-        recipient = (r.get('teams_recipient') or '').strip() or None
         key = (url, recipient)
         if key in seen:
             continue
@@ -1536,9 +1537,9 @@ def _send_with_retry(fn, *args, max_retries=2, delays=(3, 6), **kwargs):
             last_exception = e
             if attempt < max_retries:
                 delay = delays[min(attempt, len(delays) - 1)]
-                print(f"[RETRY] {fn.__name__} loi ({e}), thu lai sau {delay}s (lan {attempt + 1}/{max_retries})...")
+                print(f"[RETRY] {fn.__name__} loi ({type(e).__name__}), thu lai sau {delay}s (lan {attempt + 1}/{max_retries})...")
                 time.sleep(delay)
-    print(f"[RETRY] {fn.__name__} that bai sau {max_retries} lan thu lai: {last_exception}")
+    print(f"[RETRY] {fn.__name__} that bai sau {max_retries} lan thu lai: {type(last_exception).__name__}")
     return False
 
 # Hàng đợi gộp card CRITICAL — thêm 10/07/2026 theo yêu cầu tiếp theo sau bộ lọc CRITICAL-only:
@@ -1583,7 +1584,7 @@ def flush_critical_teams_queue():
             group = by_webhook.setdefault((webhook_url, recipient),
                                           {"audience": audience, "recipient": recipient, "alerts": []})
             group["alerts"].append(item)
-    failed_item_ids = set()
+    failed_routes = set()
     for (webhook_url, _recipient), group in by_webhook.items():
         payload = _build_teams_consolidated_card(group["alerts"])
         # Gan sau khi dung card, cung ly do nhu trong send_teams_alert.
@@ -1597,8 +1598,15 @@ def flush_critical_teams_queue():
             print(f"[TEAMS] Da gui card gop ({len(group['alerts'])} canh bao) toi audience '{group['audience'] or 'mac dinh'}'.")
         else:
             print(f"[TEAMS] Loi gui card gop toi audience '{group['audience'] or 'mac dinh'}' — giữ lại hàng đợi, thử lại chu kỳ sau.")
-            failed_item_ids.update(id(item) for item in group["alerts"])
-    _pending_critical_teams_alerts = [item for item in _pending_critical_teams_alerts if id(item) in failed_item_ids]
+            failed_routes.add((webhook_url, _recipient))
+    # An alert may go to several people. Retry only failed destinations; retaining
+    # the original whole item would send duplicates to everyone who already got it.
+    pending = []
+    for item in _pending_critical_teams_alerts:
+        remaining = [route for route in item["webhooks"] if (route[0], route[2]) in failed_routes]
+        if remaining:
+            pending.append({**item, "webhooks": remaining})
+    _pending_critical_teams_alerts = pending
 
 def _build_teams_consolidated_card(alerts):
     """1 Adaptive Card liệt kê NHIỀU alert CRITICAL cùng lúc (xem flush_critical_teams_queue) —

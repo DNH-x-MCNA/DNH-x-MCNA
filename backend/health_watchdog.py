@@ -41,6 +41,12 @@ if hasattr(sys.stderr, "reconfigure"):
     sys.stderr.reconfigure(encoding="utf-8")
 
 BACKEND_DIR = os.path.dirname(os.path.abspath(__file__))
+REPO_ROOT = os.path.dirname(BACKEND_DIR)
+if REPO_ROOT not in sys.path:
+    sys.path.insert(0, REPO_ROOT)
+from src.teams_routing import (
+    TeamsRoutingError, delivery_mode, load_teams_environment, load_shared_routes,
+)
 LOG_DIR = os.path.join(BACKEND_DIR, "logs")
 STATE_PATH = os.path.join(LOG_DIR, "health_watchdog_state.json")
 WAREHOUSE_DB = os.path.join(BACKEND_DIR, "warehouse.db")
@@ -56,7 +62,8 @@ TUNNEL_MISMATCH_THRESHOLD_MIN = 10
 
 # Webhook C-Level (Toan quoc) - lay tu config/config.yaml::report_recipients, audience "C-Level
 # (Toan quoc)" - dung chung kenh voi canh bao cong no hien co, KHONG can thiet lap webhook rieng.
-# Co the ghi de qua bien moi truong WATCHDOG_TEAMS_WEBHOOK neu sau nay can tach kenh rieng.
+# WATCHDOG_TEAMS_WEBHOOK chi dung trong che do legacy. Che do shared doc
+# C-Level tu bang local, cung mot Flow voi Daily/alert nghiep vu.
 DEFAULT_TEAMS_WEBHOOK = (
     "https://default44841e983bfb4f7091c1f177b036a1.f3.environment.api.powerplatform.com:443/"
     "powerautomate/automations/direct/cu/30/workflows/77995731b9a84a0ca215405a9a0aa44a/"
@@ -89,6 +96,24 @@ def _send_teams_alert(title: str, summary: str, severity: str = "CRITICAL") -> b
     """Ban TOI GIAN cua send_teams_alert() (xem src/notifier.py) - chi Container + TextBlock, du
     dung cho canh bao ha tang dang van ban ngan, khong can bang/anh nhu bao cao cong no."""
     webhook_url = os.environ.get("WATCHDOG_TEAMS_WEBHOOK", DEFAULT_TEAMS_WEBHOOK)
+    recipient = None
+    try:
+        load_teams_environment()
+        if delivery_mode() == "shared":
+            from src.database import load_config
+            routes = load_shared_routes(load_config())
+            destination = routes.get("C-Level (Toàn quốc)")
+            if destination is None:
+                raise TeamsRoutingError("Watchdog thiếu audience C-Level (Toàn quốc).")
+            webhook_url, recipient = destination
+        else:
+            webhook_url = os.environ.get("WATCHDOG_TEAMS_WEBHOOK", DEFAULT_TEAMS_WEBHOOK)
+    except TeamsRoutingError as exc:
+        _log(f"LOI dinh tuyen Teams: {exc}")
+        return False
+    except Exception:
+        _log("LOI doc cau hinh Teams; watchdog chua gui, khong fallback sang Flow cu.")
+        return False
     if not webhook_url:
         _log("KHONG co Teams webhook cau hinh - bo qua gui canh bao (chi ghi log).")
         return False
@@ -102,7 +127,7 @@ def _send_teams_alert(title: str, summary: str, severity: str = "CRITICAL") -> b
             "content": {
                 "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
                 "type": "AdaptiveCard",
-                "version": "1.5",
+                "version": "1.4",
                 "body": [
                     {
                         "type": "Container",
@@ -121,15 +146,18 @@ def _send_teams_alert(title: str, summary: str, severity: str = "CRITICAL") -> b
             },
         }],
     }
+    if recipient:
+        payload["recipient"] = recipient
+        payload["audience"] = "C-Level (Toàn quốc)"
     try:
         data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         req = urllib.request.Request(webhook_url.strip(), data=data,
                                       headers={"Content-Type": "application/json"})
         with urllib.request.urlopen(req, timeout=10):
-            _log(f"Da gui canh bao Teams: {title}")
+            _log(f"Webhook da nhan canh bao: {title}; can kiem Run history/Teams de xac nhan hien thi.")
             return True
     except Exception as e:
-        _log(f"LOI gui Teams: {e}")
+        _log(f"LOI gui Teams: {type(e).__name__}")
         return False
 
 
@@ -185,29 +213,31 @@ def run_check():
     prev_sync_alerted = state.get("sync_stale_alerted", False)
     if is_stale and not prev_sync_alerted:
         minutes_txt = f"{minutes:.0f} phut" if minutes is not None else "khong xac dinh (file khong ton tai)"
-        _send_teams_alert(
+        sent = _send_teams_alert(
             "Dong bo du lieu chatbot DNH da NGUNG",
             f"warehouse.db khong duoc cap nhat trong {minutes_txt} qua "
             f"(nguong canh bao: {SYNC_STALE_THRESHOLD_MIN} phut). "
             "Chatbot co the dang tra loi bang du lieu CU. Kiem tra sync_scheduler.ps1 tren may .24.",
             severity="CRITICAL",
         )
-        state["sync_stale_alerted"] = True
-        changed = True
+        if sent:
+            state["sync_stale_alerted"] = True
+            changed = True
     elif not is_stale and prev_sync_alerted:
-        _send_teams_alert(
+        sent = _send_teams_alert(
             "Dong bo du lieu chatbot DNH da PHUC HOI",
             f"warehouse.db da duoc cap nhat lai binh thuong ({minutes:.0f} phut truoc).",
             severity="INFO",
         )
-        state["sync_stale_alerted"] = False
-        changed = True
+        if sent:
+            state["sync_stale_alerted"] = False
+            changed = True
     _log(f"Sync check: is_stale={is_stale}, minutes={minutes}")
 
     is_mismatch, saved_url, latest_url = _check_tunnel_mismatch()
     prev_tunnel_alerted = state.get("tunnel_mismatch_alerted", False)
     if is_mismatch and not prev_tunnel_alerted:
-        _send_teams_alert(
+        sent = _send_teams_alert(
             "URL Backend chatbot DNH tren Vercel co the DA CU",
             f"Tunnel that dang chay: {latest_url}\n"
             f"URL da luu vao Vercel lan cuoi: {saved_url}\n"
@@ -216,16 +246,18 @@ def run_check():
             "BACKEND_API_URL tren Vercel + redeploy.",
             severity="CRITICAL",
         )
-        state["tunnel_mismatch_alerted"] = True
-        changed = True
+        if sent:
+            state["tunnel_mismatch_alerted"] = True
+            changed = True
     elif not is_mismatch and prev_tunnel_alerted:
-        _send_teams_alert(
+        sent = _send_teams_alert(
             "URL Backend chatbot DNH tren Vercel da DUOC CAP NHAT",
             f"Vercel va tunnel that da khop URL ({latest_url}).",
             severity="INFO",
         )
-        state["tunnel_mismatch_alerted"] = False
-        changed = True
+        if sent:
+            state["tunnel_mismatch_alerted"] = False
+            changed = True
     _log(f"Tunnel check: is_mismatch={is_mismatch}, saved={saved_url}, latest={latest_url}")
 
     if changed:

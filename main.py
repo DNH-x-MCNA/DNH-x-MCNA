@@ -28,6 +28,7 @@ load_env()
 from src.database import get_db_engines, load_config
 from src.etl import get_daily_digest_metrics, get_weekly_digest_metrics, get_monthly_digest_metrics
 from src.notifier import build_digest_email, send_email, flush_critical_teams_queue, send_teams_alert
+from src.teams_routing import TeamsRoutingError, load_shared_routes, resolve_destination
 from src.insight_report import action_lines, pace_lines
 from src.qlv_digest import (
     build_qlv_digest_metrics,
@@ -194,6 +195,11 @@ def send_daily_digest(dry_run=False, audience_filter=None, webhook_override=None
     from src.etl import get_daily_kpi_pace_snapshot, get_kpi_revenue_reconciliation, get_etc_return_rate
 
     config = load_config()
+    try:
+        shared_routes = load_shared_routes(config)
+    except TeamsRoutingError as exc:
+        print(f"[TEAMS] {exc} Daily chưa được gửi.")
+        return False
     recipients = config.get('report_recipients') or []
     if not recipients:
         print(f"[{datetime.now()}] Chưa cấu hình report_recipients — gửi Daily Digest bản không lọc (hành vi cũ).")
@@ -212,11 +218,7 @@ def send_daily_digest(dry_run=False, audience_filter=None, webhook_override=None
         channel = r.get('channel')
         role = str(r.get('role') or '').strip().lower()
         employee_code = str(r.get('employee_code') or '').strip()
-        webhook = webhook_override or (r.get('teams_webhook') or '').strip() or None
-        # 26/08/2026: truong TUY CHON, de trong thi payload y het truoc day. Dien vao thi mot Flow
-        # Power Automate duy nhat co the tu dinh tuyen theo nguoi nhan - xem ghi chu dai trong
-        # src/notifier.py::_resolve_teams_webhooks.
-        teams_recipient = (r.get('teams_recipient') or '').strip() or None
+        webhook, teams_recipient = resolve_destination(r, shared_routes, webhook_override)
 
         try:
             if employee_code and role != "qlv":
@@ -369,7 +371,8 @@ def send_daily_digest(dry_run=False, audience_filter=None, webhook_override=None
                 })
 
             if dry_run:
-                print(f"[DRY-RUN] Gửi Daily Digest thành công cho '{audience or 'mặc định'}' (Webhook: {webhook or 'Mặc định'})")
+                print(f"[DRY-RUN] Dựng Daily Digest thành công cho '{audience or 'mặc định'}' (chưa gửi)")
+                print(f" - Teams routing: {'shared' if shared_routes is not None else 'legacy'}")
                 print(f" - Title: {title}")
                 print(f" - Table Rows: {len(rows)}")
                 print(f" - Sections: {len(sections)}")
