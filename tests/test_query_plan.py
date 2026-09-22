@@ -554,6 +554,51 @@ def test_kpi_giua_thang_khong_duoc_goi_la_binh_thuong_chi_vi_dau_thang():
     assert "chưa đủ cơ sở kết luận nhịp độ hiện tại là bình thường hay bất thường" in answer
 
 
+def test_m20_render_tu_bang_chung_khoa_mau_so_nhan_su_va_gioi_han_ket_luan():
+    plan = build_query_plan(
+        "Thưởng/KPI đội có khớp doanh số và chính sách; bất thường cần kiểm tra",
+        query_id="m20-evidence", scope_role="regional_director", scope_area_code="MB",
+        scope_employee_code=None, scope_channel=None, max_rounds=10,
+        max_tools_per_round=5, max_unique_tools=12, request_timeout_seconds=110,
+    )
+
+    def add(tool, payload):
+        key = f"{tool}:test"
+        plan.start_tool(tool, {}, key)
+        plan.finish_tool(key, ok=True, payload=payload, source=f"template:{tool}",
+                         duration_ms=5, timeout_seconds=40)
+
+    add("get_employee_kpi", {
+        "as_of": "2026-09-22", "kpi_source": "fact_thongketinhluong",
+        "position_code": "TDV", "comparison_threshold_summary": {
+            "denominator_all_tdv": 95, "employees_with_target": 91,
+            "unassessed_missing_target": 4, "at_least_100_pct": 0,
+            "at_least_80_pct": 1, "at_least_65_pct": 3, "below_65_pct": 88,
+        },
+    })
+    add("get_revenue_reconciliation", {
+        "period_from": "2026-09-01", "period_to": "2026-09-22",
+        "top_down_revenue_otc": 12_060_000_000, "bottom_up_revenue_otc": 12_060_000_000,
+        "gap_revenue": 0, "reconciliation_status": "matched_within_tolerance",
+        "leaf_count_by_position": {"TDV": 92, "CS": 2},
+    })
+    add("get_revenue_tree", {
+        "as_of": "2026-09-22", "tree": [{"area_code": "MB", "qlv": [{
+            "employee_code": "MBKV12", "name": "Nguyen Thi Thanh Thuy",
+            "sales": 1_770_000_000, "target": 7_550_000_000, "pct": 23.4,
+            "same_name_as_region_head": True,
+            "team_member_count_by_position": {"CS": 2},
+        }]}],
+    })
+    answer = plan.finalize_answer("Model tự suy ra 94 TDV và từng người đều đã khớp.")
+    assert "0/95" in answer and "1/95" in answer and "3/95" in answer and "88/95" in answer
+    assert "4/95" in answer and "92 TDV; 2 CS" in answer
+    assert "chưa chứng minh doanh số hoặc target của từng người" in answer
+    assert "trùng tên chưa chứng minh trùng bản ghi" in answer
+    assert "94 TDV" not in answer
+    assert "từng người đều đã khớp" not in answer
+
+
 def test_footer_khong_lo_ten_ham_noi_bo_cho_nguoi_dung():
     plan = _plan("KPI đội có bất thường nào cần kiểm tra?", query_id="friendly-footer")
     plan.finalize()

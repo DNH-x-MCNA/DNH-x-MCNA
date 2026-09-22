@@ -6,7 +6,7 @@ Khoa lai 4 co che phong ve, moi cai deu tu mot su co THAT:
      position_code/is_duplicate (27/07/2026: loc lam cay Mien Nam ra 3,50 ty trong khi tong vung
      that la 6,25 ty - thieu Kenh MT 2,73 ty + Cho si 0,15 ty).
   2. Don vi ao (Kenh MT/Cho si) duoc danh dau la_nhom_kenh va KHONG di tim doi TDV.
-  3. QLV TRUNG TEN voi chinh TP quan ly vung do -> canh bao nghi van trung ban ghi (10/08/2026).
+  3. QLV trung ten voi TP: ghi nhan trung ten, khong tu suy ra trung ban ghi/target sai.
   4. scope_employee_code ep chi tra ve DUNG 1 QLV (du lieu hieu suat ca nhan dong nghiep).
 """
 import os
@@ -98,9 +98,7 @@ def test_khong_loc_is_duplicate_nen_khong_bay_hoi_doanh_thu_vung(tmp_path, monke
     assert tong_qlv == 1_400_000
 
 
-def test_qlv_trung_ten_voi_TP_duoc_canh_bao(tmp_path, monkeypatch):
-    """10/08/2026: MBKV12 trung ten voi chinh TP quan ly vung MB - phai canh bao nghi van trung
-    ban ghi, khong trinh bay nhu QLV thong thuong."""
+def test_qlv_trung_ten_voi_TP_khong_du_bang_chung_trung_ban_ghi(tmp_path, monkeypatch):
     db_path = tmp_path / "warehouse.db"
     _make_db(db_path)
     monkeypatch.setattr(local_warehouse, "DB_PATH", str(db_path))
@@ -111,6 +109,10 @@ def test_qlv_trung_ten_voi_TP_duoc_canh_bao(tmp_path, monkeypatch):
 
     assert "ghi_chu" in qlv
     assert "TRUNG TEN" in qlv["ghi_chu"]
+    assert qlv["same_name_as_region_head"] is True
+    assert "KHONG chung minh trung ban ghi" in qlv["ghi_chu"]
+    assert "rat co the la CUNG MOT NGUOI" not in qlv["ghi_chu"]
+    assert "voi 0 TDV" not in qlv["ghi_chu"]
     # MBKV12 nam trong _KNOWN_MISFLAGGED_DUPLICATE_CODES -> la NGUOI THAT, khong phai don vi ao.
     assert qlv["la_nhom_kenh"] is False
     assert qlv["tdv_count"] == 1
@@ -176,8 +178,37 @@ def test_team_of_qlv_bao_gom_du_tdv_ctv_cs_tk(tmp_path, monkeypatch):
     res = rt.revenue_tree(as_of_date=SAVE_DATE, area_code="MN")
     tp = next(t for t in res["tree"] if t["employee_code"] == "TP_MN")
     qlv = next(q for q in tp["qlv"] if q["employee_code"] == "QLV_MN")
-    assert qlv["tdv_count"] == 4
+    assert qlv["tdv_count"] == 1
+    assert qlv["team_member_count"] == 4
+    assert qlv["team_member_count_by_position"] == {"TDV": 1, "CTV": 1, "CS": 1, "TK": 1}
     ctv = next(t for t in qlv["tdv"] if t["employee_code"] == "CTV_MN")
     assert ctv["threshold"] == 70
+    assert ctv["position_code"] == "CTV"
     assert {t["employee_code"] for t in qlv["tdv"]} == codes
+
+
+def test_doi_soat_tong_tach_cs_voi_tdv_va_khong_xac_nhan_ca_nhan(tmp_path, monkeypatch):
+    path = tmp_path / "warehouse.db"
+    _make_db(path)
+    with sqlite3.connect(path) as conn:
+        conn.executescript("""
+            CREATE TABLE vhoadon_otc (customer_code TEXT, doc_date TEXT, amount9 REAL);
+            CREATE TABLE dms_khachhang (code TEXT, city_id TEXT);
+            CREATE TABLE dim_tinhthanhpho (city_id TEXT, area_code TEXT);
+            INSERT INTO vhoadon_otc VALUES ('INV','2026-07-31',500000);
+            INSERT INTO dms_khachhang VALUES ('INV','CITY');
+            INSERT INTO dim_tinhthanhpho VALUES ('CITY','MN');
+            INSERT INTO dim_nhanvien VALUES
+                ('CS_MN','Cho si',0,'CS','MN','CS_MN',NULL,NULL,0,NULL);
+            INSERT INTO fact_tonghopkhachhang VALUES
+                ('CS_MN','KH_CS',200000,400000,'2026-07-31',0,'QLV_MN');
+        """)
+    monkeypatch.setattr(local_warehouse, "DB_PATH", str(path))
+    result = rt.revenue_reconciliation_check(SAVE_DATE, area_code="MN")
+    assert result["matched_within_tolerance"] is True
+    assert result["coverage_pct"] == 100
+    assert result["leaf_count_in_tree"] == result["unique_leaf_count_in_tree"] == 2
+    assert result["tdv_count_in_tree"] == 1
+    assert result["leaf_count_by_position"] == {"TDV": 1, "CS": 1}
+    assert result["individual_invoice_reconciliation_performed"] is False
 
