@@ -574,6 +574,12 @@ checker với đúng `@AreaCode` mà tài khoản hỏi đang bị ép.
 `Q1.2026_BPNGAM_10_TQ` đều tên "Bổ phế Ngậm mua 10 tặng 01"). Luôn hiển thị kèm `Code` và `MonthEnd`;
 gộp theo `Name` là trộn lẫn các đợt khác nhau.
 
+**Chiều ngược lại cũng có: một mã ứng với nhiều chương trình.** `DMS_CTKM.Code` bị cắt ngắn nên hai
+chương trình khác nhau về chung một mã — kỳ 12/2025, `Q4.2025_NHOM_BOPHE_SIRO_` ra **hai dòng** 4.251 đơn
+và 644 đơn, khác `Name`, khác `ProgId`. Checker gộp theo `Code` + `Name` nên tách đúng; gộp theo riêng
+`Code` là cộng hai chương trình thật làm một chương trình không có thật. Chatbot gộp theo `ProgId`, và từ
+22/09/2026 trả thêm `code_is_ambiguous` + `same_code_programs` để người đọc không tưởng bảng bị lặp dòng.
+
     WITH po AS (
       SELECT x.ProgId,x.OrderId,MAX(h.CustomerCode) CustomerCode,MAX(h.DocDate) DocDate
       FROM dbo.DMS_DonHangCTKM x JOIN dbo.DMS_DonHangHdr h ON h.Id=x.OrderId

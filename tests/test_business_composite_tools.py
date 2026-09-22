@@ -1038,6 +1038,37 @@ def test_m35_mo_ta_tool_buoc_phan_biet_ma_trung_ten():
     assert "same_name_program_codes" in d
 
 
+def test_m35_mot_ma_ung_voi_nhieu_chuong_trinh_phai_tach_ra(monkeypatch):
+    """22/09/2026: 'Q4.2025_NHOM_BOPHE_SIRO_' ky 12/2025 ra hai dong 4.251 va 644 don, khac ten khac
+    ProgId - DMS_CTKM.Code bi cat ngan nen hai chuong trinh that ve chung mot ma. Gop lai la bia ra
+    mot chuong trinh khong co that; coi la bang bi lap la mat mot chuong trinh."""
+    def fake_bravo(sql, params=None):
+        if "LinkRowId" in sql:
+            return [{"CoverageDate": "2026-01-09", "LinkSyncedAt": "2026-01-09", "LinkRowId": 9}]
+        chung = {"OrdersWithoutInvoice": 0, "PaidProductOccurrences": 0, "GiftProductCount": 0,
+                 "ConfiguredProductCount": 0, "Customers": 10}
+        return [
+            {"ProgramId": 11, "ProgramCode": "Q4.2025_NHOM_BOPHE_SIRO_", "ProgramName": "Bo phe siro 10",
+             "Orders": 4251, "AssociatedRevenue": 10_757_944_139, **chung},
+            {"ProgramId": 12, "ProgramCode": "Q4.2025_NHOM_BOPHE_SIRO_", "ProgramName": "Bo phe siro nhom",
+             "Orders": 644, "AssociatedRevenue": 1_261_462_541, **chung},
+            {"ProgramId": 13, "ProgramCode": "Q4.2025_ZILGO.102_5_TQ", "ProgramName": "Zilgo 102",
+             "Orders": 2268, "AssociatedRevenue": 16_121_353_196, **chung},
+        ]
+
+    monkeypatch.setattr(rt, "_q_bravo", fake_bravo)
+    progs = {p["program_id"]: p for p in rt.promotion_effectiveness()["programs"]}
+
+    assert progs[11]["code_is_ambiguous"] and progs[12]["code_is_ambiguous"]
+    assert progs[11]["same_code_programs"] == [{"program_id": 12, "program_name": "Bo phe siro nhom"}]
+    assert progs[12]["same_code_programs"] == [{"program_id": 11, "program_name": "Bo phe siro 10"}]
+    # Ma khong trung thi khong duoc bao dong.
+    assert progs[13]["code_is_ambiguous"] is False and progs[13]["same_code_programs"] == []
+    tool = next(t for t in nl2sql.TEMPLATE_TOOLS if t["name"] == "get_promotion_effectiveness")
+    assert "code_is_ambiguous" in tool["description"]
+    assert "same_code_programs" in tool["description"]
+
+
 def test_m35_pham_vi_mien_phai_hien_trong_payload(monkeypatch):
     """22/09/2026: bang M35 ky 12/2025 chi la phan Mien Bac (857 don/23,83 ty) nhung khong dong nao
     noi ra; nguoi doi chieu lay so toan quoc (1.056 don/30,05 ty) ra so va tuong chatbot sai."""
