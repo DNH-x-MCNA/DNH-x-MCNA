@@ -10402,8 +10402,12 @@ def receivables_overview(top_n: int = 10, scope_area_code: str = None,
              f"FROM fact_congno_khachhang {where} GROUP BY customer_code "
              f"HAVING SUM(total_overdue) > 0 ORDER BY SUM(total_overdue) DESC LIMIT ?",
              tuple(params) + (requested_top_n,))
-    top_customers = [{"customer_code": r["customer_code"], "customer_name": r["name"],
-                      "balance_end": _f(r["bal"]), "total_overdue": _f(r["od"])} for r in top]
+    # 22/09/2026 (UAT dnh_etc 22/09): SQL da ORDER BY no qua han DESC, nhung bang tra loi ra thu tu
+    # 1,90 - 1,68 - 1,51 - 1,94 - 1,89: model tu xep lai khi trinh bay. Danh so rank san de thu tu
+    # nam trong CHINH du lieu, model chi viec in theo rank.
+    top_customers = [{"rank": index, "customer_code": r["customer_code"], "customer_name": r["name"],
+                      "balance_end": _f(r["bal"]), "total_overdue": _f(r["od"])}
+                     for index, r in enumerate(top, start=1)]
     eligible_top_count = int(top[0]["eligible_n"]) if top else 0
     # 15/09/2026 (UAT OTC C-Level 14:25 "Bo sung nhan vien, quan ly vung tuong ung"): kem TDV/QLV phu
     # trach theo phan cong KPI cua tung khach - pham vi da loc o tren nen khong mo rong quyen.
@@ -10446,7 +10450,10 @@ def receivables_overview(top_n: int = 10, scope_area_code: str = None,
         "top_overdue_eligible_count": eligible_top_count,
         "top_overdue_returned_count": len(top_customers),
         "ranking_basis": ("Top xep theo NO QUA HAN (tong bon nhom tuoi no cua SP goc), khong theo du no. "
+                          "In theo dung thu tu 'rank' 1..N, KHONG duoc xep lai theo cot khac. "
                           "Khach du no lon nhung chua qua han nam o du_no_lon_chua_qua_han."),
+        "by_region_note": ("by_region da gom DU moi vung ke ca 'Khac/chua xac dinh'. Phai hien du cac dong, "
+                           "neu bo dong nao thi tong cac vung se khong khop total_overdue."),
         "du_no_lon_chua_qua_han": large_balance_not_overdue,
         "collection_activity": _collection_source_gap(),
     }

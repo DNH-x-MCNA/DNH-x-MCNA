@@ -755,6 +755,13 @@ TEMPLATE_TOOLS = [
                         "lai o day. Snapshot giua thang chi la luy ke den ngay: KHONG duoc mac dinh % thap "
                         "la 'binh thuong vi dau thang'. Neu chua co ke hoach phan bo target theo ngay thi chi "
                         "neu muc thuc dat va noi chua du co so ket luan nhip do binh thuong/bat thuong. "
+                        "PHAM VI CUA TOOL NAY CHI LA DOANH SO vs CHI TIEU. Cau hoi 'tinh hinh thuc hien KPI' "
+                        "cua nguoi/doi con gom cac cau phan KHAC: thuong san pham danh muc, V15/V22, khach "
+                        "hang ASO (hoac Active Customer cho CS/TK) va tong trong so KPI - nhung so do nam o "
+                        "get_salary_achievement_summary (v15/v22/aso_achieved_count, is_ac_position_count) va "
+                        "get_salary_aso_detail. Goi them cac tool do khi tai khoan duoc phep; neu khong lay "
+                        "duoc thi PHAI liet ke ro cau phan nao chua co, khong duoc trinh bay doanh so vs chi "
+                        "tieu nhu la toan bo KPI. V25 da dung tu 01/07/2026 nen V25Bonus=0 la dung co che. "
                         "UU TIEN dung cho MOI cau hoi ve KPI/doanh so nhan vien TONG QUAN/xep hang (ke ca ma "
                         "khu vuc MBKV*/ASM*) - KHONG dung cho KPI THEO NGAY 1 nguoi (dung get_employee_daily_kpi). "
                         "Voi cau hoi 'ai chua dat KPI/target' -> dung filter='below_target'. Neu nguoi dung hoi "
@@ -1507,6 +1514,9 @@ TEMPLATE_TOOLS = [
                         "QLV tu phu trach; doc team_scope de biet moc phan cong. PHAI ghi ngay snapshot "
                         "receivable_as_of, khong goi so hien tai la so chot cuoi thang dang hoi; "
                         "no qua han khong tu dong la no xau. "
+                        "Bang top PHAI in theo dung thu tu truong 'rank' 1..N (da xep theo no qua han "
+                        "giam dan); tu xep lai theo cot khac la SAI. by_region PHAI hien du moi dong ke ca "
+                        "'Khac/chua xac dinh', bo dong nao thi tong cac vung khong con khop total_overdue. "
                         "Ket qua co breakdown qua han theo bucket (overdue_1_15/15_30/30_45/gt_45) kem "
                         "truong 'aging_bucket_note' - PHAI doc va nhac lai noi dung ghi chu do khi tra loi: "
                         "khung nay (1-15/15-30/30-45/>45 ngay) LAY THANG tu he thong goc, co the KHAC voi moc "
@@ -2714,12 +2724,19 @@ def _compact_collections_for_model(value, max_items: int, path: str, overview: l
             for index, item in enumerate(value[:shown])
         ]
     if isinstance(value, dict):
-        return {
-            key: _compact_collections_for_model(
-                item, max_items, f"{path}.{key}" if path else key, overview
-            )
-            for key, item in value.items()
-        }
+        # 22/09/2026 (UAT doi QLV TM23100148): danh sach bi cat con 12 dong, model doc 12 dong roi
+        # viet "Tong cong 12 khach" trong khi total_pending_customers=27 va _model_view.collections
+        # deu ghi 27. Moc bao "dang liet ke" o CUNG CAP voi danh sach, khong de rieng cuoi payload -
+        # cho dong ke ben thi model khong bo qua duoc nhu mot muc long o cuoi.
+        compacted = {}
+        for key, item in value.items():
+            child_path = f"{path}.{key}" if path else key
+            compacted[key] = _compact_collections_for_model(item, max_items, child_path, overview)
+            if isinstance(item, list) and len(item) > max_items:
+                compacted[f"{key}__dang_liet_ke"] = (
+                    f"Dang liet ke {max_items}/{len(item)} dong cua '{key}'. Tong THAT la {len(item)}; "
+                    f"KHONG duoc noi tong bang so dong dang hien, va phai ghi ro dang liet ke mot phan.")
+        return compacted
     if isinstance(value, str) and len(value) > 800:
         overview.append({"path": path or "$", "total_chars": len(value), "shown_chars": 800})
         return value[:800]
