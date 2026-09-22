@@ -1104,8 +1104,9 @@ def _kpi_thresholds_by_month(as_of_date: str, months_back: int = 3,
 
 def employee_kpi(as_of_date: str, limit: int = 10, order_by: str = "sales", filter: str = "all",
                   position_code: str = None, scope_area_code: str = None,
-                  scope_employee_code: str = None, include_team_detail: bool = False) -> dict:
-    """KPI nhan vien: snapshot fact_tonghopkhachhang gan nhat <= as_of_date.
+                  scope_employee_code: str = None, include_team_detail: bool = False,
+                  kpi_source: str = "customer") -> dict:
+    """KPI nhan vien: mac dinh tu fact_tonghopkhachhang; M20 dung KPI snapshot nhan su.
     include_team_detail: chi co tac dung khi position_code='QLV' - moi dong QLV co them team_detail
     (TDV/cap duoi truc tiep kem doanh so/target/%) trong cung mot lan goi.
     order_by: 'sales' hoac 'pct' (dung khi filter='all', luon xep TOT NHAT truoc).
@@ -1143,14 +1144,57 @@ def employee_kpi(as_of_date: str, limit: int = 10, order_by: str = "sales", filt
     get_kpi_ranking - tool DA co scope) -> tuc la phan quyen truoc day phu thuoc vao viec AI tinh co
     chon tool nao, khong phai hang rao that. Xem docs/kich_ban_demo1_chatbot.md muc R-F (repo D:\\DNH).
     """
-    fdate_r = _q("SELECT MAX(save_date) d FROM fact_tonghopkhachhang WHERE save_date<=?", (as_of_date,))
-    fdate = fdate_r[0]["d"] if fdate_r else None
-    if fdate is None:
-        return {"as_of": None, "total_employees": 0, "count_below_target": 0, "count_above_target": 0, "rows": []}
+    if kpi_source not in {"customer", "salary_kpi"}:
+        raise ValueError("Nguon KPI khong hop le.")
     hoi_rieng_qlv = str(position_code or "").strip().upper() == "QLV"
-    exempt = (_KNOWN_MISFLAGGED_DUPLICATE_CODES + _KPI_CHANNEL_UNIT_CODES) if hoi_rieng_qlv else None
-    roster_sql, roster_params = _roster_employee_sql(fdate)
-    sql = f"""WITH roster AS ({roster_sql}), metrics AS (
+    if kpi_source == "salary_kpi":
+        # M20/S33: FACT_TongHopKhachHang chi co nguoi duoc gan khach. Snapshot nhan su Bravo
+        # gom ca TDV chua co khach va ma bi gan IsDuplicate, nhung moi EmployeeCode chi tinh 1 lan.
+        # Chi doc cac cot KPI; khong truy van hay tra ve cot tien luong/thuong ca nhan.
+        if scope_employee_code or str(position_code or "").upper() != "TDV" or not scope_area_code:
+            return {"error": "Nguon KPI M20 chi ho tro TDV trong pham vi mien cua giam doc."}
+        fdate_r = _q(
+            "SELECT MAX(save_date) d FROM fact_thongketinhluong "
+            "WHERE save_date<=? AND substr(save_date,1,7)=substr(?,1,7)",
+            (as_of_date, as_of_date),
+        )
+        fdate = fdate_r[0]["d"] if fdate_r else None
+        if fdate is None:
+            return {"error": "Chua co snapshot KPI nhan su trong ky duoc hoi.",
+                    "kpi_source": "fact_thongketinhluong", "as_of": None}
+        sql = """WITH latest AS (
+                     SELECT employee_code, MAX(save_date) d FROM fact_thongketinhluong
+                     WHERE save_date<=? AND substr(save_date,1,7)=substr(?,1,7)
+                     GROUP BY employee_code
+                 ) SELECT COALESCE(f.employee_name,nv.name) name, f.employee_code,
+                          0 is_duplicate, f.position_code, cv.description position_label,
+                          f.month_sale_amount sales, f.month_sale_target target,
+                          0 new_customers, f.save_date metric_snapshot, f.manager_code,
+                          COALESCE(mgr.name,f.manager_code) manager_name
+                   FROM fact_thongketinhluong f
+                   JOIN latest l ON l.employee_code=f.employee_code AND l.d=f.save_date
+                   LEFT JOIN (SELECT employee_code, MAX(name) name FROM dim_nhanvien
+                              GROUP BY employee_code) nv ON nv.employee_code=f.employee_code
+                   LEFT JOIN (SELECT position_code, MAX(description) description FROM dim_chucvu
+                              GROUP BY position_code) cv ON cv.position_code=f.position_code
+                   LEFT JOIN (SELECT employee_code, MAX(name) name FROM dim_nhanvien
+                              GROUP BY employee_code) mgr ON mgr.employee_code=f.manager_code
+                   WHERE 1=1"""
+        params = [fdate, fdate]
+        if position_code:
+            sql += " AND f.position_code=?"; params.append(position_code)
+        if scope_area_code:
+            sql += " AND f.area_code=?"; params.append(scope_area_code)
+        roster = _q(sql, tuple(params))
+        roster_snapshots = [fdate]
+    else:
+        fdate_r = _q("SELECT MAX(save_date) d FROM fact_tonghopkhachhang WHERE save_date<=?", (as_of_date,))
+        fdate = fdate_r[0]["d"] if fdate_r else None
+        if fdate is None:
+            return {"as_of": None, "total_employees": 0, "count_below_target": 0, "count_above_target": 0, "rows": []}
+        exempt = (_KNOWN_MISFLAGGED_DUPLICATE_CODES + _KPI_CHANNEL_UNIT_CODES) if hoi_rieng_qlv else None
+        roster_sql, roster_params = _roster_employee_sql(fdate)
+        sql = f"""WITH roster AS ({roster_sql}), metrics AS (
                  SELECT e.employee_code, SUM(e.amount_ct) sales,
                         MAX(e.month_sale_target) target, SUM(e.is_nc) new_customers,
                         MAX(e.save_date) metric_snapshot, MAX(e.manager_code) manager_code
@@ -1168,33 +1212,34 @@ def employee_kpi(as_of_date: str, limit: int = 10, order_by: str = "sales", filt
              LEFT JOIN (SELECT employee_code, MAX(name) name FROM dim_nhanvien
                         GROUP BY employee_code) mgr ON mgr.employee_code=m.manager_code
              WHERE {_not_duplicate_sql('nv', exempt)}"""
-    params = [*roster_params, fdate, fdate]
-    if position_code:
-        sql += " AND nv.position_code=?"
-        params.append(position_code)
-    if scope_area_code:
-        sql += " AND nv.area_code=?"
-        params.append(scope_area_code)
-    if scope_employee_code:
-        # Doi cua QLV nay + chinh ho, tai DUNG snapshot dang xet (fdate) - dung manager_code THAT tu
-        # Bravo (_team_of_qlv), KHONG con suy luan qua zone nua (xem docstring _team_of_qlv - suy luan
-        # zone tung lam 5 QLV bi hieu nham "khong co doi", gay cong trung KPI vung).
-        team = _team_of_qlv(scope_employee_code, fdate)
-        if not team:
-            # Khac voi truoc (khi con dung zone, ~30% khong map duoc): gio manager_code la du lieu
-            # THAT tren tung dong hoa don/snapshot, nen "khong co doi" o day PHAN LON la dung that
-            # (vd QLV tu om khach, khong co TDV duoi quyen - vd MBKV12). Van tra loi mem thay vi loi
-            # cung, vi khong loai tru truong hop hiem thieu du lieu dong bo.
-            return {"as_of": fdate, "total_employees": 0, "count_below_target": 0, "count_above_target": 0,
-                    "rows": [], "note": (
-                        f"Khong tim thay TDV nao bao cao truc tiep len ma quan ly '{scope_employee_code}' "
-                        f"tai snapshot {fdate}. Neu ban biet minh CO quan ly TDV, day co the la han che "
-                        "dong bo du lieu - lien he MCNA. Neu ban tu phu trach khach hang truc tiep (khong "
-                        "co doi), day la dung.")}
-        allowed = [scope_employee_code] + [t["employee_code"] for t in team]
-        sql += f" AND e.employee_code IN ({','.join(['?'] * len(allowed))})"
-        params.extend(allowed)
-    roster = _q(sql, tuple(params))
+        params = [*roster_params, fdate, fdate]
+        if position_code:
+            sql += " AND nv.position_code=?"
+            params.append(position_code)
+        if scope_area_code:
+            sql += " AND nv.area_code=?"
+            params.append(scope_area_code)
+        if scope_employee_code:
+            # Doi cua QLV nay + chinh ho, tai DUNG snapshot dang xet (fdate) - dung manager_code THAT tu
+            # Bravo (_team_of_qlv), KHONG con suy luan qua zone nua (xem docstring _team_of_qlv - suy luan
+            # zone tung lam 5 QLV bi hieu nham "khong co doi", gay cong trung KPI vung).
+            team = _team_of_qlv(scope_employee_code, fdate)
+            if not team:
+                # Khac voi truoc (khi con dung zone, ~30% khong map duoc): gio manager_code la du lieu
+                # THAT tren tung dong hoa don/snapshot, nen "khong co doi" o day PHAN LON la dung that
+                # (vd QLV tu om khach, khong co TDV duoi quyen - vd MBKV12). Van tra loi mem thay vi loi
+                # cung, vi khong loai tru truong hop hiem thieu du lieu dong bo.
+                return {"as_of": fdate, "total_employees": 0, "count_below_target": 0, "count_above_target": 0,
+                        "rows": [], "note": (
+                            f"Khong tim thay TDV nao bao cao truc tiep len ma quan ly '{scope_employee_code}' "
+                            f"tai snapshot {fdate}. Neu ban biet minh CO quan ly TDV, day co the la han che "
+                            "dong bo du lieu - lien he MCNA. Neu ban tu phu trach khach hang truc tiep (khong "
+                            "co doi), day la dung.")}
+            allowed = [scope_employee_code] + [t["employee_code"] for t in team]
+            sql += f" AND e.employee_code IN ({','.join(['?'] * len(allowed))})"
+            params.extend(allowed)
+        roster = _q(sql, tuple(params))
+        roster_snapshots = _roster_snapshot_dates(fdate)
     rows = [r for r in roster if _f(r["target"]) > 0]
     unassessed = [
         {"employee_code": r["employee_code"], "name": r["name"],
@@ -1274,10 +1319,18 @@ def employee_kpi(as_of_date: str, limit: int = 10, order_by: str = "sales", filt
     below_kpi_by_manager = sorted(by_manager.values(), key=lambda x: -x["count_below_kpi"])
     for entry in below_kpi_by_manager:
         entry["employees"] = sorted(entry["employees"], key=lambda e: e["pct"])
-    return {"as_of": fdate, "total_employees": len(rows),
+    result = {"as_of": fdate, "total_employees": len(rows),
             "roster_employees": len(roster), "unassessed_count": len(unassessed),
             "missing_current_snapshot_count": sum(r["metric_snapshot"] is None for r in roster),
-            "roster_snapshots": _roster_snapshot_dates(fdate),
+            "roster_snapshots": roster_snapshots,
+            "kpi_source": ("fact_thongketinhluong" if kpi_source == "salary_kpi"
+                           else "fact_tonghopkhachhang"),
+            "position_code": position_code,
+            "comparison_basis": (
+                "M20/S33 dem moi EmployeeCode mot lan tu snapshot KPI nhan su; mau so doi chieu la "
+                "roster_employees, gom ca nguoi thieu target. Chi total_employees nguoi co target "
+                "duoc phan loai vao cac moc; khong coi nguoi thieu target la duoi 65%."
+                if kpi_source == "salary_kpi" else None),
             "unassessed_rows": unassessed[:max(1, limit)],
             "unassessed_rows_truncated": len(unassessed) > max(1, limit),
             # count_below/above_target = so nguoi DUOI/DAT MUC HUONG THUONG doanh so (65% hoac 70%
@@ -1298,6 +1351,17 @@ def employee_kpi(as_of_date: str, limit: int = 10, order_by: str = "sales", filt
             # tren fact_tonghopkhachhang, KHONG duoc bao la mot QLV that.
             "below_kpi_by_manager": below_kpi_by_manager,
             "rows": selected}
+    if kpi_source == "salary_kpi":
+        result["comparison_threshold_summary"] = {
+            "denominator_all_tdv": len(roster),
+            "employees_with_target": len(rows),
+            "unassessed_missing_target": len(unassessed),
+            "at_least_100_pct": result["count_full_target"],
+            "at_least_80_pct": result["count_kpi_achieved"],
+            "at_least_65_pct": result["count_above_target"],
+            "below_65_pct": result["count_below_target"],
+        }
+    return result
 
 
 DAILY_KPI_TARGET_PCT = 4.0  # 4% MonthSaleTarget = "100%" cua 1 ngay lam viec (yeu cau nghiep vu)
@@ -13289,6 +13353,18 @@ def call_template(name: str, args: dict, question: str = "", username: str = Non
     try:
         fn = TEMPLATES[name]
         call_args = dict(args)
+        if name == "get_employee_kpi":
+            # Nguon nhan su la lua chon noi bo, khong nhan tu tham so model. M20 cua giam doc mien
+            # doi chieu TDV theo S33; khong mo bat ky truong luong/thuong ca nhan nao.
+            call_args.pop("kpi_source", None)
+            m20_question = _fold_question(question)
+            if (scope_role == "regional_director"
+                    and "thuong" in m20_question and "kpi" in m20_question
+                    and "doi" in m20_question and "chinh sach" in m20_question):
+                if not scope_area_code:
+                    return {"ok": False, "error": "Tai khoan giam doc mien thieu pham vi mien de doi chieu KPI."}
+                call_args["position_code"] = "TDV"
+                call_args["kpi_source"] = "salary_kpi"
         if scope_role is not None and scope_role not in {"c_level", "admin_ops", "regional_director", "qlv"}:
             entry["status"] = "blocked"
             entry["error"] = "Vai tro tai khoan khong hop le."
