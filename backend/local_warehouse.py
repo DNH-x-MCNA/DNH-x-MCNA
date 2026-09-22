@@ -180,7 +180,8 @@ CREATE TABLE IF NOT EXISTS fact_tonghopkhachhang (
     -- dau tien trong thang 627/627 khach T8, 195/195 khach T9). ro_* = cua so va trang thai tai don:
     -- ROMonth (so thang cua so, thuong 3), ROLastDate (lan mua gan nhat), ReOrderStartDate (dau cua so),
     -- ReOrderSaveDate (ngay ghi nhan da tai don).
-    nc_save_date TEXT, ro_month REAL, ro_last_date TEXT, reorder_start_date TEXT, reorder_save_date TEXT
+    nc_save_date TEXT, ro_month REAL, ro_last_date TEXT, reorder_start_date TEXT, reorder_save_date TEXT,
+    area_code TEXT  -- M24: mien tai snapshot khach hang, khong thay bang danh muc NV hien tai
 );
 CREATE INDEX IF NOT EXISTS idx_ftk_savedate ON fact_tonghopkhachhang(save_date);
 CREATE INDEX IF NOT EXISTS idx_ftk_employee ON fact_tonghopkhachhang(employee_code);
@@ -352,7 +353,8 @@ _COLUMN_MIGRATIONS = {
                                ("amount_cus", "REAL"), ("is_ro", "INTEGER"), ("is_ac", "INTEGER"),
                                ("max_customer_ord_amount", "REAL"), ("emp_dms_code", "TEXT"),
                                ("nc_save_date", "TEXT"), ("ro_month", "REAL"), ("ro_last_date", "TEXT"),
-                               ("reorder_start_date", "TEXT"), ("reorder_save_date", "TEXT")],
+                               ("reorder_start_date", "TEXT"), ("reorder_save_date", "TEXT"),
+                               ("area_code", "TEXT")],
     "fact_thongketinhluong": [("tpr_target_amount", "REAL")],
     "dim_targetsanphametc": [("item_code", "TEXT"), ("doc_date", "TEXT")],
 }

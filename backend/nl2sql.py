@@ -28,6 +28,7 @@ from report_templates import (
     latest_data_date,
     sync_freshness_note,
     template_available_for_channel,
+    _is_new_customer_quality_question,
 )
 from conversation_memory import load_history, append_message, get_query_state, set_query_state
 from data_freshness import FreshnessCollector
@@ -192,6 +193,8 @@ def _fold_for_route(question: str) -> str:
 def _required_tool_for_question(question: str) -> str | None:
     """Ep tool cho cac intent co mot duong du lieu duy nhat, tranh do catalog nhieu vong."""
     q = _fold_for_route(question)
+    if _is_new_customer_quality_question(question):
+        return "get_new_customer_list"
 
     # 14/09/2026 - phan hoi nguoi dung that: "nhung nhan vien ... duoi 60%" va cau noi
     # "danh sach duoi 65%" khong duoc dinh tuyen, model tu do qua nhieu tool KPI/revenue roi
@@ -1243,9 +1246,17 @@ TEMPLATE_TOOLS = [
         "description": "DANH SACH KHACH HANG MOI trong thang (co IsNC cua Bravo) kem NGAY GHI NHAN (NCSaveDate - "
                        "ngay hoa don dau tien), doanh so thang, TDV va QLV phu trach (ma kem ten). BAT BUOC "
                        "dung khi hoi danh sach khach moi / ngay ghi nhan khach moi. Lay snapshot moi nhat cua "
-                       "TUNG nhan vien trong thang. Khong dung ngay snapshot lam ngay ghi nhan. Chi kenh OTC.",
+                       "TUNG nhan vien trong thang. Khong dung ngay snapshot lam ngay ghi nhan. Chi kenh OTC. "
+                       "M24 'mo nhieu khach moi nhung DT/khach va ty le mua lai thap': dung mode=quality. "
+                       "Doc by_employee/by_area/tong_khach_moi_duy_nhat: IsNC tren BAT KY dong nao cua khach "
+                       "(dong TDV hoac rollup QLV), DT Amount_CT, mua lai >1 OrderKey trong thang; "
+                       "KHONG dung get_customer_movement hay dem lai tu danh sach da cat. "
+                       "Khach moi KPI khac lan dau mua quan sat tren hoa don; KHONG them nhan vien ETC. "
+                       "Neu co error thi chua danh gia duoc, khong ket luan 0 khach.",
         "input_schema": {"type": "object", "properties": {
             "year_month": {"type": "string", "description": "YYYY-MM; mac dinh thang co snapshot moi nhat."},
+            "mode": {"type": "string", "enum": ["list", "quality"],
+                     "description": "quality cho M24: so khach moi, DT/khach va mua lai theo TDV/mien; list cho danh sach khach."},
             "manager_code": {"type": "string", "description": "Ma QLV khi cau hoi gioi han MOT DOI (vd 'doi qlv "
                                                                "TM23100148'). BAT BUOC truyen thay vi tu loc tren "
                                                                "danh sach toan cong ty. Tai khoan QLV bi ep doi cua "

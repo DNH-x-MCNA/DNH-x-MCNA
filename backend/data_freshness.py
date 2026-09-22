@@ -428,6 +428,8 @@ class FreshnessCollector:
         scope_channel: Optional[str] = None,
     ) -> None:
         source_keys = list(_TEMPLATE_SOURCES.get(name, ()))
+        if name == "get_new_customer_list" and _first_value(result, ("mode",)) == "quality":
+            source_keys += ["sales_otc", "sales_etc"]
         if (name == "get_employee_kpi"
                 and _first_value(result, ("kpi_source",)) == "fact_thongketinhluong"):
             source_keys = ["kpi_salary_result"]

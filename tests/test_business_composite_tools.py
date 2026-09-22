@@ -428,7 +428,8 @@ def test_m_role_questions_start_from_their_verified_report_not_free_sql():
         "Địa bàn trống, NV nghỉ/chuyển vùng, khách chưa gán ảnh hưởng bao nhiêu DT": "get_operational_data_quality",
         "Thưởng/KPI đội có khớp doanh số và chính sách; bất thường cần kiểm tra": "get_salary_ranking",
         "Top khách hàng theo DT từng tháng; khách tăng/giảm mạnh, TDV phụ trách": "get_top_customers",
-        "Mở nhiều khách mới nhưng DT/khách và tỷ lệ mua lại thấp": "get_customer_movement",
+        # M24: IsNC tren snapshot TDV; movement la cohort suy tu hoa don, khac tap khach.
+        "Mở nhiều khách mới nhưng DT/khách và tỷ lệ mua lại thấp": "get_new_customer_list",
         "Tỉnh/huyện ít khách hoạt động/ít đơn/DT-khách thấp hơn chuẩn miền": "get_geography_monthly_performance",
         "NPP/chi nhánh tăng khách tốt nhưng công nợ/tồn kho xấu đi": "get_geography_monthly_performance",
         "SKU chiến lược đạt %KH tại vùng; khoảng trống độ phủ lớn nhất": "get_customer_product_coverage",

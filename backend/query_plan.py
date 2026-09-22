@@ -87,6 +87,7 @@ _DOMAIN_SPECS = (
                   "get_receivables_overview", "get_customer_lifecycle_summary",
                   "get_customers_silent", "get_customer_attrition_risk",
                   "get_customer_cohort_retention", "get_customer_movement",
+                  "get_new_customer_list",
                   "get_customer_product_coverage", "get_cross_sell_opportunities",
                   "get_operational_data_quality", "get_promotion_effectiveness"),
         "metrics": ("customers",),
