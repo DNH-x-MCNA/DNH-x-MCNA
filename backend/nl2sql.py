@@ -2247,8 +2247,10 @@ def _payload_for_model(tool_name: str, payload, question: str):
             if not isinstance(row, dict):
                 continue
             compact_top.append({
+                # 22/09/2026: 'rank' phai nam trong danh sach trang nay, neu khong thi truong rank
+                # cua tool bi cat o day va model lai tu xep lai thu tu khi viet bang.
                 key: row.get(key) for key in (
-                    "customer_code", "customer_name", "balance_end", "total_overdue",
+                    "rank", "customer_code", "customer_name", "balance_end", "total_overdue",
                     "employee_code", "employee_name", "manager_code", "manager_name",
                 )
             })
@@ -2276,9 +2278,20 @@ def _payload_for_model(tool_name: str, payload, question: str):
                 "scope_employee_code", "scope_note", "total_balance_end", "total_overdue",
                 "overdue_pct", "overdue_1_15", "overdue_15_30", "overdue_30_45",
                 "overdue_gt_45", "aging_bucket_note", "by_channel", "by_region",
-                "ranking_basis",
+                "ranking_basis", "by_region_note",
             )
         }
+        # 22/09/2026 (cham lai UAT dnh_etc): bang theo vung chi hien MB/MN/MT, bo dong khach chua gan
+        # vung nen ba mien cong lai 62,13 ty trong khi tong qua han 62,94 ty. Canh bao co so tien cu
+        # the thi kho bo qua hon mot ghi chu chung chung.
+        chua_gan = next((r for r in (data.get("by_region") or [])
+                         if isinstance(r, dict) and str(r.get("region", "")).startswith("Khac")
+                         and (r.get("total_overdue") or 0) > 0), None)
+        if chua_gan:
+            compact_data["by_region_warning"] = (
+                f"Co {chua_gan['total_overdue']:.0f} dong no qua han thuoc nhom "
+                f"'{chua_gan['region']}'. PHAI hien thanh MOT DONG rieng trong bang theo vung; bo di "
+                "thi tong cac vung khong con khop total_overdue.")
         compact_data.update({
             "top_overdue_requested_count": requested,
             "top_overdue_eligible_count": eligible,
@@ -2560,6 +2573,20 @@ def _payload_for_model(tool_name: str, payload, question: str):
                 for item in data["unassessed_rows"]
                 if isinstance(item, dict)
             ]
+        # 22/09/2026 (cham lai UAT chosi.mn): cau "tinh hinh thuc hien KPI" van chi ra doanh so vs
+        # chi tieu. Mot dong dan trong mo ta tool khong du - liet ke CAC CAU PHAN CON THIEU ngay
+        # trong payload thi model moi neu ra, giong cach by_region_warning va __dang_liet_ke da chay.
+        if "kpi" in normalized:
+            compact_data["cau_phan_kpi_ngoai_tool_nay"] = {
+                "chua_co_trong_ket_qua_nay": ["thuong san pham danh muc", "V15", "V22",
+                                              "khach hang ASO (hoac Active Customer cho CS/TK)",
+                                              "tong trong so KPI"],
+                "lay_o_dau": ["get_salary_achievement_summary", "get_salary_aso_detail"],
+                "answer_rule": ("Tool nay CHI co doanh so vs chi tieu. Neu khong goi them cac tool tren "
+                                "thi PHAI noi ro nhung cau phan liet ke o day chua duoc tinh, khong duoc "
+                                "trinh bay doanh so vs chi tieu nhu la toan bo KPI. V25 da dung tu "
+                                "01/07/2026 nen khong dua vao."),
+            }
         if wrapper:
             return {**payload, "du_lieu": compact_data}
         return compact_data
