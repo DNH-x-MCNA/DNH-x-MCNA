@@ -1,0 +1,27 @@
+-- =====================================================================
+-- DNH Debt Aging Schema (T-SQL) — chuẩn theo hợp đồng đã ký
+-- =====================================================================
+-- TODO: File này là PLACEHOLDER. Paste nội dung T-SQL schema debt aging
+-- thật đã được tạo ở phiên làm việc trước (bản đã sửa đúng bucket theo
+-- hợp đồng) vào đây, thay thế toàn bộ nội dung bên dưới.
+--
+-- Lý do để placeholder: nội dung SQL gốc nằm trong lịch sử chat trước,
+-- không có sẵn trong phiên hiện tại dưới dạng file để copy tự động.
+-- =====================================================================
+
+-- Ví dụ cấu trúc bucket cần điền lại cho đúng (KHÔNG dùng số liệu dưới
+-- đây làm chuẩn, chỉ là khung minh hoạ):
+--
+-- CREATE TABLE dbo.DebtAgingBucket (
+--     BucketID        INT PRIMARY KEY,
+--     BucketName      NVARCHAR(50) NOT NULL,   -- vd: '0-30 ngày', '31-60 ngày'...
+--     MinDays         INT NOT NULL,
+--     MaxDays         INT NULL,                -- NULL = không giới hạn trên (>90 ngày)
+--     SortOrder       INT NOT NULL
+-- );
+--
+-- Ngày cơ sở tính tuổi nợ (date basis): CHƯA CHỐT — chờ xác nhận onsite
+-- 07/07/2026. Không hardcode invoice_date/due_date vào query cho đến khi
+-- có xác nhận từ DNH; đọc qua parameter/config, ví dụ:
+--
+-- DECLARE @DateBasis NVARCHAR(20) = <config value>; -- 'invoice_date' | 'due_date' | ...
