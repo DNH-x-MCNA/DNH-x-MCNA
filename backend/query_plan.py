@@ -576,7 +576,7 @@ class QueryPlan:
         if any(name in self._evidence for name in ("get_revenue_tree", "get_kpi_ranking")):
             self._set_reconciliation(
                 "team_employee_rollup", True,
-                "Dùng tool cây/xếp hạng đã gộp một dòng mỗi nhân viên và không cộng chồng tầng.",
+                "Đã lấy cây/xếp hạng KPI theo nguồn phân công; chưa đối chiếu hóa đơn từng nhân viên.",
             )
 
         if any(name in self._evidence for name in (
@@ -637,7 +637,129 @@ class QueryPlan:
             self.status = "completed"
         self.completed_at = dt.datetime.now().isoformat()
 
+    def _m20_kpi_answer(self) -> str | None:
+        """M20 retest: render from scoped evidence, not a model's inference from matching totals."""
+        kpi = self._evidence.get("get_employee_kpi")
+        if (self.scope.get("role") != "regional_director" or not isinstance(kpi, dict)
+                or kpi.get("kpi_source") != "fact_thongketinhluong"
+                or kpi.get("position_code") != "TDV" or kpi.get("error")):
+            return None
+        counts = kpi.get("comparison_threshold_summary")
+        if not isinstance(counts, dict):
+            return None
+
+        def number(value, digits=0):
+            if value is None:
+                return "—"
+            return f"{float(value):,.{digits}f}".replace(",", "_").replace(".", ",").replace("_", ".")
+
+        def cell(value):
+            return str(value or "—").replace("|", "/").replace("\n", " ")
+
+        def date_label(value):
+            try:
+                return dt.date.fromisoformat(str(value)[:10]).strftime("%d/%m/%Y")
+            except ValueError:
+                return cell(value)
+
+        roster = counts["denominator_all_tdv"]
+        assessed = counts["employees_with_target"]
+        missing = counts["unassessed_missing_target"]
+        area = self.scope.get("area_code") or "phạm vi tài khoản"
+        lines = [
+            f"**KPI TDV vùng {cell(area)} — snapshot {date_label(kpi.get('as_of'))}**",
+            "",
+            f"Tổng **{number(roster)} TDV**: **{number(assessed)} người có chỉ tiêu** để đánh giá; "
+            f"**{number(missing)} người thiếu chỉ tiêu**, chưa được xếp vào các mốc.",
+            "",
+            "| Mốc | Số người / tổng TDV |",
+            "|---|---:|",
+        ]
+        for label, key in (
+            ("Đạt chỉ tiêu (≥100%)", "at_least_100_pct"),
+            ("Đạt KPI (≥80%)", "at_least_80_pct"),
+            ("Tới mức thưởng nhóm hàng TDV (≥65%)", "at_least_65_pct"),
+            ("Dưới mức thưởng nhóm hàng (<65%)", "below_65_pct"),
+            ("Chưa đánh giá do thiếu chỉ tiêu", "unassessed_missing_target"),
+        ):
+            lines.append(f"| {label} | {number(counts[key])}/{number(roster)} |")
+        lines.extend(["", f"Bảng dùng mẫu số tổng roster {number(roster)} để đối chiếu. "
+                      f"Nếu tính riêng người có chỉ tiêu thì mẫu số là {number(assessed)}; "
+                      "người thiếu chỉ tiêu không được tính vào nhóm dưới 65%."])
+        try:
+            as_of = dt.date.fromisoformat(str(kpi.get("as_of"))[:10])
+        except ValueError:
+            as_of = None
+        if as_of and as_of.day < calendar.monthrange(as_of.year, as_of.month)[1]:
+            lines.extend(["", "Đây là doanh số lũy kế giữa tháng so với chỉ tiêu cả tháng. "
+                          "Chưa có phân bổ chỉ tiêu theo ngày nên chưa đủ cơ sở kết luận nhịp độ "
+                          "hiện tại bình thường hay bất thường."])
+
+        rec = self._evidence.get("get_revenue_reconciliation")
+        lines.extend(["", "**Đối chiếu tổng doanh thu OTC**", ""])
+        if (isinstance(rec, dict) and not rec.get("error")
+                and all(rec.get(key) is not None for key in (
+                    "top_down_revenue_otc", "bottom_up_revenue_otc", "gap_revenue"))):
+            lines.extend([
+                f"Kỳ {date_label(rec.get('period_from'))}–{date_label(rec.get('period_to'))}:",
+                f"- Tổng hóa đơn: **{number(rec['top_down_revenue_otc'])} đ**.",
+                f"- Tổng từ các mã tầng bán hàng trong cây: **{number(rec['bottom_up_revenue_otc'])} đ**.",
+                f"- Chênh lệch (hóa đơn trừ cây): **{number(rec['gap_revenue'])} đ**.",
+            ])
+            if rec.get("reconciliation_status") == "matched_within_tolerance":
+                lines.append("Hai tổng khớp trong dung sai đối chiếu 0,5%.")
+            else:
+                lines.append("Chưa xác nhận hai tổng khớp; cần kiểm tra phần chênh lệch và dữ liệu nguồn.")
+            roles = rec.get("leaf_count_by_position") or {}
+            if roles:
+                lines.append("Thành phần các dòng trong cây: " + "; ".join(
+                    f"{number(count)} {cell(role)}" for role, count in sorted(
+                        roles.items(), key=lambda item: (item[0] != "TDV", item[0])
+                    )
+                ) + ". Tập phân công trong cây khác roster TDV dùng để đánh giá KPI ở trên.")
+            lines.append("Phép đối chiếu này chỉ kiểm tổng doanh thu; chưa chứng minh doanh số hoặc "
+                         "target của từng người khớp hóa đơn và chính sách.")
+        else:
+            lines.append("Chưa có kết quả đối chiếu tổng hóa đơn với cây doanh thu trong lượt hỏi này.")
+
+        tree = self._evidence.get("get_revenue_tree")
+        managers = {}
+        if isinstance(tree, dict) and not tree.get("error"):
+            for tp in tree.get("tree") or []:
+                if tp.get("area_code") != self.scope.get("area_code"):
+                    continue
+                for qlv in tp.get("qlv") or []:
+                    managers[qlv["employee_code"]] = qlv
+        if managers:
+            lines.extend(["", f"**QLV/nhóm vùng {cell(area)} — snapshot {date_label(tree.get('as_of'))}**", "",
+                          "| QLV/nhóm | Doanh số (triệu đ) | Chỉ tiêu (triệu đ) | % đạt | Thành phần đội |",
+                          "|---|---:|---:|---:|---|"])
+            for code, row in managers.items():
+                members = "; ".join(f"{number(count)} {cell(role)}" for role, count in sorted(
+                    (row.get("team_member_count_by_position") or {}).items(),
+                    key=lambda item: (item[0] != "TDV", item[0]))) or "—"
+                pct = number(row.get("pct"), 1) if (row.get("target") or 0) > 0 else "Chưa đánh giá"
+                lines.append(f"| {cell(code)} — {cell(row.get('name'))} | "
+                             f"{number(row.get('sales') / 1e6 if row.get('sales') is not None else None, 1)} | "
+                             f"{number(row.get('target') / 1e6 if row.get('target') is not None else None, 1)} | "
+                             f"{pct} | {members} |")
+            same_names = [cell(code) for code, row in managers.items() if row.get("same_name_as_region_head")]
+            if same_names:
+                lines.extend(["", f"Mã {', '.join(same_names)} trùng tên với trưởng phòng. "
+                              "Riêng việc trùng tên chưa chứng minh trùng bản ghi, cộng trùng hay "
+                              "chỉ tiêu sai; cần hồ sơ phân công và chỉ tiêu để kết luận."])
+        lines.extend(["", "**Việc cần kiểm tra và giới hạn kết luận**", "",
+                      f"- Kiểm tra chỉ tiêu của {number(missing)} TDV chưa được đánh giá trong kỳ.",
+                      "- Chưa có phép đối chiếu hóa đơn theo từng nhân viên; không kết luận các cá nhân "
+                      "đạt mốc đều đã được đối soát chỉ từ việc tổng doanh thu khớp.",
+                      "- Tài khoản giám đốc miền/kênh không có quyền xem tiền lương/thưởng cá nhân. "
+                      "Vì vậy chưa thể xác nhận thưởng thực chi khớp chính sách."])
+        return "\n".join(lines)
+
     def finalize_answer(self, answer: str) -> str:
+        m20_answer = self._m20_kpi_answer()
+        if m20_answer is not None:
+            return m20_answer
         # Giao dien danh cho nguoi dung nghiep vu. Model thinh thoang van chep ten ham noi bo vao
         # footer (vd "Truy van bo sung bang get_operational_data_quality") du system prompt da cam.
         # Xoa mau ro nhat o lop cuoi de khong lo chi tiet ky thuat ra cau tra loi.

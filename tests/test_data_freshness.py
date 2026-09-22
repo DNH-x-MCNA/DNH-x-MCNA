@@ -103,6 +103,26 @@ def test_multiple_sources_are_deduplicated_and_keep_stable_order(tmp_path):
     assert collector.finalize_answer("Kết quả.").count("Nguồn dữ liệu:") == 1
 
 
+def test_m20_doc_dung_do_moi_snapshot_kpi_nhan_su(tmp_path):
+    path = make_warehouse(tmp_path)
+    with sqlite3.connect(path) as conn:
+        conn.execute("INSERT INTO fact_thongketinhluong VALUES ('2026-08-17')")
+    collector = collector_for(path)
+    collector.record_template("get_employee_kpi", {
+        "kpi_source": "fact_thongketinhluong", "as_of": "2026-08-17",
+    })
+    assert [item.source_key for item in collector.records()] == ["kpi_salary_result"]
+    assert collector.records()[0].snapshot_date == "2026-08-17"
+
+
+def test_cay_kpi_va_doi_soat_otc_khong_gan_nguon_hoa_don_etc(tmp_path):
+    collector = collector_for(make_warehouse(tmp_path))
+    collector.record_template("get_revenue_tree", {"as_of": "2026-08-17", "tree": []})
+    assert [item.source_key for item in collector.records()] == ["kpi"]
+    collector.record_template("get_revenue_reconciliation", {"as_of": "2026-08-17"})
+    assert {item.source_key for item in collector.records()} == {"kpi", "sales_otc"}
+
+
 def test_live_sql_records_query_execution_time_without_stale_warning(tmp_path):
     collector = collector_for(make_warehouse(tmp_path))
 

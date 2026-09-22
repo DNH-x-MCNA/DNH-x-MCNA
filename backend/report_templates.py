@@ -10574,35 +10574,38 @@ def revenue_tree(as_of_date: str = None, area_code: str = None, scope_area_code:
                 # Doi co the co TDV hoac CTV. CTV dung nguong thuong quan ly 70%, khong duoc
                 # gan cung TDV (65%) chi vi bang cay chua hien rieng cot vai tro.
                 t_kpi = _kpi_snapshot(t["employee_code"], fdate, t.get("position_code") or "TDV")
-                tdv_list.append({"employee_code": t["employee_code"], "name": t["name"], **t_kpi})
+                tdv_list.append({"employee_code": t["employee_code"], "name": t["name"],
+                                 "position_code": t.get("position_code"), **t_kpi})
+            member_roles = {}
+            for member in tdv_list:
+                role = member.get("position_code") or "UNKNOWN"
+                member_roles[role] = member_roles.get(role, 0) + 1
             qlv_entry = {"employee_code": qlv["employee_code"], "name": qlv["name"], **q_kpi,
-                         "tdv_count": len(tdv_list), "tdv": tdv_list, "la_nhom_kenh": is_unit}
+                         "tdv_count": member_roles.get("TDV", 0), "tdv": tdv_list,
+                         "team_member_count": len(tdv_list),
+                         "team_member_count_by_position": member_roles, "la_nhom_kenh": is_unit}
             if is_unit:
                 qlv_entry["ghi_chu"] = (f"'{qlv['name']}' la NHOM/KENH ban hang (khong phai mot ca "
                                         "nhan/khong co doi TDV rieng) - khi tra loi phai goi dung la "
                                         "kenh/nhom, KHONG duoc noi nhu mot QLV thong thuong.")
-            # 10/08/2026: phat hien khi test cau "doanh so mien bac theo qlv" - MB co 1 QLV
-            # (MBKV12, ba Nguyen Thi Thanh Thuy, 0 TDV) TRUNG TEN voi chinh TP dang quan ly ca vung
-            # MB (cung la Nguyen Thi Thanh Thuy). Day la ca da duoc ghi nhan tu 21/07/2026 (muc A4,
-            # Cau_hoi_can_DNH_xac_nhan.md) - nghi Bravo co 2 ban ghi cho cung 1 nguoi (1 o cap TP quan
-            # ly ca vung, 1 o cap QLV rieng le), CHUA duoc DNH xac nhan la QLV that hay chi la ban ghi
-            # trung. Neu khong danh dau, model de bi cau hoi "doanh so theo QLV" cua vung nay lam roi
-            # (thay 1 nguoi vua la sep vung vua la "nhan vien" duoi quyen chinh minh) roi goi lai tool
-            # nhieu lan/di do SQL tho thay vi tra loi thang - xem ghi chu doi chieu voi hanh vi that
-            # trong nl2sql.py (session 20b6c3d5, 10/08, cau "doanh so mien bac theo qlv").
+            # Trung ten chi la quan sat, khong chung minh trung ban ghi hoac target sai.
+            # Canh bao cu con gan cung "0 TDV" va ep model nghi loi nguon du doi da co CS.
             elif qlv["name"] and tp["name"] and qlv["name"].strip() == tp["name"].strip():
+                qlv_entry["same_name_as_region_head"] = True
                 qlv_entry["ghi_chu"] = (
-                    f"CANH BAO DU LIEU: '{qlv['name']}' (ma QLV {qlv['employee_code']}) TRUNG TEN voi "
+                    f"'{qlv['name']}' (ma QLV {qlv['employee_code']}) TRUNG TEN voi "
                     f"chinh Truong phong dang phu trach ca vung {tp['area_code']} (ma {tp['employee_code']}) "
-                    "- rat co the la CUNG MOT NGUOI, Bravo dang luu 2 ban ghi rieng (1 cap TP, 1 cap QLV "
-                    "voi 0 TDV). Day la ca DANG CHO DNH XAC NHAN (xem muc A4 trong "
-                    "Cau_hoi_can_DNH_xac_nhan.md), CHUA RO day la QLV that hay ban ghi trung. KHI TRA "
-                    "LOI ve nguoi/ma nay: PHAI neu ro nghi van trung ban ghi voi Truong phong vung, "
-                    "KHONG duoc trinh bay nhu mot QLV thong thuong khac trong doi hinh.")
+                    "nhung rieng ten trung KHONG chung minh trung ban ghi, cong trung hay target sai. "
+                    "Khong gan day la bat thuong neu chua doi chieu ho so phan cong va chi tieu. "
+                    "Thanh phan doi lay theo team_member_count_by_position, khong goi CS/TK la TDV.")
             qlv_list.append(qlv_entry)
         tree.append({"employee_code": tp["employee_code"], "name": tp["name"], "area_code": tp["area_code"],
                       **tp_kpi, "qlv_count": len(qlv_list), "qlv": qlv_list})
-    return {"as_of": fdate, "tree": tree}
+    return {"as_of": fdate, "tree": tree,
+            "population_note": "Cay gom TDV/CTV/CS/TK theo phan cong KPI khach hang, hop ky truoc "
+                               "va ky hien tai. Danh sach tdv la ten cu; doc position_code tung dong. "
+                               "Khong dung so nguoi trong cay thay cho roster TDV tinh luong.",
+            "individual_invoice_reconciliation_performed": False}
 
 
 def _rollup_tier_codes(fdate: str) -> list:
@@ -10952,7 +10955,8 @@ def revenue_reconciliation_check(as_of_date: str = None, area_code: str = None,
     # thay vi tu viet lai truy van rieng - tranh 2 noi dinh nghia khac nhau ve "ai thuoc doi ai".
     tree = revenue_tree(as_of_date=fdate, area_code=area_code)
     bottom_up_rev = 0.0
-    tdv_count = 0
+    leaf_counts_by_position = {}
+    unique_leaf_codes = set()
     rollup_nodes_without_tdv = 0
     for tp in tree["tree"]:
         for qlv in tp["qlv"]:
@@ -10962,7 +10966,9 @@ def revenue_reconciliation_check(as_of_date: str = None, area_code: str = None,
                 rollup_nodes_without_tdv += 1
             for t in qlv["tdv"]:
                 bottom_up_rev += t["sales"]
-                tdv_count += 1
+                role = t.get("position_code") or "UNKNOWN"
+                leaf_counts_by_position[role] = leaf_counts_by_position.get(role, 0) + 1
+                unique_leaf_codes.add(t["employee_code"])
 
     coverage_pct = (bottom_up_rev / top_down_rev * 100) if top_down_rev else 0.0
     gap_revenue = top_down_rev - bottom_up_rev
@@ -10986,7 +10992,12 @@ def revenue_reconciliation_check(as_of_date: str = None, area_code: str = None,
         "reconciliation_status": reconciliation_status,
         "matched_within_tolerance": reconciliation_status == "matched_within_tolerance",
         "tolerance_pct_points": 0.5,
-        "tdv_count_in_tree": tdv_count,
+        "tdv_count_in_tree": leaf_counts_by_position.get("TDV", 0),
+        "leaf_count_in_tree": sum(leaf_counts_by_position.values()),
+        "unique_leaf_count_in_tree": len(unique_leaf_codes),
+        "leaf_count_by_position": leaf_counts_by_position,
+        "reconciliation_level": "region_total",
+        "individual_invoice_reconciliation_performed": False,
         "rollup_nodes_without_tdv": rollup_nodes_without_tdv,
         "zones_without_qlv": None,
         "cause_attribution_available": False,
@@ -11000,6 +11011,9 @@ def revenue_reconciliation_check(as_of_date: str = None, area_code: str = None,
                  "rollup_nodes_without_tdv chi dem nut QLV/nhom kenh khong co TDV trong cay, KHONG "
                  "dong nghia voi so zone thieu QLV. cause_attribution_available=false nghia la tool "
                  "CHUA cung cap du phep do de ket luan nguyen nhan cua khoang chenh. "
+                 "Phep doi chieu chi o TONG doanh thu; tong khop KHONG chung minh doanh so/target "
+                 "tung nguoi khop hoa don hay chinh sach. So nguoi trong cay gom nhieu chuc danh "
+                 "(leaf_count_by_position), khong phai roster TDV tinh luong. "
                  "Khi trinh bay PHAI neu ro khoang thoi gian nay de nguoi doc khong tuong dang so 1 "
                  "ngay voi 1 thang."),
     }

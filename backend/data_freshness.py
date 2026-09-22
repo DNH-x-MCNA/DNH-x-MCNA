@@ -77,7 +77,7 @@ _TEMPLATE_SOURCES = {
     "get_revenue_by_region": ("sales_otc", "sales_etc"),
     "compare_periods": ("sales_otc", "sales_etc"),
     "check_order_timing": ("sales_otc", "sales_etc"),
-    "get_revenue_reconciliation": ("sales_otc", "sales_etc", "kpi"),
+    "get_revenue_reconciliation": ("sales_otc", "kpi"),
     "get_employee_kpi": ("kpi",),
     "get_new_customer_list": ("kpi",),
     "get_reorder_pending_customers": ("kpi", "kpi_salary_result"),
@@ -85,7 +85,7 @@ _TEMPLATE_SOURCES = {
     "get_employee_daily_kpi": ("sales_otc", "kpi"),
     "get_employee_directory": ("employee",),
     "get_qlv_change_history": ("employee",),
-    "get_revenue_tree": ("sales_otc", "sales_etc", "kpi"),
+    "get_revenue_tree": ("kpi",),
     "get_kpi_ranking": ("kpi",),
     "get_inventory_by_region": ("inventory",),
     "get_inventory_item_stock": ("inventory",),
@@ -428,6 +428,9 @@ class FreshnessCollector:
         scope_channel: Optional[str] = None,
     ) -> None:
         source_keys = list(_TEMPLATE_SOURCES.get(name, ()))
+        if (name == "get_employee_kpi"
+                and _first_value(result, ("kpi_source",)) == "fact_thongketinhluong"):
+            source_keys = ["kpi_salary_result"]
         channel = self._effective_channel(args, scope_channel)
         if channel in {"OTC", "ETC"}:
             excluded = "sales_etc" if channel == "OTC" else "sales_otc"
