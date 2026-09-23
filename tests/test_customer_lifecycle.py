@@ -245,8 +245,37 @@ def test_c29_tai_kich_hoat_khong_doi_khi_mo_rong_so_thang_hien_thi(tmp_path, mon
 
     assert july_two["invoice_reactivated_customers"] == july_three["invoice_reactivated_customers"]
     assert july_two["invoice_first_observed_customers"] == july_three["invoice_first_observed_customers"]
-    assert two_months["invoice_lifecycle_series"]["history_from"] == "2025-07"
-    assert three_months["invoice_lifecycle_series"]["history_from"] == "2025-07"
+    assert two_months["invoice_lifecycle_series"]["history_from"] == "2025-10"
+    assert three_months["invoice_lifecycle_series"]["history_from"] == "2025-10"
+
+
+def test_c29_khong_tinh_thang_09_2025_vao_lich_su_lan_dau_quan_sat(tmp_path, monkeypatch):
+    db_path = _setup(tmp_path, monkeypatch)
+    with sqlite3.connect(db_path) as conn:
+        # Khach mua T9/2025, vang mat T10/2025-T6/2026, quay lai T7/2026.
+        # Checker C29 chi quan sat hoa don tu 01/10/2025: T7 la lan dau quan sat.
+        conn.execute("INSERT INTO monthly_customer_summary VALUES "
+                     "('2025-09','OTC','KHSEP','D1',900,1)")
+        conn.execute("INSERT INTO vhoadon_otc VALUES "
+                     "('2026-07-12','KHSEP','SP1',700,1,700,'H9',1,'D1','2026-07-12','A')")
+
+    invoice = rt.customer_lifecycle_summary(year_month="2026-07")["invoice_lifecycle_series"]
+    july = invoice["months"][0]
+    assert july["invoice_reactivated_customers"] == 0
+    assert july["invoice_first_observed_customers"] == 2  # KH01 + KHSEP
+    assert invoice["history_from"] == "2025-10"
+
+
+def test_c29_thang_truoc_moc_quan_sat_khong_hien_thanh_0_khach(tmp_path, monkeypatch):
+    _setup(tmp_path, monkeypatch)
+    invoice = rt.customer_lifecycle_summary(
+        year_month="2025-10", months_back=2,
+    )["invoice_lifecycle_series"]
+    september, october = invoice["months"]
+    assert september["khong_co_du_lieu_hoa_don"] is True
+    assert september["invoice_active_customers"] is None
+    assert october["invoice_continuing_customers"] is None
+    assert october["invoice_stopped_customers"] is None
 
 
 def test_qlv_chuoi_lich_su_dung_doi_cua_tung_snapshot_khong_ap_nguoc_doi_hien_tai(tmp_path, monkeypatch):
