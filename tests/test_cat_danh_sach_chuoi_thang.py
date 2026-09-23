@@ -259,10 +259,15 @@ def test_hoi_thang_ngoai_cua_so_chi_tiet_phai_canh_bao_ro(tmp_path, monkeypatch)
     Chua sua duoc phan so lieu (phai co DNH quyet chuyen suy tinh tu danh muc khach hien tai), nhung
     KHONG duoc de no im lang: model rat de doc 0 thanh 'dia ban do khong ban duoc gi'."""
     _setup(tmp_path, monkeypatch)
-    # Kho nay giu chi tiet tu 01/2024. Muon kiem guard phai hoi mot ky truoc moc do.
+    # Kho fixture nay chi co hoa don chi tiet tu 01/2026 (xem _THANG). Muon kiem guard phai hoi mot
+    # ky truoc moc do.
+    # 23/09/2026: truoc day assert "2024-01-01" - do la HANG SO _detail_cutoff() tra ve, khong phai
+    # moc that cua kho fixture. Moc cat nay gio doc tu chinh kho nen canh bao neu dung ngay that su
+    # het chi tiet; bao "thieu truoc 2024-01-01" tren mot kho chi co du lieu tu 2026 la sai su that
+    # theo dung kieu ma chinh test nay muon chan.
     xa = rt.geography_monthly_performance(month_to="2024-06", months_back=12, dimension="city")
     assert "canh_bao_ngoai_cua_so" in xa, "phai canh bao khi khoang hoi vuot ra ngoai cua so chi tiet"
-    assert xa["thieu_du_lieu_truoc_ngay"] == "2024-01-01"
+    assert xa["thieu_du_lieu_truoc_ngay"] == "2026-01-01"
     assert "khong duoc doc thanh" in xa["canh_bao_ngoai_cua_so"]
 
 
