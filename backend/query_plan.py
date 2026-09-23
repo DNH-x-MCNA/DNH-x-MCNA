@@ -303,6 +303,8 @@ class QueryPlan:
     completed_at: str | None = None
     _started_monotonic: float = field(default_factory=time.monotonic, repr=False)
     _evidence: dict[str, Any] = field(default_factory=dict, repr=False)
+    _evidence_args: dict[str, dict[str, Any]] = field(default_factory=dict, repr=False)
+    _reconciliation_checks: dict[str, dict[str, tuple[bool, str]]] = field(default_factory=dict, repr=False)
     _runtime_steps: dict[str, list[str]] = field(default_factory=dict, repr=False)
 
     def remaining_seconds(self) -> float:
@@ -390,6 +392,7 @@ class QueryPlan:
                 step.result_summary = self._summarize(evidence)
         primary = matched_steps[0]
         self._evidence[primary.tool_name or primary.step_id] = evidence
+        self._evidence_args[primary.tool_name or primary.step_id] = dict(primary.tool_args or {})
         # Mot composite tool co the hoan tat nhieu domain (vd promotion_effectiveness dong thoi co
         # chuong trinh, khach va san pham). Khong ep model goi lai tool chi de danh dau buoc thu hai.
         for related in self.steps:
@@ -463,11 +466,32 @@ class QueryPlan:
                 )
         return None
 
-    def _set_reconciliation(self, rule: str, passed: bool, detail: str) -> None:
+    def _set_reconciliation(self, rule: str, passed: bool, detail: str, *, tools: tuple[str, ...]) -> None:
         item = next((value for value in self.reconciliation_rules if value.rule == rule), None)
         if item:
-            item.status = "passed" if passed else "failed"
-            item.detail = detail
+            # Một rule có nhiều phép đo/kỳ. Kết quả đúng ở phép đo hoặc kỳ khác không được
+            # xóa kết quả lệch; chỉ bằng chứng mới của CHÍNH phép đo/cùng tham số thay thế nó.
+            key = json.dumps([(name, self._evidence_args.get(name, {})) for name in tools],
+                             sort_keys=True, ensure_ascii=False, default=str)
+            periods = []
+            for name in tools:
+                args = self._evidence_args.get(name, {})
+                payload = self._evidence.get(name)
+                data = payload if isinstance(payload, dict) else {}
+                start = data.get("period_from") or data.get("date_from") or args.get("date_from")
+                end = data.get("period_to") or data.get("date_to") or args.get("date_to")
+                period = (f"{start} đến {end}" if start and end else
+                          data.get("as_of") or args.get("as_of_date") or
+                          data.get("month") or args.get("month"))
+                if period and str(period) not in periods:
+                    periods.append(str(period))
+            if periods:
+                detail = f"Kỳ {', '.join(periods)}: {detail}"
+            checks = self._reconciliation_checks.setdefault(rule, {})
+            checks[key] = (passed, detail)
+            failures = [note for ok, note in checks.values() if not ok]
+            item.status = "failed" if failures else "passed"
+            item.detail = "\n".join(dict.fromkeys(failures or [note for _, note in checks.values()]))
 
     @staticmethod
     def _close(left: float, right: float, tolerance: float = 1.0) -> bool:
@@ -481,16 +505,28 @@ class QueryPlan:
             self._set_reconciliation(
                 "revenue_totals", self._close(expected, actual),
                 f"OTC + ETC = {expected:.2f}; tổng báo cáo = {actual:.2f}.",
+                tools=("get_revenue_by_channel",),
             )
         region_revenue = self._evidence.get("get_revenue_by_region")
         if isinstance(revenue, dict) and isinstance(region_revenue, list):
-            region_total = sum(float(row.get("revenue") or 0) for row in region_revenue
-                               if isinstance(row, dict))
-            company_total = float((revenue.get("total") or {}).get("revenue") or 0)
-            self._set_reconciliation(
-                "revenue_totals", self._close(region_total, company_total),
-                f"Tổng vùng = {region_total:.2f}; tổng kênh/công ty = {company_total:.2f}.",
-            )
+            region_args = self._evidence_args.get("get_revenue_by_region", {})
+            channel_args = self._evidence_args.get("get_revenue_by_channel", {})
+            dates = tuple(revenue.get(key) or channel_args.get(key) for key in ("date_from", "date_to"))
+            same_period = all(dates) and dates == tuple(region_args.get(key) for key in ("date_from", "date_to"))
+            # Quyền đã được backend ép chung cho request. Kênh hỏi riêng ở tool vùng vẫn
+            # phải so với đúng phần OTC/ETC, không so với tổng cả hai; khác/thiếu kỳ thì bỏ qua.
+            channel = str(self.scope.get("channel") or region_args.get("channel") or "ALL").upper()
+            total_key = {"ALL": "total", "OTC": "otc", "ETC": "etc"}.get(channel)
+            channel_total = revenue.get(total_key) if total_key else None
+            if same_period and isinstance(channel_total, dict) and "revenue" in channel_total:
+                region_total = sum(float(row.get("revenue") or 0) for row in region_revenue
+                                   if isinstance(row, dict))
+                company_total = float(channel_total["revenue"] or 0)
+                self._set_reconciliation(
+                    "revenue_totals", self._close(region_total, company_total),
+                    f"Tổng vùng ({channel}) = {region_total:.2f}; tổng cùng kênh = {company_total:.2f}.",
+                    tools=("get_revenue_by_channel", "get_revenue_by_region"),
+                )
         revenue_reconcile = self._evidence.get("get_revenue_reconciliation")
         if isinstance(revenue_reconcile, dict) and "coverage_pct" in revenue_reconcile:
             status = revenue_reconcile.get("reconciliation_status")
@@ -503,6 +539,7 @@ class QueryPlan:
                 "Đã đối chiếu top-down với roll-up đội; coverage nằm trong dung sai 99,5%-100,5%."
                 if passed else str(revenue_reconcile.get("warning") or
                                     "Top-down và roll-up đội chưa khớp trong dung sai 99,5%-100,5%."),
+                tools=("get_revenue_reconciliation",),
             )
 
         movement = self._evidence.get("get_customer_movement")
@@ -514,6 +551,7 @@ class QueryPlan:
                     "revenue_totals", passed,
                     "Biến động tổng doanh thu khớp mở mới + tái kích hoạt + LFL - khách ngừng mua."
                     if passed else "Phân rã luồng khách không khớp biến động tổng doanh thu.",
+                    tools=("get_customer_movement",),
                 )
 
         coverage = self._evidence.get("get_customer_product_coverage")
@@ -523,6 +561,7 @@ class QueryPlan:
                 "revenue_totals", passed,
                 "Tổng theo dimension khớp tổng phạm vi trước khi cắt danh sách."
                 if passed else "Tổng theo dimension lệch tổng phạm vi; có dòng thiếu khóa phân nhóm.",
+                tools=("get_customer_product_coverage",),
             )
 
         debt = self._evidence.get("get_receivables_overview")
@@ -534,6 +573,7 @@ class QueryPlan:
             self._set_reconciliation(
                 "debt_aging", self._close(buckets, total),
                 f"Tổng bốn nhóm tuổi = {buckets:.2f}; tổng quá hạn = {total:.2f}.",
+                tools=("get_receivables_overview",),
             )
 
         salary = self._evidence.get("get_salary_detail")
@@ -558,6 +598,7 @@ class QueryPlan:
                     "salary_bonus_excludes_allowance", all(checks),
                     "TotalBonus khớp DM + V15 + V22 + V25 + ASO; phụ cấp được giữ riêng."
                     if all(checks) else "TotalBonus không khớp các cấu phần thưởng.",
+                    tools=("get_salary_detail", "get_salary_ranking"),
                 )
 
         salary_policy = self._evidence.get("get_salary_bonus_policy")
@@ -565,6 +606,7 @@ class QueryPlan:
             self._set_reconciliation(
                 "salary_policy_effective", True,
                 "Đã đọc chính sách/bậc thưởng đúng kỳ hiệu lực từ nguồn policy.",
+                tools=("get_salary_bonus_policy",),
             )
 
         promotion = self._evidence.get("get_promotion_effectiveness")
@@ -572,12 +614,14 @@ class QueryPlan:
             self._set_reconciliation(
                 "promotion_deduplicate_orders", True,
                 "Tool giữ doanh thu theo từng chương trình và cảnh báo không cộng ngang do một đơn có thể dùng nhiều CTKM.",
+                tools=("get_promotion_effectiveness",),
             )
 
         if any(name in self._evidence for name in ("get_revenue_tree", "get_kpi_ranking")):
             self._set_reconciliation(
                 "team_employee_rollup", True,
                 "Đã lấy cây/xếp hạng KPI theo nguồn phân công; chưa đối chiếu hóa đơn từng nhân viên.",
+                tools=("get_revenue_tree", "get_kpi_ranking"),
             )
 
         if any(name in self._evidence for name in (
@@ -586,6 +630,7 @@ class QueryPlan:
             self._set_reconciliation(
                 "source_freshness", True,
                 "Đã lấy metadata nguồn riêng; footer freshness vẫn do backend gắn sau cùng.",
+                tools=("get_audit_log", "get_promotion_data_quality", "get_salary_data_quality", "query_sql_server"),
             )
 
     def model_note(self) -> str:
@@ -758,6 +803,23 @@ class QueryPlan:
         return "\n".join(lines)
 
     def finalize_answer(self, answer: str) -> str:
+        failed_checks = [item for item in self.reconciliation_rules if item.status == "failed"]
+        if failed_checks:
+            # Đặt trước cả các renderer chuyên biệt. Tool chạy xong không đồng nghĩa số đã
+            # khớp; không giữ kết luận/số model tự soạn rồi chỉ thêm một footer mâu thuẫn.
+            labels = {
+                "revenue_totals": "Doanh thu",
+                "debt_aging": "Công nợ quá hạn",
+                "salary_bonus_excludes_allowance": "Các cấu phần thưởng",
+            }
+            lines = ["### Chưa thể xác nhận số liệu", "",
+                     "Các phép đối soát sau chưa khớp:"]
+            for item in failed_checks:
+                label = labels.get(item.rule, "Đối soát dữ liệu")
+                lines.extend(f"- **{label}:** {detail}" for detail in item.detail.splitlines())
+            lines.extend(["", "Cần kiểm tra và đối chiếu lại các nguồn trên trước khi dùng kết quả "
+                          "để kết luận. Tôi chưa xác nhận tổng số hoặc nguyên nhân chênh lệch."])
+            return "\n".join(lines)
         m20_answer = self._m20_kpi_answer()
         if m20_answer is not None:
             return m20_answer
@@ -1005,7 +1067,7 @@ class QueryPlan:
 
     def timeout_answer(self) -> str:
         completed = [step.title for step in self.steps if step.status == "completed"]
-        prefix = ("Đã kiểm chứng: " + "; ".join(completed) + ".") if completed else "Chưa có nguồn nào hoàn tất để kết luận số liệu."
+        prefix = ("Đã nhận dữ liệu: " + "; ".join(completed) + ".") if completed else "Chưa có nguồn nào hoàn tất để kết luận số liệu."
         return self.finalize_answer(prefix)
 
     def as_dict(self) -> dict[str, Any]:
