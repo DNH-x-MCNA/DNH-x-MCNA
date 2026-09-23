@@ -1,0 +1,125 @@
+{
+  "_ghi_chu": "20 luot can cham lai sau khi doi chieu query_runs 23/09. Nguon: docs/checklist_cham_lai_22-09.md. 'nguoi' la USERNAME THAT, lay tu query_runs tren may 24 chu khong phai ten hien thi trong checklist - ten hien thi gay nham (vd 'C-Level' la chuoi con cua 'OTC-Only C-Level' nen khop hai tai khoan). Rieng 'Thanh Thuy' suy ra la thuy.nguyen2 bang bang chung: muc 01 ghi 22/09 14:39, log cho thay thuy.nguyen2 hoi dung cau do luc 07:39:48 UTC = 14:39 gio may 24. Neu username tren may 24 khac, sua o day roi chay lai - script TU CHOI chay khi khong xac dinh duoc.",
+  "muc": [
+    {
+      "ma": "01",
+      "nguoi": "thuy.nguyen2",
+      "cau_hoi": "Khuyen mai nhieu khach tham gia nhung khong tao tang truong; chuong trinh nao uplift tot",
+      "can_thay": "Cau mo dau noi ro CHI Mien Bac; bang co cot don da xuat hoa don; hai dong Q4.2025_NHOM_BOPHE_SIRO_ tach rieng kem program_id"
+    },
+    {
+      "ma": "02",
+      "nguoi": "thuy.nguyen2",
+      "cau_hoi": "Mo nhieu khach moi nhung doanh thu tren khach va ty le mua lai thap",
+      "can_thay": "627 khach moi ky 8/2026 (MB 328 / MN 162 / MT 137); noi ro khach moi lay tu co IsNC cua Bravo"
+    },
+    {
+      "ma": "03",
+      "nguoi": "danh.nguyen",
+      "cau_hoi": "danh sach khach hang moi, ngay ghi nhan va doanh so phat sinh thang nay",
+      "can_thay": "Ngay ghi nhan = NCSaveDate (khong phai ngay snapshot); khong sot khach do QLV tu ban"
+    },
+    {
+      "ma": "04",
+      "nguoi": "danh.nguyen",
+      "cau_hoi": "Danh sach khach hang phat sinh 3 thang nhung chua dat kpi tai don",
+      "can_thay": "Tra DANH SACH khach kem lan mua gan nhat, khong mo ta chung chung"
+    },
+    {
+      "ma": "05",
+      "nguoi": "danh.nguyen",
+      "cau_hoi": "Doanh so san pham trong tam theo quan ly vung",
+      "can_thay": "Co %dat target SKU trong tam theo tung QLV, khong con loi"
+    },
+    {
+      "ma": "06",
+      "nguoi": "dnh_otc",
+      "cau_hoi": "bo sung ke hoach va % thuc hien tu ket qua tren",
+      "can_thay": "Co ke hoach va % thuc hien kenh MT theo tung thang"
+    },
+    {
+      "ma": "07",
+      "nguoi": "dnh_otc",
+      "cau_hoi": "Top 10 khach hang no qua han tinh den hom nay",
+      "can_thay": "Du 10 dong, co HCM04162 Duoc Sai Gon va HCM04298 FPT Long Chau"
+    },
+    {
+      "ma": "08",
+      "nguoi": "dnh_otc",
+      "cau_hoi": "Bo sung nhan vien, quan ly vung tuong ung",
+      "can_thay": "Moi khach kem TDV/QLV phu trach, ma luon di kem ten"
+    },
+    {
+      "ma": "09",
+      "nguoi": "dnh_otc",
+      "cau_hoi": "So luong ton kho bo phe tinh den hom nay",
+      "can_thay": "Tra duoc theo TEN san pham, khong bat nho ma"
+    },
+    {
+      "ma": "10",
+      "nguoi": "dnh_etc",
+      "cau_hoi": "Doanh so thang nay theo cac nhom hang",
+      "can_thay": "Du nhom hang ETC theo DIM_KeyClass + ItemTypeETC"
+    },
+    {
+      "ma": "11",
+      "nguoi": "dnh",
+      "cau_hoi": "Danh sach khach hang phat sinh 3 thang nhung chua dat kpi tai don cua doi QLV TM23100148",
+      "can_thay": "Co manager_code, tra trong vai chuc giay, khong loc tay tren danh sach toan cong ty"
+    },
+    {
+      "ma": "12",
+      "nguoi": "dnh_otc",
+      "cau_hoi": "Top 10 khach hang co cong no qua han",
+      "can_thay": "Hoi 10 tra du 10"
+    },
+    {
+      "ma": "14",
+      "nguoi": "dnh",
+      "cau_hoi": "Khach hoat dong, moi, mua lai, tai kich hoat, ngung mua tung thang",
+      "can_thay": "So tai kich hoat khop cua so quan sat da chot; khach tach theo vung"
+    },
+    {
+      "ma": "15",
+      "nguoi": "dnh",
+      "cau_hoi": "Nhung thang co tinh mua vu cao/thap nhat theo kenh va nhom san pham la thang nao",
+      "can_thay": "Tra duoc, khong timeout. LUU Y: thang thap nhat ETC la thang 2, KHONG phai thang 9 - checker S80 tinh ca thang chua tron nen sai, xem docs/dieu_tra_c08_mua_vu_23-09.md"
+    },
+    {
+      "ma": "16",
+      "nguoi": "dnh",
+      "cau_hoi": "Gia tri ton kho, so thang ton, cham luan chuyen, stock-out, can date",
+      "can_thay": "So luong ton la HIEN TAI. Gia tri ton van la gia dau nam va cau tra loi phai noi ro - day la cau A3 cho DNH chot nguon gia, DUNG cham truot vi diem nay"
+    },
+    {
+      "ma": "17",
+      "nguoi": "chosi.mn",
+      "cau_hoi": "Doanh so san pham DM1, DM2, DM3, trong tam",
+      "can_thay": "Co KPI san pham trong tam kem %dat"
+    },
+    {
+      "ma": "18",
+      "nguoi": "chosi.mn",
+      "cau_hoi": "tinh hinh thuc hien KPI cua cac trinh duoc vien",
+      "can_thay": "Ngoai doanh so/chi tieu phai neu cac cau phan con lai hoac noi ro cau phan nao chua lay duoc. V25 DA DUNG TU 01/07/2026 - V25Bonus = 0 la dung co che, KHONG duoc doi bu"
+    },
+    {
+      "ma": "24",
+      "nguoi": "chosi.mn",
+      "cau_hoi": "thuc hien va ke hoach doanh so cac quy tinh den hien tai nam nay",
+      "can_thay": "CHUA CHOT: kho khong co bang target quy. Xem chatbot noi ro thieu nguon hay tu cong tu target thang"
+    },
+    {
+      "ma": "25",
+      "nguoi": "dnh",
+      "cau_hoi": "Loai anh huong doi dia ban/chuyen nhan vien/chuyen khach; tang truong thuc con bao nhieu",
+      "can_thay": "CHUA RO nguoi cham sai o dau - can hoi lai truoc, dung doan"
+    },
+    {
+      "ma": "C24",
+      "nguoi": "dnh",
+      "cau_hoi": "Tinh/vung do phu khach thap so dia ban tuong dong; co hoi trang o dau",
+      "can_thay": "Tra duoc trong vai chuc giay (truoc day 110 giay do payload 236.714 ky tu, ban sua 34f9dca thu gon con 8.850)"
+    }
+  ]
+}
