@@ -1674,9 +1674,11 @@ def _bravo_recent_orders_by_customer(since, until=None, by_channel=False):
     # khách nợ quá hạn ở OTC không bị báo "vẫn lên đơn" chỉ vì có đơn ETC (và ngược lại).
     since_str = since.strftime("%Y-%m-%d") if hasattr(since, "strftime") else str(since)
     params = {"since": since_str}
-    cond = ""
+    # The default caller (A2) does not supply `until`. Always cap at today so
+    # a document already entered for a later accounting date is not a new order.
+    cond = " AND DocDate <= CAST(GETDATE() AS DATE)"
     if until is not None:
-        cond = " AND DocDate < :until"
+        cond += " AND DocDate < :until"
         params["until"] = until.strftime("%Y-%m-%d") if hasattr(until, "strftime") else str(until)
     ch_col = ", ch" if by_channel else ""
     sql = text(f'''
@@ -1969,14 +1971,14 @@ def check_customer_churn_alert():
                        DATEFROMPARTS(YEAR(v.DocDate), MONTH(v.DocDate), 1) AS m, SUM(v.Amount9) AS rev
                 FROM dbo.vHoaDonTotal v
                 {otc_join}
-                WHERE {otc_keep}
+                WHERE {otc_keep} AND v.DocDate <= CAST(GETDATE() AS DATE)
                 GROUP BY v.CustomerCode, k.Name, DATEFROMPARTS(YEAR(v.DocDate), MONTH(v.DocDate), 1)
                 UNION ALL
                 SELECT 'ETC', v.CustomerCode, COALESCE(k.Name, v.CustomerCode),
                        DATEFROMPARTS(YEAR(v.DocDate), MONTH(v.DocDate), 1), SUM(v.Amount9)
                 FROM dbo.vHoaDonETCTotal v
                 {etc_join}
-                WHERE {etc_keep}
+                WHERE {etc_keep} AND v.DocDate <= CAST(GETDATE() AS DATE)
                 GROUP BY v.CustomerCode, k.Name, DATEFROMPARTS(YEAR(v.DocDate), MONTH(v.DocDate), 1)
             ),
             agg AS (SELECT channel, cc, cname, m, SUM(rev) AS rev FROM cm GROUP BY channel, cc, cname, m),
@@ -2085,13 +2087,15 @@ def check_revenue_concentration_alert():
                 SELECT 'OTC' AS channel, v.CustomerCode AS cc, SUM(v.Amount9) AS rev
                 FROM dbo.vHoaDonTotal v
                 {otc_join}
-                WHERE {otc_keep} AND DATEFROMPARTS(YEAR(v.DocDate), MONTH(v.DocDate), 1) = (SELECT m FROM mx WHERE channel='OTC')
+                WHERE {otc_keep} AND v.DocDate <= CAST(GETDATE() AS DATE)
+                  AND DATEFROMPARTS(YEAR(v.DocDate), MONTH(v.DocDate), 1) = (SELECT m FROM mx WHERE channel='OTC')
                 GROUP BY v.CustomerCode
                 UNION ALL
                 SELECT 'ETC', v.CustomerCode, SUM(v.Amount9)
                 FROM dbo.vHoaDonETCTotal v
                 {etc_join}
-                WHERE {etc_keep} AND DATEFROMPARTS(YEAR(v.DocDate), MONTH(v.DocDate), 1) = (SELECT m FROM mx WHERE channel='ETC')
+                WHERE {etc_keep} AND v.DocDate <= CAST(GETDATE() AS DATE)
+                  AND DATEFROMPARTS(YEAR(v.DocDate), MONTH(v.DocDate), 1) = (SELECT m FROM mx WHERE channel='ETC')
                 GROUP BY v.CustomerCode
             ),
             agg AS (SELECT channel, cc, SUM(rev) AS rev FROM cm GROUP BY channel, cc)
