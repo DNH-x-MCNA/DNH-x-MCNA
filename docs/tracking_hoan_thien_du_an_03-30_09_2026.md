@@ -170,6 +170,7 @@ toàn `MT_*`. Cùng phạm vi, khác cách sắp xếp — **không phải lỗi
 | #64 | Cập nhật tracking này + `scripts/doc_query_runs_may_24.py` |
 | #65 | Bắt lỗi hết credit, chặn lượt gọi thiếu `username`, watchdog cảnh báo dự phòng (Codex) — **chưa merge** |
 | #66 | "Dưới 80% liên tiếp 3 tháng": payload cũ gửi model 0 kết quả, bản sửa gửi đủ 8/8 đội và 54/54 cá nhân (Codex) — **chưa merge** |
+| #67 | Bắt timeout ở mọi lượt gọi model (chat thường + stream), trả `partial_timeout`, ghi dấu tool ngay khi bắt đầu gọi (Codex) — **chưa merge** |
 
 **PR #63 đã merge và ĐÃ DEPLOY** lên máy 24 lúc 14:56 ngày 23/09 (`9a3a5c4`). Xác nhận:
 `_team_of_qlv_tu_luong` và `_NV_THEO_DMSID` có mặt trên đĩa, `Application startup complete`,
