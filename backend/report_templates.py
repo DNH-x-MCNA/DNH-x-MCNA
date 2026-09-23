@@ -2229,13 +2229,27 @@ def revenue_monthly_series(month_to: str = None, months_back: int = 12, include_
     lead = 12 if include_yoy else 0
     all_months = [_month_add(month_to, -i) for i in range(months_back + lead - 1, -1, -1)]
 
+    # 23/09/2026: hoa don ETC tren may 24 co chung tu de NGAY TUONG LAI (4 dong ngay 28/09 trong khi
+    # hom do la 23/09; truoc do 14/08 cung gap dung kieu nay voi ngay 28/08). _month_bounds tra ve
+    # ca thang nen thang DANG CHAY cong luon phan tuong lai do, trong khi cau hoi "doanh so thang
+    # nay" di qua resolve_relative_date lai cat tai hom nay -> CUNG MOT THANG ra HAI con so tuy cach
+    # hoi. Cat tran tai HOM NAY (khong phai latest_data_date(): moc do doc tu vhoadon_otc, neu sync
+    # OTC tre hon ETC mot ngay thi se cat mat doanh thu ETC co that).
+    hom_nay = str(dt.date.today())
     rows = {}
+    tran_thang = {}
     for ym in all_months:
         if (earliest and ym < earliest) or ym > latest:
             rows[ym] = None  # ngoai pham vi du lieu - KHONG duoc coi la 0
             continue
         d_from, d_to = _month_bounds(ym)
-        r = revenue_by_channel(d_from, d_to, scope_area_code, scope_channel, scope_employee_code)
+        d_to_that = min(d_to, hom_nay)
+        if d_to_that < d_from:
+            rows[ym] = None
+            continue
+        tran_thang[ym] = (d_to_that, d_to)
+        r = revenue_by_channel(d_from, d_to_that, scope_area_code, scope_channel,
+                               scope_employee_code)
         rows[ym] = r
 
     shown = all_months[lead:]
@@ -2251,6 +2265,28 @@ def revenue_monthly_series(month_to: str = None, months_back: int = 12, include_
             "otc_revenue": r["otc"]["revenue"], "etc_revenue": r["etc"]["revenue"],
             "revenue": r["total"]["revenue"], "invoices": r["total"]["invoices"],
         }
+        d_to_that, d_to_lich = tran_thang.get(ym, (None, None))
+        if d_to_that and d_to_that < d_to_lich:
+            # Thang chua tron: noi ro so nay tinh den ngay nao, de "38,4% ke hoach" khong bi doc
+            # thanh ca thang. Model da tu dien giai dung o UAT 15/09 nhung do la may, khong co gi
+            # trong payload bat buoc no phai noi.
+            item["tinh_den_ngay"] = d_to_that
+            item["thang_chua_tron"] = (
+                f"Doanh thu tinh den {d_to_that}, ke hoach la CA THANG - ty le dat KHONG phai ket "
+                "qua ca thang.")
+            # Chung tu de ngay sau hom nay: KHONG cong vao, nhung cung KHONG duoc giau. Chua co ket
+            # luan cua DNH ve viec hoa don ETC de ngay 28 hang thang la ghi truoc theo ke hoach hay
+            # nhap sai ngay, nen chi neu ra.
+            ngay_sau = (dt.date.fromisoformat(d_to_that) + dt.timedelta(days=1)).isoformat()
+            tl = revenue_by_channel(ngay_sau, d_to_lich, scope_area_code, scope_channel,
+                                    scope_employee_code)
+            if tl["total"]["revenue"] or tl["total"]["invoices"]:
+                item["chung_tu_ngay_tuong_lai"] = {
+                    "tu_ngay": ngay_sau, "den_ngay": d_to_lich,
+                    "revenue": tl["total"]["revenue"], "invoices": tl["total"]["invoices"],
+                    "ghi_chu": ("Chung tu de ngay SAU hom nay, KHONG duoc cong vao doanh thu thang "
+                                "va khong duoc trinh bay nhu doanh thu da phat sinh."),
+                }
         # C02: tra san target/%/chenh lech cua DUNG thang de model khong tu ghep doanh thu va
         # target tu hai query roi cong nham kenh. C08 chi can doanh thu lich su; bo qua toan bo
         # phan nay de khong lap 24 lan truy van target/phan ra mien roi timeout.
