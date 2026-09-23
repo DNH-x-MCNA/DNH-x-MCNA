@@ -106,12 +106,28 @@ Get-CimInstance Win32_Service | Where-Object { $_.Name -like "DNH*" } | Select-O
 **5. Xác nhận backend thật sự phục vụ được**
 
 ```powershell
-try { $r = Invoke-WebRequest -Uri "http://127.0.0.1:8010/" -UseBasicParsing -TimeoutSec 10; Write-Output ("HTTP " + $r.StatusCode) } catch { Write-Output ("LOI: " + $_.Exception.Message) }
+Start-Sleep -Seconds 5
+try {
+  $r = Invoke-WebRequest -Uri "http://127.0.0.1:8010/" -UseBasicParsing -TimeoutSec 15
+  Write-Output ("HTTP " + [int]$r.StatusCode + " -> DAT")
+} catch {
+  $code = $null
+  if ($_.Exception.Response) { $code = [int]$_.Exception.Response.StatusCode }
+  if ($code) { Write-Output ("HTTP $code -> DAT (server co tra loi)") }
+  else { Write-Output ("HONG: " + $_.Exception.Message) }
+}
 ```
 
-**HTTP 404 là ĐẠT** — server có trả lời, chỉ là không có route ở `/`. Chỉ `Unable to connect` mới
-là hỏng (hoặc sai cổng). Kèm đọc log khởi động, phải thấy `Application startup complete` và không
-có exception:
+⚠️ **`Invoke-WebRequest` NÉM EXCEPTION khi gặp 404**, nên bản viết tắt một dòng
+(`... } catch { Write-Output ("LOI: " + ...) }`) sẽ in ra chữ **"LOI"** đúng lúc hệ thống đang
+khỏe. Đoạn trên đọc `$_.Exception.Response.StatusCode`: **có mã HTTP nào cũng là ĐẠT** — server trả
+lời được. Chỉ khi **không có** mã (`Unable to connect`) mới là hỏng, hoặc sai cổng.
+
+⚠️ **Đừng kiểm ngay sau `Restart-Service`.** Uvicorn cần vài giây nạp kho và schema; kiểm sớm sẽ ra
+`Unable to connect` trên một máy hoàn toàn bình thường. Đã gặp đúng ca này ngày 23/09: báo động
+nhầm, đọc log ra `Application startup complete`. Vì vậy có `Start-Sleep` ở đầu.
+
+Kèm đọc log khởi động, phải thấy `Application startup complete` và không có exception:
 
 ```powershell
 Get-Content C:\dnh_chatbot\backend\logs\uvicorn.log -Tail 20
@@ -133,6 +149,8 @@ lộ lúc khởi động, mà service vẫn hiện `Running` dù ứng dụng đ
 | Restart thiếu service | Chỉ restart chatbot trong khi `src/` cũng đổi → cảnh báo vẫn chạy code cũ, service vẫn `Running` nên không có dấu hiệu gì |
 | Tên service sai | `Restart-Service : Cannot find any service with service name` — file `.bat` trong repo từng ghi `DNH_Chatbot_Web`, thực tế là `DNH_Chatbot_Backend` |
 | Phép kiểm không phân biệt được bản cũ/mới | Báo "ĐẠT" trên cả hai bản, che mất việc chưa pull |
+| Kiểm HTTP ngay sau restart | `Unable to connect` trên máy đang khỏe — uvicorn chưa nạp xong |
+| Bắt 404 thành lỗi | In ra "LOI" trong khi 404 chính là dấu hiệu ĐẠT (`Invoke-WebRequest` ném exception ở mọi mã 4xx/5xx) |
 
 ## Đọc log và kho (miễn phí, không gọi model)
 

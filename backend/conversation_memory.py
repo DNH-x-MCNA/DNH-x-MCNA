@@ -250,6 +250,19 @@ def create_query_run(query_id: str, session_id: str, username: str, question: st
         conn.close()
 
 
+def update_query_run_progress(query_id: str, sql_used: list[str]):
+    """Persist tool intent while a request is running, before a later model call can time out."""
+    conn = _conn()
+    try:
+        conn.execute(
+            "UPDATE query_runs SET sql_used_json=? WHERE query_id=? AND status='running'",
+            (json.dumps(sql_used, ensure_ascii=False), query_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def complete_query_run(
     query_id: str,
     answer: str,
@@ -257,18 +270,24 @@ def complete_query_run(
     freshness=None,
     row_count: int = None,
     duration_ms: int = None,
+    status: str = "completed",
+    error_message: str = None,
 ):
+    if status not in {"completed", "partial_timeout"}:
+        raise ValueError("Trang thai hoan tat query_run khong hop le")
     conn = _conn()
     try:
         conn.execute(
-            "UPDATE query_runs SET answer=?, status='completed', sql_used_json=?, freshness_json=?, row_count=?, "
-            "duration_ms=?, error_message=NULL, completed_at=? WHERE query_id=?",
+            "UPDATE query_runs SET answer=?, status=?, sql_used_json=?, freshness_json=?, row_count=?, "
+            "duration_ms=?, error_message=?, completed_at=? WHERE query_id=?",
             (
                 answer,
+                status,
                 json.dumps(sql_used or [], ensure_ascii=False),
                 json.dumps(freshness or [], ensure_ascii=False),
                 row_count,
                 duration_ms,
+                (error_message or "")[:4000] if error_message else None,
                 _utc_now(),
                 query_id,
             ),
