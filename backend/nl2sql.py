@@ -30,7 +30,8 @@ from report_templates import (
     template_available_for_channel,
     _is_new_customer_quality_question,
 )
-from conversation_memory import load_history, append_message, get_query_state, set_query_state
+from conversation_memory import (load_history, append_message, get_query_state, set_query_state,
+                                 update_query_run_progress)
 from data_freshness import FreshnessCollector
 from realtime_context import REALTIME_TOOLS, REALTIME_TOOL_NAMES, get_current_datetime, resolve_relative_date
 from glossary_memory import save_glossary_term, retrieve_relevant_glossary
@@ -3337,6 +3338,64 @@ def _blocked_future_forecast_response(question: str, session_id: str, query_id: 
     }
 
 
+def _is_model_read_timeout(exc: Exception) -> bool:
+    """Only recover transport timeouts; provider and application errors must still surface."""
+    if isinstance(exc, (TimeoutError, anthropic.APITimeoutError)):
+        return True
+    if isinstance(exc, anthropic.APIConnectionError):
+        message = str(exc).lower()
+        return "timed out" in message or "timeout" in message
+    return type(exc).__name__ in {"ReadTimeout", "ConnectTimeout", "WriteTimeout", "PoolTimeout"}
+
+
+def _model_response_or_timeout(client, *, stream: bool = False, **kwargs):
+    """Catch a read timeout at every SDK call, including stream iteration/finalization."""
+    try:
+        if not stream:
+            return client.messages.create(**kwargs), None
+        with client.messages.stream(**kwargs) as message_stream:
+            for _event in message_stream:
+                pass
+            return message_stream.get_final_message(), None
+    except Exception as exc:
+        if _is_model_read_timeout(exc):
+            return None, str(exc)
+        raise
+
+
+def _record_sql_used(query_id: str, sql_used: list[str], statement: str) -> None:
+    sql_used.append(statement)
+    if query_id:
+        update_query_run_progress(query_id, sql_used)
+
+
+def _model_timeout_result(query_plan, freshness, question: str, session_id: str,
+                          query_id: str, sql_used: list[str], error: str) -> dict:
+    """Return only verified scope/source facts after the model stops responding."""
+    query_plan.finalize(limit_reached=True)
+    # Even if all source steps completed, the requested synthesis did not.
+    query_plan.status = "partial"
+    answer = (
+        "**Hết thời gian xử lý:** Tôi chưa tổng hợp xong câu trả lời. "
+        "Phần đã lấy được và phần còn thiếu được ghi dưới đây; chưa thể kết luận đầy đủ.\n\n"
+        + query_plan.timeout_answer()
+    )
+    answer = freshness.finalize_answer(answer)
+    append_message(session_id, "user", question, query_id=query_id)
+    append_message(session_id, "assistant", answer, query_id=query_id)
+    return {
+        "answer": answer, "sql_used": sql_used, "last_result": None,
+        "freshness": freshness.as_dicts(), "query_plan": query_plan.as_dict(),
+        "partial_results_hidden": True, "completion_status": "partial_timeout",
+        "timeout_error": error, "query_id": query_id,
+    }
+
+
+def _timeout_stream_chunks(result: dict):
+    yield {"type": "text_delta", "text": result["answer"]}
+    yield {"type": "done", **result}
+
+
 def ask(question: str, session_id: str = "default", username: str = None, scope_area_code: str = None,
         scope_employee_code: str = None, scope_channel: str = None, scope_role: str = None,
         query_id: str = None) -> dict:
@@ -3454,7 +3513,10 @@ def ask(question: str, session_id: str = "default", username: str = None, scope_
             tool["name"] == required_tool for tool in tools_for_request
         ):
             request_kwargs["tool_choice"] = {"type": "tool", "name": required_tool}
-        resp = client.messages.create(**request_kwargs)
+        resp, timeout_error = _model_response_or_timeout(client, **request_kwargs)
+        if timeout_error:
+            return _model_timeout_result(query_plan, freshness, question, session_id,
+                                         query_id, sql_used, timeout_error)
         compute_and_log_cost(resp.usage, MODEL, question, session_id, username)
         messages.append({"role": "assistant", "content": resp.content})
 
@@ -3469,13 +3531,14 @@ def ask(question: str, session_id: str = "default", username: str = None, scope_
                 # 06/08/2026: da GO effort="medium" o ca 2 lenh goi (xem ghi chu dai o vong lap tren) -
                 # co che thu lai nay GIU NGUYEN vi no van la luoi an toan cho dung tinh huong tren.
                 messages.append({"role": "user", "content": "Hay tra loi ngay bay gio, ngan gon truc tiep."})
-                resp2 = client.messages.create(model=MODEL, max_tokens=_max_tokens(scope_role), system=system_blocks,
-                                                tools=tools_for_request, messages=messages,
-                                                extra_headers=_CACHE_BETA_HEADERS,
-                                                timeout=max(1.0, min(
-                                                    LLM_CALL_TIMEOUT_SECONDS,
-                                                    query_plan.remaining_seconds(),
-                                                )))
+                resp2, timeout_error = _model_response_or_timeout(
+                    client, model=MODEL, max_tokens=_max_tokens(scope_role), system=system_blocks,
+                    tools=tools_for_request, messages=messages, extra_headers=_CACHE_BETA_HEADERS,
+                    timeout=max(1.0, min(LLM_CALL_TIMEOUT_SECONDS, query_plan.remaining_seconds())),
+                )
+                if timeout_error:
+                    return _model_timeout_result(query_plan, freshness, question, session_id,
+                                                 query_id, sql_used, timeout_error)
                 compute_and_log_cost(resp2.usage, MODEL, question, session_id, username)
                 answer_text = "".join(b.text for b in resp2.content if b.type == "text").strip()
                 if not answer_text:
@@ -3586,7 +3649,7 @@ def ask(question: str, session_id: str = "default", username: str = None, scope_
             if tu.name in LOCAL_UTIL_TOOLS:
                 # Tool "tien ich" chay bang code thuan, khong cham DB - xu ly ngay tai cho, khong qua
                 # run_query/call_template (khong can audit log SQL vi khong co SQL nao ca).
-                sql_used.append(f"[tien ich] {tu.name}({tu.input})")
+                _record_sql_used(query_id, sql_used, f"[tien ich] {tu.name}({tu.input})")
                 if tu.name == "get_current_datetime":
                     payload = get_current_datetime()
                 elif tu.name == "resolve_relative_date":
@@ -3616,18 +3679,18 @@ def ask(question: str, session_id: str = "default", username: str = None, scope_
                 if scope_area_code or scope_channel:
                     # Phong ho: tool nay khong con trong tools_for_request nen AI khong the goi duoc,
                     # nhung neu vi ly do gi van xuat hien thi tu choi thang, KHONG thuc thi SQL.
-                    sql_used.append(f"[BI CHAN - tai khoan gioi han] {tu.name}")
+                    _record_sql_used(query_id, sql_used, f"[BI CHAN - tai khoan gioi han] {tu.name}")
                     payload = {"error": "Tai khoan cua ban bi gioi han (vung/kenh), khong duoc dung truy van SQL tu do."}
                     tool_ok = False
                 elif tu.name in LIVE_SQL_TOOL_NAMES and scope_role not in LIVE_SQL_ALLOWED_ROLES:
-                    sql_used.append(f"[BI CHAN - vai tro khong duoc query SQL live] {tu.name}")
+                    _record_sql_used(query_id, sql_used, f"[BI CHAN - vai tro khong duoc query SQL live] {tu.name}")
                     payload = {"error": "Tai khoan khong duoc phep truy van SQL Server live tu do."}
                     tool_ok = False
                 else:
                     db = RAW_SQL_TOOLS[tu.name]
                     tool_source = db
                     sql = tu.input.get("sql", "")
-                    sql_used.append(f"[{db}] {sql}")
+                    _record_sql_used(query_id, sql_used, f"[{db}] {sql}")
                     result = run_query(sql, question=question, db=db, username=username, session_id=session_id)
                     last_result = result
                     last_tool_used = (tu.name, str(tu.input))
@@ -3638,7 +3701,7 @@ def ask(question: str, session_id: str = "default", username: str = None, scope_
                     payload = _raw_query_payload(result, db, question)
                     tool_ok = bool(result.get("ok"))
             else:
-                sql_used.append(f"[bao cao chuan] {tu.name}({tu.input})")
+                _record_sql_used(query_id, sql_used, f"[bao cao chuan] {tu.name}({tu.input})")
                 tresult = call_template(tu.name, tu.input, question=question, username=username, session_id=session_id,
                                          scope_area_code=scope_area_code, scope_employee_code=scope_employee_code,
                                          scope_channel=scope_channel, scope_role=scope_role)
@@ -3711,13 +3774,17 @@ def ask(question: str, session_id: str = "default", username: str = None, scope_
     if messages and messages[-1].get("role") == "user" and isinstance(messages[-1].get("content"), list):
         messages[-1]["content"].append({"type": "text", "text": query_plan.model_note()})
     if query_plan.expired():
-        fallback = query_plan.timeout_answer()
+        return _model_timeout_result(query_plan, freshness, question, session_id,
+                                     query_id, sql_used, "Request deadline reached")
     else:
-        final_resp = client.messages.create(
-            model=MODEL, max_tokens=_max_tokens(scope_role), system=system_blocks,
+        final_resp, timeout_error = _model_response_or_timeout(
+            client, model=MODEL, max_tokens=_max_tokens(scope_role), system=system_blocks,
             messages=messages, extra_headers=_CACHE_BETA_HEADERS,
             timeout=max(1.0, min(LLM_CALL_TIMEOUT_SECONDS, query_plan.remaining_seconds())),
         )
+        if timeout_error:
+            return _model_timeout_result(query_plan, freshness, question, session_id,
+                                         query_id, sql_used, timeout_error)
         compute_and_log_cost(final_resp.usage, MODEL, question, session_id, username)
         fallback = _response_text(final_resp) or (
             "Toi da doi chieu cac nguon du lieu nhung chua du bang chung de ket luan chinh xac. "
@@ -3840,12 +3907,14 @@ def ask_stream(question: str, session_id: str = "default", username: str = None,
             tool["name"] == required_tool for tool in tools_for_request
         ):
             request_kwargs["tool_choice"] = {"type": "tool", "name": required_tool}
-        with client.messages.stream(**request_kwargs) as stream:
-            for _event in stream:
-                # Khong day text ra UI truoc khi biet response co tool_use hay khong. Backend can
-                # loai footer timestamp model tu sinh va gan dung metadata nguon truoc khi cong bo.
-                pass
-            resp = stream.get_final_message()
+        # Khong day text ra UI truoc khi biet response co tool_use hay khong. Backend can
+        # loai footer timestamp model tu sinh va gan dung metadata nguon truoc khi cong bo.
+        resp, timeout_error = _model_response_or_timeout(client, stream=True, **request_kwargs)
+        if timeout_error:
+            yield from _timeout_stream_chunks(_model_timeout_result(
+                query_plan, freshness, question, session_id, query_id, sql_used, timeout_error,
+            ))
+            return
 
         compute_and_log_cost(resp.usage, MODEL, question, session_id, username)
         messages.append({"role": "assistant", "content": resp.content})
@@ -3856,16 +3925,17 @@ def ask_stream(question: str, session_id: str = "default", username: str = None,
             if not answer_text:
                 # Xem ghi chu day du o ask() - truong hop hy huu het ngan sach thinking.
                 messages.append({"role": "user", "content": "Hay tra loi ngay bay gio, ngan gon truc tiep."})
-                with client.messages.stream(model=MODEL, max_tokens=_max_tokens(scope_role), system=system_blocks,
-                                             tools=tools_for_request, messages=messages,
-                                             extra_headers=_CACHE_BETA_HEADERS,
-                                             timeout=max(1.0, min(
-                                                 LLM_CALL_TIMEOUT_SECONDS,
-                                                 query_plan.remaining_seconds(),
-                                             ))) as stream2:
-                    for _event in stream2:
-                        pass
-                    resp2 = stream2.get_final_message()
+                resp2, timeout_error = _model_response_or_timeout(
+                    client, stream=True, model=MODEL, max_tokens=_max_tokens(scope_role),
+                    system=system_blocks, tools=tools_for_request, messages=messages,
+                    extra_headers=_CACHE_BETA_HEADERS,
+                    timeout=max(1.0, min(LLM_CALL_TIMEOUT_SECONDS, query_plan.remaining_seconds())),
+                )
+                if timeout_error:
+                    yield from _timeout_stream_chunks(_model_timeout_result(
+                        query_plan, freshness, question, session_id, query_id, sql_used, timeout_error,
+                    ))
+                    return
                 compute_and_log_cost(resp2.usage, MODEL, question, session_id, username)
                 answer_text = "".join(b.text for b in resp2.content if b.type == "text").strip()
                 if not answer_text:
@@ -3977,7 +4047,7 @@ def ask_stream(question: str, session_id: str = "default", username: str = None,
             tool_ok = True
             tool_source = f"template:{tu.name}"
             if tu.name in LOCAL_UTIL_TOOLS:
-                sql_used.append(f"[tien ich] {tu.name}({tu.input})")
+                _record_sql_used(query_id, sql_used, f"[tien ich] {tu.name}({tu.input})")
                 if tu.name == "get_current_datetime":
                     payload = get_current_datetime()
                 elif tu.name == "resolve_relative_date":
@@ -4005,18 +4075,18 @@ def ask_stream(question: str, session_id: str = "default", username: str = None,
                 tool_source = f"utility:{tu.name}"
             elif tu.name in RAW_SQL_TOOLS:
                 if scope_area_code or scope_channel:
-                    sql_used.append(f"[BI CHAN - tai khoan gioi han] {tu.name}")
+                    _record_sql_used(query_id, sql_used, f"[BI CHAN - tai khoan gioi han] {tu.name}")
                     payload = {"error": "Tai khoan cua ban bi gioi han (vung/kenh), khong duoc dung truy van SQL tu do."}
                     tool_ok = False
                 elif tu.name in LIVE_SQL_TOOL_NAMES and scope_role not in LIVE_SQL_ALLOWED_ROLES:
-                    sql_used.append(f"[BI CHAN - vai tro khong duoc query SQL live] {tu.name}")
+                    _record_sql_used(query_id, sql_used, f"[BI CHAN - vai tro khong duoc query SQL live] {tu.name}")
                     payload = {"error": "Tai khoan khong duoc phep truy van SQL Server live tu do."}
                     tool_ok = False
                 else:
                     db = RAW_SQL_TOOLS[tu.name]
                     tool_source = db
                     sql = tu.input.get("sql", "")
-                    sql_used.append(f"[{db}] {sql}")
+                    _record_sql_used(query_id, sql_used, f"[{db}] {sql}")
                     result = run_query(sql, question=question, db=db, username=username, session_id=session_id)
                     last_result = result
                     last_tool_used = (tu.name, str(tu.input))
@@ -4027,7 +4097,7 @@ def ask_stream(question: str, session_id: str = "default", username: str = None,
                     payload = _raw_query_payload(result, db, question)
                     tool_ok = bool(result.get("ok"))
             else:
-                sql_used.append(f"[bao cao chuan] {tu.name}({tu.input})")
+                _record_sql_used(query_id, sql_used, f"[bao cao chuan] {tu.name}({tu.input})")
                 tresult = call_template(tu.name, tu.input, question=question, username=username, session_id=session_id,
                                          scope_area_code=scope_area_code, scope_employee_code=scope_employee_code,
                                          scope_channel=scope_channel, scope_role=scope_role)
@@ -4080,16 +4150,22 @@ def ask_stream(question: str, session_id: str = "default", username: str = None,
     if messages and messages[-1].get("role") == "user" and isinstance(messages[-1].get("content"), list):
         messages[-1]["content"].append({"type": "text", "text": query_plan.model_note()})
     if query_plan.expired():
-        fallback = query_plan.timeout_answer()
+        yield from _timeout_stream_chunks(_model_timeout_result(
+            query_plan, freshness, question, session_id, query_id, sql_used,
+            "Request deadline reached",
+        ))
+        return
     else:
-        with client.messages.stream(
-            model=MODEL, max_tokens=_max_tokens(scope_role), system=system_blocks,
-            messages=messages, extra_headers=_CACHE_BETA_HEADERS,
+        final_resp, timeout_error = _model_response_or_timeout(
+            client, stream=True, model=MODEL, max_tokens=_max_tokens(scope_role),
+            system=system_blocks, messages=messages, extra_headers=_CACHE_BETA_HEADERS,
             timeout=max(1.0, min(LLM_CALL_TIMEOUT_SECONDS, query_plan.remaining_seconds())),
-        ) as final_stream:
-            for _event in final_stream:
-                pass
-            final_resp = final_stream.get_final_message()
+        )
+        if timeout_error:
+            yield from _timeout_stream_chunks(_model_timeout_result(
+                query_plan, freshness, question, session_id, query_id, sql_used, timeout_error,
+            ))
+            return
         compute_and_log_cost(final_resp.usage, MODEL, question, session_id, username)
         fallback = _response_text(final_resp) or (
             "Toi da doi chieu cac nguon du lieu nhung chua du bang chung de ket luan chinh xac. "

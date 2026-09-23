@@ -2429,15 +2429,19 @@ export default function Home() {
                                   <span className={`inline-flex rounded-full px-2 py-1 text-[10px] font-semibold ${
                                     log.status === "completed" || log.status === "success" || log.status === "ok"
                                       ? "bg-emerald-50 text-emerald-700"
-                                      : log.status === "running"
-                                        ? "bg-blue-50 text-blue-700"
-                                        : "bg-rose-50 text-rose-700"
+                                      : log.status === "partial_timeout"
+                                        ? "bg-amber-50 text-amber-700"
+                                        : log.status === "running"
+                                          ? "bg-blue-50 text-blue-700"
+                                          : "bg-rose-50 text-rose-700"
                                   }`} title={log.error_message || undefined}>
                                     {log.status === "completed" || log.status === "success" || log.status === "ok"
                                       ? "Hoàn thành"
-                                      : log.status === "running"
-                                        ? "Đang chạy"
-                                        : "Lỗi"}
+                                      : log.status === "partial_timeout"
+                                        ? "Trả lời một phần"
+                                        : log.status === "running"
+                                          ? "Đang chạy"
+                                          : "Lỗi"}
                                   </span>
                                 </td>
                                 <td className="px-4 py-3 text-left whitespace-nowrap">
