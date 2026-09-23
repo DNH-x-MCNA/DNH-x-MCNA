@@ -69,6 +69,23 @@ n AS (SELECT DMSId, EmployeeCode FROM (
 **Đây là lỗi thật, không phải bất đồng định nghĩa.** Ảnh hưởng mọi kỳ, mọi vai — chỉ là 0,256% nên
 không ai thấy bằng mắt.
 
+### ✅ Đã sửa (23/09)
+
+Thêm `_NV_THEO_DMSID` — khử trùng bằng `ROW_NUMBER() OVER (PARTITION BY dmsid ORDER BY
+COALESCE(is_duplicate,0), employee_code)`, ưu tiên dòng **không** bị đánh cờ trùng, đúng cách S62
+làm. Áp vào cả hai chỗ join trong `customer_product_coverage`.
+
+Đo lại trên kho thật sau khi sửa, kỳ hiện tại:
+
+| | Doanh thu |
+|---|---:|
+| Tool trước khi sửa | 183.242.330.033 |
+| **Tool sau khi sửa** | **182.988.498.573** |
+| SQL trực tiếp | 182.988.498.573 |
+
+Khớp đến từng đồng. Test khóa: `tests/test_chot_doi_ky_qua_khu.py::test_khu_trung_dmsid_khong_nhan_ban_dong_hoa_don`
+(dựng đúng hình `TM23110109` / `TM23110109.`, xác nhận join thô làm phồng gấp đôi rồi mới kiểm bản sửa).
+
 ## Phát hiện 2 — tập khách kỳ trước định nghĩa khác nhau
 
 Checker dựng `owner` **chỉ từ cửa sổ HIỆN TẠI**, rồi ép cả `cur` lẫn `pre` phải nằm trong `scope`:
@@ -147,13 +164,18 @@ quan sát được, và là hệ quả cộng gộp của phát hiện 2 và 3.
 
 ## Việc cần làm
 
-| # | Việc | Vùng | Mức |
+| # | Việc | Vùng | Trạng thái |
 |---|---|---|---|
-| 1 | Khử trùng `dmsid` khi join `dim_nhanvien` trong `customer_product_coverage` (và rà các tool khác join tương tự) | `backend/` | 🔴 lỗi thật |
-| 2 | Chốt định nghĩa tập khách kỳ trước: có loại khách đã dừng mua hẳn không | DNH/PMO | chặn UAT |
-| 3 | Chốt cách quy đội cho kỳ quá khứ: theo dòng-tại-thời-điểm, hay theo khách như checker | DNH/PMO | chặn UAT |
+| 1 | Khử trùng `dmsid` khi join `dim_nhanvien` trong `customer_product_coverage` | `backend/` | ✅ **đã sửa 23/09**, khớp SQL trực tiếp đến từng đồng |
+| 2 | Chốt định nghĩa tập khách kỳ trước: có loại khách đã dừng mua hẳn không | DNH/PMO | ⏳ chặn UAT |
+| 3 | Chốt cách quy đội cho kỳ quá khứ: theo dòng-tại-thời-điểm, hay theo khách như checker | DNH/PMO | ⏳ chặn UAT |
 
-Mục 1 làm được ngay. Mục 2 và 3 là **quyết định nghiệp vụ**, không nên tự chọn rồi nắn code cho
-khớp checker — phải hỏi.
+Mục 2 và 3 là **quyết định nghiệp vụ**, không nên tự chọn rồi nắn code cho khớp checker — phải hỏi.
 
-Để xác minh nốt phát hiện 3, cần `manager_code` của đội trong ảnh UAT (khách toàn mã `BDI*`).
+Đã rà các chỗ join `dim_nhanvien` theo `dmsid` còn lại: chỉ hai chỗ trong tool này là join thẳng vào
+bảng hóa đơn nên mới nhân bản dòng; chỗ ở `revenue_tree` đã dùng `SELECT DISTINCT dmsid` (một cột,
+không nhân bản), các chỗ khác tra theo chiều `employee_code → dmsid` nên không ảnh hưởng.
+
+> **Liên quan:** phát hiện 3 ở đây (quy đội cho kỳ quá khứ) cùng họ với lỗi V34 — xem
+> [dieu_tra_v34_23-09.md](dieu_tra_v34_23-09.md). Ở V34 nguyên nhân đã truy ra trọn vẹn và sửa được:
+> kho chỉ giữ 90 ngày `fact_tonghopkhachhang` nên tool chốt đội ở một mốc **sau** kỳ báo cáo.

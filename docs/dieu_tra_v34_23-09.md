@@ -3,9 +3,13 @@
 *23/09/2026. Người chấm UAT ghi: "Chương trình khuyến mãi hiện chỉ đồng bộ đến 09/01/2026".
 Câu V34, tool `promotion_effectiveness`, checker dùng `DMS_DonHangCTKM → DMS_CTKM → DMS_DonHangHdr`.*
 
-Điều tra chạy cục bộ trên `backend/warehouse.db` + đọc code, **không gọi model trả phí**. Kho local
-**không có bảng CTKM nào** nên không tái lập được số hóa đơn; phần số học dưới đây dựa trên chính
-giá trị chatbot đã hiển thị, đối chiếu với code.
+Điều tra chạy trên `backend/warehouse.db` và **đọc thẳng Bravo từ máy dev** (Bravo kết nối được,
+chỉ đọc), **không gọi model trả phí**. Kho local không có bảng CTKM nào, nhưng Bravo thì có — nên
+toàn bộ kết luận dưới đây đã **tái lập được bằng số**, không dừng ở suy luận từ code.
+
+> **Kết luận ngắn:** chênh lệch v34 do **đúng một** nguyên nhân — tool chốt đội hình ở **30/06/2026**
+> cho kỳ báo cáo **12/2025**. Đã sửa và có test khóa. Sự cố đồng bộ CTKM 09/01/2026 là chuyện khác,
+> vẫn còn và vẫn thuộc phía DNH.
 
 ## 1. Kỳ báo cáo là THÁNG 12/2025 — chứng minh bằng số học, không phải suy đoán
 
@@ -83,28 +87,52 @@ ngày 13/09/2026:
 
 Nhánh dự phòng lấy `MIN(save_date) > fdate` = **30/06/2026**, rồi `_warn(...)`.
 
-### Hệ quả
+### Hệ quả — tái lập khớp đến từng đồng
 
-**Báo cáo khuyến mãi tháng 12/2025 đang được lọc theo thành phần đội của 30/06/2026 — sau kỳ báo
-cáo đúng sáu tháng.** Ai rời đội trong khoảng đó thì đơn của họ biến mất khỏi kết quả; ai mới vào
-thì đơn cũ của họ bị kéo vào.
+**Bravo đọc được từ máy dev**, nên không phải dừng ở suy luận. Chạy đúng truy vấn của tool trên
+Bravo cho `MT_SP_TICHLUYCHAOTHU_ANC`, kỳ 01–31/12/2025, chỉ đổi **một** biến là ngày chốt đội:
 
-Khớp đúng hình dạng quan sát được: khách **ít hơn** (11 vs 14), đơn **ít hơn** (12 vs 13), nhưng
-doanh thu chỉ hụt **1,2%** (775,68 vs 784,90 tr ≈ 9,2 tr) — vài khách nhỏ rơi ra, không phải sai
-công thức.
+| Đội dùng để lọc | Khách | Đơn | Có HĐ | Doanh thu |
+|---|---:|---:|---:|---:|
+| **31/12/2025** — đúng kỳ | **14** | 15 | **13** | **784.895.766** |
+| **30/06/2026** — tool đang dùng | **11** | **12** | **11** | **775.680.951** |
 
-Đây **không phải** lỗi logic của tool. Tool tính đúng cái nó được cho. Thiếu là ở **dữ liệu lịch sử
-phân công đội trong kho local**, trong khi checker đọc thẳng Bravo nên vẫn có.
+Dòng trên khớp checker, dòng dưới khớp số chatbot đã trả trong ảnh UAT — cả ba chỉ số, đến từng
+đồng. **Toàn bộ chênh lệch v34 do đúng một nguyên nhân này.**
 
-### Ba hướng xử lý
+Lý do: trong khoảng giữa hai mốc, đội có **3 người rời và 3 người vào**:
 
-| # | Hướng | Đánh giá |
+```
+chỉ có ở 12/2025 : TM23110133, TM24050203, TM25110302
+chỉ có ở 06/2026 : TM23110127, TM26060101, TM26060102
+```
+
+Ba người rời ↔ ba khách chênh lệch. Cả hai bảng nguồn trên Bravo (`FACT_TongHopKhachHang` và
+`FACT_ThongKeTinhLuong`) cho **cùng một tập chênh** này, nên không phải lỗi của riêng bảng nào.
+
+Đây **không phải** lỗi logic của tool — tool tính đúng cái nó được cho. Thiếu là **lịch sử phân
+công đội trong kho local**.
+
+### ✅ Đã sửa (23/09)
+
+Hóa ra kho **đã sẵn có** nguồn đúng, chỉ là không ai dùng tới:
+
+| Bảng trong kho | Sync giữ | Phủ 12/2025? |
 |---|---|---|
-| A | Đồng bộ thêm lịch sử `FACT_ThongKeTinhLuong`/`fact_tonghopkhachhang` vào kho, đủ phủ 2025 | Giải quyết tận gốc, và **có lợi cho mọi tool khác** đang chốt đội theo kỳ quá khứ (v24 phát hiện 3 cùng họ vấn đề này) |
-| B | Cho `promotion_effectiveness` đọc roster thẳng từ Bravo như checker | Sửa được đúng một tool, các tool khác vẫn lệch |
-| C | Giữ nguyên, bắt buộc nêu cảnh báo `DOI LICH SU KHONG CO SNAPSHOT` ra câu trả lời | Rẻ nhất, nhưng người chấm vẫn thấy số lệch |
+| `fact_tonghopkhachhang` | `days=90` | ❌ (sớm nhất 30/06/2026) |
+| `fact_thongketinhluong` | `days=400` | ✅ (sớm nhất 17/08/2025) |
 
-Khuyến nghị **A**. Nhưng dù chọn gì thì **C phải làm ngay** — xem mục 5.
+`fact_thongketinhluong` chính là `FACT_ThongKeTinhLuong` — **đúng bảng checker dùng** — và có
+`manager_code`. Tại 31/12/2025 nó trả đúng 8 người của đội `TM23110128`.
+
+Bản sửa: `_get_team_dms_ids()` nay thử `fact_thongketinhluong` **trước khi** nhảy tới một mốc sau kỳ.
+Chỉ khi cả hai bảng đều không phủ mới nhảy tới, và khi đó đánh dấu `moc_sau_ky=True`.
+
+Kèm theo, `promotion_effectiveness` bày mốc chốt đội ra **payload** (`team_roster_as_of`,
+`team_roster_source`, `team_roster_note`) chứ không chỉ `_warn()` — xem mục 5 để biết vì sao.
+
+Không cần đụng tới `sync_fact_tonghopkhachhang(days=90)`: nới cửa sổ đồng bộ tốn thêm dữ liệu mà
+vẫn không dùng chung nguồn với checker.
 
 ## 4. Khác biệt nhỏ hơn, đã đo nên không phải nghi ngờ
 
@@ -139,33 +167,38 @@ liệu đang có:
 Cần **payload lượt UAT thật** (`sql_used_json` / tham số `scope_*` trong `query_runs`) mới chốt được.
 Tôi không đoán tiếp.
 
-## 5. ⚠️ Việc cần kiểm ngay: cảnh báo có được nói ra không
+## 5. Vì sao `_warn()` một mình là không đủ
 
-`_warn()` chỉ **đính cảnh báo vào kết quả trả cho AI**; AI có trách nhiệm nói lại:
+`_warn()` chỉ **đính cảnh báo vào kết quả trả cho model**; model có trách nhiệm nói lại:
 
 ```python
 def _warn(msg: str):
     """Ghi 1 canh bao de dinh kem vao ket qua tra ve cho AI (AI co trach nhiem noi lai voi nguoi dung)."""
 ```
 
-Lượt V34 chắc chắn đã sinh cảnh báo `DOI LICH SU KHONG CO SNAPSHOT ...` (đã chứng minh ở mục 3).
-**Trong ảnh UAT không thấy câu trả lời nhắc gì đến việc đội hình lấy từ 30/06/2026.** Nếu đúng là
-model nuốt mất cảnh báo thì đó là lỗi nặng hơn cả chênh lệch số: người đọc không có cách nào biết.
+Lượt V34 chắc chắn đã sinh cảnh báo `DOI LICH SU KHONG CO SNAPSHOT ...` (chứng minh ở mục 3), nhưng
+**trong ảnh UAT câu trả lời không nhắc gì đến việc đội hình lấy từ 30/06/2026**. Người đọc không có
+cách nào biết số mình đang nhìn bị lệch.
 
-Kiểm bằng `query_runs` trên máy 24 (miễn phí, không gọi model) — lọc lượt V34, đọc `answer` xem có
-chuỗi "30/06/2026" hoặc "đội hình" không.
+Đó là lý do bản sửa không chỉ dừng ở chốt đúng đội, mà còn bày mốc chốt đội ra **payload**
+(`team_roster_as_of`, `team_roster_source`, `team_roster_note`). Payload thì model phải đọc để trả
+lời; cảnh báo thì có thể bỏ qua.
+
+Vẫn nên kiểm `query_runs` trên máy 24 (miễn phí, không gọi model) để biết model đã nuốt bao nhiêu
+cảnh báo khác — đây khó mà là trường hợp duy nhất.
 
 ---
 
 ## Việc cần làm
 
-| # | Việc | Vùng | Mức |
+| # | Việc | Vùng | Trạng thái |
 |---|---|---|---|
-| 1 | Kiểm `query_runs` xem câu trả lời V34 có nêu cảnh báo đội hình không | vận hành | 🔴 kiểm ngay |
-| 2 | Đồng bộ lịch sử phân công đội đủ phủ kỳ quá khứ (hướng A) | kho/sync | 🔴 gốc rễ, dùng chung với v24 |
-| 3 | Chốt: đơn có `DMSEmpId2` thì tính cho đội nào | DNH/PMO | chặn UAT |
-| 4 | Thống nhất nhãn cột "DT gắn với đơn…" giữa chatbot và checker | `backend/` | thấp, chỉ là chữ |
-| 5 | Lấy payload lượt V34 để chốt việc 4 vs 12+ chương trình | vận hành | chưa kết luận |
+| 1 | Chốt đội theo `fact_thongketinhluong` cho kỳ quá khứ | `backend/` | ✅ **đã sửa**, 5 test khóa |
+| 2 | Bày mốc chốt đội ra payload thay vì chỉ `_warn()` | `backend/` | ✅ **đã sửa** |
+| 3 | Thống nhất nhãn cột "DT gắn với đơn…" (`associated_revenue_label`) | `backend/` | ✅ **đã sửa** |
+| 4 | Chốt: đơn có `DMSEmpId2` thì tính cho đội nào | DNH/PMO | ⏳ chặn UAT, cần hỏi |
+| 5 | Lấy payload lượt V34 để chốt việc 4 vs 12+ chương trình | vận hành | ⏳ chưa kết luận |
+| 6 | Kiểm `query_runs` xem model còn nuốt cảnh báo nào nữa không | vận hành | ⏳ nên làm |
 
 **Sự cố đồng bộ CTKM dừng 09/01/2026 vẫn là chuyện riêng, không phải nguyên nhân của chênh lệch số
 ở trên.** Nó thuộc chiều DMS → Bravo, hạ tầng DNH, đã ghi trong
