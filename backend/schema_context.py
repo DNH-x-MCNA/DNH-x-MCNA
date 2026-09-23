@@ -98,6 +98,12 @@ dms_khachhang: code (ma khach hang OTC), name, city_id (NGUON DUNG DE XAC DINH V
   id_code (Id noi bo DMS, khac code), emp_code (ma NV DUOC GAN phu trach khach hang nay - khac
   vhoadon_otc.employee_code la NV THUC TE ban hang tren tung hoa don, 2 ma co the khac nhau), kenh_bh.
 
+!!! FREE-SQL THEO VUNG: dms_khachhang va dmssx_khachhang DEU KHONG CO area_code. Neu dat alias
+  khach la c, c.area_code la cot KHONG TON TAI. Phai lay tp.area_code qua dung chuoi LEFT JOIN:
+  LEFT JOIN dms_khachhang c ON c.code=v.customer_code
+  LEFT JOIN dim_tinhthanhpho tp ON tp.city_id=c.city_id
+  (voi ETC thay dms_khachhang bang dmssx_khachhang). Giu LEFT JOIN de khach mo coi khong bien mat.
+
 dim_nhanvien: employee_code, name, is_duplicate (=1 la ma bi trung/khong hop le - CHI loc
   COALESCE(is_duplicate,0)<>1 KHI TINH TOAN/TONG HOP so lieu THEO nhan vien (KPI, doanh so, xep hang...)
   de tranh du lieu trung lam sai ket qua. KHI CHI TRA CUU/HIEN THI TEN (vd doi mot ma nhan vien/QLV/ASM
