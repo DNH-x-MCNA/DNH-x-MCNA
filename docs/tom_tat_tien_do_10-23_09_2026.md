@@ -138,27 +138,55 @@ Thêm một lỗi không quy ra tiền được: **20 tháng doanh thu trả v�
 
 # D. CHI PHÍ VẬN HÀNH AI
 
-### Chi phí phụ thuộc ĐỘ NẶNG của câu hỏi — không có đơn giá chung
+### Chi phí và thời gian theo độ phức tạp — đo trên 180 lượt thật
 
-Đo thật 23/09:
+*Nguồn: nhật ký chi phí 15–23/09. Đã loại 4 lượt có thời gian dưới 5 giây (lượt trùng/dùng lại
+kết quả, không phải lần chạy thật).*
 
-| Câu hỏi | Thời gian xử lý |
-|---|---:|
-| Hiệu quả khuyến mãi (nhiều công cụ, nhiều chương trình) | **33,9 giây** |
-| Danh sách khách hàng mới trong tháng | **23,8 giây** |
+| | Trung bình | Trung vị |
+|---|---:|---:|
+| Chi phí mỗi lượt | **5.042 đ** | **3.241 đ** |
+| Thời gian trả lời | **36,5 giây** | **31,1 giây** |
 
-Hai câu này **không thể cùng đơn giá**. Ước tính nay lấy **chi phí lịch sử của chính câu hỏi đó**
-(trung vị các lần đã hỏi), kèm số quan sát để biết độ tin cậy.
+> Trung vị thấp hơn trung bình khá nhiều → **một số ít câu rất nặng kéo trung bình lên**. Khi lập
+> ngân sách nên dùng trung vị cho số đông và tính riêng nhóm nặng.
 
-| | |
-|---|---:|
-| Đợt chấm lại đã chạy (2 lượt) | **17.103 đ** |
-| Tiết kiệm bằng phân tích nhật ký (0 đ chi phí AI) | **≈ 77.000 đ** |
-| 18 lượt còn lại | tính theo từng câu, **không áp đơn giá chung** |
+#### Theo độ phức tạp của CÂU TRẢ LỜI
 
-> Hai ước tính trước đều sai vì dùng một đơn giá phẳng: **4.000 đ** (trung bình các phiên nhiều lượt,
-> dùng sẵn bộ nhớ đệm) rồi **8.550 đ** (trung bình 2 lượt chạy thật). Cả hai che mất chênh lệch giữa
-> câu nặng và câu nhẹ — đo trên dữ liệu mẫu cho thấy chênh tới **4,3 lần**.
+| Mức | Số lượt | Chi phí TB | Trung vị | Thời gian TB |
+|---|---:|---:|---:|---:|
+| Rất nhẹ | 20 | 2.855 đ | 1.515 đ | **12,3 giây** |
+| Nhẹ | 71 | 4.147 đ | 2.707 đ | 24,2 giây |
+| Trung bình | 45 | 4.827 đ | 3.246 đ | 38,7 giây |
+| Nặng | 33 | 7.093 đ | 5.804 đ | 57,4 giây |
+| Rất nặng | 11 | 9.525 đ | **11.660 đ** | **88,7 giây** |
+
+Từ nhóm nhẹ nhất đến nặng nhất: chi phí tăng **3,3 lần**, thời gian tăng **7,2 lần**.
+
+#### Theo bản chất CÂU HỎI
+
+| Loại câu hỏi | Số lượt | Chi phí TB | Trung vị | Thời gian TB |
+|---|---:|---:|---:|---:|
+| Hỏi lại / giải thích cách tính | 8 | **1.721 đ** | 1.389 đ | 19,6 giây |
+| Tra cứu một số / một khách | 15 | 2.908 đ | 1.741 đ | **15,9 giây** |
+| Danh sách / top N | 21 | 4.931 đ | 3.657 đ | 29,4 giây |
+| Tổng hợp một chiều | 80 | 5.321 đ | 3.675 đ | 38,7 giây |
+| **So sánh kỳ / chuỗi thời gian** | 38 | **6.156 đ** | **5.416 đ** | **45,1 giây** |
+| Chẩn đoán đa chiều | 18 | 4.836 đ | 3.044 đ | 41,8 giây |
+
+**Câu đắt nhất không phải câu phức tạp nhất về nghiệp vụ, mà là câu kéo nhiều tháng dữ liệu.**
+Nhóm "so sánh kỳ / chuỗi thời gian" tốn hơn nhóm "chẩn đoán đa chiều" **27%**, dù nghe có vẻ đơn
+giản hơn.
+
+#### Biên độ rất rộng — không có "đơn giá" cho một lượt hỏi
+
+| | Rẻ / nhanh nhất | Đắt / chậm nhất | Chênh |
+|---|---:|---:|---:|
+| Chi phí | 1.074 đ | 15.126 đ | **14,1 lần** |
+| Thời gian | 7,0 giây | 116,7 giây | **16,7 lần** |
+
+Tương quan giữa chi phí và thời gian chỉ **r = 0,42** — câu chạy lâu **không** đồng nghĩa tốn nhiều
+tiền. Không thể suy chi phí từ thời gian, và ngược lại.
 
 ### Kiểm soát chi phí đã áp dụng
 
