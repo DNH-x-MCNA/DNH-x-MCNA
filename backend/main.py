@@ -389,6 +389,7 @@ class ChatResponse(BaseModel):
     rows: Optional[list[list[Any]]] = None
     row_count: Optional[int] = None
     query_plan: Optional[dict[str, Any]] = None
+    completion_status: Optional[str] = None
     quota_used: Optional[int] = None
     quota_limit: Optional[int] = None
     quota_remaining: Optional[int] = None
@@ -881,6 +882,8 @@ def chat(req: ChatRequest, user: dict = Depends(require_approved_user)):
             freshness=result.get("freshness"),
             row_count=lr.get("row_count") if is_raw_sql else None,
             duration_ms=_elapsed_ms(started_at),
+            status=result.get("completion_status", "completed"),
+            error_message=result.get("timeout_error"),
         )
     except HTTPException:
         fail_query_run(query_id, "HTTP error", duration_ms=_elapsed_ms(started_at))
@@ -898,6 +901,7 @@ def chat(req: ChatRequest, user: dict = Depends(require_approved_user)):
         rows=lr.get("rows") if is_raw_sql else None,
         row_count=lr.get("row_count") if is_raw_sql else None,
         query_plan=result.get("query_plan"),
+        completion_status=result.get("completion_status", "completed"),
         **quota,
     )
 
@@ -943,6 +947,8 @@ def chat_stream(req: ChatRequest, user: dict = Depends(require_approved_user)):
                         freshness=chunk.get("freshness"),
                         row_count=lr.get("row_count") if is_raw_sql else None,
                         duration_ms=_elapsed_ms(started_at),
+                        status=chunk.get("completion_status", "completed"),
+                        error_message=chunk.get("timeout_error"),
                     )
                     payload = {
                         "type": "done",
@@ -954,6 +960,7 @@ def chat_stream(req: ChatRequest, user: dict = Depends(require_approved_user)):
                         "rows": lr.get("rows") if is_raw_sql else None,
                         "row_count": lr.get("row_count") if is_raw_sql else None,
                         "query_plan": chunk.get("query_plan"),
+                        "completion_status": chunk.get("completion_status", "completed"),
                         **quota,
                     }
                 else:
