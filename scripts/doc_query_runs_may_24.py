@@ -20,6 +20,15 @@ import re
 import sqlite3
 import sys
 
+# 23/09/2026: khi dan dau ra qua pipe (vd `| Select-String`), Windows khong dung ma hoa cua console
+# nua ma roi ve cp1252 -> cau hoi tieng Viet lam vo script bang UnicodeEncodeError. Chay thang ra
+# console thi KHONG lo loi nay, nen phai ep UTF-8 ngay trong script thay vi dua vao moi truong.
+for _luong in (sys.stdout, sys.stderr):
+    try:
+        _luong.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, ValueError):
+        pass
+
 DB = os.environ.get("DNH_MEMORY_DB", r"C:\dnh_chatbot\backend\memory.db")
 
 # Doi hai moc nay neu muon soi ky khac. Gio UTC.
