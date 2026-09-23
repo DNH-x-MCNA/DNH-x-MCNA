@@ -5,8 +5,9 @@ Nguồn: log chi phí/phản hồi của chatbot từ 11/09 đến 22/09 (các l
 local, **không gọi một lượt model trả phí nào**.
 
 Mỗi lượt chấm lại là một lượt gọi model có tính phí. Trung bình ngày 22/09 là **~4.000 đ/lượt**, nên
-trọn danh sách này (24 lượt) tốn khoảng **100.000 đ**. *(Cập nhật 23/09: #22 và #23 đã đóng không
-tốn lượt nào, #13 đang chờ kiểm nhãn — còn tối đa 21 lượt, ~84.000 đ. Xem mục cập nhật bên dưới.)* Khi chạy phải truyền `username` riêng và
+trọn danh sách này (24 lượt) tốn khoảng **100.000 đ**. *(Chốt 23/09 sau khi đối chiếu `query_runs`:
+đóng được #13, #19, #20, #21, #22, #23 mà không tốn lượt nào — **còn 19 lượt, ~76.000 đ**, cộng 1
+mục mới phát hiện phải điều tra trước. Xem mục cập nhật bên dưới.)* Khi chạy phải truyền `username` riêng và
 `session_id` có tiền tố nhận diện được, nếu không thì kết quả không lọc được theo vai/vùng và **không
 dùng để chấm UAT** (xem `AGENTS.md`).
 
@@ -50,6 +51,52 @@ $py | Out-File -Encoding utf8 $env:TEMP\doc_runs_sess.py
 python $env:TEMP\doc_runs_sess.py
 ```
 
+### Kết quả đối chiếu toàn bộ — 23/09 chiều
+
+Đã chạy đối chiếu `query_runs` cho **mọi lượt có phản hồi hoặc không `completed`** trong 11/09–21/09,
+không lọc theo danh sách này. Ra **47 lượt**, trong khi checklist chỉ liệt 27. Miễn phí, không gọi model.
+
+**Danh sách này vừa thừa vừa thiếu.** Thừa vì có mục đã đóng hoặc không phải lỗi; thiếu vì dựng từ
+log chi phí nên **bỏ sót 9 lượt `error`**, trong đó có ca một người hỏi lại **5 lần liên tiếp**.
+
+#### 13 lượt `error` — phân loại theo `error_message`
+
+| Loại | Số lượt | Kết luận |
+|---|---:|---|
+| `credit balance is too low` | **9** | **Không phải lỗi sản phẩm.** Hết tiền API. Không chấm lại |
+| `The read operation timed out` | **4** | Lỗi thật, xem bên dưới |
+
+Chín lượt hết credit: `thuan.pham` 11/09 (02:58, 03:16, 03:41, 03:57, 04:12 — **cùng một câu, 5 lần
+trong 75 phút**), `danh.nguyen` 14/09 07:44, `thuan.pham` 14/09 09:59, `dnh` 17/09 03:17 và 03:38.
+(Giờ UTC; cộng 7 ra giờ máy 24.)
+
+> Đây là hậu quả kéo dài của sự cố ngân sách ghi trong `AGENTS.md` (business-eval đốt 7,08 USD ngày
+> 10/09). Người chấm UAT gõ câu hỏi và chỉ thấy chữ **"Lỗi"** — không phân biệt được "hết tiền" với
+> "sản phẩm hỏng", nên ghi vào sổ như lỗi sản phẩm. **Đề xuất cho phiên `backend/`:** trả thông báo
+> riêng cho lỗi 400 credit, và cho `health_watchdog` cảnh báo khi số dư cạn. Không sửa được ở `docs/`.
+
+#### 4 lượt timeout thật
+
+| Thời điểm (máy 24) | Câu | Trạng thái |
+|---|---|---|
+| 15/09 15:16 | Khách phát sinh 3 tháng chưa đạt KPI tái đơn, đội QLV | = mục #11, đã có `fix(loc-doi)` 16/09 → chấm lại |
+| 17/09 13:46 | Tháng mùa vụ cao/thấp theo kênh và nhóm SP | = mục #15 |
+| 21/09 09:39 | **Cùng câu mùa vụ, lỗi lại lần hai** | `fix(c08)` commit 13:54 cùng ngày, tức **sau** cả hai lần lỗi. Chấm lại **một lần** cho cả hai, không phải hai lần |
+| **16/09 14:00** | **Tỉnh/vùng độ phủ khách thấp; cơ hội trắng ở đâu** | 🔴 **MỤC MỚI — chưa có bản sửa nào nhắm vào.** Phải điều tra trước khi chấm |
+
+#### Đóng dứt điểm, bỏ khỏi hàng đợi
+
+| Mục | Căn cứ |
+|---|---|
+| #13 | `completed`, **rating = 1 (👍)**. Lượt kế tiếp đưa mã `BGI00699` cũng 👍. Nhãn "Lỗi" lấy từ log chi phí là sai |
+| #19, #20, #21 | Toàn bộ nhóm 2 — hết credit và lượt bỏ dở, xem trên |
+| #22, #23 | Chatbot đúng, xem mục riêng bên dưới |
+
+#### Còn phải chấm lại
+
+**17 lượt nhóm 1** (18 trừ #13) **+ #24, #25** = **19 lượt ≈ 76.000 đ**, cộng **1 mục mới** (độ phủ
+khách) phải điều tra trước chứ chưa chấm. Nhóm 4 giữ nguyên: chưa chấm.
+
 ### ⚠️ Đính chính commit `6a4a692` (đã nằm trong master, không sửa message được)
 
 Commit `6a4a692` (PR #49, merge `596ad1a`) có tiêu đề ghi **"(UAT dnh_etc 15/09 14:53)"** và phần
@@ -80,14 +127,14 @@ mô tả đúng nằm ở **body của PR #49** (đã sửa) và ở mục #23 b
 | 10 | 15/09 14:43 | dnh_etc | Doanh số tháng này theo các nhóm hàng | Thiếu nhóm đầu tư/khai thác/dược liệu/lao/khác | `fix(etc)` 15/09 (ghi rõ UAT dnh_etc 14:43) | Đủ nhóm hàng ETC theo `DIM_KeyClass` + `ItemTypeETC` |
 | 11 | 15/09 15:16 (Lỗi 114 giây) | C-Level | Khách phát sinh 3 tháng chưa đạt KPI tái đơn, đội QLV TM23100148 | Lỗi timeout | `fix(loc-doi)` 16/09 (ghi rõ UAT 15/09 15:16) | Có `manager_code`, trả trong vài chục giây, không lọc tay trên danh sách toàn công ty |
 | 12 | 16/09 09:48 và 09:52 | OTC-Only C-Level + dnh_etc | Top 10 khách hàng có công nợ quá hạn | Hỏi top 10 trả top 3 / top 5 | `fix(receivables): preserve requested top customer count` 16/09 | Hỏi 10 trả đủ 10 |
-| 13 ⚠️ | 16/09 10:08 (Lỗi) | dnh_etc | Bệnh viện Bắc Ninh còn nợ bao nhiêu | Lỗi | `feat(tra-cuu)` 16/09 | **Kiểm lại nhãn trước khi chấm.** `query_runs` 23/09 cho lượt này `status=completed`, `rating=1` (👍): chatbot xin mã khách, người dùng đưa `BGI00699`, lượt sau trả đúng và cũng 👍. Nhãn "Lỗi" lấy từ log chi phí, không khớp `query_runs`. Nếu đúng là người dùng đã hài lòng thì bỏ khỏi hàng đợi |
+| ~~13~~ ✅ | 16/09 10:08 (Lỗi) | dnh_etc | Bệnh viện Bắc Ninh còn nợ bao nhiêu | Lỗi | `feat(tra-cuu)` 16/09 | **ĐÓNG 23/09 — không chấm lại.** `query_runs` cho `status=completed`, `rating=1` (👍): chatbot xin mã khách, người dùng đưa `BGI00699`, lượt sau trả đúng và cũng 👍. Nhãn "Lỗi" lấy từ log chi phí, không khớp `query_runs`. Người dùng đã hài lòng, đã bỏ khỏi hàng đợi |
 | 14 | 16/09 15:21 | C-Level | Khách hoạt động, mới, mua lại, tái kích hoạt, ngừng mua từng tháng | Lệch số khách tái kích hoạt | `fix(vong-doi)` 18/09, `fix(c31)` 21/09 | Số tái kích hoạt khớp cửa sổ quan sát đã chốt; khách tách theo vùng |
 | 15 | 17/09 13:46 (Lỗi 112 giây) | C-Level | Tháng mùa vụ cao/thấp theo kênh và nhóm sản phẩm | Lỗi timeout | `fix(c08): avoid seasonality report timeout` 21/09 | Trả được, không timeout |
 | 16 | 18/09 09:44 | C-Level | Giá trị tồn kho, số tháng tồn, chậm luân chuyển, stock-out, cận date | Số liệu không đúng — "hàng tồn chưa thể xác nhận" | `fix(ton-kho)` ×2 17/09, `fix(ton-kho, do-moi)` 18/09, `fix(m40)` ×2 21/09 | Số lượng tồn là **hiện tại** (đã cộng nhập–xuất). **Giá trị** tồn vẫn là giá đầu năm và câu trả lời phải nói rõ điều đó — đây là câu A3 chờ DNH chốt nguồn giá, **đừng chấm trượt vì điểm này** |
 | 17 | 14/09 13:50 | chosi.mn | Doanh số sản phẩm DM1, DM2, DM3, trọng tâm | KPI doanh số sản phẩm thiếu | `fix(khach-kpi)` 15/09 | Có KPI sản phẩm trọng tâm kèm %đạt |
 | 18 | 14/09 11:07 | chosi.mn | Tình hình thực hiện KPI của các trình dược viên | Thiếu thưởng SP danh mục, V15/V22/V25, ASO, tổng trọng số | `fix(kpi)` 22/09 — **`fix(c45)` 21/09 KHÔNG phủ câu này**, nó chỉ đóng gói bảng ngưỡng theo tháng | Ngoài doanh số/chỉ tiêu phải nêu các cấu phần còn lại hoặc nói rõ cấu phần nào chưa lấy được. **V25 đã dừng từ 01/07/2026** — `V25Bonus = 0` là đúng cơ chế, không được đòi bù |
 
-## Nhóm 2 — Lượt chết kỹ thuật, chấm lại để biết còn không
+## ~~Nhóm 2~~ — ✅ ĐÓNG CẢ BA ngày 23/09, không chấm lại
 
 | # | Lượt | Tài khoản | Câu hỏi | Dấu hiệu |
 |---|---|---|---|---|
@@ -95,8 +142,15 @@ mô tả đúng nằm ở **body của PR #49** (đã sửa) và ở mục #23 b
 | 20 | 14/09 14:44 | Nguyễn Văn Danh | Thực hiện doanh số ngày của các trình dược viên | `Lỗi` sau 843 ms, **0 token** |
 | 21 | 17/09 16:02 | Nguyễn Thị Hồng Thúy | Khách vừa nợ quá hạn vừa giảm mua | Kẹt trạng thái `Đang chạy`, không có latency (lượt 16:05 chạy lại thì xong) |
 
-0 token nghĩa là hỏng ở tầng phiên/định tuyến chứ không phải model trả sai. Nếu chấm lại vẫn hỏng thì
-lấy `backend/logs` quanh đúng mốc giờ đó chứ đừng tốn thêm lượt.
+~~0 token nghĩa là hỏng ở tầng phiên/định tuyến chứ không phải model trả sai.~~
+
+**Tiền đề trên SAI** (đối chiếu `query_runs` 23/09). #19 và #20 có `error_message` ghi rõ
+`credit balance is too low` — API từ chối vì hết tiền, không phải hỏng tầng phiên. #21 thì
+tool đã chạy đủ (thấy trong `audit_log` 16:02:29–16:02:34) nhưng lượt không chạy tới cuối hàm:
+`query_state` của phiên dừng ở 15:59:44, mà `set_query_state` chỉ được gọi khi trả lời thành
+công. Người dùng mở phiên mới lúc 16:04 và hỏi lại, xong trong 45,6 giây.
+
+**Cả ba không phải lỗi sản phẩm. Không chấm lại.**
 
 ## Nhóm 3 — Chưa có bản sửa nào nhắm vào, phải điều tra trước khi chấm
 
