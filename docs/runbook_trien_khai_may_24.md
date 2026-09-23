@@ -15,6 +15,7 @@ Máy 24 là máy chạy chatbot thật. Theo `AGENTS.md`: **không sửa code tr
 | Service tunnel | `DNH_Chatbot_Tunnel` (Cloudflare) |
 | Log | `C:\dnh_chatbot\backend\logs\` |
 | Kho | `C:\dnh_chatbot\backend\warehouse.db`, `memory.db`, `auth.db` |
+| Cổng backend | **8010** (`http://127.0.0.1:8010/`), KHÔNG phải 8000 như mẫu trong `.bat` |
 
 **Không có `sqlite3` CLI trên máy 24** — mọi truy vấn phải qua `python -c` hoặc script Python.
 
@@ -92,6 +93,33 @@ Get-Process python* -ErrorAction SilentlyContinue | Select-Object Id, ProcessNam
 `StartTime` của **mọi service vừa restart** phải là hôm nay, sau thời điểm pull. Máy 24 luôn có
 nhiều tiến trình python (chatbot, cảnh báo, sync scheduler); cái **cố ý không restart** thì giữ giờ
 cũ là đúng — nhưng phải đối chiếu với bảng thư mục để biết cái nào là cố ý, cái nào là bỏ sót.
+
+⚠️ **`ProcessId` của service KHÔNG phải PID của python.** Service chạy qua NSSM, nên `Get-Service` /
+`Get-CimInstance Win32_Service` trả PID của **tiến trình bọc NSSM**, còn python là tiến trình con
+mang PID khác. Đừng đối chiếu trực tiếp hai danh sách rồi kết luận service trỏ vào PID đã chết. Một
+lần restart cũng có thể để lại tiến trình con thoáng qua rồi tự thoát — không phải dấu hiệu hỏng.
+
+```powershell
+Get-CimInstance Win32_Service | Where-Object { $_.Name -like "DNH*" } | Select-Object Name, ProcessId, State | Format-Table -AutoSize
+```
+
+**5. Xác nhận backend thật sự phục vụ được**
+
+```powershell
+try { $r = Invoke-WebRequest -Uri "http://127.0.0.1:8010/" -UseBasicParsing -TimeoutSec 10; Write-Output ("HTTP " + $r.StatusCode) } catch { Write-Output ("LOI: " + $_.Exception.Message) }
+```
+
+**HTTP 404 là ĐẠT** — server có trả lời, chỉ là không có route ở `/`. Chỉ `Unable to connect` mới
+là hỏng (hoặc sai cổng). Kèm đọc log khởi động, phải thấy `Application startup complete` và không
+có exception:
+
+```powershell
+Get-Content C:\dnh_chatbot\backend\logs\uvicorn.log -Tail 20
+Get-Content C:\dnh_chatbot\backend\logs\uvicorn.err.log -Tail 20
+```
+
+Bước này bắt buộc khi đợt deploy có sửa `schema_context.py` hoặc mô tả tool: lỗi cú pháp/import chỉ
+lộ lúc khởi động, mà service vẫn hiện `Running` dù ứng dụng đã chết.
 
 **Đừng kill tiến trình python bằng tay** để "restart": rất dễ giết nhầm sync scheduler, mất lịch
 đồng bộ Bravo.
