@@ -122,8 +122,26 @@ khi số khách lại **cao hơn** (349 vs 292) — hai hiệu ứng ngược ch
 Bản thân code đã cảnh báo về vùng này: `FACT_TongHopKhachHang` chỉ giữ lịch sử phân công đội khoảng
 **90 ngày**, mà kỳ trước kết thúc 30/06 — cách `as_of` 85 ngày, sát mép.
 
-> Chưa xác minh được phần này bằng số vì **không biết `manager_code` của đội trong ảnh UAT**. Cơ chế
-> thì đã đọc code xác nhận; con số thì cần chạy lại đúng đội mới chốt được.
+### ✅ Đã xác minh bằng số (23/09, sau khi có `manager_code`)
+
+Lượt UAT là của `thuan.pham` — vai `qlv`, phạm vi **MT**, `employee_code` = **`TM23110128`**. Khớp
+với việc khách trong ảnh toàn mã `BDI*` (Bình Định). Đội có **7 nhân viên** tại mốc 23/09.
+
+Chạy lại kỳ trước (07/04–30/06) cho đúng đội đó trên kho dev:
+
+| Cách tính | Doanh thu | Khách | Đơn |
+|---|---:|---:|---:|
+| **Cách TOOL** — lọc từng dòng theo đội hôm nay | **3.705,7 tr** | **349** | **608** |
+| **Cách CHECKER** — quy khách, không lọc người bán | 4.029,4 tr | 273 | 584 |
+| Chênh | +323,8 tr | −76 khách | |
+
+**Dòng "cách TOOL" khớp chính xác con số chatbot hiển thị trong ảnh UAT: 3,71 tỷ · 349 khách ·
+608 đơn.** Không còn là suy luận từ code.
+
+Dòng "cách CHECKER" ra 4.029,4 tr / 273 khách so với checker thật 4.069,8 tr / 292 khách — lệch nhẹ
+vì kho dev chỉ có dữ liệu đến 15/09 nên tập `scope` (khách mua ở kỳ này) nhỏ hơn máy 24. Hướng và
+độ lớn thì khớp: **cách checker cho doanh thu CAO hơn nhưng số khách THẤP hơn** — đúng nghịch lý
+quan sát được, và là hệ quả cộng gộp của phát hiện 2 và 3.
 
 ---
 
