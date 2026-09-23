@@ -32,8 +32,11 @@ for _luong in (sys.stdout, sys.stderr):
         pass
 
 DANH_SACH = os.path.join(GOC, "scripts", "cham_lai_20_luot.json")
-# Trung binh do duoc ngay 22/09/2026. Chi de uoc luong truoc khi chay, khong phai gia chot.
-VND_MOI_LUOT = 4000
+# DO THAT 23/09/2026: 2 luot dau tien het 0,6841 USD = ~17.100d, tuc ~8.550d/luot - GAP DOI con so
+# 4.000d lay tu log chi phi ngay 22/09. Ly do: moi muc chay trong mot session RIENG nen luot nao cung
+# phai ghi cache tu dau, ma cache chiem 71% chi phi. Con so 4.000d/luot cua ngay 22/09 la trung binh
+# tren cac phien nhieu luot, dung san cache - khong ap duoc cho kieu chay nay.
+VND_MOI_LUOT = 8550
 
 
 def _nap_muc():
