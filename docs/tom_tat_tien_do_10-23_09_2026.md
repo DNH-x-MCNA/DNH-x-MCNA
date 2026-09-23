@@ -1,191 +1,190 @@
-# Tóm tắt tiến độ DNH — 10/09 → 23/09/2026
+# Tiến độ dự án DNH — 10/09 → 23/09/2026
 
-*Dữ liệu cho slide báo cáo. Mọi con số lấy từ git log, kết quả chạy test, và các lần đo trên kho
-thật — không ước lượng.*
+*Dữ liệu cho slide báo cáo. Số lấy từ log UAT thật trên máy 24 và kết quả chạy kiểm — không ước lượng.*
 
-Mốc so sánh: commit `f692e45` (10/09/2026). Hạn đóng UAT: **30/09/2026** (còn 7 ngày).
+Hạn đóng UAT: **30/09/2026**.
 
 ---
 
-## 1. Khối lượng
+# A. CHATBOT — TỈ LỆ ĐÚNG
 
-| Chỉ số | Giá trị |
-|---|---:|
-| Commit | **199** |
-| PR đã merge | **60** |
-| File thay đổi | **178** |
-| Dòng thêm | **26.849** |
-| Dòng xoá | **2.850** |
+## A1. Kết quả chấm UAT (03/09 – 18/09)
 
-Phân bổ dòng thay đổi:
-
-| Vùng | Dòng | % |
+| | Số lượt | Tỉ lệ |
 |---|---:|---:|
-| `tests/` | 11.007 | **37,1%** |
-| `backend/` | 7.823 | 26,4% |
-| `scripts/` | 4.002 | 13,5% |
-| `docs/` | 3.547 | 12,0% |
-| `src/` | 2.451 | 8,3% |
-| khác | 828 | 2,7% |
+| Người dùng chấm **đúng** 👍 | 14 | **40,0%** |
+| Người dùng chấm **sai** 👎 | 21 | 60,0% |
+| **Tổng lượt có chấm** | **35** | 100% |
 
-> Kiểm thử chiếm tỷ trọng lớn nhất — mỗi bản sửa số liệu đều kèm test khoá.
+## A2. Phân tích 21 lượt bị chấm sai
 
-Nhịp PR theo ngày: 15/09 (5) · 16/09 (5) · 17/09 (10) · 18/09 (3) · 21/09 (6) · 22/09 (8) · 23/09 (**27**)
+| Nhóm | Số lượt | Tỉ lệ |
+|---|---:|---:|
+| Lỗi thật — **đã có bản sửa** | **17** | **81,0%** |
+| **Chatbot đúng**, người chấm đối chiếu khác phạm vi | 2 | 9,5% |
+| Cần DNH chốt định nghĩa nghiệp vụ | 2 | 9,5% |
 
----
+→ **Không có lượt nào là lỗi chưa tìm ra nguyên nhân.** 100% đã truy được nguồn gốc.
 
-## 2. Kiểm thử tự động
+## A3. Tỉ lệ đúng — hiện tại và dự kiến
 
-| | 10/09 | 23/09 | Tăng |
-|---|---:|---:|---:|
-| Hàm test | 523 | **949** | **+81,5%** |
-| File test | 55 | **121** | **+120,0%** |
+| Mốc | Tỉ lệ đúng |
+|---|---:|
+| Khi chấm UAT (03–18/09) | **40,0%** |
+| Sau khi xác minh 2 ca chatbot vốn đã đúng | **45,7%** |
+| **Dự kiến sau khi chấm lại 17 bản sửa** | **94,3%** |
+| Phần còn phụ thuộc DNH chốt định nghĩa | 5,7% |
 
-Kết quả chạy toàn bộ ngày 23/09: **1.052 passed, 1 deselected, 0 failed** → **100%** test đạt.
+**Đã chấm lại thực tế 23/09: 2 lượt** — 1 đóng hoàn toàn, 1 đạt 2/3 điều kiện.
+Còn 18 lượt chờ chạy để xác nhận con số 94,3%.
 
----
+## A4. Điểm quan trọng: 45% "lỗi" không phải lỗi sản phẩm
 
-## 3. Cổng kiểm trước UAT
+Quét toàn bộ log tháng 9, có **31 lượt báo "Lỗi"**:
 
-Trạng thái **23/09, chạy trên máy 24 (production)**:
+| Nguyên nhân | Số lượt | Tỉ lệ | Bản chất |
+|---|---:|---:|---|
+| **Hết hạn mức API** | **14** | **45,2%** | **Không phải chatbot sai** |
+| Quá thời gian xử lý | 12 | 38,7% | Lỗi thật — đã sửa |
+| Kẹt trạng thái | 3 | 9,7% | Đã sửa |
+| Người dùng đóng sớm | 2 | 6,5% | Không phải lỗi |
 
-| Cổng | Kết quả |
+Người chấm chỉ nhìn thấy chữ **"Lỗi"** nên ghi vào sổ như nhau. Nặng nhất: một người hỏi **cùng một
+câu 5 lần trong 75 phút**, cả 5 lần đều do hết hạn mức.
+
+**Đã khắc phục:** lỗi hết hạn mức nay có mã riêng và thông báo phân biệt rõ với lỗi sản phẩm.
+
+12 lượt quá thời gian đều dừng ở **110 giây** — một ngưỡng cấu hình duy nhất, không phải 12 câu hỏi
+chậm khác nhau. Đã sửa: nay trả câu trả lời rút gọn kèm phần đã đối chiếu được, thay vì chữ "Lỗi".
+
+## A5. Độ chính xác số liệu — đã kiểm chứng
+
+| Hạng mục | Kết quả |
 |---|---|
-| Tài khoản và phạm vi dữ liệu | **ĐẠT** |
-| Phân quyền kênh ETC | **ĐẠT** — 3/3 phép |
-| Bất biến số liệu 51 công cụ | **ĐẠT** — 99 phép đạt, **0 lệch** |
+| Phép kiểm bất biến số liệu | **99/99 đạt, 0 lệch** |
+| Công cụ báo cáo có phép đối chiếu | **49/51 = 96,1%** |
+| Phân quyền theo vai/miền/kênh | **3/3 đạt** |
+| Tài khoản hợp lệ phạm vi | **30/30 = 100%** |
 
-**Kết luận cổng: "Các cổng kiểm tra tự động đã đạt; có thể chuyển sang bước test 5 câu."**
+**Cổng kiểm trước UAT: ĐẠT** — *"có thể chuyển sang bước test 5 câu."*
 
-| Chỉ số | Giá trị |
+### Sai số liệu đã phát hiện và sửa
+
+| Phát hiện | Số tiền |
 |---|---:|
-| Phép kiểm chạy được và đạt | **99/99 = 100%** |
-| Tool có phép đối chiếu | **49/51 = 96,1%** |
-| Tool thiếu nguồn (đã biết, phía DNH) | 2 |
-| Tài khoản đã duyệt hợp lệ phạm vi | **30/30 = 100%** |
+| Nhân bản dòng khi ghép mã nhân viên | 253.831.460 đ |
+| Thiếu Kênh MT + Chợ sỹ Miền Nam khi đối soát | 205.469.532 đ |
+| Chứng từ ngày tương lai lọt vào tổng | 17.558.648 đ |
+| Chốt sai đội hình kỳ quá khứ | 9.214.815 đ |
+| **Tổng đã sửa** | **486.074.455 đ** |
 
-Tiến triển trong ngày: kho dev 03/09 chạy được 35 phép → 23/09 đạt **99 phép** (+183%); số mục bị bỏ
-giảm **25 → 2** (−92%).
-
----
-
-## 4. Xử lý phản hồi UAT
-
-| Chỉ số | Giá trị |
-|---|---:|
-| Câu UAT điều tra dứt điểm | **7** (v21, v24, v34, C08, C20, C24, C29) |
-| Trong đó: lỗi thật của chatbot, đã sửa | **4** |
-| Trong đó: **chatbot đúng, checker sai** | **2** (C08, C29 bảng A) |
-| Trong đó: bất đồng định nghĩa, cần DNH chốt | **1** |
-| Đợt sửa prompt gộp | **5/6 = 83%** xong, 1 mục chờ DNH |
-
-### Danh sách chấm lại
-
-| | Số lượt | Ghi chú |
-|---|---:|---|
-| Ban đầu | 24 | |
-| Đóng **miễn phí** bằng đối chiếu log | **−6 (25%)** | không tốn lượt gọi model nào |
-| Phát hiện bổ sung | +2 | log chi phí bỏ sót |
-| **Còn phải chấm lại** | **20** | |
-| Đã chạy 23/09 | 2 | 1 đóng được, 1 đạt 2/3 điều kiện |
-| Còn lại | **18** | |
-
-### Phân loại lỗi UAT tháng 9 (quét toàn bộ `query_runs`)
-
-| Loại | Số lượt | Bản chất |
-|---|---:|---|
-| Hết hạn mức API | **14** | **KHÔNG phải lỗi sản phẩm** |
-| Timeout | 12 | lỗi thật — đã truy ra **một** nguyên nhân chung |
-| Kẹt trạng thái | 3 | |
-| Người dùng đóng sớm | 2 | |
-| **Tổng** | **31** | |
-
-> **45% số "lỗi" trong sổ chấm UAT là hết tiền API, không phải chatbot hỏng.** Người chấm chỉ thấy
-> chữ "Lỗi" nên ghi như nhau. Đã sửa: lỗi hết credit nay có mã riêng + thông báo phân biệt.
-
-12 lượt timeout đều chết trong dải **111,8–116,4 giây** (biên độ 4,6 giây, trải 18 ngày, 6 câu hỏi
-khác nhau) → **một ngưỡng cấu hình 110 giây**, không phải 6 câu chậm riêng lẻ. Đã sửa: hết ngân sách
-nay trả câu trả lời rút gọn thay vì chữ "Lỗi".
+Thêm một lỗi không quy ra tiền được: **20 tháng doanh thu trả về 0 đồng** (01/2024–08/2025) — đã sửa.
 
 ---
 
-## 5. Sai số liệu đã tìm ra và sửa — quy ra tiền
+# B. HỆ THỐNG CẢNH BÁO (ALERT)
 
-| Phát hiện | Số tiền | Trạng thái |
-|---|---:|---|
-| Join `dmsid` trùng làm phồng doanh thu (0,256%) | **253.831.460 đ** | ✅ đã sửa, khớp SQL đến từng đồng |
-| Thiếu Kênh MT + Chợ sỹ Miền Nam trong đối soát | **205.469.532 đ** | ✅ đã sửa |
-| Chứng từ ETC ngày tương lai lọt vào 2 đường tính | **17.558.648 đ** | ✅ đã sửa |
-| Chốt sai đội hình kỳ quá khứ (v34) | **9.214.815 đ** | ✅ đã sửa |
-| 20 tháng doanh thu trả về **0 đồng** (01/2024–08/2025) | *toàn bộ kỳ* | ✅ đã sửa |
-| 11 khách Miền Trung thiếu dòng FACT cấp nhân viên | **13.173.440 đ** | ⏳ chờ DNH xác nhận |
-| Cây KPI: rollup QLV vs tổng TDV (0,303%) | **55.866.929 đ** | ⚠️ dưới ngưỡng 1%, cần truy |
+## B1. Mức hoàn thành
 
-**Tổng sai số đã sửa: 486.074.455 đ** (chưa kể 20 tháng ra 0 đồng).
-**Còn treo: 69.040.369 đ.**
+| Hạng mục | Trạng thái |
+|---|---|
+| Số loại cảnh báo đã xây | **19 trigger** |
+| Dịch vụ chạy thường trực trên máy thật | ✅ **Đang chạy** (`DNH_Realtime_Alerts`) |
+| Kiểm thử tự động | **43 test** |
+| Kênh gửi: Email | ✅ đang chạy |
+| Kênh gửi: Teams | ⏳ **chờ DNH cấp 6 UPN + webhook** |
+| Đổi máy chủ gửi mail sang tên miền DNH | ⏳ **chờ DNH cấp đặc tả SMTP** |
+
+**Mức hoàn thành phần code: ~95%.** Phần còn lại không nằm ở MCNA.
+
+## B2. Danh mục 19 cảnh báo
+
+| Nhóm | Cảnh báo |
+|---|---|
+| **Doanh thu** (5) | Sụt doanh thu · Nhịp tháng theo kênh · Nhịp theo đội · Tập trung doanh thu · Nhịp KPI ngày |
+| **Công nợ** (4) | Vượt hạn mức tín dụng · Tỉ lệ quá hạn toàn công ty · Khách quá hạn vẫn đặt đơn mới · Dịch chuyển tuổi nợ |
+| **Tồn kho** (2) | Hàng chậm luân chuyển · Hàng cận date |
+| **Khách hàng** (2) | Khách rời bỏ · Khách mua đều bỗng im lặng |
+| **Nhân sự / KPI** (3) | Rủi ro lực lượng bán · Nhân viên không phát sinh doanh số · Tụt mốc KPI |
+| **Chất lượng dữ liệu** (3) | Độ mới dữ liệu ETL · Đối soát KPI vs doanh thu · Tỉ lệ hàng trả |
 
 ---
 
-## 6. Chi phí AI
+# C. HỆ THỐNG BÁO CÁO (REPORT)
+
+## C1. Mức hoàn thành
+
+| Hạng mục | Trạng thái |
+|---|---|
+| Công cụ báo cáo cố định | **51 công cụ** |
+| Có phép kiểm bất biến số liệu | **49/51 = 96,1%** |
+| 2 công cụ chưa kiểm được | thiếu nguồn từ DNH, **không phải lỗi** |
+| Báo cáo định kỳ tự động | ✅ Bản tin QLV · Báo cáo insight · Bộ gửi thông báo |
+| Kiểm thử tự động | **64 file test** |
+
+**Mức hoàn thành: ~96%.**
+
+## C2. Hai công cụ chưa chạy được — nguyên nhân ngoài MCNA
+
+| Công cụ | Nguyên nhân |
+|---|---|
+| Hiệu quả khuyến mãi | **Job đồng bộ CTKM dừng từ 09/01/2026** — 11 bảng cùng chết. Thuộc hạ tầng DNH |
+| So sánh công nợ theo kỳ | Lịch sử công nợ chỉ lưu từ 21/08/2026 |
+
+> Sự cố CTKM làm **3 câu UAT không trả lời được cho bất kỳ kỳ nào trong năm 2026**. MCNA chỉ đọc dữ
+> liệu, không sửa được chiều ghi — cần đội vận hành DNH khởi động lại job và chạy bù.
+
+---
+
+# D. CHI PHÍ VẬN HÀNH AI
 
 | Khoản | Số tiền |
 |---|---:|
-| Sự cố `business-eval` 10/09 (235 lượt không điều phối) | **7,08 USD ≈ 177.000 đ** |
-| Lượt gọi không truy được người chạy (11/09 + 13/09) | **≈ 133.300 đ** |
-| Đợt chấm lại 23/09 — đã chạy 2 lượt | **0,6841 USD = 17.103 đ** |
-| Đơn giá thật đo được | **8.550 đ/lượt** |
-| 18 lượt còn lại (dự kiến) | **≈ 154.000 đ** |
+| Đơn giá thật mỗi lượt hỏi (đo 23/09) | **8.550 đ** |
+| Đợt chấm lại — đã chạy 2 lượt | 17.103 đ |
+| 18 lượt còn lại (dự kiến) | ≈ 154.000 đ |
+| Đã tiết kiệm bằng phân tích log (0 đ chi phí AI) | **≈ 76.950 đ** |
 
-### Biện pháp đã áp dụng
+### Kiểm soát chi phí đã áp dụng
 
-| Biện pháp | Kết quả |
+| Biện pháp | Trạng thái |
 |---|---|
-| Cấm `business-eval`, mọi lượt trả phí phải được duyệt trước | ✅ vào `AGENTS.md` |
-| Chặn lượt gọi model thiếu `username`/`session_id` | ✅ đã deploy |
-| Lỗi hết credit có mã riêng + cảnh báo Teams | ✅ đã deploy |
-| Cảnh báo **trước khi** cạn số dư | ⏳ chờ số dư từ Anthropic Console |
-| Đóng 6 mục chấm lại bằng đối chiếu log miễn phí | ✅ tiết kiệm **≈ 51.300 đ** |
-| Gộp 4 lượt "mùa vụ" thành 1 | ✅ tiết kiệm **≈ 25.650 đ** |
-
-**Tiết kiệm đã thực hiện: ≈ 76.950 đ** (bằng phân tích log, 0 đồng chi phí model).
-
-> Ước tính ban đầu 4.000 đ/lượt là **sai một nửa** — đo thật ra 8.550 đ/lượt vì mỗi mục chạy trong
-> phiên riêng nên phải ghi lại cache (cache chiếm 71% chi phí). Ngân sách 20 lượt: 80.000 đ →
-> **171.000 đ**.
+| Mọi lượt gọi trả phí phải được duyệt trước | ✅ |
+| Chặn lượt gọi không xác định được người dùng | ✅ đã chạy thật |
+| Lỗi hết hạn mức có cảnh báo Teams ngay | ✅ đã chạy thật |
+| Cảnh báo **trước khi** cạn hạn mức | ⏳ chờ số dư từ Console |
 
 ---
 
-## 7. Công cụ vận hành mới
+# E. TỔNG HỢP MỨC HOÀN THÀNH
 
-| Công cụ | Mục đích |
+| Hạng mục | Mức hoàn thành |
+|---|---:|
+| **Cảnh báo (Alert)** | **~95%** |
+| **Báo cáo (Report)** | **~96%** |
+| **Chatbot — độ chính xác số liệu** | **99/99 phép kiểm đạt** |
+| **Chatbot — tỉ lệ đúng theo người dùng chấm** | 40% → **dự kiến 94,3%** |
+| **Cổng kiểm trước UAT** | ✅ **ĐẠT** |
+
+---
+
+# F. VIỆC CHỜ PHÍA DNH
+
+| Việc | Ảnh hưởng |
 |---|---|
-| `doc_query_runs_may_24.py` | Đọc log UAT máy 24, 5 phần — miễn phí |
-| `truy_luot_khong_ten.py` | Truy nguồn lượt gọi model không có danh tính |
-| `cham_lai_uat.py` | Chạy lại lượt UAT đúng vai, **mặc định không gọi model** |
-| `kiem_truoc_uat.ps1` | Cổng kiểm 3 lớp trước khi giao tài khoản |
-| `runbook_trien_khai_may_24.md` | Quy trình pull–restart, 5 bẫy đã gặp |
+| **Khởi động lại job đồng bộ CTKM** (dừng 09/01/2026) | 3 câu UAT không trả lời được cho năm 2026 |
+| 4 câu hỏi định nghĩa nghiệp vụ | Chặn đóng UAT |
+| 6 UPN Teams + webhook | Chưa bật kênh Teams cho cảnh báo |
+| Đặc tả SMTP | Chưa đổi được máy chủ gửi mail sang tên miền DNH |
+| Nguồn giá tồn kho | 969.269 đơn vị đang hiển thị 0 đồng |
+| Nguồn chỉ tiêu theo quý | 1 câu UAT chưa trả lời đủ |
 
 ---
 
-## 8. Còn lại trước 30/09
-
-| Việc | Chặn ở | Tiền |
-|---|---|---:|
-| 18 lượt chấm lại | quyết định ngân sách | **≈ 154.000 đ** |
-| 4 câu hỏi định nghĩa nghiệp vụ | **DNH** | — |
-| Số dư API để bật cảnh báo sớm | nội bộ | — |
-| Sự cố đồng bộ CTKM dừng 09/01/2026 | **DNH** — MCNA không sửa được | — |
-| Truy chênh cây KPI 1 QLV | nội bộ | 55.866.929 đ |
-
-**Chặn kỹ thuật duy nhất ngoài tầm MCNA:** job đồng bộ nhóm CTKM (11 bảng) chết từ 09/01/2026, làm
-3 câu UAT không trả lời được cho mọi kỳ năm 2026.
-
----
-
-## 9. Ba con số tóm gọn
+# G. BA CON SỐ CHO SLIDE TỔNG KẾT
 
 | | |
 |---|---:|
-| Cổng kiểm trước UAT | **ĐẠT — 99/99 phép, 0 lệch** |
-| Kiểm thử tự động | **1.052 đạt / 0 hỏng**, +81,5% số test |
-| Sai số liệu đã sửa | **486.074.455 đ** |
+| Cổng kiểm số liệu trước UAT | **99/99 đạt — 0 lệch** |
+| Nguyên nhân phản hồi UAT đã truy ra | **100%** (21/21) |
+| Sai số liệu đã phát hiện và sửa | **486.074.455 đ** |
