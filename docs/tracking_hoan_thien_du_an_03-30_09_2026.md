@@ -1,63 +1,145 @@
-# Tracking hoàn thiện dự án DNH — cập nhật 03/09/2026
+# Tracking hoàn thiện dự án DNH — cập nhật **23/09/2026**
 
-## Kết quả đã hoàn tất trong đợt làm sạch miễn phí
+> **Bản 03/09 đã cũ 20 ngày và gây hiểu nhầm.** Nó liệt 6 việc trong "đợt sửa prompt gộp — CHƯA
+> deploy", nhưng kiểm lại trong code ngày 23/09 thì **5/6 đã làm xong**, chỉ còn 1 mục đang chờ DNH.
+> Ai đọc bản cũ rồi bắt tay làm lại là mất công. Mục này ghi lại để lần sau không lặp: **tài liệu
+> tracking phải đối chiếu code trước khi dùng làm danh sách việc.**
 
-| Việc | Trạng thái | Bằng chứng / ghi chú |
-|---|---|---|
-| Trang quyết định Nhóm A | Xong | `Nhom_A_can_DNH_chot_truoc_UAT_10-09-2026.md`, gồm A1–A9 và số câu bị ảnh hưởng trực tiếp. |
-| Top sản phẩm tách OTC/ETC | Đã có trong code | Mô tả tool và system prompt đều buộc gọi hai lần khi so sánh hai kênh; không sửa lặp lại. |
-| Bộ kiểm bất biến 40 công cụ | Xong phần code | Catalog phủ đúng 40/40 tool. Kho dev chạy được 35 phép đạt, 0 lệch; 25 mục bị bỏ vì kho dev thiếu bảng/cột hoặc không có dữ liệu. Phải chạy lại trên máy 24 trước UAT. |
-| Panel vai trò Trưởng phòng | Đã có trong code | `regional_director` hiển thị “Giám đốc Miền / Kênh (Trưởng phòng)” ở danh sách, form tạo và form sửa. |
-| S27/S30 mồ côi | Xong | C41 chuyển sang S27 (`READY_CURRENT`); C45 chuyển sang S30 (`READY`). Không còn checker mồ côi. |
-| C01/M01 đủ 24 tháng | Xong và đã chạy thật | S01 đọc thẳng 24 tháng hóa đơn và tính MoM/YoY/tăng trưởng. Lần chạy cuối ra 72 dòng theo tháng và 3 dòng tăng trưởng; C01/M01 chuyển sang `READY`. |
-| Quy tắc Active Customer | Xong | Thêm TK vào tầng nhân viên cùng TDV/CTV/CS; CS và TK dùng `is_ac`, không cộng/hiển thị ASO. Test hiện kiểm riêng cả CS lẫn TK. |
-| Cây `frontend/` trùng | Đã cảnh báo rõ hơn | File `_KHONG_DUNG_LAM_ROOT_DIRECTORY.md` ghi rõ chênh lệch và cách xóa phần git-tracked sau khi được duyệt. Chưa xóa vì máy 24 còn dùng `.vercel/project.json`. |
-| Đáp án 138 câu | Xong | Đã sinh lại lúc 09:28 ngày 03/09 trên 368.226 dòng bán hàng: 80 checker chạy đủ, 1 chạy một phần, 1 dùng kho local, 4 khóa đúng chủ đích, không có checker lỗi. Baseline: 63 `READY`, 2 `READY_CURRENT`, 62 `PARTIAL/DERIVED`, 11 `BLOCKED`. |
-| Snapshot KPI/lương vs hóa đơn | Đã chạy lại | Khớp 1.960/1.973 dòng chung; khi loại `IsDuplicate=1` khớp 1.875/1.876 dòng chung trong ngưỡng 1%. |
-| File Excel giao tester | Đã cập nhật | Ngày chốt 31/08/2026; C01/M01→`READY`, C41→S27, C45→S30; tổng hợp tự tính 62 câu cần chốt/thiếu một phần. |
-| Kiểm thử tự động | Đạt | 435 test đạt, 1 test chủ động bỏ qua. Đã sửa ca test dùng cứng ngày 28 khiến sai khi tháng có 31 ngày. |
-| Build và lint giao diện production | Đạt | Next.js build thành công, TypeScript và 16 trang tĩnh hoàn tất. ESLint đạt sạch sau khi loại đúng các cây lưu trữ, bản sao và đầu ra sinh tự động khỏi phạm vi kiểm tra. |
-| Kiểm tra phân quyền ETC | Đạt | 3/3 phép kiểm giữ đúng kênh ETC. Script mặc định đã đổi từ JSON sang báo cáo tiếng Việt; vẫn có `--json` cho hệ thống tự động. |
-| Lệnh kiểm tra một lần trước UAT | Xong | `scripts/kiem_truoc_uat.ps1` chạy tuần tự kiểm tài khoản, phân quyền ETC và bất biến 40 công cụ; cuối cùng kết luận rõ Đạt/Chưa đạt. |
-| Gói UAT chiều 03/09 | Đã chuẩn bị | `handoff_private/UAT_Chatbot_DNH_2026-09-03_v2.zip`, gồm trang đọc trước và 8 tài liệu/file kiểm thử; không chứa mật khẩu, API key hay chuỗi kết nối. Chỉ phát hành sau khi tài khoản máy 24 qua kiểm tra scope. |
+Còn **7 ngày** tới hạn đóng UAT 30/09/2026.
 
-## Việc còn lại trước khi giao tester
+---
 
-| Ưu tiên | Việc | Người cần xử lý | Hạn / điều kiện |
+## Đợt sửa prompt gộp — đã xong 5/6, không phải 0/6
+
+Kiểm bằng cách đọc code ngày 23/09, kèm vị trí cụ thể:
+
+| # | Việc | Trạng thái | Bằng chứng |
 |---:|---|---|---|
-| 1 | Chọn ngân sách A (nạp thêm khoảng 60–80 USD) hoặc B (giảm hạn mức UAT) | MCNA + DNH | Trong tuần 1; chưa chốt thì không nên mở UAT rộng. |
-| 2 | Chạy `scripts/kiem_tai_khoan_thieu_pham_vi.py` trên `auth.db` của máy 24 và sửa mọi tài khoản đã duyệt còn thiếu scope | Người vận hành máy 24 | Trước khi gửi tài khoản. Kho local hiện có 12 tài khoản QLV cũ không hợp lệ; đây chưa phải kết luận về production. |
-| 3 | Gửi trang Nhóm A và lấy xác nhận bằng văn bản | DNH | Trước 10/09/2026. Riêng “tuần trong tháng” chưa sửa code cho tới khi có phản hồi hoặc tới hạn áp dụng giả định. |
+| 1 | So sánh hai kênh phải gọi `get_top_products` hai lần | ✅ xong | `nl2sql.py:2984` — *"goi get_top_products HAI LAN voi cung khoang ngay/limit: mot lan channel=OTC va mot lan channel=ETC"* |
+| 3 | Free-SQL viết thẳng `c.area_code` lên `dms_khachhang` (cột không tồn tại) | ✅ xong | `schema_context.py:96` ghi rõ `dms_khachhang` có `city_id`, **không** có `area_code`; đường join đúng `customer_code → dms_khachhang.code → city_id → dim_tinhthanhpho.area_code` được mô tả ở dòng 47–49, 62–63 |
+| 5 | CTKM luôn hiện `program_code` + kỳ kèm tên | ✅ xong | `nl2sql.py:1755` — *"BAT BUOC hien ca program_code, program_name va period tu payload"*; dòng 1763 xử lý `same_name_program_codes` |
+| 6 | C31: vế tăng thêm phải gồm **cả** khách tái kích hoạt | ✅ xong | `nl2sql.py:1061` — `added_revenue = new_or_first_observed_revenue + reactivated_revenue` |
+| 7 | Thiếu tool **tổng hợp** thưởng toàn công ty (C48) | ✅ đã quyết **không** mở tool mới | `report_templates.py:12858` — *"C48 UAT 07/09: dung chung tool luong da co thay vi mo them tool moi (bo 40 phep doi chieu…)"*. Dùng `salary_achievement_summary` |
+| 2 | Định nghĩa "tuần trong tháng" | ⏳ **chờ DNH** | `schema_context.py:382–386` đang áp quy tắc tạm: gặp "tuần trong tháng"/"tuần này"/"từng tuần" mà người hỏi không nói rõ cách chia thì **hỏi lại**, không tự chọn |
 
-## Đợt sửa prompt gộp cuối tuần 1 — CHƯA deploy
+**Kết luận: mục này không còn là một "đợt deploy gộp" nữa.** Chỉ còn #2, và nó chặn ở phía DNH chứ
+không phải ở code. Quy tắc gộp thay đổi mô tả tool/system prompt vào **một** lần deploy (cache chiếm
+71% chi phí) vẫn giữ nguyên cho các thay đổi sau này.
 
-Gom vào MỘT lần duy nhất vì mỗi lần sửa mô tả tool/system prompt là một lần trả tiền ghi lại cache
-cho mọi vai (cache chiếm 71% chi phí). Không vá lẻ từng cái.
+---
 
-| # | Việc | File | Gốc |
-|---:|---|---|---|
-| 1 | Mô tả `get_top_products`: câu hỏi so sánh hai kênh phải gọi tool hai lần, mỗi lần một `channel` | `backend/report_templates.py` | Ca `dnh` 14/08 |
-| 2 | Định nghĩa "tuần trong tháng" — chốt tạm tuần lịch thứ Hai nếu 10/09 chưa có phản hồi DNH | `backend/schema_context.py` | Câu A9 nhóm A |
-| 3 | Free-SQL bỏ qua join `city_id → area_code`, viết thẳng `c.area_code` lên `dms_khachhang`/`dmssx_khachhang` (cột không tồn tại); retry lặp lại đúng lỗi 8 lần không tự sửa | `backend/schema_context.py` + vòng retry free-SQL | UAT trực tiếp 03/09 — câu C02 hỏng hoàn toàn, ghi nhận không hài lòng |
-| 7 | Thiếu công cụ **tổng hợp** thưởng toàn công ty: chỉ có tool xếp hạng TOP 100 nên chatbot phải từ chối C48 (bỏ sót ~106/209 người). Dữ liệu có sẵn trên Bravo, chỉ thiếu tool cộng tổng. Chatbot từ chối là đúng, nhưng nên vá khoảng trống | `backend/report_templates.py` — thêm tool tổng hợp thưởng theo tháng/vùng/chức danh | UAT trực tiếp 03/09 — câu C48 |
-| 6 | C31: khi hỏi "khách mới/tái kích hoạt bù được bao nhiêu", vế tăng thêm phải gồm **cả khách tái kích hoạt**, không chỉ khách xuất hiện lần đầu. Hiện loại bất đối xứng nên tỷ lệ bù đắp ra 32–40% trong khi thực tế 69–137% ở mọi ngưỡng churn — kết luận ngược hẳn | Mô tả tool luồng khách trong `backend/nl2sql.py` | UAT trực tiếp 03/09 — câu C31, mức High |
-| 5 | CTKM: luôn hiển thị `program_code` và kỳ kèm tên chương trình. Nhiều chương trình trùng tên khác kỳ (`T9.2025_BPNGAM_10_TQ`, `Q4.2025_BPNGAM_10_TQ`, `Q1.2026_BPNGAM_10_TQ` đều là "Bổ phế Ngậm mua 10 tặng 01") — thiếu mã/kỳ thì câu trả lời không kiểm chứng được | Mô tả `get_promotion_effectiveness` trong `backend/nl2sql.py` | UAT trực tiếp 03/09 — câu C18 |
+## Việc còn lại thật sự — xếp theo mức chặn
 
-> **Đã gỡ mục 4 (CTKM dán nhãn sai) ngày 04/09** — kiểm lại bằng cách gọi thẳng
-> `promotion_effectiveness` cho thấy tool trả `invoiced_orders=309`, đúng bằng con số chatbot hiển
-> thị. Không có lỗi dán nhãn. Chênh 313 trong đối chứng ban đầu là do khác cửa sổ thời gian (tool cắt
-> tại mốc sync 09/01). Bài học: đừng kết luận từ replication SQL mà chưa gọi chính tool đó.
+### 🔴 1. Lỗi hết credit đang bị ghi vào sổ chấm như lỗi sản phẩm
 
-## 🔴 Sự cố vận hành phát hiện 03/09/2026 — job đồng bộ CTKM đã chết
+Đối chiếu `query_runs` đợt UAT 11–21/09 ra **13 lượt `error`**:
 
-**Không sửa được từ phía MCNA.** Repo chỉ ĐỌC các bảng `DMS_*` (không có lệnh `INSERT`/`UPDATE`/
-`MERGE` nào), và `sync_warehouse.py` chạy theo hướng Bravo → `warehouse.db`. Job hỏng nằm ở chiều
-ngược lại — **app DMS → Bravo**, thuộc hạ tầng DNH. Đây là phần cần chuyển cho đội vận hành DNH.
+| Loại | Số lượt | Thực chất |
+|---|---:|---|
+| `credit balance is too low` | **9** | Hết tiền API — **không phải lỗi sản phẩm** |
+| `The read operation timed out` | 4 | Lỗi thật, đã có bản sửa |
 
-### Phạm vi chính xác
+Người chấm UAT chỉ nhìn thấy chữ **"Lỗi"**, không phân biệt được hai loại, nên ghi vào sổ như chatbot
+hỏng. Nặng nhất: `thuan.pham` ngày 11/09 hỏi **cùng một câu 5 lần trong 75 phút** (02:58 → 04:12
+UTC), cả 5 lần đều hết credit.
+
+Đã grep toàn bộ `backend/` và `src/`: **không có chỗ nào bắt lỗi credit**. Chưa ai làm.
+
+→ Giao phiên `backend/` (Codex) 23/09: bắt riêng lỗi 400 credit với thông báo phân biệt được, và cho
+`backend/health_watchdog.py` cảnh báo **trước khi** số dư cạn hẳn.
+
+### 🔴 2. Lượt gọi model không có `username` — không truy được ai chạy
+
+`AGENTS.md` bắt buộc mọi lượt gọi model trả phí phải có `username` riêng và `session_id` có tiền tố
+nhận diện được; thiếu thì **không dùng để chấm UAT**. Hiện **không có chỗ nào ép** điều này.
+
+Log còn lại: 8 lượt `unknown` tối 13/09 (≈ **81.900 đ** trong 30 phút) và một cụm `unknown` ngày
+11/09 (≈ **51.400 đ**) — không truy được ai chạy. (Cụm `unknown`/`alice` ngày 21/09 23:56 thì vô
+hại: 0 token, 0 đ, là smoke test.)
+
+→ Chặn/cảnh báo ở tầng gọi: phiên `backend/`. Truy nguồn các lượt cũ: phiên `docs/`.
+
+### 🟡 3. Chấm lại 20 lượt ≈ 80.000 đ
+
+Xem [checklist_cham_lai_22-09.md](checklist_cham_lai_22-09.md). Danh sách gốc 24 lượt; đối chiếu
+`query_runs` miễn phí ngày 23/09 đóng được 6 mục mà không tốn lượt nào, nhưng phát hiện thêm 1 lượt
+bị sót → **còn 20 lượt**.
+
+**Phải chạy đối chiếu `query_runs` trước khi chấm lại bất cứ mục nào** — bước này miễn phí và đã
+chứng minh cắt được ¼ hàng đợi. Anh Đăng tự xem danh sách này.
+
+Khi chạy: bắt buộc truyền `username` riêng và `session_id` có tiền tố nhận diện được.
+
+### 🟡 4. Bộ kiểm bất biến 40 công cụ phải chạy lại trên máy 24
+
+Kho dev chạy được 35 phép đạt, 0 lệch; **25 mục bị bỏ** vì kho dev thiếu bảng/cột hoặc không có dữ
+liệu. Chưa chạy trên máy 24. Dùng `scripts/kiem_truoc_uat.ps1` (chạy tuần tự kiểm tài khoản, phân
+quyền ETC, bất biến 40 công cụ, kết luận Đạt/Chưa đạt).
+
+### 🟡 5. Kiểm tài khoản thiếu phạm vi trên `auth.db` máy 24
+
+`scripts/kiem_tai_khoan_thieu_pham_vi.py`. Kho local có 12 tài khoản QLV cũ không hợp lệ — **đây chưa
+phải kết luận về production**, phải chạy trên máy 24 mới biết.
+
+### ⏳ 6. Câu hỏi đang chờ DNH
+
+Xem [cau_hoi_DNH_23-09.md](cau_hoi_DNH_23-09.md) — 4 câu chặn đóng UAT:
+
+| # | Câu | Chặn |
+|---:|---|---|
+| 1 | "Doanh số ETC" là toàn kênh hay một miền? | Mục #22/#23 checklist |
+| 2 | Hóa đơn ETC đề ngày 28 hàng tháng: ghi trước hay nhập sai? | Cách tính doanh số tháng đang chạy |
+| 3 | 11 khách Miền Trung có doanh thu nhưng không có dòng FACT cấp nhân viên (13.173.440 đ) | Phép đối soát doanh thu (PR #62) |
+| 4 | Đơn có `DMSEmpId2` thì tính cho đội nào? | v24, v34 |
+
+Cộng thêm, từ bản cũ và vẫn còn treo: định nghĩa "tuần trong tháng" (A9), nguồn giá tồn kho (B03,
+969.269 đơn vị đang = 0 đ), nguồn target quý (mục #24 checklist), UPN Teams + webhook Flow (PR #41),
+đặc tả SMTP.
+
+### ⏳ 7. v34 — còn một điểm chưa chốt
+
+Chatbot trả **4** chương trình, checker liệt **12+**. Hai khả năng chưa phân biệt được: checker
+`ORDER BY p.Code` không có `TOP` nên ảnh chụp chỉ là phần đầu danh sách; hoặc phạm vi đội của tool
+hẹp hơn phạm vi checker chạy thật. Cần `sql_used_json` của lượt UAT thật trên máy 24.
+
+---
+
+## Đã làm xong ngày 23/09
+
+| PR | Nội dung |
+|---|---|
+| #49 | `_detail_cutoff()` đọc mốc từ dữ liệu thay vì hằng số — vá lỗ 20 tháng ra 0 đồng |
+| #50, #55 | Checklist chấm lại: đóng 6 mục miễn phí, hạ 24 → 20 lượt |
+| #51 | Chứng từ ngày tương lai không cộng vào tháng đang chạy |
+| #52 | v21 — hai định nghĩa cửa sổ nhìn lại |
+| #53, #61 | Runbook triển khai máy 24 (restart theo **thư mục** thay đổi, cổng 8010) |
+| #59, #60 | Điều tra v24 — 1 lỗi thật, 2 bất đồng định nghĩa |
+| #62 | Đối soát doanh thu: cộng thêm Kênh MT và Chợ sỹ Miền Nam (Codex) |
+| **#63** | **v34 + v24** — chốt đội đúng kỳ quá khứ, khử trùng `dmsid` |
+
+**PR #63 đã merge, CHƯA deploy.** Có sửa `backend/` → máy 24 phải `git pull` rồi restart
+`DNH_Chatbot_Backend`. Không đổi `src/` nên không cần restart `DNH_Realtime_Alerts`. Xem
+[runbook_trien_khai_may_24.md](runbook_trien_khai_may_24.md).
+
+### Hai bài học ghi lại từ hôm nay
+
+1. **Bravo đọc được thẳng từ máy dev** qua `_q_bravo()`. Tôi đã viết vào tài liệu rằng "không tái lập
+   được vì kho local thiếu bảng CTKM" rồi dừng ở suy luận — thử một câu `SELECT TOP (1) 1` thì ra
+   ngay, và nhờ đó tái lập v34 khớp đến từng đồng. Các bảng chỉ có trên Bravo: nhóm `DMS_*`, và lịch
+   sử `FACT_*` dài hơn cửa sổ sync.
+2. **Đừng kết luận "chưa ai sửa" từ tiêu đề commit.** Hai lần trong một ngày mắc đúng lỗi này. Phải
+   `git log -S` theo mã câu **hoặc** grep ghi chú trong code — liên kết thường chỉ nằm ở comment.
+
+---
+
+## 🔴 Sự cố vận hành — job đồng bộ CTKM đã chết (phát hiện 03/09, **vẫn chưa khôi phục**)
+
+**Không sửa được từ phía MCNA.** Repo chỉ ĐỌC các bảng `DMS_*` (không có `INSERT`/`UPDATE`/`MERGE`
+nào), và `sync_warehouse.py` chạy theo hướng Bravo → `warehouse.db`. Job hỏng nằm ở chiều ngược lại —
+**app DMS → Bravo**, thuộc hạ tầng DNH.
 
 11 bảng nhóm khuyến mãi cùng dừng trong một khoảng 40 giây ngày **09/01/2026**, trong khi phần còn
-lại của pipeline vẫn chạy bình thường tới hôm nay:
+lại của pipeline vẫn chạy bình thường:
 
 | Trạng thái | Bảng | `MAX(SyncAt)` |
 |---|---|---|
@@ -70,18 +152,18 @@ lại của pipeline vẫn chạy bình thường tới hôm nay:
 | ⚠️ | `DMS_NhomKHNPP` | 30/12/2025 |
 | ⚠️ | `DMS_CTKMOnTop3` | `NULL` — chưa từng ghi |
 
-Các mốc liền nhau theo thứ tự chạy cho thấy đây là **một job duy nhất phụ trách nhóm CTKM**, dừng sau
-lần chạy thành công cuối. Hai bảng còn lại dừng quanh dịp đầu năm, nhiều khả năng cùng đợt.
-
-### Hệ quả và việc cần làm
-
 Đơn gắn CTKM: 12.447–13.545/tháng (09–12/2025) → 2.042 (01/2026, dừng giữa tháng) → **0** từ 02/2026.
-C18, M35, V34 không trả lời được cho bất kỳ kỳ nào trong 2026.
+**C18, M35, V34 không trả lời được cho bất kỳ kỳ nào trong 2026.**
 
 1. **DNH**: tìm và khởi động lại job đồng bộ nhóm CTKM, chạy bù từ 09/01/2026.
 2. **MCNA**: không cần sửa gì — khôi phục xong là `S12` và tool khuyến mãi tự chạy lại.
 3. **Trước khi giao UAT nhóm khuyến mãi**: nếu chưa khôi phục, tester sẽ báo lỗi hàng loạt cho cùng
    một nguyên nhân. Nên hoặc khôi phục trước, hoặc ghi rõ trong pack là nhóm này chỉ kiểm kỳ 2025.
+
+> Ngày 23/09 điều tra v34 xác nhận lại: mốc phủ liên kết CTKM vẫn dừng ở **09/01/2026**. Vì vậy kỳ
+> báo cáo mặc định của tool khuyến mãi lùi về **12/2025** — đúng thiết kế, không phải lỗi.
+
+---
 
 ## Khoảng trống đồng bộ ETL — dữ liệu có trên Bravo nhưng chatbot không thấy
 
@@ -90,35 +172,28 @@ C18, M35, V34 không trả lời được cho bất kỳ kỳ nào trong 2026.
 | `dbo.DMS_DiTuyen` | 1.785.213 dòng, 451 NV, 37.853 khách, 06/2022–nay. Có `IsPlaned`, `ArriveTime`, `LeaveTime` | C49, V16 và toàn bộ nhóm phủ tuyến/viếng thăm | **Không có bảng nào** |
 | `DiscountRate` trên `vHoaDonTotal`/`vHoaDonETCTotal` | Mọi dòng hóa đơn | Chiết khấu trong C13 | Không có cột |
 | `BranchCode`/`DistributorCode` trên hai view hóa đơn | Mọi dòng hóa đơn | Phần chi nhánh nội bộ của C25/M29 | Không có cột |
+| Lịch sử `FACT_TongHopKhachHang` | 22 mốc, 01/2025–nay | Chốt đội cho kỳ quá khứ | Chỉ giữ **90 ngày** (`sync_fact_tonghopkhachhang(days=90)`) |
 
-Ba nguồn này đều **có sẵn trên Bravo**, chỉ chưa đưa xuống `warehouse.db`. Chatbot từ chối các câu
-liên quan là hợp lý với quyền truy cập của nó, nhưng đây là việc sửa được bằng ETL chứ không phải
-giới hạn dữ liệu — nên tách khỏi nhóm "cần DNH mở nguồn".
+Ba nguồn đầu **có sẵn trên Bravo**, chỉ chưa đưa xuống `warehouse.db` — sửa được bằng ETL, không
+phải giới hạn dữ liệu, nên tách khỏi nhóm "cần DNH mở nguồn".
+
+Dòng thứ tư là nguyên nhân lỗi v34. **Đã xử lý bằng đường khác** (PR #63): dùng
+`fact_thongketinhluong` — kho đã giữ sẵn 400 ngày và đúng là bảng checker dùng — thay vì nới cửa sổ
+đồng bộ.
+
+---
 
 ## Điểm cần làm rõ định nghĩa (chưa phải lỗi)
 
 | Câu | Hiện trạng | Cần làm |
 |---|---|---|
-| C20 | Ba số tổng khớp tuyệt đối với `S13` (217,56 / 226,84 / -9,28 tỷ), số khách lệch không đáng kể. Nhưng LFL chatbot -37,40 tỷ + "phần dư chưa phân loại" +2,87 tỷ, còn `S13` cho LFL -34,49 tỷ và phần dư = 0. Đã loại hai giả thuyết: 0 giao dịch thiếu mã khách; hàng trả cả kỳ chỉ -502 triệu | Xem `audit_log` phiên hỏi C20 để biết chatbot xếp khoản 2,87 tỷ vào đâu và theo tiêu chí gì. Chốt một định nghĩa LFL duy nhất rồi mới so |
+| C20 | Ba số tổng khớp tuyệt đối với `S13` (217,56 / 226,84 / −9,28 tỷ), số khách lệch không đáng kể. Nhưng LFL chatbot −37,40 tỷ + "phần dư chưa phân loại" +2,87 tỷ, còn `S13` cho LFL −34,49 tỷ và phần dư = 0. Đã loại hai giả thuyết: 0 giao dịch thiếu mã khách; hàng trả cả kỳ chỉ −502 triệu | Xem `audit_log` phiên hỏi C20 để biết chatbot xếp khoản 2,87 tỷ vào đâu và theo tiêu chí gì. Chốt một định nghĩa LFL duy nhất rồi mới so |
 
-## Gói gửi tester sau khi ba việc trên đạt
-
-1. `outputs/uat_chatbot_dnh/uat_tracking_chatbot_dnh.xlsx`.
-2. `docs/dap_an_bo_cau_hoi_dieu_hanh.md` và `docs/bao_cao_sql_doi_chung_138.md` qua kênh nội bộ.
-3. `docs/doi_chieu_snapshot_vs_hoadon.md`.
-4. Tài khoản đúng cây phân quyền; gửi mật khẩu bằng kênh riêng.
-5. `docs/huong_dan_ban_giao_uat.md` và trang quyết định Nhóm A.
-
-## Chưa làm trong hôm nay để tránh tốn tiền hoặc vượt quyền
-
-- Chưa chạy thử chatbot 5 câu và chưa chạy vòng 138 câu qua API.
-- Chưa thay đổi hạn mức câu hỏi vì cần quyết định ngân sách A/B.
-- Chưa sửa định nghĩa tuần trong tháng vì hạn phản hồi là 10/09.
-- Chưa sửa tài khoản production, deploy, gửi email hay gửi tài liệu ra ngoài.
-- Đợt bổ sung sau commit `79ee98e` (báo cáo ETC thân thiện, lệnh kiểm trước UAT và cấu hình lint) chưa commit/push.
+---
 
 ## Nợ kỹ thuật đã thấy nhưng không chặn UAT
 
-- Cây `frontend/` cũ vẫn được giữ lại vì máy 24 còn dùng `.vercel/project.json`; ESLint đã bỏ qua cây
-  này để tránh trộn kết quả của bản sao với ứng dụng production. Chỉ xóa sau khi đã chuyển cấu hình
-  triển khai và được duyệt rõ ràng.
+- Cây `frontend/` cũ vẫn giữ vì máy 24 còn dùng `.vercel/project.json`; ESLint đã bỏ qua cây này để
+  khỏi trộn kết quả bản sao với ứng dụng production. Chỉ xóa sau khi chuyển cấu hình triển khai và
+  được duyệt rõ ràng.
+- 10 nhánh cục bộ đã merge chưa dọn.
