@@ -138,12 +138,27 @@ Thêm một lỗi không quy ra tiền được: **20 tháng doanh thu trả v�
 
 # D. CHI PHÍ VẬN HÀNH AI
 
-| Khoản | Số tiền |
+### Chi phí phụ thuộc ĐỘ NẶNG của câu hỏi — không có đơn giá chung
+
+Đo thật 23/09:
+
+| Câu hỏi | Thời gian xử lý |
 |---|---:|
-| Đơn giá thật mỗi lượt hỏi (đo 23/09) | **8.550 đ** |
-| Đợt chấm lại — đã chạy 2 lượt | 17.103 đ |
-| 18 lượt còn lại (dự kiến) | ≈ 154.000 đ |
-| Đã tiết kiệm bằng phân tích log (0 đ chi phí AI) | **≈ 76.950 đ** |
+| Hiệu quả khuyến mãi (nhiều công cụ, nhiều chương trình) | **33,9 giây** |
+| Danh sách khách hàng mới trong tháng | **23,8 giây** |
+
+Hai câu này **không thể cùng đơn giá**. Ước tính nay lấy **chi phí lịch sử của chính câu hỏi đó**
+(trung vị các lần đã hỏi), kèm số quan sát để biết độ tin cậy.
+
+| | |
+|---|---:|
+| Đợt chấm lại đã chạy (2 lượt) | **17.103 đ** |
+| Tiết kiệm bằng phân tích nhật ký (0 đ chi phí AI) | **≈ 77.000 đ** |
+| 18 lượt còn lại | tính theo từng câu, **không áp đơn giá chung** |
+
+> Hai ước tính trước đều sai vì dùng một đơn giá phẳng: **4.000 đ** (trung bình các phiên nhiều lượt,
+> dùng sẵn bộ nhớ đệm) rồi **8.550 đ** (trung bình 2 lượt chạy thật). Cả hai che mất chênh lệch giữa
+> câu nặng và câu nhẹ — đo trên dữ liệu mẫu cho thấy chênh tới **4,3 lần**.
 
 ### Kiểm soát chi phí đã áp dụng
 
