@@ -191,10 +191,55 @@ def data_freshness_note() -> str:
 # ngoai"). Cac ham can CHI TIET tung dong (top_products: item_code; check_order_timing: stt/Amount9)
 # KHONG the bu duoc bang nguon nen - xem canh bao rieng trong 2 ham do.
 
+_DETAIL_CUTOFF_FALLBACK = "2024-01-01"
+# Khoa cache theo DUONG DAN kho dang mo, khong phai mot o nho duy nhat: test doi DB_PATH sang kho
+# tam cho tung ca, con may 24 co the tro sang ban sao khi doi chieu. Cache khong khoa se tra moc
+# cua kho TRUOC do cho kho HIEN TAI - sai am tham va phu thuoc thu tu goi.
+_DETAIL_CUTOFF_CACHE = {}
+_DETAIL_CUTOFF_TTL = dt.timedelta(minutes=10)
+
+
 def _detail_cutoff() -> str:
-    # Phai dong bo voi sync_warehouse.DETAIL_HISTORY_START. Khong import file sync de tranh no
-    # tai ket noi Bravo khi service chatbot khoi dong.
-    return "2024-01-01"
+    """Ngay som nhat CON GIU hoa don chi tiet trong kho - doc TU CHINH KHO, khong tin hang so.
+
+    23/09/2026 (UAT dnh_etc 15/09 14:53 "thuc hien, ke hoach doanh so cac thang"): truoc day ham
+    nay tra ve cung hang so voi sync_warehouse.DETAIL_HISTORY_START (2024-01-01). Nhung kho tren
+    dia duoc dung theo chinh sach CU (chi giu 12 thang chi tiet) nen chi tiet that su chi bat dau
+    2025-09. Hai nguon vi the ho mat 20 thang lien tiep 2024-01 -> 2025-08: revenue_by_channel chi
+    UNION monthly_customer_summary khi date_from < cutoff, ma cutoff lai la 2024-01-01, nen khoang
+    do doc bang chi tiet - von rong - va tra ve DUNG 0 dong cho CA HAI kenh du monthly_customer_
+    summary co du so. Do la kieu "0 dong" bia ra ma ca du an dang chong.
+
+    Hang so chi khop du lieu sau khi da --full lai toan bo hoa don; truoc do khong ai bao loi.
+    Lay ranh gioi THAT tu kho khien moi do lech giua chinh sach sync va du lieu tren dia tu lanh,
+    khong phu thuoc vao viec co ai nho chay lai sync hay khong. Cache 10 phut vi ranh gioi chi doi
+    sau mot dot sync lon.
+    """
+    import local_warehouse
+
+    now = dt.datetime.now()
+    khoa = str(local_warehouse.DB_PATH)
+    cached = _DETAIL_CUTOFF_CACHE.get(khoa)
+    if cached and now - cached[0] < _DETAIL_CUTOFF_TTL:
+        return cached[1]
+    moc = []
+    for table in ("vhoadon_otc", "vhoadon_etc"):
+        try:
+            r = _q(f"SELECT MIN(doc_date) d FROM {table}")
+        except Exception:
+            continue
+        # .get(): mot so ca test thay _q bang stub tra ve dong co khoa khac; moc cat khong duoc lam
+        # vo ca tool chi vi khong doc duoc mot bang.
+        if r and isinstance(r[0], dict) and r[0].get("d"):
+            moc.append(str(r[0]["d"])[:10])
+    # Khong co bang/khong co dong nao: giu hang so cu thay vi doan - kho rong thi moi cau tra loi
+    # deu da bi chan o tang khac.
+    # Lam tron ve NGAY DAU THANG: nguon nen la bang KH x THANG nen ranh gioi hai nguon chi co nghia
+    # o muc thang. Neu giu nguyen ngay hoa don dau tien (vd 2025-09-03) thi cau hoi ca thang 09/2025
+    # (tu 2025-09-01) bi coi la "ky da nen" du chi tiet phu tron thang.
+    value = (min(moc)[:7] + "-01") if moc else _DETAIL_CUTOFF_FALLBACK
+    _DETAIL_CUTOFF_CACHE[khoa] = (now, value)
+    return value
 
 
 def _monthly_summary_scope_clause(scope_area_code: str, channel: str):
@@ -406,12 +451,16 @@ def revenue_by_channel(date_from: str, date_to: str, scope_area_code: str = None
                f"WHERE v.doc_date BETWEEN ? AND ?{scope_sql}", (date_from, date_to) + scope_params)[0]
         etc_rev, etc_hd = _f(e["rev"]), int(e["hd"])
 
-    # date_from truoc cua so 12 thang chi tiet -> phan xa hon da bi nen, cong them tu
-    # monthly_customer_summary (vhoadon_otc/etc chi con giu 12 thang gan nhat, xem sync_warehouse.py).
+    # date_from truoc moc con giu chi tiet -> phan xa hon da bi nen, cong them tu
+    # monthly_customer_summary (xem _detail_cutoff: moc lay tu chinh kho, khong phai hang so).
     cutoff = _detail_cutoff()
-    if date_from < cutoff:
-        summary_to = min(date_to, cutoff)
-        ym_from, ym_to = date_from[:7], summary_to[:7]
+    # Chi cong bang nen cho cac thang TRUOC HAN thang cua cutoff. Truoc day cat theo NGAY
+    # (min(date_to, cutoff) roi lay [:7]) nen thang chua cutoff bi tinh o CA hai nguon khi thang do
+    # vua co dong da nen vua co dong chi tiet - cong doi doanh thu dung mot thang giao nhau. Cach
+    # cat theo thang nay da duoc dung san o customer_movement/_customer_monthly_activity.
+    ym_from = date_from[:7]
+    ym_to = min(date_to[:7], _month_add(cutoff[:7], -1)) if date_from < cutoff else None
+    if ym_to and ym_from <= ym_to:
         if scope_channel != "ETC":
             msc_o, msc_o_params = _monthly_summary_scope_clause(scope_area_code, "OTC")
             msc_emp_sql, msc_emp_params = _employee_scope_clause(scope_employee_code, "m", as_of=date_to)
