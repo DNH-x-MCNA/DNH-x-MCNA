@@ -64,10 +64,13 @@ UTC), cả 5 lần đều hết credit.
 |---|---|
 | Lỗi HTTP 400 credit có `status = api_credit_exhausted` + thông báo rõ cho người dùng; lỗi gốc vẫn lưu trong `query_runs` | ✅ |
 | Chặn lượt gọi model thiếu `username` hoặc `session_id` nhận diện được | ✅ |
-| Watchdog cảnh báo số dư ước tính | ⚠️ **có code nhưng CHƯA BẬT** |
+| Watchdog cảnh báo **Teams** sau lượt web đầu tiên bị từ chối vì hết credit | ✅ |
+| Watchdog cảnh báo **sớm, trước khi cạn** | ⚠️ **có code nhưng CHƯA BẬT** |
 
-Kiểm chứng bằng `git stash`: mã cũ 14 test trượt, mã mới 15 test đạt. Full suite **1.024 passed,
-1 deselected**. Không gọi API trả phí.
+**22 test hồi quy mới.** Full suite **1.031 passed, 1 deselected**. Không gọi API trả phí.
+
+Lưu ý phân biệt hai lớp cảnh báo: lớp **sau khi bị từ chối** đã hoạt động — lần tới hết credit sẽ có
+tin Teams ngay thay vì im lặng. Lớp **trước khi cạn** mới là phần còn chặn.
 
 ### 🔴 Việc đang chặn: watchdog cần hai số từ anh Đăng
 
@@ -76,16 +79,20 @@ Watchdog không tự đọc được số dư từ Anthropic — cần mốc th�
 1. **Số dư API hiện tại** (USD)
 2. **Thời điểm chụp số dư đó** (ngày giờ)
 
-Lấy tại Anthropic Console → **Billing / Credits**. Chưa có hai số này thì cảnh báo **không bật
-được**, và kịch bản 23/09 lặp lại: hết tiền giữa buổi chấm, người chấm ghi vào sổ như lỗi sản phẩm.
+Lấy tại Anthropic Console → **Billing / Credits**. Chưa có hai số này thì cảnh báo **sớm** không bật
+được — hệ thống vẫn chỉ biết kêu **sau khi** đã hết tiền, tức người chấm vẫn mất một lượt.
 
 Đây là mục cấp bách nhất còn lại — credit đã cạn **ngay trong ngày 23/09**.
 
 ### Còn lại của mục này
 
-9 dòng UAT cũ trong `query_runs` vẫn mang trạng thái lỗi chung, **chưa backfill** sang
-`api_credit_exhausted`. Không chặn gì, nhưng ai đọc `query_runs` thô về sau vẫn thấy 9 dòng đó
-giống lỗi sản phẩm — nên đối chiếu kèm `error_message`.
+**Cả 14 dòng** hết credit trong tháng 9 vẫn mang trạng thái lỗi chung, **chưa backfill** sang
+`api_credit_exhausted`. Không chặn gì, nhưng ai đọc `query_runs` thô về sau vẫn thấy chúng giống lỗi
+sản phẩm — nên đối chiếu kèm `error_message`.
+
+> ⚠️ Con số **9** từng ghi ở đây là **sai phạm vi**: nó chỉ là phần rơi vào cửa sổ 11–21/09 mà
+> checklist soi, không phải cả tháng. Quét cả tháng 9 ra **14**. Cùng một cái bẫy đã làm bảng phân
+> loại lỗi ở trên bị ghi thiếu — đọc số nào cũng phải kèm cửa sổ thời gian sinh ra nó.
 
 ### 🔴 2. Lượt gọi model không có `username` — không truy được ai chạy
 
