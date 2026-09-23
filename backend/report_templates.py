@@ -2730,19 +2730,17 @@ def _invoice_customer_lifecycle_series(month_to: str, months_back: int,
                                        scope_employee_code: str = None) -> dict:
     """Chuoi C29 suy tu hoa don OTC, tach khoi co nghiep vu NC/RO/AC cua Bravo.
 
-    Khong goi `first_observed` la khach moi that. Ham dung mot cua so lich su 12 thang CO DINH,
-    neo vao month_to thay vi neo vao thang dau bang hien thi. Nhu vay so tai kich hoat cua cung mot
-    thang khong thay doi khi nguoi dung doi months_back tu 4 thanh 6. C29 hien chi co co NC/RO cho
-    OTC, nen chuoi kem theo cung khoa OTC.
+    Khong goi `first_observed` la khach moi that. Cua so quan sat C29 bat dau 10/2025
+    theo #sales cua checker UAT, doc lap voi so thang hien thi. C29 hien chi co co NC/RO
+    cho OTC, nen chuoi kem theo cung khoa OTC.
     """
     earliest, latest = _revenue_data_month_range()
     if not earliest or not latest:
         return {"status": "no_data", "months": []}
-    display_from = _month_add(month_to, -(months_back - 1))
-    # Neo lich su vao THANG CUOI, khong vao display_from. Ban cu lam T8 co 14 thang lich su khi
-    # hien 4 dong, nhung 16 thang khi hien 6 dong; cung mot khach bi doi tu first-observed sang
-    # reactivated chi vi mo rong bang. 12 thang nay cung khop cua so #sales cua checker UAT.
-    required_history_from = _month_add(month_to, -12)
+    # #sales cua checker C29 loc DocDate >= 2025-10-01. Thang 09/2025 van co trong kho,
+    # nhung neu nap no thi khach chi mua T9 roi quay lai T4-T9/2026 bi chuyen nham
+    # tu first-observed sang reactivated. Giữ mốc này cố định khi đổi months_back.
+    required_history_from = "2025-10"
     history_from = max(earliest, required_history_from)
     history_complete = earliest <= required_history_from
     rows = _customer_monthly_activity(
@@ -2759,7 +2757,7 @@ def _invoice_customer_lifecycle_series(month_to: str, months_back: int,
     for offset in range(months_back - 1, -1, -1):
         month = _month_add(month_to, -offset)
         previous = _month_add(month, -1)
-        if month < earliest:
+        if month < history_from:
             series.append({
                 "month": month, "khong_co_du_lieu_hoa_don": True,
                 "invoice_active_customers": None, "invoice_continuing_customers": None,
@@ -2789,9 +2787,9 @@ def _invoice_customer_lifecycle_series(month_to: str, months_back: int,
             "month": month,
             "invoice_active_customers": active,
             # Thieu thang lien truoc thi khong duoc bien "khong thay" thanh 0.
-            "invoice_continuing_customers": continuing if previous >= earliest else None,
+            "invoice_continuing_customers": continuing if previous >= history_from else None,
             "invoice_reactivated_customers": reactivated if history_complete else None,
-            "invoice_stopped_customers": stopped if previous >= earliest else None,
+            "invoice_stopped_customers": stopped if previous >= history_from else None,
             "invoice_first_observed_customers": first_observed if history_complete else None,
             "classification_history_complete": history_complete,
         })
