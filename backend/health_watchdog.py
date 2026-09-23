@@ -28,8 +28,10 @@ neu src/notifier.py doi cau truc.
 import os
 import sys
 import json
+import math
 import time
 import datetime as dt
+import sqlite3
 import urllib.request
 
 # Chay qua Task Scheduler (console cp1252 tren Windows) - log co the chua URL/ky tu dac biet (vd
@@ -46,6 +48,8 @@ STATE_PATH = os.path.join(LOG_DIR, "health_watchdog_state.json")
 WAREHOUSE_DB = os.path.join(BACKEND_DIR, "warehouse.db")
 CLOUDFLARED_LAST_URL_PATH = os.path.join(LOG_DIR, "cloudflared_last_url.txt")
 CLOUDFLARED_SUPERVISOR_LOG = os.path.join(LOG_DIR, "cloudflared_supervisor.log")
+COST_LOG_PATH = os.path.join(LOG_DIR, "cost_log.jsonl")
+MEMORY_DB = os.path.join(BACKEND_DIR, "memory.db")
 
 # Nguong: gap ~4-5 lan chu ky sync binh thuong (20 phut/lan, xem sync_scheduler.ps1) truoc khi coi
 # la "sync da chet" - tranh bao dong gia khi 1-2 chu ky don le bi cham/retry binh thuong.
@@ -177,6 +181,86 @@ def _check_tunnel_mismatch() -> tuple:
     return minutes_since > TUNNEL_MISMATCH_THRESHOLD_MIN, saved_url, latest_url
 
 
+def _check_api_credit() -> tuple:
+    """Return (estimated remaining USD, low threshold USD, snapshot key).
+
+    Anthropic exposes usage/cost reports, but no supported balance endpoint. Operators must
+    capture a Console balance and its local timestamp in WATCHDOG_API_CREDIT_SNAPSHOT_USD and
+    WATCHDOG_API_CREDIT_SNAPSHOT_AT. Only this backend's Anthropic cost log is deducted, so the
+    value is an estimate; external API/Console spend and auto-reloads are invisible here.
+    Missing/invalid configuration or cost log means UNKNOWN, not a healthy balance.
+    """
+    balance_text = os.environ.get("WATCHDOG_API_CREDIT_SNAPSHOT_USD", "").strip()
+    at_text = os.environ.get("WATCHDOG_API_CREDIT_SNAPSHOT_AT", "").strip()
+    if not balance_text or not at_text:
+        return None, None, None
+    try:
+        balance = float(balance_text)
+        threshold = float(os.environ.get("WATCHDOG_API_CREDIT_LOW_USD", "5"))
+        snapshot_at = dt.datetime.fromisoformat(at_text)
+        if (not math.isfinite(balance) or not math.isfinite(threshold)
+                or balance < 0 or threshold <= 0 or snapshot_at.tzinfo is not None):
+            raise ValueError("snapshot must be a nonnegative USD balance and a local naive timestamp")
+    except ValueError as exc:
+        _log(f"Credit check: cau hinh khong hop le: {exc}")
+        return None, None, None
+    if not os.path.exists(COST_LOG_PATH):
+        _log("Credit check: khong co cost_log.jsonl, khong the uoc tinh so du")
+        return None, None, None
+
+    spent = 0.0
+    try:
+        with open(COST_LOG_PATH, "r", encoding="utf-8") as handle:
+            for line in handle:
+                try:
+                    row = json.loads(line)
+                    ts = dt.datetime.fromisoformat(row["ts"])
+                    if ts.tzinfo is not None or ts < snapshot_at:
+                        continue
+                    if row.get("provider") == "Anthropic":
+                        cost = float(row["cost_usd"])
+                        if not math.isfinite(cost) or cost < 0:
+                            raise ValueError("invalid Anthropic cost")
+                        spent += cost
+                except (ValueError, KeyError, TypeError, json.JSONDecodeError) as exc:
+                    _log(f"Credit check: cost_log.jsonl khong doc duoc day du: {exc}")
+                    return None, None, None
+    except OSError as exc:
+        _log(f"Credit check: khong doc duoc cost_log.jsonl: {exc}")
+        return None, None, None
+    return balance - spent, threshold, f"{at_text}|{balance_text}"
+
+
+def _recent_credit_rejection() -> tuple | None:
+    """Fallback signal when no balance snapshot exists: a real rejected web request."""
+    if not os.path.exists(MEMORY_DB):
+        return None
+    try:
+        with sqlite3.connect(f"file:{MEMORY_DB}?mode=ro", uri=True, timeout=5) as conn:
+            row = conn.execute("""
+                SELECT created_at, username FROM query_runs
+                WHERE status IN ('error', 'api_credit_exhausted')
+                  AND (LOWER(error_message) LIKE '%credit balance is too low%'
+                       OR LOWER(error_message) LIKE '%insufficient_credit%')
+                ORDER BY created_at DESC LIMIT 1
+            """).fetchone()
+    except sqlite3.Error as exc:
+        _log(f"Credit rejection check: khong doc duoc query_runs: {exc}")
+        return None
+    if not row:
+        return None
+    try:
+        created_at = dt.datetime.fromisoformat(row[0].replace("Z", "+00:00"))
+        if created_at.tzinfo is None:
+            created_at = created_at.replace(tzinfo=dt.timezone.utc)
+    except (TypeError, ValueError):
+        return None
+    age_seconds = (dt.datetime.now(dt.timezone.utc) - created_at).total_seconds()
+    if not 0 <= age_seconds <= 1800:  # watchdog runs every 15 minutes
+        return None
+    return row[0], row[1]
+
+
 def run_check():
     state = _load_state()
     changed = False
@@ -227,6 +311,48 @@ def run_check():
         state["tunnel_mismatch_alerted"] = False
         changed = True
     _log(f"Tunnel check: is_mismatch={is_mismatch}, saved={saved_url}, latest={latest_url}")
+
+    remaining, threshold, snapshot_key = _check_api_credit()
+    if remaining is None:
+        _log("Credit check: CHUA GIAM SAT (can snapshot so du va cost log)")
+    else:
+        if state.get("api_credit_snapshot_key") != snapshot_key:
+            state["api_credit_snapshot_key"] = snapshot_key
+            state["api_credit_low_alerted"] = False
+            changed = True
+        if remaining <= threshold and not state.get("api_credit_low_alerted", False):
+            sent = _send_teams_alert(
+                "Han muc API Claude sap can",
+                f"Số dư ước tính còn ${remaining:.2f}, dưới ngưỡng ${threshold:.2f}. "
+                "Đối chiếu số dư thực trong Anthropic Console > Settings > Billing và nạp thêm "
+                "trước khi chatbot ngừng trả lời. Ước tính chỉ trừ chi phí Anthropic trong "
+                "backend/logs/cost_log.jsonl từ mốc số dư đã cấu hình; chi phí ngoài chatbot "
+                "và tự nạp tiền không được tính.",
+                severity="WARNING",
+            )
+            if sent:
+                state["api_credit_low_alerted"] = True
+                changed = True
+        elif remaining > threshold and state.get("api_credit_low_alerted", False):
+            state["api_credit_low_alerted"] = False
+            changed = True
+        _log(f"Credit check: estimated_remaining_usd={remaining:.2f}, low_usd={threshold:.2f}")
+
+    rejection = _recent_credit_rejection()
+    if rejection and not state.get("api_credit_exhausted_alerted", False):
+        sent = _send_teams_alert(
+            "API Claude da HET credit",
+            f"Anthropic vua tu choi cau hoi cua {rejection[1]} luc {rejection[0]} UTC vi het credit. "
+            "Kiem tra Anthropic Console > Settings > Billing va nap them credit; "
+            "nguoi dung da duoc bao khong can hoi lai.",
+            severity="CRITICAL",
+        )
+        if sent:
+            state["api_credit_exhausted_alerted"] = True
+            changed = True
+    elif not rejection and state.get("api_credit_exhausted_alerted", False):
+        state["api_credit_exhausted_alerted"] = False
+        changed = True
 
     if changed:
         _save_state(state)

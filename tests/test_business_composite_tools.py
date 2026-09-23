@@ -582,7 +582,7 @@ def test_ask_sends_forced_tool_choice_only_on_first_round(monkeypatch):
 
     result = nl2sql.ask(
         "Chuỗi liên kết đơn hàng–khuyến mãi hiện có dữ liệu đến ngày nào?",
-        session_id="forced-quality", scope_role="c_level",
+        session_id="forced-quality", username="unit-test", scope_role="c_level",
     )
 
     assert result["answer"].startswith("Dữ liệu liên kết đến")
@@ -617,7 +617,7 @@ def test_regional_director_skips_forced_salary_tool_that_is_not_advertised(monke
 
     nl2sql.ask(
         "Thưởng/KPI đội có khớp doanh số và chính sách; bất thường cần kiểm tra",
-        session_id="regional-m20", scope_area_code="MB", scope_role="regional_director",
+        session_id="regional-m20", username="unit-test", scope_area_code="MB", scope_role="regional_director",
     )
 
     names = {tool["name"] for tool in seen[0]["tools"]}
@@ -732,7 +732,7 @@ def _run_ask_until_rounds_exhausted(monkeypatch, scope_role):
     monkeypatch.setattr(nl2sql, "call_template",
                         lambda name, args, **kw: {"ok": True, "result": {"programs": []}})
 
-    nl2sql.ask("Danh gia hieu qua khuyen mai", session_id="s-test", query_id="q-test",
+    nl2sql.ask("Danh gia hieu qua khuyen mai", session_id="s-test", username="unit-test", query_id="q-test",
               scope_role=scope_role)
     return fake_messages.calls
 
@@ -787,7 +787,7 @@ def test_repeated_tool_call_is_not_reexecuted_and_forces_final_answer(monkeypatc
         return {"ok": True, "result": {"programs": [{"program_name": "KM01"}]}}
 
     monkeypatch.setattr(nl2sql, "call_template", fake_template)
-    result = nl2sql.ask("Danh gia hieu qua khuyen mai", session_id="s-test", query_id="q-test")
+    result = nl2sql.ask("Danh gia hieu qua khuyen mai", session_id="s-test", username="unit-test", query_id="q-test")
 
     assert result["answer"].startswith("Da tong hop tu du lieu da truy van.")
     assert "Dữ liệu trực tiếp:" in result["answer"]

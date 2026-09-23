@@ -20,6 +20,7 @@ import re
 import time
 import unicodedata
 from collections import defaultdict
+from functools import wraps
 import anthropic
 from schema_context import SCHEMA_CONTEXT
 from query_engine import run_query
@@ -55,6 +56,68 @@ from query_plan import build_query_plan
 # Bo trong ca 3 -> chay Claude y het truoc day.
 MODEL = os.environ.get("LLM_MODEL", "").strip() or "claude-sonnet-5"
 LLM_BASE_URL = os.environ.get("LLM_BASE_URL", "").strip()
+
+
+class ApiCreditExhaustedError(RuntimeError):
+    """The provider rejected a model call because its prepaid credit is exhausted."""
+
+    def __init__(self, raw_message: str):
+        self.raw_message = raw_message
+        super().__init__(raw_message)
+
+
+class UnattributedModelCallError(ValueError):
+    """Do not spend API credit on a request that cannot be attributed."""
+
+
+def _is_api_credit_error(exc: Exception) -> bool:
+    """Only classify an HTTP billing rejection, never an arbitrary model 400."""
+    if getattr(exc, "status_code", None) not in (400, 402):
+        return False
+    body = getattr(exc, "body", None)
+    detail = f"{exc} {body}".lower()
+    return any(marker in detail for marker in (
+        "credit balance is too low", "credit balance too low",
+        "credit_balance", "insufficient_credit", "insufficient credit",
+    ))
+
+
+def _translate_credit_errors(fn):
+    @wraps(fn)
+    def wrapped(*args, **kwargs):
+        try:
+            return fn(*args, **kwargs)
+        except Exception as exc:
+            if _is_api_credit_error(exc):
+                raise ApiCreditExhaustedError(str(exc)) from exc
+            raise
+    return wrapped
+
+
+def _translate_stream_credit_errors(fn):
+    @wraps(fn)
+    def wrapped(*args, **kwargs):
+        try:
+            yield from fn(*args, **kwargs)
+        except Exception as exc:
+            if _is_api_credit_error(exc):
+                raise ApiCreditExhaustedError(str(exc)) from exc
+            raise
+    return wrapped
+
+
+def _require_model_attribution(username: str, session_id: str, origin: str) -> None:
+    """Web sessions have server-side ownership; offline runs need a readable prefix."""
+    user = (username or "").strip()
+    sid = (session_id or "").strip()
+    if not user or user.lower() in ("unknown", "anonymous", "none", "null", "alice", "test", "admin"):
+        raise UnattributedModelCallError("Lượt gọi model phải có username riêng, không dùng unknown.")
+    if not sid or sid.lower() in ("default", "unknown", "none", "null"):
+        raise UnattributedModelCallError("Lượt gọi model phải có session_id nhận diện được.")
+    if origin != "web" and not re.match(r"^[A-Za-z][A-Za-z0-9_]*[-_:].+", sid):
+        raise UnattributedModelCallError(
+            "Lượt gọi model từ script phải có session_id với tiền tố nhận diện được (ví dụ uat-...)."
+        )
 
 # Cac tinh nang CHI Anthropic co. Tro sang nha cung cap khac thi phai tat, neu khong API se tu choi
 # hoac lang le bo qua - ca hai deu kho phat hien.
@@ -3455,9 +3518,10 @@ def _timeout_stream_chunks(result: dict):
     yield {"type": "done", **result}
 
 
+@_translate_credit_errors
 def ask(question: str, session_id: str = "default", username: str = None, scope_area_code: str = None,
         scope_employee_code: str = None, scope_channel: str = None, scope_role: str = None,
-        query_id: str = None) -> dict:
+        query_id: str = None, origin: str = "script") -> dict:
     """
     Nhan cau hoi tieng Viet + session_id (1 phien chat webapp) - tu dong nho lai vai cau hoi/tra loi
     gan nhat trong CUNG session de hieu ngu canh cau hoi tiep theo.
@@ -3491,6 +3555,7 @@ def ask(question: str, session_id: str = "default", username: str = None, scope_
             "query_id": query_id,
         }
 
+    _require_model_attribution(username, session_id, origin)
     freshness = FreshnessCollector()
     client = _llm_client()
     history = load_history(session_id, max_turns=_max_history_turns(scope_role))
@@ -3859,9 +3924,10 @@ def ask(question: str, session_id: str = "default", username: str = None, scope_
             "partial_results_hidden": True, "query_id": query_id}
 
 
+@_translate_stream_credit_errors
 def ask_stream(question: str, session_id: str = "default", username: str = None, scope_area_code: str = None,
                 scope_employee_code: str = None, scope_channel: str = None, scope_role: str = None,
-                query_id: str = None):
+                query_id: str = None, origin: str = "script"):
     """11/08/2026: BAN SSE cua ask() - GIONG HET logic tool-calling/phan quyen/cache o tren.
     17/08/2026: SDK van nhan stream tu model, nhung backend chi cong bo text sau khi biet response
     khong con tool_use, loai timestamp model tu sinh va gan metadata nguon. Uu tien answer tren UI
@@ -3905,6 +3971,7 @@ def ask_stream(question: str, session_id: str = "default", username: str = None,
                "query_id": query_id}
         return
 
+    _require_model_attribution(username, session_id, origin)
     freshness = FreshnessCollector()
     client = _llm_client()
     history = load_history(session_id, max_turns=_max_history_turns(scope_role))

@@ -274,7 +274,7 @@ def test_ask_replaces_model_timestamp_and_persists_final_answer(monkeypatch):
     appended = []
     _patch_nl2sql_runtime(monkeypatch, SimpleNamespace(messages=FakeMessages()), appended)
 
-    result = nl2sql.ask("Đánh giá CTKM", session_id="s", query_id="q")
+    result = nl2sql.ask("Đánh giá CTKM", session_id="unit-freshness", username="unit-test", query_id="q")
 
     assert "13/08/2026" not in result["answer"]
     assert result["answer"].count("Dữ liệu trực tiếp:") == 1
@@ -322,7 +322,7 @@ def test_ask_stream_emits_exactly_the_final_persisted_answer(monkeypatch):
     appended = []
     _patch_nl2sql_runtime(monkeypatch, SimpleNamespace(messages=FakeMessages()), appended)
 
-    chunks = list(nl2sql.ask_stream("Đánh giá CTKM", session_id="s", query_id="q"))
+    chunks = list(nl2sql.ask_stream("Đánh giá CTKM", session_id="unit-freshness", username="unit-test", query_id="q"))
     done = chunks[-1]
     streamed = "".join(chunk["text"] for chunk in chunks if chunk["type"] == "text_delta")
 
