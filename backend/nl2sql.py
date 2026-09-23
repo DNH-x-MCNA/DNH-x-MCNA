@@ -653,7 +653,10 @@ TEMPLATE_TOOLS = [
     {
         "name": "get_revenue_by_channel",
         "description": "Doanh thu + so hoa don theo kenh OTC va ETC trong 1 khoang ngay. "
-                        "Truy van DA KIEM CHUNG khop 100% voi Bravo - UU TIEN dung tool nay cho moi cau hoi ve doanh thu theo kenh/tong doanh thu.",
+                        "Truy van DA KIEM CHUNG khop 100% voi Bravo - UU TIEN dung tool nay cho moi cau hoi ve doanh thu theo kenh/tong doanh thu. "
+                        "Voi tai khoan chi duoc xem kenh ETC ma KHONG co scope_area_code, tong ETC la TOAN KENH ETC, "
+                        "gom ca 3 mien MB/MT/MN; PHAI noi ro 'toan kenh ETC, gom ca 3 mien' ngay canh tong. "
+                        "Neu co scope_area_code thi chi noi tong kenh ETC trong mien duoc phep, KHONG goi la ca 3 mien.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -971,7 +974,10 @@ TEMPLATE_TOOLS = [
                         "muc uu tien va ghi mot dong 'Dang liet ke N/T khach', khong noi ve gioi han ky thuat. "
                         "Moi khach co nhom_im_lang va san_pham_mua_nhieu_nhat. Neu san pham co status hoac "
                         "product_name_status=not_available thi chi noi thieu thong tin san pham, KHONG loai "
-                        "khach va KHONG suy dien ten SKU. Kho local chi giu chi tiet hoa don ~12 thang gan "
+                        "khach va KHONG suy dien ten SKU. Ky san pham mua nhieu nhat la ky_san_pham "
+                        "12 thang, KHAC ky_nhin_lai 6 thang cua doanh_thu_ky_nhin_lai. Khi noi "
+                        "'san pham mua nhieu nhat', BAT BUOC ghi ro ky_san_pham.tu/den tu payload, "
+                        "khong gan nham vao ky doanh thu. Kho local chi giu chi tiet hoa don ~12 thang gan "
                         "nhat, PHAI noi ro gioi han nay neu nguoi dung hoi xa hon.",
         "input_schema": {
             "type": "object",
@@ -1052,6 +1058,10 @@ TEMPLATE_TOOLS = [
                        "quan sat 24 thang de khop S90; khong dung dinh nghia nay cho V15/V23. Khi hoi "
                        "tong doanh thu them/mat hay ty le bu doanh thu, BAT BUOC dung "
                        "summary_all_customers; summary_on_returned_top_rows chi la top-N de minh hoa. "
+                       "C31: added_revenue = new_or_first_observed_revenue + reactivated_revenue; "
+                       "ty le bu dap la compensation_pct_of_lost_revenue = added_revenue / "
+                       "lost_previous_revenue * 100. BAT BUOC tinh ca khach tai kich hoat trong ve "
+                       "tang them; khong chi lay khach mua lan dau. "
                        "V15/S61b: SO KHACH THEO TUNG TDV phai lay o by_employee (tinh tren toan bo tap "
                        "khach, quy khach cho nguoi ban nhieu nhat trong chinh thang do) - TUYET DOI khong "
                        "tu dem tren danh sach customers da cat top-N. "
@@ -2207,6 +2217,11 @@ def _raw_query_payload(result: dict, db: str, question: str) -> dict:
             "LEFT JOIN khach theo customer_code, sau do LEFT JOIN dim_tinhthanhpho theo city_id va "
             "dung tp.area_code. Giu LEFT JOIN de khong lam mat khach mo coi."
         )
+        payload["next_action"] = (
+            "Sua JOIN theo query_correction roi goi query_database MOT LAN voi SQL da sua. "
+            "Day la cot sai trong bang local da co, khong phai thieu nguon SQL Server."
+        )
+        return payload
     if db == "local" and any(marker in error_lower for marker in _SCHEMA_COVERAGE_ERROR_MARKERS):
         try:
             payload["sql_server_catalog_fallback"] = search_sql_catalog(
@@ -3271,6 +3286,12 @@ def _dynamic_context_note(question: str = "", session_id: str = "", scope_area_c
             f'KHONG kha dung cho tai khoan nay. MOI cau tra loi co so lieu doanh thu/don hang PHAI ghi ro '
             f'dang "(chi kenh {scope_channel})" ngay canh con so.'
         )
+        if str(scope_channel).upper() == "ETC" and not scope_area_code:
+            parts.append(
+                "Tong doanh thu ETC cua tai khoan nay la TOAN KENH ETC, gom ca 3 mien MB/MT/MN. "
+                "Khi neu tong, PHAI ghi ro 'toan kenh ETC, gom ca 3 mien' de nguoi doc khong "
+                "doi chieu nham voi bao cao ETC loc rieng mot mien."
+            )
 
     glossary = retrieve_relevant_glossary(question, username=username)
     if glossary:
