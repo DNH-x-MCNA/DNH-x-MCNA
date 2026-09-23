@@ -45,10 +45,78 @@ Hai lượt timeout cách nhau **2 phút** — dấu hiệu người dùng bấm
 **Đây là ứng viên số một** sau khi xong việc credit: cùng một câu, cùng một ngày, bốn lần hỏng, và
 chưa có commit nào nhắm vào.
 
+---
+
+## 🔴 Đo được 23/09: cả 12 lượt chết ở CÙNG một ngưỡng, không phải 6 câu chậm riêng lẻ
+
+`duration_ms` của toàn bộ 12 lượt:
+
+```
+111,8  111,9  111,9  112,1  112,3  112,4  112,7  113,0  114,4  114,9  116,4 giây
+```
+
+Trải **18 ngày**, **6 câu hỏi khác nhau**, **2 tài khoản** — mà biên độ chỉ **4,6 giây**. Nếu là truy
+vấn chậm thật thì thời lượng phải tản mát. Bó sát thế này chỉ có một cách giải thích: **một ngưỡng
+cấu hình cố định**.
+
+Ngưỡng đó nằm ở [nl2sql.py:180](../backend/nl2sql.py):
+
+```python
+REQUEST_TIMEOUT_SECONDS = _timeout_env("CHAT_REQUEST_TIMEOUT_SECONDS", 110, 120)
+TOOL_TIMEOUT_SECONDS    = _timeout_env("CHAT_TOOL_TIMEOUT_SECONDS", 40, REQUEST_TIMEOUT_SECONDS)
+LLM_CALL_TIMEOUT_SECONDS = _timeout_env("CHAT_LLM_TIMEOUT_SECONDS", 45, REQUEST_TIMEOUT_SECONDS)
+```
+
+**110 giây ngân sách + 1,8–6,4 giây dọn dẹp = 111,8–116,4 giây quan sát được.** Khớp trọn vẹn.
+
+### Vì sao người dùng thấy chữ "Lỗi" thay vì một câu trả lời rút gọn
+
+Hệ thống **đã có** đường xuống thang êm — [nl2sql.py:3714](../backend/nl2sql.py):
+
+```python
+if query_plan.expired():
+    fallback = query_plan.timeout_answer()
+```
+
+Nhưng chỗ này chỉ được kiểm **ở bước chốt câu trả lời cuối**. Nếu ngân sách cạn **giữa** một lượt gọi
+model trong vòng lặp, tham số
+
+```python
+timeout=max(1.0, min(LLM_CALL_TIMEOUT_SECONDS, query_plan.remaining_seconds()))
+```
+
+làm SDK **ném exception** — và exception đó thoát ra ngoài thành `status=error`,
+`error_message="The read operation timed out"`.
+
+**Bằng chứng khớp: cả 12 lượt đều có `sql_used_json` = `(khong ghi)`.** Lượt nào đi tới bước chốt thì
+đã ghi được tool. Không lượt nào ghi → không lượt nào chạm tới `timeout_answer()`.
+
+### Hệ quả
+
+Đây **không phải** 6 câu hỏi cần tối ưu riêng. Đây là **một lỗ hổng xử lý ngoại lệ**: hệ thống có
+sẵn phương án xuống thang nhưng không bắt được đúng exception để dùng nó.
+
+Sửa chỗ này thì **cả 12 lượt** — và mọi lượt vượt ngân sách về sau — chuyển từ chữ **"Lỗi"** thành
+câu trả lời rút gọn kèm phần đã đối chiếu được. Với người chấm UAT, đó là khác biệt giữa "chatbot
+hỏng" và "chatbot trả lời được một phần, nói rõ phần còn thiếu".
+
+> Cùng họ với sự cố credit: người chấm chỉ thấy một chữ "Lỗi" cho những nguyên nhân hoàn toàn khác
+> nhau, nên ghi vào sổ như nhau.
+
+### Gợi ý cho phiên `backend/`
+
+1. Bắt exception timeout quanh **mọi** lượt gọi model trong vòng lặp, không chỉ ở bước chốt; rơi về
+   `query_plan.timeout_answer()` thay vì để thoát ra.
+2. Ghi `sql_used_json` **trước** khi chốt, để lượt hỏng vẫn truy được đã gọi tool nào.
+3. Chỉ sau khi làm xong hai việc trên mới bàn tới việc nới `CHAT_REQUEST_TIMEOUT_SECONDS` — nới trần
+   mà không có đường xuống thang thì chỉ dời chỗ hỏng.
+
+---
+
 ## Việc còn thiếu để Codex sửa tiếp
 
-Bảng trên đã có `created_at` và câu hỏi. **Còn thiếu `duration_ms` và tool đã gọi** — hai thứ cần để
-biết timeout ở bước nào (truy vấn kho, đọc Bravo, hay model xử payload).
+✅ **Đã lấy được `duration_ms` (xem trên).** `sql_used_json` thì **rỗng ở cả 12 lượt** — bản thân điều
+đó là bằng chứng, không phải thiếu dữ liệu.
 
 Đã bổ sung **Phần 5** vào [`scripts/doc_query_runs_may_24.py`](../scripts/doc_query_runs_may_24.py):
 in ra từng lượt timeout kèm giờ UTC, **giờ máy 24 đã quy đổi sẵn**, `duration_ms` theo giây, và
