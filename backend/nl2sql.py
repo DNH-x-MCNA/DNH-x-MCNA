@@ -2250,6 +2250,55 @@ def _payload_for_model(tool_name: str, payload, question: str):
         if unicodedata.category(ch) != "Mn"
     ).replace("đ", "d").split())
 
+    if (tool_name == "get_workforce_productivity"
+            and "lien tiep" in normalized and "duoi 80" in normalized):
+        wrapper = payload if isinstance(payload.get("du_lieu"), dict) else None
+        data = payload["du_lieu"] if wrapper else payload
+        source_rows = data.get("rows")
+        if isinstance(source_rows, list):
+            requested = re.search(r"\b(\d+)\s*thang\b", normalized)
+            min_months = max(1, int(requested.group(1))) if requested else 3
+            evaluated_month = data.get("decline_evaluated_through") or data.get("month_to")
+            matches = []
+            for row in source_rows:
+                if (not isinstance(row, dict) or row.get("month") != evaluated_month
+                        or (row.get("below_80_streak_months") or 0) < min_months):
+                    continue
+                actual, target = float(row.get("actual") or 0), float(row.get("target") or 0)
+                matches.append({
+                    "code": row.get("group_code"), "name": row.get("group_name"),
+                    "achievement_pct": round(row.get("achievement_pct") or 0, 2),
+                    "streak_months": row["below_80_streak_months"],
+                    "gap_to_80": round(max(0, 0.8 * target - actual)),
+                    "gap_to_target": round(max(0, target - actual)),
+                })
+            matches.sort(key=lambda row: (-row["gap_to_80"], str(row["code"])))
+            group_by = data.get("group_by")
+            both_levels = "ca nhan" in normalized and "doi" in normalized
+            other_level = ({"manager": "employee", "employee": "manager"}.get(group_by)
+                           if both_levels else None)
+            compact = {
+                "group_by": group_by, "month_to": data.get("month_to"),
+                "month_to_is_partial": data.get("month_to_is_partial"),
+                "pham_vi_kenh": data.get("pham_vi_kenh"), "data_as_of": data.get("data_as_of"),
+                "streak_below_80": {
+                    "evaluated_month": evaluated_month,
+                    "minimum_consecutive_months": min_months,
+                    "qualifying_count": len(matches),
+                    "source_groups_not_shown": data.get("so_nhom_khong_hien") or 0,
+                    "count_is_complete": not bool(data.get("so_nhom_khong_hien")),
+                    "gap_to_80_total": sum(row["gap_to_80"] for row in matches),
+                    "gap_to_target_total": sum(row["gap_to_target"] for row in matches),
+                    "rows": matches,
+                    "other_group_by_needed_for_both_levels": other_level,
+                    "gap_definition": (
+                        "gap_to_80 = so tien con thieu de dat 80% target; "
+                        "gap_to_target = so tien con thieu de dat 100% target, tai thang danh gia."
+                    ),
+                },
+            }
+            return {**wrapper, "du_lieu": compact} if wrapper else compact
+
     if tool_name == "get_receivables_overview":
         wrapper = payload if isinstance(payload.get("du_lieu"), dict) else None
         data = payload.get("du_lieu") if wrapper else payload
@@ -2735,6 +2784,16 @@ def _normalize_tool_input_for_question(tool_name: str, tool_input: dict, questio
         requested_top = re.search(r"\btop\s*(\d{1,3})\b", q)
         if requested_top:
             args["top_n"] = min(100, max(1, int(requested_top.group(1))))
+        return args
+
+    if tool_name == "get_workforce_productivity":
+        if "lien tiep" in q and "duoi 80" in q:
+            # Include three complete months even when month_to is an in-progress month, and keep
+            # every employee/team in the source before making a short model-facing view.
+            requested = re.search(r"\b(\d+)\s*thang\b", q)
+            min_months = max(1, int(requested.group(1))) if requested else 3
+            args["months_back"] = max(min_months + 1, int(args.get("months_back") or 0))
+            args["limit"] = max(1000, int(args.get("limit") or 0))
         return args
 
     if tool_name != "get_employee_kpi":
