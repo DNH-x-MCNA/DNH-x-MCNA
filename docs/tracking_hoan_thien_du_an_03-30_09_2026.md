@@ -169,6 +169,7 @@ toàn `MT_*`. Cùng phạm vi, khác cách sắp xếp — **không phải lỗi
 | **#63** | **v34 + v24** — chốt đội đúng kỳ quá khứ, khử trùng `dmsid` |
 | #64 | Cập nhật tracking này + `scripts/doc_query_runs_may_24.py` |
 | #65 | Bắt lỗi hết credit, chặn lượt gọi thiếu `username`, watchdog cảnh báo dự phòng (Codex) — **chưa merge** |
+| #66 | "Dưới 80% liên tiếp 3 tháng": payload cũ gửi model 0 kết quả, bản sửa gửi đủ 8/8 đội và 54/54 cá nhân (Codex) — **chưa merge** |
 
 **PR #63 đã merge và ĐÃ DEPLOY** lên máy 24 lúc 14:56 ngày 23/09 (`9a3a5c4`). Xác nhận:
 `_team_of_qlv_tu_luong` và `_NV_THEO_DMSID` có mặt trên đĩa, `Application startup complete`,
@@ -240,6 +241,19 @@ Dòng thứ tư là nguyên nhân lỗi v34. **Đã xử lý bằng đường kh
 đồng bộ.
 
 ---
+
+## C08 — checker sai phương pháp, chatbot đúng
+
+Người chấm ghi *"tháng thấp nhất của kênh ETC là tháng 9"*. Điều tra
+([dieu_tra_c08_mua_vu_23-09.md](dieu_tra_c08_mua_vu_23-09.md)): checker tính cả **tháng 9/2026 chưa
+hết tháng** vào nền mùa vụ, kéo chỉ số tháng đó xuống thành thấp nhất giả. Tool thì loại tháng đang
+chạy — đúng phương pháp.
+
+Tái lập trên kho dev, chỉ đổi một biến: tính cả tháng cụt → thấp nhất là **tháng 9 (70,27%)**; loại
+tháng cụt → **tháng 2 (82,26%)**, khớp đúng số chatbot đã trả.
+
+**Cần sửa checker S80, không sửa chatbot.** Một chỉ số mùa vụ đổi kết luận theo ngày bấm nút thì
+không phải chỉ số mùa vụ.
 
 ## C20 — khoản dư "chưa phân loại" đã được sửa từ 07/09, tài liệu chưa kịp ghi
 
