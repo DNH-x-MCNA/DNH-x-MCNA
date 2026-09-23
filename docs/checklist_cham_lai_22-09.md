@@ -5,12 +5,62 @@ Nguồn: log chi phí/phản hồi của chatbot từ 11/09 đến 22/09 (các l
 local, **không gọi một lượt model trả phí nào**.
 
 Mỗi lượt chấm lại là một lượt gọi model có tính phí. Trung bình ngày 22/09 là **~4.000 đ/lượt**, nên
-trọn danh sách này (24 lượt) tốn khoảng **100.000 đ**. Khi chạy phải truyền `username` riêng và
+trọn danh sách này (24 lượt) tốn khoảng **100.000 đ**. *(Cập nhật 23/09: #22 và #23 đã đóng không
+tốn lượt nào, #13 đang chờ kiểm nhãn — còn tối đa 21 lượt, ~84.000 đ. Xem mục cập nhật bên dưới.)* Khi chạy phải truyền `username` riêng và
 `session_id` có tiền tố nhận diện được, nếu không thì kết quả không lọc được theo vai/vùng và **không
 dùng để chấm UAT** (xem `AGENTS.md`).
 
 Thứ tự ưu tiên: nhóm 3 trước (còn nghi sai số thật), rồi nhóm 1 (nhiều khả năng đóng được), nhóm 2
 xen kẽ, nhóm 4 đừng chấm cho tới khi sync xong.
+
+---
+
+## Cập nhật 23/09 — đối chiếu `query_runs` trước khi chấm lại
+
+Danh sách này dựng từ **log chi phí**, trong đó mỗi lượt chỉ có trạng thái và nhận xét đã tóm tắt.
+Bảng `query_runs` trong `backend/memory.db` trên máy 24 giữ thêm **tool đã gọi, câu trả lời đầy đủ
+và `feedback_comment` nguyên văn**. Đọc SQLite, không gọi model, **không tốn đồng nào**.
+
+Đối chiếu ngày 23/09 cho session `41b1aeae-5b02-4103-a8df-42e050fa48b9` (`dnh_etc`, 15/09) đóng
+được **#22 và #23**, và cho thấy **#13 nhiều khả năng gán nhầm nhãn**. Ba mục trên tổng 24 — tức
+riêng bước đối chiếu miễn phí này đã cắt khoảng **12.000 đ** và, quan trọng hơn, gỡ đúng mục đang
+bị xếp "ưu tiên cao nhất" ra khỏi hàng đợi.
+
+**Vì vậy: chạy đối chiếu `query_runs` cho toàn bộ 24 lượt TRƯỚC khi chấm lại bất cứ mục nào.**
+Lọc theo `session_id` (lấy từ `audit_log.jsonl`) thay vì theo giờ — `audit_log` ghi giờ địa phương
+còn `query_runs.created_at` ghi UTC, lệch đúng 7 tiếng, rất dễ tìm trượt.
+
+```powershell
+$py = @'
+import sqlite3, json
+SESS = "<session_id lay tu audit_log>"
+c = sqlite3.connect(r"C:\dnh_chatbot\backend\memory.db")
+c.row_factory = sqlite3.Row
+for r in c.execute("SELECT * FROM query_runs WHERE session_id=? ORDER BY created_at", (SESS,)):
+    print("=" * 78)
+    print("%s | %s | %s" % (str(r["created_at"])[:19], r["username"], r["status"]))
+    print("HOI : %s" % (r["question"] or ""))
+    print("TOOL: %s" % json.loads(r["sql_used_json"] or "[]"))
+    if r["feedback_rating"] is not None:
+        print("CHAM: %s | %s | %s" % (r["feedback_rating"], r["feedback_category"],
+                                      r["feedback_comment"]))
+    print((r["answer"] or "")[:3000])
+'@
+$py | Out-File -Encoding utf8 $env:TEMP\doc_runs_sess.py
+python $env:TEMP\doc_runs_sess.py
+```
+
+### ⚠️ Đính chính commit `6a4a692` (đã nằm trong master, không sửa message được)
+
+Commit `6a4a692` (PR #49, merge `596ad1a`) có tiêu đề ghi **"(UAT dnh_etc 15/09 14:53)"** và phần
+mở đầu trình bày như thể nó sửa cho mục #23. **Sai.** Lỗi mà commit đó vá là thật và độc lập
+(`_detail_cutoff()` trả hằng số lệch dữ liệu, làm 20 tháng 2024-01 → 2025-08 ra 0 đồng cho cả hai
+kênh), nhưng **không liên quan mục #23**: lượt 14:53 gọi `get_revenue_monthly_series(month_to=
+'2026-09', months_back=9)`, tức 2026-01 → 2026-09, nằm trọn trong cửa sổ chi tiết.
+
+Bản sửa message đã push lên nhánh nhưng PR được merge trước đó 1 phút nên không vào master. Phần
+mô tả đúng nằm ở **body của PR #49** (đã sửa) và ở mục #23 bên dưới. Ai tra commit log về sau đọc
+đến `6a4a692` thì đọc tiếp chỗ này.
 
 ---
 
@@ -30,7 +80,7 @@ xen kẽ, nhóm 4 đừng chấm cho tới khi sync xong.
 | 10 | 15/09 14:43 | dnh_etc | Doanh số tháng này theo các nhóm hàng | Thiếu nhóm đầu tư/khai thác/dược liệu/lao/khác | `fix(etc)` 15/09 (ghi rõ UAT dnh_etc 14:43) | Đủ nhóm hàng ETC theo `DIM_KeyClass` + `ItemTypeETC` |
 | 11 | 15/09 15:16 (Lỗi 114 giây) | C-Level | Khách phát sinh 3 tháng chưa đạt KPI tái đơn, đội QLV TM23100148 | Lỗi timeout | `fix(loc-doi)` 16/09 (ghi rõ UAT 15/09 15:16) | Có `manager_code`, trả trong vài chục giây, không lọc tay trên danh sách toàn công ty |
 | 12 | 16/09 09:48 và 09:52 | OTC-Only C-Level + dnh_etc | Top 10 khách hàng có công nợ quá hạn | Hỏi top 10 trả top 3 / top 5 | `fix(receivables): preserve requested top customer count` 16/09 | Hỏi 10 trả đủ 10 |
-| 13 | 16/09 10:08 (Lỗi) | dnh_etc | Bệnh viện Bắc Ninh còn nợ bao nhiêu | Lỗi | `feat(tra-cuu)` 16/09 | Tìm được khách theo tên, không cần mã |
+| 13 ⚠️ | 16/09 10:08 (Lỗi) | dnh_etc | Bệnh viện Bắc Ninh còn nợ bao nhiêu | Lỗi | `feat(tra-cuu)` 16/09 | **Kiểm lại nhãn trước khi chấm.** `query_runs` 23/09 cho lượt này `status=completed`, `rating=1` (👍): chatbot xin mã khách, người dùng đưa `BGI00699`, lượt sau trả đúng và cũng 👍. Nhãn "Lỗi" lấy từ log chi phí, không khớp `query_runs`. Nếu đúng là người dùng đã hài lòng thì bỏ khỏi hàng đợi |
 | 14 | 16/09 15:21 | C-Level | Khách hoạt động, mới, mua lại, tái kích hoạt, ngừng mua từng tháng | Lệch số khách tái kích hoạt | `fix(vong-doi)` 18/09, `fix(c31)` 21/09 | Số tái kích hoạt khớp cửa sổ quan sát đã chốt; khách tách theo vùng |
 | 15 | 17/09 13:46 (Lỗi 112 giây) | C-Level | Tháng mùa vụ cao/thấp theo kênh và nhóm sản phẩm | Lỗi timeout | `fix(c08): avoid seasonality report timeout` 21/09 | Trả được, không timeout |
 | 16 | 18/09 09:44 | C-Level | Giá trị tồn kho, số tháng tồn, chậm luân chuyển, stock-out, cận date | Số liệu không đúng — "hàng tồn chưa thể xác nhận" | `fix(ton-kho)` ×2 17/09, `fix(ton-kho, do-moi)` 18/09, `fix(m40)` ×2 21/09 | Số lượng tồn là **hiện tại** (đã cộng nhập–xuất). **Giá trị** tồn vẫn là giá đầu năm và câu trả lời phải nói rõ điều đó — đây là câu A3 chờ DNH chốt nguồn giá, **đừng chấm trượt vì điểm này** |
@@ -52,10 +102,48 @@ lấy `backend/logs` quanh đúng mốc giờ đó chứ đừng tốn thêm lư
 
 | # | Lượt | Tài khoản | Câu hỏi | Phản hồi | Vì sao còn treo |
 |---|---|---|---|---|---|
-| 22 | 15/09 14:48 | dnh_etc | Doanh số ETC tháng này | "tháng này mới có gần 6,5 tỷ thôi" | **Ưu tiên cao nhất** — chính chủ kênh báo sai số tuyệt đối, không commit nào từ 15/09 đến nay nhắm vào con số doanh số ETC theo tháng |
-| 23 | 15/09 14:53 | dnh_etc | Thực hiện, kế hoạch doanh số các tháng trong năm | "Kế hoạch đúng, thực hiện sai" | Cùng gốc với #22. Chấm chung một lượt điều tra |
+| ~~22~~ | 15/09 14:48 | dnh_etc | Doanh số ETC tháng này | "tháng này mới có gần 6,5 tỷ thôi" | ✅ **ĐÓNG 23/09 — chatbot đúng, không chấm lại.** Xem bên dưới |
+| ~~23~~ | 15/09 14:53 | dnh_etc | Thực hiện, kế hoạch doanh số các tháng trong năm | "Kế hoạch đúng, thực hiện sai" | ✅ **ĐÓNG 23/09 — chatbot đúng, không chấm lại.** Xem bên dưới |
 | 24 | 14/09 13:45 | chosi.mn | Thực hiện và kế hoạch doanh số các quý | Thiếu kế hoạch quý | Kho có target theo tháng/vùng/QLV/SKU nhưng **không có bảng target quý**. Cần DNH chốt: cộng từ target tháng, hay có nguồn riêng |
 | 25 | 16/09 15:00 | C-Level | Loại ảnh hưởng đổi địa bàn/chuyển NV/chuyển khách | "Số liệu không đúng", không ghi sai ở đâu | Hỏi lại người chấm sai chỗ nào trước, đừng đoán rồi tốn lượt |
+
+### #22 và #23 — chatbot đúng, người chấm nhìn phạm vi khác
+
+Ghi nhận ngày 15/09 (commit `309b5b7`) đã kết luận #22 "chatbot đã đúng, nhận xét chấm sai — anh
+Đăng xác nhận". Danh sách 22/09 xếp lại nó thành "ưu tiên cao nhất, không commit nào nhắm vào" vì
+tra theo **commit sửa** — mà một quyết định **không sửa** thì không để lại commit sửa nào. Ngày
+23/09 `query_runs` cho bằng chứng trực tiếp:
+
+| Lượt | Tool đã gọi | Chatbot trả |
+|---|---|---|
+| 14:48 | `resolve_relative_date` → `get_revenue_by_channel(2026-09-01 → 2026-09-15)` | **16,19 tỷ · 420 hóa đơn** |
+| 14:53 | `get_revenue_monthly_series(month_to='2026-09', months_back=9)` | bảng 9 tháng, kèm ghi chú tháng 9 mới 15 ngày |
+
+Chạy lại đúng hai bộ tham số đó trên kho ngày 23/09: 16,56 tỷ · 429 hóa đơn (chênh 2,2% vì lúc hỏi
+kho mới sync 14:43, kho đọc lại đã sync tiếp 16:55 — đúng chiều, đúng lượng), và cả 9 tháng khớp
+`SUM(amount9)` trên `vhoadon_etc` **đến từng chữ số**. Không có lỗi tính.
+
+**Con số 6,5 tỷ đến từ đâu.** Đã thử tách theo nhóm hàng, theo nhân viên, theo tổ hợp nhóm — không
+lát nào rơi vào 6,5. Lát duy nhất khớp là **theo vùng**:
+
+| Vùng | Hóa đơn | 01–15/09 |
+|---|---:|---:|
+| MN | 200 | 8,44 tỷ |
+| **MB** | **188** | **6,72 tỷ** |
+| MT | 41 | 1,39 tỷ |
+
+Quy về mốc sync lúc hỏi (×0,978) thì MB ≈ **6,58 tỷ** — đúng "gần 6,5 tỷ". Nhiều khả năng người
+chấm đang đối chiếu báo cáo lọc **Miền Bắc**, còn tài khoản `dnh_etc` trả **toàn kênh, cả 3 miền**.
+
+Không suy giả thuyết này sang #23: lấy MB so kế hoạch toàn quốc ra 27–41% mọi tháng, không ai gọi
+thế là "kế hoạch đúng". #23 mới chỉ chắc được là **chatbot không sai**; căn cứ của người chấm thì
+chưa rõ.
+
+**Việc cần làm (miễn phí, thay cho 2 lượt chấm lại):** hỏi chủ kênh ETC đúng một câu — *con số
+6,5 tỷ là toàn kênh hay riêng Miền Bắc, và bảng "thực hiện các tháng" so ở phạm vi nào?* Nếu trả
+lời "Miền Bắc" thì đây **không phải lỗi số mà là lỗi trình bày**: câu trả lời tổng phải nói rõ
+"toàn kênh ETC, gồm cả 3 miền". Sửa ở mô tả tool, **gộp vào đợt sửa prompt chung** — cache chiếm
+71% chi phí, không vá lẻ.
 
 ## Nhóm 4 — Lỗ trống ETL, đừng chấm cho tới khi sync xong
 
