@@ -1,4 +1,24 @@
 @echo off
+:: ############################################################################
+:: ## KHONG CHAY FILE NAY DE RESTART CHATBOT.                                ##
+:: ##                                                                        ##
+:: ## File nay GO BO (nssm remove) roi CAI LAI service tu dau. Chay nham tren ##
+:: ## may 24 dang phuc vu nguoi dung la lam dut dich vu va mat cau hinh hien  ##
+:: ## co. Chi dung khi lan DAU dang ky, hoac khi co chu dich cai lai.         ##
+:: ##                                                                        ##
+:: ## Restart thuong ngay (sau khi git pull) - PowerShell quyen Admin:        ##
+:: ##     Restart-Service DNH_Chatbot_Backend -Force                          ##
+:: ############################################################################
+::
+:: THUC TE TREN MAY 24 (do ngay 23/09/2026, dung de doi chieu khi sua bien ben duoi):
+::   - Repo clone tai   : C:\dnh_chatbot   (KHONG phai D:\DNH)
+::   - Service chatbot  : DNH_Chatbot_Backend   (KHONG phai DNH_Chatbot_Web)
+::   - Service canh bao : DNH_Realtime_Alerts   (dang ky boi register_alert_service.bat)
+::   - Service tunnel   : DNH_Chatbot_Tunnel    (Cloudflare, KHONG co script dang ky trong repo)
+:: Ba service tren doc lap nhau. Va ban code trong backend/ thi chi can restart
+:: DNH_Chatbot_Backend; restart nham DNH_Realtime_Alerts la lam gian doan canh bao ma khong
+:: giai quyet gi.
+::
 :: Dang ky Windows Service chay web chatbot (backend/main.py + frontend/) thuong truc qua NSSM.
 :: CHAY TREN MAY 24 (khong phai may nay) — sua 4 dong "set ...PATH/DIR" ben duoi cho dung
 :: duong dan THAT tren may 24 truoc khi chay (repo clone o dau, Python cai o dau, NSSM cai o dau).
@@ -9,16 +29,16 @@
 ::   3. Da test thu cong "python backend\main.py" chay duoc, mo trinh duyet vao that thay web.
 ::   4. Da cai NSSM (hoac dung duong dan NSSM co san neu may 24 da dung NSSM cho service khac).
 
-cd /d "D:\DNH"
+cd /d "C:\dnh_chatbot"
 
 :: ===== SUA 4 DONG DUOI CHO DUNG MAY 24 =====
 set NSSM_PATH=C:\Users\Admin\AppData\Local\Microsoft\WinGet\Packages\NSSM.NSSM_Microsoft.Winget.Source_8wekyb3d8bbwe\nssm-2.24-101-g897c7ad\win64\nssm.exe
 set PYTHON_PATH=C:\Users\Admin\AppData\Local\Programs\Python\Python312\python.exe
-set PROJECT_DIR=D:\DNH
-set SCRIPT_PATH=D:\DNH\backend\main.py
+set PROJECT_DIR=C:\dnh_chatbot
+set SCRIPT_PATH=C:\dnh_chatbot\backend\main.py
 :: ============================================
 
-set SERVICE_NAME=DNH_Chatbot_Web
+set SERVICE_NAME=DNH_Chatbot_Backend
 
 echo Dang kiem tra va dung Service cu neu dang chay... >> nssm_chatbot_web_log.txt
 "%NSSM_PATH%" stop %SERVICE_NAME% >> nssm_chatbot_web_log.txt 2>&1
