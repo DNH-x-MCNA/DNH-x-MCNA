@@ -8,8 +8,10 @@ chỉ đọc), **không gọi model trả phí**. Kho local không có bảng CT
 toàn bộ kết luận dưới đây đã **tái lập được bằng số**, không dừng ở suy luận từ code.
 
 > **Kết luận ngắn:** chênh lệch v34 do **đúng một** nguyên nhân — tool chốt đội hình ở **30/06/2026**
-> cho kỳ báo cáo **12/2025**. Đã sửa và có test khóa. Sự cố đồng bộ CTKM 09/01/2026 là chuyện khác,
-> vẫn còn và vẫn thuộc phía DNH.
+> cho kỳ báo cáo **12/2025**. Đã sửa, có test khóa, đã deploy lên máy 24 ngày 23/09.
+> Việc "chatbot 4 vs checker 12+ chương trình" **không phải lỗi**: model hiển thị 8/20 chương trình
+> tool trả về, còn checker sắp theo mã nên ảnh chụp toàn `MT_*`.
+> Sự cố đồng bộ CTKM 09/01/2026 là chuyện khác, vẫn còn và vẫn thuộc phía DNH.
 
 ## 1. Kỳ báo cáo là THÁNG 12/2025 — chứng minh bằng số học, không phải suy đoán
 
@@ -157,15 +159,27 @@ nhưng **không `employee_code` nào ứng với hơn một `dmsid`** (đo: 0 tr
 > Khác với v24 phát hiện 1: ở đó join theo chiều ngược (`nv.dmsid = v.employee_code`) nên `dmsid`
 > trùng làm **nhân bản dòng hóa đơn**. Cùng một bảng, hai chiều join, chỉ một chiều hỏng.
 
-**c) Số chương trình 4 vs 12+ — chưa kết luận được.** Hai khả năng, không phân biệt được bằng dữ
-liệu đang có:
+**c) Số chương trình 4 vs 12+ — ✅ đã chốt 23/09 bằng payload lượt thật.**
 
-- Checker `ORDER BY p.Code` và **không có `TOP`**; `MT_` xếp trước `Q…` và `T…` nên ảnh chụp phần
-  đầu danh sách đương nhiên toàn `MT_*`. Tool thì `TOP (limit) ORDER BY AssociatedRevenue DESC`.
-- Hoặc phạm vi đội của tool hẹp hơn phạm vi checker chạy thật (`@ManagerCode` có thể là `NULL`).
+Đọc `query_runs` trên máy 24, lượt UAT là `2026-09-23 06:56:39 | thuan.pham`:
 
-Cần **payload lượt UAT thật** (`sql_used_json` / tham số `scope_*` trong `query_runs`) mới chốt được.
-Tôi không đoán tiếp.
+```
+get_promotion_effectiveness({})
+get_promotion_effectiveness({'date_from':'2026-09-01','date_to':'2026-09-23','limit':20})
+get_promotion_effectiveness({'date_from':'2025-12-01','date_to':'2025-12-31','limit':20})
+```
+
+Và chính câu trả lời ghi: *"Đang liệt kê **8/20** chương trình (theo doanh thu gắn CTKM giảm dần)."*
+
+**Tool trả 20 chương trình, model chỉ hiển thị 8** rồi tự nói ra điều đó. Không có chương trình nào
+bị lọc mất. Checker thì `ORDER BY p.Code` và không có `TOP`, mà `MT_` xếp trước `Q…`/`T…` nên ảnh
+chụp checker đương nhiên toàn `MT_*`.
+
+Hai bên **cùng phạm vi MT**, chỉ khác cách sắp xếp và mức cắt hiển thị. Không phải lỗi.
+
+> Danh sách chatbot trả gồm cả `MT_*` lẫn `T11.2025_*`, `T12.2025_*`, `Q4.2025_*` — tức không lọc
+> theo tiền tố mã. Giả thuyết "checker lọc theo tiền tố `MT_`" nêu ở bản trước là **sai**; nguyên
+> nhân thật chỉ là thứ tự sắp xếp.
 
 ## 5. Vì sao `_warn()` một mình là không đủ
 
@@ -197,7 +211,7 @@ cảnh báo khác — đây khó mà là trường hợp duy nhất.
 | 2 | Bày mốc chốt đội ra payload thay vì chỉ `_warn()` | `backend/` | ✅ **đã sửa** |
 | 3 | Thống nhất nhãn cột "DT gắn với đơn…" (`associated_revenue_label`) | `backend/` | ✅ **đã sửa** |
 | 4 | Chốt: đơn có `DMSEmpId2` thì tính cho đội nào | DNH/PMO | ⏳ chặn UAT, cần hỏi |
-| 5 | Lấy payload lượt V34 để chốt việc 4 vs 12+ chương trình | vận hành | ⏳ chưa kết luận |
+| 5 | Lấy payload lượt V34 để chốt việc 4 vs 12+ chương trình | vận hành | ✅ **đã chốt** — model hiển thị 8/20, checker sắp theo mã |
 | 6 | Kiểm `query_runs` xem model còn nuốt cảnh báo nào nữa không | vận hành | ⏳ nên làm |
 
 **Sự cố đồng bộ CTKM dừng 09/01/2026 vẫn là chuyện riêng, không phải nguyên nhân của chênh lệch số
