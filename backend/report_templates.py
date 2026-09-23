@@ -11261,30 +11261,57 @@ def revenue_reconciliation_check(as_of_date: str = None, area_code: str = None,
             LEFT JOIN dim_tinhthanhpho tp ON tp.city_id=kh.city_id
             WHERE v.doc_date BETWEEN ? AND ? GROUP BY v.customer_code, tp.area_code
             """, (month_start, fdate))
-        top_down_rev = sum(_f(r["rev"]) for r in rows
-                            if (r["area"] or region_from_customer_code(r["cc"])) == area_code)
+        invoice_rows = [r for r in rows
+                        if (r["area"] or region_from_customer_code(r["cc"])) == area_code]
     else:
-        top_down_rev = _f(_q("SELECT COALESCE(SUM(amount9),0) rev FROM vhoadon_otc WHERE doc_date BETWEEN ? AND ?",
-                              (month_start, fdate))[0]["rev"])
+        invoice_rows = _q("SELECT customer_code cc, SUM(amount9) rev FROM vhoadon_otc "
+                          "WHERE doc_date BETWEEN ? AND ? GROUP BY customer_code",
+                          (month_start, fdate))
+    top_down_rev = sum(_f(r["rev"]) for r in invoice_rows)
 
     # Doanh thu OTC CONG DON TU DUOI LEN: dung LAI cay to chuc cua revenue_tree() (TDV -> QLV -> TP)
     # thay vi tu viet lai truy van rieng - tranh 2 noi dinh nghia khac nhau ve "ai thuoc doi ai".
     tree = revenue_tree(as_of_date=fdate, area_code=area_code)
-    bottom_up_rev = 0.0
+    leaf_revenue = 0.0
+    standalone_rollup_revenue = 0.0
     leaf_counts_by_position = {}
     unique_leaf_codes = set()
+    seen_rollup_codes = set()
     rollup_nodes_without_tdv = 0
     for tp in tree["tree"]:
         for qlv in tp["qlv"]:
+            if qlv["employee_code"] in seen_rollup_codes:
+                continue
+            seen_rollup_codes.add(qlv["employee_code"])
             if not qlv["tdv"]:
                 # Day la MOT NUT QLV/nhom kenh khong co TDV trong cay, KHONG phai bang chung
                 # "mot dia ban/zone chua co QLV". Ten bien cu lam chatbot quy sai nguyen nhan M20.
                 rollup_nodes_without_tdv += 1
+                # Nhom/kenh trong Bravo co doanh thu o nut roll-up nhung khong co
+                # doi TDV trong cay. Cong nut nay MOT LAN; khong xem la TDV ao.
+                if qlv.get("la_nhom_kenh"):
+                    standalone_rollup_revenue += qlv["sales"]
             for t in qlv["tdv"]:
-                bottom_up_rev += t["sales"]
+                leaf_revenue += t["sales"]
                 role = t.get("position_code") or "UNKNOWN"
                 leaf_counts_by_position[role] = leaf_counts_by_position.get(role, 0) + 1
                 unique_leaf_codes.add(t["employee_code"])
+
+    bottom_up_rev = leaf_revenue + standalone_rollup_revenue
+    # Do tong trong dung sai 0,5% van co the che mat khach co hoa don nhung
+    # khong co dong FACT o bat ky ma TDV/CTV/CS/TK nao. Doi chieu danh sach
+    # khach tren dung snapshot/ky, giu nguyen gioi han vung cua tai khoan.
+    leaf_area_sql = " AND nv.area_code=?" if area_code else ""
+    leaf_customers = {row["customer_code"] for row in _q(
+        f"SELECT DISTINCT f.customer_code FROM fact_tonghopkhachhang f "
+        f"JOIN {_MONTH_LATEST_SUBQ} l ON l.employee_code=f.employee_code AND l.d=f.save_date "
+        f"JOIN dim_nhanvien nv ON nv.employee_code=f.employee_code "
+        f"WHERE UPPER(COALESCE(nv.position_code,'')) IN ({_tier_ph()}){leaf_area_sql}",
+        (fdate, fdate, *_EMPLOYEE_TIER_POSITIONS, *((area_code,) if area_code else ())),
+    )}
+    unattributed_rows = [r for r in invoice_rows if r["cc"] not in leaf_customers]
+    unattributed_revenue = sum(_f(r["rev"]) for r in unattributed_rows)
+    unattributed_customers = {r["cc"] for r in unattributed_rows}
 
     coverage_pct = (bottom_up_rev / top_down_rev * 100) if top_down_rev else 0.0
     gap_revenue = top_down_rev - bottom_up_rev
@@ -11295,6 +11322,8 @@ def revenue_reconciliation_check(as_of_date: str = None, area_code: str = None,
         reconciliation_status = "overcount_needs_investigation"
     elif coverage_pct < 99.5:
         reconciliation_status = "incomplete_needs_investigation"
+    elif unattributed_customers and abs(gap_revenue) > 1:
+        reconciliation_status = "incomplete_customer_attribution"
     else:
         reconciliation_status = "matched_within_tolerance"
     result = {
@@ -11302,6 +11331,10 @@ def revenue_reconciliation_check(as_of_date: str = None, area_code: str = None,
         "period_from": month_start, "period_to": fdate,
         "top_down_revenue_otc": top_down_rev,
         "bottom_up_revenue_otc": bottom_up_rev,
+        "leaf_revenue_otc": leaf_revenue,
+        "standalone_rollup_revenue_otc": standalone_rollup_revenue,
+        "unattributed_invoice_customer_count": len(unattributed_customers),
+        "unattributed_invoice_revenue_otc": unattributed_revenue,
         "coverage_pct": coverage_pct,
         "gap_revenue": gap_revenue,
         "gap_pct": gap_pct,
@@ -11324,6 +11357,10 @@ def revenue_reconciliation_check(as_of_date: str = None, area_code: str = None,
                  "can dieu tra; KHONG duoc goi la 'binh thuong', 'gap cau truc da biet', hay tu gan "
                  "nguyen nhan cho khach mo coi/QLV/TDV neu chua co phep do rieng. Neu chua co ty le ky "
                  "truoc thi cung KHONG duoc ket luan gap nay on dinh hay khong bat thuong. "
+                 "Doanh thu nhom/kenh khong co TDV duoc cong tu nut roll-up va giu RIENG khoi "
+                 "leaf_revenue_otc; khong dem nhom/kenh thanh TDV ao. "
+                 "unattributed_invoice_customer_count dem khach co hoa don nhung khong co dong "
+                 "FACT tang TDV/CTV/CS/TK trong snapshot; chua biet vi sao chua phan bo. "
                  "rollup_nodes_without_tdv chi dem nut QLV/nhom kenh khong co TDV trong cay, KHONG "
                  "dong nghia voi so zone thieu QLV. cause_attribution_available=false nghia la tool "
                  "CHUA cung cap du phep do de ket luan nguyen nhan cua khoang chenh. "
@@ -11342,6 +11379,21 @@ def revenue_reconciliation_check(as_of_date: str = None, area_code: str = None,
                              "xuong. Chua co bang chung dinh luong de quy chenh lech cho nguyen nhan "
                              "cu the; can kiem tra mapping khach hang - NV va cay doi ngu truoc khi "
                              "ket luan day la gap binh thuong.")
+        if unattributed_customers:
+            result["warning"] += (
+                f" Da do duoc {len(unattributed_customers)} khach co hoa don "
+                f"{unattributed_revenue:,.0f} d nhung khong co dong FACT tang "
+                "TDV/CTV/CS/TK trong snapshot; chua biet vi sao."
+            )
+    elif reconciliation_status == "incomplete_customer_attribution":
+        result["warning"] = (
+            "CHUA DOI SOAT KHOP: "
+            f"Da cong {standalone_rollup_revenue:,.0f} d tu nhom/kenh khong co TDV. "
+            f"{len(unattributed_customers)} khach co hoa don OTC {unattributed_revenue:,.0f} d "
+            "nhung khong co dong FACT tang TDV/CTV/CS/TK trong snapshot. "
+            f"Tong hoa don va cay con lech {gap_revenue:,.0f} d du nam trong dung sai 0,5%. "
+            "Can doi chieu phan cong/nguon; chua ket luan nguyen nhan."
+        )
     elif reconciliation_status == "not_comparable_no_top_down_revenue":
         result["warning"] = ("KHONG DU DIEU KIEN DOI SOAT: doanh thu OTC tren xuong bang 0 trong ky, "
                              "khong the dien giai coverage_pct.")

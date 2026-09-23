@@ -195,7 +195,8 @@ def test_doi_soat_tong_tach_cs_voi_tdv_va_khong_xac_nhan_ca_nhan(tmp_path, monke
             CREATE TABLE vhoadon_otc (customer_code TEXT, doc_date TEXT, amount9 REAL);
             CREATE TABLE dms_khachhang (code TEXT, city_id TEXT);
             CREATE TABLE dim_tinhthanhpho (city_id TEXT, area_code TEXT);
-            INSERT INTO vhoadon_otc VALUES ('INV','2026-07-31',500000);
+            -- 500000 tu doi QLV_MN + 900000 tu nhom Kenh MT khong co TDV.
+            INSERT INTO vhoadon_otc VALUES ('INV','2026-07-31',1400000);
             INSERT INTO dms_khachhang VALUES ('INV','CITY');
             INSERT INTO dim_tinhthanhpho VALUES ('CITY','MN');
             INSERT INTO dim_nhanvien VALUES
