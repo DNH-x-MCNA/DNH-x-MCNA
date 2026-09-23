@@ -2123,6 +2123,19 @@ def _month_add(year_month: str, delta: int) -> str:
     return f"{total // 12:04d}-{total % 12 + 1:02d}"
 
 
+def _lui_thang_giu_ngay(ngay: str, so_thang: int) -> str:
+    """Lui N thang nhung GIU NGUYEN ngay trong thang - tuong duong DATEADD(month,-N,<ngay>) cua
+    SQL Server, ke ca cach ket ngay khi thang dich ngan hon (31/03 lui 1 thang -> 28/02).
+
+    KHAC _month_add(...)+'-01' (moc dau thang lich). Hai cach cho ra ky khac nhau va da tung lam
+    lech so that: xem customers_silent.
+    """
+    y, m, d = int(ngay[:4]), int(ngay[5:7]), int(ngay[8:10])
+    ym = _month_add(f"{y:04d}-{m:02d}", -so_thang)
+    y2, m2 = int(ym[:4]), int(ym[5:7])
+    return f"{y2:04d}-{m2:02d}-{min(d, _last_day_of_month(y2, m2)):02d}"
+
+
 def _month_diff(year_month_from: str, year_month_to: str) -> int:
     """So thang tu 'YYYY-MM' den 'YYYY-MM' (am neu moc den nam truoc moc tu)."""
     yf, mf = int(year_month_from[:4]), int(year_month_from[5:7])
@@ -3583,7 +3596,10 @@ def customers_silent(as_of_date: str = None, silent_days: int = 60, lookback_mon
     co that tren chung tu, khong phu thuoc co nghiep vu nao chua duoc xac nhan.
 
     silent_days: so ngay khong mua toi thieu de bi liet ke (mac dinh 60).
-    lookback_months: cua so nhin lai de tinh doanh thu "tung mua" (mac dinh 6 thang).
+    lookback_months: cua so nhin lai de tinh doanh thu "tung mua" (mac dinh 6 thang), tinh LUI DUNG
+    N THANG TU as_of (23/09 lui 6 thang = 23/03), khong phai moc dau thang lich - giong
+    DATEADD(month,-N,...) cua checker S69c.
+    San pham mua nhieu nhat dung ky RIENG 12 thang (ky_san_pham), khong phai ky nhin lai.
     Sap xep theo doanh thu ky truoc GIAM DAN - khach mat nhieu tien nhat len dau."""
     as_of_date = (as_of_date or latest_data_date())[:10]
     silent_days = max(1, min(int(silent_days or 60), 720))
@@ -3592,29 +3608,44 @@ def customers_silent(as_of_date: str = None, silent_days: int = 60, lookback_mon
 
     as_of = dt.date.fromisoformat(as_of_date)
     cutoff = (as_of - dt.timedelta(days=silent_days)).isoformat()
-    ym_from = _month_add(as_of_date[:7], -(lookback_months - 1))
-    date_from = f"{ym_from}-01"
+    # 23/09/2026 (UAT v21): ky nhin lai truoc day la _month_add(...)+'-01', tuc moc DAU THANG LICH
+    # (01/04 khi hoi ngay 23/09), trong khi checker S69c dung DATEADD(month,-6,GETDATE()) = 23/03.
+    # Chenh dung phan doanh thu 23-31/03 nen hang loat khach ra so thap hon checker. Do lai tren kho:
+    # 10/10 khach khop tuyet doi checker voi moc 23/03, 7/10 khop so chatbot cu voi moc 01/04.
+    date_from = _lui_thang_giu_ngay(as_of_date, lookback_months)
+    # San pham mua nhieu nhat dung ky RIENG, RONG HON - checker lay 12 thang tinh tu dau thang
+    # as_of (DATEADD(month,-12,@MonthStart)). Dung chung ky 6 thang voi doanh thu thi top SKU doi
+    # han: ca BDI00361 doanh thu giong het checker (5,5 trieu) ma san pham van khac.
+    item_from = f"{_month_add(as_of_date[:7], -12)}-01"
 
     scope_sql, scope_params = _scope_clause(scope_area_code)
     emp_sql, emp_params = _employee_scope_clause(scope_employee_code, "v", as_of=as_of_date)
     scope_sql += emp_sql
     scope_params += emp_params
 
-    parts, part_params = [], []
-    if scope_channel != "ETC":
-        join_o = _otc_area_join("v", scope_area_code)
-        parts.append(f"SELECT v.customer_code, v.doc_date, v.item_code, v.amount9 FROM vhoadon_otc v {join_o} "
-                      f"WHERE v.doc_date BETWEEN ? AND ?{scope_sql}")
-        part_params.append((date_from, as_of_date) + scope_params)
-    if scope_channel != "OTC":
-        join_e = _etc_area_join("v", scope_area_code)
-        parts.append(f"SELECT v.customer_code, v.doc_date, v.item_code, v.amount9 FROM vhoadon_etc v {join_e} "
-                      f"WHERE v.doc_date BETWEEN ? AND ?{scope_sql}")
-        part_params.append((date_from, as_of_date) + scope_params)
-    if not parts:
-        return {"error": "Khong co kenh nao kha dung voi pham vi tai khoan."}
+    def _base_ban_hang(tu: str, den: str):
+        """Nguon ban hang da ep scope cho mot khoang ngay. Tach ra vi doanh thu va san pham dung
+        HAI ky khac nhau - truoc day dung chung mot base nen khong tach duoc."""
+        cac_phan, tham_so = [], []
+        if scope_channel != "ETC":
+            join_o = _otc_area_join("v", scope_area_code)
+            cac_phan.append(
+                f"SELECT v.customer_code, v.doc_date, v.item_code, v.amount9 FROM vhoadon_otc v {join_o} "
+                f"WHERE v.doc_date BETWEEN ? AND ?{scope_sql}")
+            tham_so.append((tu, den) + scope_params)
+        if scope_channel != "OTC":
+            join_e = _etc_area_join("v", scope_area_code)
+            cac_phan.append(
+                f"SELECT v.customer_code, v.doc_date, v.item_code, v.amount9 FROM vhoadon_etc v {join_e} "
+                f"WHERE v.doc_date BETWEEN ? AND ?{scope_sql}")
+            tham_so.append((tu, den) + scope_params)
+        return (" UNION ALL ".join(cac_phan),
+                tuple(p for pp in tham_so for p in pp))
 
-    base_sql = " UNION ALL ".join(parts)
+    base_sql, base_params_moi = _base_ban_hang(date_from, as_of_date)
+    if not base_sql:
+        return {"error": "Khong co kenh nao kha dung voi pham vi tai khoan."}
+    item_base_sql, item_base_params = _base_ban_hang(item_from, as_of_date)
     sql = f"""WITH base AS ({base_sql}), silent AS (
                 SELECT customer_code, MAX(doc_date) lan_mua_cuoi,
                        SUM(amount9) doanh_thu_ky_nhin_lai,
@@ -3627,7 +3658,7 @@ def customers_silent(as_of_date: str = None, silent_days: int = 60, lookback_mon
               FROM silent
               ORDER BY doanh_thu_ky_nhin_lai DESC, customer_code
               LIMIT ?"""
-    base_params = tuple(p for pp in part_params for p in pp)
+    base_params = base_params_moi
     params = base_params + (cutoff, limit)
     rows = _q(sql, params)
 
@@ -3639,7 +3670,7 @@ def customers_silent(as_of_date: str = None, silent_days: int = 60, lookback_mon
     if returned_codes:
         ph = ",".join(["?"] * len(returned_codes))
         item_rows = _q(
-            f"""WITH base AS ({base_sql})
+            f"""WITH base AS ({item_base_sql})
                 SELECT customer_code,item_code,SUM(amount9) revenue
                 FROM base
                 WHERE customer_code IN ({ph})
@@ -3647,12 +3678,14 @@ def customers_silent(as_of_date: str = None, silent_days: int = 60, lookback_mon
                 GROUP BY customer_code,item_code
                 HAVING SUM(amount9)>0
                 ORDER BY customer_code,revenue DESC,item_code""",
-            base_params + tuple(returned_codes),
+            item_base_params + tuple(returned_codes),
         )
         for item in item_rows:
             favourite_items.setdefault(item["customer_code"], {
                 "item_code": item["item_code"],
-                "revenue_in_lookback": _f(item["revenue"]),
+                # Ky RIENG, khong phai ky nhin lai cua doanh thu - ten truong phai noi ro dieu do.
+                "ky": {"tu": item_from, "den": as_of_date},
+                "revenue_trong_ky_san_pham": _f(item["revenue"]),
             })
         item_codes = [v["item_code"] for v in favourite_items.values()]
         item_names = {}
@@ -3721,6 +3754,7 @@ def customers_silent(as_of_date: str = None, silent_days: int = 60, lookback_mon
     result = {
         "as_of": as_of_date, "nguong_im_lang_ngay": silent_days,
         "ky_nhin_lai": {"tu": date_from, "den": as_of_date},
+        "ky_san_pham": {"tu": item_from, "den": as_of_date},
         "so_khach": total_count,
         "total_count": total_count,
         "returned_count": returned_count,
@@ -3732,7 +3766,10 @@ def customers_silent(as_of_date: str = None, silent_days: int = 60, lookback_mon
                      "tinh den hom nay); sau_thang_truoc_khi_ngung = 6 thang lich tinh den THANG MUA "
                      "CUOI cua chinh khach do (dung khi hoi 'truoc khi ngung mua ho mua bao nhieu'). "
                      "Danh sach khach im lang duoc loc theo ky nhin lai co dinh, nen khach im lang lau "
-                     "hon ky do co the khong xuat hien."),
+                     "hon ky do co the khong xuat hien. "
+                     "san_pham_mua_nhieu_nhat tinh tren ky_san_pham (12 thang), KHAC ky_nhin_lai cua "
+                     "doanh thu - khi neu san pham PHAI ghi ro ky do, dung mac dinh nguoi doc hieu la "
+                     "cung ky voi cot doanh thu."),
         "data_as_of": latest_data_date(),
     }
     if scope_channel:
