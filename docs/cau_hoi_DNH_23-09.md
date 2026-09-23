@@ -1,6 +1,6 @@
 # Câu hỏi cần DNH xác nhận — 23/09/2026
 
-Hai câu dưới đây **chặn việc đóng UAT**, không phải câu hỏi tìm hiểu thêm. Mỗi câu đều đã điều tra
+Bốn câu dưới đây **chặn việc đóng UAT**, không phải câu hỏi tìm hiểu thêm. Mỗi câu đều đã điều tra
 hết mức làm được từ phía MCNA; phần còn lại là định nghĩa nghiệp vụ chỉ DNH trả lời được.
 
 ---
@@ -62,6 +62,42 @@ lịch**, không phải lỗi nhập ngẫu nhiên.
 nhưng **có nêu ra** kèm số tiền, để không giấu cũng không tự cộng. Mức ảnh hưởng hiện rất nhỏ
 (17,56 triệu trên 45,9 tỷ = 0,04%). Có câu trả lời thì đổi cách xử lý được ngay mà không phải sửa
 lại cấu trúc.
+
+---
+
+## Câu 3 — 11 khách có doanh thu ở Miền Trung nhưng không có dòng FACT cấp nhân viên
+
+**Gửi:** phụ trách dữ liệu Bravo / phân công địa bàn.
+
+Phép đối soát doanh thu (PR #62) trên kho dev kỳ **01–15/09/2026** còn lệch **13.173.440đ** của
+**11 khách hàng**. Các khách này **có hóa đơn và có doanh thu** ghi ở mã quản lý Miền Trung, nhưng
+**không có dòng nào trong FACT ở cấp nhân viên** — nên cộng theo nhân viên thì thiếu, cộng theo mã
+quản lý thì đủ.
+
+Chưa quy nguyên nhân. Bản sửa **giữ nguyên cảnh báo** thay vì tự bù số.
+
+**Xin xác nhận:** 11 khách này thuộc **phân công của ai**, và vì sao không phát sinh dòng FACT cấp
+nhân viên — khách chưa gán TDV, TDV đã nghỉ, hay lỗi đồng bộ?
+
+---
+
+## Câu 4 — Đơn hàng có hai nhân viên thì tính cho đội nào?
+
+**Gửi:** phụ trách kênh OTC / DMS.
+
+`DMS_DonHangHdr` có hai cột nhân viên: `DMSEmpId1` và `DMSEmpId2`. Hai bên đang hiểu khác nhau:
+
+| | Cách lọc |
+|---|---|
+| Chatbot | `DMSEmpId1 IN (đội) **OR** DMSEmpId2 IN (đội)` |
+| Checker UAT | chỉ `DMSEmpId1` |
+
+Nghĩa là đơn do người ngoài đội đứng tên chính nhưng có người trong đội ở vai thứ hai thì chatbot
+tính vào đội, checker thì không.
+
+**Xin xác nhận:** doanh số/khách của đội nên tính theo **người đứng tên chính** (`DMSEmpId1`), hay
+**bất kỳ ai tham gia đơn**? Đây là định nghĩa nghiệp vụ, chúng tôi không tự chọn để nắn số cho khớp
+checker.
 
 ---
 

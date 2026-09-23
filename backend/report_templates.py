@@ -278,6 +278,22 @@ def _fact_date_le(as_of_date: str = None) -> str:
     return r[0]["d"] if r and r[0]["d"] else None
 
 
+# 23/09/2026 (v24 phat hien 1): dim_nhanvien co 6 gia tri dmsid ung voi HAI dong - DNH00601,
+# DNH01250, va bon ma kieu TM23110109 / 'TM23110109.' (thua dau cham). LEFT JOIN thang bang nay vao
+# bang hoa don theo dmsid lam NHAN BAN dong: moi dong hoa don cua nhung nguoi do bi dem hai lan.
+# Do tren ky hien tai, kenh OTC: 99.294.041.118 -> 99.547.872.578, phong +253.831.460 (+0,256%) -
+# khop den tung dong voi chenh lech giua scope_totals cua tool va SQL truc tiep.
+# Checker S62 khu trung bang ROW_NUMBER uu tien dong KHONG bi danh co IsDuplicate; day lam giong het
+# de hai ben cung mot dinh nghia thay vi moi ben mot kieu.
+_NV_THEO_DMSID = (
+    "(SELECT dmsid, employee_code FROM ("
+    "SELECT dmsid, employee_code, ROW_NUMBER() OVER ("
+    "PARTITION BY dmsid ORDER BY COALESCE(is_duplicate,0), employee_code) rn "
+    "FROM dim_nhanvien WHERE dmsid IS NOT NULL AND TRIM(dmsid)<>''"
+    ") WHERE rn=1)"
+)
+
+
 def _dms_theo_ma_nv(codes: list) -> dict:
     """employee_code -> DMSId (khoa noi sang hoa don). Dung chung cho doi QLV va phan ra M16."""
     if not codes:
@@ -309,7 +325,7 @@ def _dms_theo_ma_nv(codes: list) -> dict:
     return dms_by_employee
 
 
-def _get_team_dms_ids(scope_employee_code: str, fdate: str = None) -> list:
+def _get_team_dms_ids(scope_employee_code: str, fdate: str = None, thong_tin: dict = None) -> list:
     """DMSId cua tat ca TDV thuoc quyen quan ly cua 1 QLV tai thoi diem `fdate`.
 
     13/08/2026 DOI NGUON XAC DINH DOI - suy luan zone -> manager_code that tu Bravo.
@@ -336,9 +352,37 @@ def _get_team_dms_ids(scope_employee_code: str, fdate: str = None) -> list:
     `fdate`: ngay snapshot de chot doi. Rong = doi HIEN TAI. Cac tool doanh thu truyen ngay cuoi
     ky duoc hoi vao day, de "doanh thu doi toi thang 7" tinh theo doi CUA THANG 7 - dung dinh nghia
     ma cay to chuc, KPI va luong dang dung. Thieu tham so nay chinh la 8/18 ca lech con lai sau ban
-    va sang 13/08."""
+    va sang 13/08.
+
+    `thong_tin`: dict tuy chon de ham GHI RA moc da thuc su dung ("moc_chot_doi", "nguon_chot_doi",
+    "moc_sau_ky"). Tool nao muon dua thong tin nay vao payload thi truyen vao - xem
+    promotion_effectiveness. _warn() mot minh la KHONG DU: no chi dinh canh bao vao ket qua tra cho
+    model, ma model co the khong noi lai."""
+    def _ghi(moc, nguon, sau_ky=False):
+        if thong_tin is not None:
+            thong_tin["moc_chot_doi"] = str(moc)[:10] if moc else None
+            thong_tin["nguon_chot_doi"] = nguon
+            thong_tin["moc_sau_ky"] = sau_ky
+
     team = _team_of_qlv(scope_employee_code, fdate)
     codes = [t["employee_code"] for t in team if t.get("employee_code")]
+    if codes:
+        _ghi((_roster_snapshot_dates(fdate) or [None])[-1] if fdate else None,
+             "fact_tonghopkhachhang")
+    if not codes and fdate:
+        # 23/09/2026 (V34): TRUOC KHI nhay toi moc sau ky, thu bang snapshot luong - bang do giu 400
+        # ngay thay vi 90, thuong van phu dung ky duoc hoi. Do tren du lieu that: chot doi dung ky
+        # 12/2025 tra ve 14 khach/784.895.766d (khop checker), con nhay toi 30/06/2026 tra 11
+        # khach/775.680.951d - lech vi 3 nguoi roi doi va 3 nguoi moi vao.
+        team_luong, moc_luong = _team_of_qlv_tu_luong(scope_employee_code, fdate)
+        codes = [t["employee_code"] for t in team_luong if t.get("employee_code")]
+        if codes:
+            team = team_luong
+            _ghi(moc_luong, "fact_thongketinhluong")
+            _warn(f"DOI CHOT TU SNAPSHOT LUONG: bang phan cong doi theo khach "
+                  f"(fact_tonghopkhachhang) chi giu ~90 ngay nen khong phu ky den {fdate}; da chot "
+                  f"doi bang fact_thongketinhluong tai moc {str(moc_luong)[:10]} - dung nguon va "
+                  f"dung ky. So lieu hop le, khong can canh bao them voi nguoi dung.")
     if not codes and fdate:
         # 13/09/2026 (V34): ky duoc hoi co the nam TRUOC pham vi phan cong doi con giu trong kho
         # (fact_tonghopkhachhang chi giu ~90 ngay). Vi du that: tool khuyen mai lay moc phu CTKM
@@ -351,6 +395,7 @@ def _get_team_dms_ids(scope_employee_code: str, fdate: str = None) -> list:
             team = _team_of_qlv(scope_employee_code, som_nhat)
             codes = [t["employee_code"] for t in team if t.get("employee_code")]
             if codes:
+                _ghi(som_nhat, "fact_tonghopkhachhang", sau_ky=True)
                 _warn(f"DOI LICH SU KHONG CO SNAPSHOT: ky duoc hoi den {fdate} nam TRUOC pham vi phan "
                       f"cong doi con giu trong kho (som nhat {str(som_nhat)[:10]}). Dang dung thanh phan "
                       f"doi tai {str(som_nhat)[:10]}; thanh phan doi tai ky do co the khac - PHAI noi ro "
@@ -5582,7 +5627,7 @@ def customer_product_coverage(as_of_date: str = None, lookback_months: int = 3,
             if not scope_area_code:
                 geo_join = (" LEFT JOIN dms_khachhang kh ON kh.code=v.customer_code "
                             "LEFT JOIN dim_tinhthanhpho tp ON tp.city_id=kh.city_id")
-            join = geo_join + " LEFT JOIN dim_nhanvien nv ON nv.dmsid=v.employee_code"
+            join = geo_join + f" LEFT JOIN {_NV_THEO_DMSID} nv ON nv.dmsid=v.employee_code"
             parts.append(f"SELECT '{period}' period,v.customer_code,v.item_code,v.amount9,v.quantity,"
                          "'OTC:'||v.doc_date||':'||v.customer_code||':'||COALESCE(v.stt,'') order_key,"
                          f"COALESCE(nv.employee_code,v.employee_code) employee_code,COALESCE(tp.city_name,'UNKNOWN') city_name FROM vhoadon_otc v {join} "
@@ -5593,7 +5638,7 @@ def customer_product_coverage(as_of_date: str = None, lookback_months: int = 3,
             if not scope_area_code:
                 geo_join = (" LEFT JOIN dmssx_khachhang kh ON kh.code=v.customer_code "
                             "LEFT JOIN dim_tinhthanhpho tp ON tp.city_id=kh.city_id")
-            join = geo_join + " LEFT JOIN dim_nhanvien nv ON nv.dmsid=v.employee_code"
+            join = geo_join + f" LEFT JOIN {_NV_THEO_DMSID} nv ON nv.dmsid=v.employee_code"
             parts.append(f"SELECT '{period}' period,v.customer_code,v.item_code,v.amount9,v.quantity,"
                          "'ETC:'||v.doc_date||':'||v.customer_code||':'||COALESCE(v.stt,'') order_key,"
                          f"COALESCE(nv.employee_code,v.employee_code) employee_code,COALESCE(tp.city_name,'UNKNOWN') city_name FROM vhoadon_etc v {join} "
@@ -10753,6 +10798,45 @@ def _team_of_qlv(qlv_employee_code: str, fdate: str = None) -> list:
     )
 
 
+def _team_of_qlv_tu_luong(qlv_employee_code: str, fdate: str) -> tuple:
+    """Doi cua 1 QLV lay tu snapshot LUONG - nguon du phong cho ky QUA KHU. Tra (danh_sach, moc).
+
+    23/09/2026 (V34). Kho giu hai bang snapshot voi hai do dai khac nhau:
+      - fact_tonghopkhachhang : sync_warehouse.sync_fact_tonghopkhachhang(days=90)
+      - fact_thongketinhluong : sync_warehouse.sync_fact_thongketinhluong(days=400)
+    Ca hai deu co cot manager_code that tu Bravo. Cac cau hoi khuyen mai roi vao 12/2025 (vi chuoi
+    lien ket CTKM dung o 09/01/2026 nen ky mac dinh lui ve thang day du gan nhat) - NGOAI tam bang
+    thu nhat nhung VAN trong tam bang thu hai.
+
+    Truoc ban va nay, khong tim thay snapshot <= fdate thi _get_team_dms_ids nhay TOI mot moc SAU ky
+    bao cao. Do tren du lieu that (QLV TM23110128, chuong trinh MT_SP_TICHLUYCHAOTHU_ANC, ky 12/2025):
+      - chot doi tai 31/12/2025 -> 14 khach / 13 don co HD / 784.895.766d  (khop checker)
+      - chot doi tai 30/06/2026 -> 11 khach / 12 don / 775.680.951d        (khop so chatbot da tra)
+    Lech vi 3 nguoi roi doi va 3 nguoi moi vao trong khoang do. Con so chenh khong lon (1,2% doanh
+    thu) nen nhin bang mat KHONG the phat hien.
+
+    Day cung dung nguon voi checker S-* (FACT_ThongKeTinhLuong + ManagerCode), nen hai ben chot doi
+    giong nhau thay vi moi ben mot kieu.
+    """
+    if not fdate:
+        return [], None
+    try:
+        r = _q("SELECT MAX(save_date) d FROM fact_thongketinhluong WHERE save_date<=?", (str(fdate),))
+    except sqlite3.OperationalError:
+        return [], None
+    moc = r[0]["d"] if r and r[0]["d"] else None
+    if not moc:
+        return [], None
+    return _q(
+        f"SELECT DISTINCT l.employee_code, nv.name, nv.position_code "
+        f"FROM fact_thongketinhluong l "
+        f"LEFT JOIN dim_nhanvien nv ON nv.employee_code=l.employee_code "
+        f"WHERE l.save_date=? AND l.manager_code=? "
+        f"AND UPPER(COALESCE(nv.position_code,'')) IN ({_tier_ph()})",
+        (moc, qlv_employee_code, *_EMPLOYEE_TIER_POSITIONS),
+    ), moc
+
+
 def qlv_change_history(area_code: str = None, qlv_search: str = None, scope_area_code: str = None) -> list:
     """Lich su ai tung/dang phu trach tung 'to' (zone noi bo V01-V22) - CHI suy luan duoc tu quy uoc
     dat ten (xem org_hierarchy.py), KHONG phai du lieu audit chinh thuc (Bravo khong co bang lich su
@@ -11985,8 +12069,9 @@ def promotion_effectiveness(date_from: str = None, date_to: str = None, limit: i
                         " LEFT JOIN dbo.DIM_TinhThanhPho tp ON tp.CityId=kh.CityId ")
         scope_where += " AND tp.AreaCode=:scope_area_code"
         params["scope_area_code"] = scope_area_code
+    thong_tin_doi = {}
     if scope_employee_code:
-        dms_ids = _get_team_dms_ids(scope_employee_code, str(report_to))
+        dms_ids = _get_team_dms_ids(scope_employee_code, str(report_to), thong_tin_doi)
         emp_placeholders = []
         for idx, dms_id in enumerate(dms_ids):
             key = f"emp_{idx}"
@@ -12115,12 +12200,28 @@ def promotion_effectiveness(date_from: str = None, date_to: str = None, limit: i
         "scope_note": (
             f"Tat ca so trong bao cao nay CHI tinh don cua khach thuoc mien {scope_area_code}, "
             "khong phai toan quoc." if scope_area_code else None),
+        # 23/09/2026 (V34): ky mac dinh cua tool nay luon lui ve qua khu (thang day du gan nhat truoc
+        # moc phu CTKM), nen doi duoc chot o mot ngay CACH XA hom nay. Do tren du lieu that, chot
+        # nham moc lam lech 14->11 khach va 784,90->775,68 tr ma nhin bang mat khong thay. Bay ra
+        # payload thay vi chi _warn(), vi _warn() phu thuoc vao viec model co chiu noi lai hay khong.
+        "team_roster_as_of": thong_tin_doi.get("moc_chot_doi"),
+        "team_roster_source": thong_tin_doi.get("nguon_chot_doi"),
+        "team_roster_note": (
+            "Thanh phan doi dung de loc bao cao nay duoc chot tai %s - SAU ky bao cao (%s den %s). "
+            "Ai roi doi hoac moi vao giua hai moc se lam lech so khach/so don/doanh thu. PHAI noi ro "
+            "dieu nay khi trinh bay." % (thong_tin_doi.get("moc_chot_doi"), report_from, report_to)
+            if thong_tin_doi.get("moc_sau_ky") else None),
         "warning": warning,
         "interpretation_note": (
             "associated_revenue la doanh thu cua don hang co gan chuong trinh. Mot don co the dung "
             "nhieu chuong trinh nen KHONG cong doanh thu cac dong voi nhau, va chua du co so ket luan "
             "ROI/uplift neu thieu chi phi chuong trinh va nhom doi chung."
         ),
+        # 23/09/2026 (V34): checker dat ten cot la "DT gan voi don trong ky bao cao", chatbot tung
+        # trinh bay thanh "DT gan voi don co CTKM". Cung mot dai luong (SUM(Amount9) cua vHoaDonTotal
+        # noi theo TRY_CONVERT(int,DMSId)), khac moi cai ten - nhung nguoi cham UAT phai mat cong doi
+        # chieu moi biet la khong lech. Chot mot ten de hai ben goi giong nhau.
+        "associated_revenue_label": "DT gan voi don trong ky bao cao",
         "program_count_returned": len(programs),
         "programs": programs,
     }
