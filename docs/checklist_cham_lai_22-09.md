@@ -82,7 +82,44 @@ trong 75 phút**), `danh.nguyen` 14/09 07:44, `thuan.pham` 14/09 09:59, `dnh` 17
 | 15/09 15:16 | Khách phát sinh 3 tháng chưa đạt KPI tái đơn, đội QLV | = mục #11, đã có `fix(loc-doi)` 16/09 → chấm lại |
 | 17/09 13:46 | Tháng mùa vụ cao/thấp theo kênh và nhóm SP | = mục #15 |
 | 21/09 09:39 | **Cùng câu mùa vụ, lỗi lại lần hai** | `fix(c08)` commit 13:54 cùng ngày, tức **sau** cả hai lần lỗi. Chấm lại **một lần** cho cả hai, không phải hai lần |
-| **16/09 14:00** | **Tỉnh/vùng độ phủ khách thấp; cơ hội trắng ở đâu** | 🔴 **MỤC MỚI — chưa có bản sửa nào nhắm vào.** Phải điều tra trước khi chấm |
+| **16/09 14:00** | **Tỉnh/vùng độ phủ khách thấp; cơ hội trắng ở đâu** (câu C24, checker S51) | ✅ Đã có bản sửa `34f9dca` **16/09 15:50** — xem điều tra bên dưới. Chấm lại để đóng |
+
+#### Điều tra mục "độ phủ khách" (16/09 14:00) — đã có bản sửa
+
+**Đính chính:** bản đầu của mục cập nhật này xếp nó là "mục mới, chưa có bản sửa nào nhắm vào".
+**Sai.** Commit `34f9dca` (16/09 **15:50**, tức khoảng 2 tiếng sau lượt hỏng) nhắm đúng lượt này —
+tiêu đề commit là `fix(payload): dia ban khong bi cat mu...`, không chứa chữ "độ phủ" hay "C24",
+nên tra theo commit log không ra. Liên kết chỉ nằm trong **ghi chú code** tại
+[nl2sql.py:2327](backend/nl2sql.py), ghi thẳng *"nhat ky UAT 14:02 — Tinh/vung do phu khach thap;
+co hoi trang o dau, chay 110 giay, 15.126 dong"*.
+
+> Đây là **lần thứ hai trong ngày** mắc đúng một lỗi: tra commit log không thấy rồi kết luận
+> "chưa ai sửa". Lần đầu là mục #22 (quyết định *không sửa* nên không để lại commit sửa). Lần này
+> là commit có sửa nhưng tiêu đề không nhắc tên câu. **Trước khi kết luận "chưa có bản sửa", phải
+> `git log -S` theo mã câu HOẶC grep ghi chú trong code, không chỉ đọc tiêu đề commit.**
+
+**Nguyên nhân gốc không phải tool chậm.** Đo trên kho dev:
+
+| | Thời gian | Số dòng |
+|---|---:|---:|
+| `geography_monthly_performance(dimension='city')` | **2,6 giây** | 375 |
+| `geography_monthly_performance(dimension='area')` | **2,2 giây** | 18 |
+
+110 giây là do **model phải xử payload khổng lồ**, không phải do truy vấn. Bản sửa `34f9dca` thu gọn
+payload trước khi gửi model; đo lại hôm nay:
+
+| | Ký tự |
+|---|---:|
+| Payload gốc | 236.714 |
+| Sau khi thu gọn | **8.850** |
+| **Giảm** | **96,3%** |
+
+Bản thu gọn giữ `thap_nhat_thang_cuoi` và `cao_nhat_thang_cuoi` — đúng thứ câu hỏi cần — cùng
+`so_dia_ban_khong_hien` để không địa bàn nào biến mất âm thầm. Trước đó lưới an toàn cắt mù còn
+12 dòng ĐẦU (không phải 12 địa bàn yếu nhất), nên model kết luận "tỉnh nào độ phủ kém" trên 7%
+dữ liệu **mà vẫn nói chắc chắn**.
+
+**Còn lại:** bản sửa vào ngày 16/09 nhưng lượt này **chưa từng được chấm lại**. Cần đúng 1 lượt.
 
 #### Đóng dứt điểm, bỏ khỏi hàng đợi
 
@@ -94,8 +131,8 @@ trong 75 phút**), `danh.nguyen` 14/09 07:44, `thuan.pham` 14/09 09:59, `dnh` 17
 
 #### Còn phải chấm lại
 
-**17 lượt nhóm 1** (18 trừ #13) **+ #24, #25** = **19 lượt ≈ 76.000 đ**, cộng **1 mục mới** (độ phủ
-khách) phải điều tra trước chứ chưa chấm. Nhóm 4 giữ nguyên: chưa chấm.
+**17 lượt nhóm 1** (18 trừ #13) **+ #24, #25 + 1 lượt độ phủ khách** = **20 lượt ≈ 80.000 đ**.
+Nhóm 4 giữ nguyên: chưa chấm. Mục mùa vụ tính **một** lượt cho cả hai lần hỏng 17/09 và 21/09.
 
 ### ⚠️ Đính chính commit `6a4a692` (đã nằm trong master, không sửa message được)
 
