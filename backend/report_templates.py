@@ -11029,10 +11029,20 @@ def kpi_ranking(group_by: str = "qlv", as_of_date: str = None, limit: int = 20,
         coverage_params.append(scope_employee_code)
     coverage_sql += " GROUP BY nv.employee_code"
     coverage = _q(coverage_sql, (fdate, fdate, *coverage_params))
-    # Chi lui ve ky tron khi CHUA AI trong pham vi co target. Neu da co target giua thang thi
-    # giu so lieu ky dang hoi; roster ky tron chi giup tim nguoi, khong doi ky cua doanh so.
-    if coverage and not any(_f(r["target"]) > 0 for r in coverage):
-        fdate = _fdate_roster(requested_as_of)
+    rankable_now = sum(_f(r["target"]) > 0 for r in coverage)
+    roster_fdate = _fdate_roster(requested_as_of)
+    use_closed_period = not rankable_now
+    # A sparse new-month snapshot can already contain a target for ONE manager.
+    # The old all-or-nothing fallback then returned only that manager in the
+    # default ranking, although the closed month still had the whole team.
+    # Compare like-for-like periods for an unqualified/default ranking. An
+    # explicit midmonth request still reports only that month's known KPI.
+    if as_of_date is None and roster_fdate and roster_fdate != fdate and rankable_now:
+        closed_coverage = _q(coverage_sql, (roster_fdate, roster_fdate, *coverage_params))
+        rankable_closed = sum(_f(r["target"]) > 0 for r in closed_coverage)
+        use_closed_period = rankable_now < rankable_closed
+    if use_closed_period and roster_fdate and roster_fdate != fdate:
+        fdate = roster_fdate
         coverage = _q(coverage_sql, (fdate, fdate, *coverage_params))
     if latest_available and str(latest_available) != str(fdate):
         _warn(

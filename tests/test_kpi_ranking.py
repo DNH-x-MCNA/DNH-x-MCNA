@@ -225,3 +225,71 @@ def test_giua_thang_co_target_thi_giu_ky_hien_tai_va_bao_nguoi_chua_du_du_lieu(t
     assert sum(r['sales'] for r in qlvs) == sum(r['sales'] for r in regions) == 30
     assert qlvs[0]['pct'] == 30
     assert any('chua du snapshot/target' in warning for warning in warnings)
+
+
+def _twenty_qlv_with_sparse_september(tmp_path, monkeypatch, september_target):
+    """August is complete; September 4 contains only one of twenty QLV."""
+    path = tmp_path / "warehouse.db"
+    conn = sqlite3.connect(path)
+    conn.executescript("""
+        CREATE TABLE fact_tonghopkhachhang (employee_code TEXT, customer_code TEXT,
+            amount_ct REAL, month_sale_target REAL, save_date TEXT, is_nc INTEGER,
+            manager_code TEXT);
+        CREATE TABLE dim_nhanvien (employee_code TEXT, name TEXT, is_duplicate INTEGER,
+            position_code TEXT, area_code TEXT, dmsid TEXT);
+        CREATE TABLE dim_targetvungmien (area_code TEXT, channel_code TEXT,
+            amount REAL, doc_date TEXT);
+    """)
+    for index in range(20):
+        qlv, tdv = f"Q{index:02d}", f"T{index:02d}"
+        conn.execute("INSERT INTO dim_nhanvien VALUES (?,?,0,'QLV','MB',?)",
+                     (qlv, qlv, qlv))
+        conn.execute("INSERT INTO dim_nhanvien VALUES (?,?,0,'TDV','MB',?)",
+                     (tdv, tdv, tdv))
+        conn.execute("INSERT INTO fact_tonghopkhachhang VALUES (?,?,80,100,'2026-08-31',0,NULL)",
+                     (qlv, f"K{index:02d}"))
+        conn.execute("INSERT INTO fact_tonghopkhachhang VALUES (?,?,80,100,'2026-08-31',0,?)",
+                     (tdv, f"C{index:02d}", qlv))
+    conn.execute("INSERT INTO fact_tonghopkhachhang VALUES "
+                 "('Q00','K-SEP',10,?,'2026-09-04',0,NULL)", (september_target,))
+    conn.execute("INSERT INTO fact_tonghopkhachhang VALUES "
+                 "('T00','C-SEP',10,?,'2026-09-04',0,'Q00')", (september_target,))
+    conn.commit()
+    conn.close()
+    monkeypatch.setattr(local_warehouse, "DB_PATH", str(path))
+
+    import datetime as datetime_module
+
+    class SeptemberFourth(datetime_module.date):
+        @classmethod
+        def today(cls):
+            return cls(2026, 9, 4)
+
+    monkeypatch.setattr(rt.dt, "date", SeptemberFourth)
+    return path
+
+
+def test_sparse_first_month_without_any_target_falls_back_to_closed_month(tmp_path, monkeypatch):
+    """Exact 0/20 case: the existing fallback already handles this on master."""
+    _twenty_qlv_with_sparse_september(tmp_path, monkeypatch, september_target=0)
+    assert len(rt.kpi_ranking("qlv", "2026-08-31")) == 20
+    rows = rt.kpi_ranking("qlv")
+    assert len(rows) == 20
+    assert {r["as_of"] for r in rows} == {"2026-08-31"}
+
+
+def test_sparse_first_month_with_one_target_keeps_complete_default_ranking(tmp_path, monkeypatch):
+    """One positive target must not make the other nineteen managers disappear."""
+    _twenty_qlv_with_sparse_september(tmp_path, monkeypatch, september_target=100)
+    assert len(rt.kpi_ranking("qlv", "2026-08-31")) == 20
+    rows = rt.kpi_ranking("qlv")
+    assert len(rows) == 20
+    assert {r["as_of"] for r in rows} == {"2026-08-31"}
+    regions = rt.kpi_ranking("region")
+    assert len(regions) == 1
+    assert regions[0]["as_of"] == "2026-08-31"
+    assert regions[0]["sales"] == sum(row["sales"] for row in rows) == 1600
+    # An explicit midmonth request still reports current-period numbers only.
+    current = rt.kpi_ranking("qlv", "2026-09-04")
+    assert [r["employee_code"] for r in current] == ["Q00"]
+    assert current[0]["sales"] == 10
