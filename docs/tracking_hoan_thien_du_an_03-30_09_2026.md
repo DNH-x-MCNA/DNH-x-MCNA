@@ -110,7 +110,56 @@ một phát hiện, không được đọc thành "đã sạch".
 → Chặn ở tầng gọi: **✅ xong trong PR #65**. Truy nguồn các lượt cũ: còn lại, và xem ghi chú trên —
 các lượt `unknown` không có trong `query_runs` nên phải truy từ `cost_log.jsonl`.
 
-### 🟡 3. Chấm lại 20 lượt ≈ 80.000 đ
+### 🔴 3. Cổng kiểm trước UAT đang CHƯA ĐẠT — đã truy ra nguyên nhân, xác nhận bằng số
+
+Chạy `kiem_truoc_uat.ps1` trên **máy 24** ngày 23/09 (lần đầu chạy có `auth.db` thật, 30 tài khoản):
+
+| Phép kiểm | Kết quả |
+|---|---|
+| Tài khoản và phạm vi dữ liệu | `[DAT]` |
+| Phân quyền kênh ETC | `[DAT]` |
+| Bất biến số liệu 40 công cụ | **`[CHUA DAT]`** — 97 đạt, **2 lệch**, 2 mục thiếu nguồn |
+
+Cổng kết luận: *"CHƯA NÊN giao tài khoản cho tester."*
+
+**Hai chỗ lệch đều đúng một số: 17.558.648đ.**
+
+| Phép kiểm | Đường A | Đường B | Chênh |
+|---|---:|---:|---:|
+| Tổng từng tháng vs một lần gọi cả khoảng | chuỗi 973.135.481.906 | một lần gọi 973.153.040.554 | **+17.558.648** |
+| Cộng địa bàn vs toàn công ty (09/2026) | toàn công ty 47.533.694.577 | địa bàn 47.551.253.225 | **+17.558.648** |
+
+**Đã xác nhận bằng số trên máy 24** — đúng bộ chứng từ ETC đề ngày tương lai:
+
+```
+so dong: 4 | so chung tu: 2 | so khach: 1 | tong: 17.558.648d | ngay: 28/09/2026
+  13126017 | NBI00003 | 80440000011 |  8.841.600
+  13126017 | NBI00003 | 81180000008 |     82.857
+  13126019 | NBI00003 | 80440000007 |  2.149.429
+  13126019 | NBI00003 | 80440000018 |  6.484.762
+```
+
+Khớp **đến từng đồng**. Kênh OTC không có dòng nào.
+
+#### Nguyên nhân: các đường tính không nhất quán
+
+| Đường | Xử lý chứng từ tương lai |
+|---|---|
+| Chuỗi từng tháng | **cắt tại hôm nay** (PR #51) |
+| Một lần gọi cả khoảng | dùng ngày cuối kỳ → **có cộng** |
+| Báo cáo theo địa bàn | dùng ngày cuối kỳ → **có cộng** |
+
+PR #51 mới cắt ở một số đường. Chính sách đã chốt (xem `cau_hoi_DNH_23-09.md` câu 2) là **không cộng
+vào doanh thu tháng đang chạy nhưng có nêu ra** — nên hai đường còn lại phải sửa theo, không phải
+ngược lại.
+
+→ Giao phiên `backend/`: áp **cùng một** quy tắc cắt ngày tương lai cho mọi đường doanh thu, thay vì
+để từng đường tự quyết. Khi DNH trả lời câu 2 thì chỉ phải đổi một chỗ.
+
+> Kho dev đồng bộ đến 15/09 nên **không** tái lập được — chứng từ 28/09 chỉ có trên máy 24. Đây là
+> ca phải đo trên máy thật, không suy từ kho dev.
+
+### 🟡 4. Chấm lại 20 lượt — đơn giá gấp đôi ước tính ban đầu
 
 Xem [checklist_cham_lai_22-09.md](checklist_cham_lai_22-09.md). Danh sách gốc 24 lượt; đối chiếu
 `query_runs` miễn phí ngày 23/09 đóng được 6 mục mà không tốn lượt nào, nhưng phát hiện thêm 1 lượt
@@ -121,7 +170,7 @@ chứng minh cắt được ¼ hàng đợi. Anh Đăng tự xem danh sách này
 
 Khi chạy: bắt buộc truyền `username` riêng và `session_id` có tiền tố nhận diện được.
 
-### 🟡 4. Cổng kiểm trước UAT — chạy lại 23/09, khỏe hơn tài liệu cũ ghi nhiều
+### 🟡 5. Cổng kiểm trên kho dev (tham chiếu)
 
 Bản 03/09 ghi *"35 phép đạt, 25 mục bị bỏ"*. Chạy lại toàn bộ trên kho dev ngày 23/09:
 
@@ -146,7 +195,15 @@ mục thiếu nguồn có thể giảm tiếp.
 powershell -ExecutionPolicy Bypass -File C:\dnh_chatbot\scripts\kiem_truoc_uat.ps1
 ```
 
-### 🟡 5. Kiểm tài khoản thiếu phạm vi trên `auth.db` máy 24
+### ✅ 6. Kiểm tài khoản thiếu phạm vi — đã chạy trên máy 24
+
+`[DAT]`. 30 tài khoản, 30 đang hoạt động, **0 tài khoản đã duyệt nào thiếu phạm vi**. Một tài khoản
+**chưa duyệt** thiếu vùng và mã nhân viên: `linh.nguyen4` (vai `qlv`) — không chặn gì, nhưng phải bổ
+sung trước khi duyệt.
+
+Con số "12 tài khoản QLV cũ không hợp lệ" trong bản 03/09 là của **kho dev**, không phải production.
+
+### (cũ) Kiểm tài khoản thiếu phạm vi trên `auth.db` máy 24
 
 `scripts/kiem_tai_khoan_thieu_pham_vi.py`. Kho local có 12 tài khoản QLV cũ không hợp lệ — **đây chưa
 phải kết luận về production**, phải chạy trên máy 24 mới biết.
