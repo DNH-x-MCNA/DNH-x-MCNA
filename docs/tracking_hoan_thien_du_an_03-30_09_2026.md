@@ -121,11 +121,30 @@ chứng minh cắt được ¼ hàng đợi. Anh Đăng tự xem danh sách này
 
 Khi chạy: bắt buộc truyền `username` riêng và `session_id` có tiền tố nhận diện được.
 
-### 🟡 4. Bộ kiểm bất biến 40 công cụ phải chạy lại trên máy 24
+### 🟡 4. Cổng kiểm trước UAT — chạy lại 23/09, khỏe hơn tài liệu cũ ghi nhiều
 
-Kho dev chạy được 35 phép đạt, 0 lệch; **25 mục bị bỏ** vì kho dev thiếu bảng/cột hoặc không có dữ
-liệu. Chưa chạy trên máy 24. Dùng `scripts/kiem_truoc_uat.ps1` (chạy tuần tự kiểm tài khoản, phân
-quyền ETC, bất biến 40 công cụ, kết luận Đạt/Chưa đạt).
+Bản 03/09 ghi *"35 phép đạt, 25 mục bị bỏ"*. Chạy lại toàn bộ trên kho dev ngày 23/09:
+
+| Phép kiểm | Kết quả |
+|---|---|
+| Tài khoản và phạm vi dữ liệu | `[CHUA DAT]` — không có `backend/auth.db` trên máy dev (đúng dự kiến), exit 2 |
+| Phân quyền kênh ETC | **`[DAT]`** — 3/3 phép giữ đúng phạm vi ETC |
+| Bất biến số liệu 40 công cụ | **`[DAT]`** — **99 phép đạt, 0 lệch, 2 mục không chạy được** |
+
+**Từ 25 mục bị bỏ xuống còn 2**, và số phép kiểm chạy được tăng 35 → 99. Hai mục còn lại:
+`get_promotion_effectiveness` (chuỗi liên kết CTKM chết 09/01/2026 — phía DNH) và
+`get_receivables_period_compare` (lịch sử công nợ chỉ lưu từ 21/08/2026).
+
+Đã rà `scripts/kiem_truoc_uat.ps1` trước khi khuyến nghị chạy trên máy thật: ba script nó gọi đều
+tồn tại, cờ `--db` hợp lệ, và **không script nào gọi model trả phí**. Cổng cũng trả mã thoát đúng —
+kiểm tài khoản không mở được kho thì exit 2, cổng báo `[CHUA DAT]` chứ không âm thầm cho qua.
+
+**Còn lại: chạy trên máy 24.** Ở đó có `auth.db` thật nên phép kiểm thứ nhất mới có nghĩa, và hai
+mục thiếu nguồn có thể giảm tiếp.
+
+```powershell
+powershell -ExecutionPolicy Bypass -File C:\dnh_chatbot\scripts\kiem_truoc_uat.ps1
+```
 
 ### 🟡 5. Kiểm tài khoản thiếu phạm vi trên `auth.db` máy 24
 
