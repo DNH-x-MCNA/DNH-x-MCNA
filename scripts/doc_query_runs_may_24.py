@@ -13,8 +13,10 @@ Loc theo `session_id` thay vi theo gio de khoi tim truot.
 
 Khong co `sqlite3` CLI tren may 24 nen moi truy van phai di qua Python.
 """
+import datetime as dt
 import json
 import os
+import re
 import sqlite3
 import sys
 
@@ -24,18 +26,28 @@ DB = os.environ.get("DNH_MEMORY_DB", r"C:\dnh_chatbot\backend\memory.db")
 TU_NGAY = "2026-09-01"
 DEN_NGAY = "2026-09-30"
 
-# Tool co the phat _warn() ma model CO THE khong noi lai. Xem muc 5 docs/dieu_tra_v34_23-09.md:
-# _warn() chi dinh canh bao vao ket qua tra cho model, model bo qua duoc.
-TOOL_CO_CANH_BAO = (
-    "promotion", "customer_product_coverage", "kpi", "revenue", "salary", "coverage",
+# Cua so bang phan cong doi trong kho: sync_warehouse.sync_fact_tonghopkhachhang(days=90).
+# Ky bao cao lui xa hon nguong nay thi _get_team_dms_ids() KHONG con snapshot dung ky - phai di
+# duong du phong va phat _warn. Xem docs/dieu_tra_v34_23-09.md muc 3.
+CUA_SO_ROSTER_NGAY = 90
+
+# Tool CHOT DOI theo ky duoc hoi. Chi nhung tool nay moi dinh vao bay tren.
+TOOL_CHOT_DOI = (
+    "promotion_effectiveness", "customer_product_coverage", "employee_kpi", "kpi_ranking",
+    "focus_product_kpi", "customer_lifecycle",
 )
+
+# promotion_effectiveness khong truyen ngay thi TU LUI ve thang day du gan nhat truoc moc phu CTKM
+# (dung o 09/01/2026) - tuc luon la ky qua khu xa, du args rong.
+TOOL_MAC_DINH_LUI_QUA_KHU = ("promotion_effectiveness",)
 
 # Dau hieu cho thay cau tra loi CO noi lai canh bao pham vi/doi hinh.
 DAU_HIEU_DA_NOI = (
     "doi hinh", "đội hình", "chot doi", "chốt đội", "snapshot", "phan cong doi",
-    "phân công đội", "thieu du lieu", "thiếu dữ liệu", "canh bao", "cảnh báo",
-    "chi gom", "chỉ gồm", "khong phai toan quoc", "không phải toàn quốc",
+    "phân công đội", "thanh phan doi", "thành phần đội", "roster",
 )
+
+_NGAY = re.compile(r"(\d{4})-(\d{2})(?:-(\d{2}))?")
 
 
 def _mo():
@@ -88,35 +100,66 @@ def phan_1_khuyen_mai(con):
     print(">> Neu checker chay voi @ManagerCode IS NULL thi no la TOAN QUOC, khong cung pham vi.")
 
 
+def _ngay_cu_nhat(blob):
+    """Ngay xua nhat xuat hien trong tham so tool. None neu khong co ngay nao."""
+    ngay = []
+    for y, m, d in _NGAY.findall(blob):
+        try:
+            ngay.append(dt.date(int(y), int(m), int(d or 1)))
+        except ValueError:
+            pass
+    return min(ngay) if ngay else None
+
+
 def phan_2_canh_bao_bi_nuot(con):
-    """Cac luot goi tool co the phat _warn nhung cau tra loi khong nhac gi den pham vi/doi hinh."""
+    """Luot CHOT DOI cho ky lui xa hon cua so roster - dung dieu kien _warn thuc su phat.
+
+    Ban dau muc nay loc theo ten tool chung chung ("revenue", "kpi", "salary") va ra 153/263 luot -
+    rong den muc khong ai doc noi. Gio bam dung dieu kien gay loi V34: ky bao cao lui qua
+    CUA_SO_ROSTER_NGAY ngay so voi luc chay.
+    """
     print()
     print("=" * 78)
-    print("PHAN 2 - UNG VIEN 'CANH BAO BI NUOT'")
+    print("PHAN 2 - LUOT CHOT DOI CHO KY QUA KHU XA (ung vien 'canh bao bi nuot')")
     print("=" * 78)
-    print("Day la DANH SACH UNG VIEN, khong phai ket luan. Nguoi doc tu quyet.")
+    print("Dieu kien: tool chot doi theo ky + ky bao cao lui hon %d ngay so voi luc chay."
+          % CUA_SO_ROSTER_NGAY)
+    print("Do la luc kho het snapshot phan cong doi va tool phai di duong du phong.")
     print()
     nghi, tong = [], 0
     for r in con.execute(
             "SELECT * FROM query_runs WHERE created_at>=? AND created_at<? AND status='completed' "
             "ORDER BY created_at", (TU_NGAY, DEN_NGAY)):
-        blob = json.dumps(_tools(r), ensure_ascii=False).lower()
-        if not any(k in blob for k in TOOL_CO_CANH_BAO):
+        blob = (r["sql_used_json"] or "")
+        low = blob.lower()
+        if not any(k in low for k in TOOL_CHOT_DOI):
+            continue
+        try:
+            chay = dt.date.fromisoformat(str(r["created_at"])[:10])
+        except ValueError:
+            continue
+        moc = chay - dt.timedelta(days=CUA_SO_ROSTER_NGAY)
+        cu = _ngay_cu_nhat(blob)
+        mac_dinh_lui = any(k in low for k in TOOL_MAC_DINH_LUI_QUA_KHU)
+        if not ((cu and cu < moc) or mac_dinh_lui):
             continue
         tong += 1
         if not _co_dau_hieu(r["answer"]):
-            nghi.append(r)
-    print("Luot goi tool co the phat canh bao : %d" % tong)
-    print("Trong do cau tra loi KHONG nhac gi den pham vi/doi hinh/thieu du lieu : %d" % len(nghi))
+            nghi.append((r, cu, mac_dinh_lui))
+    print("Luot chot doi cho ky qua khu xa            : %d" % tong)
+    print("Trong do cau tra loi KHONG nhac gi den doi hinh : %d" % len(nghi))
     print()
-    for r in nghi[:40]:
-        print("  %s | %-14s | %s" % (
-            str(r["created_at"])[:19], r["username"], (r["question"] or "")[:90]))
+    for r, cu, mac_dinh in nghi[:40]:
+        print("  %s | %-14s | ky=%s%s" % (
+            str(r["created_at"])[:19], r["username"],
+            cu.isoformat() if cu else "(mac dinh)",
+            " [tu lui]" if mac_dinh and not cu else ""))
+        print("      %s" % (r["question"] or "")[:100])
     if len(nghi) > 40:
         print("  ... con %d luot nua" % (len(nghi) - 40))
     print()
-    print(">> Khong phai luot nao trong so nay cung co canh bao that - tool chi phat _warn trong mot")
-    print(">> so dieu kien. Day la de KHOANH VUNG, buoc sau moi doc tung luot.")
+    print(">> Tu ban sua 23/09 (PR #63), cac luot nay chot doi bang fact_thongketinhluong (giu 400")
+    print(">> ngay) nen KHONG con lech. Danh sach tren chu yeu de ra soat luot CU truoc ban sua.")
 
 
 def phan_3_luot_khong_ten(con):
@@ -130,7 +173,11 @@ def phan_3_luot_khong_ten(con):
         "FROM query_runs WHERE username IS NULL OR TRIM(username)='' OR LOWER(username) IN "
         "('unknown','alice','test','admin') GROUP BY username, session_id ORDER BY MIN(created_at)"))
     if not rows:
-        print("Khong con luot nao khong truy duoc nguoi chay. Tot.")
+        print("Khong co dong nao trong query_runs. NHUNG DAY KHONG PHAI KET LUAN 'da sach':")
+        print("danh sach luot `unknown` trong checklist 22/09 lay tu LOG CHI PHI")
+        print("(backend/logs/cost_log.jsonl), khong phai tu query_runs. Neu cost_log co ma")
+        print("query_runs khong co thi nhung luot do DA DI DUONG KHAC, khong qua ham ghi")
+        print("query_runs - tu no da la mot phat hien, phai truy tiep chu khong duoc bo qua.")
         return
     print("%-12s %-38s %5s  %-19s %-19s" % ("USER", "SESSION", "SO", "TU (UTC)", "DEN (UTC)"))
     for r in rows:

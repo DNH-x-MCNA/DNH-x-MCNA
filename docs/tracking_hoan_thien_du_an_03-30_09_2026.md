@@ -32,16 +32,25 @@ không phải ở code. Quy tắc gộp thay đổi mô tả tool/system prompt 
 
 ### 🔴 1. Lỗi hết credit đang bị ghi vào sổ chấm như lỗi sản phẩm
 
-Đối chiếu `query_runs` đợt UAT 11–21/09 ra **13 lượt `error`**:
+Quét `query_runs` cả tháng 9 trên máy 24 (23/09) — **nặng hơn con số 13 ghi trong checklist**, vì
+checklist chỉ soi 11–21/09:
 
 | Loại | Số lượt | Thực chất |
 |---|---:|---|
-| `credit balance is too low` | **9** | Hết tiền API — **không phải lỗi sản phẩm** |
-| `The read operation timed out` | 4 | Lỗi thật, đã có bản sửa |
+| `credit balance is too low` | **14** | Hết tiền API — **không phải lỗi sản phẩm** |
+| `The read operation timed out` | **12** | Lỗi thật |
+| Kẹt `running`, không có `error_message` | 3 | Không chạy tới cuối hàm |
+| `Client closed stream` | 2 | Người dùng đóng trước khi xong |
 
 Người chấm UAT chỉ nhìn thấy chữ **"Lỗi"**, không phân biệt được hai loại, nên ghi vào sổ như chatbot
 hỏng. Nặng nhất: `thuan.pham` ngày 11/09 hỏi **cùng một câu 5 lần trong 75 phút** (02:58 → 04:12
 UTC), cả 5 lần đều hết credit.
+
+🔴 **Credit đang cạn lại ngay lúc này.** Lượt `2026-09-23 06:43:25 | thuan.pham` hỏng vì hết credit —
+**13 phút trước** chính lượt V34 đang điều tra. Việc giao phiên `backend/` không còn là dự phòng.
+
+12 lượt timeout tập trung vào **vài câu lặp lại**: "mùa vụ cao/thấp" 4 lần, "dưới 80% liên tiếp
+3 tháng" 3 lần. Đây là câu hỏi hỏng có hệ thống, không phải sự cố lẻ.
 
 Đã grep toàn bộ `backend/` và `src/`: **không có chỗ nào bắt lỗi credit**. Chưa ai làm.
 
@@ -56,6 +65,10 @@ nhận diện được; thiếu thì **không dùng để chấm UAT**. Hiện *
 Log còn lại: 8 lượt `unknown` tối 13/09 (≈ **81.900 đ** trong 30 phút) và một cụm `unknown` ngày
 11/09 (≈ **51.400 đ**) — không truy được ai chạy. (Cụm `unknown`/`alice` ngày 21/09 23:56 thì vô
 hại: 0 token, 0 đ, là smoke test.)
+
+⚠️ Quét `query_runs` ngày 23/09 **không thấy dòng `unknown` nào**. Các lượt đó chỉ có trong
+`backend/logs/cost_log.jsonl`. Nghĩa là chúng **không đi qua hàm ghi `query_runs`** — tự nó đã là
+một phát hiện, không được đọc thành "đã sạch".
 
 → Chặn/cảnh báo ở tầng gọi: phiên `backend/`. Truy nguồn các lượt cũ: phiên `docs/`.
 
@@ -96,11 +109,11 @@ Cộng thêm, từ bản cũ và vẫn còn treo: định nghĩa "tuần trong t
 969.269 đơn vị đang = 0 đ), nguồn target quý (mục #24 checklist), UPN Teams + webhook Flow (PR #41),
 đặc tả SMTP.
 
-### ⏳ 7. v34 — còn một điểm chưa chốt
+### ✅ 7. v34 — đã chốt hết, không còn điểm treo
 
-Chatbot trả **4** chương trình, checker liệt **12+**. Hai khả năng chưa phân biệt được: checker
-`ORDER BY p.Code` không có `TOP` nên ảnh chụp chỉ là phần đầu danh sách; hoặc phạm vi đội của tool
-hẹp hơn phạm vi checker chạy thật. Cần `sql_used_json` của lượt UAT thật trên máy 24.
+Payload lượt thật (`2026-09-23 06:56:39`) cho thấy tool trả **20** chương trình, model hiển thị
+**8** và tự ghi ra *"Đang liệt kê 8/20"*. Checker `ORDER BY p.Code` không có `TOP` nên ảnh chụp
+toàn `MT_*`. Cùng phạm vi, khác cách sắp xếp — **không phải lỗi**.
 
 ---
 
@@ -116,10 +129,11 @@ hẹp hơn phạm vi checker chạy thật. Cần `sql_used_json` của lượt 
 | #59, #60 | Điều tra v24 — 1 lỗi thật, 2 bất đồng định nghĩa |
 | #62 | Đối soát doanh thu: cộng thêm Kênh MT và Chợ sỹ Miền Nam (Codex) |
 | **#63** | **v34 + v24** — chốt đội đúng kỳ quá khứ, khử trùng `dmsid` |
+| #64 | Cập nhật tracking này + `scripts/doc_query_runs_may_24.py` |
 
-**PR #63 đã merge, CHƯA deploy.** Có sửa `backend/` → máy 24 phải `git pull` rồi restart
-`DNH_Chatbot_Backend`. Không đổi `src/` nên không cần restart `DNH_Realtime_Alerts`. Xem
-[runbook_trien_khai_may_24.md](runbook_trien_khai_may_24.md).
+**PR #63 đã merge và ĐÃ DEPLOY** lên máy 24 lúc 14:56 ngày 23/09 (`9a3a5c4`). Xác nhận:
+`_team_of_qlv_tu_luong` và `_NV_THEO_DMSID` có mặt trên đĩa, `Application startup complete`,
+uvicorn chạy trên `0.0.0.0:8010`.
 
 ### Hai bài học ghi lại từ hôm nay
 
@@ -127,7 +141,12 @@ hẹp hơn phạm vi checker chạy thật. Cần `sql_used_json` của lượt 
    được vì kho local thiếu bảng CTKM" rồi dừng ở suy luận — thử một câu `SELECT TOP (1) 1` thì ra
    ngay, và nhờ đó tái lập v34 khớp đến từng đồng. Các bảng chỉ có trên Bravo: nhóm `DMS_*`, và lịch
    sử `FACT_*` dài hơn cửa sổ sync.
-2. **Đừng kết luận "chưa ai sửa" từ tiêu đề commit.** Hai lần trong một ngày mắc đúng lỗi này. Phải
+2. **`Invoke-WebRequest` ném exception ở mọi mã 4xx/5xx**, nên lệnh kiểm sức khỏe viết tắt in ra
+   chữ "LOI" đúng lúc backend đang khỏe (404 ở `/` là bình thường). Thêm vào đó, kiểm ngay sau
+   `Restart-Service` thì uvicorn chưa nạp xong và ra `Unable to connect`. Hai cái cộng lại làm báo
+   động nhầm hai lần trong một buổi. Runbook đã sửa: đọc `$_.Exception.Response.StatusCode` —
+   **có mã HTTP nào cũng là ĐẠT**, và chờ vài giây trước khi kiểm.
+3. **Đừng kết luận "chưa ai sửa" từ tiêu đề commit.** Hai lần trong một ngày mắc đúng lỗi này. Phải
    `git log -S` theo mã câu **hoặc** grep ghi chú trong code — liên kết thường chỉ nằm ở comment.
 
 ---
