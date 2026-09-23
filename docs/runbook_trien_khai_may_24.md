@@ -15,10 +15,32 @@ Máy 24 là máy chạy chatbot thật. Theo `AGENTS.md`: **không sửa code tr
 | Service tunnel | `DNH_Chatbot_Tunnel` (Cloudflare) |
 | Log | `C:\dnh_chatbot\backend\logs\` |
 | Kho | `C:\dnh_chatbot\backend\warehouse.db`, `memory.db`, `auth.db` |
+| Cổng backend | **8010** (`http://127.0.0.1:8010/`), KHÔNG phải 8000 như mẫu trong `.bat` |
 
 **Không có `sqlite3` CLI trên máy 24** — mọi truy vấn phải qua `python -c` hoặc script Python.
 
-Ba service độc lập nhau. Vá code trong `backend/` thì **chỉ restart `DNH_Chatbot_Backend`**.
+### Thư mục nào đổi thì restart service nào
+
+Ba service độc lập nhau và **nạp code từ những thư mục khác nhau**. Restart theo đúng bảng này:
+
+| Thư mục có thay đổi | Service cần restart |
+|---|---|
+| `backend/` | `DNH_Chatbot_Backend` |
+| `src/` | `DNH_Realtime_Alerts` |
+| cả hai | cả hai |
+| `docs/`, `scripts/`, `tests/` | không cần restart gì |
+
+> **Bẫy đã gặp 23/09:** bản runbook đầu chỉ ghi *"vá code trong `backend/` thì chỉ restart
+> `DNH_Chatbot_Backend`"*. Đợt deploy hôm đó có PR #54 sửa `src/alerts.py`, nên chatbot được nạp
+> code mới còn **service cảnh báo vẫn chạy bản cũ** — không ai để ý vì service vẫn `Running` và
+> chatbot thì đã đúng. Chỉ phát hiện nhờ nhìn `StartTime` của tiến trình còn lại vẫn là ngày hôm
+> trước.
+
+Sau khi `git pull`, xem thư mục nào vừa đổi để biết phải restart cái nào:
+
+```powershell
+git -C C:\dnh_chatbot diff --name-only HEAD@{1} HEAD | ForEach-Object { ($_ -split '/')[0] } | Sort-Object -Unique
+```
 
 ⚠️ `scripts/register_chatbot_web_service.bat` **không phải lệnh restart** — nó `nssm remove` rồi
 cài lại service từ đầu. Chỉ dùng khi đăng ký lần đầu hoặc cố ý cài lại.
@@ -49,21 +71,55 @@ Kiểm bằng một **thứ chỉ có ở bản mới** (hàm/trường mới th
 cũng trả đúng. Bài học 23/09: phép kiểm `_detail_cutoff() == '2024-01-01'` đạt trên **cả** hai bản
 vì hằng số cũ trùng giá trị mong đợi — không chứng minh được gì.
 
-**3. Restart** (PowerShell quyền Administrator)
+**3. Restart** (PowerShell quyền Administrator) — theo bảng thư mục ở trên
 
 ```powershell
 Restart-Service DNH_Chatbot_Backend -Force
 ```
 
+Nếu `src/` cũng đổi thì restart thêm:
+
+```powershell
+Restart-Service DNH_Realtime_Alerts -Force
+```
+
 **4. Xác nhận tiến trình đã khởi động lại**
 
 ```powershell
-Get-Service DNH_Chatbot_Backend | Select-Object Name, Status
+Get-Service DNH_Chatbot_Backend, DNH_Realtime_Alerts | Select-Object Name, Status
 Get-Process python* -ErrorAction SilentlyContinue | Select-Object Id, ProcessName, StartTime | Format-Table -AutoSize
 ```
 
-`StartTime` của tiến trình chatbot phải là **hôm nay, sau thời điểm pull**. Máy 24 luôn có nhiều
-tiến trình python (chatbot, cảnh báo, sync scheduler) — cái không restart vẫn giữ giờ cũ là đúng.
+`StartTime` của **mọi service vừa restart** phải là hôm nay, sau thời điểm pull. Máy 24 luôn có
+nhiều tiến trình python (chatbot, cảnh báo, sync scheduler); cái **cố ý không restart** thì giữ giờ
+cũ là đúng — nhưng phải đối chiếu với bảng thư mục để biết cái nào là cố ý, cái nào là bỏ sót.
+
+⚠️ **`ProcessId` của service KHÔNG phải PID của python.** Service chạy qua NSSM, nên `Get-Service` /
+`Get-CimInstance Win32_Service` trả PID của **tiến trình bọc NSSM**, còn python là tiến trình con
+mang PID khác. Đừng đối chiếu trực tiếp hai danh sách rồi kết luận service trỏ vào PID đã chết. Một
+lần restart cũng có thể để lại tiến trình con thoáng qua rồi tự thoát — không phải dấu hiệu hỏng.
+
+```powershell
+Get-CimInstance Win32_Service | Where-Object { $_.Name -like "DNH*" } | Select-Object Name, ProcessId, State | Format-Table -AutoSize
+```
+
+**5. Xác nhận backend thật sự phục vụ được**
+
+```powershell
+try { $r = Invoke-WebRequest -Uri "http://127.0.0.1:8010/" -UseBasicParsing -TimeoutSec 10; Write-Output ("HTTP " + $r.StatusCode) } catch { Write-Output ("LOI: " + $_.Exception.Message) }
+```
+
+**HTTP 404 là ĐẠT** — server có trả lời, chỉ là không có route ở `/`. Chỉ `Unable to connect` mới
+là hỏng (hoặc sai cổng). Kèm đọc log khởi động, phải thấy `Application startup complete` và không
+có exception:
+
+```powershell
+Get-Content C:\dnh_chatbot\backend\logs\uvicorn.log -Tail 20
+Get-Content C:\dnh_chatbot\backend\logs\uvicorn.err.log -Tail 20
+```
+
+Bước này bắt buộc khi đợt deploy có sửa `schema_context.py` hoặc mô tả tool: lỗi cú pháp/import chỉ
+lộ lúc khởi động, mà service vẫn hiện `Running` dù ứng dụng đã chết.
 
 **Đừng kill tiến trình python bằng tay** để "restart": rất dễ giết nhầm sync scheduler, mất lịch
 đồng bộ Bravo.
@@ -74,6 +130,7 @@ tiến trình python (chatbot, cảnh báo, sync scheduler) — cái không rest
 |---|---|
 | Restart mà chưa pull | `rev-parse` vẫn ra commit cũ; code trên đĩa không đổi |
 | Pull rồi mà quên restart | Đĩa mới nhưng `StartTime` của tiến trình vẫn là hôm trước |
+| Restart thiếu service | Chỉ restart chatbot trong khi `src/` cũng đổi → cảnh báo vẫn chạy code cũ, service vẫn `Running` nên không có dấu hiệu gì |
 | Tên service sai | `Restart-Service : Cannot find any service with service name` — file `.bat` trong repo từng ghi `DNH_Chatbot_Web`, thực tế là `DNH_Chatbot_Backend` |
 | Phép kiểm không phân biệt được bản cũ/mới | Báo "ĐẠT" trên cả hai bản, che mất việc chưa pull |
 
