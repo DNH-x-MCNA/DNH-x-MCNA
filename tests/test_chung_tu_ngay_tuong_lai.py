@@ -48,6 +48,7 @@ def _make_db(path):
             emp_code TEXT, kenh_bh TEXT);
         CREATE TABLE dmssx_khachhang (code TEXT, name TEXT, city_id INTEGER, id_code INTEGER,
             kenh_bh TEXT);
+        CREATE TABLE dim_tinhthanhpho (city_id INTEGER, city_name TEXT, area_code TEXT);
         CREATE TABLE monthly_customer_summary (year_month TEXT, channel TEXT, customer_code TEXT,
             employee_code TEXT, revenue REAL, invoice_count INTEGER);
         """
@@ -68,6 +69,9 @@ def _make_db(path):
             ("2026-09-28", "KH02", "SP01", 18_000, 1, 18_000, "HD09TL", 1, "NV02", "2026-09-20"),
         ],
     )
+    conn.execute("INSERT INTO dms_khachhang VALUES ('KH01','Khach OTC',1,1,'NV01','OTC')")
+    conn.execute("INSERT INTO dmssx_khachhang VALUES ('KH02','Khach ETC',1,2,'ETC')")
+    conn.execute("INSERT INTO dim_tinhthanhpho VALUES (1,'Ninh Binh','MB')")
     conn.commit()
     conn.close()
 
@@ -161,3 +165,32 @@ def test_scope_kenh_etc_van_duoc_ap_cho_phan_chung_tu_tuong_lai(tmp_path, monkey
     assert thang_9["otc_revenue"] == 0.0
     assert thang_9["etc_revenue"] == 2_000_000
     assert thang_9["chung_tu_ngay_tuong_lai"]["revenue"] == 18_000
+
+
+def test_goi_ca_khoang_khop_tong_tung_thang_va_neu_rieng_chung_tu_tuong_lai(tmp_path, monkeypatch):
+    _kho(tmp_path, monkeypatch)
+    months = _chuoi()["months"]
+    whole = rt.revenue_by_channel("2026-08-01", "2026-09-30")
+    assert whole["total"]["revenue"] == sum(m["revenue"] for m in months)
+    assert whole["total"]["revenue"] == 14_000_000
+    assert whole["tinh_den_ngay"] == "2026-09-23"
+    assert whole["chung_tu_ngay_tuong_lai"]["revenue"] == 18_000
+    assert whole["chung_tu_ngay_tuong_lai"]["invoices"] == 1
+
+
+def test_dia_ban_khop_tong_cong_ty_va_neu_rieng_chung_tu_tuong_lai(tmp_path, monkeypatch):
+    _kho(tmp_path, monkeypatch)
+    area = rt.geography_monthly_performance(month_to="2026-09", months_back=1, dimension="area")
+    company = rt.revenue_by_channel("2026-09-01", "2026-09-23")
+    assert sum(row["revenue"] for row in area["rows"]) == company["total"]["revenue"]
+    assert company["total"]["revenue"] == 5_000_000
+    assert area["tinh_den_ngay"] == "2026-09-23"
+    assert area["chung_tu_ngay_tuong_lai"]["revenue"] == 18_000
+
+
+def test_khoang_thang_da_ket_thuc_khong_bi_cat_hay_gan_co_tuong_lai(tmp_path, monkeypatch):
+    _kho(tmp_path, monkeypatch)
+    august = rt.revenue_by_channel("2026-08-01", "2026-08-31")
+    assert august["total"]["revenue"] == 9_000_000
+    assert "chung_tu_ngay_tuong_lai" not in august
+    assert "tinh_den_ngay" not in august
