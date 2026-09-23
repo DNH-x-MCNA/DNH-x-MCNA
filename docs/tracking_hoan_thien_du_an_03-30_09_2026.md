@@ -52,10 +52,34 @@ UTC), cả 5 lần đều hết credit.
 12 lượt timeout tập trung vào **vài câu lặp lại**: "mùa vụ cao/thấp" 4 lần, "dưới 80% liên tiếp
 3 tháng" 3 lần. Đây là câu hỏi hỏng có hệ thống, không phải sự cố lẻ.
 
-Đã grep toàn bộ `backend/` và `src/`: **không có chỗ nào bắt lỗi credit**. Chưa ai làm.
+### ✅ Đã sửa — PR #65 (chưa merge, chưa deploy)
 
-→ Giao phiên `backend/` (Codex) 23/09: bắt riêng lỗi 400 credit với thông báo phân biệt được, và cho
-`backend/health_watchdog.py` cảnh báo **trước khi** số dư cạn hẳn.
+| Việc | Trạng thái |
+|---|---|
+| Lỗi HTTP 400 credit có `status = api_credit_exhausted` + thông báo rõ cho người dùng; lỗi gốc vẫn lưu trong `query_runs` | ✅ |
+| Chặn lượt gọi model thiếu `username` hoặc `session_id` nhận diện được | ✅ |
+| Watchdog cảnh báo số dư ước tính | ⚠️ **có code nhưng CHƯA BẬT** |
+
+Kiểm chứng bằng `git stash`: mã cũ 14 test trượt, mã mới 15 test đạt. Full suite **1.024 passed,
+1 deselected**. Không gọi API trả phí.
+
+### 🔴 Việc đang chặn: watchdog cần hai số từ anh Đăng
+
+Watchdog không tự đọc được số dư từ Anthropic — cần mốc thủ công để suy ra tốc độ tiêu:
+
+1. **Số dư API hiện tại** (USD)
+2. **Thời điểm chụp số dư đó** (ngày giờ)
+
+Lấy tại Anthropic Console → **Billing / Credits**. Chưa có hai số này thì cảnh báo **không bật
+được**, và kịch bản 23/09 lặp lại: hết tiền giữa buổi chấm, người chấm ghi vào sổ như lỗi sản phẩm.
+
+Đây là mục cấp bách nhất còn lại — credit đã cạn **ngay trong ngày 23/09**.
+
+### Còn lại của mục này
+
+9 dòng UAT cũ trong `query_runs` vẫn mang trạng thái lỗi chung, **chưa backfill** sang
+`api_credit_exhausted`. Không chặn gì, nhưng ai đọc `query_runs` thô về sau vẫn thấy 9 dòng đó
+giống lỗi sản phẩm — nên đối chiếu kèm `error_message`.
 
 ### 🔴 2. Lượt gọi model không có `username` — không truy được ai chạy
 
@@ -70,7 +94,8 @@ hại: 0 token, 0 đ, là smoke test.)
 `backend/logs/cost_log.jsonl`. Nghĩa là chúng **không đi qua hàm ghi `query_runs`** — tự nó đã là
 một phát hiện, không được đọc thành "đã sạch".
 
-→ Chặn/cảnh báo ở tầng gọi: phiên `backend/`. Truy nguồn các lượt cũ: phiên `docs/`.
+→ Chặn ở tầng gọi: **✅ xong trong PR #65**. Truy nguồn các lượt cũ: còn lại, và xem ghi chú trên —
+các lượt `unknown` không có trong `query_runs` nên phải truy từ `cost_log.jsonl`.
 
 ### 🟡 3. Chấm lại 20 lượt ≈ 80.000 đ
 
@@ -130,6 +155,7 @@ toàn `MT_*`. Cùng phạm vi, khác cách sắp xếp — **không phải lỗi
 | #62 | Đối soát doanh thu: cộng thêm Kênh MT và Chợ sỹ Miền Nam (Codex) |
 | **#63** | **v34 + v24** — chốt đội đúng kỳ quá khứ, khử trùng `dmsid` |
 | #64 | Cập nhật tracking này + `scripts/doc_query_runs_may_24.py` |
+| #65 | Bắt lỗi hết credit, chặn lượt gọi thiếu `username` (Codex) — **chưa merge** |
 
 **PR #63 đã merge và ĐÃ DEPLOY** lên máy 24 lúc 14:56 ngày 23/09 (`9a3a5c4`). Xác nhận:
 `_team_of_qlv_tu_luong` và `_NV_THEO_DMSID` có mặt trên đĩa, `Application startup complete`,
