@@ -68,7 +68,7 @@ from conversation_memory import (
     list_query_runs,
     save_query_feedback,
 )
-from nl2sql import ask, ask_stream
+from nl2sql import ApiCreditExhaustedError, ask, ask_stream
 from query_engine import _write_log
 from pricing import USD_TO_VND_RATE, api_provider_for_model
 
@@ -871,7 +871,8 @@ def chat(req: ChatRequest, user: dict = Depends(require_approved_user)):
     try:
         result = ask(req.question, session_id=req.session_id, username=user["username"],
                      scope_area_code=scope_area_code, scope_employee_code=scope_employee_code,
-                     scope_channel=scope_channel, scope_role=user["role"], query_id=query_id)
+                     scope_channel=scope_channel, scope_role=user["role"], query_id=query_id,
+                     origin="web")
         lr = result.get("last_result") or {}
         is_raw_sql = lr.get("ok") and "columns" in lr
         complete_query_run(
@@ -882,6 +883,10 @@ def chat(req: ChatRequest, user: dict = Depends(require_approved_user)):
             row_count=lr.get("row_count") if is_raw_sql else None,
             duration_ms=_elapsed_ms(started_at),
         )
+    except ApiCreditExhaustedError as e:
+        fail_query_run(query_id, e.raw_message, duration_ms=_elapsed_ms(started_at),
+                       status="api_credit_exhausted")
+        raise HTTPException(503, "Hệ thống đã hết hạn mức API. Đây không phải do câu hỏi sai; vui lòng chờ quản trị viên nạp thêm hạn mức, không cần hỏi lại.")
     except HTTPException:
         fail_query_run(query_id, "HTTP error", duration_ms=_elapsed_ms(started_at))
         raise
@@ -932,7 +937,8 @@ def chat_stream(req: ChatRequest, user: dict = Depends(require_approved_user)):
         try:
             for chunk in ask_stream(req.question, session_id=req.session_id, username=user["username"],
                                      scope_area_code=scope_area_code, scope_employee_code=scope_employee_code,
-                                     scope_channel=scope_channel, scope_role=user["role"], query_id=query_id):
+                                     scope_channel=scope_channel, scope_role=user["role"], query_id=query_id,
+                                     origin="web"):
                 if chunk["type"] == "done":
                     lr = chunk.get("last_result") or {}
                     is_raw_sql = lr.get("ok") and "columns" in lr
@@ -963,6 +969,14 @@ def chat_stream(req: ChatRequest, user: dict = Depends(require_approved_user)):
             fail_query_run(query_id, "Client closed stream", duration_ms=_elapsed_ms(started_at),
                            status="cancelled")
             raise
+        except ApiCreditExhaustedError as e:
+            fail_query_run(query_id, e.raw_message, duration_ms=_elapsed_ms(started_at),
+                           status="api_credit_exhausted")
+            err_payload = {
+                "type": "error", "code": "api_credit_exhausted", "query_id": query_id,
+                "message": "Hệ thống đã hết hạn mức API. Đây không phải do câu hỏi sai; vui lòng chờ quản trị viên nạp thêm hạn mức, không cần hỏi lại.",
+            }
+            yield f"data: {json.dumps(err_payload, ensure_ascii=False)}\n\n"
         except Exception as e:
             # Loi giua chung stream: KHONG the raise HTTPException nua (header da gui roi, client
             # dang doc stream) - gui 1 event loi qua SSE de frontend tu xu ly hien thi, giong tinh
