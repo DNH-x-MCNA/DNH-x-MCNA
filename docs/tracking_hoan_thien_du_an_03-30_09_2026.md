@@ -49,8 +49,14 @@ UTC), cả 5 lần đều hết credit.
 🔴 **Credit đang cạn lại ngay lúc này.** Lượt `2026-09-23 06:43:25 | thuan.pham` hỏng vì hết credit —
 **13 phút trước** chính lượt V34 đang điều tra. Việc giao phiên `backend/` không còn là dự phòng.
 
-12 lượt timeout tập trung vào **vài câu lặp lại**: "mùa vụ cao/thấp" 4 lần, "dưới 80% liên tiếp
-3 tháng" 3 lần. Đây là câu hỏi hỏng có hệ thống, không phải sự cố lẻ.
+12 lượt timeout tập trung vào **vài câu lặp lại**. Đã đối chiếu từng lượt với mốc commit — xem
+[doi_chieu_12_luot_timeout_23-09.md](doi_chieu_12_luot_timeout_23-09.md):
+
+- **6/12 đã có bản sửa trỏ đúng** (mùa vụ ×4 → `074e98f`; khách phát sinh 3 tháng → `2954886`;
+  độ phủ khách → `34f9dca`). Không lượt nào hỏng **sau** bản sửa → chỉ cần chấm lại, không sửa thêm.
+- **6/12 chưa có bản sửa nào.** Nặng nhất: *"cá nhân/đội dưới 80% liên tiếp 3 tháng"* hỏng **4 lần
+  trong một ngày 08/09** (2 hết credit lúc 11:27 và 13:31, 2 timeout lúc 13:46 và 13:48 — cách nhau
+  2 phút, người dùng bấm lại ngay).
 
 ### ✅ Đã sửa — PR #65 (chưa merge, chưa deploy)
 
@@ -155,7 +161,7 @@ toàn `MT_*`. Cùng phạm vi, khác cách sắp xếp — **không phải lỗi
 | #62 | Đối soát doanh thu: cộng thêm Kênh MT và Chợ sỹ Miền Nam (Codex) |
 | **#63** | **v34 + v24** — chốt đội đúng kỳ quá khứ, khử trùng `dmsid` |
 | #64 | Cập nhật tracking này + `scripts/doc_query_runs_may_24.py` |
-| #65 | Bắt lỗi hết credit, chặn lượt gọi thiếu `username` (Codex) — **chưa merge** |
+| #65 | Bắt lỗi hết credit, chặn lượt gọi thiếu `username`, watchdog cảnh báo dự phòng (Codex) — **chưa merge** |
 
 **PR #63 đã merge và ĐÃ DEPLOY** lên máy 24 lúc 14:56 ngày 23/09 (`9a3a5c4`). Xác nhận:
 `_team_of_qlv_tu_luong` và `_NV_THEO_DMSID` có mặt trên đĩa, `Application startup complete`,

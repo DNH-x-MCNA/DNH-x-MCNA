@@ -232,6 +232,39 @@ def phan_4_loi_va_phan_hoi(con):
             print("      nhan xet: %s" % r["feedback_comment"])
 
 
+def phan_5_timeout(con):
+    """Chi tiet 12 luot timeout - du de tach loi TRUOC/SAU tung ban sua.
+
+    Phien backend/ can dung ba thu cho moi dong: created_at (UTC), duration_ms, va tool da goi.
+    Gio may 24 = UTC + 7.
+    """
+    print()
+    print("=" * 78)
+    print("PHAN 5 - CHI TIET LUOT TIMEOUT (cho phien backend/)")
+    print("=" * 78)
+    rows = [r for r in con.execute(
+        "SELECT * FROM query_runs WHERE created_at>=? AND created_at<? AND status<>'completed' "
+        "ORDER BY created_at", (TU_NGAY, DEN_NGAY))
+        if "timed out" in (r["error_message"] or "").lower()
+        or "timeout" in (r["error_message"] or "").lower()]
+    if not rows:
+        print("Khong co luot timeout nao trong ky.")
+        return
+    print("%-19s %-19s %9s  %-13s %s" % ("UTC", "GIO MAY 24", "GIAY", "USER", "CAU HOI"))
+    for r in rows:
+        utc = str(r["created_at"])[:19]
+        try:
+            lo = (dt.datetime.fromisoformat(utc) + dt.timedelta(hours=7)).isoformat(sep=" ")
+        except ValueError:
+            lo = "?"
+        giay = (r["duration_ms"] or 0) / 1000.0
+        print("%-19s %-19s %9.1f  %-13s %s" % (utc, lo, giay, r["username"],
+                                               (r["question"] or "")[:70]))
+        print("    TOOL: %s" % (r["sql_used_json"] or "(khong ghi)")[:400])
+    print()
+    print(">> Doi chieu gio MAY 24 (khong phai UTC) voi gio commit ban sua de biet truoc/sau.")
+
+
 def main():
     con = _mo()
     print("Doc: %s" % DB)
@@ -241,6 +274,7 @@ def main():
     phan_2_canh_bao_bi_nuot(con)
     phan_3_luot_khong_ten(con)
     phan_4_loi_va_phan_hoi(con)
+    phan_5_timeout(con)
     con.close()
 
 
