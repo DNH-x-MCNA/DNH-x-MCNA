@@ -228,13 +228,52 @@ Dòng thứ tư là nguyên nhân lỗi v34. **Đã xử lý bằng đường kh
 
 ---
 
-## Điểm cần làm rõ định nghĩa (chưa phải lỗi)
+## C20 — khoản dư "chưa phân loại" đã được sửa từ 07/09, tài liệu chưa kịp ghi
 
-| Câu | Hiện trạng | Cần làm |
-|---|---|---|
-| C20 | Ba số tổng khớp tuyệt đối với `S13` (217,56 / 226,84 / −9,28 tỷ), số khách lệch không đáng kể. Nhưng LFL chatbot −37,40 tỷ + "phần dư chưa phân loại" +2,87 tỷ, còn `S13` cho LFL −34,49 tỷ và phần dư = 0. Đã loại hai giả thuyết: 0 giao dịch thiếu mã khách; hàng trả cả kỳ chỉ −502 triệu | Xem `audit_log` phiên hỏi C20 để biết chatbot xếp khoản 2,87 tỷ vào đâu và theo tiêu chí gì. Chốt một định nghĩa LFL duy nhất rồi mới so |
+Bản 03/09 ghi C20 là điểm treo: *"LFL chatbot −37,40 tỷ + phần dư chưa phân loại +2,87 tỷ, còn S13
+cho LFL −34,49 tỷ và phần dư = 0"*, và đề xuất đọc `audit_log` để tìm chatbot xếp 2,87 tỷ vào đâu.
 
----
+Commit **`b957283` (07/09)** — *"fix(uat): route and reconcile executive checks"* — đã xử lý, nhưng
+tiêu đề không nhắc C20 nên tra commit log không ra. Liên kết nằm ở **ghi chú trong code**
+([report_templates.py](../backend/report_templates.py), `_movement_summary`):
+
+```python
+# Neu co doanh thu am do hang tra, "doanh thu them - doanh thu mat" khong bang delta.
+# Tach ro phan dieu chinh nay thay vi de mot khoan du "chua phan loai" nhu C20 UAT.
+non_positive_adjustment = classified_delta - (added + lfl_delta - lost)
+```
+
+Đo lại trên kho dev, kỳ 08/2026 (miễn phí, không gọi model):
+
+| | Giá trị |
+|---|---:|
+| Tổng kỳ này | 80,55 tỷ |
+| Tổng kỳ trước | 74,84 tỷ |
+| Biến động | **+5,72 tỷ** |
+| LFL | +3,83 tỷ |
+| Khách mới | +1,99 tỷ |
+| Tái kích hoạt | +14,86 tỷ |
+| Ngừng mua | −14,96 tỷ |
+| **Điều chỉnh âm (hàng trả)** | **−0,01 tỷ** |
+| **Cộng lại** | **+5,72 tỷ** ✓ khớp biến động |
+
+**Không còn khoản dư chưa phân loại.** Payload cân bằng tuyệt đối, và phần từng gây tranh cãi nay có
+tên riêng `non_positive_revenue_adjustment` — ở kỳ này chỉ **10 triệu**, tức 0,2% biến động, chứ
+không phải 2,87 tỷ.
+
+### Còn lại
+
+Việc *cân bằng* đã xong. Chưa xác nhận được là **mức LFL** của chatbot có còn lệch S13 hay không —
+cần một trong hai:
+
+1. **SQL của checker S13** để đối chiếu định nghĩa LFL (nghi ngờ: S13 gộp phần điều chỉnh âm vào
+   LFL, chatbot tách riêng — cộng lại thì −37,40 + 2,87 = −34,53 so với −34,49 của S13, lệch
+   40 triệu); hoặc
+2. **Chấm lại C20 một lượt** sau bản sửa 07/09 — lượt gốc chạy trước đó nên số cũ không còn đại diện.
+
+Đây là **lần thứ ba trong ngày** gặp cùng một kiểu: tài liệu ghi "chưa sửa" trong khi commit có sửa
+nhưng tiêu đề không nhắc tên câu. Cách tra đúng: `git log -S` theo tên trường/mã câu, hoặc grep ghi
+chú trong code.
 
 ## Nợ kỹ thuật đã thấy nhưng không chặn UAT
 
