@@ -868,7 +868,74 @@ bao nhiêu khách chỉ có dòng `ManagerCode` rỗng (nhóm dễ bị bỏ só
                               THEN CustomerCode END) KhachMoi_BoSotNeuLocQLV
     FROM f GROUP BY MonthEnd ORDER BY MonthEnd;
 
-Cột cuối là mức chênh nếu chỉ lấy khách có QLV: T8/2026 là **627 − 612 = 15 khách (2,4%)**. Bản chạy
+#### Bảng A của C29 — "khách không mang cờ" (sửa 23/09/2026)
+
+Bản trên thiếu cột **khách không mang cờ nào**, và bản checker đang dùng cho bảng A thì **đếm theo
+dòng snapshot** nên dòng rollup QLV làm phồng số. Truy vấn đúng:
+
+    WITH snaps AS (
+      SELECT EOMONTH(SaveDate) MonthEnd, MAX(SaveDate) SaveDate
+      FROM dbo.FACT_TongHopKhachHang
+      WHERE SaveDate >= @FromDate AND SaveDate < @ToDate
+      GROUP BY EOMONTH(SaveDate)
+    ), f AS (
+      SELECT EOMONTH(f.SaveDate) MonthEnd, f.CustomerCode, f.IsNC, f.IsRO, f.IsAC
+      FROM dbo.FACT_TongHopKhachHang f
+      JOIN snaps s ON s.SaveDate = f.SaveDate
+      WHERE (@AreaCode IS NULL OR f.AreaCode = @AreaCode)
+    )
+    SELECT MonthEnd,
+      COUNT(DISTINCT CustomerCode) TongKhachDuyNhat,
+      COUNT(DISTINCT CASE WHEN IsNC=1 THEN CustomerCode END) KhachMoi,
+      COUNT(DISTINCT CASE WHEN IsRO=1 THEN CustomerCode END) KhachMuaLai,
+      COUNT(DISTINCT CASE WHEN IsNC=1 OR IsRO=1 THEN CustomerCode END) KhachCoCo,
+      COUNT(DISTINCT CustomerCode)
+        - COUNT(DISTINCT CASE WHEN IsNC=1 OR IsRO=1 THEN CustomerCode END) KhachKhongMangCo,
+      COUNT(DISTINCT CASE WHEN IsAC=1 THEN CustomerCode END) KhachAC_ChiCS_TK
+    FROM f GROUP BY MonthEnd ORDER BY MonthEnd;
+
+Ba điểm bắt buộc, mỗi điểm ứng với một cách sai đã gặp:
+
+**1. `COUNT(DISTINCT CustomerCode)`, KHÔNG phải `COUNT(*)`.** Đo trên kho ngày 23/09/2026:
+
+| Snapshot | Số dòng | Khách duy nhất | Dòng `ManagerCode` NULL |
+|---|---:|---:|---:|
+| 2026-06-30 | 12.042 | 6.021 | 6.021 |
+| 2026-07-31 | 13.722 | 6.861 | 6.861 |
+| 2026-08-31 | **13.853** | **6.926** | 6.926 |
+| 2026-09-15 | 6.676 | 3.343 | 3.343 |
+
+Mỗi khách có **một dòng rollup `ManagerCode` NULL** cộng với các dòng gắn QLV. Nhưng **không phải
+luôn đúng 2 dòng**: `13.853 ≠ 6.926 × 2`. Kiểm từng khách tháng 8/2026 thấy `HCM14142` và `HCM00344`
+có **3 dòng** (hai QLV cùng phụ trách), còn `LCH00074` chỉ có **1 dòng** (chưa gắn QLV). Tháng
+09/2026 có 10 khách một dòng.
+
+Nghĩa là đếm dòng phồng theo **một tỷ lệ thay đổi theo tháng** — không chia đôi ra số đúng được.
+
+**2. `IsNC=1 OR IsRO=1`, KHÔNG phải trừ riêng từng cờ.** Đo trên cả 4 snapshot thì giao NC ∩ RO
+hiện bằng 0, nên `Tổng − NC − RO` tình cờ ra cùng kết quả. Nhưng đó là đặc điểm dữ liệu hiện tại,
+không phải ràng buộc — một khách vừa mới vừa mua lại sẽ bị trừ hai lần. Dạng `OR` đúng trong mọi
+trường hợp nên dùng luôn.
+
+**3. KHÔNG thêm bộ lọc `@ManagerCode` vào truy vấn này.** Lọc theo QLV sẽ bỏ mất dòng rollup và
+toàn bộ khách chưa gắn QLV — đúng lỗi đã ghi ở cảnh báo đầu mục S18. Muốn tách theo QLV thì dùng
+truy vấn thứ nhất và **không cộng ngang**.
+
+Đối chiếu tháng 8/2026, số ra khớp đúng bảng chatbot trả:
+
+```
+Tổng 6.926 | mới 627 | mua lại 5.565 | có cờ 6.192 | KHÔNG MANG CỜ 734 (10,6%) | AC 42
+```
+
+**Kết luận: bảng A của chatbot đúng, checker sai.** Chatbot định nghĩa "không mang cờ" = tổng khách
+duy nhất − khách có NC hoặc RO, đúng như truy vấn trên.
+
+`KhachAC` chỉ dành cho CS và TK (DNH chốt 27/08/2026) nên đặt tên cột là `KhachAC_ChiCS_TK` để không
+ai dùng nhầm thành "khách hoạt động toàn công ty".
+
+---
+
+Cột cuối của truy vấn trước là mức chênh nếu chỉ lấy khách có QLV: T8/2026 là **627 − 612 = 15 khách (2,4%)**. Bản chạy
 UAT 03/09 cho thấy chatbot báo đúng **612** — tức đang lọc bỏ khách chưa gắn QLV. Chênh nhỏ nhưng
 phải nói rõ, vì đây là chỉ số đếm khách, không phải ước lượng.
 
