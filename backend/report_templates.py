@@ -468,9 +468,12 @@ def _employee_scope_clause(scope_employee_code: str, alias: str, as_of: str = No
     return f" AND {alias}.employee_code IN ({placeholders})", tuple(dms_ids)
 
 
-def revenue_by_channel(date_from: str, date_to: str, scope_area_code: str = None,
-                        scope_channel: str = None, scope_employee_code: str = None) -> dict:
-    """Doanh thu + so hoa don theo kenh OTC/ETC trong khoang [date_from, date_to].
+def _revenue_by_channel_raw(date_from: str, date_to: str, scope_area_code: str = None,
+                            scope_channel: str = None, scope_employee_code: str = None) -> dict:
+    """Phep cong doanh thu theo khoang ngay, ke ca chung tu de ngay tuong lai.
+
+    Chi dung noi bo de thong ke rieng phan chung tu de ngay sau hom nay. Doanh thu
+    da phat sinh cho nguoi dung phai di qua revenue_by_channel().
     scope_area_code: NEU duoc truyen (tai khoan QLV/GD mien bi gioi han vung), CHI tinh doanh thu
     cua dung vung do (join qua bang khach hang) - do la co che ep buoc o tang code, khong phu thuoc
     AI co tu loc dung hay khong.
@@ -538,6 +541,36 @@ def revenue_by_channel(date_from: str, date_to: str, scope_area_code: str = None
         result["coverage_warning"] = coverage["warning"]
     if scope_channel:
         result["channel_scope"] = f"Tai khoan chi duoc xem kenh {scope_channel} - so lieu kenh khac KHONG duoc hien thi."
+    return result
+
+
+def revenue_by_channel(date_from: str, date_to: str, scope_area_code: str = None,
+                       scope_channel: str = None, scope_employee_code: str = None) -> dict:
+    """Doanh thu da phat sinh den hom nay; chung tu de ngay sau do duoc neu rieng."""
+    today = dt.date.today().isoformat()
+    actual_to = min(date_to, today)
+    result = _revenue_by_channel_raw(
+        date_from, actual_to, scope_area_code, scope_channel, scope_employee_code,
+    )
+    result["date_to"] = date_to
+    if actual_to < date_to:
+        result["tinh_den_ngay"] = today
+        future_from = max(date_from, (dt.date.today() + dt.timedelta(days=1)).isoformat())
+        future = _revenue_by_channel_raw(
+            future_from, date_to, scope_area_code, scope_channel, scope_employee_code,
+        )
+        if future["total"]["revenue"] or future["total"]["invoices"]:
+            result["chung_tu_ngay_tuong_lai"] = {
+                "tu_ngay": future_from, "den_ngay": date_to,
+                "revenue": future["total"]["revenue"],
+                "invoices": future["total"]["invoices"],
+                "ghi_chu": ("Chung tu de ngay SAU hom nay, KHONG duoc cong vao doanh thu "
+                            "da phat sinh."),
+            }
+        coverage = _revenue_period_coverage(date_from, date_to)
+        result["data_coverage"] = coverage
+        if not coverage["complete"]:
+            result["coverage_warning"] = coverage["warning"]
     return result
 
 
@@ -2336,8 +2369,8 @@ def revenue_monthly_series(month_to: str = None, months_back: int = 12, include_
             # luan cua DNH ve viec hoa don ETC de ngay 28 hang thang la ghi truoc theo ke hoach hay
             # nhap sai ngay, nen chi neu ra.
             ngay_sau = (dt.date.fromisoformat(d_to_that) + dt.timedelta(days=1)).isoformat()
-            tl = revenue_by_channel(ngay_sau, d_to_lich, scope_area_code, scope_channel,
-                                    scope_employee_code)
+            tl = _revenue_by_channel_raw(ngay_sau, d_to_lich, scope_area_code, scope_channel,
+                                         scope_employee_code)
             if tl["total"]["revenue"] or tl["total"]["invoices"]:
                 item["chung_tu_ngay_tuong_lai"] = {
                     "tu_ngay": ngay_sau, "den_ngay": d_to_lich,
@@ -5955,6 +5988,8 @@ def geography_monthly_performance(month_to: str = None, months_back: int = 6,
     months_back = max(1, min(int(months_back or 6), 12))
     month_from = _month_add(month_to, -(months_back - 1))
     date_from, _ = _month_bounds(month_from); _, date_to = _month_bounds(month_to)
+    today = dt.date.today().isoformat()
+    actual_date_to = min(date_to, today)
     limit = max(1, min(int(limit or 100), 500))
     # 26/08/2026: ham nay CHi truy van vhoadon_otc/etc, KHONG cong monthly_customer_summary nhu
     # revenue_by_channel lam - vi bang nen khong co khoa tinh (chi co khach + nhan vien), suy tinh
@@ -5976,6 +6011,7 @@ def geography_monthly_performance(month_to: str = None, months_back: int = 6,
     months = [_month_add(month_from, i) for i in range(months_back)]
     periods = [(ym, *_month_bounds(ym)) for ym in months] if scope_employee_code else [(month_to, date_from, date_to)]
     for _ym, period_from, period_to in periods:
+        period_to = min(period_to, actual_date_to)
         emp_sql, emp_params = _employee_scope_clause(scope_employee_code, "v", as_of=period_to)
         suffix, suffix_params = scope_sql + emp_sql, scope_params + emp_params
         if scope_channel != "ETC":
@@ -6091,6 +6127,20 @@ def geography_monthly_performance(month_to: str = None, months_back: int = 6,
             "month_to_is_partial": month_to_partial,
             "month_to_data_through": data_as_of if month_to_partial else None,
         }
+    if actual_date_to < date_to:
+        ket_qua["tinh_den_ngay"] = today
+        future_from = max(date_from, (dt.date.today() + dt.timedelta(days=1)).isoformat())
+        future = _revenue_by_channel_raw(
+            future_from, date_to, scope_area_code, scope_channel, scope_employee_code,
+        )
+        if future["total"]["revenue"] or future["total"]["invoices"]:
+            ket_qua["chung_tu_ngay_tuong_lai"] = {
+                "tu_ngay": future_from, "den_ngay": date_to,
+                "revenue": future["total"]["revenue"],
+                "invoices": future["total"]["invoices"],
+                "ghi_chu": ("Chung tu de ngay SAU hom nay, KHONG duoc cong vao doanh thu "
+                            "theo dia ban da phat sinh."),
+            }
     if month_to_partial:
         ket_qua["current_month_comparison_warning"] = (
             f"Thang {month_to} moi co du lieu den {data_as_of}. Khong duoc so sanh truc tiep voi "
