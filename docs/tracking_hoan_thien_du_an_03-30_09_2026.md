@@ -110,7 +110,36 @@ một phát hiện, không được đọc thành "đã sạch".
 → Chặn ở tầng gọi: **✅ xong trong PR #65**. Truy nguồn các lượt cũ: còn lại, và xem ghi chú trên —
 các lượt `unknown` không có trong `query_runs` nên phải truy từ `cost_log.jsonl`.
 
-### 🔴 3. Cổng kiểm trước UAT đang CHƯA ĐẠT — đã truy ra nguyên nhân, xác nhận bằng số
+### ✅ 3. Cổng kiểm trước UAT — ĐÃ ĐẠT (23/09, sau PR #75)
+
+Chạy lại trên máy 24 sau khi deploy PR #75:
+
+```
+Da chay: 99 phep kiem DAT, 0 LECH, 2 muc khong chay duoc.
+[DAT] Tai khoan va pham vi du lieu
+[DAT] Phan quyen kenh ETC
+[DAT] Bat bien so lieu cua 40 cong cu
+KET LUAN: Cac cong kiem tra tu dong da dat; co the chuyen sang buoc test 5 cau.
+```
+
+Cả hai chỗ lệch **17.558.648đ** biến mất:
+
+| Phép kiểm | Trước PR #75 | Sau |
+|---|---:|---:|
+| Tổng từng tháng vs một lần gọi | lệch 17.558.648 | **0** |
+| Cộng địa bàn vs toàn công ty (09/2026) | lệch 17.558.648 | **`[DAT]`** |
+
+Hai mục `get_promotion_effectiveness` và `get_receivables_period_compare` vẫn "không chạy được" —
+thiếu nguồn đã biết, không phải lỗi.
+
+#### Một số dư cần theo dõi, chưa chặn
+
+Mục 11 (cây KPI) vẫn lệch **55.866.929đ (0,303%)** giữa rollup QLV của Bravo và tổng TDV dưới quyền —
+dưới ngưỡng 1% nên `[DAT]`. Con số **không đổi** trước và sau PR #75, tập trung ở một QLV:
+`Hoàng Công Thưởng` (rollup 941.259.147 vs cộng TDV 997.126.076). Đây là chênh ổn định, không phải
+nhiễu; nên truy nguồn trước khi đóng UAT nhưng không chặn giao tài khoản.
+
+### (đã đóng) Nguyên nhân lệch 17.558.648đ — giữ lại để tra cứu
 
 Chạy `kiem_truoc_uat.ps1` trên **máy 24** ngày 23/09 (lần đầu chạy có `auth.db` thật, 30 tài khoản):
 
