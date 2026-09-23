@@ -6,8 +6,8 @@ local, **không gọi một lượt model trả phí nào**.
 
 Mỗi lượt chấm lại là một lượt gọi model có tính phí. Trung bình ngày 22/09 là **~4.000 đ/lượt**, nên
 trọn danh sách này (24 lượt) tốn khoảng **100.000 đ**. *(Chốt 23/09 sau khi đối chiếu `query_runs`:
-đóng được #13, #19, #20, #21, #22, #23 mà không tốn lượt nào — **còn 19 lượt, ~76.000 đ**, cộng 1
-mục mới phát hiện phải điều tra trước. Xem mục cập nhật bên dưới.)* Khi chạy phải truyền `username` riêng và
+đóng được #13, #19, #20, #21, #22, #23 mà không tốn lượt nào, nhưng phát hiện thêm 1 lượt bị sót —
+**còn 20 lượt, ~80.000 đ**. Xem mục cập nhật bên dưới.)* Khi chạy phải truyền `username` riêng và
 `session_id` có tiền tố nhận diện được, nếu không thì kết quả không lọc được theo vai/vùng và **không
 dùng để chấm UAT** (xem `AGENTS.md`).
 
