@@ -89,9 +89,9 @@ def test_route_visit_mode_uses_dms_route_and_marks_same_day_conversion_as_lower_
         captured["sql"] = sql
         captured["params"] = params
         return [{
-            "MonthEnd": "2026-08-31", "EmpDMSCode": "TDV01", "Visits": 10,
+            "DocDate": "2026-08-12", "MonthEnd": "2026-08-31", "EmpDMSCode": "TDV01", "Visits": 10,
             "VisitedCustomers": 8, "PlannedVisits": 7, "VisitsWithOrder": 2,
-            "Revenue": 1_000_000,
+            "Orders": 3, "OnRouteOrders": 2, "Revenue": 1_000_000,
         }]
 
     monkeypatch.setattr(rt, "_q_bravo", fake_bravo)
@@ -102,13 +102,15 @@ def test_route_visit_mode_uses_dms_route_and_marks_same_day_conversion_as_lower_
     assert "DMS_DiTuyen" in captured["sql"]
     assert "DMS_DonHangHdr" in captured["sql"]
     assert "vHoaDonTotal" in captured["sql"]
-    assert result["rows"] == [{
+    assert result["rows"][0] == {
         "month": "2026-08", "employee_dms_code": "TDV01", "visits": 10,
         "visited_customers": 8, "planned_visits": 7, "planned_visit_pct": 70.0,
         "visits_with_order": 2, "same_day_order_pct_lower_bound": 20.0,
+        "orders": 3, "on_route_orders": 2,
         "revenue": 1_000_000.0, "revenue_per_visit": 100000.0,
-    }]
-    assert "CAN DUOI" in result["definition"]
+    }
+    assert "IsPlaned=1" in result["definition"]
+    assert "h.StatusId<>2 OR h.StatusId IS NULL" in captured["sql"]
 
 
 def test_v25_tu_07_2026_la_doi_co_che_khong_phai_mismatch(monkeypatch):

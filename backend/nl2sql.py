@@ -572,7 +572,8 @@ def _required_tool_for_question(question: str) -> str | None:
         return "get_geography_monthly_performance"
     if any(marker in q for marker in (
         "vieng tham", "viếng thăm", "di tuyen", "đi tuyến", "phu tuyen", "phủ tuyến",
-        "route", "check-in", "check in", "ty le co don sau tham", "tỷ lệ có đơn sau thăm",
+        "dung tuyen", "đúng tuyến", "route", "check-in", "check in",
+        "ty le co don sau tham", "tỷ lệ có đơn sau thăm",
     )):
         return "get_workforce_productivity"
     if any(marker in q for marker in (

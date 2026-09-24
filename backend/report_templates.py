@@ -6287,7 +6287,7 @@ def geography_monthly_performance(month_to: str = None, months_back: int = 6,
 def _route_visit_effectiveness(month_to: str = None, months_back: int = 1, limit: int = 50,
                                scope_area_code: str = None, scope_channel: str = None,
                                scope_employee_code: str = None) -> dict:
-    """C49/S34: hieu qua di tuyen tu DMS_DiTuyen, truy van tong hop tren Bravo.
+    """C49/S34: luot tham va don dung tuyen theo ngay tu hai nguon DMS tren Bravo.
 
     Khong dua 1,8 trieu dong di tuyen vao SMALL_TABLES: co che do reload toan bo moi gio va se lam
     vong dong bo treo. Chi doc phan ky nguoi dung hoi, gom theo thang x TDV, nen vua du de phan tich
@@ -6313,17 +6313,24 @@ def _route_visit_effectiveness(month_to: str = None, months_back: int = 1, limit
     date_from = dt.date.fromisoformat(month_from + "-01")
     date_to_exclusive = dt.date(end_month_date.year + (end_month_date.month == 12),
                                 1 if end_month_date.month == 12 else end_month_date.month + 1, 1)
+    # DMS co the chua co du lieu cua nhung ngay toi: khong hien ngay tuong lai nhu ngay da chot.
+    date_to_exclusive = min(date_to_exclusive, dt.date.today() + dt.timedelta(days=1))
     limit = max(1, min(int(limit or 50), 200))
 
     params = {"date_from": date_from, "date_to_exclusive": date_to_exclusive}
     visit_joins = ""
     visit_filter = ""
+    order_joins = ""
+    order_filter = ""
     invoice_joins = ""
     invoice_filter = ""
     if scope_area_code:
         visit_joins = (" LEFT JOIN dbo.DMS_KhachHang kh ON kh.Code=v.CustomerCode "
                        " LEFT JOIN dbo.DIM_TinhThanhPho tp ON tp.CityId=kh.CityId ")
         visit_filter += " AND tp.AreaCode=:scope_area_code"
+        order_joins = (" LEFT JOIN dbo.DMS_KhachHang okh ON okh.Code=h.CustomerCode "
+                       " LEFT JOIN dbo.DIM_TinhThanhPho otp ON otp.CityId=okh.CityId ")
+        order_filter += " AND otp.AreaCode=:scope_area_code"
         invoice_joins = (" LEFT JOIN dbo.DMS_KhachHang ikh ON ikh.Code=i.CustomerCode "
                          " LEFT JOIN dbo.DIM_TinhThanhPho itp ON itp.CityId=ikh.CityId ")
         invoice_filter += " AND itp.AreaCode=:scope_area_code"
@@ -6342,6 +6349,7 @@ def _route_visit_effectiveness(month_to: str = None, months_back: int = 1, limit
             return {"error": "Khong co DMSId duoc phan quyen de loc du lieu di tuyen.", "rows": []}
         joined = ",".join(placeholders)
         visit_filter += f" AND v.EmpDMSCode IN ({joined})"
+        order_filter += f" AND h.DMSEmpId1 IN ({joined})"
         invoice_filter += f" AND i.EmpDMSCode IN ({joined})"
 
     try:
@@ -6354,9 +6362,35 @@ def _route_visit_effectiveness(month_to: str = None, months_back: int = 1, limit
                 WHERE v.DocDate>=:date_from AND v.DocDate<:date_to_exclusive {visit_filter}
                 GROUP BY v.DocDate, v.EmpDMSCode, v.CustomerCode
             ), orders AS (
-                SELECT DISTINCT h.DocDate, h.DMSEmpId1 AS EmpDMSCode, h.CustomerCode
+                SELECT h.Id, h.DocDate, h.DMSEmpId1 AS EmpDMSCode, h.CustomerCode,
+                       h.IsPlaned
                 FROM dbo.DMS_DonHangHdr h
+                {order_joins}
                 WHERE h.DocDate>=:date_from AND h.DocDate<:date_to_exclusive
+                  AND (h.StatusId<>2 OR h.StatusId IS NULL) {order_filter}
+            ), orders_by_visit AS (
+                SELECT DocDate,EmpDMSCode,CustomerCode,COUNT(*) OrderCount
+                FROM orders GROUP BY DocDate,EmpDMSCode,CustomerCode
+            ), visit_daily AS (
+                SELECT v.DocDate,v.EmpDMSCode,COUNT(*) Visits,
+                       COUNT(DISTINCT v.CustomerCode) VisitedCustomers,
+                       SUM(v.IsPlanned) PlannedVisits,
+                       SUM(CASE WHEN o.OrderCount>0 THEN 1 ELSE 0 END) VisitsWithOrder
+                FROM visits v LEFT JOIN orders_by_visit o
+                  ON o.DocDate=v.DocDate AND o.EmpDMSCode=v.EmpDMSCode
+                 AND o.CustomerCode=v.CustomerCode
+                GROUP BY v.DocDate,v.EmpDMSCode
+            ), order_daily AS (
+                SELECT DocDate,EmpDMSCode,COUNT(*) Orders,
+                       SUM(CASE WHEN IsPlaned=1 THEN 1 ELSE 0 END) OnRouteOrders
+                FROM orders GROUP BY DocDate,EmpDMSCode
+            ), day_keys AS (
+                SELECT DocDate,EmpDMSCode FROM visit_daily
+                UNION SELECT DocDate,EmpDMSCode FROM order_daily
+            ), monthly_visit_customers AS (
+                SELECT EOMONTH(DocDate) MonthEnd,EmpDMSCode,
+                       COUNT(DISTINCT CustomerCode) VisitedCustomers
+                FROM visits GROUP BY EOMONTH(DocDate),EmpDMSCode
             ), revenue AS (
                 SELECT EOMONTH(i.DocDate) AS MonthEnd, i.EmpDMSCode, SUM(i.Amount9) Revenue
                 FROM dbo.vHoaDonTotal i
@@ -6364,17 +6398,20 @@ def _route_visit_effectiveness(month_to: str = None, months_back: int = 1, limit
                 WHERE i.DocDate>=:date_from AND i.DocDate<:date_to_exclusive {invoice_filter}
                 GROUP BY EOMONTH(i.DocDate), i.EmpDMSCode
             )
-            SELECT EOMONTH(v.DocDate) AS MonthEnd, v.EmpDMSCode,
-                   COUNT(*) AS Visits, COUNT(DISTINCT v.CustomerCode) AS VisitedCustomers,
-                   SUM(v.IsPlanned) AS PlannedVisits,
-                   SUM(CASE WHEN o.CustomerCode IS NOT NULL THEN 1 ELSE 0 END) AS VisitsWithOrder,
-                   MAX(r.Revenue) AS Revenue
-            FROM visits v
-            LEFT JOIN orders o ON o.DocDate=v.DocDate AND o.EmpDMSCode=v.EmpDMSCode
-                              AND o.CustomerCode=v.CustomerCode
-            LEFT JOIN revenue r ON r.MonthEnd=EOMONTH(v.DocDate) AND r.EmpDMSCode=v.EmpDMSCode
-            GROUP BY EOMONTH(v.DocDate), v.EmpDMSCode
-            ORDER BY MonthEnd DESC, Visits DESC, v.EmpDMSCode
+            SELECT d.DocDate,EOMONTH(d.DocDate) AS MonthEnd,d.EmpDMSCode,
+                   ISNULL(v.Visits,0) Visits,ISNULL(v.VisitedCustomers,0) VisitedCustomers,
+                   ISNULL(v.PlannedVisits,0) PlannedVisits,
+                   ISNULL(v.VisitsWithOrder,0) VisitsWithOrder,
+                   ISNULL(o.Orders,0) Orders,ISNULL(o.OnRouteOrders,0) OnRouteOrders,
+                   ISNULL(mc.VisitedCustomers,0) MonthlyVisitedCustomers,
+                   ISNULL(r.Revenue,0) Revenue
+            FROM day_keys d
+            LEFT JOIN visit_daily v ON v.DocDate=d.DocDate AND v.EmpDMSCode=d.EmpDMSCode
+            LEFT JOIN order_daily o ON o.DocDate=d.DocDate AND o.EmpDMSCode=d.EmpDMSCode
+            LEFT JOIN monthly_visit_customers mc
+              ON mc.MonthEnd=EOMONTH(d.DocDate) AND mc.EmpDMSCode=d.EmpDMSCode
+            LEFT JOIN revenue r ON r.MonthEnd=EOMONTH(d.DocDate) AND r.EmpDMSCode=d.EmpDMSCode
+            ORDER BY d.DocDate,d.EmpDMSCode
         """, params)
     except Exception as exc:
         return {
@@ -6382,25 +6419,54 @@ def _route_visit_effectiveness(month_to: str = None, months_back: int = 1, limit
             "source": "DMS_DiTuyen + DMS_DonHangHdr + vHoaDonTotal (OTC)",
         }
 
-    rows = []
+    daily_rows = []
     for row in raw:
         visits = int(row.get("Visits") or 0)
         with_order = int(row.get("VisitsWithOrder") or 0)
         planned = int(row.get("PlannedVisits") or 0)
         revenue = _f(row.get("Revenue"))
         month_end = row.get("MonthEnd")
-        rows.append({
+        daily_rows.append({
+            "date": str(row.get("DocDate"))[:10],
             "month": str(month_end)[:7] if month_end else None,
             "employee_dms_code": row.get("EmpDMSCode"),
             "visits": visits,
             "visited_customers": int(row.get("VisitedCustomers") or 0),
+            "monthly_visited_customers": int(row.get("MonthlyVisitedCustomers")
+                                             or row.get("VisitedCustomers") or 0),
             "planned_visits": planned,
             "planned_visit_pct": round(planned / visits * 100, 1) if visits else None,
             "visits_with_order": with_order,
             "same_day_order_pct_lower_bound": round(with_order / visits * 100, 1) if visits else None,
+            "orders": int(row.get("Orders") or 0),
+            "on_route_orders": int(row.get("OnRouteOrders") or 0),
             "revenue": revenue,
             "revenue_per_visit": round(revenue / visits, 2) if visits else None,
         })
+
+    rows_by_employee = {}
+    for day in daily_rows:
+        key = (day["month"], day["employee_dms_code"])
+        bucket = rows_by_employee.setdefault(key, {
+            "month": day["month"], "employee_dms_code": day["employee_dms_code"],
+            "visits": 0, "visited_customers": 0, "planned_visits": 0,
+            "visits_with_order": 0, "orders": 0, "on_route_orders": 0, "revenue": 0.0,
+        })
+        for metric in ("visits", "planned_visits",
+                       "visits_with_order", "orders", "on_route_orders"):
+            bucket[metric] += day[metric]
+        bucket["visited_customers"] = max(bucket["visited_customers"],
+                                           day["monthly_visited_customers"])
+        # Revenue la tong THANG giong nhau tren moi dong ngay cua TDV, khong cong lap.
+        bucket["revenue"] = day["revenue"]
+    rows = []
+    for bucket in rows_by_employee.values():
+        visits = bucket["visits"]
+        bucket["planned_visit_pct"] = round(bucket["planned_visits"] / visits * 100, 1) if visits else None
+        bucket["same_day_order_pct_lower_bound"] = (
+            round(bucket["visits_with_order"] / visits * 100, 1) if visits else None)
+        bucket["revenue_per_visit"] = round(bucket["revenue"] / visits, 2) if visits else None
+        rows.append(bucket)
 
     monthly_summary = []
     for month in sorted({r["month"] for r in rows if r["month"]}, reverse=True):
@@ -6408,6 +6474,8 @@ def _route_visit_effectiveness(month_to: str = None, months_back: int = 1, limit
         visits = sum(r["visits"] for r in group)
         planned = sum(r["planned_visits"] for r in group)
         ordered = sum(r["visits_with_order"] for r in group)
+        orders = sum(r["orders"] for r in group)
+        on_route_orders = sum(r["on_route_orders"] for r in group)
         revenue = sum(r["revenue"] for r in group)
         monthly_summary.append({
             "month": month, "employees_with_visits": len(group), "visits": visits,
@@ -6416,18 +6484,88 @@ def _route_visit_effectiveness(month_to: str = None, months_back: int = 1, limit
             "planned_visit_pct": round(planned / visits * 100, 1) if visits else None,
             "visits_with_order": ordered,
             "same_day_order_pct_lower_bound": round(ordered / visits * 100, 1) if visits else None,
+            "orders": orders, "on_route_orders": on_route_orders,
             "revenue": revenue, "revenue_per_visit": round(revenue / visits, 2) if visits else None,
         })
+    daily_summary = []
+    day = end_month_date
+    while day < date_to_exclusive:
+        day_rows = [r for r in daily_rows if r["date"] == day.isoformat()]
+        if day_rows:
+            visits = sum(r["visits"] for r in day_rows)
+            planned = sum(r["planned_visits"] for r in day_rows)
+            with_order = sum(r["visits_with_order"] for r in day_rows)
+            daily_summary.append({
+                "date": day.isoformat(), "data_status": "RECORDED",
+                "employees": len(day_rows), "visits": visits, "planned_visits": planned,
+                "planned_visit_pct": round(planned / visits * 100, 1) if visits else None,
+                "visits_with_order": with_order,
+                "same_day_order_pct_lower_bound": round(with_order / visits * 100, 1) if visits else None,
+                "orders": sum(r["orders"] for r in day_rows),
+                "on_route_orders": sum(r["on_route_orders"] for r in day_rows),
+            })
+        else:
+            daily_summary.append({
+                "date": day.isoformat(), "data_status": "NO_ROUTE_OR_ORDER_RECORD",
+                "employees": None, "visits": None, "planned_visits": None,
+                "planned_visit_pct": None, "visits_with_order": None,
+                "same_day_order_pct_lower_bound": None, "orders": None,
+                "on_route_orders": None,
+            })
+        day += dt.timedelta(days=1)
+    # Model chi nhan toi da 10.000 ky tu va mang dai bi cat con 12 dong. Chia bang
+    # ngay thanh cac chuoi ngan (<800 ky tu) de DU moi ngay van qua duoc lop serialize.
+    daily_table_parts = {}
+    for offset in range(0, len(daily_summary), 10):
+        segment = daily_summary[offset:offset + 10]
+        lines = []
+        for item in segment:
+            if item["data_status"] != "RECORDED":
+                lines.append(f'{item["date"]}:CHUA_CO_BAN_GHI')
+            else:
+                lines.append(
+                    f'{item["date"]}:{item["visits"]}/{item["planned_visits"]}/'
+                    f'{item["planned_visit_pct"]}/{item["visits_with_order"]}/'
+                    f'{item["same_day_order_pct_lower_bound"]}/{item["orders"]}/'
+                    f'{item["on_route_orders"]}')
+        daily_table_parts[f"ngay_{offset + 1}_{offset + len(segment)}"] = " | ".join(lines)
     visible_rows, hidden = _giu_top_don_vi(rows, "employee_dms_code", "visits", limit)
+    visible_daily = [r for r in daily_rows if r["month"] == month_to]
+    visible_employee_codes = {r["employee_dms_code"] for r in visible_rows if r["month"] == month_to}
+    daily_employee_table = {}
+    for row in visible_daily:
+        if row["employee_dms_code"] in visible_employee_codes:
+            daily_employee_table.setdefault(row["employee_dms_code"], []).append(
+                f'{row["date"][-2:]}={row["on_route_orders"]}')
+    daily_employee_table = {code: ",".join(days)
+                            for code, days in sorted(daily_employee_table.items())}
     return {
         "mode": "route_visits", "month_from": month_from, "month_to": month_to,
         "rows": visible_rows, "monthly_summary": monthly_summary,
+        "daily_summary": daily_summary, "daily_employee_rows": visible_daily[:500],
+        "daily_employee_table_columns": "ma_TDV: ngay_trong_thang=so_don_dung_tuyen; "
+                                        "chi liet ke ngay co ban ghi cua TDV do",
+        "daily_employee_table": daily_employee_table,
+        "daily_table_columns": "ngay:luot_tham/luot_theo_tuyen/ty_le_luot_theo_tuyen_pct/"
+                               "luot_co_don_cung_ngay/ty_le_luot_co_don_pct/tong_don/don_dung_tuyen",
+        "daily_table_parts": daily_table_parts,
+        "daily_employee_rows_not_shown": max(0, len(visible_daily) - 500),
         "so_nhan_vien_khong_hien": hidden,
         "source": "DMS_DiTuyen + DMS_DonHangHdr + vHoaDonTotal (OTC)",
         "definition": (
             "Mot luot vieng = mot cap ngay + TDV DMS + khach hang (loai dong trung). "
-            "Ty le co don chi tinh don cung ngay, cung TDV, cung khach nen la CAN DUOI; "
-            "don dat sau luot tham khong duoc tinh."),
+            "Don dung tuyen = DMS_DonHangHdr.IsPlaned=1, loai don da huy StatusId=2; "
+            "khong suy tu so luot vieng co don. planned_visit_pct la ty trong luot tham "
+            "IsPlaned=1 tren luot tham GHI NHAN, KHONG phai ty le hoan thanh lich tuyen "
+            "(chua co mau so so luot du kien). visits_with_order chi noi cung ngay, cung "
+            "TDV, cung khach; same_day_order_pct_lower_bound la ty le luot tham co don "
+            "cung ngay tren luot tham ghi nhan, KHONG chung minh don dat sau luot tham. "
+            "Ngay NO_ROUTE_OR_ORDER_RECORD chua co ban ghi trong pham vi, KHONG tu dien 0."),
+        "daily_answer_rule": "Tra bang tung ngay tu dau thang voi cot on_route_orders; neu ngay chua co "
+                             "ban ghi thi noi thieu nguon, khong ghi 0. Liet ke TDV tu daily_employee_rows "
+                             "va neu bi cat thi noi ro so dong chua hien. daily_table_parts giu DU "
+                             "moi ngay ngay ca khi mang daily_summary bi rut gon cho model. "
+                             "daily_employee_table giu so don dung tuyen cua tung TDV theo ngay.",
         "data_as_of": latest,
     }
 
@@ -14208,10 +14346,13 @@ def call_template(name: str, args: dict, question: str = "", username: str = Non
                 call_args["focus"] = "shortage"
         if name == "get_workforce_productivity":
             if any(marker in q_folded for marker in (
-                "vieng tham", "di tuyen", "phu tuyen",
+                "vieng tham", "di tuyen", "dung tuyen", "phu tuyen",
                 "ty le co don sau tham", "check-in", "check in",
             )):
                 call_args["mode"] = "route_visits"
+                if any(marker in q_folded for marker in ("tu dau thang", "thang nay", "tung ngay")):
+                    call_args["month_to"] = dt.date.today().strftime("%Y-%m")
+                    call_args["months_back"] = 1
             elif "vung nao duoi 80" in q_folded and "lien tiep" in q_folded:
                 call_args["mode"] = "productivity"
                 call_args["group_by"] = "manager"
