@@ -192,6 +192,66 @@ def _chi_phi_hien_tai():
     return tong
 
 
+def _kiem_ket_noi_model(nl2sql):
+    """Goi thu models.list() - KHONG ton phi - truoc khi chay that. None = ket noi duoc.
+
+    24/09/2026: mot cua so PowerShell tren may 24 con sot LLM_BASE_URL=http://127.0.0.1:9 (cong tac chan goi
+    model cua mot khoi lenh chay test) -> 18/18 luot cham lai APIConnectionError, moi luot 7,7 giay, va 18 dong
+    'error' trong query_runs. Dung ngay tu dau, noi ro nguyen nhan."""
+    from urllib.parse import urlparse
+    base = getattr(nl2sql, "LLM_BASE_URL", "") or ""
+    if (urlparse(base).hostname or "") in ("127.0.0.1", "localhost", "::1", "0.0.0.0"):
+        return ("LLM_BASE_URL=%s tro ve chinh may nay - thuong la cong tac chan goi model con sot trong cua so "
+                "PowerShell. Mo cua so moi (hoac Remove-Item Env:LLM_BASE_URL, Env:LLM_API_KEY) roi chay lai." % base)
+    if not getattr(nl2sql, "IS_ANTHROPIC", True):
+        return None   # nha cung cap khac: khong chac co models.list, khong chan
+    try:
+        nl2sql._llm_client().models.list(limit=1)
+    except Exception as exc:
+        goc = exc.__cause__ or exc.__context__
+        return "%s: %s%s" % (type(exc).__name__, str(exc)[:200],
+                             (" | goc: %s: %s" % (type(goc).__name__, str(goc)[:200])) if goc else "")
+    return None
+
+
+def _hoi(nl2sql, cau_hoi, sid, user, pv):
+    """Mot luot hoi that: mo query_runs -> ask -> dong query_runs. Tra (tra_loi, loi, cong_cu, giay)."""
+    import uuid
+    from conversation_memory import complete_query_run, create_query_run, fail_query_run
+    area, emp, kenh = pv
+    # 24/09/2026: mo dong query_runs TRUOC khi goi model, giong /chat trong main.py. Truoc day luot
+    # chay tu script khong co query_runs nen dashboard lay dong audit_log thay vao - ma dong audit
+    # chi ghi thoi gian MOT lan goi tool: luot do that 33,9 giay hien thanh 3,4 giay, 23,8 giay
+    # hien thanh 91 ms. Mo dong truoc con giup luot hong van co dau vet, va neu ghi so hong thi
+    # dung muc nay TRUOC khi ton tien.
+    query_id = str(uuid.uuid4())
+    try:
+        create_query_run(query_id, sid, user["username"], cau_hoi)
+    except Exception as exc:
+        return "", "BO QUA, khong goi model: khong mo duoc dong query_runs (%s)" % exc, [], 0.0
+    bat_dau = time.time()
+    try:
+        r = nl2sql.ask(cau_hoi, session_id=sid, username=user["username"],
+                       scope_area_code=area, scope_employee_code=emp, scope_channel=kenh,
+                       scope_role=user.get("role"), query_id=query_id, origin="cham_lai_uat")
+        tra_loi, loi = r.get("answer") or "", None
+        cong_cu = r.get("sql_used") or []
+        trang_thai = r.get("completion_status") or "completed"
+        complete_query_run(
+            query_id, tra_loi, sql_used=cong_cu, freshness=r.get("freshness"),
+            duration_ms=int((time.time() - bat_dau) * 1000),
+            status=trang_thai if trang_thai in ("completed", "partial_timeout") else "completed",
+            error_message=r.get("timeout_error"))
+    except Exception as exc:
+        tra_loi, loi, cong_cu = "", "%s: %s" % (type(exc).__name__, str(exc)[:300]), []
+        fail_query_run(
+            query_id, str(getattr(exc, "raw_message", exc))[:1000],
+            duration_ms=int((time.time() - bat_dau) * 1000),
+            status=("api_credit_exhausted" if type(exc).__name__ == "ApiCreditExhaustedError"
+                    else "error"))
+    return tra_loi, loi, cong_cu, time.time() - bat_dau
+
+
 def main():
     ap = argparse.ArgumentParser(description="Chay lai cac luot UAT can cham lai")
     ap.add_argument("--ma", nargs="*", help="Chi chay cac ma nay (vd: 01 03 15). Rong = tat ca.")
@@ -271,6 +331,14 @@ def main():
     else:
         print("Uoc tinh: KHONG CO LICH SU CHI PHI - khong uoc tinh duoc, phai chay tren may 24.")
 
+    if os.environ.get("LLM_BASE_URL"):
+        print()
+        print("CANH BAO: cua so nay dang dat LLM_BASE_URL=%s - chay that se goi dia chi do, khong phai "
+              "Anthropic. Neu la cong tac chan tu mot khoi lenh test thi mo cua so moi." % os.environ["LLM_BASE_URL"])
+    so_cau_truoc = sum(1 for m, _, _ in ke_hoach if m.get("cau_truoc"))
+    if so_cau_truoc:
+        print("Co %d muc la CAU NOI TIEP: se hoi cau_truoc trong cung phien truoc (ton them %d luot)."
+              % (so_cau_truoc, so_cau_truoc))
     if not tham.xac_nhan:
         print()
         print("=" * 78)
@@ -279,58 +347,38 @@ def main():
         print("=" * 78)
         return
 
-    import uuid
     import nl2sql
-    from conversation_memory import complete_query_run, create_query_run, fail_query_run
+    loi_ket_noi = _kiem_ket_noi_model(nl2sql)
+    if loi_ket_noi:
+        sys.exit("DUNG TRUOC KHI TON TIEN - khong ket noi duoc model: %s" % loi_ket_noi)
     ngay = dt.date.today().strftime("%d%m")
     truoc = _chi_phi_hien_tai()
     ket_qua = []
     for m, user, pv in ke_hoach:
-        area, emp, kenh = pv
         sid = "chamlai%s-%s" % (ngay, m["ma"])
         print()
         print("-" * 78)
         print("[%s] %s | session=%s" % (m["ma"], user["username"], sid))
+        tra_loi_truoc = None
+        if m.get("cau_truoc"):
+            # 24/09/2026: 06/08 la CAU NOI TIEP ("bo sung ... tu ket qua tren"). Chay rieng thi chatbot hoi lai
+            # la dung - phai hoi cau truoc (lay tu phien UAT goc 15/09) trong CUNG phien.
+            print("HOI TRUOC: %s" % m["cau_truoc"])
+            tra_loi_truoc, loi_truoc, _, giay_truoc = _hoi(nl2sql, m["cau_truoc"], sid, user, pv)
+            print("=> %.1f giay | %s" % (giay_truoc, ("LOI: " + loi_truoc) if loi_truoc else "xong"))
+            if loi_truoc:
+                print("=> BO QUA cau chinh vi cau truoc loi.")
+                continue
         print("HOI: %s" % m["cau_hoi"])
-        # 24/09/2026: mo dong query_runs TRUOC khi goi model, giong /chat trong main.py. Truoc day luot
-        # chay tu script khong co query_runs nen dashboard lay dong audit_log thay vao - ma dong audit
-        # chi ghi thoi gian MOT lan goi tool: luot do that 33,9 giay hien thanh 3,4 giay, 23,8 giay
-        # hien thanh 91 ms. Mo dong truoc con giup luot hong van co dau vet, va neu ghi so hong thi
-        # dung muc nay TRUOC khi ton tien.
-        query_id = str(uuid.uuid4())
-        try:
-            create_query_run(query_id, sid, user["username"], m["cau_hoi"])
-        except Exception as exc:
-            print("=> BO QUA, khong goi model: khong mo duoc dong query_runs (%s)" % exc)
-            continue
-        bat_dau = time.time()
-        try:
-            r = nl2sql.ask(m["cau_hoi"], session_id=sid, username=user["username"],
-                           scope_area_code=area, scope_employee_code=emp, scope_channel=kenh,
-                           scope_role=user.get("role"), query_id=query_id, origin="cham_lai_uat")
-            tra_loi, loi = r.get("answer") or "", None
-            cong_cu = r.get("sql_used") or []
-            trang_thai = r.get("completion_status") or "completed"
-            complete_query_run(
-                query_id, tra_loi, sql_used=cong_cu, freshness=r.get("freshness"),
-                duration_ms=int((time.time() - bat_dau) * 1000),
-                status=trang_thai if trang_thai in ("completed", "partial_timeout") else "completed",
-                error_message=r.get("timeout_error"))
-        except Exception as exc:
-            tra_loi, loi, cong_cu = "", "%s: %s" % (type(exc).__name__, str(exc)[:300]), []
-            fail_query_run(
-                query_id, str(getattr(exc, "raw_message", exc))[:1000],
-                duration_ms=int((time.time() - bat_dau) * 1000),
-                status=("api_credit_exhausted" if type(exc).__name__ == "ApiCreditExhaustedError"
-                        else "error"))
-        giay = time.time() - bat_dau
+        tra_loi, loi, cong_cu, giay = _hoi(nl2sql, m["cau_hoi"], sid, user, pv)
         print("=> %.1f giay | %s" % (giay, ("LOI: " + loi) if loi else "xong"))
         if tra_loi:
             print(tra_loi[:1200])
         ket_qua.append({"ma": m["ma"], "nguoi": user["username"], "cau_hoi": m["cau_hoi"],
                         "can_thay": m["can_thay"], "tra_loi": tra_loi, "loi": loi,
                         "cong_cu": cong_cu, "giay": round(giay, 1), "session_id": sid,
-                        "usd": _chi_phi_theo_session(sid)})
+                        "usd": _chi_phi_theo_session(sid), "cau_truoc": m.get("cau_truoc"),
+                        "tra_loi_truoc": tra_loi_truoc})
 
     sau = _chi_phi_hien_tai()
     print()
@@ -364,6 +412,8 @@ def main():
                 "để đóng, lấy từ `docs/checklist_cham_lai_22-09.md`.*\n\n")
         for k in ket_qua:
             f.write("## Mục %s — `%s`\n\n" % (k["ma"], k["nguoi"]))
+            if k.get("cau_truoc"):
+                f.write("**Câu trước (cùng phiên):** %s\n\n" % k["cau_truoc"])
             f.write("**Hỏi:** %s\n\n" % k["cau_hoi"])
             f.write("**Cần thấy để đóng:** %s\n\n" % k["can_thay"])
             f.write("**Phiên:** `%s` · **Thời gian:** %.1f giây\n\n" % (k["session_id"], k["giay"]))
