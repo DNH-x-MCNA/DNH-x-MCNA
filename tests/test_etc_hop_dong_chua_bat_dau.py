@@ -26,7 +26,7 @@ def test_hop_dong_chua_bat_dau_tach_rieng_khoi_con_hieu_luc(monkeypatch):
     kq = rt.etc_contract_status(as_of_date="2026-09-23")
 
     assert kq["so_hop_dong_con_hieu_luc"] == 1
-    assert kq["so_hop_dong_chua_bat_dau"] == 1 and kq["gia_tri_hop_dong_chua_bat_dau"] == 5_000_000.0
+    assert kq["so_hop_dong_chua_den_hieu_luc"] == 1 and kq["gia_tri_hop_dong_chua_den_hieu_luc"] == 5_000_000.0
     assert kq["so_hop_dong_chua_xuat_hoa_don_nao"] == 0, "Chua bat dau thi chua xuat la dung, khong phai cham."
     assert [x["contract_id"] for x in kq["hop_dong_thuc_hien_duoi_50_pct"]] == [1]
     assert kq["tong_gia_tri"] == 1_000_000.0
@@ -36,4 +36,4 @@ def test_hop_dong_bat_dau_dung_ngay_as_of_la_con_hieu_luc(monkeypatch):
     rows = [_dong(1, "2026-09-23", 1_000_000.0, 0.0, 0)]
     monkeypatch.setattr(rt, "_q_bravo", lambda sql, params=None: rows)
     kq = rt.etc_contract_status(as_of_date="2026-09-23")
-    assert kq["so_hop_dong_con_hieu_luc"] == 1 and kq["so_hop_dong_chua_bat_dau"] == 0
+    assert kq["so_hop_dong_con_hieu_luc"] == 1 and kq["so_hop_dong_chua_den_hieu_luc"] == 0
