@@ -6,8 +6,10 @@
 24/09/2026: loi cung ho v34 van con o ~17 tool. PR #63 chi va promotion_effectiveness. Cac tool loc
 doi qua `_employee_scope_clause` khi ky hoi cu hon cua so fact_tonghopkhachhang (sync 90 ngay) thi
 truyen fdate=None vao _get_team_dms_ids -> lay DOI HIEN TAI, va nhanh du phong fact_thongketinhluong
-khong bao gio chay. Do tren kho dev, ky 05/2026: 10/21 QLV lech doanh thu, thieu 2,5 ty (-17,7%
-tren nhom bi anh huong).
+khong bao gio chay. Do TREN MAY 24 (24/09/2026):
+  ky 05/2026: 11/21 QLV lech, thieu rong 2.374.998.673d (-14,5%); co QLV bi phong (+5,7%)
+  ky 04/2026: 15/22 QLV lech, lech rong chi -2,2% vi sai hai chieu bu tru nhau
+  ky 08/2026: DAT (doi chung)
 
 "Doi dung" o day = doi theo fact_thongketinhluong (sync 400 ngay) tai moc gan nhat <= cuoi ky - cung
 nguon voi checker UAT dung (FACT_ThongKeTinhLuong + ManagerCode).
@@ -76,7 +78,7 @@ def main():
         "SELECT DISTINCT manager_code FROM fact_thongketinhluong WHERE save_date=? "
         "AND manager_code IS NOT NULL AND TRIM(manager_code)<>'' ORDER BY manager_code", (moc_luong,))]
 
-    sai, tong_sai, tong_dung = [], 0.0, 0.0
+    sai, tong_sai, tong_dung, tong_tuyet_doi = [], 0.0, 0.0, 0.0
     for qlv in qlvs:
         try:
             _, tham = rt._employee_scope_clause(qlv, "v", as_of=ky_den)
@@ -91,6 +93,7 @@ def main():
             continue
         tong_sai += a
         tong_dung += b
+        tong_tuyet_doi += abs(a - b)
         sai.append((qlv, len(set(tham)), len(dung_ids), len(set(tham) - set(dung_ids)),
                     len(set(dung_ids) - set(tham)), a, b))
 
@@ -108,6 +111,12 @@ def main():
     print("Doanh thu dang tra %s | dung ky %s | lech %s (%.1f%%)" % (
         _dong(tong_sai), _dong(tong_dung), _dong(tong_sai - tong_dung),
         (tong_sai - tong_dung) / tong_dung * 100 if tong_dung else 0))
+    # 24/09/2026: may 24 ky 04/2026 ra lech RONG chi -2,2% nhung 15/22 QLV sai - sai HAI CHIEU (doi
+    # nay thua nguoi -> phong, doi kia sot nguoi -> hut) nen bu tru nhau trong tong. Moi QLV chi nhin
+    # so cua doi minh, nen sai so tung QLV moi la thu nguoi dung gap; con so rong che mat dieu do.
+    print("Sai so TUYET DOI (cong |lech| tung QLV): %s (%.1f%% so voi dung ky)" % (
+        _dong(tong_tuyet_doi), tong_tuyet_doi / tong_dung * 100 if tong_dung else 0))
+    print("  -> lech RONG nho hon lech TUYET DOI nghia la sai hai chieu, bu tru nhau trong tong.")
     print("THUA = nguoi co trong doi hom nay nhung chua vao doi o ky do; SOT = nguoi da roi doi.")
     return 1
 

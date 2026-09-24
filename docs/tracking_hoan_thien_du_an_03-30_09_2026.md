@@ -28,24 +28,38 @@ không phải ở code. Quy tắc gộp thay đổi mô tả tool/system prompt 
 
 ---
 
-## 🔴 Phát hiện 24/09 — lỗi v34 còn ở ~17 công cụ khác, thiếu 2,5 tỷ kỳ 05/2026
+## 🔴 Phát hiện 24/09 — lỗi v34 còn ở ~17 công cụ khác, đo trên máy 24
 
 PR #63 chỉ vá `promotion_effectiveness`. Các công cụ lọc theo đội qua `_employee_scope_clause` khi kỳ
 hỏi cũ hơn cửa sổ phân công đội (sync 90 ngày, sớm nhất 30/06/2026) thì truyền `fdate=None` vào
 `_get_team_dms_ids` → lấy **đội hiện tại**; nhánh dự phòng bảng lương của PR #63 không bao giờ chạy.
 
-Đo trên kho dev bằng `scripts/kiem_doi_ky_qua_khu.py`:
+**Đo trên máy 24** bằng `scripts/kiem_doi_ky_qua_khu.py` — chính dữ liệu và code chatbot đang dùng:
 
-| Kỳ | QLV lệch doanh thu | Doanh thu đang trả | Đúng kỳ | Lệch |
+| Kỳ | QLV lệch | Doanh thu đang trả | Đúng kỳ | Lệch ròng |
 |---|---:|---:|---:|---:|
-| **05/2026** (ngoài cửa sổ) | **10/21** | 11.655.923.229 | 14.156.127.036 | **−2.500.203.807 (−17,7%)** |
-| 08/2026 (trong cửa sổ — đối chứng) | 0/21 | — | — | **0** |
+| **05/2026** | **11/21** | 13.983.500.753 | 16.358.499.426 | **−2.374.998.673 (−14,5%)** |
+| **04/2026** | **15/22** | 28.632.222.304 | 29.266.767.273 | −634.544.969 (−2,2%) |
+| 08/2026 (đối chứng) | 0/21 | — | — | **0 — ĐẠT** |
 
-Nặng nhất: `TM23100149` hụt **57,6%**, `TM25030101` hụt **47,5%**. Tháng 8 lệch 0 xác nhận khoản
-lệch là do **chốt sai mốc đội**, không phải do hai nguồn đội hình khác nhau.
+Nặng nhất tháng 5: `TM23100149` **−57,6%**, `TM25030101` **−47,5%**, `TM24050201` −24,9%.
+
+### Hai điều số kho dev không cho thấy
+
+**1. Sai hai chiều, và con số ròng che gần hết.** Tháng 4 lệch ròng chỉ −2,2%, nhưng 15/22 QLV sai.
+Đội thừa người thì doanh thu phồng, đội sót người thì hụt — cộng lại bù trừ nhau. Trên kho dev,
+cùng kỳ 04/2026: lệch ròng −3,1% nhưng **sai số tuyệt đối 7,06 tỷ (25,6%)**. Mỗi QLV chỉ nhìn số đội
+mình, nên con số người dùng gặp là sai số từng QLV, không phải con số ròng. Script nay in cả hai.
+
+**2. Kết quả sai thay đổi theo ngày hỏi.** `TM23110105` trên kho dev (đồng bộ đến 15/09) lệch 0, trên
+máy 24 lại **phồng +5,7%** — vì "đội hiện tại" của máy 24 đã khác. Cùng một câu hỏi về tháng 5, hỏi
+hôm nay và hỏi tuần sau có thể ra hai số khác nhau mà không ai sửa gì.
+
+Tháng 8 đạt trên cả hai máy → khoản lệch do **chốt sai mốc đội**, không phải do hai nguồn đội hình khác
+nhau.
 
 Chỉ ảnh hưởng tài khoản **QLV** hỏi kỳ trước 30/06/2026 (YoY, cùng kỳ, tháng cũ). Đã giao phiên
-`backend/` sửa; sau khi sửa chạy lại script phải ra `DAT` (mã thoát 0).
+`backend/` sửa. Sau khi sửa và deploy, chạy lại trên máy 24: cả ba kỳ phải ra `DAT`.
 
 ## Việc còn lại thật sự — xếp theo mức chặn
 
