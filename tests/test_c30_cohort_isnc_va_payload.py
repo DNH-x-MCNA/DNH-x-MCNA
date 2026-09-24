@@ -175,3 +175,24 @@ def test_payload_gui_model_giu_du_16_cohort_va_dem_cohort_co_so_theo_tuoi():
     assert goi["cohort_co_so_theo_tuoi"]["t1"]["den"] == "2026-07"
     dong_07 = next(d for d in goi["bang_cohort"] if d["cohort"] == "2026-07")
     assert dong_07["t1"] == 37.1 and dong_07["t3"] is None
+
+
+def test_payload_ghep_cot_isnc_vao_bang_chinh_va_doi_ten_cot_hoa_don(tmp_path, monkeypatch):
+    """Chay lai C30 sau deploy ad2a047: khoi IsNC gui rieng thi model bo qua va van goi 324 khach
+    (lan dau co hoa don) la "cohort mo moi". So IsNC phai nam tren CUNG dong cua bang chinh."""
+    monkeypatch.setattr(local_warehouse, "DB_PATH", _kho(tmp_path))
+    kq = rt.customer_cohort_retention(month_to="2026-08", months_back=3, age_months=[1])
+
+    goi = json.loads(nl2sql._serialize_payload_for_model(
+        "get_customer_cohort_retention", kq,
+        "Tỷ lệ giữ chân theo cohort tháng mở mới sau 1/3/6/12 tháng"))
+
+    dong = {d["cohort"]: d for d in goi["bang_cohort"]}
+    assert "khach" not in dong["2026-08"], "Cot hoa don phai co ten rieng, khong de model goi la khach mo moi."
+    assert dong["2026-08"]["khach_lan_dau_co_hoa_don"] == 1
+    assert dong["2026-08"]["khach_mo_moi_isnc"] == 2
+    assert dong["2026-08"]["isnc_t1"] is None and dong["2026-08"]["isnc_t1_tam_tinh"] == 100.0
+    assert dong["2026-07"]["khach_mo_moi_isnc"] == 1 and dong["2026-07"]["isnc_t1"] == 100.0
+    assert all("khach_mo_moi_isnc" not in d for m, d in dong.items() if m not in ("2026-07", "2026-08"))
+    assert "2026-07, 2026-08" in goi["cach_trinh_bay_bat_buoc"]
+    assert "bang_cohort" not in goi["cohort_theo_isnc"], "Khong gui hai bang song song nua."
