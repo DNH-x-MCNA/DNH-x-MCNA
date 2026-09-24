@@ -28,6 +28,25 @@ không phải ở code. Quy tắc gộp thay đổi mô tả tool/system prompt 
 
 ---
 
+## 🔴 Phát hiện 24/09 — lỗi v34 còn ở ~17 công cụ khác, thiếu 2,5 tỷ kỳ 05/2026
+
+PR #63 chỉ vá `promotion_effectiveness`. Các công cụ lọc theo đội qua `_employee_scope_clause` khi kỳ
+hỏi cũ hơn cửa sổ phân công đội (sync 90 ngày, sớm nhất 30/06/2026) thì truyền `fdate=None` vào
+`_get_team_dms_ids` → lấy **đội hiện tại**; nhánh dự phòng bảng lương của PR #63 không bao giờ chạy.
+
+Đo trên kho dev bằng `scripts/kiem_doi_ky_qua_khu.py`:
+
+| Kỳ | QLV lệch doanh thu | Doanh thu đang trả | Đúng kỳ | Lệch |
+|---|---:|---:|---:|---:|
+| **05/2026** (ngoài cửa sổ) | **10/21** | 11.655.923.229 | 14.156.127.036 | **−2.500.203.807 (−17,7%)** |
+| 08/2026 (trong cửa sổ — đối chứng) | 0/21 | — | — | **0** |
+
+Nặng nhất: `TM23100149` hụt **57,6%**, `TM25030101` hụt **47,5%**. Tháng 8 lệch 0 xác nhận khoản
+lệch là do **chốt sai mốc đội**, không phải do hai nguồn đội hình khác nhau.
+
+Chỉ ảnh hưởng tài khoản **QLV** hỏi kỳ trước 30/06/2026 (YoY, cùng kỳ, tháng cũ). Đã giao phiên
+`backend/` sửa; sau khi sửa chạy lại script phải ra `DAT` (mã thoát 0).
+
 ## Việc còn lại thật sự — xếp theo mức chặn
 
 ### 🔴 1. Lỗi hết credit đang bị ghi vào sổ chấm như lỗi sản phẩm
