@@ -321,9 +321,8 @@ def abandon_stale_query_runs(max_age_seconds: int = 600) -> int:
         cursor = conn.execute(
             "UPDATE query_runs SET status='abandoned', "
             "error_message='Luot truy van dung ma khong co ket qua cuoi; co the dich vu da khoi dong lai.', "
-            "duration_ms=COALESCE(duration_ms, MAX(0, CAST((julianday(?) - julianday(created_at)) * 86400000 AS INTEGER))), "
             "completed_at=? WHERE status='running' AND julianday(created_at) < julianday(?)",
-            (now.isoformat(timespec="seconds"), now.isoformat(timespec="seconds"), cutoff),
+            (now.isoformat(timespec="seconds"), cutoff),
         )
         conn.commit()
         return cursor.rowcount
