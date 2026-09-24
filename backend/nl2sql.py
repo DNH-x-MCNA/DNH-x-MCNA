@@ -1103,6 +1103,11 @@ TEMPLATE_TOOLS = [
                        "get_customer_lifecycle_summary de lay khoi theo_vung cho ve dau cua cau hoi - "
                        "thieu mot trong hai la tra loi nua cau. Cua so cohort tu noi rong de tuoi lon "
                        "nhat co so that; neu cohort_from_da_mo_rong=true thi neu ly_do_mo_rong_cua_so. "
+                       "C30 'thang mo moi': cohort_theo_isnc dem khach co IsNC - DUNG so khach moi cua "
+                       "C29/M24 - phai trinh bay cho cac thang co snapshot, kem "
+                       "doi_chieu_hai_dinh_nghia_khach_moi; tuoi 3/6/12 chi co o bang cohort hoa don va "
+                       "phai noi ro do la dinh nghia khac. Gia tri *_tam_tinh chi la so den ngay du lieu "
+                       "cua thang dang chay, phai ghi 'tam tinh'. "
                        "DNH van can chot dinh nghia 'khach mo moi' truoc khi dung lam KPI chinh thuc.",
         "input_schema": {"type": "object", "properties": {
             "month_to": {"type": "string", "description": "YYYY-MM, thang cohort cuoi."},
@@ -2523,6 +2528,73 @@ def _payload_for_model(tool_name: str, payload, question: str):
                 "can thi goi lai tool voi pham vi hep hon (it dia ban hoac it thang), KHONG doan."
             ),
         })
+        if wrapper:
+            return {**payload, "du_lieu": compact_data}
+        return compact_data
+
+    if tool_name == "get_customer_cohort_retention":
+        wrapper = payload if isinstance(payload.get("du_lieu"), dict) else None
+        data = payload.get("du_lieu") if wrapper else payload
+        cohorts = data.get("cohorts")
+        if not isinstance(cohorts, list) or not cohorts:
+            return payload
+
+        # 24/09/2026 (UAT C30): 16 cohort x 4 tuoi dang dict day du vuot MAX_PAYLOAD_CHARS, luoi
+        # an toan cat con 12 cohort DAU. Ngay 23/09 model mat cohort 06-08/2026 roi viet "quá mới nên
+        # tuổi 1-3 tháng cũng chưa tròn kỳ" - sai, 06 va 07/2026 da co so tuoi 1. Ngay 21/09 model
+        # viet "chưa có cohort nào đủ 12 tháng" trong khi 06-08/2025 co so. Gui bang gon DU moi cohort.
+        def _pct(value):
+            return None if value is None else round(float(value), 1)
+
+        def _bang(ds):
+            bang = []
+            for c in ds:
+                if not isinstance(c, dict):
+                    continue
+                dong = {"cohort": c.get("cohort_month"), "khach": c.get("cohort_customers")}
+                if c.get("group") not in (None, "ALL"):
+                    dong["nhom"] = c.get("group")
+                if c.get("cohort_is_left_censored"):
+                    dong["kiem_duyet_trai"] = True
+                for r in c.get("retention") or []:
+                    tuoi = r.get("age_month")
+                    dong[f"t{tuoi}"] = _pct(r.get("retention_pct"))
+                    if r.get("retention_pct_tam_tinh") is not None:
+                        dong[f"t{tuoi}_tam_tinh"] = _pct(r.get("retention_pct_tam_tinh"))
+                bang.append(dong)
+            return bang
+
+        bang = _bang(cohorts)
+        co_so = {}
+        for tuoi in data.get("ages") or []:
+            thang = [d["cohort"] for d in bang
+                     if d.get(f"t{tuoi}") is not None and not d.get("kiem_duyet_trai")]
+            co_so[f"t{tuoi}"] = {"so_cohort": len(thang), "tu": min(thang) if thang else None,
+                                 "den": max(thang) if thang else None}
+        compact_data = {key: data.get(key) for key in (
+            "definition", "cohort_from", "cohort_to", "group_by", "ages", "cohort_from_da_mo_rong",
+            "ly_do_mo_rong_cua_so", "left_censored_cohort_months", "valid_cohort_count",
+            "pham_vi_du_lieu_co_that", "latest_complete_month", "pham_vi_kenh", "canh_bao",
+            "luu_y_doi_chieu", "doi_chieu_hai_dinh_nghia_khach_moi", "ghi_chu_hai_dinh_nghia",
+            "tam_tinh_thang_chua_tron", "data_as_of",
+        ) if data.get(key) is not None}
+        compact_data.update({
+            "tong_so_cohort": len(bang),
+            "bang_cohort": bang,
+            "cohort_co_so_theo_tuoi": co_so,
+            "cach_doc": (
+                "tN = % khach cua cohort con mua dung thang tuoi N; null = thang dich chua tron, KHONG "
+                "phai 0%. tN_tam_tinh = so tam tinh den ngay du lieu cua thang dang chay. bang_cohort "
+                f"liet ke DU {len(bang)} cohort; KHONG duoc noi 'chua co cohort nao du tuoi N' khi "
+                "cohort_co_so_theo_tuoi.tN.so_cohort > 0, va phai neu ca cohort moi nhat co so."),
+        })
+        isnc = data.get("cohort_theo_isnc")
+        if isinstance(isnc, dict):
+            compact_data["cohort_theo_isnc"] = (
+                {key: isnc.get(key) for key in ("status", "definition", "thang_khong_co_snapshot",
+                                                "gioi_han") if isnc.get(key) is not None}
+                | {"bang_cohort": _bang(isnc.get("cohorts") or [])}
+                if isnc.get("status") == "ok" else isnc)
         if wrapper:
             return {**payload, "du_lieu": compact_data}
         return compact_data
