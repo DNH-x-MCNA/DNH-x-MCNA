@@ -91,6 +91,7 @@ def test_thang_tron_so_voi_tron_thang_truoc_ke_ca_ngay_31(tmp_path, monkeypatch)
 
     assert kq["previous_period"] == {"from": "2026-08-01", "to": "2026-08-31"}
     assert kq["scope_totals"]["previous"]["revenue"] == 600, "Hoa don 31/08 phai nam trong ky truoc."
+    assert kq["comparison_basis"] == "THANG TRON SO VOI TRON THANG TRUOC"
 
 
 def test_giua_thang_van_so_cung_so_ngay_thang_truoc(tmp_path, monkeypatch):
@@ -99,3 +100,4 @@ def test_giua_thang_van_so_cung_so_ngay_thang_truoc(tmp_path, monkeypatch):
     kq = rt.customer_product_coverage(as_of_date="2026-09-15", lookback_months=1, mode="product")
 
     assert kq["previous_period"] == {"from": "2026-08-01", "to": "2026-08-15"}
+    assert kq["comparison_basis"] == "CUNG NGAY TRONG THANG TRUOC (MTD-aligned)"
