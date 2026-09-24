@@ -14731,6 +14731,14 @@ def call_template(name: str, args: dict, question: str = "", username: str = Non
             if key in call_args and isinstance(call_args[key], str) and len(call_args[key]) == 10:
                 call_args[key] += " 23:59:59"
 
+        if name in ("get_top_customers", "get_top_products"):
+            # 24/09/2026 (hop tien do): "hoi top khach hang mien Trung, bot lay top 50 toan quoc roi moi loc ra
+            # 2 khach mien Trung" - tool khong co tham so mien nen model khong loc duoc tu dau. area_code chi
+            # dung khi tai khoan KHONG bi gioi han vung; bi gioi han thi scope cua server ben duoi ghi de.
+            mien_hoi = str(call_args.pop("area_code", None) or "").strip().upper()
+            call_args.pop("scope_area_code", None)   # model khong duoc tu truyen scope
+            if mien_hoi in ("MB", "MT", "MN") and not scope_area_code:
+                call_args["scope_area_code"] = mien_hoi
         if scope_area_code and name not in _AREA_EXEMPT_TEMPLATES:
             call_args["scope_area_code"] = scope_area_code
         if scope_employee_code and name in _PERSON_LEVEL_TEMPLATES:
