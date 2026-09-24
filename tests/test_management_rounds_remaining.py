@@ -207,7 +207,7 @@ def test_c34_cau_hoi_tu_dong_chon_mode_fail_closed(tmp_path, monkeypatch):
     assert result["result"]["launch_date_source"] == "not_available"
 
 
-def test_c44_hop_dong_etc_fail_closed_khi_chua_co_khoa_hoa_don(tmp_path, monkeypatch):
+def test_c44_hop_dong_etc_goi_nham_tool_dia_ban_thi_chan_va_chi_sang_tool_hop_dong(tmp_path, monkeypatch):
     _setup(tmp_path, monkeypatch)
     payload = rt.call_template(
         "get_geography_monthly_performance", {},
@@ -216,9 +216,13 @@ def test_c44_hop_dong_etc_fail_closed_khi_chua_co_khoa_hoa_don(tmp_path, monkeyp
     )
 
     result = payload["result"]
-    assert result["status"] == "SOURCE_GAP_CONTRACT_INVOICE_LINK"
-    assert "Doanh thu thuc hien theo tung hop dong" in result["not_verifiable"]
+    # Van fail-closed va cam customer+SKU; nhung ly do phai dung (khoa ContractId CO that tu 13/09) va
+    # chi sang tool hop dong, khong noi "khong co khoa hop dong".
+    assert result["status"] == "USE_GET_ETC_CONTRACT_STATUS"
+    assert result["next_tool"] == "get_etc_contract_status"
+    assert "Doanh thu thuc hien theo tung hop dong" in result["not_verifiable_from_this_tool"]
     assert "customer+SKU" in result["forbidden_inference"]
+    assert "khong co khoa" not in result["reason"].lower()
 
 
 def test_customer_movement_phan_loai_new_reactivated_stopped(tmp_path, monkeypatch):

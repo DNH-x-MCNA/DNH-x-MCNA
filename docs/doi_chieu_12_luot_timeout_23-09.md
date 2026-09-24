@@ -52,8 +52,11 @@ chưa có commit nào nhắm vào.
 `duration_ms` của toàn bộ 12 lượt:
 
 ```
-111,8  111,9  111,9  112,1  112,3  112,4  112,7  113,0  114,4  114,9  116,4 giây
+111,8  111,9  111,9  112,1  112,3  112,4  112,7  112,9  113,0  114,4  114,9  116,4 giây
 ```
+
+*(Bản đầu của mục này chỉ liệt **11** giá trị — sót lượt 04/09 10:05 của `thuy.nguyen`, 112,9 giây.
+Codex bắt được khi đối chiếu. Dải và kết luận không đổi.)*
 
 Trải **18 ngày**, **6 câu hỏi khác nhau**, **2 tài khoản** — mà biên độ chỉ **4,6 giây**. Nếu là truy
 vấn chậm thật thì thời lượng phải tản mát. Bó sát thế này chỉ có một cách giải thích: **một ngưỡng
@@ -88,17 +91,27 @@ timeout=max(1.0, min(LLM_CALL_TIMEOUT_SECONDS, query_plan.remaining_seconds()))
 làm SDK **ném exception** — và exception đó thoát ra ngoài thành `status=error`,
 `error_message="The read operation timed out"`.
 
-**Bằng chứng khớp: cả 12 lượt đều có `sql_used_json` = `(khong ghi)`.** Lượt nào đi tới bước chốt thì
-đã ghi được tool. Không lượt nào ghi → không lượt nào chạm tới `timeout_answer()`.
+⚠️ **Đính chính 23/09.** Bản đầu viết: *"cả 12 lượt đều có `sql_used_json` rỗng → không lượt nào
+chạm tới `timeout_answer()`"*. **Suy luận đó sai.** Code cũ chỉ ghi `sql_used_json` **khi request
+hoàn tất**, nên **mọi** lượt hỏng đều rỗng — bất kể hỏng ở đâu. Một đặc điểm chung của tất cả các ca
+thất bại thì không chứng minh được riêng ca nào.
+
+Trường rỗng đó **tương thích** với giả thuyết nhưng **không phải bằng chứng**. Căn cứ thật sự cho
+giả thuyết chỉ có một: **độ bó của `duration_ms`** (12 lượt, 18 ngày, 6 câu, biên độ 4,6 giây) khớp
+với ngưỡng 110 giây.
 
 ### Hệ quả
 
 Đây **không phải** 6 câu hỏi cần tối ưu riêng. Đây là **một lỗ hổng xử lý ngoại lệ**: hệ thống có
 sẵn phương án xuống thang nhưng không bắt được đúng exception để dùng nó.
 
-Sửa chỗ này thì **cả 12 lượt** — và mọi lượt vượt ngân sách về sau — chuyển từ chữ **"Lỗi"** thành
-câu trả lời rút gọn kèm phần đã đối chiếu được. Với người chấm UAT, đó là khác biệt giữa "chatbot
-hỏng" và "chatbot trả lời được một phần, nói rõ phần còn thiếu".
+Nếu giả thuyết đúng thì sửa chỗ này sẽ làm các lượt vượt ngân sách về sau chuyển từ chữ **"Lỗi"**
+thành câu trả lời rút gọn kèm phần đã đối chiếu được. Với người chấm UAT, đó là khác biệt giữa
+"chatbot hỏng" và "chatbot trả lời được một phần, nói rõ phần còn thiếu".
+
+⚠️ **Chưa khẳng định được 12 lượt lịch sử sẽ trả lời đầy đủ sau khi sửa.** Chưa có số đo UAT thật
+sau deploy, và mỗi câu vẫn có thể vượt ngân sách vì lý do riêng. Phải chấm lại đo thật rồi mới kết
+luận — đúng như bài học "đừng kết luận từ replication mà chưa gọi chính tool đó".
 
 > Cùng họ với sự cố credit: người chấm chỉ thấy một chữ "Lỗi" cho những nguyên nhân hoàn toàn khác
 > nhau, nên ghi vào sổ như nhau.
@@ -107,7 +120,9 @@ hỏng" và "chatbot trả lời được một phần, nói rõ phần còn thi
 
 1. Bắt exception timeout quanh **mọi** lượt gọi model trong vòng lặp, không chỉ ở bước chốt; rơi về
    `query_plan.timeout_answer()` thay vì để thoát ra.
-2. Ghi `sql_used_json` **trước** khi chốt, để lượt hỏng vẫn truy được đã gọi tool nào.
+2. Ghi `sql_used_json` **ngay khi bắt đầu gọi tool**, không đợi request hoàn tất — hiện lượt hỏng
+   nào cũng để trống trường này nên không truy được đã chạy tới đâu. Đây vừa là việc cần sửa, vừa là
+   lý do phép suy luận ở trên không dùng trường này làm bằng chứng được.
 3. Chỉ sau khi làm xong hai việc trên mới bàn tới việc nới `CHAT_REQUEST_TIMEOUT_SECONDS` — nới trần
    mà không có đường xuống thang thì chỉ dời chỗ hỏng.
 

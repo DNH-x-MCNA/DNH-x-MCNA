@@ -570,7 +570,8 @@ def _required_tool_for_question(question: str) -> str | None:
         return "get_geography_monthly_performance"
     if any(marker in q for marker in (
         "vieng tham", "viếng thăm", "di tuyen", "đi tuyến", "phu tuyen", "phủ tuyến",
-        "route", "check-in", "check in", "ty le co don sau tham", "tỷ lệ có đơn sau thăm",
+        "dung tuyen", "đúng tuyến", "route", "check-in", "check in",
+        "ty le co don sau tham", "tỷ lệ có đơn sau thăm",
     )):
         return "get_workforce_productivity"
     if any(marker in q for marker in (
@@ -1613,10 +1614,10 @@ TEMPLATE_TOOLS = [
                         "KHONG duoc goi la 'toan cong ty' hay hien thi kenh khac. Khi hien thi bucket "
                         "cuoi, viet 'tren 45 ngay', KHONG bat dau dong Markdown bang ky tu >. "
                         "Neu cau hoi hoi SO TIEN DA THU, KE HOACH THU hoac CAM KET THU, BAT BUOC doc "
-                        "collection_activity: kho hien chi co snapshot du no, chua co chung tu thu gan "
-                        "hoa don/khach, chi tieu thu va cam ket. Khong suy ra so da thu tu chenh lech hai "
-                        "snapshot, khong gan cam ket qua han; chi neu so du/no qua han hien tai nhu phan "
-                        "thay the neu huu ich.",
+                        "collection_activity: backend lay but toan BC/PT vao 131 tren Bravo theo "
+                        "khach va TDV phu trach hien tai. PHAI tra phan co nguon, kem ky va pham vi. "
+                        "Chua doi chieu thu-hoa don day du; ke hoach thu va cam ket thu chua co nguon. "
+                        "Khong suy so thu tu chenh lech snapshot va khong tu gan cam ket qua han.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -2554,25 +2555,38 @@ def _payload_for_model(tool_name: str, payload, question: str):
         def _pct(value):
             return None if value is None else round(float(value), 1)
 
-        def _bang(ds):
-            bang = []
-            for c in ds:
-                if not isinstance(c, dict):
-                    continue
-                dong = {"cohort": c.get("cohort_month"), "khach": c.get("cohort_customers")}
-                if c.get("group") not in (None, "ALL"):
-                    dong["nhom"] = c.get("group")
-                if c.get("cohort_is_left_censored"):
-                    dong["kiem_duyet_trai"] = True
-                for r in c.get("retention") or []:
-                    tuoi = r.get("age_month")
-                    dong[f"t{tuoi}"] = _pct(r.get("retention_pct"))
-                    if r.get("retention_pct_tam_tinh") is not None:
-                        dong[f"t{tuoi}_tam_tinh"] = _pct(r.get("retention_pct_tam_tinh"))
-                bang.append(dong)
-            return bang
+        def _ty_le(retention, tien_to=""):
+            cot = {}
+            for r in retention or []:
+                tuoi = r.get("age_month")
+                cot[f"{tien_to}t{tuoi}"] = _pct(r.get("retention_pct"))
+                if r.get("retention_pct_tam_tinh") is not None:
+                    cot[f"{tien_to}t{tuoi}_tam_tinh"] = _pct(r.get("retention_pct_tam_tinh"))
+            return cot
 
-        bang = _bang(cohorts)
+        # 24/09/2026 (chay lai C30 sau deploy ad2a047): khoi IsNC gui RIENG thi model bo qua, chi
+        # nhac 1 dong ghi chu va van goi cot 324 khach (lan dau co hoa don) la "cohort mo moi" - dung
+        # loi nguoi cham da ghi. Ghep IsNC vao CUNG dong cua bang chinh, va doi ten cot hoa don.
+        isnc = data.get("cohort_theo_isnc")
+        isnc_ok = isinstance(isnc, dict) and isnc.get("status") == "ok"
+        isnc_theo_thang = ({c.get("cohort_month"): c for c in isnc.get("cohorts") or []
+                            if isinstance(c, dict)} if isnc_ok else {})
+        bang = []
+        for c in cohorts:
+            if not isinstance(c, dict):
+                continue
+            dong = {"cohort": c.get("cohort_month"),
+                    "khach_lan_dau_co_hoa_don": c.get("cohort_customers")}
+            if c.get("group") not in (None, "ALL"):
+                dong["nhom"] = c.get("group")
+            if c.get("cohort_is_left_censored"):
+                dong["kiem_duyet_trai"] = True
+            dong.update(_ty_le(c.get("retention")))
+            ghep = isnc_theo_thang.get(c.get("cohort_month"))
+            if ghep:
+                dong["khach_mo_moi_isnc"] = ghep.get("cohort_customers")
+                dong.update(_ty_le(ghep.get("retention"), "isnc_"))
+            bang.append(dong)
         co_so = {}
         for tuoi in data.get("ages") or []:
             thang = [d["cohort"] for d in bang
@@ -2583,8 +2597,7 @@ def _payload_for_model(tool_name: str, payload, question: str):
             "definition", "cohort_from", "cohort_to", "group_by", "ages", "cohort_from_da_mo_rong",
             "ly_do_mo_rong_cua_so", "left_censored_cohort_months", "valid_cohort_count",
             "pham_vi_du_lieu_co_that", "latest_complete_month", "pham_vi_kenh", "canh_bao",
-            "luu_y_doi_chieu", "doi_chieu_hai_dinh_nghia_khach_moi", "ghi_chu_hai_dinh_nghia",
-            "tam_tinh_thang_chua_tron", "data_as_of",
+            "luu_y_doi_chieu", "ghi_chu_hai_dinh_nghia", "tam_tinh_thang_chua_tron", "data_as_of",
         ) if data.get(key) is not None}
         compact_data.update({
             "tong_so_cohort": len(bang),
@@ -2596,13 +2609,19 @@ def _payload_for_model(tool_name: str, payload, question: str):
                 f"liet ke DU {len(bang)} cohort; KHONG duoc noi 'chua co cohort nao du tuoi N' khi "
                 "cohort_co_so_theo_tuoi.tN.so_cohort > 0, va phai neu ca cohort moi nhat co so."),
         })
-        isnc = data.get("cohort_theo_isnc")
         if isinstance(isnc, dict):
             compact_data["cohort_theo_isnc"] = (
-                {key: isnc.get(key) for key in ("status", "definition", "thang_khong_co_snapshot",
-                                                "gioi_han") if isnc.get(key) is not None}
-                | {"bang_cohort": _bang(isnc.get("cohorts") or [])}
-                if isnc.get("status") == "ok" else isnc)
+                {key: isnc.get(key) for key in ("status", "definition", "gioi_han")
+                 if isnc.get(key) is not None} if isnc_ok else isnc)
+        if isnc_theo_thang:
+            thang_isnc = sorted(isnc_theo_thang)
+            compact_data["cach_trinh_bay_bat_buoc"] = (
+                "Bang tra loi PHAI co HAI cot so khach: 'Khach lan dau co hoa don' (khach_lan_dau_co_"
+                "hoa_don) va 'Khach mo moi (IsNC)' (khach_mo_moi_isnc, cung so khach moi cua C29/M24), "
+                f"cot IsNC dien cho {', '.join(thang_isnc)} va de trong o thang khac vi kho chua co "
+                "snapshot. Ty le giu chan theo IsNC (isnc_tN) dat canh ty le hoa don cua cung dong. "
+                "KHONG duoc goi khach_lan_dau_co_hoa_don la 'khach mo moi'. Neu ro vi sao IsNC lon hon "
+                "(khach Bravo gan co mo moi co the da tung mua truoc do).")
         if wrapper:
             return {**payload, "du_lieu": compact_data}
         return compact_data
@@ -3207,8 +3226,9 @@ QUAN TRONG VE CHON TOOL:
   -> dung get_receivables_overview. Cong no cua 1 khach cu the -> get_customer_detail. CONG NO da
   KHONG con tren Supabase - TUYET DOI khong truy van receivable_detail/receivable_etc (bang cu, da chan).
   Neu hoi SO DA THU TRONG THANG/KE HOACH THU/CAM KET THU QUA HAN, doc collection_activity trong
-  get_receivables_overview: kho chi co snapshot du no, CHUA co chung tu thu gan hoa don/khach, target
-  thu hay bang cam ket. KHONG lay chenh lech hai snapshot lam tien da thu va KHONG tu gan cam ket qua han.
+  get_receivables_overview: collection_activity tra but toan BC/PT vao tai khoan 131 theo khach/TDV
+  phu trach hien tai trong thang, nhung CHUA co ke hoach thu hay bang cam ket. Tra phan thu duoc,
+  noi ro pham vi va phan thieu nguon; KHONG lay chenh lech snapshot lam tien da thu.
 - HOP DONG/GOI THAU ETC (C44/M42): BAT BUOC get_etc_contract_status, khoa vHoaDonETCTotal.ContractId
   da duoc kiem chung; phu luc cuon ve Id0. KHONG ghep bang khach hang + SKU. Gia tri con lai la chua
   xuat hoa don TRUOC VAT, KHONG phai chua giai ngan/thanh toan. Duoi 50% la chi bao sang loc, chua
