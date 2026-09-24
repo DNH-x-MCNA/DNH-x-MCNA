@@ -28,7 +28,7 @@ không phải ở code. Quy tắc gộp thay đổi mô tả tool/system prompt 
 
 ---
 
-## 🔴 Phát hiện 24/09 — lỗi v34 còn ở ~17 công cụ khác, đo trên máy 24
+## ✅ Phát hiện 24/09 — lỗi v34 còn ở ~17 công cụ khác — ĐÃ SỬA, đã kiểm trên máy 24
 
 PR #63 chỉ vá `promotion_effectiveness`. Các công cụ lọc theo đội qua `_employee_scope_clause` khi kỳ
 hỏi cũ hơn cửa sổ phân công đội (sync 90 ngày, sớm nhất 30/06/2026) thì truyền `fdate=None` vào
@@ -58,8 +58,26 @@ hôm nay và hỏi tuần sau có thể ra hai số khác nhau mà không ai s�
 Tháng 8 đạt trên cả hai máy → khoản lệch do **chốt sai mốc đội**, không phải do hai nguồn đội hình khác
 nhau.
 
-Chỉ ảnh hưởng tài khoản **QLV** hỏi kỳ trước 30/06/2026 (YoY, cùng kỳ, tháng cũ). Đã giao phiên
-`backend/` sửa. Sau khi sửa và deploy, chạy lại trên máy 24: cả ba kỳ phải ra `DAT`.
+Chỉ ảnh hưởng tài khoản **QLV** hỏi kỳ trước 30/06/2026 (YoY, cùng kỳ, tháng cũ).
+
+### ✅ Đã sửa — PR #80, deploy 24/09 (`436aed8`), kiểm trên máy 24
+
+| Kỳ | Trước sửa | Sau sửa |
+|---|---|---|
+| 05/2026 | 11/21 QLV lệch, thiếu 2.374.998.673đ | **DAT — 21/21** |
+| 04/2026 | 15/22 QLV lệch | **DAT — 22/22** |
+| 08/2026 (đối chứng) | DAT | **DAT** |
+
+## ✅ Lượt treo `running` — ĐÃ SỬA, PR #81, deploy 24/09
+
+Trước đây nếu stream kết thúc mà không phát `done`, hoặc service restart giữa chừng, dòng `query_runs`
+treo `running` mãi. Nay: stream thiếu `done` ghi `abandoned`; lúc khởi động, dòng `running` cũ hơn
+10 phút được đóng.
+
+Trên máy 24: **5 lượt treo → 0**, cả 5 chuyển `abandoned` (17/08, 27/08, 04/09, 07/09, 17/09).
+
+> Hôm 23/09 quét cửa sổ 01–30/09 nên chỉ thấy 3; hai lượt 17/08 và 27/08 nằm ngoài cửa sổ. Nguyên
+> nhân riêng của từng lượt chưa quy được.
 
 ## Việc còn lại thật sự — xếp theo mức chặn
 
