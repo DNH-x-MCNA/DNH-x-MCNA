@@ -125,3 +125,16 @@ def test_dong_chi_co_cost_log_co_nguon(tmp_path, monkeypatch):
     d = dong[("dnh", "chao bot")]
     assert d["status"] == "no_sql" and d["log_source"] == "cost_log"
     assert kq["summary"]["total_queries"] == 1
+
+
+def test_unknown_co_chi_phi_hien_nhan_ro_nghia(tmp_path, monkeypatch):
+    # Luot goi model that tu script khong truyen username: van hien (tien that) nhung dat ten ro nghia.
+    audit = [{"ts": TS, "username": None, "question": "chi tiet ca 4 quan ly", "session_id": "verify_routing_fix_0914",
+              "sql": "<template:get_revenue_by_region>({})", "status": "ok", "duration_ms": 40}]
+    cost = [{"ts": TS, "session_id": "verify_routing_fix_0914", "username": None,
+             "question_preview": "chi tiet ca 4 quan ly", "model": "claude-sonnet-5",
+             "cost_usd": 0.18, "input_tokens": 100, "output_tokens": 50}]
+    dong, kq = _chay(tmp_path, monkeypatch, audit, cost, runs=[])
+    assert dong[("unknown", "chi tiet ca 4 quan ly")]["user_name"].startswith("Không khai tên người dùng")
+    u = [x for x in kq["user_breakdown"] if x["username"] == "unknown"]
+    assert u and u[0]["user_name"].startswith("Không khai tên người dùng") and u[0]["cost_usd"] > 0
