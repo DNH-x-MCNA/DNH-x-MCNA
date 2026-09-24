@@ -596,6 +596,40 @@ def revenue_by_channel(date_from: str, date_to: str, scope_area_code: str = None
     return result
 
 
+_MA_MIEN_SQL = {ma: khoa for khoa, cac_ma in REGION_SQL_MARKERS.items() for ma in cac_ma}
+_MIEN_NGAN = {"bac": "MB", "trung": "MT", "nam": "MN"}
+
+
+def _mien_chuan(area_code, customer_code=None) -> str:
+    """MB/MT/MN tu area_code cua tinh (MB2 -> MB); thieu thi suy tu tien to ma khach nhu revenue_by_region."""
+    khoa = _MA_MIEN_SQL.get(str(area_code or "").strip().upper())
+    if khoa:
+        return _MIEN_NGAN[khoa]
+    suy = region_from_customer_code(customer_code) if customer_code else None
+    return suy if suy in ("MB", "MT", "MN") else "Khac"
+
+
+def _mien_cua_khach(ma_khach) -> dict:
+    """customer_code -> MB/MT/MN qua danh muc khach (OTC dms_khachhang, ETC dmssx_khachhang)."""
+    ma = sorted({c for c in ma_khach if c})
+    kq = {}
+    for dau in range(0, len(ma), 500):
+        lo = ma[dau:dau + 500]
+        ph = ",".join("?" for _ in lo)
+        for bang in ("dms_khachhang", "dmssx_khachhang"):
+            try:
+                for r in _q(f"SELECT kh.code, tp.area_code FROM {bang} kh "
+                            f"LEFT JOIN dim_tinhthanhpho tp ON tp.city_id=kh.city_id WHERE kh.code IN ({ph})",
+                            tuple(lo)):
+                    if r["code"] not in kq and r["area_code"]:
+                        kq[r["code"]] = _mien_chuan(r["area_code"])
+            except sqlite3.OperationalError:
+                pass
+    for c in ma:
+        kq.setdefault(c, _mien_chuan(None, c))
+    return kq
+
+
 def top_products(date_from: str, date_to: str, limit: int = 10, channel: str = "ALL",
                   scope_area_code: str = None, scope_channel: str = None,
                   scope_employee_code: str = None) -> list:
@@ -635,6 +669,34 @@ def top_products(date_from: str, date_to: str, limit: int = 10, channel: str = "
                "scope_revenue": _f(r["scope_rev"]),
                "share_pct_of_scope": (_f(r["rev"]) / _f(r["scope_rev"]) * 100
                                       if _f(r["scope_rev"]) else None)} for r in rows]
+    # 24/09/2026 (hop tien do: "SKU theo detail, khu vuc theo vung mien -> bat lay detail theo khu vuc"):
+    # moi san pham top kem doanh thu tung mien, de cau hoi toan quoc van tra duoc chi tiet MB/MT/MN.
+    if result:
+        ma_sp = [x["item_code"] for x in result]
+        ph = ",".join("?" for _ in ma_sp)
+        mien_parts, mien_params = [], []
+        for bang, bang_kh, co in (("vhoadon_otc", "dms_khachhang", channel in ("OTC", "ALL")),
+                                  ("vhoadon_etc", "dmssx_khachhang", channel in ("ETC", "ALL"))):
+            if not co:
+                continue
+            mien_parts.append(
+                f"SELECT v.item_code, v.customer_code, tp.area_code area, v.amount9 FROM {bang} v "
+                f"LEFT JOIN {bang_kh} kh ON kh.code=v.customer_code "
+                f"LEFT JOIN dim_tinhthanhpho tp ON tp.city_id=kh.city_id "
+                f"WHERE v.doc_date BETWEEN ? AND ?{scope_sql} AND v.item_code IN ({ph})")
+            mien_params.extend((date_from, date_to) + scope_params + tuple(ma_sp))
+        try:
+            theo_mien = {}
+            for r in _q(f"SELECT item_code, customer_code, area, SUM(amount9) rev FROM "
+                        f"({' UNION ALL '.join(mien_parts)}) GROUP BY item_code, customer_code, area",
+                        tuple(mien_params)):
+                d = theo_mien.setdefault(r["item_code"], {})
+                k = _mien_chuan(r["area"], r["customer_code"])
+                d[k] = d.get(k, 0.0) + _f(r["rev"])
+            for x in result:
+                x["theo_mien"] = {k: round(v) for k, v in sorted(theo_mien.get(x["item_code"], {}).items()) if v}
+        except sqlite3.OperationalError:
+            pass
     # Du lieu cu hon 12 thang da bi NEN thanh KH x thang (khong con item_code) - top san pham KHONG
     # the tinh dung cho phan xa hon cua so nay, phai bao ro thay vi am tham tra ve so thieu.
     cutoff = _detail_cutoff()
@@ -697,7 +759,10 @@ def top_customers(date_from: str, date_to: str, limit: int = 10, channel: str = 
               FROM combined GROUP BY customer_code ORDER BY rev DESC LIMIT ?"""
     params = tuple(p for pp in part_params for p in pp) + (limit,)
     rows = _q(sql, params)
+    # 24/09/2026 (hop tien do: "top khach hang, no, khu vuc... bat lay detail theo khu vuc"): kem mien.
+    mien = _mien_cua_khach([r["customer_code"] for r in rows])
     return [{"customer_code": r["customer_code"], "revenue": _f(r["rev"]),
+             "mien": mien.get(r["customer_code"], "Khac"),
              "scope_revenue": _f(r["scope_rev"]),
              "share_pct_of_scope": (_f(r["rev"]) / _f(r["scope_rev"]) * 100
                                     if _f(r["scope_rev"]) else None)} for r in rows]
@@ -1939,8 +2004,103 @@ def compare_periods(date_from_a: str, date_to_a: str, date_from_b: str, date_to_
         }
     delta = a["total"]["revenue"] - b["total"]["revenue"]
     pct_change = (delta / b["total"]["revenue"] * 100) if b["total"]["revenue"] else None
-    return {"period_a": a, "period_b": b, "delta": delta, "pct_change": pct_change,
-            "comparison_valid": True}
+    ket_qua = {"period_a": a, "period_b": b, "delta": delta, "pct_change": pct_change,
+               "comparison_valid": True}
+    # 24/09/2026 (hop tien do): "chatbot phai giai thich duoc nguyen nhan tang/giam doanh thu (phat sinh khach
+    # moi nao, SKU nao ban them...) chu khong chi dua ra con so so sanh" - C-Level hoi nhieu ve so sanh.
+    try:
+        ket_qua["nguyen_nhan_bien_dong"] = _nguyen_nhan_bien_dong(
+            date_from_a, date_to_a, date_from_b, date_to_b, scope_area_code, scope_channel,
+            scope_employee_code, delta)
+    except (sqlite3.OperationalError, KhongXacDinhDuocDoi) as exc:
+        # Khong tach duoc nguyen nhan thi van tra chenh lech tong nhu truoc, noi ro ly do.
+        ket_qua["nguyen_nhan_bien_dong"] = {"status": "KHONG_TINH_DUOC", "ly_do": str(exc)[:200]}
+    return ket_qua
+
+
+def _doanh_thu_theo_khoa(khoa: str, date_from: str, date_to: str, scope_area_code: str = None,
+                         scope_channel: str = None, scope_employee_code: str = None) -> dict:
+    """{customer_code|item_code: doanh thu} tren hoa don chi tiet, cung pham vi voi top_customers."""
+    channel = scope_channel or "ALL"
+    scope_sql, scope_params = _scope_clause(scope_area_code)
+    emp_sql, emp_params = _employee_scope_clause(scope_employee_code, "v", as_of=date_to)
+    parts, params = [], []
+    for bang, join, co in (("vhoadon_otc", _otc_area_join("v", scope_area_code), channel in ("OTC", "ALL")),
+                           ("vhoadon_etc", _etc_area_join("v", scope_area_code), channel in ("ETC", "ALL"))):
+        if co:
+            parts.append(f"SELECT v.{khoa} k, v.amount9 FROM {bang} v {join} "
+                         f"WHERE v.doc_date BETWEEN ? AND ?{scope_sql}{emp_sql}")
+            params.extend((date_from, date_to) + scope_params + emp_params)
+    return {r["k"]: _f(r["rev"]) for r in _q(
+        f"SELECT k, SUM(amount9) rev FROM ({' UNION ALL '.join(parts)}) GROUP BY k", tuple(params))}
+
+
+def _nguyen_nhan_bien_dong(dfa, dta, dfb, dtb, scope_area_code, scope_channel, scope_employee_code,
+                           delta_tong, top_n: int = 5) -> dict:
+    """Tach chenh lech ky A - ky B thanh cac khoan giai thich duoc: theo mien, khach tang/giam, khach moi
+    phat sinh / khong con mua, SKU tang/giam. Tong cac khoan theo khach = chenh lech tren hoa don chi tiet."""
+    cutoff = _detail_cutoff()
+    if min(dfa, dfb)[:10] < cutoff:
+        return {"status": "NGOAI_CUA_SO_CHI_TIET",
+                "ly_do": (f"Ky truoc {cutoff} chi con tong doanh thu theo khach/thang (khong con SKU) nen khong "
+                          "tach duoc nguyen nhan theo SKU; chi bao duoc chenh lech tong.")}
+    kh_a = _doanh_thu_theo_khoa("customer_code", dfa, dta, scope_area_code, scope_channel, scope_employee_code)
+    kh_b = _doanh_thu_theo_khoa("customer_code", dfb, dtb, scope_area_code, scope_channel, scope_employee_code)
+    sp_a = _doanh_thu_theo_khoa("item_code", dfa, dta, scope_area_code, scope_channel, scope_employee_code)
+    sp_b = _doanh_thu_theo_khoa("item_code", dfb, dtb, scope_area_code, scope_channel, scope_employee_code)
+    kh_delta = {c: kh_a.get(c, 0.0) - kh_b.get(c, 0.0) for c in set(kh_a) | set(kh_b)}
+    sp_delta = {c: sp_a.get(c, 0.0) - sp_b.get(c, 0.0) for c in set(sp_a) | set(sp_b)}
+    delta_chi_tiet = sum(kh_delta.values())
+    tang_kh = sorted([c for c, d in kh_delta.items() if d > 0], key=lambda c: -kh_delta[c])[:top_n]
+    giam_kh = sorted([c for c, d in kh_delta.items() if d < 0], key=lambda c: kh_delta[c])[:top_n]
+    moi = [c for c, v in kh_a.items() if v > 0 and kh_b.get(c, 0.0) <= 0]
+    mat = [c for c, v in kh_b.items() if v > 0 and kh_a.get(c, 0.0) <= 0]
+    tang_sp = sorted([c for c, d in sp_delta.items() if d > 0], key=lambda c: -sp_delta[c])[:top_n]
+    giam_sp = sorted([c for c, d in sp_delta.items() if d < 0], key=lambda c: sp_delta[c])[:top_n]
+    ten_kh = _customer_names(tang_kh + giam_kh)
+    mien = _mien_cua_khach(kh_delta)
+    ten_sp = {}
+    ma_sp = tang_sp + giam_sp
+    if ma_sp:
+        ph = ",".join("?" for _ in ma_sp)
+        try:
+            ten_sp = {r["code"]: r["name"] for r in _q(f"SELECT code, name FROM brv_sanpham WHERE code IN ({ph})",
+                                                        tuple(ma_sp))}
+        except sqlite3.OperationalError:
+            ten_sp = {}
+    theo_mien = {}
+    for c, d in kh_delta.items():
+        m = theo_mien.setdefault(mien.get(c, "Khac"), {"ky_a": 0.0, "ky_b": 0.0})
+        m["ky_a"] += kh_a.get(c, 0.0)
+        m["ky_b"] += kh_b.get(c, 0.0)
+    for m in theo_mien.values():
+        m["chenh_lech"] = m["ky_a"] - m["ky_b"]
+        m["pct"] = (m["chenh_lech"] / m["ky_b"] * 100) if m["ky_b"] else None
+
+    def _kh(c):
+        return {"customer_code": c, "ten": ten_kh.get(c), "mien": mien.get(c), "ky_a": kh_a.get(c, 0.0),
+                "ky_b": kh_b.get(c, 0.0), "chenh_lech": kh_delta[c]}
+
+    def _sp(c):
+        return {"item_code": c, "ten": ten_sp.get(c), "ky_a": sp_a.get(c, 0.0), "ky_b": sp_b.get(c, 0.0),
+                "chenh_lech": sp_delta[c]}
+    lech_tong = delta_chi_tiet - (delta_tong or 0.0)
+    return {
+        "status": "OK",
+        "chenh_lech_tren_hoa_don_chi_tiet": delta_chi_tiet,
+        "khop_voi_chenh_lech_tong": abs(lech_tong) <= max(1.0, abs(delta_tong or 0.0) * 0.005),
+        "theo_mien": dict(sorted(theo_mien.items())),
+        "khach_tang_manh_nhat": [_kh(c) for c in tang_kh],
+        "khach_giam_manh_nhat": [_kh(c) for c in giam_kh],
+        "khach_phat_sinh_moi_so_voi_ky_b": {"so_khach": len(moi), "doanh_thu": sum(kh_a[c] for c in moi)},
+        "khach_khong_con_mua_so_voi_ky_b": {"so_khach": len(mat), "doanh_thu_ky_b": sum(kh_b[c] for c in mat)},
+        "sku_tang_manh_nhat": [_sp(c) for c in tang_sp],
+        "sku_giam_manh_nhat": [_sp(c) for c in giam_sp],
+        "cach_doc": ("Chenh lech = tong chenh lech tung khach (ky A - ky B) tren hoa don chi tiet. Khach phat sinh "
+                     "moi = co doanh thu ky A, khong co ky B (moi hoac quay lai) - KHONG phai co IsNC. Khi tra "
+                     "loi so sanh PHAI giai thich bang cac khoan nay (mien nao, khach nao, SKU nao keo tang/giam), "
+                     "khong chi neu con so tong."),
+    }
 
 
 def _ytd_plan(year: int, from_month: str, to_month: str, scope_area_code: str = None,
@@ -14666,6 +14826,14 @@ def call_template(name: str, args: dict, question: str = "", username: str = Non
             if key in call_args and isinstance(call_args[key], str) and len(call_args[key]) == 10:
                 call_args[key] += " 23:59:59"
 
+        if name in ("get_top_customers", "get_top_products"):
+            # 24/09/2026 (hop tien do): "hoi top khach hang mien Trung, bot lay top 50 toan quoc roi moi loc ra
+            # 2 khach mien Trung" - tool khong co tham so mien nen model khong loc duoc tu dau. area_code chi
+            # dung khi tai khoan KHONG bi gioi han vung; bi gioi han thi scope cua server ben duoi ghi de.
+            mien_hoi = str(call_args.pop("area_code", None) or "").strip().upper()
+            call_args.pop("scope_area_code", None)   # model khong duoc tu truyen scope
+            if mien_hoi in ("MB", "MT", "MN") and not scope_area_code:
+                call_args["scope_area_code"] = mien_hoi
         if scope_area_code and name not in _AREA_EXEMPT_TEMPLATES:
             call_args["scope_area_code"] = scope_area_code
         if scope_employee_code and name in _PERSON_LEVEL_TEMPLATES:

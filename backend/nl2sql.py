@@ -738,13 +738,15 @@ TEMPLATE_TOOLS = [
                         "Neu nguoi dung yeu cau tach/so sanh top san pham OTC va ETC, BAT BUOC goi tool HAI LAN "
                         "voi cung khoang ngay va limit: mot lan channel=OTC, mot lan channel=ETC; KHONG dung "
                         "channel=ALL vi ALL gop doanh thu hai kenh theo cung ma san pham. Tu dong tra ve top san "
-                        "pham cua rieng doi QLV neu duoc hoi.",
+                        "pham cua rieng doi QLV neu duoc hoi. Moi dong co theo_mien (doanh thu MB/MT/MN cua "
+                        "chinh SKU do): cau hoi KHONG gioi han vung thi BAT BUOC trinh bay kem chi tiet theo mien.",
         "input_schema": {
             "type": "object",
             "properties": {
                 "date_from": {"type": "string", "description": "YYYY-MM-DD"},
                 "date_to": {"type": "string", "description": "YYYY-MM-DD"},
                 "limit": {"type": "integer", "description": "So luong top can lay, mac dinh 10"},
+                "area_code": {"type": "string", "enum": ["MB", "MT", "MN"], "description": "Loc DUNG mot mien khi nguoi dung hoi top cua mien do (vd top khach hang mien Trung -> MT); KHONG lay top toan quoc roi tu loc."},
                 "channel": {"type": "string", "enum": ["OTC", "ETC", "ALL"], "description": "Kenh, mac dinh channel=ALL (gop ca 2 kenh). Khi tach/so sanh OTC va ETC, goi rieng channel=OTC va channel=ETC; khong dung channel=ALL."},
             },
             "required": ["date_from", "date_to"],
@@ -758,13 +760,15 @@ TEMPLATE_TOOLS = [
                         "UU TIEN dung tool nay cho moi cau hoi ve khach hang mua nhieu nhat/top khach hang. "
                         "C11/S70 co concentration_by_month cho top khach, top SKU va mien. "
                         "C32/M21/V19 co monthly_customer_changes: top tang/giam RIENG tung thang, "
-                        "dong gop vao bien dong tong va ma nguoi phu trach.",
+                        "dong gop vao bien dong tong va ma nguoi phu trach. Moi dong co mien (MB/MT/MN cua "
+                        "khach): cau hoi KHONG gioi han vung thi BAT BUOC co cot Mien.",
         "input_schema": {
             "type": "object",
             "properties": {
                 "date_from": {"type": "string", "description": "YYYY-MM-DD"},
                 "date_to": {"type": "string", "description": "YYYY-MM-DD"},
                 "limit": {"type": "integer", "description": "So luong top can lay, mac dinh 10"},
+                "area_code": {"type": "string", "enum": ["MB", "MT", "MN"], "description": "Loc DUNG mot mien khi nguoi dung hoi top cua mien do (vd top khach hang mien Trung -> MT); KHONG lay top toan quoc roi tu loc."},
                 "channel": {"type": "string", "enum": ["OTC", "ETC", "ALL"], "description": "Kenh, mac dinh ALL"},
             },
             "required": ["date_from", "date_to"],
@@ -898,7 +902,7 @@ TEMPLATE_TOOLS = [
     },
     {
         "name": "compare_periods",
-        "description": "So sanh nhanh tong doanh thu (OTC+ETC) giua 2 khoang thoi gian bat ky (vd thang nay vs "
+        "description": "Tra kem nguyen_nhan_bien_dong (theo mien, khach tang/giam manh nhat, khach phat sinh moi/khong con mua, SKU tang/giam manh nhat - tong khop chenh lech): BAT BUOC giai thich tang/giam bang cac khoan nay, khong chi neu con so tong (hop 24/09). So sanh nhanh tong doanh thu (OTC+ETC) giua 2 khoang thoi gian bat ky (vd thang nay vs "
                         "thang truoc, quy nay vs cung ky nam truoc). Tool tu kiem pham vi kho; neu mot ky thieu "
                         "du lieu thi comparison_valid=false va delta/pct_change=None. PHAI bao thieu lich su, "
                         "TUYET DOI khong coi ky thieu la 0 dong. UU TIEN dung tool nay cho so sanh dung 2 ky.",
@@ -3243,6 +3247,9 @@ QUAN TRONG VE CHON TOOL:
   goi get_top_products HAI LAN voi cung khoang ngay/limit: mot lan channel=OTC va mot lan channel=ETC.
   KHONG dung channel=ALL trong truong hop nay, vi ALL gop doanh thu hai kenh cua cung ma san pham va
   khong con hai bang xep hang doc lap. Cau tra loi phai ghi ro bang OTC va bang ETC rieng.
+- CHI TIET THEO KHU VUC (hop tien do 24/09/2026): cau hoi top khach hang, cong no, san pham/SKU, doanh
+  thu ma KHONG gioi han vung -> trinh bay kem chi tiet theo mien (MB/MT/MN) tu truong mien/theo_mien/
+  by_area/theo_vung ma tool da tra. Tai khoan da bi gioi han mot vung thi khong can tach.
 - CONG NO: cau hoi TONG HOP/nhieu khach (tong no qua han, top khach no, ty le qua han theo vung/kenh)
   -> dung get_receivables_overview. Cong no cua 1 khach cu the -> get_customer_detail. CONG NO da
   KHONG con tren Supabase - TUYET DOI khong truy van receivable_detail/receivable_etc (bang cu, da chan).
