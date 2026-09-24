@@ -381,6 +381,13 @@ class QueryPlan:
 
     def start_tool(self, tool_name: str, args: dict[str, Any], tool_key: str) -> str:
         matches: list[PlanStep] = []
+        if tool_name == "get_new_customer_list":
+            # Select the customer step first. Revenue per new customer is only
+            # covered if the returned payload proves that quality mode ran.
+            matches = [step for step in self.steps if (
+                step.status == "pending" and step.domain == "customer"
+                and tool_name in step.tool_hints
+            )][:1]
         if tool_name in {"query_database", "query_sql_server", "query_inventory_receivables"}:
             raw_text = _plain(json.dumps(args or {}, ensure_ascii=False, default=str))
             raw_domains = {domain for domain, markers in _RAW_DOMAIN_MARKERS.items()
@@ -449,6 +456,28 @@ class QueryPlan:
         # chuong trinh, khach va san pham). Khong ep model goi lai tool chi de danh dau buoc thu hai.
         for related in self.steps:
             if related.status == "pending" and primary.tool_name in related.tool_hints:
+                if (primary.tool_name == "get_new_customer_list" and related.domain == "revenue"
+                        and primary.status == "completed"):
+                    by_area = evidence.get("by_area") if isinstance(evidence, dict) else None
+                    has_quality = (
+                        isinstance(evidence, dict) and evidence.get("mode") == "quality"
+                        and isinstance(by_area, list)
+                        and any(isinstance(row, dict)
+                                and row.get("doanh_thu_binh_quan_khach_moi") is not None
+                                and row.get("ty_le_mua_lai_khach_moi_pct") is not None
+                                for row in by_area)
+                    )
+                    if not has_quality:
+                        related.status = "partial"
+                        related.tool_name = primary.tool_name
+                        related.tool_args = primary.tool_args
+                        related.source = source
+                        related.duration_ms = duration_ms
+                        related.error = (
+                            "Tool khách mới chưa trả doanh thu bình quân/khách và tỷ lệ mua lại "
+                            "ở chế độ quality; chưa đủ nguồn để kết luận hai chỉ số này."
+                        )
+                        continue
                 related.status = primary.status
                 related.tool_name = primary.tool_name
                 related.tool_args = primary.tool_args
@@ -1162,6 +1191,27 @@ def build_query_plan(question: str, *, query_id: str | None, scope_role: str | N
         # liệu nghiệp vụ nặng không liên quan.
         domains = [spec for spec in domains if spec["domain"] == "freshness"]
     domain_names = {spec["domain"] for spec in domains}
+    new_customer_quality = (
+        "customer" in domain_names and "revenue" in domain_names
+        and "khach moi" in plain_question
+        and ("doanh thu tren khach" in plain_question
+             or "doanh so tren khach" in plain_question)
+        and "mua lai" in plain_question
+    )
+    reorder_kpi = (
+        "customer" in domain_names and "kpi" in domain_names
+        and "tai don" in plain_question
+    )
+    product_sales = (
+        "revenue" in domain_names and "product" in domain_names
+        and any(marker in plain_question for marker in (
+            "doanh so san pham", "doanh thu san pham",
+            "doanh so thang nay theo cac nhom hang", "doanh so theo nhom hang",
+        ))
+        and not any(marker in plain_question for marker in (
+            "tong doanh thu", "tong doanh so", "toan cong ty",
+        ))
+    )
     inventory_risk_composite = "inventory" in domain_names and any(
         marker in plain_question for marker in (
             "thieu hang", "kho thieu", "ton cao", "cham luan chuyen",
@@ -1184,6 +1234,17 @@ def build_query_plan(question: str, *, query_id: str | None, scope_role: str | N
         tool_hints = [
             tool for tool in spec["tools"] if tool not in blocked_salary_tools
         ]
+        # The single business tool for each composite question already contains
+        # both measures. Without these hints the planner marks a second domain
+        # "model did not call a source" after the correct tool has succeeded.
+        if new_customer_quality and spec["domain"] == "revenue":
+            tool_hints.append("get_new_customer_list")
+        if reorder_kpi and spec["domain"] in {"kpi", "customer"}:
+            tool_hints.append("get_reorder_pending_customers")
+        if product_sales and spec["domain"] == "revenue":
+            tool_hints.extend(("get_top_products", "get_focus_product_kpi"))
+        if product_sales and spec["domain"] == "product":
+            tool_hints.append("get_focus_product_kpi")
         if (inventory_risk_composite and spec["domain"] in {"revenue", "customer"}
                 and "get_inventory_expiry_report" not in tool_hints):
             # Chi V38/C42/M39: supply_risk co BQ doanh thu va khach tung mua cua chinh SKU.
@@ -1207,6 +1268,13 @@ def build_query_plan(question: str, *, query_id: str | None, scope_role: str | N
             if metric not in metrics:
                 metrics.append(metric)
         spec_rules = list(spec["rules"])
+        # These are per-customer/product measures, not company revenue totals or
+        # a sales-team roll-up. Requiring those unrelated reconciliations leaves
+        # the plan partial even when its actual source has completed.
+        if spec["domain"] == "revenue" and (new_customer_quality or product_sales):
+            spec_rules = []
+        if spec["domain"] == "kpi" and reorder_kpi:
+            spec_rules = []
         if salary_blocked_by_role:
             # Khong de mot reconciliation rule bat kha thi treo o trang thai pending, va cung khong
             # quang cao tool nhay cam qua query plan sau khi tang phan quyen da an chung.
