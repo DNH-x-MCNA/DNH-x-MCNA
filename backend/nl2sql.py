@@ -738,7 +738,8 @@ TEMPLATE_TOOLS = [
                         "Neu nguoi dung yeu cau tach/so sanh top san pham OTC va ETC, BAT BUOC goi tool HAI LAN "
                         "voi cung khoang ngay va limit: mot lan channel=OTC, mot lan channel=ETC; KHONG dung "
                         "channel=ALL vi ALL gop doanh thu hai kenh theo cung ma san pham. Tu dong tra ve top san "
-                        "pham cua rieng doi QLV neu duoc hoi.",
+                        "pham cua rieng doi QLV neu duoc hoi. Moi dong co theo_mien (doanh thu MB/MT/MN cua "
+                        "chinh SKU do): cau hoi KHONG gioi han vung thi BAT BUOC trinh bay kem chi tiet theo mien.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -758,7 +759,8 @@ TEMPLATE_TOOLS = [
                         "UU TIEN dung tool nay cho moi cau hoi ve khach hang mua nhieu nhat/top khach hang. "
                         "C11/S70 co concentration_by_month cho top khach, top SKU va mien. "
                         "C32/M21/V19 co monthly_customer_changes: top tang/giam RIENG tung thang, "
-                        "dong gop vao bien dong tong va ma nguoi phu trach.",
+                        "dong gop vao bien dong tong va ma nguoi phu trach. Moi dong co mien (MB/MT/MN cua "
+                        "khach): cau hoi KHONG gioi han vung thi BAT BUOC co cot Mien.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -3225,6 +3227,9 @@ QUAN TRONG VE CHON TOOL:
   goi get_top_products HAI LAN voi cung khoang ngay/limit: mot lan channel=OTC va mot lan channel=ETC.
   KHONG dung channel=ALL trong truong hop nay, vi ALL gop doanh thu hai kenh cua cung ma san pham va
   khong con hai bang xep hang doc lap. Cau tra loi phai ghi ro bang OTC va bang ETC rieng.
+- CHI TIET THEO KHU VUC (hop tien do 24/09/2026): cau hoi top khach hang, cong no, san pham/SKU, doanh
+  thu ma KHONG gioi han vung -> trinh bay kem chi tiet theo mien (MB/MT/MN) tu truong mien/theo_mien/
+  by_area/theo_vung ma tool da tra. Tai khoan da bi gioi han mot vung thi khong can tach.
 - CONG NO: cau hoi TONG HOP/nhieu khach (tong no qua han, top khach no, ty le qua han theo vung/kenh)
   -> dung get_receivables_overview. Cong no cua 1 khach cu the -> get_customer_detail. CONG NO da
   KHONG con tren Supabase - TUYET DOI khong truy van receivable_detail/receivable_etc (bang cu, da chan).

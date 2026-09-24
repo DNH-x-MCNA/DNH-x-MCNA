@@ -596,6 +596,40 @@ def revenue_by_channel(date_from: str, date_to: str, scope_area_code: str = None
     return result
 
 
+_MA_MIEN_SQL = {ma: khoa for khoa, cac_ma in REGION_SQL_MARKERS.items() for ma in cac_ma}
+_MIEN_NGAN = {"bac": "MB", "trung": "MT", "nam": "MN"}
+
+
+def _mien_chuan(area_code, customer_code=None) -> str:
+    """MB/MT/MN tu area_code cua tinh (MB2 -> MB); thieu thi suy tu tien to ma khach nhu revenue_by_region."""
+    khoa = _MA_MIEN_SQL.get(str(area_code or "").strip().upper())
+    if khoa:
+        return _MIEN_NGAN[khoa]
+    suy = region_from_customer_code(customer_code) if customer_code else None
+    return suy if suy in ("MB", "MT", "MN") else "Khac"
+
+
+def _mien_cua_khach(ma_khach) -> dict:
+    """customer_code -> MB/MT/MN qua danh muc khach (OTC dms_khachhang, ETC dmssx_khachhang)."""
+    ma = sorted({c for c in ma_khach if c})
+    kq = {}
+    for dau in range(0, len(ma), 500):
+        lo = ma[dau:dau + 500]
+        ph = ",".join("?" for _ in lo)
+        for bang in ("dms_khachhang", "dmssx_khachhang"):
+            try:
+                for r in _q(f"SELECT kh.code, tp.area_code FROM {bang} kh "
+                            f"LEFT JOIN dim_tinhthanhpho tp ON tp.city_id=kh.city_id WHERE kh.code IN ({ph})",
+                            tuple(lo)):
+                    if r["code"] not in kq and r["area_code"]:
+                        kq[r["code"]] = _mien_chuan(r["area_code"])
+            except sqlite3.OperationalError:
+                pass
+    for c in ma:
+        kq.setdefault(c, _mien_chuan(None, c))
+    return kq
+
+
 def top_products(date_from: str, date_to: str, limit: int = 10, channel: str = "ALL",
                   scope_area_code: str = None, scope_channel: str = None,
                   scope_employee_code: str = None) -> list:
@@ -635,6 +669,34 @@ def top_products(date_from: str, date_to: str, limit: int = 10, channel: str = "
                "scope_revenue": _f(r["scope_rev"]),
                "share_pct_of_scope": (_f(r["rev"]) / _f(r["scope_rev"]) * 100
                                       if _f(r["scope_rev"]) else None)} for r in rows]
+    # 24/09/2026 (hop tien do: "SKU theo detail, khu vuc theo vung mien -> bat lay detail theo khu vuc"):
+    # moi san pham top kem doanh thu tung mien, de cau hoi toan quoc van tra duoc chi tiet MB/MT/MN.
+    if result:
+        ma_sp = [x["item_code"] for x in result]
+        ph = ",".join("?" for _ in ma_sp)
+        mien_parts, mien_params = [], []
+        for bang, bang_kh, co in (("vhoadon_otc", "dms_khachhang", channel in ("OTC", "ALL")),
+                                  ("vhoadon_etc", "dmssx_khachhang", channel in ("ETC", "ALL"))):
+            if not co:
+                continue
+            mien_parts.append(
+                f"SELECT v.item_code, v.customer_code, tp.area_code area, v.amount9 FROM {bang} v "
+                f"LEFT JOIN {bang_kh} kh ON kh.code=v.customer_code "
+                f"LEFT JOIN dim_tinhthanhpho tp ON tp.city_id=kh.city_id "
+                f"WHERE v.doc_date BETWEEN ? AND ?{scope_sql} AND v.item_code IN ({ph})")
+            mien_params.extend((date_from, date_to) + scope_params + tuple(ma_sp))
+        try:
+            theo_mien = {}
+            for r in _q(f"SELECT item_code, customer_code, area, SUM(amount9) rev FROM "
+                        f"({' UNION ALL '.join(mien_parts)}) GROUP BY item_code, customer_code, area",
+                        tuple(mien_params)):
+                d = theo_mien.setdefault(r["item_code"], {})
+                k = _mien_chuan(r["area"], r["customer_code"])
+                d[k] = d.get(k, 0.0) + _f(r["rev"])
+            for x in result:
+                x["theo_mien"] = {k: round(v) for k, v in sorted(theo_mien.get(x["item_code"], {}).items()) if v}
+        except sqlite3.OperationalError:
+            pass
     # Du lieu cu hon 12 thang da bi NEN thanh KH x thang (khong con item_code) - top san pham KHONG
     # the tinh dung cho phan xa hon cua so nay, phai bao ro thay vi am tham tra ve so thieu.
     cutoff = _detail_cutoff()
@@ -697,7 +759,10 @@ def top_customers(date_from: str, date_to: str, limit: int = 10, channel: str = 
               FROM combined GROUP BY customer_code ORDER BY rev DESC LIMIT ?"""
     params = tuple(p for pp in part_params for p in pp) + (limit,)
     rows = _q(sql, params)
+    # 24/09/2026 (hop tien do: "top khach hang, no, khu vuc... bat lay detail theo khu vuc"): kem mien.
+    mien = _mien_cua_khach([r["customer_code"] for r in rows])
     return [{"customer_code": r["customer_code"], "revenue": _f(r["rev"]),
+             "mien": mien.get(r["customer_code"], "Khac"),
              "scope_revenue": _f(r["scope_rev"]),
              "share_pct_of_scope": (_f(r["rev"]) / _f(r["scope_rev"]) * 100
                                     if _f(r["scope_rev"]) else None)} for r in rows]
