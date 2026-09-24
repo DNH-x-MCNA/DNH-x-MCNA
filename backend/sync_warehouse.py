@@ -353,7 +353,7 @@ def sync_fact_tonghopkhachhang(days=90):
     print(f"[fact_tonghopkhachhang] Reload {days} ngay gan nhat: {len(rows)} dong")
 
 
-def sync_fact_thongketinhluong(days=400):
+def sync_fact_thongketinhluong(days=None):
     """Dong bo ket qua tinh thuong/luong kinh doanh (KPI+luong moi QD 0429/.25 + QD 0107/2026) tu
     Bravo FACT_ThongKeTinhLuong - da xac nhan (xem local_warehouse.py::SCHEMA) day la ket qua Bravo
     DA TU TINH SAN dung cong thuc, khong phai du lieu tho can tinh lai. CHI 1 SNAPSHOT/NGAY (SaveDate),
@@ -362,8 +362,19 @@ def sync_fact_thongketinhluong(days=400):
     11/09/2026: 90 -> 400 ngay. 90 ngay chi con 3 thang tron, nen chuoi dai nhat do duoc la 2 lan giam:
     M16 "giam lien tiep 3 thang" KHONG BAO GIO tra duoc (Pham Xuan Toan giam 4 thang lien 05->08/2026
     tren Bravo, kho chi thay 2), M05/C47 hoi 6 thang lien tiep cung am tham chi co 3 thang. Bang chi co
-    1 snapshot cuoi thang/nguoi (~210 NV) nen 13 thang ~3.000 dong, chi phi khong dang ke."""
-    start = dt.date.today() - dt.timedelta(days=days)
+    1 snapshot cuoi thang/nguoi (~210 NV) nen 13 thang ~3.000 dong, chi phi khong dang ke.
+
+    24/09/2026: 400 ngay -> TOAN BO LICH SU (days=None). Bang nay con la nguon CHOT DOI cho ky qua khu
+    (report_templates._team_of_qlv_tu_luong, sau PR #63/#80). Cua so 400 ngay bat dau 17/08/2025, nen moi
+    cau hoi QLV ve ky truoc do - dien hinh la "so cung ky nam ngoai" - roi ve doi SAU ky. Do bang Bravo
+    lam doi chung, thang 07/2025: 15/16 QLV lech, sai so tuyet doi 6,27 ty (18,7%).
+    Khong nang len mot so ngay khac vi mot cua so co dinh se lai truot qua moc 01/2025 sau vai thang
+    va loi quay lai am tham. Toan bo lich su tren Bravo 24/09/2026 chi 4.024 dong / 29 snapshot, moi
+    nam them ~2.500 dong. Truyen days=N van dung duoc neu can gioi han."""
+    if days is None:
+        start = dt.date(2000, 1, 1)
+    else:
+        start = dt.date.today() - dt.timedelta(days=days)
     _, rows = bravo_query(
         "SELECT EmployeeCode, EmployeeName, PositionCode, AreaCode, AreaCode2, ManagerCode, SaveDate, "
         "MonthSaleAmount, MonthSaleTarget, MonthSalePercent_R, "
@@ -400,7 +411,8 @@ def sync_fact_thongketinhluong(days=400):
         )
     conn.commit()
     conn.close()
-    print(f"[fact_thongketinhluong] Reload {days} ngay gan nhat: {len(rows)} dong")
+    pham_vi = "toan bo lich su" if days is None else f"{days} ngay gan nhat"
+    print(f"[fact_thongketinhluong] Reload {pham_vi}: {len(rows)} dong")
 
 
 def sync_fact_congno():
