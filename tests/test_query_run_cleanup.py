@@ -69,7 +69,8 @@ def test_startup_chi_dong_running_qua_lau_va_giu_dau_tool(tmp_path, monkeypatch)
     main.close_stale_query_runs_on_startup()
     old = memory.get_query_run("old")
     assert old["status"] == "abandoned"
-    assert old["duration_ms"] >= 19 * 60 * 1000
+    # Sau restart khong biet request dung luc nao; thoi gian den startup khong phai runtime.
+    assert old["duration_ms"] is None
     assert old["sql_used"] == ["tool:get_revenue_by_channel"]
     assert memory.get_query_run("recent")["status"] == "running"
     assert memory.get_query_run("complete")["status"] == "completed"
