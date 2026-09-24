@@ -902,7 +902,7 @@ TEMPLATE_TOOLS = [
     },
     {
         "name": "compare_periods",
-        "description": "So sanh nhanh tong doanh thu (OTC+ETC) giua 2 khoang thoi gian bat ky (vd thang nay vs "
+        "description": "Tra kem nguyen_nhan_bien_dong (theo mien, khach tang/giam manh nhat, khach phat sinh moi/khong con mua, SKU tang/giam manh nhat - tong khop chenh lech): BAT BUOC giai thich tang/giam bang cac khoan nay, khong chi neu con so tong (hop 24/09). So sanh nhanh tong doanh thu (OTC+ETC) giua 2 khoang thoi gian bat ky (vd thang nay vs "
                         "thang truoc, quy nay vs cung ky nam truoc). Tool tu kiem pham vi kho; neu mot ky thieu "
                         "du lieu thi comparison_valid=false va delta/pct_change=None. PHAI bao thieu lich su, "
                         "TUYET DOI khong coi ky thieu la 0 dong. UU TIEN dung tool nay cho so sanh dung 2 ky.",
