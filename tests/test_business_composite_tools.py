@@ -826,9 +826,13 @@ def test_c44_contract_guard_cam_ghep_hoa_don_qua_khach_sku():
 
     for text in (prompt, live_tool):
         lowered = text.lower()
-        assert "khong co khoa hop dong" in lowered
+        # ContractId da kiem chung 13/09; gioi han con lai la khoa CONG NO-hop dong.
+        assert "khong co khoa hop dong" not in lowered
+        assert "get_etc_contract_status" in lowered
+        assert "contractid" in lowered
         assert ("khach" in lowered or "customer" in lowered) and "sku" in lowered
         assert "gia tri con lai" in lowered
+        assert "cong no qua han" in lowered and "chua kiem chung" in lowered
 
 
 def test_workforce_question_auto_applies_uat_mode_and_employee_scope(monkeypatch):

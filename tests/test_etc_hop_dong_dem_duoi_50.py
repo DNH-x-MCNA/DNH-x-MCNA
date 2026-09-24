@@ -12,11 +12,19 @@ Du lieu gia (da monkeypatch _q_bravo), khong cham Bravo that."""
 import os
 import sys
 
+import pytest
+
 BACKEND = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "backend")
 if BACKEND not in sys.path:
     sys.path.append(BACKEND)
 
 import report_templates as rt
+
+
+@pytest.fixture(autouse=True)
+def _ngay_du_lieu_gia(monkeypatch):
+    # Test offline khong duoc phu thuoc warehouse.db tren may chay.
+    monkeypatch.setattr(rt, "latest_data_date", lambda: "2026-09-13")
 
 
 def _dong(i, gia_tri, da_xuat, con_lai_ngay=100, so_dong_lech=0):
@@ -63,3 +71,19 @@ def test_hop_dong_gia_tri_bat_thuong_khong_bi_tinh_vao_dem(monkeypatch):
 
     assert kq["so_hop_dong_thuc_hien_duoi_50_pct"] == 3
     assert kq["so_hop_dong_gia_tri_bat_thuong"] == 3
+
+
+def test_canh_bao_dung_so_song_khong_ghi_cung(monkeypatch):
+    """17/09/2026 cau C44 (commit 36314d7, bi sot sau #30, dua lai 24/09): chatbot bao "co 3 hop dong gia
+    tri bat thuong" trong khi truong so lieu ngay canh do ghi 60. Cau chu canh_bao ghi cung "3/9.135 hop
+    dong" - ket qua do 13/09 voi luat CU. So ghi cung trong van ban lac hau am tham moi lan doi luat, va
+    model doc van ban chu khong doc truong so."""
+    rows = ([_dong(i, 1_000_000.0, 100_000.0) for i in range(1, 4)]
+            + [_dong(90 + i, 1_000_000.0, 0.0, so_dong_lech=1) for i in range(7)])
+    monkeypatch.setattr(rt, "_q_bravo", lambda sql, params=None: rows)
+
+    kq = rt.etc_contract_status(as_of_date="2026-09-23")
+
+    assert kq["so_hop_dong_gia_tri_bat_thuong"] == 7
+    assert "7 hop dong co gia tri bat thuong" in kq["canh_bao"]   # cau chu khop truong so lieu
+    assert "3/9.135" not in kq["canh_bao"]                        # khong con so ghi cung cua ban cu

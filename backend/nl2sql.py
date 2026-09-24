@@ -417,8 +417,6 @@ def _required_tool_for_question(question: str) -> str | None:
         return "get_inventory_item_stock"
     if "gia tri ton kho" in q:
         return "get_inventory_by_region"
-    # C44/M42: kho/hoa don khong co khoa hop dong da xac nhan. Ep vao bao cao co guard
-    # source-gap thay vi de model tu search SQL va noi hoa don qua customer+SKU.
     # 13/09/2026: C44/M42 hoi TIEN DO THUC HIEN hop dong. Truoc day day sang bao cao dia ban (chi co
     # doanh thu thuc hien, khong co gia tri hop dong/con lai/han) nen ca hai deu CHUA DAT voi ly do
     # "chua co khoa lien ket hoa don - hop dong". Kiem lai 13/09: khoa CO that, ContractId phu 100%
@@ -1254,8 +1252,7 @@ TEMPLATE_TOOLS = [
                        "dia ban, ke ca cau hoi dang 'dia ban QUY MO LON nhung TANG TRUONG THAP' "
                        "(doi chieu cot revenue/ty trong voi cot MoM - KHONG can viet SQL tay). Kho local CHUA co khoa chi nhanh/NPP/distributor; neu hoi chieu do tool "
                        "tra not_applicable, PHAI noi ro, KHONG tu suy tu tinh/vung. C44/M42 ve hop "
-                       "dong/goi thau ETC tra SOURCE_GAP_CONTRACT_INVOICE_LINK; phai liet ke dung "
-                       "not_verifiable va KHONG query SQL tu do de noi hoa don bang customer+SKU. "
+                       "dong/goi thau ETC phai dung get_etc_contract_status, KHONG noi hoa don bang customer+SKU. "
                        "11/09/2026 (C24/M27): voi dimension='city', moi dong da co san "
                        "area_avg_revenue_per_city/area_avg_customers_per_city/area_avg_revenue_per_customer "
                        "(trung binh cac tinh CUNG VUNG, cung thang) va 2 co bool "
@@ -1312,11 +1309,19 @@ TEMPLATE_TOOLS = [
                        "13/09/2026: ContractId co tren 100% dong hoa don ETC, khop 1.037/1.037 hop dong). "
                        "CAC HOP DONG CO GIA TRI BAT THUONG da duoc tach rieng khoi moi con so tong "
                        "(so_hop_dong_gia_tri_bat_thuong / hop_dong_gia_tri_bat_thuong) - PHAI noi ro dieu "
-                       "nay khi bao tong gia tri, khong duoc cong chung vao.",
+                       "nay khi bao tong gia tri, khong duoc cong chung vao. Gia tri con lai la chua "
+                       "xuat hoa don, KHONG phai chua giai ngan/thanh toan. Dung hop_dong_con_lai_lon_nhat "
+                       "cho ve con gia tri lon; duoi 50% chi la chi bao, chua chung minh cham lich giao. "
+                       "PHAI neu cong_no_theo_hop_dong: chua kiem chung no qua han theo hop dong, NULL "
+                       "khong phai 0; cam gan no cua khach cho tung hop dong. So dem la tong day du, "
+                       "danh sach bi gioi han va cac nhom co the chong lan.",
         "input_schema": {"type": "object", "properties": {
             "as_of_date": {"type": "string", "description": "YYYY-MM-DD; mac dinh ngay du lieu moi nhat."},
             "expiring_days": {"type": "integer", "description": "Nguong 'sap het han', mac dinh 90 ngay."},
             "only_active": {"type": "boolean", "description": "Chi xet hop dong con hieu luc (mac dinh true)."},
+            "min_remaining_value": {"type": "number", "minimum": 0,
+                                    "description": "Nguong gia tri con lai VND do nguoi dung yeu cau; "
+                                                   "bo trong thi xep giam dan gia tri duong, khong tu dat nguong."},
             "limit": {"type": "integer", "minimum": 1, "maximum": 200}}, "required": []},
     },
     {
@@ -2065,11 +2070,11 @@ QUERY_SQL_SERVER_TOOL = {
         "context hoac goi search_sql_server_catalog. Dung T-SQL: TOP N, dbo.[TenObject], KHONG LIMIT, "
         "KHONG SELECT *. Chi SELECT/WITH; cam EXEC stored procedure, ghi/sua/xoa, SELECT INTO va truy van "
         "sang database khac. Du lieu live la nguon chinh de kiem tra do phu, nhung voi doanh thu/cong no/"
-        "KPI da co tool chuan thi van BAT BUOC dung tool chuan truoc. C44/M42 hop dong ETC: hoa don "
-        "hien KHONG co khoa hop dong da xac nhan; KHONG duoc ghep qua customer+SKU de tinh doanh thu "
-        "thuc hien, gia tri con lai, ty le giai ngan hay cong no theo hop dong. Chi doc metadata hop dong "
-        "va neu ro cac chi tieu tren chua kiem chung; khong cong/xep hang gia tri hop dong bat thuong khi "
-        "chua co quy tac chat luong du lieu duoc DNH chot. Tool live chi kha dung cho vai tro "
+        "KPI da co tool chuan thi van BAT BUOC dung tool chuan truoc. C44/M42 hop dong ETC: dung "
+        "get_etc_contract_status, noi vHoaDonETCTotal.ContractId va cuon phu luc theo Id0. KHONG duoc "
+        "ghep qua customer+SKU. Gia tri con lai la chua xuat hoa don, khong phai chua giai ngan. "
+        "Cong no qua han theo hop dong chua kiem chung; khong gan no khach cho tung hop dong. "
+        "Tach gia tri bat thuong theo tool chuan. Tool live chi kha dung cho vai tro "
         "C-Level/Admin do SQL tu do khong the ep phan quyen dong theo moi bang."
     ),
     "input_schema": {
@@ -3224,12 +3229,13 @@ QUAN TRONG VE CHON TOOL:
   get_receivables_overview: collection_activity tra but toan BC/PT vao tai khoan 131 theo khach/TDV
   phu trach hien tai trong thang, nhung CHUA co ke hoach thu hay bang cam ket. Tra phan thu duoc,
   noi ro pham vi va phan thieu nguon; KHONG lay chenh lech snapshot lam tien da thu.
-- HOP DONG/GOI THAU ETC (C44/M42): hoa don hien KHONG co khoa hop dong da DNH xac nhan. TUYET DOI
-  KHONG ghep hoa don vao hop dong chi bang khach hang + SKU, vi mot dong co the nhan nham/nhan doi.
-  Chi duoc bao metadata hop dong co truc tiep trong nguon (so, khach, hieu luc, gia tri goc) va phai ghi
-  ro doanh thu thuc hien, gia tri con lai/giai ngan, ty le thuc hien va cong no qua han THEO HOP DONG
-  chua the kiem chung. Gia tri hop dong bat thuong khong duoc cong tong/xep hang nhu so sach neu chua
-  co quy tac kiem tra va xac nhan cua DNH.
+- HOP DONG/GOI THAU ETC (C44/M42): BAT BUOC get_etc_contract_status, khoa vHoaDonETCTotal.ContractId
+  da duoc kiem chung; phu luc cuon ve Id0. KHONG ghep bang khach hang + SKU. Gia tri con lai la chua
+  xuat hoa don TRUOC VAT, KHONG phai chua giai ngan/thanh toan. Duoi 50% la chi bao sang loc, chua
+  chung minh cham lich giao hang. Dung danh sach con lai lon nhat va sap het han cung nguong tool tra.
+  PHAI noi ro cong no qua han theo hop dong (cong_no_theo_hop_dong) chua kiem chung: NULL khong phai 0; khong gan no khach cho tung
+  hop dong, khong suy no qua han tu phan chua xuat. Tong khong gom gia tri bat thuong; so dem day du
+  khac so dong mau va cac nhom co the chong lan. Doc canh_bao ve gioi han metadata lich su.
 - Voi phan cau hoi KHONG thuoc cac nhom tren: thu query_database tren warehouse truoc neu schema da
   mo ta. Neu warehouse KHONG CO object/cot can thiet, BAT BUOC dung search_sql_server_catalog de tim
   trong TOAN BO SQL Server da duoc cap quyen, sau do dung query_sql_server (neu tool kha dung) de doc

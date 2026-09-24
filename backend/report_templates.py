@@ -7820,7 +7820,8 @@ def etc_revenue_by_item_type(date_from: str, date_to: str, scope_area_code: str 
 
 def etc_contract_status(as_of_date: str = None, expiring_days: int = 90, limit: int = 50,
                         only_active: bool = True, scope_area_code: str = None,
-                        scope_channel: str = None, scope_employee_code: str = None) -> dict:
+                        scope_channel: str = None, scope_employee_code: str = None,
+                        min_remaining_value: float = None) -> dict:
     """C43/C44/M42: hop dong ETC - gia tri, da xuat hoa don, con lai, ty le thuc hien, sap het han.
 
     13/09/2026 - VI SAO CO TOOL NAY: ba cau cum H bi ghi la "chua co khoa lien ket hoa don voi hop
@@ -7834,9 +7835,13 @@ def etc_contract_status(as_of_date: str = None, expiring_days: int = 90, limit: 
     2 lan - xem ghi chu 15/09/2026 trong SQL) ra khoi moi con so tong, khong am tham cong vao - nguoi
     doc thay ca hai phan.
     """
-    as_of_date = (as_of_date or latest_data_date())[:10]
+    as_of_date = dt.date.fromisoformat((as_of_date or latest_data_date())[:10]).isoformat()
     expiring_days = max(1, min(int(expiring_days or 90), 720))
     limit = max(1, min(int(limit or 50), 200))
+    if min_remaining_value is not None:
+        min_remaining_value = float(min_remaining_value)
+        if not 0 <= min_remaining_value < float("inf"):
+            raise ValueError("Nguong gia tri con lai phai la so huu han khong am.")
     params = {"as_of": as_of_date}
     dieu_kien_vung = ""
     if scope_area_code:
@@ -7852,8 +7857,10 @@ def etc_contract_status(as_of_date: str = None, expiring_days: int = 90, limit: 
         for i, ma in enumerate(dms_ids):
             params["nv%d" % i] = ma
             cho.append(":nv%d" % i)
-        dieu_kien_nv = " AND (hd.EmpDMSCode1 IN (%s) OR hd.EmpDMSCode2 IN (%s))" % (
-            ",".join(cho), ",".join(cho))
+        dieu_kien_nv = (
+            " AND EXISTS (SELECT 1 FROM dong pham_vi WHERE pham_vi.Id0=hd.Id"
+            " AND (pham_vi.EmpDMSCode1 IN (%s) OR pham_vi.EmpDMSCode2 IN (%s)))" % (
+                ",".join(cho), ",".join(cho)) if cho else " AND 1=0")
     sql = (
         "WITH dong AS ("
         " SELECT Id, RowId, MAX(Id0) Id0, MAX(ParentId) ParentId,"
@@ -7914,6 +7921,8 @@ def etc_contract_status(as_of_date: str = None, expiring_days: int = 90, limit: 
         " JOIN hd ON hd.Id=m.HopDongGocId"
         " LEFT JOIN sku_hop_dong k ON k.Id0=m.HopDongGocId AND k.ItemCode=s.ItemCode"
         " WHERE s.ContractId IS NOT NULL"
+        # Codex 24/09: chi tinh hoa don den het ngay as_of - hoi ky cu khong lay hoa don ve sau.
+        " AND s.DocDate < DATEADD(day, 1, CAST(:as_of AS date))"
         "), hoadon AS ("
         " SELECT ContractId,"
         " SUM(CASE WHEN KhacKhach=1 AND KhacSku=1 THEN 0 ELSE Amount9 END) DaXuat,"
@@ -7953,6 +7962,8 @@ def etc_contract_status(as_of_date: str = None, expiring_days: int = 90, limit: 
             "con_lai_ngay": con_lai_ngay,
             "sap_het_han": con_lai_ngay is not None and 0 <= con_lai_ngay <= expiring_days,
             "da_het_han": con_lai_ngay is not None and con_lai_ngay < 0,
+            "chua_den_hieu_luc": bool(r["FromDate"] and str(r["FromDate"])[:10] > as_of_date),
+            "thieu_ngay_hieu_luc": not r["FromDate"] or not r["ToDate"] or con_lai_ngay is None,
         }
         if int(r.get("SoDongGanNham") or 0) > 0:
             muc["chung_tu_gan_nham_da_loai"] = {
@@ -7970,13 +7981,12 @@ def etc_contract_status(as_of_date: str = None, expiring_days: int = 90, limit: 
         else:
             hop_dong.append(muc)
 
-    # 24/09/2026: "con hieu luc" = DA bat dau va chua het han. Truoc day chi xet ngay ket thuc nen hop dong
-    # da ky nhung chua toi ngay bat dau (1 hop dong o as_of 23/09) bi dem la con hieu luc voi 0% -> lot vao
-    # "chua xuat hoa don nao" va "duoi 50%" nhu the thuc hien cham. Tach rieng, van bao so luong.
-    def _chua_bat_dau(x):
-        return bool(x["tu_ngay"]) and x["tu_ngay"] > as_of_date
-    chua_bat_dau = [x for x in hop_dong if not x["da_het_han"] and _chua_bat_dau(x)]
-    dang_hieu_luc = [x for x in hop_dong if not x["da_het_han"] and not _chua_bat_dau(x)]
+    # 24/09/2026 (Claude #95 + Codex): "con hieu luc" = DA bat dau, chua het han va CO du ngay hieu luc.
+    # Truoc day chi xet ngay ket thuc nen hop dong chua toi ngay bat dau (0%) lot vao "chua xuat hoa don
+    # nao" va "duoi 50%" nhu the thuc hien cham. Hai nhom nay tach rieng, van bao so luong.
+    chua_den_hieu_luc = [x for x in hop_dong if x["chua_den_hieu_luc"]]
+    dang_hieu_luc = [x for x in hop_dong if not x["da_het_han"]
+                     and not x["chua_den_hieu_luc"] and not x["thieu_ngay_hieu_luc"]]
     xet = dang_hieu_luc if only_active else hop_dong
     sap_het = [x for x in xet if x["sap_het_han"]]
     chua_xuat = [x for x in xet if x["so_hoa_don"] == 0]
@@ -7984,7 +7994,12 @@ def etc_contract_status(as_of_date: str = None, expiring_days: int = 90, limit: 
         [x for x in xet if x["ty_le_thuc_hien_pct"] is not None and x["ty_le_thuc_hien_pct"] < 50],
         key=lambda x: (x["ty_le_thuc_hien_pct"], -x["con_lai"]))
     gan_nham = [x for x in xet if x.get("chung_tu_gan_nham_da_loai")]
+    con_lai_lon = sorted(
+        [x for x in xet if x["con_lai"] > 0
+         and (min_remaining_value is None or x["con_lai"] >= min_remaining_value)],
+        key=lambda x: (-x["con_lai"], str(x["contract_id"])))
     return {
+        "status": "PARTIAL_CONTRACT_DEBT_UNAVAILABLE",
         "as_of": as_of_date, "nguong_sap_het_han_ngay": expiring_days,
         "chi_xet_hop_dong_con_hieu_luc": only_active,
         "nguon": ("vHopDongETC cuon hop dong/phu luc theo Id0 + "
@@ -7993,8 +8008,9 @@ def etc_contract_status(as_of_date: str = None, expiring_days: int = 90, limit: 
                         "hop dong - kiem chung 13/09/2026."),
         "tong_so_hop_dong": len(hop_dong) + len(bat_thuong),
         "so_hop_dong_con_hieu_luc": len(dang_hieu_luc),
-        "so_hop_dong_chua_bat_dau": len(chua_bat_dau),
-        "gia_tri_hop_dong_chua_bat_dau": sum(x["gia_tri_hop_dong"] for x in chua_bat_dau),
+        "so_hop_dong_chua_den_hieu_luc": len(chua_den_hieu_luc),
+        "gia_tri_hop_dong_chua_den_hieu_luc": sum(x["gia_tri_hop_dong"] for x in chua_den_hieu_luc),
+        "so_hop_dong_thieu_ngay_hieu_luc": sum(x["thieu_ngay_hieu_luc"] for x in hop_dong),
         "tong_gia_tri": sum(x["gia_tri_hop_dong"] for x in xet),
         "tong_da_xuat_hoa_don": sum(x["da_xuat_hoa_don"] for x in xet),
         "tong_con_lai": sum(x["con_lai"] for x in xet),
@@ -8007,6 +8023,29 @@ def etc_contract_status(as_of_date: str = None, expiring_days: int = 90, limit: 
         # nhu the do la tong that (UAT 17/09, cau C44). Cung lop loi voi "hoi top 10 tra top 3".
         "so_hop_dong_thuc_hien_duoi_50_pct": len(thuc_hien_thap),
         "hop_dong_thuc_hien_duoi_50_pct": thuc_hien_thap[:limit],
+        "nguong_gia_tri_con_lai": min_remaining_value,
+        "so_hop_dong_con_lai_theo_nguong": len(con_lai_lon),
+        "hop_dong_con_lai_lon_nhat": con_lai_lon[:limit],
+        "gioi_han_moi_danh_sach": limit,
+        "dinh_nghia": {
+            "thuc_hien_thap": "Da xuat hoa don duoi 50% gia tri; chi la chi bao sang loc, "
+                               "chua chung minh cham so voi lich giao hang cam ket.",
+            "con_lai": "Gia tri hop dong tru da xuat hoa don, TRUOC VAT; KHONG phai tien "
+                       "chua giai ngan, chua thanh toan hay du no.",
+            "con_lai_lon": "Xep giam dan gia tri con lai duong; chi ap nguong khi duoc truyen, "
+                           "khong tu coi day la nguong nghiep vu DNH da chot.",
+        },
+        "cong_no_theo_hop_dong": {
+            "status": "SOURCE_GAP_CONTRACT_DEBT_LINK",
+            "tong_qua_han": None,
+            "so_hop_dong_qua_han": None,
+            "reason": "Kho fact_congno_khachhang tu usp_DeptAccDueDate_GetData chi co snapshot "
+                      "khach x kenh, chua co mapping cong no den tung hop dong duoc kiem chung. "
+                      "KHONG gan toan bo no cua khach cho moi hop dong, khong suy no tu gia tri "
+                      "con lai, khong ket luan khong co no hoac moi phat sinh no qua han.",
+            "required_source": "Chi tiet du no/qua han gan hoa don va ContractId, ngay snapshot; "
+                               "can lich su de xac dinh no qua han moi phat sinh.",
+        },
         "hop_dong_sap_het_han": sorted(sap_het, key=lambda x: x["con_lai_ngay"])[:limit],
         "so_hop_dong_gia_tri_bat_thuong": len(bat_thuong),
         "hop_dong_gia_tri_bat_thuong": sorted(bat_thuong, key=lambda x: -x["gia_tri_hop_dong"])[:20],
@@ -8016,16 +8055,24 @@ def etc_contract_status(as_of_date: str = None, expiring_days: int = 90, limit: 
             {k: x[k] for k in ("contract_id", "so_hop_dong", "customer_code", "chung_tu_gan_nham_da_loai")}
             for x in sorted(gan_nham, key=lambda x: -abs(x["chung_tu_gan_nham_da_loai"]["so_tien"]))[:20]],
         "so_hop_dong_co_hoa_don_khac_ma_khach": sum(1 for x in xet if x.get("hoa_don_khac_ma_khach_van_tinh")),
+        # 17/09/2026 (commit 36314d7, bi sot sau #30, dua lai 24/09): cau chu PHAI dung so SONG. Ban cu ghi
+        # cung "3/9.135 hop dong" - ket qua do 13/09 voi luat CU; luat sua 15/09 nay tach 60 hop dong.
+        # Model doc cau chu nen bao "co 3 hop dong bat thuong" trong khi truong dem ngay canh ghi 60.
         "canh_bao": ("Hop dong goc va phu luc da duoc cuon theo Id0; hoa don noi qua dung "
                      "ContractId cua tung phien ban, khong ghep gan dung theo khach/SKU/thoi gian. "
-                     "Cac hop dong co gia tri bat thuong da duoc TACH RIENG khoi moi con so tong o "
-                     "day (do 13/09/2026: 3/9.135 hop dong chiem 99,88% tong gia tri). Khi tra loi "
+                     f"{len(bat_thuong)} hop dong co gia tri bat thuong da duoc TACH RIENG khoi moi "
+                     "con so tong o day (dau hieu: truoc VAT lech Quantity*UnitPrice qua 5%, don gia "
+                     "tren 1 ty/don vi, hoac sau VAT chenh truoc VAT qua 2 lan - vd HD 115627). Khi tra loi "
                      "phai neu ro con so tong khong gom nhung hop dong do va can DNH kiem lai du lieu "
                      "goc. Ty le thuc hien = tong Amount9 hoa don co ContractId / gia tri hop dong, "
                      "ca hai deu TRUOC VAT. Chung tu mang ContractId nhung khac CA ma khach LAN mat "
                      "hang cua hop dong bi coi la gan nham: KHONG tinh vao da xuat, liet ke o "
                      "hop_dong_co_chung_tu_gan_nham - neu co thi noi ro va de DNH kiem lai. Hoa don "
-                     "khac ma khach nhung cung mat hang van tinh (thuong la cung don vi co hai ma)."),
+                     "khac ma khach nhung cung mat hang van tinh (thuong la cung don vi co hai ma). "
+                     "Hoa don chi tinh den het ngay as_of; metadata/gia tri "
+                     "hop dong va phu luc la ban hien tai tren Bravo, chua phuc dung lich su thay doi. "
+                     "Cong no qua han THEO HOP DONG chua kiem chung (xem cong_no_theo_hop_dong); "
+                     "khong duoc hieu NULL la 0. Cac nhom danh sach co the chong lan, khong cong so dem."),
         "data_as_of": latest_data_date(),
     }
 
@@ -14824,25 +14871,23 @@ def call_template(name: str, args: dict, question: str = "", username: str = Non
                 "data_as_of": latest_data_date(),
             }
         elif name == "get_geography_monthly_performance" and contract_etc_question:
-            # C44/M42: hoa don khong co contract_id da DNH xac nhan. Tra source-gap co
-            # cau truc ngay tai tool de model khong the tu ghep customer+SKU roi tinh sai.
+            # C44/M42: bao cao dia ban KHONG co so theo hop dong - van chan (fail-closed) de model khong tu
+            # ghep customer+SKU. 24/09/2026: bo ly do cu "hoa don khong co khoa hop dong" - sai tu 13/09
+            # (vHoaDonETCTotal.ContractId phu 100%) va mau thuan voi get_etc_contract_status; model doc ly do
+            # nay co the noi voi nguoi dung la "khong co khoa".
             result = {
-                "status": "SOURCE_GAP_CONTRACT_INVOICE_LINK",
+                "status": "USE_GET_ETC_CONTRACT_STATUS",
                 "requested_scope": "ETC",
-                "verified_available": [
-                    "Metadata hop dong truc tiep trong nguon: so hop dong, khach hang, hieu luc, gia tri goc.",
-                ],
-                "not_verifiable": [
+                "next_tool": "get_etc_contract_status",
+                "not_verifiable_from_this_tool": [
                     "Doanh thu thuc hien theo tung hop dong",
-                    "Gia tri con lai/chua giai ngan va ty le thuc hien",
+                    "Gia tri con lai (chua xuat hoa don) va ty le thuc hien",
                     "Cong no qua han theo tung hop dong",
                 ],
-                "reason": ("Hoa don hien khong co khoa hop dong da DNH xac nhan. Ghep bang khach "
-                           "hang + SKU co the gan nham hoac dem trung doanh thu."),
+                "reason": ("Bao cao dia ban chi co doanh thu theo vung/khach, khong co so theo hop dong. So "
+                           "theo hop dong lay tu get_etc_contract_status (noi hoa don qua "
+                           "vHoaDonETCTotal.ContractId, cuon phu luc theo Id0)."),
                 "forbidden_inference": "Khong noi hoa don vao hop dong qua customer+SKU.",
-                "data_quality_guard": ("Khong cong tong/xep hang gia tri hop dong bat thuong khi "
-                                       "chua co quy tac chat luong duoc DNH chot."),
-                "required_source": "contract_id hoac khoa lien ket don/hoa don-hop dong da DNH xac nhan.",
                 "data_as_of": latest_data_date(),
             }
         else:
