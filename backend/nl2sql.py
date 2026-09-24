@@ -2323,6 +2323,24 @@ def _payload_for_model(tool_name: str, payload, question: str):
     """
     if not isinstance(payload, dict):
         return payload
+    if tool_name == "get_promotion_effectiveness":
+        wrapper = payload if isinstance(payload.get("du_lieu"), dict) else None
+        data = payload["du_lieu"] if wrapper else payload
+        programs = data.get("programs")
+        if isinstance(programs, list) and programs:
+            # UAT 01 (24/09): the generic size cap sent only 8/21 December programs
+            # to the model, hiding both versions of Q4.2025_NHOM_BOPHE_SIRO_.
+            # Keep the complete ranked list with the measures needed to distinguish
+            # orders from invoiced orders; the original payload remains in last_result.
+            fields = (
+                "program_id", "program_code", "program_name",
+                "participating_customers", "orders", "invoiced_orders",
+                "associated_revenue", "program_from", "program_to",
+            )
+            concise = [{key: row[key] for key in fields if key in row}
+                       if isinstance(row, dict) else row for row in programs]
+            data = {**data, "programs": concise}
+            return {**wrapper, "du_lieu": data} if wrapper else data
     normalized = " ".join("".join(
         ch for ch in unicodedata.normalize("NFD", (question or "").lower())
         if unicodedata.category(ch) != "Mn"
