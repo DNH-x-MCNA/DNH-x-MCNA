@@ -34,6 +34,7 @@
     {
       "ma": "06",
       "nguoi": "dnh_otc",
+      "cau_truoc": "Doanh so thuc hien kenh MT cac thang tinh tu dau nam",
       "cau_hoi": "bo sung ke hoach va % thuc hien tu ket qua tren",
       "can_thay": "Co ke hoach va % thuc hien kenh MT theo tung thang"
     },
@@ -46,6 +47,7 @@
     {
       "ma": "08",
       "nguoi": "dnh_otc",
+      "cau_truoc": "Top 10 khach hang no qua han tinh den hom nay",
       "cau_hoi": "Bo sung nhan vien, quan ly vung tuong ung",
       "can_thay": "Moi khach kem TDV/QLV phu trach, ma luon di kem ten"
     },
