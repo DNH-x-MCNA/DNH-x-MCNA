@@ -33,3 +33,10 @@ def test_cau_hoi_chi_tieu_theo_tinh_van_giu_gioi_han(tmp_path, monkeypatch):
     r = _goi(tmp_path, monkeypatch, "Tỉnh nào đạt bao nhiêu % kế hoạch, hụt bao nhiêu so với chỉ tiêu?")
     assert "target_by_city" in r["unavailable_metrics"]
     assert _gioi_han(r, "ke hoach theo tinh"), "Hoi chi tieu theo tinh thi van la buoc chua du."
+
+
+def test_c29_mo_ta_tool_bat_trinh_bay_theo_vung():
+    # Cham lai UAT 24/09 muc 14: payload co theo_vung nhung model bo qua vi cau hoi khong noi "vung".
+    import nl2sql
+    tool = next(t for t in nl2sql.TEMPLATE_TOOLS if t["name"] == "get_customer_lifecycle_summary")
+    assert "BAT BUOC trinh bay them bang theo vung" in tool["description"]
