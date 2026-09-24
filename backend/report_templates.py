@@ -4356,6 +4356,82 @@ def _product_month_pair_summary(current_month: str, previous_month: str,
     }
 
 
+def _isnc_cohort_retention(cohort_from: str, month_to: str, ages: list, latest: str,
+                           latest_complete: str, months_by_customer: dict,
+                           scope_area_code: str = None, scope_employee_code: str = None) -> dict:
+    """Cohort theo co IsNC (khach mo moi cua Bravo) - CUNG nguon voi so 'khach moi' cua C29/M24.
+
+    24/09/2026 (UAT C30, cham 21/09): cohort hoa don cua tool nay cho 08/2026 = 324 khach, trong khi
+    C29/M24 bao 627 khach moi (is_nc=1, snapshot 31/08) - nguoi cham coi 627 la dung va ghi C30 "lech
+    so khach moi". Ca hai deu dung theo dinh nghia rieng: 324 la khach LAN DAU co hoa don trong kho
+    tu 06/2022, 627 la khach Bravo gan co mo moi trong ky. Tra ca hai, cung ten nguon, de model khong
+    goi hai con so khac nhau cung la "khach mo moi". Loc giong het C29 (bo nhan vien trung, loc vung
+    theo nv.area_code, doi QLV theo dung snapshot).
+    """
+    try:
+        rows = _q("SELECT substr(save_date,1,7) ym, MAX(save_date) d FROM fact_tonghopkhachhang "
+                  "WHERE substr(save_date,1,7) BETWEEN ? AND ? GROUP BY ym", (cohort_from, month_to))
+    except Exception as exc:
+        return {"status": "khong_co_nguon", "ly_do": f"Kho chua co fact_tonghopkhachhang: {exc}"}
+    snaps = {r["ym"]: r["d"] for r in rows if r["d"]}
+    if not snaps:
+        return {"status": "khong_co_nguon",
+                "ly_do": f"Kho khong co snapshot KPI khach nao tu {cohort_from} den {month_to}."}
+
+    cohorts = []
+    for ym in sorted(snaps):
+        snap = snaps[ym]
+        sql = ("SELECT DISTINCT f.customer_code FROM fact_tonghopkhachhang f "
+               "LEFT JOIN dim_nhanvien nv ON nv.employee_code=f.employee_code "
+               f"WHERE f.save_date=? AND f.is_nc=1 AND {_not_duplicate_sql('nv')}")
+        params = [snap]
+        if scope_area_code:
+            sql += " AND nv.area_code=?"
+            params.append(scope_area_code)
+        if scope_employee_code:
+            allowed = [scope_employee_code] + [
+                t["employee_code"] for t in _team_of_qlv(scope_employee_code, snap)]
+            sql += f" AND f.employee_code IN ({','.join(['?'] * len(allowed))})"
+            params.extend(allowed)
+        khach = {r["customer_code"] for r in _q(sql, tuple(params)) if r["customer_code"]}
+        retention = []
+        for age in ages:
+            target_month = _month_add(ym, age)
+            complete = target_month <= latest_complete
+            retained = sum(1 for c in khach if target_month in months_by_customer.get(c, ()))
+            muc = {"age_month": age, "target_month": target_month,
+                   "retained_customers": retained if complete else None,
+                   "retention_pct": (retained / len(khach) * 100) if complete and khach else None,
+                   "ky_da_du": complete}
+            if not complete and target_month == latest and khach:
+                muc["retained_customers_tam_tinh"] = retained
+                muc["retention_pct_tam_tinh"] = retained / len(khach) * 100
+            retention.append(muc)
+        cohorts.append({"cohort_month": ym, "snapshot_date": snap,
+                        "cohort_customers": len(khach), "retention": retention})
+
+    thieu = [m for m in _months_between(cohort_from, month_to) if m not in snaps]
+    return {
+        "status": "ok",
+        "definition": ("Cohort = khach co is_nc=1 trong snapshot KPI cuoi thang (FACT_TongHopKhachHang, "
+                       "chi kenh OTC) - CUNG so 'khach moi' cua C29/M24. retained = co hoa don o dung "
+                       "thang tuoi."),
+        "cohorts": cohorts,
+        "thang_khong_co_snapshot": thieu,
+        "gioi_han": (f"Kho chi co snapshot KPI khach tu {min(snaps)}; cac thang truoc do KHONG co co "
+                     "IsNC nen khong dung duoc dinh nghia nay cho tuoi 3/6/12 thang. Tuoi dai phai doc "
+                     "o bang cohort hoa don (dinh nghia khac, noi ro khi dung)." if thieu else None),
+    }
+
+
+def _months_between(month_from: str, month_to: str) -> list:
+    thang, ket_qua = month_from, []
+    while thang <= month_to:
+        ket_qua.append(thang)
+        thang = _month_add(thang, 1)
+    return ket_qua
+
+
 def customer_cohort_retention(month_to: str = None, months_back: int = 6,
                               age_months: list = None, group_by: str = "overall",
                               scope_area_code: str = None, scope_channel: str = None,
@@ -4442,12 +4518,20 @@ def customer_cohort_retention(month_to: str = None, months_back: int = 6,
             target_month = _month_add(cohort_month, age)
             complete = target_month <= latest_complete
             retained = len(b["retained"][age]) if complete else None
-            retention.append({
+            muc = {
                 "age_month": age, "target_month": target_month,
                 "retained_customers": retained,
                 "retention_pct": (retained / size * 100) if complete and size else None,
                 "ky_da_du": complete,
-            })
+            }
+            # 24/09/2026 (UAT C30): cohort 08/2026 tuoi 1 roi vao thang 09 dang chay nen tra None -
+            # dung, nhung nguoi chay ghi "thang 8 da ket thuc ma khong co % giu chan 1 thang".
+            # Checker S19 lay LastMonth = MAX(thang co hoa don), tuc tinh luon thang chua tron.
+            # Van giu retention_pct=None (khong tron ky thi khong ket luan), them so TAM TINH co nhan.
+            if not complete and target_month == latest and size:
+                muc["retained_customers_tam_tinh"] = len(b["retained"][age])
+                muc["retention_pct_tam_tinh"] = len(b["retained"][age]) / size * 100
+            retention.append(muc)
         cohorts.append({"cohort_month": cohort_month, "group": group,
                         "cohort_customers": size,
                         "cohort_is_left_censored": cohort_is_left_censored,
@@ -4457,8 +4541,35 @@ def customer_cohort_retention(month_to: str = None, months_back: int = 6,
     left_censored_months = sorted({
         c["cohort_month"] for c in cohorts if c["cohort_is_left_censored"]
     })
+    # IsNC chi co o kenh OTC va chi co mot so tong cho ca pham vi - khong tach duoc theo kenh/vung
+    # cua cohort. group_by khac overall thi khong ghep, tranh dat hai con so khac truc canh nhau.
+    cohort_isnc, doi_chieu = None, None
+    if group_by == "overall" and (scope_channel or "").upper() != "ETC":
+        months_by_customer = {code: c["months"] for code, c in by_customer.items()}
+        cohort_isnc = _isnc_cohort_retention(
+            cohort_from, month_to, ages, latest, latest_complete, months_by_customer,
+            scope_area_code=scope_area_code, scope_employee_code=scope_employee_code)
+        if cohort_isnc.get("status") == "ok":
+            isnc_theo_thang = {c["cohort_month"]: c["cohort_customers"] for c in cohort_isnc["cohorts"]}
+            hoa_don_theo_thang = {c["cohort_month"]: c["cohort_customers"] for c in cohorts}
+            doi_chieu = [{"month": m, "khach_mo_moi_isnc": isnc_theo_thang[m],
+                          "khach_lan_dau_co_hoa_don_trong_kho": hoa_don_theo_thang.get(m, 0)}
+                         for m in sorted(isnc_theo_thang)]
+    tam_tinh_den = latest_data_date() if latest != latest_complete else None
     return {
         "definition": "Cohort = thang co hoa don dau tien QUAN SAT DUOC trong kho; retained = co hoa don o dung thang tuoi.",
+        "cohort_theo_isnc": cohort_isnc,
+        "doi_chieu_hai_dinh_nghia_khach_moi": doi_chieu,
+        "ghi_chu_hai_dinh_nghia": (
+            "cohorts dem khach LAN DAU co hoa don trong kho (lich su tu pham_vi_du_lieu_co_that.tu_thang); "
+            "cohort_theo_isnc dem khach Bravo gan co mo moi (is_nc=1) - chinh la so 'khach moi' cua "
+            "C29/M24. Khach mo moi theo IsNC co the da tung mua truoc day nen so IsNC LON HON. Khi cau "
+            "hoi noi 'thang mo moi' phai neu so IsNC cho cac thang co snapshot va noi ro tuoi dai "
+            "(3/6/12) chi do duoc bang dinh nghia hoa don." if doi_chieu else None),
+        "tam_tinh_thang_chua_tron": (
+            f"Tuoi co target_month = {latest} (thang dang chay, du lieu den {tam_tinh_den}) co them "
+            "retention_pct_tam_tinh: CHI la so tam tinh den ngay du lieu, khong phai ty le chot; "
+            "retention_pct cua o do van None." if tam_tinh_den else None),
         "cohort_from": cohort_from, "cohort_to": month_to, "group_by": group_by,
         "cohort_from_da_mo_rong": cohort_from < cohort_from_da_hoi,
         "ly_do_mo_rong_cua_so": (
@@ -5732,9 +5843,17 @@ def customer_product_coverage(as_of_date: str = None, lookback_months: int = 3,
         previous_ym = _month_add(as_of_date[:7], -1)
         py, pm = int(previous_ym[:4]), int(previous_ym[5:7])
         aligned_day = min(current_end_date.day, _last_day_of_month(py, pm))
+        # 24/09/2026 (M33/S72): as_of la NGAY CUOI thang thi day la thang TRON, phai so voi TRON
+        # thang truoc. Ban cu cat theo so ngay: 30/09 chi so voi 01-30/08 (mat ngay 31), 28/02 chi
+        # so voi 01-28/01 - lech checker S72 (thang tron vs thang tron).
+        thang_tron = current_end_date.day == _last_day_of_month(current_end_date.year,
+                                                                current_end_date.month)
+        if thang_tron:
+            aligned_day = _last_day_of_month(py, pm)
         previous_from = f"{previous_ym}-01"
         previous_to = f"{previous_ym}-{aligned_day:02d}"
-        comparison_basis = "CUNG NGAY TRONG THANG TRUOC (MTD-aligned)"
+        comparison_basis = ("THANG TRON SO VOI TRON THANG TRUOC" if thang_tron
+                            else "CUNG NGAY TRONG THANG TRUOC (MTD-aligned)")
     else:
         previous_to = previous_end_date.isoformat()
         previous_from = (previous_end_date - dt.timedelta(days=window_days - 1)).isoformat()
