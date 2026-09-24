@@ -1017,6 +1017,14 @@ def chat_stream(req: ChatRequest, user: dict = Depends(require_approved_user)):
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 
+def _ten_hien_thi_dashboard(uname: str) -> str:
+    # 24/09/2026: "unknown" tren may 24 la 80 luot goi model that (16,83 USD / 30 ngay) tu script verify_*
+    # khong truyen username - tien that, khong giau, nhung phai goi dung ten de nguoi doc khong tuong la loi.
+    if uname in ("", "unknown"):
+        return "Không khai tên người dùng (thường là script)"
+    return get_name_by_username(uname) or uname
+
+
 @app.get("/audit-logs", dependencies=[Depends(require_api_key)])
 def get_audit_logs_dashboard(
     days: int = Query(default=30, ge=1, le=365),
@@ -1326,7 +1334,7 @@ def get_audit_logs_dashboard(
         c_api_provider = ", ".join(sorted({api_provider_for_model(m) for m in c_models})) or None
         c_api_model = ", ".join(c_models) or None
 
-        display_name = get_name_by_username(uname) or uname
+        display_name = _ten_hien_thi_dashboard(uname)
 
         # 24/09/2026: dong CHI CO trong audit_log (khong co query_run) la mot lan GOI TOOL, khong phai
         # mot luot chat. Hai hau qua da gap:
@@ -1417,7 +1425,7 @@ def get_audit_logs_dashboard(
         if not _passes_time_filter(_cpq2.get("first_ts")):
             continue
         _seen_q.add(_qk2)
-        _dn2 = get_name_by_username(_uname2) or _uname2
+        _dn2 = _ten_hien_thi_dashboard(_uname2)
         user_stats[_uname2]["query_count"] += 1
         if not user_stats[_uname2].get("display_name"):
             user_stats[_uname2]["display_name"] = _dn2
@@ -1471,7 +1479,7 @@ def get_audit_logs_dashboard(
         st["total_tokens"] += d["total_tokens"]
         st.setdefault("query_count", 0)
         if "display_name" not in st:
-            st["display_name"] = get_name_by_username(uname) or uname
+            st["display_name"] = _ten_hien_thi_dashboard(uname)
         total_cost_usd += d["cost_usd"]
         total_input_tokens += d["input_tokens"]
         total_output_tokens += d["output_tokens"]

@@ -4412,16 +4412,22 @@ còn tool lấy mốc dữ liệu gần nhất (23/09). Khi chấm, đặt `@AsO
 
 Với nhóm thứ hai, **ghép theo khách + SKU + ngày sẽ bỏ sót**. Đây là thêm một lý do không dùng S86 cũ.
 
-Checker dưới đây đã chạy trên Bravo 24/09 với `@AsOfDate = 2026-09-23` và khớp tool
-`etc_contract_status` (bản đã loại chứng từ gắn nhầm) **10/10 chỉ tiêu**:
-- tổng 7.817, bất thường 60, còn hiệu lực 2.327;
-- giá trị 1.019,58 tỷ, đã xuất 309,22 tỷ, còn lại 710,36 tỷ, tỷ lệ 30,3%;
-- chưa xuất 715, dưới 50% là 1.660;
-- sắp hết hạn 336 hợp đồng, còn lại 34,54 tỷ.
+Checker dưới đây đã chạy trên Bravo **chiều 24/09** với `@AsOfDate = 2026-09-23`, cùng lượt với tool
+`etc_contract_status` (bản đã loại chứng từ gắn nhầm và hợp đồng chưa bắt đầu). Kết quả khớp **10/10 chỉ tiêu**:
+- tổng 7.824, bất thường 60, còn hiệu lực 2.332;
+- giá trị 1.019,56 tỷ, đã xuất 310,67 tỷ, còn lại 708,89 tỷ, tỷ lệ 30,5%;
+- chưa xuất 715, dưới 50% là 1.662;
+- sắp hết hạn 337 hợp đồng, còn lại 34,55 tỷ.
+
+Bravo là dữ liệu sống. Sáng 24/09 cùng mốc as_of có 7.817 hợp đồng, 2.327 còn hiệu lực và 309,21 tỷ đã
+xuất. Vì vậy khi chấm, phải chạy checker **ngay lúc chatbot trả lời**, không so với số ghi ở đây.
 
 Trong các hợp đồng còn hiệu lực, chỉ có KT.06 dính chứng từ gắn nhầm. Sau khi loại, hợp đồng này ra 0đ, 0%.
 
-"Còn hiệu lực" ở đây dùng cùng định nghĩa với tool: `ToDate >= @AsOfDate`, gồm cả hợp đồng chưa đến ngày bắt đầu.
+"Còn hiệu lực" = **đã bắt đầu và chưa hết hạn**: `FromDate <= @AsOfDate <= ToDate`. Tool và checker dùng
+cùng định nghĩa này từ 24/09. Hợp đồng đã ký nhưng chưa tới ngày bắt đầu (2 hợp đồng, 114 triệu) không
+bị tính là "chưa xuất hóa đơn" hay "thực hiện dưới 50%". Tool báo riêng nhóm này ở
+`so_hop_dong_chua_bat_dau`.
 
     SET NOCOUNT ON;
     IF OBJECT_ID('tempdb..#s86b') IS NOT NULL DROP TABLE #s86b;
@@ -4458,7 +4464,8 @@ Trong các hợp đồng còn hiệu lực, chỉ có KT.06 dính chứng từ g
     SELECT h.*, ISNULL(u.DeliveredRevenue,0) DeliveredRevenue, ISNULL(u.SoHoaDon,0) SoHoaDon,
            h.ContractValue-ISNULL(u.DeliveredRevenue,0) RemainingValue,
            DATEDIFF(day,@AsOfDate,h.ToDate) NgayConLai,
-           CASE WHEN h.BadRows=0 AND (h.ToDate>=@AsOfDate OR h.ToDate IS NULL) THEN 1 ELSE 0 END Xet
+           CASE WHEN h.BadRows=0 AND (h.ToDate>=@AsOfDate OR h.ToDate IS NULL)
+                     AND (h.FromDate<=@AsOfDate OR h.FromDate IS NULL) THEN 1 ELSE 0 END Xet
     INTO #s86b
     FROM h LEFT JOIN used u ON u.ContractId=h.ContractId;
 

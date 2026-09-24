@@ -7970,7 +7970,13 @@ def etc_contract_status(as_of_date: str = None, expiring_days: int = 90, limit: 
         else:
             hop_dong.append(muc)
 
-    dang_hieu_luc = [x for x in hop_dong if not x["da_het_han"]]
+    # 24/09/2026: "con hieu luc" = DA bat dau va chua het han. Truoc day chi xet ngay ket thuc nen hop dong
+    # da ky nhung chua toi ngay bat dau (1 hop dong o as_of 23/09) bi dem la con hieu luc voi 0% -> lot vao
+    # "chua xuat hoa don nao" va "duoi 50%" nhu the thuc hien cham. Tach rieng, van bao so luong.
+    def _chua_bat_dau(x):
+        return bool(x["tu_ngay"]) and x["tu_ngay"] > as_of_date
+    chua_bat_dau = [x for x in hop_dong if not x["da_het_han"] and _chua_bat_dau(x)]
+    dang_hieu_luc = [x for x in hop_dong if not x["da_het_han"] and not _chua_bat_dau(x)]
     xet = dang_hieu_luc if only_active else hop_dong
     sap_het = [x for x in xet if x["sap_het_han"]]
     chua_xuat = [x for x in xet if x["so_hoa_don"] == 0]
@@ -7987,6 +7993,8 @@ def etc_contract_status(as_of_date: str = None, expiring_days: int = 90, limit: 
                         "hop dong - kiem chung 13/09/2026."),
         "tong_so_hop_dong": len(hop_dong) + len(bat_thuong),
         "so_hop_dong_con_hieu_luc": len(dang_hieu_luc),
+        "so_hop_dong_chua_bat_dau": len(chua_bat_dau),
+        "gia_tri_hop_dong_chua_bat_dau": sum(x["gia_tri_hop_dong"] for x in chua_bat_dau),
         "tong_gia_tri": sum(x["gia_tri_hop_dong"] for x in xet),
         "tong_da_xuat_hoa_don": sum(x["da_xuat_hoa_don"] for x in xet),
         "tong_con_lai": sum(x["con_lai"] for x in xet),
