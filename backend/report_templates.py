@@ -2604,6 +2604,61 @@ def revenue_seasonality(month_to: str = None, months_back: int = 24,
                 "average_revenue": average,
                 "seasonal_index_pct": average / overall_average * 100 if overall_average else None,
             })
+
+        # 24/09/2026 (C08 UAT): status INSUFFICIENT_HISTORY da co san cho ca hai kenh nhung cau tra loi
+        # van chot "thang 2 thap nhat" nhu chac chan. Mot co chung chung khong du - phai chi ro CHO NAO
+        # chua vung. Thuoc do: nua chenh lech giua hai nam cua CUNG mot thang duong lich, quy ra diem
+        # chi so - tuc la neu chi co mot nam thi chi so thang do lech khoi binh quan hai nam bao nhieu.
+        # Do tren kho that 24/09: trung vi 6,8 diem (OTC), 10,2 diem (ETC). Truong hop C08: thang 2
+        # (82,26%, 2 nam) chi thap hon thang 9 (87,26%, 1 nam) 5,0 diem - nho hon dao dong binh thuong,
+        # ma thang 9 lai chi co mot nam du lieu. Khong co can cu noi "thang 2 thap nhat".
+        so_qs = {row["calendar_month"]: row["observations"] for row in rows}
+        qs_max = max(so_qs.values()) if so_qs else 0
+        thang_it_qs = sorted(month for month, n in so_qs.items() if n < qs_max)
+        nua_chenh = [
+            (max(amounts) - min(amounts)) / 2 / overall_average * 100
+            for amounts in by_calendar_month.values()
+            if len(amounts) >= 2 and overall_average
+        ]
+        dao_dong = median(nua_chenh) if nua_chenh else None
+
+        def _xep_hang(cao_nhat: bool):
+            thu_tu = sorted(rows, key=lambda row: row["seasonal_index_pct"] or 0, reverse=cao_nhat)
+            if len(thu_tu) < 2:
+                return None
+            dau, nhi = thu_tu[0], thu_tu[1]
+            chenh = abs((dau["seasonal_index_pct"] or 0) - (nhi["seasonal_index_pct"] or 0))
+            ly_do = []
+            if dau["calendar_month"] in thang_it_qs:
+                ly_do.append("thang %d chi co %d nam du lieu (cac thang khac %d nam)"
+                             % (dau["calendar_month"], dau["observations"], qs_max))
+            if dao_dong is None:
+                ly_do.append("chua do duoc do dao dong giua cac nam")
+            elif chenh < dao_dong:
+                ly_do.append("chi %s hon thang %d %.1f diem, nho hon muc dao dong binh thuong giua hai nam "
+                             "cua cung mot thang (%.1f diem)%s"
+                             % ("cao" if cao_nhat else "thap", nhi["calendar_month"], chenh, dao_dong,
+                                "; thang %d lai chi co %d nam du lieu" % (nhi["calendar_month"], nhi["observations"])
+                                if nhi["calendar_month"] in thang_it_qs else ""))
+            return {
+                "calendar_month": dau["calendar_month"],
+                "runner_up_month": nhi["calendar_month"],
+                "gap_pts": round(chenh, 2),
+                "robust": not ly_do,
+                "reason": "; ".join(ly_do) or None,
+            }
+
+        xep_thap, xep_cao = _xep_hang(False), _xep_hang(True)
+        chua_vung = [(nhan, x) for nhan, x in (("thap nhat", xep_thap), ("cao nhat", xep_cao))
+                     if x and not x["robust"]]
+        ranking_note = None
+        if chua_vung:
+            ranking_note = (
+                "BAT BUOC NOI RO VOI NGUOI DUNG: " + " | ".join(
+                    "Xep hang thang %s (thang %d) CHUA VUNG: %s" % (nhan, x["calendar_month"], x["reason"])
+                    for nhan, x in chua_vung)
+                + ". KHONG khang dinh 'thang X la thang %s'; trinh bay la hai thang sat nhau va chua du "
+                  "du lieu de phan dinh." % "/".join(nhan for nhan, _ in chua_vung))
         return {
             "channel": channel,
             "status": "READY" if enough_history else "INSUFFICIENT_HISTORY_FOR_SEASONAL_CONCLUSION",
@@ -2612,6 +2667,11 @@ def revenue_seasonality(month_to: str = None, months_back: int = 24,
             "months": rows,
             "highest_calendar_month": max(rows, key=lambda row: row["seasonal_index_pct"]) if rows else None,
             "lowest_calendar_month": min(rows, key=lambda row: row["seasonal_index_pct"]) if rows else None,
+            "calendar_months_with_fewer_observations": thang_it_qs,
+            "year_to_year_noise_pts": round(dao_dong, 1) if dao_dong is not None else None,
+            "lowest_ranking": xep_thap,
+            "highest_ranking": xep_cao,
+            "ranking_note": ranking_note,
             "current_month": latest_month,
             "current_month_revenue": current_value,
             "expected_full_month_revenue": expected,
