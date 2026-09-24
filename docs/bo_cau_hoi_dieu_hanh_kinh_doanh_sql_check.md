@@ -4375,7 +4375,7 @@ theo logic S86 cũ và ra số lệch với chatbot. Tách lệch trên Bravo (a
 |---|---:|---:|---|
 | Hợp đồng còn hiệu lực | 2.353 | 2.327 | 27 hợp đồng giá trị bất thường **không** bị loại: CTE `med` có tính nhưng không dùng. Thêm 1 hợp đồng có ngày bắt đầu sau as_of. |
 | Tổng giá trị | 1.030,16 tỷ | 1.019,58 tỷ | Phần chênh là 10,69 tỷ của 27 hợp đồng bất thường ở trên. |
-| Đã xuất hóa đơn | 449,22 tỷ | 309,21 tỷ | Ghép theo khách + SKU + ngày trên **mọi dòng thô**. Một hóa đơn bị cộng một lần cho **mỗi phiên bản/phụ lục** và cho mọi hợp đồng trùng khách-SKU. 123 hợp đồng vượt 100%. |
+| Đã xuất hóa đơn | 449,22 tỷ | 309,22 tỷ | Ghép theo khách + SKU + ngày trên **mọi dòng thô**. Một hóa đơn bị cộng một lần cho **mỗi phiên bản/phụ lục** và cho mọi hợp đồng trùng khách-SKU. 123 hợp đồng vượt 100%. |
 | Chưa xuất hóa đơn nào | 696 | 715 | Hóa đơn của hợp đồng khác bị gán nhầm sang. |
 
 Ví dụ `259/QĐ-SNHG` (Id0 121160) có 2 phiên bản, mỗi phiên bản 1 dòng cùng SKU:
@@ -4385,20 +4385,38 @@ Ví dụ `259/QĐ-SNHG` (Id0 121160) có 2 phiên bản, mỗi phiên bản 1 d�
 Còn lệch 2.349 so với 2.353 trong bảng là do mốc ngày: khối tham số chung đặt `@AsOfDate` = hôm nay (24/09),
 còn tool lấy mốc dữ liệu gần nhất (23/09). Khi chấm, đặt `@AsOfDate` bằng ngày `as_of` mà chatbot báo.
 
+**Chứng từ gắn nhầm hợp đồng (UAT C44, 24/09).** `ContractId` đúng với phần lớn hóa đơn, nhưng có chứng từ bị gắn nhầm. Ví dụ hợp đồng `KT.06.G1.HD.TTYTTB-NH` (khách DTH00244, chỉ có 1 SKU):
+- ngày 27/07 bán 2.000 đơn vị, +6.857.143đ;
+- ngày 27/08 trả lại đủ 2.000 đơn vị, −6.857.143đ, nên ròng bằng 0;
+- phiếu trả **TL 00006979 ngày 16/09 lại thuộc khách TBI00502, mặt hàng 80440000007**, mà vẫn mang `ContractId` của hợp đồng này. Nếu cộng thẳng, hợp đồng ra −3.304.990đ (−4,8%).
+
+Đo trên toàn Bravo, chia hai nhóm:
+
+| Nhóm | Quy mô | Xử lý |
+|---|---|---|
+| Khác **cả** mã khách **lẫn** SKU của hợp đồng | 18 dòng, 7 hợp đồng | Coi là gắn nhầm: **loại** khỏi phần đã xuất và báo riêng |
+| Khác mã khách nhưng **cùng** SKU | 71 dòng, 28 hợp đồng | Vẫn **tính**. Phần lớn là cùng một đơn vị có hai mã, ví dụ TTYT TP Nam Định NDI00011/NDI00018, BV 354, BV Phạm Ngọc Thạch, TTYT Tam Bình đổi tên sau sáp nhập |
+
+Với nhóm thứ hai, **ghép theo khách + SKU + ngày sẽ bỏ sót**. Đây là thêm một lý do không dùng S86 cũ.
+
 Checker dưới đây đã chạy trên Bravo 24/09 với `@AsOfDate = 2026-09-23` và khớp tool
-`etc_contract_status` **10/10 chỉ tiêu**:
+`etc_contract_status` (bản đã loại chứng từ gắn nhầm) **10/10 chỉ tiêu**:
 - tổng 7.817, bất thường 60, còn hiệu lực 2.327;
-- giá trị 1.019,58 tỷ, đã xuất 309,21 tỷ, còn lại 710,36 tỷ, tỷ lệ 30,3%;
+- giá trị 1.019,58 tỷ, đã xuất 309,22 tỷ, còn lại 710,36 tỷ, tỷ lệ 30,3%;
 - chưa xuất 715, dưới 50% là 1.660;
 - sắp hết hạn 336 hợp đồng, còn lại 34,54 tỷ.
 
+Trong các hợp đồng còn hiệu lực, chỉ có KT.06 dính chứng từ gắn nhầm. Sau khi loại, hợp đồng này ra 0đ, 0%.
+
 "Còn hiệu lực" ở đây dùng cùng định nghĩa với tool: `ToDate >= @AsOfDate`, gồm cả hợp đồng chưa đến ngày bắt đầu.
 
+    SET NOCOUNT ON;
+    IF OBJECT_ID('tempdb..#s86b') IS NOT NULL DROP TABLE #s86b;
     ;WITH dong AS (
       SELECT Id, RowId, MAX(Id0) Id0, MAX(DocNo0) DocNo0, MAX(CustomerCode) CustomerCode,
              MAX(FromDate0) FromDate0, MAX(ToDate0) ToDate0,
              MAX(AmountBefVat) AmountBefVat, MAX(AmountAfterVat) AmountAfterVat,
-             MAX(Quantity) Quantity, MAX(UnitPrice) UnitPrice
+             MAX(Quantity) Quantity, MAX(UnitPrice) UnitPrice, MAX(ItemCode) ItemCode
       FROM dbo.vHopDongETC GROUP BY Id, RowId
     ), h AS (
       SELECT Id0 ContractId, MAX(DocNo0) ContractNo, MAX(CustomerCode) CustomerCode,
@@ -4410,21 +4428,30 @@ Checker dưới đây đã chạy trên Bravo 24/09 với `@AsOfDate = 2026-09-2
                                                                      THEN ABS(AmountAfterVat) ELSE ABS(AmountBefVat) END
                       THEN 1 ELSE 0 END) BadRows
       FROM dong GROUP BY Id0
+    ), sku AS (
+      SELECT DISTINCT Id0, ItemCode FROM dong
     ), used AS (
-      SELECT m.Id0 ContractId, SUM(s.Amount9) DeliveredRevenue, COUNT(DISTINCT s.Stt) SoHoaDon
+      -- Chung tu khac CA ma khach LAN SKU cua hop dong = gan nham -> khong tinh
+      SELECT m.Id0 ContractId,
+             SUM(CASE WHEN s.CustomerCode<>h.CustomerCode AND k.ItemCode IS NULL THEN 0 ELSE s.Amount9 END) DeliveredRevenue,
+             COUNT(DISTINCT CASE WHEN s.CustomerCode<>h.CustomerCode AND k.ItemCode IS NULL THEN NULL ELSE s.Stt END) SoHoaDon
       FROM dbo.vHoaDonETCTotal s
       JOIN (SELECT DISTINCT Id, Id0 FROM dong) m ON m.Id = s.ContractId
+      JOIN h ON h.ContractId = m.Id0
+      LEFT JOIN sku k ON k.Id0 = m.Id0 AND k.ItemCode = s.ItemCode
       WHERE s.ContractId IS NOT NULL
       GROUP BY m.Id0
-    ), filtered AS (
-      SELECT h.*, ISNULL(u.DeliveredRevenue,0) DeliveredRevenue, ISNULL(u.SoHoaDon,0) SoHoaDon,
-             h.ContractValue-ISNULL(u.DeliveredRevenue,0) RemainingValue,
-             DATEDIFF(day,@AsOfDate,h.ToDate) NgayConLai
-      FROM h LEFT JOIN used u ON u.ContractId=h.ContractId
-      WHERE h.BadRows=0 AND (h.ToDate>=@AsOfDate OR h.ToDate IS NULL)
     )
-    SELECT 1 ThuTu, N'Tổng số hợp đồng (toàn bộ lịch sử)' Chi_tieu, CAST((SELECT COUNT(*) FROM h) AS varchar(20)) Gia_tri
-    UNION ALL SELECT 2, N'Số hợp đồng giá trị bất thường (đã tách riêng)', CAST((SELECT COUNT(*) FROM h WHERE BadRows>0) AS varchar(20))
+    SELECT h.*, ISNULL(u.DeliveredRevenue,0) DeliveredRevenue, ISNULL(u.SoHoaDon,0) SoHoaDon,
+           h.ContractValue-ISNULL(u.DeliveredRevenue,0) RemainingValue,
+           DATEDIFF(day,@AsOfDate,h.ToDate) NgayConLai,
+           CASE WHEN h.BadRows=0 AND (h.ToDate>=@AsOfDate OR h.ToDate IS NULL) THEN 1 ELSE 0 END Xet
+    INTO #s86b
+    FROM h LEFT JOIN used u ON u.ContractId=h.ContractId;
+
+    ;WITH filtered AS (SELECT * FROM #s86b WHERE Xet=1)
+    SELECT 1 ThuTu, N'Tổng số hợp đồng (toàn bộ lịch sử)' Chi_tieu, CAST((SELECT COUNT(*) FROM #s86b) AS varchar(20)) Gia_tri
+    UNION ALL SELECT 2, N'Số hợp đồng giá trị bất thường (đã tách riêng)', CAST((SELECT COUNT(*) FROM #s86b WHERE BadRows>0) AS varchar(20))
     UNION ALL SELECT 3, N'Số hợp đồng còn hiệu lực', CAST((SELECT COUNT(*) FROM filtered) AS varchar(20))
     UNION ALL SELECT 4, N'Tổng giá trị hợp đồng (đã loại bất thường)', CONCAT(ROUND((SELECT SUM(ContractValue) FROM filtered)/1e9,2),N' tỷ')
     UNION ALL SELECT 5, N'Đã xuất hóa đơn', CONCAT(ROUND((SELECT SUM(DeliveredRevenue) FROM filtered)/1e9,2),N' tỷ')
@@ -4436,9 +4463,12 @@ Checker dưới đây đã chạy trên Bravo 24/09 với `@AsOfDate = 2026-09-2
            ROUND((SELECT SUM(RemainingValue) FROM filtered WHERE NgayConLai BETWEEN 0 AND 90)/1e9,2),N' tỷ')
     ORDER BY ThuTu;
 
-Muốn lấy danh sách hợp đồng dưới 50% hoặc sắp hết hạn: giữ nguyên các CTE, thay `SELECT` cuối bằng
-`SELECT ContractNo, CustomerCode, ContractValue, DeliveredRevenue, 100.0*DeliveredRevenue/NULLIF(ContractValue,0) Pct, NgayConLai FROM filtered WHERE ...`.
+Muốn lấy danh sách, chạy tiếp trong **cùng session** (bảng `#s86b` đã có sẵn), ví dụ dưới 50%:
+`SELECT ContractNo, CustomerCode, ContractValue, DeliveredRevenue, 100.0*DeliveredRevenue/NULLIF(ContractValue,0) Pct, NgayConLai FROM #s86b WHERE Xet=1 AND ContractValue<>0 AND 100.0*DeliveredRevenue/ContractValue<50 ORDER BY Pct, RemainingValue DESC`.
 Phải có `WHERE` lọc: bản UAT 24/09 thiếu điều kiện `< 50%`, nên liệt kê ra cả hợp đồng đạt 200%.
+
+Bảng tạm là bắt buộc. Bản dùng thuần CTE bị **hết thời gian chờ** trên Bravo, vì 10 truy vấn con ở phần
+`SELECT` cuối, mỗi cái đều tính lại toàn bộ chuỗi CTE.
 
 > ⚠️ **C43 và M41 vẫn thiếu nguồn ở phần thầu**: `vHopDongETC` chỉ có hợp đồng **đã ký**, không có giá
 > trị tham gia thầu hay tỷ lệ trúng. Hai câu này giữ nguyên cách trả lời cũ (doanh thu thực hiện theo
