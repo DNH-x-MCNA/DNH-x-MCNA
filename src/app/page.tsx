@@ -221,6 +221,26 @@ const FEEDBACK_CATEGORY_OPTIONS = [
 
 const FEEDBACK_CATEGORY_LABELS = Object.fromEntries(FEEDBACK_CATEGORY_OPTIONS) as Record<string, string>;
 
+// 24/09/2026: truoc day moi trang thai la deu hien "Loi". Cac trang thai moi cua PR #65
+// (api_credit_exhausted), PR #81 (abandoned), luot nguoi dung dong giua chung (cancelled) va dong
+// kiem tra tu dong (tool_check) vi vay van hien chu "Loi" tren dashboard - dung cai PR #65 muon bo:
+// nguoi doc khong phan biet duoc het han muc API voi chatbot hong.
+const QUERY_STATUS_LABELS: Record<string, { label: string; className: string }> = {
+  completed: { label: "Hoàn thành", className: "bg-emerald-50 text-emerald-700" },
+  success: { label: "Hoàn thành", className: "bg-emerald-50 text-emerald-700" },
+  ok: { label: "Hoàn thành", className: "bg-emerald-50 text-emerald-700" },
+  partial_timeout: { label: "Trả lời một phần", className: "bg-amber-50 text-amber-700" },
+  running: { label: "Đang chạy", className: "bg-blue-50 text-blue-700" },
+  api_credit_exhausted: { label: "Hết hạn mức API", className: "bg-orange-50 text-orange-700" },
+  abandoned: { label: "Bị bỏ dở", className: "bg-slate-100 text-slate-600" },
+  cancelled: { label: "Người dùng dừng", className: "bg-slate-100 text-slate-600" },
+  tool_check: { label: "Kiểm tra tự động", className: "bg-slate-100 text-slate-500" },
+};
+
+function queryStatusLabel(status: string | null | undefined) {
+  return QUERY_STATUS_LABELS[status || ""] || { label: "Lỗi", className: "bg-rose-50 text-rose-700" };
+}
+
 const SAMPLE_QUESTIONS_COMMON = [
   "Doanh thu hôm nay bao nhiêu?",
   "Top 10 sản phẩm bán chạy nhất?",
@@ -387,6 +407,8 @@ type QueryLogItem = {
   sql: string | null;
   status: string;
   duration_ms: number | null;
+  tool_duration_ms?: number | null;
+  log_source?: "audit" | "query_run" | "security";
   session_id: string | null;
   query_id?: string | null;
   row_count?: number | null;
@@ -2427,21 +2449,9 @@ export default function Home() {
                                 </td>
                                 <td className="px-4 py-3 text-center whitespace-nowrap">
                                   <span className={`inline-flex rounded-full px-2 py-1 text-[10px] font-semibold ${
-                                    log.status === "completed" || log.status === "success" || log.status === "ok"
-                                      ? "bg-emerald-50 text-emerald-700"
-                                      : log.status === "partial_timeout"
-                                        ? "bg-amber-50 text-amber-700"
-                                        : log.status === "running"
-                                          ? "bg-blue-50 text-blue-700"
-                                          : "bg-rose-50 text-rose-700"
+                                    queryStatusLabel(log.status).className
                                   }`} title={log.error_message || undefined}>
-                                    {log.status === "completed" || log.status === "success" || log.status === "ok"
-                                      ? "Hoàn thành"
-                                      : log.status === "partial_timeout"
-                                        ? "Trả lời một phần"
-                                        : log.status === "running"
-                                          ? "Đang chạy"
-                                          : "Lỗi"}
+                                    {queryStatusLabel(log.status).label}
                                   </span>
                                 </td>
                                 <td className="px-4 py-3 text-left whitespace-nowrap">
@@ -2472,7 +2482,18 @@ export default function Home() {
                                   {log.session_cost_vnd.toLocaleString("vi-VN")} đ
                                 </td>
                                 <td className="px-4 py-3 text-center text-slate-500 whitespace-nowrap">
-                                  {log.duration_ms != null ? `${log.duration_ms} ms` : "—"}
+                                  {log.duration_ms != null ? (
+                                    `${log.duration_ms} ms`
+                                  ) : log.tool_duration_ms != null ? (
+                                    <span
+                                      className="text-slate-400"
+                                      title={`Không có bản ghi cả lượt. Một lần gọi công cụ mất ${log.tool_duration_ms} ms — không phải thời gian trả lời.`}
+                                    >
+                                      —
+                                    </span>
+                                  ) : (
+                                    "—"
+                                  )}
                                 </td>
                                 <td className="px-4 py-3 text-center">
                                   {log.sql ? (
