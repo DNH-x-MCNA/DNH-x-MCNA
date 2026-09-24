@@ -9561,7 +9561,10 @@ def _sales_financial_quality_by_month(date_from: str, date_to: str,
         return {"status": "not_applicable", "rows_by_month_channel": [], "rows_by_month_area": []}
     raw = _q(" UNION ALL ".join(parts), tuple(params))
     if scope_area_code:
-        raw = [row for row in raw if row.get("area_code") == scope_area_code]
+        allowed_areas = set(_area_markers(scope_area_code))
+        raw = [row for row in raw if row.get("area_code") in allowed_areas]
+    for row in raw:
+        row["region"] = _AREA_TO_REGION_VI.get(row.get("area_code"), "Khac/chua xac dinh")
 
     def aggregate(keys):
         buckets = {}
@@ -9597,6 +9600,9 @@ def _sales_financial_quality_by_month(date_from: str, date_to: str,
             bucket["gift_order_share_pct"] = (
                 gift_order_count / total_order_count * 100 if total_order_count else None
             )
+            # Gia ban = 0 khong phai gia tri kinh te cua hang tang. Khong suy ty le
+            # "hang tang / doanh thu" bang 0/gross hoac bang so luong/gross.
+            bucket["gift_value_rate_pct"] = None
             bucket["net_revenue_after_discount_and_returns"] = (
                 bucket["invoice_revenue_after_returns"] - bucket["discount_amount"]
             )
@@ -9612,10 +9618,25 @@ def _sales_financial_quality_by_month(date_from: str, date_to: str,
             result.append(bucket)
         return sorted(result, key=lambda row: tuple(str(row[name]) for name in keys))
 
+    region_rows = aggregate(("month", "region"))
+    previous_by_region = {}
+    for row in region_rows:
+        previous = previous_by_region.get(row["region"])
+        for metric, delta in (
+            ("discount_rate_pct", "discount_rate_change_pp"),
+            ("return_adjustment_rate_pct", "return_rate_change_pp"),
+            ("gift_order_share_pct", "gift_order_share_change_pp"),
+        ):
+            row[delta] = (row[metric] - previous[metric]
+                          if previous and row[metric] is not None
+                          and previous[metric] is not None else None)
+        previous_by_region[row["region"]] = row
+
     return {
         "status": "ok",
         "rows_by_month_channel": aggregate(("month", "channel")),
         "rows_by_month_area": aggregate(("month", "area_code")),
+        "rows_by_month_region": region_rows,
         "discount_definition": "Chiet khau = Amount9 duong x DiscountRate; Amount9 la doanh thu gop truoc chiet khau.",
         "return_definition": "Hang tra/dieu chinh = Amount9 am hoac DocCode='HC'; ty le chia cho doanh thu gop duong.",
         "return_threshold_note": "Nguong 2% chi la de xuat cua MCNA, can DNH chot.",
@@ -9624,6 +9645,14 @@ def _sales_financial_quality_by_month(date_from: str, date_to: str,
             "Hang tang = UnitPrice=0 va Quantity>0; gift_order_share_pct chia so don co hang tang "
             "cho tong so don trong cung thang/kenh hoac thang/vung."
         ),
+        "gift_value_rate_status": "UNAVAILABLE_NO_GIFT_VALUATION",
+        "gift_value_rate_note": (
+            "Chua co gia von/gia tri hang tang duoc DNH chot. Khong the tinh gia tri hang tang "
+            "tren doanh thu; chi tra so luong hang tang va ty le don co hang tang. "
+            "gift_value_rate_pct=NULL la thieu nguon, khong phai 0%."),
+        "region_month_note": (
+            "rows_by_month_region gom MB va MB2 thanh Mien Bac. Cac cot *_change_pp la thay doi "
+            "DIEM PHAN TRAM so voi thang truoc trong cung vung; thang dau khong co moc so sanh."),
         "promotion_metric_status": "REQUIRES_FRESH_PROMOTION_LINK_CHECK",
         "promotion_metric_note": (
             "Chi phi/khuyen mai phai doc chuoi DMS_DonHangCTKM va moc coverage moi nhat trong lan hoi; "
@@ -9830,6 +9859,7 @@ def order_timing_check(date_from: str = None, date_to: str = None, threshold_day
         result["financial_quality_by_month"] = financial_quality
         result["return_adjustment_by_month"] = financial_quality.get("rows_by_month_channel", [])
         result["financial_quality_by_month_area"] = financial_quality.get("rows_by_month_area", [])
+        result["financial_quality_by_month_region"] = financial_quality.get("rows_by_month_region", [])
     reference_large_rows = [
         row for row in order_rows
         if _f(row["revenue"]) > median_by_channel.get(str(row["order_key"]).split(":", 1)[0], 0.0) * 3
