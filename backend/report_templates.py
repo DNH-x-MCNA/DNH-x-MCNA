@@ -39,6 +39,7 @@ COST_LOG_PATH = os.path.join(_LOGS_DIR, "cost_log.jsonl")
 # vi backend phuc vu nhieu request dong thoi: bien module se ro ri canh bao cua request nay sang
 # request khac. call_template() reset dau moi lan goi va gom lai o cuoi (xem cuoi file).
 _tool_warnings = contextvars.ContextVar("tool_warnings", default=None)
+_tool_user_warnings = contextvars.ContextVar("tool_user_warnings", default=None)
 
 
 def _fold_question(value: str) -> str:
@@ -49,12 +50,21 @@ def _fold_question(value: str) -> str:
     ).replace("đ", "d").split())
 
 
-def _warn(msg: str):
-    """Ghi 1 canh bao de dinh kem vao ket qua tra ve cho AI (AI co trach nhiem noi lai voi nguoi dung).
-    An toan khi goi ngoai pham vi call_template (bo qua, khong loi)."""
+def _warn(msg: str, *, code: str, severity: str, message: str):
+    """Keep model guidance and a separately authored, user-facing message together.
+
+    Only warning severity requires disclosure; info records valid source choices.
+    Context-local buckets keep independent requests from sharing messages.
+    """
+    if severity not in {"warning", "info"}:
+        raise ValueError(f"Unsupported tool warning severity: {severity}")
     bucket = _tool_warnings.get()
     if bucket is not None and msg not in bucket:
         bucket.append(msg)
+    user_bucket = _tool_user_warnings.get()
+    warning = {"code": code, "severity": severity, "message": message}
+    if user_bucket is not None and warning not in user_bucket:
+        user_bucket.append(warning)
 
 
 def _q(sql, params=()):
@@ -382,7 +392,10 @@ def _get_team_dms_ids(scope_employee_code: str, fdate: str = None, thong_tin: di
             _warn(f"DOI CHOT TU SNAPSHOT LUONG: bang phan cong doi theo khach "
                   f"(fact_tonghopkhachhang) chi giu ~90 ngay nen khong phu ky den {fdate}; da chot "
                   f"doi bang fact_thongketinhluong tai moc {str(moc_luong)[:10]} - dung nguon va "
-                  f"dung ky. So lieu hop le, khong can canh bao them voi nguoi dung.")
+                  f"dung ky. So lieu hop le, khong can canh bao them voi nguoi dung.",
+                  code="team_roster_salary_snapshot", severity="info",
+                  message=(f"Đội của QLV {scope_employee_code} được xác định theo dữ liệu lương "
+                           f"ngày {str(moc_luong)[:10]}, phù hợp với kỳ đến {fdate}."))
     if not codes and fdate:
         # 13/09/2026 (V34): ky duoc hoi co the nam TRUOC pham vi phan cong doi con giu trong kho
         # (fact_tonghopkhachhang chi giu ~90 ngay). Vi du that: tool khuyen mai lay moc phu CTKM
@@ -399,7 +412,11 @@ def _get_team_dms_ids(scope_employee_code: str, fdate: str = None, thong_tin: di
                 _warn(f"DOI LICH SU KHONG CO SNAPSHOT: ky duoc hoi den {fdate} nam TRUOC pham vi phan "
                       f"cong doi con giu trong kho (som nhat {str(som_nhat)[:10]}). Dang dung thanh phan "
                       f"doi tai {str(som_nhat)[:10]}; thanh phan doi tai ky do co the khac - PHAI noi ro "
-                      f"khi trinh bay, khong duoc khang dinh day la doi hinh cua chinh ky do.")
+                      f"khi trinh bay, khong duoc khang dinh day la doi hinh cua chinh ky do.",
+                      code="historical_team_roster_after_period", severity="warning",
+                      message=(f"Chưa có dữ liệu đội của QLV {scope_employee_code} cho kỳ đến {fdate}. "
+                               f"Báo cáo đang dùng đội ngày {str(som_nhat)[:10]}, sau kỳ được hỏi; "
+                               "thành viên có thể khác nên số liệu chưa phản ánh đúng đội của kỳ đó."))
     if not codes:
         if scope_employee_code in _VERIFIED_SELF_MANAGED_QLV_CODES:
             rows = _q(
@@ -413,7 +430,10 @@ def _get_team_dms_ids(scope_employee_code: str, fdate: str = None, thong_tin: di
                 _warn(
                     f"Ma QLV '{scope_employee_code}' khong co TDV bao cao truc tiep. "
                     "Bao cao nay CHI gom giao dich ghi theo DMSId cua chinh QLV, "
-                    "khong phai doanh so toan mien."
+                    "khong phai doanh so toan mien.",
+                    code="manager_own_transactions_only", severity="warning",
+                    message=(f"QLV {scope_employee_code} chưa có TDV báo cáo trực tiếp trong dữ liệu. "
+                             "Báo cáo chỉ gồm giao dịch của chính QLV, chưa đại diện cho doanh số toàn miền.")
                 )
                 return own_dms_ids
         raise KhongXacDinhDuocDoi(
@@ -442,7 +462,12 @@ def _get_team_dms_ids(scope_employee_code: str, fdate: str = None, thong_tin: di
               f"nay CHI gom {len(dms_ids)} nguoi do, tuc THIEU phan cua {len(thieu)} nguoi con lai "
               f"({', '.join(thieu[:8])}{'...' if len(thieu) > 8 else ''}). PHAI noi ro voi nguoi dung "
               f"day la so THIEU, khong duoc trinh bay nhu doanh thu ca doi. Nguyen nhan thuong gap: "
-              f"kho chua dong bo lai sau khi them cot dmsid - chay 'py sync_warehouse.py' de khac phuc.")
+              f"kho chua dong bo lai sau khi them cot dmsid - chay 'py sync_warehouse.py' de khac phuc.",
+              code="team_revenue_partial_members", severity="warning",
+              message=(f"Báo cáo của QLV {scope_employee_code} chỉ tính được {len(dms_ids)}/{len(codes)} TDV. "
+                       f"Còn thiếu phần của {len(thieu)} người "
+                       f"({', '.join(thieu[:8])}{'…' if len(thieu) > 8 else ''}) vì chưa nối được mã nhân viên "
+                       "với hóa đơn; doanh thu, số đơn và số khách chưa đầy đủ cho cả đội."))
     return dms_ids
 
 
@@ -987,7 +1012,11 @@ def revenue_by_region(date_from: str, date_to: str, scope_area_code: str = None,
             _warn(f"SO LIEU THEO VUNG CO THE THIEU: tong cong theo vung ({total:,.0f} d) khong khop "
                   f"tong doanh thu khong loc vung ({raw_total:,.0f} d), chenh {abs(total - raw_total):,.0f} d. "
                   f"PHAI canh bao nguoi dung rang phan chia theo vung dang thieu/sai, KHONG duoc trinh bay "
-                  f"breakdown nay nhu so lieu chac chan.")
+                  f"breakdown nay nhu so lieu chac chan.",
+                  code="regional_revenue_reconciliation_mismatch", severity="warning",
+                  message=(f"Kỳ {date_from} đến {date_to}: tổng doanh thu theo vùng {total:,.0f} đồng "
+                           f"lệch {abs(total - raw_total):,.0f} đồng so với tổng {raw_total:,.0f} đồng "
+                           "trong cùng phạm vi. Phần chia theo vùng cần được đối chiếu lại."))
         result = [{"area": k, "revenue": v, "share_pct": (v / total * 100 if total else 0.0)}
                   for k, v in sorted(agg.items(), key=lambda x: -x[1])]
 
@@ -1375,7 +1404,11 @@ def employee_kpi(as_of_date: str, limit: int = 10, order_by: str = "sales", filt
     if unassessed:
         _warn(f"Danh sach doi ghi nhan {len(roster)} nguoi; chi {len(rows)} nguoi co chi tieu du "
               f"de danh gia KPI ky {fdate[:7]}. {len(unassessed)} nguoi chua du du lieu, "
-              "KHONG duoc ket luan ho dat 0%/khong dat KPI hay lay target thang truoc thay the.")
+              "KHONG duoc ket luan ho dat 0%/khong dat KPI hay lay target thang truoc thay the.",
+              code="employee_kpi_incomplete_coverage", severity="warning",
+              message=(f"Kỳ {fdate[:7]}: chỉ {len(rows)}/{len(roster)} người đủ dữ liệu để đánh giá KPI. "
+                       f"{len(unassessed)} người còn lại chưa đủ dữ liệu; chưa thể kết luận họ đạt 0% "
+                       "hoặc không đạt KPI."))
     for r in rows:
         r["sales"] = _f(r["sales"]); r["target"] = _f(r["target"])
         r["pct"] = (r["sales"] / r["target"] * 100) if r["target"] else 0.0
@@ -1651,7 +1684,10 @@ def employee_daily_kpi(employee_code: str, year_month: str, scope_area_code: str
         # thanh "khong ban duoc gi" - phai noi ro la THIEU DU LIEU chi tieu cho thang nay.
         _warn(f"Khong co snapshot chi tieu cho '{employee_code}' trong thang {year_month} trong kho "
               "local - so % theo ngay duoi day KHONG dang tin cay (target=0), can dong bo lai hoac "
-              "hoi thang khac.")
+              "hoi thang khac.",
+              code="daily_kpi_target_unavailable", severity="warning",
+              message=(f"Chưa có dữ liệu chỉ tiêu tháng {year_month} của nhân viên {employee_code}. "
+                       "Tỷ lệ hoàn thành theo ngày chưa đủ căn cứ để đánh giá KPI."))
 
     days = []
     # 11/09/2026 (V03): T7/CN tach RIENG, khong bo. T7 la ngay ban nhieu nhat (22,3% doanh thu OTC
@@ -8647,7 +8683,10 @@ def _customer_receivable(customer_code: str, channel: str) -> dict:
     total_rows = int(meta[0]["n"]) if meta else 0
     if total_rows == 0:
         _warn("Bang cong no (fact_congno_khachhang) CHUA co du lieu (chua dong bo hoac SP loi). PHAI "
-              "tra loi 'chua tra cuu duoc cong no', TUYET DOI KHONG ket luan 'khach khong co no'.")
+              "tra loi 'chua tra cuu duoc cong no', TUYET DOI KHONG ket luan 'khach khong co no'.",
+              code="customer_receivables_unavailable", severity="warning",
+              message=(f"Chưa tra cứu được công nợ của khách {customer_code} vì nguồn công nợ chưa có dữ liệu. "
+                       "Chưa thể xác nhận khách có nợ hay không."))
         return {"balance_end": None, "total_overdue": None, "overdue_pct": None,
                 "receivable_status": "unavailable", "receivable_source": "bao cao cong no goc DNH (SP)",
                 "receivable_as_of": None,
@@ -10629,7 +10668,10 @@ def receivables_overview(top_n: int = 10, scope_area_code: str = None,
     total_rows = int(meta[0]["n"]) if meta else 0
     if total_rows == 0:
         _warn("Bang cong no (fact_congno_khachhang) CHUA co du lieu (chua dong bo hoac SP loi). PHAI "
-              "tra loi 'chua tra cuu duoc cong no', TUYET DOI KHONG ket luan 'khong co no'.")
+              "tra loi 'chua tra cuu duoc cong no', TUYET DOI KHONG ket luan 'khong co no'.",
+              code="receivables_unavailable", severity="warning",
+              message=("Chưa tra cứu được công nợ trong phạm vi tài khoản vì nguồn công nợ chưa có dữ liệu. "
+                       "Chưa thể xác nhận có nợ hay không."))
         return {"receivable_status": "unavailable", "receivable_as_of": None,
                 "receivable_source": "bao cao cong no goc DNH (SP)",
                 "receivable_warning": (
@@ -11161,7 +11203,11 @@ def _warn_region_target_mismatch(rows: list, fdate: str, tolerance_pct: float = 
             _warn(f"DOI CHIEU LECH ({r['area_code']}): tong chi tieu gop tu nhan vien "
                   f"{r['target']:,.0f}d vs chi tieu vung chinh thuc (dim_targetvungmien) {ref:,.0f}d "
                   f"- lech {diff_pct:.1f}%. Cau truc du lieu co the da doi; PHAI noi ro con so dang "
-                  f"can doi chieu lai, KHONG khang dinh chac chan voi nguoi dung.")
+                  f"can doi chieu lai, KHONG khang dinh chac chan voi nguoi dung.",
+                  code="regional_kpi_target_mismatch", severity="warning",
+                  message=(f"Vùng {r['area_code']}, kỳ {ym}: chỉ tiêu cộng từ nhân viên "
+                           f"{r['target']:,.0f} đồng lệch {diff_pct:.1f}% so với chỉ tiêu vùng chính thức "
+                           f"{ref:,.0f} đồng. Kết quả KPI cần được đối chiếu lại."))
 
     # 29/07/2026 - VA DIEM MU: vong lap tren chi duyet cac vung CO MAT trong rows, nen vung BIEN MAT
     # HOAN TOAN khoi snapshot thi khong co dong nao de kiem -> khong canh bao gi ca.
@@ -11177,7 +11223,11 @@ def _warn_region_target_mismatch(rows: list, fdate: str, tolerance_pct: float = 
               f"(chi tieu vung chinh thuc: {hut:,.0f}d). Con so 'toan doi' duoi day CHI gom cac vung "
               f"con lai, KHONG phai toan cong ty - TUYET DOI khong trinh bay nhu so toan quoc. "
               f"Nguyen nhan thuong gap: snapshot thang dang duoc ghi do dang, moi vung ghi mot ngay "
-              f"khac nhau. Hoi lai vao thang da tron (vd cuoi thang) de co so day du.")
+              f"khac nhau. Hoi lai vao thang da tron (vd cuoi thang) de co so day du.",
+              code="regional_kpi_missing_areas", severity="warning",
+              message=(f"Dữ liệu KPI đến {fdate} thiếu các vùng {', '.join(sorted(missing))}, "
+                       f"có tổng chỉ tiêu chính thức {hut:,.0f} đồng. Kết quả chỉ gồm các vùng còn lại, "
+                       "chưa đủ để đại diện cho toàn công ty."))
 
 
 def kpi_ranking(group_by: str = "qlv", as_of_date: str = None, limit: int = 20,
@@ -11200,7 +11250,9 @@ def kpi_ranking(group_by: str = "qlv", as_of_date: str = None, limit: int = 20,
         return []
     managers = _rollup_tier_codes(latest_available)
     if not managers:
-        _warn("Khong xac dinh duoc tang quan ly (manager_code rong). KHONG du so lieu de xep hang KPI.")
+        _warn("Khong xac dinh duoc tang quan ly (manager_code rong). KHONG du so lieu de xep hang KPI.",
+              code="kpi_manager_hierarchy_unavailable", severity="warning",
+              message=(f"Chưa có dữ liệu phân cấp quản lý đến {fdate} nên chưa thể xếp hạng KPI."))
         return []
     ph = ",".join("?" for _ in managers)
     coverage_sql = (
@@ -11237,13 +11289,20 @@ def kpi_ranking(group_by: str = "qlv", as_of_date: str = None, limit: int = 20,
         _warn(
             f"Xep hang KPI dang dung ky day du gan nhat {fdate}, khong dung snapshot giua thang "
             f"{latest_available} vi snapshot giua thang chi co nguoi da phat sinh ban hang va co "
-            "the chua du target."
+            "the chua du target.",
+            code="kpi_closed_period_used", severity="warning",
+            message=(f"Bảng xếp hạng KPI sử dụng kỳ đầy đủ gần nhất đến {fdate}. "
+                     f"Dữ liệu mới hơn ngày {latest_available} chưa đủ người hoặc chỉ tiêu để so sánh.")
         )
     unavailable = sum(_f(r["target"]) <= 0 for r in coverage)
     if unavailable:
         _warn(f"{unavailable}/{len(coverage)} ma quan ly trong roster chua du snapshot/target ky "
               f"{fdate[:7]}; bang xep hang chi tinh cac ma co target. KHONG coi nguoi thieu du lieu "
-              "la dat 0% hay khong dat KPI.")
+              "la dat 0% hay khong dat KPI.",
+              code="kpi_ranking_incomplete_coverage", severity="warning",
+              message=(f"Kỳ {fdate[:7]}: {unavailable}/{len(coverage)} mã quản lý chưa đủ dữ liệu hoặc chỉ tiêu. "
+                       "Bảng xếp hạng chỉ gồm các mã có chỉ tiêu; chưa thể kết luận những người còn lại "
+                       "đạt 0% hoặc không đạt KPI."))
 
     if group_by == "region":
         # QUAN TRONG: phai gom ve 1 dong/nhan vien TRUOC (SUM(amount_ct), MAX(target) - target lap
@@ -11278,7 +11337,10 @@ def kpi_ranking(group_by: str = "qlv", as_of_date: str = None, limit: int = 20,
         managers = _rollup_tier_codes(fdate)
         if not managers:
             _warn("Khong xac dinh duoc tang quan ly (manager_code rong) nen KHONG tinh duoc KPI theo "
-                  "vung. PHAI noi ro la chua tra cuu duoc, KHONG duoc tra ve 0 nhu the la khong dat.")
+                  "vung. PHAI noi ro la chua tra cuu duoc, KHONG duoc tra ve 0 nhu the la khong dat.",
+                  code="regional_kpi_hierarchy_unavailable", severity="warning",
+                  message=(f"Chưa có dữ liệu phân cấp quản lý đến {fdate} nên chưa tính được KPI theo vùng. "
+                           "Chưa thể kết luận vùng không đạt KPI."))
             return []
         ph = ",".join(["?"] * len(managers))
 
@@ -11293,7 +11355,11 @@ def kpi_ranking(group_by: str = "qlv", as_of_date: str = None, limit: int = 20,
             _warn(f"CANH BAO CAU TRUC: {len(nested)} nguoi o tang quan ly lai co cap tren "
                   f"({', '.join(n['employee_code'] for n in nested[:5])}...) - cay to chuc da co them "
                   "tang moi, cach gop KPI theo vung hien tai CO THE DEM TRUNG. PHAI noi ro so lieu "
-                  "dang can kiem tra lai, khong khang dinh chac chan.")
+                  "dang can kiem tra lai, khong khang dinh chac chan.",
+                  code="regional_kpi_nested_managers", severity="warning",
+                  message=(f"Dữ liệu đến {fdate} có {len(nested)} mã quản lý đồng thời thuộc một cấp quản lý khác "
+                           f"({', '.join(n['employee_code'] for n in nested[:5])}{'…' if len(nested) > 5 else ''}). "
+                           "Tổng KPI theo vùng có thể bị tính trùng và cần được đối chiếu lại."))
 
         sql = f"""SELECT nv.area_code area_code, SUM(e.sales) sales, SUM(e.target) target
                   FROM (SELECT f.employee_code, SUM(f.amount_ct) sales, MAX(f.month_sale_target) target
@@ -11333,7 +11399,10 @@ def kpi_ranking(group_by: str = "qlv", as_of_date: str = None, limit: int = 20,
     managers = _rollup_tier_codes(fdate)
     if not managers:
         _warn("Khong xac dinh duoc tang quan ly (manager_code rong) nen KHONG xep hang duoc QLV. "
-              "PHAI noi ro la chua tra cuu duoc, KHONG tra ve danh sach rong nhu the la khong co ai.")
+              "PHAI noi ro la chua tra cuu duoc, KHONG tra ve danh sach rong nhu the la khong co ai.",
+              code="qlv_kpi_hierarchy_unavailable", severity="warning",
+              message=(f"Chưa có dữ liệu phân cấp quản lý đến {fdate} nên chưa xếp hạng được QLV. "
+                       "Danh sách trống chưa có nghĩa là không có QLV trong phạm vi này."))
         return []
     ph = ",".join(["?"] * len(managers))
     qlv_sql = (f"SELECT employee_code, name, area_code, COALESCE(is_duplicate,0) dup "
@@ -13962,6 +14031,7 @@ def call_template(name: str, args: dict, question: str = "", username: str = Non
     # 22/07/2026 (diem #5): mo "hop" canh bao rieng cho lan goi nay - tool goi _warn() trong luc chay
     # se duoc gom lai va dinh kem vao ket qua tra ve cho AI.
     token = _tool_warnings.set([])
+    user_warning_token = _tool_user_warnings.set([])
     try:
         fn = TEMPLATES[name]
         call_args = dict(args)
@@ -14368,6 +14438,9 @@ def call_template(name: str, args: dict, question: str = "", username: str = Non
         warnings = _tool_warnings.get() or []
         if warnings:
             payload["canh_bao"] = warnings
+        user_warnings = _tool_user_warnings.get() or []
+        if user_warnings:
+            payload["user_warnings"] = user_warnings
         return payload
     except KhongXacDinhDuocDoi as e:
         # KHONG boc them "Loi khi chay bao cao chuan" - day khong phai su co ky thuat ma la
@@ -14406,3 +14479,4 @@ def call_template(name: str, args: dict, question: str = "", username: str = Non
         return {"ok": False, "error": f"Loi khi chay bao cao chuan '{name}': {str(e)[:300]}"}
     finally:
         _tool_warnings.reset(token)
+        _tool_user_warnings.reset(user_warning_token)
