@@ -127,8 +127,10 @@ def test_cuon_phu_luc_ve_hop_dong_goc_va_noi_hoa_don_bang_contract_id(monkeypatc
     assert hd["ty_le_thuc_hien_pct"] == pytest.approx(99.9703725)
     assert "FROM dong GROUP BY Id0" in bat["sql"]
     assert "JOIN map_hop_dong m ON m.ContractId=s.ContractId" in bat["sql"]
-    assert "s.CustomerCode" not in bat["sql"]
-    assert "s.ItemCode" not in bat["sql"]
+    # Hoa don chi GAN vao hop dong qua ContractId, khong ghep theo khach/SKU (kieu S86 cu). Tu 24/09 khach
+    # va SKU tren hoa don chi dung de DANH DAU chung tu gan nham (test_etc_chung_tu_gan_nham.py).
+    assert "s.CustomerCode=" not in bat["sql"] and "=s.CustomerCode" not in bat["sql"]
+    assert bat["sql"].count("s.ItemCode") == 1 and "LEFT JOIN sku_hop_dong k" in bat["sql"]
 
 
 def test_tai_khoan_chi_xem_otc_bi_chan_tool_hop_dong_etc():

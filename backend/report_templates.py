@@ -7604,7 +7604,7 @@ def etc_contract_status(as_of_date: str = None, expiring_days: int = 90, limit: 
         " MAX(FromDate0) FromDate0, MAX(ToDate0) ToDate0, MAX(StatusId) StatusId,"
         " MAX(EmpDMSCode1) EmpDMSCode1, MAX(EmpDMSCode2) EmpDMSCode2,"
         " MAX(AmountAfterVat) AmountAfterVat, MAX(AmountBefVat) AmountBefVat,"
-        " MAX(Quantity) Quantity, MAX(UnitPrice) UnitPrice"
+        " MAX(Quantity) Quantity, MAX(UnitPrice) UnitPrice, MAX(ItemCode) ItemCode"
         " FROM dbo.vHopDongETC GROUP BY Id, RowId"
         "), hd AS ("
         # Id0 la hop dong goc; Id khac Id0 la phu luc/phien ban con (910 ho hop dong co phu luc,
@@ -7639,17 +7639,40 @@ def etc_contract_status(as_of_date: str = None, expiring_days: int = 90, limit: 
         " FROM dong GROUP BY Id0"
         "), map_hop_dong AS ("
         " SELECT DISTINCT Id ContractId, Id0 HopDongGocId FROM dong"
-        "), hoadon AS ("
-        " SELECT m.HopDongGocId ContractId, SUM(s.Amount9) DaXuat,"
-        " COUNT(DISTINCT s.Stt) SoHoaDon, MAX(s.DocDate) LanXuatCuoi"
+        "), sku_hop_dong AS ("
+        " SELECT DISTINCT Id0, ItemCode FROM dong"
+        "), dong_hoadon AS ("
+        # 24/09/2026 (UAT C44): ContractId dung cho da so, nhung co chung tu GAN NHAM hop dong. HD
+        # KT.06.G1.HD.TTYTTB-NH (khach DTH00244, 1 SKU) ban 2.000 roi tra lai du 2.000 -> rong 0, nhung
+        # phieu tra TL 00006979 ngay 16/09 cua khach TBI00502, SKU 80440000007 lai mang ContractId cua
+        # no -> tool bao da xuat -3,3 trieu (-4,8%). Do toan Bravo: 18 dong / 7 hop dong khac CA khach
+        # LAN SKU = gan nham -> loai khoi da xuat, bao rieng. Khac ma khach nhung CUNG SKU (71 dong / 28
+        # hop dong) phan lon la cung don vi hai ma (TTYT Nam Dinh NDI00011/NDI00018, BV 354, BV Pham
+        # Ngoc Thach, TTYT Tam Binh doi ten sau sap nhap) -> van tinh, danh dau de nguoi doc biet.
+        " SELECT m.HopDongGocId ContractId, s.Stt, s.DocDate, s.Amount9,"
+        " CASE WHEN s.CustomerCode<>hd.CustomerCode THEN 1 ELSE 0 END KhacKhach,"
+        " CASE WHEN k.ItemCode IS NULL THEN 1 ELSE 0 END KhacSku"
         " FROM dbo.vHoaDonETCTotal s"
         " JOIN map_hop_dong m ON m.ContractId=s.ContractId"
-        " WHERE s.ContractId IS NOT NULL GROUP BY m.HopDongGocId"
+        " JOIN hd ON hd.Id=m.HopDongGocId"
+        " LEFT JOIN sku_hop_dong k ON k.Id0=m.HopDongGocId AND k.ItemCode=s.ItemCode"
+        " WHERE s.ContractId IS NOT NULL"
+        "), hoadon AS ("
+        " SELECT ContractId,"
+        " SUM(CASE WHEN KhacKhach=1 AND KhacSku=1 THEN 0 ELSE Amount9 END) DaXuat,"
+        " COUNT(DISTINCT CASE WHEN KhacKhach=1 AND KhacSku=1 THEN NULL ELSE Stt END) SoHoaDon,"
+        " MAX(CASE WHEN KhacKhach=1 AND KhacSku=1 THEN NULL ELSE DocDate END) LanXuatCuoi,"
+        " SUM(CASE WHEN KhacKhach=1 AND KhacSku=1 THEN 1 ELSE 0 END) SoDongGanNham,"
+        " SUM(CASE WHEN KhacKhach=1 AND KhacSku=1 THEN Amount9 ELSE 0 END) TienGanNham,"
+        " SUM(CASE WHEN KhacKhach=1 AND KhacSku=0 THEN Amount9 ELSE 0 END) TienKhacMaKhach"
+        " FROM dong_hoadon GROUP BY ContractId"
         ") SELECT hd.Id, hd.DocNo, hd.CustomerCode, hd.StatusId, hd.SoDong, hd.SoDongLechGiaTri,"
         " hd.SoPhienBan, hd.SoPhuLuc,"
         " CONVERT(varchar(10), hd.FromDate, 120) FromDate,"
         " CONVERT(varchar(10), hd.ToDate, 120) ToDate,"
         " hd.GiaTri, ISNULL(h.DaXuat, 0) DaXuat, ISNULL(h.SoHoaDon, 0) SoHoaDon,"
+        " ISNULL(h.SoDongGanNham, 0) SoDongGanNham, ISNULL(h.TienGanNham, 0) TienGanNham,"
+        " ISNULL(h.TienKhacMaKhach, 0) TienKhacMaKhach,"
         " CONVERT(varchar(10), h.LanXuatCuoi, 120) LanXuatCuoi,"
         " DATEDIFF(day, CAST(:as_of AS date), hd.ToDate) ConLaiNgay"
         " FROM hd LEFT JOIN hoadon h ON h.ContractId = hd.Id"
@@ -7674,6 +7697,13 @@ def etc_contract_status(as_of_date: str = None, expiring_days: int = 90, limit: 
             "sap_het_han": con_lai_ngay is not None and 0 <= con_lai_ngay <= expiring_days,
             "da_het_han": con_lai_ngay is not None and con_lai_ngay < 0,
         }
+        if int(r.get("SoDongGanNham") or 0) > 0:
+            muc["chung_tu_gan_nham_da_loai"] = {
+                "so_dong": int(r["SoDongGanNham"]), "so_tien": _f(r.get("TienGanNham")),
+                "ly_do": "Chung tu mang ContractId cua hop dong nay nhung KHAC ca ma khach lan mat hang "
+                         "- nghi gan nham, KHONG tinh vao da xuat."}
+        if _f(r.get("TienKhacMaKhach")):
+            muc["hoa_don_khac_ma_khach_van_tinh"] = _f(r.get("TienKhacMaKhach"))
         if int(r["SoDongLechGiaTri"] or 0) > 0:
             muc["ly_do_bat_thuong"] = (
                 "Gia tri khong nhat quan o %d/%d dong (truoc VAT lech qua 5%% so voi Quantity*UnitPrice, "
@@ -7690,6 +7720,7 @@ def etc_contract_status(as_of_date: str = None, expiring_days: int = 90, limit: 
     thuc_hien_thap = sorted(
         [x for x in xet if x["ty_le_thuc_hien_pct"] is not None and x["ty_le_thuc_hien_pct"] < 50],
         key=lambda x: (x["ty_le_thuc_hien_pct"], -x["con_lai"]))
+    gan_nham = [x for x in xet if x.get("chung_tu_gan_nham_da_loai")]
     return {
         "as_of": as_of_date, "nguong_sap_het_han_ngay": expiring_days,
         "chi_xet_hop_dong_con_hieu_luc": only_active,
@@ -7714,13 +7745,22 @@ def etc_contract_status(as_of_date: str = None, expiring_days: int = 90, limit: 
         "hop_dong_sap_het_han": sorted(sap_het, key=lambda x: x["con_lai_ngay"])[:limit],
         "so_hop_dong_gia_tri_bat_thuong": len(bat_thuong),
         "hop_dong_gia_tri_bat_thuong": sorted(bat_thuong, key=lambda x: -x["gia_tri_hop_dong"])[:20],
+        "so_hop_dong_co_chung_tu_gan_nham": len(gan_nham),
+        "tong_tien_chung_tu_gan_nham_da_loai": sum(x["chung_tu_gan_nham_da_loai"]["so_tien"] for x in gan_nham),
+        "hop_dong_co_chung_tu_gan_nham": [
+            {k: x[k] for k in ("contract_id", "so_hop_dong", "customer_code", "chung_tu_gan_nham_da_loai")}
+            for x in sorted(gan_nham, key=lambda x: -abs(x["chung_tu_gan_nham_da_loai"]["so_tien"]))[:20]],
+        "so_hop_dong_co_hoa_don_khac_ma_khach": sum(1 for x in xet if x.get("hoa_don_khac_ma_khach_van_tinh")),
         "canh_bao": ("Hop dong goc va phu luc da duoc cuon theo Id0; hoa don noi qua dung "
                      "ContractId cua tung phien ban, khong ghep gan dung theo khach/SKU/thoi gian. "
                      "Cac hop dong co gia tri bat thuong da duoc TACH RIENG khoi moi con so tong o "
                      "day (do 13/09/2026: 3/9.135 hop dong chiem 99,88% tong gia tri). Khi tra loi "
                      "phai neu ro con so tong khong gom nhung hop dong do va can DNH kiem lai du lieu "
                      "goc. Ty le thuc hien = tong Amount9 hoa don co ContractId / gia tri hop dong, "
-                     "ca hai deu TRUOC VAT."),
+                     "ca hai deu TRUOC VAT. Chung tu mang ContractId nhung khac CA ma khach LAN mat "
+                     "hang cua hop dong bi coi la gan nham: KHONG tinh vao da xuat, liet ke o "
+                     "hop_dong_co_chung_tu_gan_nham - neu co thi noi ro va de DNH kiem lai. Hoa don "
+                     "khac ma khach nhung cung mat hang van tinh (thuong la cung don vi co hai ma)."),
         "data_as_of": latest_data_date(),
     }
 
