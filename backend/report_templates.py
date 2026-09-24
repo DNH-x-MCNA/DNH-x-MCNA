@@ -10719,6 +10719,133 @@ def _collection_source_gap() -> dict:
     }
 
 
+def _collection_actual_mtd(as_of_date: str = None, scope_area_code: str = None,
+                           scope_channel: str = None, scope_employee_code: str = None,
+                           customer_limit: int = 100) -> dict:
+    """V37/S45: but toan thu BC/PT vao 131 tren Bravo, tach ro phan khong co nguon.
+
+    Khong suy so da thu tu chenh lech snapshot no. BC/PT la phieu bao co/phieu thu;
+    BT, hoa don va hang tra khong phai tien thu. Gan TDV theo phan cong khach hien tai
+    trong DMS, khong suy ra TDV truc tiep thu tien hay nguoi lap phieu.
+    """
+    today = dt.date.today()
+    as_of = dt.date.fromisoformat(str(as_of_date or today.isoformat())[:10])
+    if as_of > today:
+        as_of = today
+    date_from = as_of.replace(day=1)
+    date_to_exclusive = as_of + dt.timedelta(days=1)
+    if scope_employee_code and scope_channel and scope_channel.upper() != "OTC":
+        raise KhongXacDinhDuocDoi("Chua co phan cong khach ETC theo doi QLV de loc thu tien.")
+    channel = "OTC" if scope_employee_code else str(scope_channel or "ALL").upper()
+    if channel not in {"ALL", "OTC", "ETC"}:
+        raise ValueError(f"scope_channel khong hop le: {scope_channel}")
+    team_codes = None
+    if scope_employee_code:
+        team_codes = sorted(team_customer_codes(_q, scope_employee_code, as_of))
+        if not team_codes:
+            raise KhongXacDinhDuocDoi(
+                f"Khong xac dinh duoc khach cua doi {scope_employee_code} de loc thu tien.")
+    params = {"date_from": date_from, "date_to": date_to_exclusive}
+    team_clause = ""
+    if team_codes is not None:
+        holders = []
+        for index, code in enumerate(team_codes):
+            key = f"team_customer_{index}"
+            params[key] = code
+            holders.append(f":{key}")
+        team_clause = f" AND k.Code IN ({','.join(holders)})"
+    area_clause = ""
+    if scope_area_code:
+        holders = []
+        for index, area in enumerate(_area_markers(scope_area_code)):
+            key = f"scope_area_{index}"
+            params[key] = area
+            holders.append(f":{key}")
+        area_clause = f" AND tp.AreaCode IN ({','.join(holders)})"
+    rows = []
+    for source_channel, class_code, customer_table, dms_table in (
+        ("OTC", "TM", "BRV_KhachHang", "DMS_KhachHang"),
+        ("ETC", "SX", "BRVSX_KhachHang", "DMSSX_KhachHang"),
+    ):
+        if channel not in {"ALL", source_channel}:
+            continue
+        dms_employee = "MAX(d.EmpDMSCode1)" if source_channel == "OTC" else "CAST(NULL AS varchar(50))"
+        area_join = (" JOIN dbo.DIM_TinhThanhPho tp ON tp.CityId=d.CityId "
+                     if scope_area_code else "")
+        sql = f"""
+            SELECT k.Code CustomerCode,MAX(k.Name) CustomerName,
+                   {dms_employee} EmployeeDMSCode,
+                   SUM(h.Amount) Amount,COUNT(*) PostingRows,
+                   SUM(CASE WHEN h.DocCode='BC' THEN h.Amount ELSE 0 END) BankCreditAmount,
+                   SUM(CASE WHEN h.DocCode='PT' THEN h.Amount ELSE 0 END) CashReceiptAmount
+            FROM dbo.vHTTPhatSinh h
+            JOIN dbo.{customer_table} k ON k.Id=h.CustomerId
+            LEFT JOIN dbo.{dms_table} d ON d.Code=k.Code
+            {area_join}
+            WHERE h.ClassCode=:class_code AND h.IsActive=1
+              AND h.DocCode IN ('BC','PT') AND h.Account LIKE '131%'
+              AND h.DocDate>=:date_from AND h.DocDate<:date_to
+              {team_clause}{area_clause}
+            GROUP BY k.Code
+        """
+        source_rows = _q_bravo(sql, {**params, "class_code": class_code})
+        for source_row in source_rows:
+            rows.append({
+                "channel": source_channel,
+                "customer_code": source_row["CustomerCode"],
+                "customer_name": source_row.get("CustomerName"),
+                "employee_dms_code": source_row.get("EmployeeDMSCode"),
+                "actual_collected": _f(source_row.get("Amount")),
+                "bank_credit_amount": _f(source_row.get("BankCreditAmount")),
+                "cash_receipt_amount": _f(source_row.get("CashReceiptAmount")),
+                "posting_rows": int(source_row.get("PostingRows") or 0),
+            })
+    rows.sort(key=lambda row: (-row["actual_collected"], row["customer_code"]))
+    employee_groups = {}
+    for row in rows:
+        key = (row["channel"], row["employee_dms_code"] or "CHUA_GAN_TDV")
+        group = employee_groups.setdefault(key, {
+            "channel": key[0], "employee_dms_code": key[1],
+            "actual_collected": 0.0, "customers": 0,
+        })
+        group["actual_collected"] += row["actual_collected"]
+        group["customers"] += 1
+    employee_rows = sorted(employee_groups.values(),
+                           key=lambda row: (-row["actual_collected"], row["employee_dms_code"]))
+    limit = max(1, min(int(customer_limit or 100), 200))
+    _warn("V37: PHAI noi ke hoach thu va cam ket/hang cam ket CHUA co nguon; "
+          "so BC/PT chi la but toan thu vao 131, khong phai doi chieu hoa don day du.",
+          code="v37_collection_partial", severity="warning",
+          message=("Đã tra cứu được bút toán thu BC/PT vào tài khoản 131 theo khách và "
+                   "TDV phụ trách hiện tại. Chưa có nguồn kế hoạch thu và cam kết hoặc "
+                   "hạn cam kết để so sánh hay xác định quá hạn; số thu chưa đối chiếu "
+                   "đầy đủ với từng hóa đơn."))
+    return {
+        "status": "partial", "period_from": date_from.isoformat(),
+        "period_to": as_of.isoformat(), "source": "Bravo dbo.vHTTPhatSinh (BC/PT, Account 131)",
+        "scope_channel": channel, "scope_area_code": scope_area_code,
+        "scope_employee_code": scope_employee_code,
+        "total_actual_collected": sum(row["actual_collected"] for row in rows),
+        "total_customers": len(rows),
+        "total_posting_rows": sum(row["posting_rows"] for row in rows),
+        "by_employee": employee_rows,
+        "by_customer": rows[:limit], "customers_not_shown": max(0, len(rows) - limit),
+        "available_metrics": ["thu_thuc_te_BC_PT_vao_131_theo_khach_va_TDV_phu_trach_hien_tai"],
+        "unavailable_metrics": ["ke_hoach_thu_tien", "cam_ket_thu_va_han_cam_ket",
+                                "doi_chieu_day_du_chung_tu_thu_voi_hoa_don"],
+        "definition": (
+            "So thu la tong but toan BC/PT con hieu luc vao tai khoan 131 trong thang den "
+            "period_to, gan theo MA KHACH. TDV la nguoi phu trach khach HIEN TAI tren DMS, "
+            "khong phai nguoi truc tiep thu tien. Khong cong BT/hoa don/hang tra. "
+            "Chua doi chieu phieu thu voi tung hoa don, ung truoc hay toan bo cach thanh toan; "
+            "khong goi day la tong thu chinh thuc neu DNH chua chot."),
+        "answer_rule": (
+            "Tra so thu BC/PT theo TDV/khach va noi ro pham vi, so khach bi cat. "
+            "KHONG noi 'khong co du lieu' cho ca cau. Ke hoach thu va cam ket qua han "
+            "chua co nguon: neu ro tung phan, khong tu suy ra tu du no."),
+    }
+
+
 def _gan_nguoi_phu_trach_cong_no(rows: list) -> None:
     """Gan TDV/QLV phu trach (ma kem ten) cho danh sach khach cong no, theo snapshot KPI gan nhat cua
     TUNG khach. Nguon phan cong chi phu OTC; khach khong co phan cong thi ghi ro, khong bo trong im lang."""
@@ -10752,7 +10879,9 @@ def _gan_nguoi_phu_trach_cong_no(rows: list) -> None:
 
 
 def receivables_overview(top_n: int = 10, scope_area_code: str = None,
-                         scope_channel: str = None, scope_employee_code: str = None) -> dict:
+                         scope_channel: str = None, scope_employee_code: str = None,
+                         include_collection: bool = False,
+                         collection_as_of_date: str = None) -> dict:
     """Tong quan CONG NO tu kho local fact_congno_khachhang (snapshot tuc thoi tu SP goc DNH
     usp_DeptAccDueDate_GetData): tong du no, tong qua han, ty le qua han, tach theo KENH (OTC/ETC)
     va theo VUNG, top N khach no qua han nhieu nhat.
@@ -10777,6 +10906,19 @@ def receivables_overview(top_n: int = 10, scope_area_code: str = None,
         requested_top_n = min(100, max(1, int(top_n)))
     except (TypeError, ValueError):
         requested_top_n = 10
+
+    collection_activity = _collection_source_gap()
+    if include_collection:
+        try:
+            collection_activity = _collection_actual_mtd(
+                collection_as_of_date, scope_area_code, scope_channel, scope_employee_code)
+        except KhongXacDinhDuocDoi:
+            raise
+        except Exception as exc:
+            collection_activity = {
+                **_collection_source_gap(),
+                "source_error": f"Chua doc duoc chung tu BC/PT tren Bravo: {exc}",
+            }
 
     conditions, params = [], []
     team_scope = None
@@ -10837,7 +10979,7 @@ def receivables_overview(top_n: int = 10, scope_area_code: str = None,
                     "Chua tra cuu duoc cong no trong pham vi tai khoan tai thoi diem nay."),
                 "scope_area_code": scope_area_code, "scope_channel": channel,
                 "scope_employee_code": scope_employee_code, "team_scope": team_scope,
-                "collection_activity": _collection_source_gap()}
+                "collection_activity": collection_activity}
 
     snapshot_at = meta[0]["at"]
 
@@ -10928,7 +11070,7 @@ def receivables_overview(top_n: int = 10, scope_area_code: str = None,
         "by_region_note": ("by_region da gom DU moi vung ke ca 'Khac/chua xac dinh'. Phai hien du cac dong, "
                            "neu bo dong nao thi tong cac vung se khong khop total_overdue."),
         "du_no_lon_chua_qua_han": large_balance_not_overdue,
-        "collection_activity": _collection_source_gap(),
+        "collection_activity": collection_activity,
     }
     try:
         age_h = (dt.datetime.now() - dt.datetime.fromisoformat(snapshot_at)).total_seconds() / 3600.0
@@ -14273,6 +14415,10 @@ def call_template(name: str, args: dict, question: str = "", username: str = Non
         if scope_channel and _CHANNEL_SCOPE_POLICIES[name] == "filter":
             call_args["scope_channel"] = scope_channel
         q_folded = _fold_question(question)
+        if name == "get_receivables_overview":
+            # V37: model khong duoc tu bat/tat phan thu tien qua args.
+            call_args["include_collection"] = "thu tien" in q_folded or "cam ket thu" in q_folded
+            call_args.pop("collection_as_of_date", None)
         if name == "get_new_customer_list" and _is_new_customer_quality_question(question):
             call_args["mode"] = "quality"
         if name == "get_customer_movement" and (

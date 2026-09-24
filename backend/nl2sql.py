@@ -1608,10 +1608,10 @@ TEMPLATE_TOOLS = [
                         "KHONG duoc goi la 'toan cong ty' hay hien thi kenh khac. Khi hien thi bucket "
                         "cuoi, viet 'tren 45 ngay', KHONG bat dau dong Markdown bang ky tu >. "
                         "Neu cau hoi hoi SO TIEN DA THU, KE HOACH THU hoac CAM KET THU, BAT BUOC doc "
-                        "collection_activity: kho hien chi co snapshot du no, chua co chung tu thu gan "
-                        "hoa don/khach, chi tieu thu va cam ket. Khong suy ra so da thu tu chenh lech hai "
-                        "snapshot, khong gan cam ket qua han; chi neu so du/no qua han hien tai nhu phan "
-                        "thay the neu huu ich.",
+                        "collection_activity: backend lay but toan BC/PT vao 131 tren Bravo theo "
+                        "khach va TDV phu trach hien tai. PHAI tra phan co nguon, kem ky va pham vi. "
+                        "Chua doi chieu thu-hoa don day du; ke hoach thu va cam ket thu chua co nguon. "
+                        "Khong suy so thu tu chenh lech snapshot va khong tu gan cam ket qua han.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -3220,8 +3220,9 @@ QUAN TRONG VE CHON TOOL:
   -> dung get_receivables_overview. Cong no cua 1 khach cu the -> get_customer_detail. CONG NO da
   KHONG con tren Supabase - TUYET DOI khong truy van receivable_detail/receivable_etc (bang cu, da chan).
   Neu hoi SO DA THU TRONG THANG/KE HOACH THU/CAM KET THU QUA HAN, doc collection_activity trong
-  get_receivables_overview: kho chi co snapshot du no, CHUA co chung tu thu gan hoa don/khach, target
-  thu hay bang cam ket. KHONG lay chenh lech hai snapshot lam tien da thu va KHONG tu gan cam ket qua han.
+  get_receivables_overview: collection_activity tra but toan BC/PT vao tai khoan 131 theo khach/TDV
+  phu trach hien tai trong thang, nhung CHUA co ke hoach thu hay bang cam ket. Tra phan thu duoc,
+  noi ro pham vi va phan thieu nguon; KHONG lay chenh lech snapshot lam tien da thu.
 - HOP DONG/GOI THAU ETC (C44/M42): hoa don hien KHONG co khoa hop dong da DNH xac nhan. TUYET DOI
   KHONG ghep hoa don vao hop dong chi bang khach hang + SKU, vi mot dong co the nhan nham/nhan doi.
   Chi duoc bao metadata hop dong co truc tiep trong nguon (so, khach, hieu luc, gia tri goc) va phai ghi
