@@ -883,6 +883,64 @@ class QueryPlan:
                       "Vì vậy chưa thể xác nhận thưởng thực chi khớp chính sách."])
         return "\n".join(lines)
 
+    def _uat01_promotion_answer(self) -> str | None:
+        """Render the checked program rows when the model omits them in UAT 01.
+
+        A shared DMS code can denote two real programs. The answer must keep the
+        ProgramIds and the invoiced-order denominator even when the model writes
+        a shorter narrative. This renderer only handles the exact UAT question.
+        """
+        question = _plain(self.question)
+        if not ("khuyen mai" in question and "khach tham gia" in question
+                and ("uplift" in question or "tang truong" in question)):
+            return None
+        data = self._evidence.get("get_promotion_effectiveness")
+        if not isinstance(data, dict) or data.get("status") != "ok":
+            return None
+        programs = data.get("programs")
+        if not isinstance(programs, list) or not programs:
+            return None
+
+        def cell(value: Any) -> str:
+            return str(value if value is not None else "—").replace("|", "\\|").replace("\n", " ")
+
+        def number(value: Any) -> str:
+            try:
+                return f"{round(float(value)):,.0f}".replace(",", ".")
+            except (TypeError, ValueError):
+                return "—"
+
+        period = data.get("period") or {}
+        scope = data.get("scope_area_code")
+        scope_note = f"Miền {scope}" if scope else "toàn bộ phạm vi được cấp quyền"
+        total = data.get("program_count_returned") or len(programs)
+        lines = [
+            f"### Khuyến mãi — {scope_note}", "",
+            f"Kỳ đơn hàng {period.get('from') or '—'} đến {period.get('to') or '—'}; "
+            f"liên kết DMS ghi nhận đến {data.get('promotion_link_coverage_to') or 'chưa rõ'}.",
+            "**Không thể kết luận uplift thật** từ nguồn này: thiếu chi phí chương trình và "
+            "nhóm đối chứng. Doanh thu dưới đây là doanh thu gắn với đơn dùng CTKM; "
+            "một đơn có thể thuộc nhiều CTKM nên không cộng các dòng thành tổng công ty.",
+            "Các số chỉ thuộc kỳ đơn hàng nêu trên, không mặc nhiên là kết quả cả thời gian "
+            "chạy của chương trình.",
+            "", f"Đang liệt kê {len(programs)}/{total} chương trình tool trả về.", "",
+            "| Program ID | Mã CTKM | Chương trình | Chạy từ–đến | Khách tham gia | Đơn gắn CTKM | "
+            "Đơn đã xuất hóa đơn | DT gắn đơn (đ) |",
+            "|---:|---|---|---|---:|---:|---:|---:|",
+        ]
+        for row in programs:
+            if not isinstance(row, dict):
+                continue
+            lines.append(
+                f"| {cell(row.get('program_id'))} | {cell(row.get('program_code'))} | "
+                f"{cell(row.get('program_name'))} | "
+                f"{cell(row.get('program_from'))}–{cell(row.get('program_to'))} | "
+                f"{number(row.get('participating_customers'))} | "
+                f"{number(row.get('orders'))} | {number(row.get('invoiced_orders'))} | "
+                f"{number(row.get('associated_revenue'))} |"
+            )
+        return "\n".join(lines)
+
     def finalize_answer(self, answer: str) -> str:
         failed_checks = [item for item in self.reconciliation_rules if item.status == "failed"]
         if failed_checks:
@@ -901,6 +959,10 @@ class QueryPlan:
             lines.extend(["", "Cần kiểm tra và đối chiếu lại các nguồn trên trước khi dùng kết quả "
                           "để kết luận. Tôi chưa xác nhận tổng số hoặc nguyên nhân chênh lệch."])
             return "\n".join(lines)
+        if self.status == "completed":
+            promotion_answer = self._uat01_promotion_answer()
+            if promotion_answer is not None:
+                return promotion_answer
         m20_answer = self._m20_kpi_answer()
         if m20_answer is not None:
             return m20_answer

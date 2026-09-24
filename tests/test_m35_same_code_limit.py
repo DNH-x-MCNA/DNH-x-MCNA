@@ -84,8 +84,10 @@ def test_m35_compact_model_view_keeps_program_ids_outside_top_eight(monkeypatch)
     model_view = json.loads(shown)
 
     assert result["program_count_returned"] == 21
-    assert model_view["_model_view"]["mode"] == "concise_priority_view"
-    assert model_view["_model_view"]["collections"][0]["shown"] < 12
+    # UAT 01: all 21 rows now fit after keeping only the measures needed for
+    # this answer; no longer accept the old 8-row generic compact view.
+    assert len(model_view["programs"]) == 21
+    assert {p["program_id"] for p in model_view["programs"]} >= {118969, 118972}
     assert [p["program_id"] for p in model_view["same_code_programs_to_distinguish"]] == [
         118969, 118972]
     assert len(shown) <= nl2sql.MAX_PAYLOAD_CHARS
