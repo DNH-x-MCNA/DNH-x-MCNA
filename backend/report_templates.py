@@ -10915,33 +10915,16 @@ def _team_of_qlv(qlv_employee_code: str, fdate: str = None) -> list:
     dinh "doi" giong het nhau.
     org_hierarchy.py (zone-based) VAN con dung rieng cho qlv_change_history() - do la lich su AI TUNG
     phu trach 1 khu vuc theo thoi gian, ban chat khac voi "doi hien tai bao cao len ai"."""
-    # 04/09/2026: lay HOP cua hai moc thay vi mot moc.
-    #   - moc THANG DA TRON  : giu du nguoi chua ban gi trong ky nay (chong co lai danh sach doi)
-    #   - moc MOI NHAT       : giu NGUOI MOI VAO chua co trong anh chup thang truoc
-    # Chi lay moc tron thi bo sot nguoi moi (do duoc: kiem_11 lech tu 0,831% len 1,713%); chi lay
-    # moc moi nhat thi dinh dung bay co lai da gay loi M01. Hop hai moc giu duoc ca hai.
-    cac_moc = _roster_snapshot_dates(fdate)
-    if len(cac_moc) > 1:
-        phan = " UNION ".join(
-            f"SELECT DISTINCT e.employee_code, nv.name, nv.position_code FROM fact_tonghopkhachhang e "
-            f"JOIN {_MONTH_LATEST_SUBQ} l ON l.employee_code=e.employee_code AND l.d=e.save_date "
-            f"LEFT JOIN dim_nhanvien nv ON nv.employee_code=e.employee_code "
-            f"WHERE e.manager_code=? AND UPPER(COALESCE(nv.position_code,'')) IN ({_tier_ph()})"
-            for _ in cac_moc)
-        tham = tuple(
-            x for d in cac_moc
-            for x in (d, d, qlv_employee_code, *_EMPLOYEE_TIER_POSITIONS)
-        )
-        return _q(phan, tham)
-    fdate = cac_moc[0] if cac_moc else None
-    if not fdate:
-        return []
+    # Giữ người chưa bán ở kỳ mới, nhưng phân công mới phải thay thế quan hệ cũ.
+    # UNION sau khi lọc manager giữ một người ở CẢ HAI đội khi họ chuyển QLV.
+    # Dùng cùng roster như employee_kpi: chốt mốc mới nhất của từng người TRƯỚC
+    # khi lọc theo QLV. Không mang số KPI/target của kỳ cũ sang kỳ đang hỏi.
+    roster_sql, roster_params = _roster_employee_sql(fdate)
     return _q(
-        f"SELECT DISTINCT e.employee_code, nv.name, nv.position_code FROM fact_tonghopkhachhang e "
-        f"JOIN {_MONTH_LATEST_SUBQ} l ON l.employee_code=e.employee_code AND l.d=e.save_date "
+        f"SELECT DISTINCT e.employee_code, nv.name, nv.position_code FROM ({roster_sql}) e "
         f"LEFT JOIN dim_nhanvien nv ON nv.employee_code=e.employee_code "
         f"WHERE e.manager_code=? AND UPPER(COALESCE(nv.position_code,'')) IN ({_tier_ph()})",
-        (fdate, fdate, qlv_employee_code, *_EMPLOYEE_TIER_POSITIONS),
+        (*roster_params, qlv_employee_code, *_EMPLOYEE_TIER_POSITIONS),
     )
 
 
