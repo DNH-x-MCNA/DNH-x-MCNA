@@ -46,7 +46,7 @@ Quét toàn bộ log tháng 9, có **31 lượt báo "Lỗi"**:
 |---|---:|---:|---|
 | **Hết hạn mức API** | **14** | **45,2%** | **Không phải chatbot sai** |
 | Quá thời gian xử lý | 12 | 38,7% | Lỗi thật — đã sửa |
-| Kẹt trạng thái | 3 | 9,7% | Đã sửa |
+| Kẹt trạng thái | 3 | 9,7% | ⚠️ **Chưa sửa** — đính chính 24/09 |
 | Người dùng đóng sớm | 2 | 6,5% | Không phải lỗi |
 
 Người chấm chỉ nhìn thấy chữ **"Lỗi"** nên ghi vào sổ như nhau. Nặng nhất: một người hỏi **cùng một
@@ -140,12 +140,12 @@ Thêm một lỗi không quy ra tiền được: **20 tháng doanh thu trả v�
 
 ### Chi phí và thời gian theo độ phức tạp — đo trên 180 lượt thật
 
-*Nguồn: nhật ký chi phí 15–23/09. Đã loại 4 lượt có thời gian dưới 5 giây (lượt trùng/dùng lại
-kết quả, không phải lần chạy thật).*
+*Nguồn: nhật ký chi phí 15–23/09, 184 lượt. Chi phí tính trên cả 184 lượt; thời gian tính trên 180
+lượt — 4 lượt bị dashboard ghi sai thời gian (xem đính chính cuối mục).*
 
 | | Trung bình | Trung vị |
 |---|---:|---:|
-| Chi phí mỗi lượt | **5.042 đ** | **3.241 đ** |
+| Chi phí mỗi lượt | **5.134 đ** | **3.267 đ** |
 | Thời gian trả lời | **36,5 giây** | **31,1 giây** |
 
 > Trung vị thấp hơn trung bình khá nhiều → **một số ít câu rất nặng kéo trung bình lên**. Khi lập
@@ -156,8 +156,8 @@ kết quả, không phải lần chạy thật).*
 | Mức | Số lượt | Chi phí TB | Trung vị | Thời gian TB |
 |---|---:|---:|---:|---:|
 | Rất nhẹ | 20 | 2.855 đ | 1.515 đ | **12,3 giây** |
-| Nhẹ | 71 | 4.147 đ | 2.707 đ | 24,2 giây |
-| Trung bình | 45 | 4.827 đ | 3.246 đ | 38,7 giây |
+| Nhẹ | 73 | 4.297 đ | 2.717 đ | 24,2 giây |
+| Trung bình | 47 | 5.002 đ | 3.288 đ | 38,7 giây |
 | Nặng | 33 | 7.093 đ | 5.804 đ | 57,4 giây |
 | Rất nặng | 11 | 9.525 đ | **11.660 đ** | **88,7 giây** |
 
@@ -184,6 +184,11 @@ giản hơn.
 |---|---:|---:|---:|
 | Chi phí | 1.074 đ | 15.126 đ | **14,1 lần** |
 | Thời gian | 7,0 giây | 116,7 giây | **16,7 lần** |
+
+> **Đính chính 24/09.** Bản đầu loại 4 lượt dưới 5 giây vì cho là "lượt trùng, không chạy thật".
+> Sai: mỗi lượt đó tốn **8.700–9.960 đ**, tức là chạy thật nhưng dashboard **ghi sai thời gian**. Hai
+> trong số đó là lượt chấm lại chạy bằng script — script đo 33,9 và 23,8 giây, dashboard ghi 3,4 giây
+> và 91 mili-giây. Nay chỉ loại chúng khỏi thống kê thời gian. Chi phí trung bình 5.042 → **5.134 đ**.
 
 Tương quan giữa chi phí và thời gian chỉ **r = 0,42** — câu chạy lâu **không** đồng nghĩa tốn nhiều
 tiền. Không thể suy chi phí từ thời gian, và ngược lại.
