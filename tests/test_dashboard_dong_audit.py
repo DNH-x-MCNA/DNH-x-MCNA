@@ -86,3 +86,42 @@ def test_dong_kiem_tu_dong_co_tien_to_kiemtra(tmp_path, monkeypatch):
               "status": "ok", "duration_ms": 20}]
     dong, _ = _chay(tmp_path, monkeypatch, audit, cost=[], runs=[])
     assert dong[("kiem_tu_dong", audit[0]["question"])]["status"] == "tool_check"
+
+
+def test_dong_co_cau_hoi_nhung_khong_username_khong_session_la_kiem_tu_dong(tmp_path, monkeypatch):
+    # Dang that tren may dev/may 24: test/script goi call_template kem cau hoi nhung khong danh tinh.
+    audit = [{"ts": TS, "username": None, "question": "Top 10 san pham ban chay nhat?", "session_id": None,
+              "sql": "<template:get_top_products>({})", "status": "ok", "duration_ms": 40}]
+    dong, kq = _chay(tmp_path, monkeypatch, audit, cost=[], runs=[])
+    assert dong[("unknown", "Top 10 san pham ban chay nhat?")]["status"] == "tool_check"
+    assert kq["summary"]["total_queries"] == 0
+    assert not [u for u in kq["user_breakdown"] if u["username"] == "unknown"]
+
+
+def test_dong_khong_username_nhung_co_session_van_la_luot_can_xem(tmp_path, monkeypatch):
+    # Co session ma mat username la bat thuong - giu nguyen de con thay, khong giau thanh kiem tu dong.
+    audit = [{"ts": TS, "username": None, "question": "doanh thu", "session_id": "web-abc",
+              "sql": "<template:get_revenue_ytd>({})", "status": "ok", "duration_ms": 40}]
+    dong, kq = _chay(tmp_path, monkeypatch, audit, cost=[], runs=[])
+    assert dong[("unknown", "doanh thu")]["status"] == "ok"
+    assert kq["summary"]["total_queries"] == 1
+
+
+def test_dong_security_khong_dem_la_cau_hoi(tmp_path, monkeypatch):
+    audit = [{"ts": TS, "username": "dnh", "question": "", "session_id": None,
+              "sql": "<auth:login>", "status": "ok"},
+             {"ts": TS, "username": "dnh", "question": "", "session_id": None,
+              "sql": "<admin:create_user>", "status": "ok"}]
+    dong, kq = _chay(tmp_path, monkeypatch, audit, cost=[], runs=[])
+    assert kq["summary"]["total_queries"] == 0, "Dang nhap/thao tac admin khong phai luot truy van."
+    assert not [u for u in kq["user_breakdown"] if u["username"] == "dnh"]
+    assert all(r["log_source"] == "security" for r in kq["logs"]), "Dong security van phai hien o tab Security."
+
+
+def test_dong_chi_co_cost_log_co_nguon(tmp_path, monkeypatch):
+    cost = [{"ts": TS, "session_id": "web-1", "username": "dnh", "question_preview": "chao bot",
+             "model": "claude-sonnet-5", "cost_usd": 0.01, "input_tokens": 10, "output_tokens": 5}]
+    dong, kq = _chay(tmp_path, monkeypatch, audit=[], cost=cost, runs=[])
+    d = dong[("dnh", "chao bot")]
+    assert d["status"] == "no_sql" and d["log_source"] == "cost_log"
+    assert kq["summary"]["total_queries"] == 1

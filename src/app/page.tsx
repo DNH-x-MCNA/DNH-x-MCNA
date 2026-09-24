@@ -408,7 +408,7 @@ type QueryLogItem = {
   status: string;
   duration_ms: number | null;
   tool_duration_ms?: number | null;
-  log_source?: "audit" | "query_run" | "security";
+  log_source?: "audit" | "query_run" | "security" | "cost_log";
   session_id: string | null;
   query_id?: string | null;
   row_count?: number | null;
