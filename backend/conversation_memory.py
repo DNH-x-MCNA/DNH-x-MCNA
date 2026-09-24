@@ -12,7 +12,7 @@ import json
 import os
 import sqlite3
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "memory.db")
 
@@ -306,6 +306,26 @@ def fail_query_run(query_id: str, error_message: str, duration_ms: int = None, s
             (status, (error_message or "")[:4000], duration_ms, _utc_now(), query_id),
         )
         conn.commit()
+    finally:
+        conn.close()
+
+
+def abandon_stale_query_runs(max_age_seconds: int = 600) -> int:
+    """Dong cac luot running qua lau sau restart; khong cham luot vua bat dau."""
+    if max_age_seconds <= 0:
+        raise ValueError("max_age_seconds phai duong")
+    now = datetime.now(timezone.utc)
+    cutoff = (now - timedelta(seconds=max_age_seconds)).isoformat(timespec="seconds")
+    conn = _conn()
+    try:
+        cursor = conn.execute(
+            "UPDATE query_runs SET status='abandoned', "
+            "error_message='Luot truy van dung ma khong co ket qua cuoi; co the dich vu da khoi dong lai.', "
+            "completed_at=? WHERE status='running' AND julianday(created_at) < julianday(?)",
+            (now.isoformat(timespec="seconds"), cutoff),
+        )
+        conn.commit()
+        return cursor.rowcount
     finally:
         conn.close()
 
