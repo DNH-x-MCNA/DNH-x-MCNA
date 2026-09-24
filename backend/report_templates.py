@@ -12308,7 +12308,7 @@ def promotion_effectiveness(date_from: str = None, date_to: str = None, limit: i
             INNER JOIN dbo.DMS_DKKMCt d ON d.CondId=t.CondId
             GROUP BY t.ProgId
         )
-        SELECT TOP ({limit})
+        SELECT
                p.Id AS ProgramId, p.Code AS ProgramCode, p.Name AS ProgramName,
                COUNT_BIG(*) AS Orders,
                COUNT(DISTINCT po.CustomerCode) AS Customers,
@@ -12324,9 +12324,17 @@ def promotion_effectiveness(date_from: str = None, date_to: str = None, limit: i
         LEFT JOIN GiftProducts g ON g.ProgId=po.ProgId
         LEFT JOIN ConfiguredProducts c ON c.ProgId=po.ProgId
         GROUP BY p.Id, p.Code, p.Name, p.FromDate, p.ToDate
-        ORDER BY AssociatedRevenue DESC
+        ORDER BY AssociatedRevenue DESC, p.Id
         OPTION (HASH JOIN)
     """, params)
+
+    # DMS_CTKM.Code is truncated and is not a program key. Limiting SQL rows before
+    # checking codes can leave one program in the top N while hiding a lower-revenue
+    # program with the same code (Dec 2025: 4,251 versus 644 orders). Aggregate all
+    # programs first; return the top N plus their same-code siblings from this period.
+    top_codes = {row.get("ProgramCode") for row in rows[:limit] if row.get("ProgramCode")}
+    rows = [row for rank, row in enumerate(rows) if rank < limit
+            or row.get("ProgramCode") in top_codes]
 
     programs = []
     for row in rows:
@@ -12376,6 +12384,16 @@ def promotion_effectiveness(date_from: str = None, date_to: str = None, limit: i
              for other in trung_ma if other["program_id"] != prog["program_id"]),
             key=lambda item: str(item["program_id"])) if len(trung_ma) > 1 else []
 
+    # These rows remain visible when the general model payload compacts the ranked
+    # programs list. A warning about a shared code is not enough unless both actual
+    # ProgramIds and their separate numbers reach the model.
+    same_code_programs_to_distinguish = [
+        {key: prog[key] for key in (
+            "program_id", "program_code", "program_name", "orders",
+            "invoiced_orders", "associated_revenue")}
+        for prog in programs if prog["code_is_ambiguous"]
+    ]
+
     warning = None
     if requested_to > coverage_date:
         warning = (f"Du lieu lien ket don hang-chuong trinh moi den {coverage_date}; "
@@ -12420,6 +12438,7 @@ def promotion_effectiveness(date_from: str = None, date_to: str = None, limit: i
         # chieu moi biet la khong lech. Chot mot ten de hai ben goi giong nhau.
         "associated_revenue_label": "DT gan voi don trong ky bao cao",
         "program_count_returned": len(programs),
+        "same_code_programs_to_distinguish": same_code_programs_to_distinguish,
         "programs": programs,
     }
 
