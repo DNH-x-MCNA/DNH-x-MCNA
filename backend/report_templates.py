@@ -14937,6 +14937,20 @@ def call_template(name: str, args: dict, question: str = "", username: str = Non
             }
         else:
             result = fn(**call_args)
+        if (name == "get_geography_monthly_performance" and isinstance(result, dict)
+                and result.get("unavailable_metrics")):
+            # 24/09/2026 (cham lai UAT C24, 136 giay het gio): tool LUON tra unavailable_metrics (target/gap/TDV
+            # phu trach theo tinh) va query_plan coi moi danh sach khong rong la buoc CHUA DU -> cau "do phu khach
+            # thap, co hoi trang" (khong hoi chi tieu) bi danh dau thieu nguon, model goi lai tool roi tu viet SQL
+            # den het gio. Chi giu la gioi han khi cau hoi THUC SU hoi chi tieu/ke hoach/phu trach theo dia ban;
+            # con lai van bao cho model biet nhung khong bien thanh buoc thieu.
+            hoi_chi_tieu = any(marker in q_folded for marker in (
+                "ke hoach", "chi tieu", "target", "muc tieu", "% dat", "phan tram dat", "dat bao nhieu",
+                "hut", "thieu so voi", "trach nhiem", "phu trach", "nguoi phu trach",
+            ))
+            if not hoi_chi_tieu:
+                result = dict(result)
+                result["chi_so_khong_co_theo_dia_ban"] = result.pop("unavailable_metrics")
         if name == "get_top_customers" and isinstance(result, list):
             if concentration_question:
                 result = {
