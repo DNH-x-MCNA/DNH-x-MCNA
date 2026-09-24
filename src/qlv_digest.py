@@ -607,15 +607,21 @@ def build_qlv_period_email(
     metrics: dict,
     money_formatter: Callable[[float], str],
 ) -> str:
-    """Dựng email tuần/tháng cho đúng một đội QLV.
+    """Dựng email tuần/tháng cho đúng một đội QLV."""
+    return _build_qlv_email(metrics, money_formatter, daily=False)
 
-    Weekly/Monthly là báo cáo email; Teams chỉ dùng cho Daily Digest. Hàm này dùng cùng
-    metrics/sections đã khóa phạm vi đội, nhưng không tạo payload hoặc gửi Teams.
-    """
+
+def build_qlv_daily_email(metrics: dict, money_formatter: Callable[[float], str]) -> str:
+    """Daily QLV/ASM/RM cũng đi email theo quyết định 24/09."""
+    return _build_qlv_email(metrics, money_formatter, daily=True)
+
+
+def _build_qlv_email(metrics: dict, money_formatter: Callable[[float], str], *, daily: bool) -> str:
     # Email không bị giới hạn khung card Teams nên liệt kê tới 15 dòng mỗi nhóm việc.
-    headers, rows, sections = build_qlv_period_teams_content(metrics, money_formatter, max_rows=15)
+    content_builder = build_qlv_teams_content if daily else build_qlv_period_teams_content
+    headers, rows, sections = content_builder(metrics, money_formatter, max_rows=15)
     period_type = str(metrics.get("period_type") or "weekly").lower()
-    period_label = "TUẦN" if period_type == "weekly" else "THÁNG"
+    period_label = "HÀNG NGÀY" if daily else ("TUẦN" if period_type == "weekly" else "THÁNG")
     code = html.escape(str(metrics.get("employee_code") or ""))
     area = str(metrics.get("area_code") or "").upper()
     area_label = {
