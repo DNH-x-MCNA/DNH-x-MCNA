@@ -10848,7 +10848,7 @@ def _team_of_qlv_tu_luong(qlv_employee_code: str, fdate: str) -> tuple:
 
     23/09/2026 (V34). Kho giu hai bang snapshot voi hai do dai khac nhau:
       - fact_tonghopkhachhang : sync_warehouse.sync_fact_tonghopkhachhang(days=90)
-      - fact_thongketinhluong : sync_warehouse.sync_fact_thongketinhluong(days=400)
+      - fact_thongketinhluong : sync_warehouse.sync_fact_thongketinhluong() - TOAN BO lich su (24/09)
     Ca hai deu co cot manager_code that tu Bravo. Cac cau hoi khuyen mai roi vao 12/2025 (vi chuoi
     lien ket CTKM dung o 09/01/2026 nen ky mac dinh lui ve thang day du gan nhat) - NGOAI tam bang
     thu nhat nhung VAN trong tam bang thu hai.

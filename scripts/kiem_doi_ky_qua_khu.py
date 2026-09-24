@@ -63,10 +63,24 @@ def main():
         sys.exit("Khong co snapshot luong phu ky nay - khong co 'doi dung' de so.")
     print()
 
+    # 24/09/2026: ky truoc _detail_cutoff() khong con trong vhoadon_otc/etc ma da nen vao
+    # monthly_customer_summary. Chi doc bang chi tiet thi hai ben deu ra 0 dong va script bao DAT
+    # ma khong kiem gi - dat gia. Nen chon bang theo ky.
+    moc_chi_tiet = rt._detail_cutoff()
+    dung_tom_tat = ky_den < moc_chi_tiet
+    if dung_tom_tat:
+        print("Ky nam truoc moc chi tiet %s -> doc monthly_customer_summary." % moc_chi_tiet)
+        print()
+
     def doanh_thu(ids):
         if not ids:
             return 0.0
         ph = ",".join("?" * len(ids))
+        if dung_tom_tat:
+            return con.execute(
+                "SELECT COALESCE(SUM(revenue),0) FROM monthly_customer_summary "
+                "WHERE year_month BETWEEN ? AND ? AND employee_code IN (%s)" % ph,
+                (ky_tu[:7], ky_den[:7], *ids)).fetchone()[0]
         tong = 0.0
         for bang in ("vhoadon_otc", "vhoadon_etc"):
             tong += con.execute(
@@ -78,7 +92,7 @@ def main():
         "SELECT DISTINCT manager_code FROM fact_thongketinhluong WHERE save_date=? "
         "AND manager_code IS NOT NULL AND TRIM(manager_code)<>'' ORDER BY manager_code", (moc_luong,))]
 
-    sai, tong_sai, tong_dung, tong_tuyet_doi = [], 0.0, 0.0, 0.0
+    sai, tong_sai, tong_dung, tong_tuyet_doi, tong_kiem = [], 0.0, 0.0, 0.0, 0.0
     for qlv in qlvs:
         try:
             _, tham = rt._employee_scope_clause(qlv, "v", as_of=ky_den)
@@ -89,6 +103,7 @@ def main():
         if not dung_ids:
             continue
         a, b = doanh_thu(list(tham)), doanh_thu(dung_ids)
+        tong_kiem += b
         if abs(a - b) < 1:
             continue
         tong_sai += a
@@ -98,6 +113,9 @@ def main():
                     len(set(dung_ids) - set(tham)), a, b))
 
     if not sai:
+        if tong_kiem <= 0:
+            print("KHONG KET LUAN DUOC: tong doanh thu doi dung ky bang 0 - khong co du lieu ky nay de so.")
+            return 2
         print("DAT: doanh thu cua ca %d QLV khop doi hinh dung ky." % len(qlvs))
         return 0
 
