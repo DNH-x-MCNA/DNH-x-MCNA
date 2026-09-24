@@ -1000,6 +1000,19 @@ OTC ra **2.433 khách** theo cách này, còn chatbot báo **341**. Chừng nào
 chân của hai bên không so trực tiếp được** — phải thống nhất nguồn cohort trước. Nếu DNH chốt dùng
 `IsNC`, thay CTE `f` bằng truy vấn lấy tháng đầu tiên có `IsNC=1` trong `FACT_TongHopKhachHang`.
 
+> **Đính chính 24/09/2026 (UAT C30).** Câu "chatbot dùng cờ `IsNC`" ở trên là sai. Bảng `cohorts` của
+> chatbot tính theo **lần đầu có hóa đơn trong kho** (lịch sử từ 06/2022). Vì vậy tháng 08/2026 chỉ có
+> **324** khách, trong khi C29/M24 báo **627** khách mới theo `IsNC`. Từ bản sửa này, chatbot trả thêm
+> `cohort_theo_isnc` (đúng 627 cho 08/2026) và bảng `doi_chieu_hai_dinh_nghia_khach_moi`. Kho chỉ có
+> snapshot KPI từ 06/2026, nên cohort theo `IsNC` mới đo được tuổi ngắn. Tuổi 3/6/12 vẫn phải đọc ở
+> bảng cohort hóa đơn. Khi chấm C30 bằng `IsNC`, đối chiếu với `cohort_theo_isnc` chứ không đối chiếu
+> với `cohorts`.
+>
+> Tuổi rơi vào tháng đang chạy (ví dụ cohort 08/2026, tuổi 1 là tháng 09) vẫn để `None`, vì tháng đó
+> chưa tròn. Chatbot có thêm `retention_pct_tam_tinh`, là số tạm tính đến ngày dữ liệu. Checker trên
+> lấy `LastMonth = MAX(tháng có hóa đơn)`, nên nếu `#sales` có tháng đang chạy thì số của checker cũng
+> chỉ là số tạm tính, đối chiếu với `retention_pct_tam_tinh`.
+
     WITH f AS (
       SELECT CustomerCode,MIN(DATEFROMPARTS(YEAR(DocDate),MONTH(DocDate),1)) CohortMonth
       FROM #sales GROUP BY CustomerCode
