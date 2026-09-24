@@ -77,6 +77,20 @@ def test_nguoi_roi_doi_khong_bi_loai_khoi_ky_ma_ho_con_lam(kho):
     assert "D_MOI" not in ids, "Nguoi vao thang 6/2026 khong duoc tinh vao ky 12/2025."
 
 
+def test_bo_loc_dung_doi_12_2025_khi_snapshot_khach_da_het_han(kho):
+    """Duong chung cua cac tool doanh thu phai thu snapshot luong khi khong con KPI 12/2025."""
+    sql, ids = rt._employee_scope_clause(QLV, "v", as_of="2025-12-31")
+    assert sql == " AND v.employee_code IN (?,?)"
+    assert set(ids) == {"D_CU", "D_CHUNG"}
+    assert "D_MOI" not in ids
+
+
+def test_bo_loc_ky_co_snapshot_khach_van_dung_doi_cua_ky(kho):
+    sql, ids = rt._employee_scope_clause(QLV, "v", as_of="2026-06-30")
+    assert sql == " AND v.employee_code IN (?,?)"
+    assert set(ids) == {"D_CHUNG", "D_MOI"}
+
+
 def test_ky_hien_tai_van_dung_bang_theo_khach(kho):
     """Ban va khong duoc lam doi duong di cua ky BINH THUONG."""
     thong_tin = {}

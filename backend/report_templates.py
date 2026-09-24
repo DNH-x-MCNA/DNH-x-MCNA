@@ -457,13 +457,10 @@ def _employee_scope_clause(scope_employee_code: str, alias: str, as_of: str = No
     if not scope_employee_code:
         return "", ()
     team_snapshot = _fact_date_le(as_of) if as_of else None
-    if as_of and not team_snapshot:
-        _warn(
-            "CANH BAO DOI LICH SU: FACT_TongHopKhachHang chi giu lich su phan cong doi khoang "
-            "90 ngay, nen ky cu hon dang duoc tinh theo THANH PHAN DOI HIEN TAI. Thanh phan doi "
-            "tai ky do co the khac; bat buoc noi ro khi trinh bay YoY/lich su cap doi."
-        )
-    dms_ids = _get_team_dms_ids(scope_employee_code, team_snapshot)
+    # Khi snapshot khach hang da het han luu (~90 ngay), van phai truyen NGAY KY HOI
+    # de _get_team_dms_ids thu snapshot luong (~400 ngay) truoc khi buoc dung doi sau ky.
+    # Truyen None o day se am tham chot DOI HIEN TAI, lam sai moi tool dung scope nay.
+    dms_ids = _get_team_dms_ids(scope_employee_code, team_snapshot or as_of)
     placeholders = ",".join(["?"] * len(dms_ids))
     return f" AND {alias}.employee_code IN ({placeholders})", tuple(dms_ids)
 
