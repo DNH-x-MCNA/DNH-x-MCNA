@@ -1337,16 +1337,20 @@ def get_audit_logs_dashboard(
         #     hoi/session -> dong audit trong, status "ok" -> hien "unknown ... Hoan thanh" nhu mot luot
         #     chat thanh cong. Dong khong danh tinh, khong cau hoi, khong ton tien = kiem tra tu dong.
         chi_co_audit = not e.get("query_id") and not is_security_event
-        # Hai dang: dong cu khong danh tinh (truoc 24/09), va dong moi tu khai qua tien to session
-        # "kiemtra-" (scripts/verify_etc_channel_scope.py). Ca hai deu khong goi model nen c_usd = 0.
+        # Ba dang, deu khong goi model nen c_usd = 0: dong khong danh tinh khong cau hoi; dong khong
+        # username VA khong session (test/script goi call_template kem cau hoi - luot chat that luon
+        # co ca hai vi phai dang nhap); dong tu khai qua tien to session "kiemtra-".
+        khong_danh_tinh = uname in ("", "unknown")
         kiem_tu_dong = chi_co_audit and not c_usd and (
-            (uname in ("", "unknown") and not (e.get("question") or "").strip())
+            (khong_danh_tinh and (not sid or not (e.get("question") or "").strip()))
             or sid.startswith("kiemtra-"))
         trang_thai = "tool_check" if kiem_tu_dong else e.get("status", "success")
         thoi_gian = None if chi_co_audit else e.get("duration_ms")
         thoi_gian_tool = e.get("duration_ms") if chi_co_audit else None
 
-        if not kiem_tu_dong:
+        # Dong security (dang nhap, doi mat khau, thao tac admin) khong phai cau hoi: tu 05/08 no bi
+        # cong vao "Tong luot truy van" va so cau hoi cua tung nguoi (235 dong / 30 ngay tren may 24).
+        if not kiem_tu_dong and not is_security_event:
             user_stats[uname]["query_count"] += 1
         user_stats[uname]["display_name"] = display_name
 
@@ -1427,6 +1431,7 @@ def get_audit_logs_dashboard(
             "sql": None,
             "status": "no_sql",
             "duration_ms": None,
+            "log_source": "cost_log",
             "session_id": _sid2,
             "query_id": None,
             "row_count": None,
@@ -1519,7 +1524,8 @@ def get_audit_logs_dashboard(
             "total_output_tokens": grand_output_tokens,
             "total_cache_tokens": grand_cache_tokens,
             "grand_total_tokens": grand_input_tokens + grand_output_tokens + grand_cache_tokens,
-            "total_queries": sum(1 for row in filtered_logs if row.get("status") != "tool_check"),
+            "total_queries": sum(1 for row in filtered_logs
+                                 if row.get("status") != "tool_check" and row.get("log_source") != "security"),
             "unique_users_count": len([u for u in user_stats if u and u.lower() != "unknown"]),
             "days": days,
             "date": target_date.strftime("%Y-%m-%d") if target_date else None
