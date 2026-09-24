@@ -3503,6 +3503,7 @@ def _model_timeout_result(query_plan, freshness, question: str, session_id: str,
         + query_plan.timeout_answer()
     )
     answer = freshness.finalize_answer(answer)
+    answer = query_plan.finalize_warnings(answer)
     append_message(session_id, "user", question, query_id=query_id)
     append_message(session_id, "assistant", answer, query_id=query_id)
     return {
@@ -3671,6 +3672,7 @@ def ask(question: str, session_id: str = "default", username: str = None, scope_
             query_plan.finalize()
             answer_text = query_plan.finalize_answer(answer_text)
             answer_text = freshness.finalize_answer(answer_text)
+            answer_text = query_plan.finalize_warnings(answer_text)
             append_message(session_id, "user", question, query_id=query_id)
             append_message(session_id, "assistant", answer_text, query_id=query_id)
             if last_tool_used:
@@ -3829,6 +3831,7 @@ def ask(question: str, session_id: str = "default", username: str = None, scope_
                 tresult = call_template(tu.name, tu.input, question=question, username=username, session_id=session_id,
                                          scope_area_code=scope_area_code, scope_employee_code=scope_employee_code,
                                          scope_channel=scope_channel, scope_role=scope_role)
+                query_plan.record_tool_warnings(tresult.get("user_warnings") or [])
                 last_result = tresult
                 last_tool_used = (tu.name, str(tu.input))
                 if tresult.get("ok"):
@@ -3916,6 +3919,7 @@ def ask(question: str, session_id: str = "default", username: str = None, scope_
         )
         fallback = query_plan.finalize_answer(fallback)
     fallback = freshness.finalize_answer(fallback)
+    fallback = query_plan.finalize_warnings(fallback)
     append_message(session_id, "user", question, query_id=query_id)
     append_message(session_id, "assistant", fallback, query_id=query_id)
     return {"answer": fallback, "sql_used": sql_used, "last_result": None,
@@ -4070,6 +4074,7 @@ def ask_stream(question: str, session_id: str = "default", username: str = None,
             query_plan.finalize()
             answer_text = query_plan.finalize_answer(answer_text)
             answer_text = freshness.finalize_answer(answer_text)
+            answer_text = query_plan.finalize_warnings(answer_text)
             yield {"type": "text_delta", "text": answer_text}
             append_message(session_id, "user", question, query_id=query_id)
             append_message(session_id, "assistant", answer_text, query_id=query_id)
@@ -4227,6 +4232,7 @@ def ask_stream(question: str, session_id: str = "default", username: str = None,
                 tresult = call_template(tu.name, tu.input, question=question, username=username, session_id=session_id,
                                          scope_area_code=scope_area_code, scope_employee_code=scope_employee_code,
                                          scope_channel=scope_channel, scope_role=scope_role)
+                query_plan.record_tool_warnings(tresult.get("user_warnings") or [])
                 last_result = tresult
                 last_tool_used = (tu.name, str(tu.input))
                 if tresult.get("ok"):
@@ -4299,6 +4305,7 @@ def ask_stream(question: str, session_id: str = "default", username: str = None,
         )
         fallback = query_plan.finalize_answer(fallback)
     fallback = freshness.finalize_answer(fallback)
+    fallback = query_plan.finalize_warnings(fallback)
     yield {"type": "text_delta", "text": fallback}
     append_message(session_id, "user", question, query_id=query_id)
     append_message(session_id, "assistant", fallback, query_id=query_id)

@@ -306,6 +306,58 @@ class QueryPlan:
     _evidence_args: dict[str, dict[str, Any]] = field(default_factory=dict, repr=False)
     _reconciliation_checks: dict[str, dict[str, tuple[bool, str]]] = field(default_factory=dict, repr=False)
     _runtime_steps: dict[str, list[str]] = field(default_factory=dict, repr=False)
+    _user_warnings: list[dict[str, str]] = field(default_factory=list, repr=False)
+
+    def record_tool_warnings(self, warnings: list[dict[str, str]]) -> None:
+        """Keep reviewed, user-facing warnings independently of the model payload.
+
+        Legacy ASCII instructions in ``canh_bao`` are intentionally not rendered here.
+        Each producer supplies a severity and human wording; information about a valid
+        fallback source is retained in the trace without becoming a warning footer.
+        """
+        for warning in warnings:
+            if not isinstance(warning, dict):
+                continue
+            if warning.get("severity") not in {"warning", "info"}:
+                continue
+            if not warning.get("code") or not str(warning.get("message") or "").strip():
+                continue
+            item = {key: str(warning[key]) for key in ("code", "severity", "message")}
+            if item not in self._user_warnings:
+                self._user_warnings.append(item)
+
+    def finalize_warnings(self, answer: str) -> str:
+        """Append missing caveats after every answer renderer and freshness cleanup.
+
+        Compare complete sentences, ignoring accents/Markdown/punctuation. Avoid fuzzy
+        word overlap: sharing words or dates does not mean the limitation was disclosed.
+        A materially different paraphrase may therefore receive a repeated caveat; losing
+        a required limitation is worse than that conservative duplication.
+        """
+        def normalized(text: str) -> str:
+            return " " + " ".join(re.findall(r"\w+", _plain(text))) + " "
+
+        def sentences(text: str) -> list[str]:
+            return re.split(r"(?<=[.!?])\s+|\n+", text)
+
+        # Equality of complete statements matters: "Không đúng rằng <warning>"
+        # must not count as disclosing the warning just because it contains its text.
+        present = {normalized(sentence) for sentence in sentences(answer)}
+        additions = []
+        for warning in self._user_warnings:
+            if warning["severity"] != "warning":
+                continue
+            missing = []
+            for sentence in sentences(warning["message"].strip()):
+                comparison = normalized(sentence)
+                if comparison.strip() and comparison not in present:
+                    missing.append(sentence)
+                    present.add(comparison)
+            if missing:
+                additions.append("- " + " ".join(missing))
+        if not additions:
+            return answer
+        return answer.rstrip() + "\n\n### Lưu ý về số liệu\n" + "\n".join(additions)
 
     def remaining_seconds(self) -> float:
         return max(0.0, self.request_timeout_seconds - (time.monotonic() - self._started_monotonic))
@@ -1084,6 +1136,7 @@ class QueryPlan:
             "status": self.status,
             "sources": list(self.sources),
             "reconciliation_rules": [asdict(item) for item in self.reconciliation_rules],
+            "user_warnings": [dict(item) for item in self._user_warnings],
             "max_rounds": self.max_rounds,
             "max_tools_per_round": self.max_tools_per_round,
             "max_unique_tools": self.max_unique_tools,
