@@ -21,12 +21,24 @@ if BACKEND not in sys.path:
 import report_templates as rt
 
 
+# 24/09/2026: truoc day call_template o day khong truyen username/cau hoi/session, nen moi lan chay
+# cong kiem de lai mot dong audit_log TRONG - dashboard hien thanh "unknown ... Hoan thanh" nhu mot
+# luot chat thanh cong, va moi dong trong gop lai thanh mot. Nay tu khai danh tinh; tien to
+# "kiemtra-" cua session la quy uoc de dashboard nhan ra day la kiem tra tu dong (main.py /audit-logs).
+_DANH_TINH = {
+    "username": "kiem_tu_dong",
+    "session_id": "kiemtra-etc-%s" % __import__("datetime").date.today().isoformat(),
+}
+
+
 def _tool(name: str, args: dict) -> dict:
     wrapped = rt.call_template(
         name,
         args,
+        question="[Kiem tra tu dong] Phan quyen kenh ETC: %s" % name,
         scope_role="regional_director",
         scope_channel="ETC",
+        **_DANH_TINH,
     )
     if not wrapped.get("ok"):
         raise AssertionError(f"{name} tra loi: {wrapped}")
@@ -156,8 +168,10 @@ def main(argv=None) -> int:
         wrapped = rt.call_template(
             "get_customer_detail",
             {"customer_code": pure_otc[0]["customer_code"], "date_from": date_from, "date_to": date_to},
+            question="[Kiem tra tu dong] Phan quyen kenh ETC: tu choi khach thuan OTC",
             scope_role="regional_director",
             scope_channel="ETC",
+            **_DANH_TINH,
         )
         result = wrapped.get("result") or {}
         assert wrapped.get("ok") and "error" in result, wrapped

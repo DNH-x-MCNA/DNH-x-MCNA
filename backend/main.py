@@ -1328,7 +1328,26 @@ def get_audit_logs_dashboard(
 
         display_name = get_name_by_username(uname) or uname
 
-        user_stats[uname]["query_count"] += 1
+        # 24/09/2026: dong CHI CO trong audit_log (khong co query_run) la mot lan GOI TOOL, khong phai
+        # mot luot chat. Hai hau qua da gap:
+        #  1. duration_ms cua no la thoi gian MOT tool (call_template ghi sau moi tool), nhung bang
+        #     hien nhu thoi gian tra loi. Luot cham lai chay tu script do that 33,9 va 23,8 giay,
+        #     dashboard ghi 3,4 giay va 91 ms. Nay bo trong duration_ms, giu so goc o tool_duration_ms.
+        #  2. Script kiem tu dong (verify_etc_channel_scope.py) goi call_template khong username/cau
+        #     hoi/session -> dong audit trong, status "ok" -> hien "unknown ... Hoan thanh" nhu mot luot
+        #     chat thanh cong. Dong khong danh tinh, khong cau hoi, khong ton tien = kiem tra tu dong.
+        chi_co_audit = not e.get("query_id") and not is_security_event
+        # Hai dang: dong cu khong danh tinh (truoc 24/09), va dong moi tu khai qua tien to session
+        # "kiemtra-" (scripts/verify_etc_channel_scope.py). Ca hai deu khong goi model nen c_usd = 0.
+        kiem_tu_dong = chi_co_audit and not c_usd and (
+            (uname in ("", "unknown") and not (e.get("question") or "").strip())
+            or sid.startswith("kiemtra-"))
+        trang_thai = "tool_check" if kiem_tu_dong else e.get("status", "success")
+        thoi_gian = None if chi_co_audit else e.get("duration_ms")
+        thoi_gian_tool = e.get("duration_ms") if chi_co_audit else None
+
+        if not kiem_tu_dong:
+            user_stats[uname]["query_count"] += 1
         user_stats[uname]["display_name"] = display_name
 
         # Chi phi per-question (khong con gom theo session de tranh cong trung)
@@ -1349,8 +1368,10 @@ def get_audit_logs_dashboard(
             "user_name": display_name,
             "question": e.get("question"),
             "sql": e.get("sql"),
-            "status": e.get("status", "success"),
-            "duration_ms": e.get("duration_ms"),
+            "status": trang_thai,
+            "duration_ms": thoi_gian,
+            "tool_duration_ms": thoi_gian_tool,
+            "log_source": "audit" if chi_co_audit else ("security" if is_security_event else "query_run"),
             "session_id": sid,
             "query_id": e.get("query_id"),
             "row_count": e.get("row_count"),
@@ -1453,6 +1474,10 @@ def get_audit_logs_dashboard(
 
     user_breakdown = []
     for uname, s in sorted(user_stats.items(), key=lambda x: -x[1]["cost_usd"]):
+        # 24/09/2026: user_stats co the co dong chi vi kiem tra tu dong (khong dem cau hoi, 0 dong) -
+        # khong hien mot dong "unknown - 0 cau hoi" vo nghia trong bang theo nguoi dung.
+        if not s.get("query_count") and not s.get("cost_usd"):
+            continue
         user_breakdown.append({
             "username": uname,
             "user_name": s.get("display_name", uname),
@@ -1494,7 +1519,7 @@ def get_audit_logs_dashboard(
             "total_output_tokens": grand_output_tokens,
             "total_cache_tokens": grand_cache_tokens,
             "grand_total_tokens": grand_input_tokens + grand_output_tokens + grand_cache_tokens,
-            "total_queries": len(filtered_logs),
+            "total_queries": sum(1 for row in filtered_logs if row.get("status") != "tool_check"),
             "unique_users_count": len([u for u in user_stats if u and u.lower() != "unknown"]),
             "days": days,
             "date": target_date.strftime("%Y-%m-%d") if target_date else None

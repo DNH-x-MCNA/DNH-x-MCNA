@@ -279,7 +279,9 @@ def main():
         print("=" * 78)
         return
 
+    import uuid
     import nl2sql
+    from conversation_memory import complete_query_run, create_query_run, fail_query_run
     ngay = dt.date.today().strftime("%d%m")
     truoc = _chi_phi_hien_tai()
     ket_qua = []
@@ -290,15 +292,37 @@ def main():
         print("-" * 78)
         print("[%s] %s | session=%s" % (m["ma"], user["username"], sid))
         print("HOI: %s" % m["cau_hoi"])
+        # 24/09/2026: mo dong query_runs TRUOC khi goi model, giong /chat trong main.py. Truoc day luot
+        # chay tu script khong co query_runs nen dashboard lay dong audit_log thay vao - ma dong audit
+        # chi ghi thoi gian MOT lan goi tool: luot do that 33,9 giay hien thanh 3,4 giay, 23,8 giay
+        # hien thanh 91 ms. Mo dong truoc con giup luot hong van co dau vet, va neu ghi so hong thi
+        # dung muc nay TRUOC khi ton tien.
+        query_id = str(uuid.uuid4())
+        try:
+            create_query_run(query_id, sid, user["username"], m["cau_hoi"])
+        except Exception as exc:
+            print("=> BO QUA, khong goi model: khong mo duoc dong query_runs (%s)" % exc)
+            continue
         bat_dau = time.time()
         try:
             r = nl2sql.ask(m["cau_hoi"], session_id=sid, username=user["username"],
                            scope_area_code=area, scope_employee_code=emp, scope_channel=kenh,
-                           scope_role=user.get("role"), origin="cham_lai_uat")
+                           scope_role=user.get("role"), query_id=query_id, origin="cham_lai_uat")
             tra_loi, loi = r.get("answer") or "", None
             cong_cu = r.get("sql_used") or []
+            trang_thai = r.get("completion_status") or "completed"
+            complete_query_run(
+                query_id, tra_loi, sql_used=cong_cu, freshness=r.get("freshness"),
+                duration_ms=int((time.time() - bat_dau) * 1000),
+                status=trang_thai if trang_thai in ("completed", "partial_timeout") else "completed",
+                error_message=r.get("timeout_error"))
         except Exception as exc:
             tra_loi, loi, cong_cu = "", "%s: %s" % (type(exc).__name__, str(exc)[:300]), []
+            fail_query_run(
+                query_id, str(getattr(exc, "raw_message", exc))[:1000],
+                duration_ms=int((time.time() - bat_dau) * 1000),
+                status=("api_credit_exhausted" if type(exc).__name__ == "ApiCreditExhaustedError"
+                        else "error"))
         giay = time.time() - bat_dau
         print("=> %.1f giay | %s" % (giay, ("LOI: " + loi) if loi else "xong"))
         if tra_loi:
