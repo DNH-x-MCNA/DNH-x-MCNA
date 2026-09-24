@@ -7,14 +7,23 @@
      -> hien "unknown ... Hoan thanh" nhu mot luot chat thanh cong.
 Du lieu gia, khong doc log that.
 """
+import importlib.util
 import json
-import os
 import sys
+from pathlib import Path
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "backend"))
+BACKEND = Path(__file__).resolve().parents[1] / "backend"
+if str(BACKEND) not in sys.path:
+    sys.path.insert(0, str(BACKEND))
 
 import auth  # noqa: E402
-import main  # noqa: E402
+
+# Nap backend/main.py theo duong dan: repo co main.py o goc, test chay truoc co the da giu
+# sys.modules["main"] la file goc -> `import main` lay nham module.
+_spec = importlib.util.spec_from_file_location("dnh_dashboard_audit_test_main", BACKEND / "main.py")
+main = importlib.util.module_from_spec(_spec)
+sys.modules[_spec.name] = main
+_spec.loader.exec_module(main)
 
 
 def _chay(tmp_path, monkeypatch, audit, cost, runs):
