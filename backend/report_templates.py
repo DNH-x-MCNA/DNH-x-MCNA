@@ -5843,6 +5843,11 @@ def customer_product_coverage(as_of_date: str = None, lookback_months: int = 3,
         previous_ym = _month_add(as_of_date[:7], -1)
         py, pm = int(previous_ym[:4]), int(previous_ym[5:7])
         aligned_day = min(current_end_date.day, _last_day_of_month(py, pm))
+        # 24/09/2026 (M33/S72): as_of la NGAY CUOI thang thi day la thang TRON, phai so voi TRON
+        # thang truoc. Ban cu cat theo so ngay: 30/09 chi so voi 01-30/08 (mat ngay 31), 28/02 chi
+        # so voi 01-28/01 - lech checker S72 (thang tron vs thang tron).
+        if current_end_date.day == _last_day_of_month(current_end_date.year, current_end_date.month):
+            aligned_day = _last_day_of_month(py, pm)
         previous_from = f"{previous_ym}-01"
         previous_to = f"{previous_ym}-{aligned_day:02d}"
         comparison_basis = "CUNG NGAY TRONG THANG TRUOC (MTD-aligned)"

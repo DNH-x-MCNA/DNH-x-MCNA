@@ -1215,7 +1215,10 @@ TEMPLATE_TOOLS = [
                        "M33/S72: largest_revenue_declines da sap theo muc mat doanh thu va "
                        "primary_decline_driver tach FEWER_CUSTOMERS/FEWER_ORDERS/"
                        "LOWER_PAID_QUANTITY_PER_ORDER/LOWER_NET_REVENUE_PER_PAID_UNIT; khong tu suy "
-                       "nguyen nhan tu mot cot doanh thu. C33/C36: dung largest_revenue_increases, "
+                       "nguyen nhan tu mot cot doanh thu. M33 khong neu ky thi backend ep ky cua S72: "
+                       "THANG TRON gan nhat so tron thang truoc (as_of_date=ngay cuoi thang tron, "
+                       "lookback_months=1); cau tra loi phai neu ro hai ky current_period/previous_period. "
+                       "C33/C36: dung largest_revenue_increases, "
                        "largest_internal_share_losses, coverage_up_revenue_per_customer_down va "
                        "revenue_up_coverage_down da tinh tren tap day du truoc khi cat limit. "
                        "C28/S91: mode='assignment_change' tach khach giu nguyen NV chinh, doi NV, moi va "
@@ -2920,6 +2923,22 @@ def _normalize_tool_input_for_question(tool_name: str, tool_input: dict, questio
         requested_top = re.search(r"\btop\s*(\d{1,3})\b", q)
         if requested_top:
             args["top_n"] = min(100, max(1, int(requested_top.group(1))))
+        return args
+
+    if tool_name == "get_customer_product_coverage" and args.get("mode") == "product":
+        # 24/09/2026 (UAT M33, cham 22/09): cau "SKU DT giam do it khach/it don/giam luong/giam gia
+        # ban" khong neu ky, model tu chon lookback_months=3 -> so 01/07-22/09 voi 08/04-30/06 (co
+        # thang dang chay, cua so lech thang). Checker S72 so THANG TRON voi thang truoc. Do tren may
+        # 24: cung ky thi tool khop S72 tung SKU; khac ky thi ket luan nguoc chieu (Siro ho bo phe
+        # -8,98 ty theo 3 thang nhung +5,74 ty T8 so T7). Khong neu ky -> ep ve ky cua S72.
+        nguyen_nhan = sum(marker in q for marker in ("it khach", "it don", "giam luong", "giam gia"))
+        neu_ky = re.search(
+            r"thang\s*\d|\bt\d{1,2}\b|\bquy\b|nam\s*(nay|truoc|\d{4})|\d{1,2}/\d{2,4}|\d+\s*thang|"
+            r"\btuan\b|\bngay\b|\bmtd\b|\bytd\b|thang nay|thang truoc|ky nay|\btu\s+\d", q)
+        if nguyen_nhan >= 2 and not neu_ky:
+            from report_templates import _latest_complete_revenue_month, _month_bounds
+            args["as_of_date"] = _month_bounds(_latest_complete_revenue_month())[1]
+            args["lookback_months"] = 1
         return args
 
     if tool_name == "get_workforce_productivity":
