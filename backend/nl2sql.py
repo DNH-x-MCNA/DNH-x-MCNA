@@ -1104,6 +1104,11 @@ TEMPLATE_TOOLS = [
                        "get_customer_lifecycle_summary de lay khoi theo_vung cho ve dau cua cau hoi - "
                        "thieu mot trong hai la tra loi nua cau. Cua so cohort tu noi rong de tuoi lon "
                        "nhat co so that; neu cohort_from_da_mo_rong=true thi neu ly_do_mo_rong_cua_so. "
+                       "C30 'thang mo moi': cohort_theo_isnc dem khach co IsNC - DUNG so khach moi cua "
+                       "C29/M24 - phai trinh bay cho cac thang co snapshot, kem "
+                       "doi_chieu_hai_dinh_nghia_khach_moi; tuoi 3/6/12 chi co o bang cohort hoa don va "
+                       "phai noi ro do la dinh nghia khac. Gia tri *_tam_tinh chi la so den ngay du lieu "
+                       "cua thang dang chay, phai ghi 'tam tinh'. "
                        "DNH van can chot dinh nghia 'khach mo moi' truoc khi dung lam KPI chinh thuc.",
         "input_schema": {"type": "object", "properties": {
             "month_to": {"type": "string", "description": "YYYY-MM, thang cohort cuoi."},
@@ -1211,7 +1216,10 @@ TEMPLATE_TOOLS = [
                        "M33/S72: largest_revenue_declines da sap theo muc mat doanh thu va "
                        "primary_decline_driver tach FEWER_CUSTOMERS/FEWER_ORDERS/"
                        "LOWER_PAID_QUANTITY_PER_ORDER/LOWER_NET_REVENUE_PER_PAID_UNIT; khong tu suy "
-                       "nguyen nhan tu mot cot doanh thu. C33/C36: dung largest_revenue_increases, "
+                       "nguyen nhan tu mot cot doanh thu. M33 khong neu ky thi backend ep ky cua S72: "
+                       "THANG TRON gan nhat so tron thang truoc (as_of_date=ngay cuoi thang tron, "
+                       "lookback_months=1); cau tra loi phai neu ro hai ky current_period/previous_period. "
+                       "C33/C36: dung largest_revenue_increases, "
                        "largest_internal_share_losses, coverage_up_revenue_per_customer_down va "
                        "revenue_up_coverage_down da tinh tren tap day du truoc khi cat limit. "
                        "C28/S91: mode='assignment_change' tach khach giu nguyen NV chinh, doi NV, moi va "
@@ -2528,6 +2536,73 @@ def _payload_for_model(tool_name: str, payload, question: str):
             return {**payload, "du_lieu": compact_data}
         return compact_data
 
+    if tool_name == "get_customer_cohort_retention":
+        wrapper = payload if isinstance(payload.get("du_lieu"), dict) else None
+        data = payload.get("du_lieu") if wrapper else payload
+        cohorts = data.get("cohorts")
+        if not isinstance(cohorts, list) or not cohorts:
+            return payload
+
+        # 24/09/2026 (UAT C30): 16 cohort x 4 tuoi dang dict day du vuot MAX_PAYLOAD_CHARS, luoi
+        # an toan cat con 12 cohort DAU. Ngay 23/09 model mat cohort 06-08/2026 roi viet "quá mới nên
+        # tuổi 1-3 tháng cũng chưa tròn kỳ" - sai, 06 va 07/2026 da co so tuoi 1. Ngay 21/09 model
+        # viet "chưa có cohort nào đủ 12 tháng" trong khi 06-08/2025 co so. Gui bang gon DU moi cohort.
+        def _pct(value):
+            return None if value is None else round(float(value), 1)
+
+        def _bang(ds):
+            bang = []
+            for c in ds:
+                if not isinstance(c, dict):
+                    continue
+                dong = {"cohort": c.get("cohort_month"), "khach": c.get("cohort_customers")}
+                if c.get("group") not in (None, "ALL"):
+                    dong["nhom"] = c.get("group")
+                if c.get("cohort_is_left_censored"):
+                    dong["kiem_duyet_trai"] = True
+                for r in c.get("retention") or []:
+                    tuoi = r.get("age_month")
+                    dong[f"t{tuoi}"] = _pct(r.get("retention_pct"))
+                    if r.get("retention_pct_tam_tinh") is not None:
+                        dong[f"t{tuoi}_tam_tinh"] = _pct(r.get("retention_pct_tam_tinh"))
+                bang.append(dong)
+            return bang
+
+        bang = _bang(cohorts)
+        co_so = {}
+        for tuoi in data.get("ages") or []:
+            thang = [d["cohort"] for d in bang
+                     if d.get(f"t{tuoi}") is not None and not d.get("kiem_duyet_trai")]
+            co_so[f"t{tuoi}"] = {"so_cohort": len(thang), "tu": min(thang) if thang else None,
+                                 "den": max(thang) if thang else None}
+        compact_data = {key: data.get(key) for key in (
+            "definition", "cohort_from", "cohort_to", "group_by", "ages", "cohort_from_da_mo_rong",
+            "ly_do_mo_rong_cua_so", "left_censored_cohort_months", "valid_cohort_count",
+            "pham_vi_du_lieu_co_that", "latest_complete_month", "pham_vi_kenh", "canh_bao",
+            "luu_y_doi_chieu", "doi_chieu_hai_dinh_nghia_khach_moi", "ghi_chu_hai_dinh_nghia",
+            "tam_tinh_thang_chua_tron", "data_as_of",
+        ) if data.get(key) is not None}
+        compact_data.update({
+            "tong_so_cohort": len(bang),
+            "bang_cohort": bang,
+            "cohort_co_so_theo_tuoi": co_so,
+            "cach_doc": (
+                "tN = % khach cua cohort con mua dung thang tuoi N; null = thang dich chua tron, KHONG "
+                "phai 0%. tN_tam_tinh = so tam tinh den ngay du lieu cua thang dang chay. bang_cohort "
+                f"liet ke DU {len(bang)} cohort; KHONG duoc noi 'chua co cohort nao du tuoi N' khi "
+                "cohort_co_so_theo_tuoi.tN.so_cohort > 0, va phai neu ca cohort moi nhat co so."),
+        })
+        isnc = data.get("cohort_theo_isnc")
+        if isinstance(isnc, dict):
+            compact_data["cohort_theo_isnc"] = (
+                {key: isnc.get(key) for key in ("status", "definition", "thang_khong_co_snapshot",
+                                                "gioi_han") if isnc.get(key) is not None}
+                | {"bang_cohort": _bang(isnc.get("cohorts") or [])}
+                if isnc.get("status") == "ok" else isnc)
+        if wrapper:
+            return {**payload, "du_lieu": compact_data}
+        return compact_data
+
     if tool_name == "get_customer_product_coverage" and payload.get("mode") == "product":
         # 18/09/2026 (cau M33): payload tho cua nhanh nay do duoc 500.156 ky tu - gap 50 lan ngan
         # sach 10.000. Bo rut gon chung ha dan 12 -> 8 -> 5 -> 3 -> 1 -> 0 dong, va o buoc 0 thi MOI
@@ -2849,6 +2924,22 @@ def _normalize_tool_input_for_question(tool_name: str, tool_input: dict, questio
         requested_top = re.search(r"\btop\s*(\d{1,3})\b", q)
         if requested_top:
             args["top_n"] = min(100, max(1, int(requested_top.group(1))))
+        return args
+
+    if tool_name == "get_customer_product_coverage" and args.get("mode") == "product":
+        # 24/09/2026 (UAT M33, cham 22/09): cau "SKU DT giam do it khach/it don/giam luong/giam gia
+        # ban" khong neu ky, model tu chon lookback_months=3 -> so 01/07-22/09 voi 08/04-30/06 (co
+        # thang dang chay, cua so lech thang). Checker S72 so THANG TRON voi thang truoc. Do tren may
+        # 24: cung ky thi tool khop S72 tung SKU; khac ky thi ket luan nguoc chieu (Siro ho bo phe
+        # -8,98 ty theo 3 thang nhung +5,74 ty T8 so T7). Khong neu ky -> ep ve ky cua S72.
+        nguyen_nhan = sum(marker in q for marker in ("it khach", "it don", "giam luong", "giam gia"))
+        neu_ky = re.search(
+            r"thang\s*\d|\bt\d{1,2}\b|\bquy\b|nam\s*(nay|truoc|\d{4})|\d{1,2}/\d{2,4}|\d+\s*thang|"
+            r"\btuan\b|\bngay\b|\bmtd\b|\bytd\b|thang nay|thang truoc|ky nay|\btu\s+\d", q)
+        if nguyen_nhan >= 2 and not neu_ky:
+            from report_templates import _latest_complete_revenue_month, _month_bounds
+            args["as_of_date"] = _month_bounds(_latest_complete_revenue_month())[1]
+            args["lookback_months"] = 1
         return args
 
     if tool_name == "get_workforce_productivity":
