@@ -5,6 +5,7 @@ import time
 import uuid
 import datetime as dt
 from collections import defaultdict
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Header, Depends, Query, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
@@ -64,6 +65,7 @@ from conversation_memory import (
     create_query_run,
     complete_query_run,
     fail_query_run,
+    abandon_stale_query_runs,
     get_query_run,
     list_query_runs,
     save_query_feedback,
@@ -74,7 +76,18 @@ from pricing import USD_TO_VND_RATE, api_provider_for_model
 
 init_auth_schema()
 
-app = FastAPI(title="DNH AI Chatbot API", version="1.0.0")
+def close_stale_query_runs_on_startup():
+    """Sau restart, dong nhung luot khong the nhan event ket thuc nua."""
+    abandon_stale_query_runs()
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    close_stale_query_runs_on_startup()
+    yield
+
+
+app = FastAPI(title="DNH AI Chatbot API", version="1.0.0", lifespan=lifespan)
 
 API_KEY = os.getenv("BACKEND_API_KEY", "").strip()
 ALLOWED_EMAIL_DOMAIN = "namhapharma.com"
@@ -938,6 +951,7 @@ def chat_stream(req: ChatRequest, user: dict = Depends(require_approved_user)):
     create_query_run(query_id, req.session_id, user["username"], req.question.strip())
 
     def event_generator():
+        done_seen = False
         try:
             for chunk in ask_stream(req.question, session_id=req.session_id, username=user["username"],
                                      scope_area_code=scope_area_code, scope_employee_code=scope_employee_code,
@@ -956,6 +970,7 @@ def chat_stream(req: ChatRequest, user: dict = Depends(require_approved_user)):
                         status=chunk.get("completion_status", "completed"),
                         error_message=chunk.get("timeout_error"),
                     )
+                    done_seen = True
                     payload = {
                         "type": "done",
                         "query_id": query_id,
@@ -971,6 +986,12 @@ def chat_stream(req: ChatRequest, user: dict = Depends(require_approved_user)):
                     }
                 else:
                     payload = chunk
+                yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+            if not done_seen:
+                fail_query_run(query_id, "Stream ended without done event", duration_ms=_elapsed_ms(started_at),
+                               status="abandoned")
+                payload = {"type": "error", "code": "stream_incomplete", "query_id": query_id,
+                           "message": "Lượt trả lời kết thúc chưa đầy đủ. Vui lòng thử lại sau."}
                 yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
         except GeneratorExit:
             fail_query_run(query_id, "Client closed stream", duration_ms=_elapsed_ms(started_at),
