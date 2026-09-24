@@ -19,8 +19,10 @@ import datetime as dt
 import io
 import json
 import os
+import statistics
 import sys
 import time
+import unicodedata
 
 GOC = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(GOC, "backend"))
@@ -32,11 +34,65 @@ for _luong in (sys.stdout, sys.stderr):
         pass
 
 DANH_SACH = os.path.join(GOC, "scripts", "cham_lai_20_luot.json")
-# DO THAT 23/09/2026: 2 luot dau tien het 0,6841 USD = ~17.100d, tuc ~8.550d/luot - GAP DOI con so
-# 4.000d lay tu log chi phi ngay 22/09. Ly do: moi muc chay trong mot session RIENG nen luot nao cung
-# phai ghi cache tu dau, ma cache chiem 71% chi phi. Con so 4.000d/luot cua ngay 22/09 la trung binh
-# tren cac phien nhieu luot, dung san cache - khong ap duoc cho kieu chay nay.
-VND_MOI_LUOT = 8550
+# 23/09/2026: BO uoc tinh mot don gia chung. Chi phi moi luot phu thuoc DO NANG cua cau hoi - hai
+# luot dau chay that mat 33,9 giay va 23,8 giay, khong the cung gia. Gio uoc tinh theo LICH SU CUA
+# CHINH CAU HOI DO trong cost_log: tra ve trung vi cac lan da hoi, kem so quan sat de biet do tin.
+# Cau nao chua tung hoi thi dung trung vi chung va danh dau ro.
+#
+# Lich su cac con so da dung, de khong ai quay lai dung nham:
+#   4.000d  - trung binh log ngay 22/09, tren cac phien NHIEU luot dung san cache -> khong ap duoc
+#   8.550d  - trung binh 2 luot chay that 23/09 -> dung kieu chay nhung phang, bo qua do nang
+VND_MOI_USD = 25000
+
+
+def _gon(s: str) -> str:
+    """Bo dau, chu thuong, gop khoang trang - de khop cau hoi trong JSON (khong dau) voi
+    question_preview trong cost_log (co dau)."""
+    s = "".join(ch for ch in unicodedata.normalize("NFD", (s or "").lower())
+                if unicodedata.category(ch) != "Mn")
+    return " ".join(s.replace("d", "d").replace("đ", "d").split())
+
+
+def _lich_su_chi_phi():
+    """question (da gon) -> danh sach cost_usd cac lan da hoi. Doc cost_log, khong goi model."""
+    try:
+        from cost_logger import LOG_PATH
+    except ImportError:
+        return {}, []
+    if not os.path.exists(LOG_PATH):
+        return {}, []
+    theo_cau, tat_ca = {}, []
+    with io.open(LOG_PATH, encoding="utf-8", errors="replace") as f:
+        for dong in f:
+            dong = dong.strip()
+            if not dong:
+                continue
+            try:
+                e = json.loads(dong)
+            except ValueError:
+                continue
+            gia = float(e.get("cost_usd") or 0)
+            if gia <= 0:
+                continue
+            tat_ca.append(gia)
+            khoa = _gon(e.get("question_preview") or "")
+            if khoa:
+                theo_cau.setdefault(khoa, []).append(gia)
+    return theo_cau, tat_ca
+
+
+def _uoc_tinh(cau_hoi: str, theo_cau: dict, tat_ca: list):
+    """Tra (usd, so_quan_sat, nguon). Khop theo tien to vi question_preview bi cat con 120 ky tu."""
+    can = _gon(cau_hoi)
+    khop = []
+    for khoa, gia in theo_cau.items():
+        if khoa.startswith(can[:60]) or can.startswith(khoa[:60]):
+            khop.extend(gia)
+    if khop:
+        return statistics.median(khop), len(khop), "lich su chinh cau nay"
+    if tat_ca:
+        return statistics.median(tat_ca), len(tat_ca), "TRUNG VI CHUNG (cau nay chua tung hoi)"
+    return None, 0, "khong co lich su"
 
 
 def _nap_muc():
@@ -86,6 +142,33 @@ def _pham_vi(user: dict):
         return main._business_scopes(user), None
     except Exception as exc:  # HTTPException cua FastAPI, hoac loi cau hinh scope
         return None, str(getattr(exc, "detail", exc))[:200]
+
+
+def _chi_phi_theo_session(sid: str):
+    """Chi phi THAT cua rieng mot muc - cong cac dong cost_log mang dung session_id nay.
+
+    Chinh xac hon phep tru tong truoc/sau: neu co luot khac chay xen vao thi phep tru sai, con
+    loc theo session_id thi khong.
+    """
+    try:
+        from cost_logger import LOG_PATH
+    except ImportError:
+        return None
+    if not os.path.exists(LOG_PATH):
+        return None
+    tong = 0.0
+    with io.open(LOG_PATH, encoding="utf-8", errors="replace") as f:
+        for dong in f:
+            dong = dong.strip()
+            if not dong:
+                continue
+            try:
+                e = json.loads(dong)
+            except ValueError:
+                continue
+            if e.get("session_id") == sid:
+                tong += float(e.get("cost_usd") or 0)
+    return tong
 
 
 def _chi_phi_hien_tai():
@@ -147,11 +230,25 @@ def main():
             continue
         ke_hoach.append((m, user, pv))
 
+    theo_cau, tat_ca = _lich_su_chi_phi()
+    print("Lich su chi phi: %d luot da ghi, %d cau hoi khac nhau." % (len(tat_ca), len(theo_cau)))
+    print()
+
+    tong_usd, so_doan = 0.0, 0
+    print("%-5s %-16s %10s %5s  %s" % ("MA", "TAI KHOAN", "UOC TINH", "QS", "CAU HOI"))
     for m, user, pv in ke_hoach:
-        area, emp, kenh = pv
-        print("  [%s] %-16s vai=%-18s mien=%-4s kenh=%-4s nv=%s" % (
-            m["ma"], user["username"], user.get("role"), area or "-", kenh or "-", emp or "-"))
-        print("       %s" % m["cau_hoi"][:90])
+        usd, n, nguon = _uoc_tinh(m["cau_hoi"], theo_cau, tat_ca)
+        if usd is None:
+            gia = "?"
+        else:
+            tong_usd += usd
+            if "CHUNG" in nguon:
+                so_doan += 1
+            gia = format(round(usd * VND_MOI_USD), ",d").replace(",", ".") + "d"
+        print("%-5s %-16s %10s %5s  %s" % (m["ma"], user["username"], gia, n or "-",
+                                           m["cau_hoi"][:60]))
+        if usd is not None and "CHUNG" in nguon:
+            print("      ^ cau nay CHUA TUNG HOI - dung trung vi chung, do tin thap")
     if bo_qua:
         print()
         print("BO QUA %d muc (khong chay bang quyen trong):" % len(bo_qua))
@@ -160,9 +257,19 @@ def main():
 
     print()
     print("Se chay : %d luot" % len(ke_hoach))
-    print("Uoc tinh: ~%s VND (%d x %s)" % (
-        format(len(ke_hoach) * VND_MOI_LUOT, ",d").replace(",", "."),
-        len(ke_hoach), format(VND_MOI_LUOT, ",d").replace(",", ".")))
+    if tat_ca:
+        print("Uoc tinh: ~%s VND  (%.4f USD) - tinh theo DO NANG tung cau, khong phai don gia chung"
+              % (format(round(tong_usd * VND_MOI_USD), ",d").replace(",", "."), tong_usd))
+        re_nhat = min(tat_ca) * VND_MOI_USD
+        dat_nhat = max(tat_ca) * VND_MOI_USD
+        print("         Bien do mot luot trong lich su: %s - %sd -> uoc tinh co the lech nhieu"
+              % (format(round(re_nhat), ",d").replace(",", "."),
+                 format(round(dat_nhat), ",d").replace(",", ".")))
+        if so_doan:
+            print("         %d/%d muc phai dung trung vi chung (chua tung hoi) - phan nay do tin thap"
+                  % (so_doan, len(ke_hoach)))
+    else:
+        print("Uoc tinh: KHONG CO LICH SU CHI PHI - khong uoc tinh duoc, phai chay tren may 24.")
 
     if not tham.xac_nhan:
         print()
@@ -198,15 +305,30 @@ def main():
             print(tra_loi[:1200])
         ket_qua.append({"ma": m["ma"], "nguoi": user["username"], "cau_hoi": m["cau_hoi"],
                         "can_thay": m["can_thay"], "tra_loi": tra_loi, "loi": loi,
-                        "cong_cu": cong_cu, "giay": round(giay, 1), "session_id": sid})
+                        "cong_cu": cong_cu, "giay": round(giay, 1), "session_id": sid,
+                        "usd": _chi_phi_theo_session(sid)})
 
     sau = _chi_phi_hien_tai()
     print()
     print("=" * 78)
+    print("CHI PHI THAT THEO TUNG MUC")
+    print("=" * 78)
+    print("%-5s %10s %8s  %s" % ("MA", "THAT", "GIAY", "CAU HOI"))
+    for k in ket_qua:
+        tien = ("%sd" % format(round((k["usd"] or 0) * VND_MOI_USD), ",d").replace(",", ".")
+                if k["usd"] is not None else "?")
+        print("%-5s %10s %8.1f  %s" % (k["ma"], tien, k["giay"], k["cau_hoi"][:52]))
+    do_duoc = [k["usd"] for k in ket_qua if k["usd"]]
+    if do_duoc:
+        print()
+        print("  re nhat : %sd" % format(round(min(do_duoc) * VND_MOI_USD), ",d").replace(",", "."))
+        print("  dat nhat: %sd" % format(round(max(do_duoc) * VND_MOI_USD), ",d").replace(",", "."))
+        print("  chenh   : %.1f lan giua cau re nhat va dat nhat" % (max(do_duoc) / min(do_duoc)))
+    print()
     if truoc is not None and sau is not None:
         usd = sau - truoc
-        print("Chi phi THAT cua dot nay: %.4f USD (~%s VND)" % (
-            usd, format(round(usd * 25000), ",d").replace(",", ".")))
+        print("Tong chi phi dot nay: %.4f USD (~%s VND)" % (
+            usd, format(round(usd * VND_MOI_USD), ",d").replace(",", ".")))
     print("Xong %d/%d luot, %d luot loi." % (
         len(ket_qua), len(ke_hoach), sum(1 for k in ket_qua if k["loi"])))
 
@@ -221,6 +343,9 @@ def main():
             f.write("**Hỏi:** %s\n\n" % k["cau_hoi"])
             f.write("**Cần thấy để đóng:** %s\n\n" % k["can_thay"])
             f.write("**Phiên:** `%s` · **Thời gian:** %.1f giây\n\n" % (k["session_id"], k["giay"]))
+            if k.get("usd") is not None:
+                f.write("**Chi phí thật:** %s đ\n\n"
+                        % format(round(k["usd"] * VND_MOI_USD), ",d").replace(",", "."))
             if k["cong_cu"]:
                 f.write("**Công cụ đã gọi:**\n\n```\n%s\n```\n\n" % "\n".join(str(c) for c in k["cong_cu"]))
             if k["loi"]:
