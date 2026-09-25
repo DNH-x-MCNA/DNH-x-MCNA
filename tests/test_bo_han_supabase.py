@@ -9,9 +9,12 @@ from pathlib import Path
 import pandas as pd
 
 GOC = Path(__file__).resolve().parents[1]
-for duong in (str(GOC), str(GOC / "backend")):
-    if duong not in sys.path:
-        sys.path.insert(0, duong)
+# backend DUNG SAU goc repo: ca hai deu co main.py. Chen backend len dau lam cac test chay sau `import main` nham
+# backend/main.py (may 24 25/09: test_canh_bao_kiem_thu_nguoc truot 2 ca khi chay sau file nay).
+if str(GOC / "backend") not in sys.path:
+    sys.path.append(str(GOC / "backend"))
+if str(GOC) not in sys.path:
+    sys.path.insert(0, str(GOC))
 
 import nl2sql  # noqa: E402
 import src.alerts as alerts  # noqa: E402
