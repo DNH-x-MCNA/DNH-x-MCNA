@@ -2051,24 +2051,6 @@ QUERY_TOOL = {
     },
 }
 
-QUERY_SUPABASE_TOOL = {
-    "name": "query_inventory_receivables",
-    "description": (
-        "CHI dung cho cau hoi ve TON KHO (inventory) - du lieu do dong nghiep tu nhap tren Supabase. "
-        "CONG NO KHONG dung tool nay nua (da chuyen sang bang fact_congno_khachhang o kho local - dung "
-        "query_database). Chay 1 cau SQL SELECT (chi doc) tren Supabase (PostgreSQL - ten cot phan biet "
-        "hoa/thuong, PHAI dat trong dau ngoac kep \"...\"). Chi duoc dung SELECT/WITH, khong INSERT/UPDATE/DELETE/DROP."
-    ),
-    "input_schema": {
-        "type": "object",
-        "properties": {
-            "sql": {"type": "string", "description": "Cau lenh SQL SELECT (PostgreSQL) can chay tren Supabase"},
-            "explanation": {"type": "string", "description": "Giai thich ngan gon muc dich cau query nay"},
-        },
-        "required": ["sql"],
-    },
-}
-
 QUERY_SQL_SERVER_TOOL = {
     "name": "query_sql_server",
     "description": (
@@ -2131,7 +2113,6 @@ SAVE_GLOSSARY_TOOL = {
 
 RAW_SQL_TOOLS = {
     "query_database": "local",
-    "query_inventory_receivables": "supabase",
     "query_sql_server": "bravo",
 }
 LIVE_SQL_TOOL_NAMES = {"query_sql_server"}
@@ -2146,7 +2127,7 @@ TEMPLATE_TOOLS = [
 ]
 ALL_TOOLS = (
     TEMPLATE_TOOLS
-    + [QUERY_TOOL, QUERY_SUPABASE_TOOL, QUERY_SQL_SERVER_TOOL, SEARCH_SQL_CATALOG_TOOL]
+    + [QUERY_TOOL, QUERY_SQL_SERVER_TOOL, SEARCH_SQL_CATALOG_TOOL]
     + REALTIME_TOOLS
     + [SAVE_GLOSSARY_TOOL]
 )
@@ -3550,7 +3531,7 @@ def _dynamic_context_note(question: str = "", session_id: str = "", scope_area_c
             f'trong khi tai khoan chi duoc xem {scope_channel}), hoac hoi CHUNG CHUNG kieu "ca 2 kenh"/ '
             f'"tat ca kenh" - PHAI TU CHOI RO RANG, giai thich tai khoan chi co quyen xem kenh {scope_channel}, '
             f'KHONG duoc tra loi bang so lieu kenh {scope_channel} nhu the la du du lieu (gay hieu nham la '
-            f'da bao gom ca kenh kia). Tool tra cuu SQL tu do (query_database/query_inventory_receivables) '
+            f'da bao gom ca kenh kia). Tool tra cuu SQL tu do (query_database) '
             f'KHONG kha dung cho tai khoan nay. MOI cau tra loi co so lieu doanh thu/don hang PHAI ghi ro '
             f'dang "(chi kenh {scope_channel})" ngay canh con so.'
         )
@@ -3673,7 +3654,7 @@ def ask(question: str, session_id: str = "default", username: str = None, scope_
     gan nhat trong CUNG session de hieu ngu canh cau hoi tiep theo.
     scope_area_code: NEU duoc truyen (tai khoan regional_director/qlv bi gioi han vung), MOI tool bao
     cao chuan se bi EP LOC theo dung vung nay o TANG CODE (report_templates.py), va tool SQL tu do
-    (query_database/query_inventory_receivables) se bi LOAI HAN khoi danh sach tool kha dung - day la
+    (query_database) se bi LOAI HAN khoi danh sach tool kha dung - day la
     lop bao ve du lieu THAT (khong phu thuoc AI co lam dung huong dan hay khong).
     scope_employee_code: CHI danh cho tai khoan qlv - gioi han rieng cac bao cao lo hieu suat CA NHAN
     dong nghiep (get_revenue_tree/get_kpi_ranking) chi con doi cua rieng ho, khong thay KPI ca nhan

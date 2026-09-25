@@ -6,37 +6,7 @@ from sqlalchemy import create_engine
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CONFIG_PATH = os.path.join(PROJECT_ROOT, 'config.yaml')
 
-_cloud_engine = None
-_fast_cloud_engine = None
 _bravo_engine = None
-_bravo_down_until = None
-_CIRCUIT_BREAKER_SECONDS = 300.0
-
-
-def _get_cloud_engine():
-    global _cloud_engine
-    if _cloud_engine is not None:
-        return _cloud_engine
-    url = (os.getenv("CLOUD_DB_URL") or "").strip()
-    if not url:
-        return None
-    if url.startswith("postgres://"):
-        url = url.replace("postgres://", "postgresql://", 1)
-    _cloud_engine = create_engine(url, pool_pre_ping=True, pool_size=5, max_overflow=10)
-    return _cloud_engine
-
-
-def _get_fast_cloud_engine():
-    global _fast_cloud_engine
-    if _fast_cloud_engine is not None:
-        return _fast_cloud_engine
-    url = (os.getenv("CLOUD_DB_URL") or "").strip()
-    if not url:
-        return None
-    if url.startswith("postgres://"):
-        url = url.replace("postgres://", "postgresql://", 1)
-    _fast_cloud_engine = create_engine(url, pool_pre_ping=True, connect_args={'connect_timeout': 3})
-    return _fast_cloud_engine
 
 
 def _get_bravo_engine():
@@ -64,40 +34,6 @@ def _get_bravo_engine():
         connect_args={'timeout': 10}
     )
     return _bravo_engine
-
-
-def run_with_failover(label, pg_fn, mssql_fn):
-    """
-    Ưu tiên đọc từ Bravo SQL Server nếu có cấu hình + Bravo đang truy cập được. Nếu Bravo lỗi/down
-    hoặc chưa cấu hình -> tự động fallback sang đọc từ Supabase Cloud.
-    """
-    global _bravo_down_until
-    import time
-    now = time.monotonic()
-    skip_bravo = _bravo_down_until is not None and now < _bravo_down_until
-
-    if not skip_bravo:
-        bravo_engine = _get_bravo_engine()
-        if bravo_engine is not None:
-            try:
-                with bravo_engine.connect() as conn:
-                    result = mssql_fn(conn)
-                _bravo_down_until = None
-                return result
-            except Exception as e:
-                print(f"[DB][{label}] Bravo lỗi/không truy cập được ({e}) — chuyển sang Supabase dự phòng.")
-                _bravo_down_until = now + _CIRCUIT_BREAKER_SECONDS
-        else:
-            print(f"[DB][{label}] Chưa cấu hình BRAVO_SQL_* — thử thẳng Supabase.")
-    else:
-        print(f"[DB][{label}] Bravo mới báo lỗi gần đây — bỏ qua, dùng thẳng Supabase (tự thử lại Bravo sau {_CIRCUIT_BREAKER_SECONDS}s).")
-
-    engine = _get_fast_cloud_engine()
-    if engine is None:
-        print(f"[DB][{label}] Không có Supabase engine để fallback — bỏ qua.")
-        return None
-    with engine.connect() as conn:
-        return pg_fn(conn)
 
 
 def load_config():

@@ -7,9 +7,9 @@ NGUON DU LIEU (tu 2026-07-08):
   (moi 15-30 phut) tu Bravo qua sync_warehouse.py, co INDEX + DAY DU LICH SU NHIEU NAM, tra loi
   nhanh (<=10s). Dung tool query_database cho cau hoi tu do ve doanh thu/san pham/khach hang/
   nhan vien/vung mien/tra hang khong thuoc 5 tool bao cao chuan.
-- Supabase CHI con dung cho inventory (bang do dong nghiep tu nhap) - dung tool
-  query_inventory_receivables. CONG NO da chuyen HAN sang kho local (bang fact_congno_khachhang,
-  snapshot tu SP goc DNH) tu 29/07/2026 - KHONG con doc receivable_detail/receivable_etc tren Supabase.
+- 25/09/2026: DA BO HAN Supabase. Ton kho doc tu kho local (brv_tonkhodk/brv_kho/brv_sanpham, tool
+  get_inventory_expiry_report). CONG NO o kho local (bang fact_congno_khachhang, snapshot tu SP goc DNH)
+  tu 29/07/2026 - KHONG con doc receivable_detail/receivable_etc.
 - Bravo (SQL Server song, may chu that cua khach hang) la nguon fallback CHI-DOC cho object/cot chua
   duoc warehouse phu. Chatbot tim schema dong tu catalog toan bo object duoc cap quyen, sau do moi
   query live bang T-SQL. Bao cao chuan van uu tien warehouse/tool da kiem chung de nhanh va on dinh.
@@ -262,20 +262,9 @@ fact_congno_khachhang: CONG NO theo khach hang, snapshot TUC THOI tu bao cao con
   co du no o ca OTC va ETC, tong no ho the nao" chi tra duoc TONG GOP, nguoi hoi khong biet ai no OTC
   bao nhieu / ETC bao nhieu - dung y cau hoi. Gop truoc roi SUM 1 lan la MAT HAN kha nang tach lai.
 
-=== SUPABASE (PostgreSQL) - CHI dung voi tool query_inventory_receivables ===
-(Ten cot phan biet hoa/thuong, PHAI dat trong dau ngoac kep "...", dung LIMIT N)
-
-inventory (snapshot ton kho MOI NHAT, khong theo ngay): "item_code", "item_name", "unit",
-  "opening_qty", "inward_qty", "outward_qty", "closing_qty" (ton cuoi SL),
-  "closing_value" (ton cuoi tien), "warehouse" (CHU Y: cot nay 100%
-  NULL, KHONG dung duoc de loc/nhom theo vung - neu cau hoi co yeu to VUNG MIEN, chuyen sang dung
-  query_database voi brv_tonkhodk/brv_kho/brv_sanpham o kho local thay vi bang nay).
-  CHI duoc bao cao cac so snapshot da phat sinh. KHONG tinh/tra ve so thang ban het, ngay ban het,
-  sap can kho hoac bat ky suy dien ton kho tuong lai nao.
-
-(CONG NO: KHONG con tren Supabase - da chuyen sang bang fact_congno_khachhang o kho local, hoi qua
- query_database. TUYET DOI KHONG truy van receivable_detail/receivable_etc - 2 bang do la du lieu
- Excel nhap tay cu, sai lech lon, DA NGUNG dung tu 29/07/2026.)
+(CONG NO: dung bang fact_congno_khachhang o kho local, hoi qua query_database. TUYET DOI KHONG
+ truy van receivable_detail/receivable_etc - 2 bang do la du lieu Excel nhap tay cu, DA NGUNG dung
+ tu 29/07/2026.)
 
 === QUY TAC QUAN TRONG ===
 1. Doanh thu = SUM(amount9), KHONG dung cot nao khac.
@@ -296,8 +285,8 @@ inventory (snapshot ton kho MOI NHAT, khong theo ngay): "item_code", "item_name"
 7. Luon tra loi bang TIENG VIET, ro rang, ngan gon, co so lieu cu the kem don vi (ty/trieu dong).
 8. Neu cau hoi co NHIEU khia canh (vd hoi ca theo san pham, khach hang, vung mien, nhan vien cung
    luc), hay tach thanh cac truy van rieng biet tuan tu, KHONG co gang gop tat ca vao 1 cau SQL qua phuc tap.
-9. query_database chay tren kho "local" (SQLite - LIMIT N, khong quote ten cot). query_inventory_receivables
-   chay tren SUPABASE (PostgreSQL - quote ten cot trong "...", LIMIT N). KHONG dung nham dialect giua 2 tool.
+9. query_database chay tren kho "local" (SQLite - LIMIT N, khong quote ten cot); query_sql_server chay
+   tren Bravo (T-SQL - TOP N). KHONG dung nham dialect giua 2 tool.
 10. Kho local co DAY DU LICH SU nhieu nam (tu ~2022) nen thoai mai so sanh xa (nam nay vs nam truoc,
     quy nay vs quy truoc...) - dung tool compare_periods hoac tu ghep 2 lan goi get_revenue_by_channel.
 11. CHINH SACH THU NHAP TDV OTC - PHAN BIET RO BA THU KHAC NHAU, DUNG GOP:
