@@ -388,7 +388,7 @@ class QueryPlan:
                 step.status == "pending" and step.domain == "customer"
                 and tool_name in step.tool_hints
             )][:1]
-        if tool_name in {"query_database", "query_sql_server", "query_inventory_receivables"}:
+        if tool_name in {"query_database", "query_sql_server"}:
             raw_text = _plain(json.dumps(args or {}, ensure_ascii=False, default=str))
             raw_domains = {domain for domain, markers in _RAW_DOMAIN_MARKERS.items()
                            if any(marker in raw_text for marker in markers)}

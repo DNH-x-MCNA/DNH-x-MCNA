@@ -7,7 +7,7 @@ lich su nhieu nam, dung cho HAU HET cau hoi (bao cao chuan va cau hoi tu do da d
 Bravo song la fallback read-only cho object/cot chua dong bo va chi duoc mo cho vai tro du dieu kien;
 SQL bi validate, timeout, gioi han dong va audit. Supabase chi con dung cho snapshot inventory cu.
 """
-import os, re, ssl, time, json, datetime as dt, decimal, urllib.parse
+import os, re, time, json, datetime as dt, decimal, urllib.parse
 from sqlalchemy import create_engine, text
 
 
@@ -105,11 +105,6 @@ def _get_engine(db: str = "local"):
             if drv == "ODBC Driver 18 for SQL Server":
                 s += "TrustServerCertificate=yes;"
             _engines[db] = create_engine("mssql+pyodbc:///?odbc_connect=" + urllib.parse.quote_plus(s), pool_pre_ping=True)
-        elif db == "supabase":
-            pwd = os.environ["SUPABASE_DB_PASSWORD"]; ref = os.environ["SUPABASE_REF"]; host = os.environ["SUPABASE_HOST"]
-            url = f"postgresql+pg8000://postgres.{ref}:{urllib.parse.quote_plus(pwd)}@{host}:5432/postgres"
-            ctx = ssl.create_default_context(); ctx.check_hostname = False; ctx.verify_mode = ssl.CERT_NONE
-            _engines[db] = create_engine(url, connect_args={"ssl_context": ctx}, pool_pre_ping=True)
         else:
             raise ValueError(f"db khong hop le: {db}")
     return _engines[db]
@@ -137,7 +132,7 @@ def validate_sql(sql: str, db: str = "local") -> str:
         raise SqlRejected("Chi duoc truy van object trong database SQL Server hien tai.")
     if db == "bravo" and _SELECT_ALL_COLUMNS.search(s):
         raise SqlRejected("SQL Server live khong cho phep SELECT *; phai liet ke dung cac cot can doc.")
-    if db in ("supabase", "local") and not re.search(r"\bLIMIT\s+\d+\b", s, re.IGNORECASE):
+    if db == "local" and not re.search(r"\bLIMIT\s+\d+\b", s, re.IGNORECASE):
         s = f"{s}\nLIMIT {MAX_ROWS}"
     # db == "bravo" (T-SQL): khong tu dong them TOP N (cu phap SELECT...LIMIT khong hop le voi SQL Server,
     # AI tu dung TOP N neu can) - fetchmany(MAX_ROWS) ben duoi van dam bao gioi han so dong tra ve.
@@ -158,9 +153,7 @@ def run_query(sql: str, question: str = "", db: str = "local", username: str = N
         safe_sql = validate_sql(sql, db)
         eng = _get_engine(db)
         with eng.connect() as conn:
-            if db == "supabase":
-                conn.execute(text(f"SET statement_timeout = {STATEMENT_TIMEOUT_SEC * 1000}"))
-            elif db == "bravo":
+            if db == "bravo":
                 # Timeout o tang pyodbc ngan truy van live treo VPN/scan qua lau. LOCK_TIMEOUT
                 # chi gioi han cho khoa, khong doi isolation level va khong doc dirty data.
                 proxied = conn.connection

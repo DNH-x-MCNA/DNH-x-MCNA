@@ -618,8 +618,8 @@ def get_bravo_inventory_snapshot(force_refresh=False):
     phế Nam Hà từng hiện closing_qty gộp chung 1 số thay vì tách đúng OTC/ETC).
 
     Công thức tính (SQL/pandas) dùng chung với script đồng bộ cũ — xem
-    scripts/sync_from_bravo_to_supabase.py::build_inventory_dataframe() để tránh trùng lặp/lệch
-    công thức về sau (script đó giờ CHỈ còn là backup thủ công, không chạy tự động).
+    src/bravo_inventory.py::build_inventory_dataframe() (25/09/2026 chuyển từ script đồng bộ Supabase cũ khi
+    bỏ hẳn Supabase) để tránh trùng lặp/lệch công thức về sau.
 
     LƯU Ý: closing_value hiện luôn = 0 (chưa có nguồn giá trị tồn kho được DNH xác nhận). Các trường
     suy diễn months_to_sell còn được giữ trong cấu trúc legacy để audit, nhưng mọi cảnh báo/digest
@@ -644,8 +644,9 @@ def get_bravo_inventory_snapshot(force_refresh=False):
         return []
 
     try:
-        sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "scripts"))
-        from sync_from_bravo_to_supabase import build_inventory_dataframe, get_sql_server_connection
+        # 25/09/2026: bo han Supabase - hai ham nay chuyen sang src/bravo_inventory.py. Truoc day import tu
+        # scripts/sync_from_bravo_to_supabase.py, ma script do sys.exit(1) luc import neu thieu CLOUD_DB_URL.
+        from src.bravo_inventory import build_inventory_dataframe, get_sql_server_connection
         sql_conn = get_sql_server_connection()
         try:
             df = build_inventory_dataframe(sql_conn)
@@ -1522,29 +1523,6 @@ def _biz_threshold(key, default):
         return default
 
 
-def _alert_engine():
-    """Cloud engine dùng chung của chatbot (lớp hậu-ETL). None nếu chưa cấu hình."""
-    try:
-        from src.database import _get_cloud_engine
-        return _get_cloud_engine()
-    except Exception as e:
-        print(f"[ALERTS] Không lấy được engine dữ liệu: {e}")
-        return None
-
-
-def _two_latest_periods(conn):
-    """Trả (latest, previous) period của receivable_detail theo đúng thứ tự thời gian."""
-    from sqlalchemy import text
-    from src.etl import _latest_period_key
-    periods = [r[0] for r in conn.execute(text("SELECT DISTINCT period FROM receivable_detail")).fetchall() if r[0]]
-    if not periods:
-        return None, None
-    periods_sorted = sorted(periods, key=_latest_period_key, reverse=True)
-    latest = periods_sorted[0]
-    prev = periods_sorted[1] if len(periods_sorted) > 1 else None
-    return latest, prev
-
-
 # ---- Pure helpers (unit-test được, không đụng DB) --------------------------
 
 def overdue_ratio(total_overdue, total_balance):
@@ -1800,34 +1778,10 @@ def check_debt_aging_migration_alert():
         rows.sort(key=lambda r: r[2], reverse=True)
         rows = rows[:10]
     except Exception as e:
-        print(f"[ALERTS][aging_migration] Bravo lỗi/chưa đủ lịch sử ({e}) — dự phòng Supabase receivable_detail.")
-        engine = _alert_engine()
-        if engine is None:
-            return
-        try:
-            with engine.connect() as conn:
-                latest, prev = _two_latest_periods(conn)
-                if not latest or not prev:
-                    print("[ALERTS][aging_migration] Chưa đủ 2 kỳ để so sánh.")
-                    return
-                latest_label, prev_label = latest, prev
-                key_suffix = latest  # "M_YYYY" — không có dấu ":"
-                sql = text('''
-                    SELECT c.customer_code, c.customer_name, c.overdue_gt_45,
-                           COALESCE(p.overdue_gt_45, 0) AS prev_gt45
-                    FROM receivable_detail c
-                    LEFT JOIN receivable_detail p
-                           ON c.customer_code = p.customer_code AND p.period = :prev
-                    WHERE c.period = :latest
-                      AND c.overdue_gt_45 > 10000000
-                      AND COALESCE(p.overdue_gt_45, 0) = 0
-                    ORDER BY c.overdue_gt_45 DESC LIMIT 10
-                ''')
-                db_rows = conn.execute(sql, {"latest": latest, "prev": prev}).fetchall()
-                rows = [(r[0], r[1], r[2]) for r in db_rows]
-        except Exception as e2:
-            print(f"[ALERTS][aging_migration] Lỗi cả 2 nguồn: {e2}")
-            return
+        # 25/09/2026: bo han Supabase - khong con du phong receivable_detail. Bravo loi hoac chua du snapshot
+        # thang truoc thi BO QUA lan nay (khong canh bao tren so lieu khong kiem chung duoc).
+        print(f"[ALERTS][aging_migration] Bravo lỗi/chưa đủ lịch sử ({e}) — bỏ qua lần này.")
+        return
 
     if not rows:
         print("[ALERTS][aging_migration] Không có khách mới rơi vào nhóm >45 ngày.")
