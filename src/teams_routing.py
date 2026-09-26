@@ -1,4 +1,4 @@
-"""Business delivery policy agreed on 24/09; optional shared Teams Flow from #41."""
+"""Business delivery policy agreed on 24/09 (C-Level keeps Teams, 26/09); optional shared Teams Flow from #41."""
 from __future__ import annotations
 
 import json
@@ -20,22 +20,28 @@ def is_team_manager(recipient):
 
 
 def teams_audience_allowed(recipient):
-    """Only regional/channel directors; a team code always excludes Teams.
+    """Business Teams: C-Level plus regional/channel directors; QLV/ASM/RM use email only.
 
-    Legacy YAML has no roles on the five scoped director audiences. Continue to
-    recognize those scopes, but never infer a director from a name or an UPN.
+    26/09/2026: anh Dang chot phuong an A - C-Level GIU Teams (Daily + canh bao) nhu truoc #106. Ghi chu
+    tay hop 24/09 ghi "Teams: C-Level, Giam doc mien, Giam doc kenh"; ban tom tat chu chi ghi giam doc
+    mien/kenh nen #106 da bo C-Level. C-Level = audience KHONG gioi han vung/kenh (legacy: role rong).
+
+    Legacy YAML has no roles on the six audiences. Continue to recognize those
+    scopes, but never infer a role from a name or an UPN. A team code always excludes Teams.
     """
     if is_team_manager(recipient) or str(recipient.get("employee_code") or "").strip():
         return False
     role = str(recipient.get("role") or "").strip().lower()
-    if role not in {"", "regional_director", "channel_director"}:
+    if role not in {"", "c_level", "regional_director", "channel_director"}:
         return False
     region, channel = recipient.get("region"), recipient.get("channel")
+    if role == "c_level":
+        return not region and not channel
     if role == "regional_director":
         return bool(region)
     if role == "channel_director":
         return bool(channel)
-    return bool(region or channel)
+    return True
 
 
 def delivery_mode():
@@ -58,7 +64,7 @@ def load_shared_routes(config):
     """Validate all director UPNs before Teams sends; never fall back from shared.
 
     Only audience -> UPN is allowed in the local mapping. It cannot widen data
-    scopes. Email-only managers/C-Level must not appear in that mapping.
+    scopes. Email-only managers (QLV/ASM/RM) must not appear in that mapping.
     """
     if delivery_mode() == "legacy":
         return None
@@ -92,7 +98,7 @@ def load_shared_routes(config):
     except (OSError, UnicodeError, ValueError):
         raise TeamsRoutingError("Không đọc được bảng UPN Teams; kiểm tra JSON và khóa trùng.") from None
     if not isinstance(mapping, dict) or set(mapping) != set(names):
-        raise TeamsRoutingError("Bảng UPN phải có đúng các audience giám đốc miền/kênh; không có QLV/C-Level.")
+        raise TeamsRoutingError("Bảng UPN phải có đúng các audience C-Level và giám đốc miền/kênh; không có QLV.")
     routes = {}
     for name in names:
         recipient = mapping[name]
