@@ -188,3 +188,26 @@ def test_lui_thang_ket_ngay_khi_thang_dich_ngan_hon(tmp_path, monkeypatch):
     assert rt._lui_thang_giu_ngay("2026-03-31", 1) == "2026-02-28"
     assert rt._lui_thang_giu_ngay("2026-09-23", 6) == "2026-03-23"
     assert rt._lui_thang_giu_ngay("2026-01-15", 12) == "2025-01-15"
+
+
+def test_theo_nguong_30_60_90_mot_lan_khop_goi_rieng(tmp_path, monkeypatch):
+    # 26/09/2026 (may 24 23/09): "Khach im lang 30/60/90 ngay" -> model goi tool 3 lan. theo_nguong phai khop tung lan goi
+    # rieng va tinh tren toan bo tap (khong bi limit).
+    db_path = tmp_path / "warehouse.db"
+    _make_db(db_path)
+    conn = sqlite3.connect(db_path)
+    conn.executemany("INSERT INTO vhoadon_otc VALUES (?,?,'SP_MOI',?,1,1,?,1,'NV1',?,NULL)", [
+        ("2026-08-14", "KH_40_NGAY", 7_000_000, "S40", "2026-08-14"),   # im lang 40 ngay: chi >=30
+        ("2026-07-15", "KH_70_NGAY", 5_000_000, "S70", "2026-07-15"),   # im lang 70 ngay: >=30 va >=60
+    ])
+    conn.commit()
+    conn.close()
+    monkeypatch.setattr(local_warehouse, "DB_PATH", str(db_path))
+    r = rt.customers_silent(as_of_date=AS_OF, silent_days=30, limit=1)
+    bang = {x["nguong_ngay"]: x for x in r["theo_nguong"]}
+    assert set(bang) >= {30, 60, 90, 180}
+    for n in (30, 60, 90):
+        rieng = rt.customers_silent(as_of_date=AS_OF, silent_days=n, limit=200)
+        assert bang[n]["so_khach"] == rieng["total_count"]
+        assert abs(bang[n]["doanh_thu_ky_nhin_lai"] - sum(k["doanh_thu_ky_nhin_lai"] for k in rieng["khach_im_lang"])) < 1
+    assert (bang[30]["so_khach"], bang[60]["so_khach"], bang[90]["so_khach"]) == (6, 5, 4), "Tich luy theo nguong."

@@ -1056,6 +1056,8 @@ TEMPLATE_TOOLS = [
                         "dung khi hoi truoc khi ngung ho mua bao nhieu). BAT BUOC doc "
                         "total_count de ket luan tren toan bo tap; neu bang chi tiet dai thi chi neu cac "
                         "muc uu tien va ghi mot dong 'Dang liet ke N/T khach', khong noi ve gioi han ky thuat. "
+                        "Hoi NHIEU nguong (30/60/90) -> goi MOT lan voi silent_days = nguong nho nhat, doc "
+                        "theo_nguong (so khach + doanh thu tung nguong); KHONG goi lai tung nguong. "
                         "Moi khach co nhom_im_lang va san_pham_mua_nhieu_nhat. Neu san pham co status hoac "
                         "product_name_status=not_available thi chi noi thieu thong tin san pham, KHONG loai "
                         "khach va KHONG suy dien ten SKU. Ky san pham mua nhieu nhat la ky_san_pham "
