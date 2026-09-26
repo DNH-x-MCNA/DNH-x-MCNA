@@ -4510,8 +4510,25 @@ def customers_silent(as_of_date: str = None, silent_days: int = 60, lookback_mon
 
     total_count = int(rows[0]["total_count"] or 0) if rows else 0
     returned_count = len(out)
+    # 26/09/2026 (query_runs may 24 23/09 "Khach im lang 30/60/90 ngay"): model goi tool 3 lan (30, 60, 90). Tra so khach +
+    # doanh thu ky nhin lai cho MOI nguong trong mot lan, tinh tren TOAN BO tap khach (khong bi limit), cung ky/pham vi.
+    nguong_ds = sorted({30, 60, 90, 180, silent_days})
+    moc_nguong = {n: (as_of - dt.timedelta(days=n)).isoformat() for n in nguong_ds}
+    cot_nguong = ", ".join(f"SUM(CASE WHEN lan <= ? THEN 1 ELSE 0 END) n{n}, "
+                           f"SUM(CASE WHEN lan <= ? THEN rev ELSE 0 END) r{n}" for n in nguong_ds)
+    tong_nguong = _q(
+        f"WITH base AS ({base_sql}), s AS (SELECT customer_code, MAX(doc_date) lan, SUM(amount9) rev FROM base "
+        f"GROUP BY customer_code HAVING SUM(amount9) > 0) SELECT {cot_nguong} FROM s",
+        base_params + tuple(x for n in nguong_ds for x in (moc_nguong[n], moc_nguong[n])))[0]
+    theo_nguong = [{"nguong_ngay": n, "so_khach": int(tong_nguong[f"n{n}"] or 0),
+                    "doanh_thu_ky_nhin_lai": _f(tong_nguong[f"r{n}"])} for n in nguong_ds]
     result = {
         "as_of": as_of_date, "nguong_im_lang_ngay": silent_days,
+        "theo_nguong": theo_nguong,
+        "theo_nguong_ghi_chu": ("So khach im lang >= N ngay (TICH LUY: nhom >=90 nam trong >=60) va doanh thu ky nhin lai "
+                                "cua ho, tinh tren toan bo tap khach. Hoi nhieu nguong -> dung bang nay, KHONG goi lai "
+                                "tool cho tung nguong; danh sach khach_im_lang loc theo nguong_im_lang_ngay, moi dong co "
+                                "nhom_im_lang."),
         "ky_nhin_lai": {"tu": date_from, "den": as_of_date},
         "ky_san_pham": {"tu": item_from, "den": as_of_date},
         "so_khach": total_count,
@@ -11252,8 +11269,10 @@ def _inventory_supply_risk(stock_by_item: dict, item_names: dict, area_code: str
         "answer_rule": (
             "Moi trang thai co trong status_counts deu DA co it nhat vai dong mau trong rows. "
             "Neu so_dong_chua_hien_theo_trang_thai con so du cho mot trang thai, day la danh sach BI "
-            "CAT theo limit - noi ro con bao nhieu SKU chua liet ke va co the goi lai voi limit lon "
-            "hon hoac focus='shortage'/'overstock'. TUYET DOI khong noi la khong lay duoc danh sach."),
+            "CAT theo limit - noi ro con bao nhieu SKU chua liet ke. Tra loi TU rows + status_counts; CHI goi "
+            "lai (limit lon hon hoac focus='shortage'/'overstock') khi nguoi dung doi DANH SACH DAY DU cua mot "
+            "nhom (26/09: model tu goi lai focus='shortage' sau focus='all' o 4 luot tong quan ton kho 18-22/09). "
+            "TUYET DOI khong noi la khong lay duoc danh sach."),
         "recent_customer_candidates": buyer_candidates,
         # 18/09/2026 (cau M40): hai ve cua phep chia KHONG cung don vi. brv_sanpham.unit cua cac ma
         # nay la "Vien" va ton kho theo lo dem bang vien, trong khi hoa don ban theo HOP - don gia
