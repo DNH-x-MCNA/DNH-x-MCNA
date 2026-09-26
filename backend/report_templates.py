@@ -2795,6 +2795,30 @@ def revenue_monthly_series(month_to: str = None, months_back: int = 12, include_
                 "plan_matches": (plan["otc"] is not None
                                  and abs(region_plan_total - plan["otc"]) <= 1),
             }
+        # 26/09/2026 (Cost of Value): C02 hoi "theo kenh VA mien" nhung payload chi tach mien cho OTC. UAT 16-17/09
+        # sau ban sua C02 van 3-4 tool, 5 vong, 12-13 nghin dong/luot - model tu do phan ETC theo mien. Nguon KHONG co
+        # ke hoach ETC theo mien (dim_targetvungmien chi co kenh GT/MT = OTC; ke hoach ETC chi o toan cong ty), nen
+        # tra doanh thu ETC THAT theo mien cung ky va noi thang la khong co ke hoach mien, de mot lan goi la du.
+        if include_plans and include_region_breakdown and scope_channel != "OTC" and not scope_employee_code:
+            etc_from = _month_bounds(ym)[0]
+            etc_to = d_to_that or _month_bounds(ym)[1]
+            try:
+                etc_rows = revenue_by_region(etc_from, etc_to, scope_area_code=scope_area_code, channel="ETC",
+                                             scope_channel=scope_channel)
+                item["etc_by_region"] = [{"area_code": row["area"], "etc_revenue": _f(row["revenue"])}
+                                         for row in etc_rows]
+                tong_etc_mien = sum(_f(row["revenue"]) for row in etc_rows)
+                item["etc_region_reconciliation"] = {
+                    "revenue_sum_regions": tong_etc_mien, "revenue_company_etc": item["etc_revenue"],
+                    "revenue_matches": abs(tong_etc_mien - _f(item["etc_revenue"])) <= 1,
+                }
+            except sqlite3.OperationalError as exc:
+                item["etc_by_region"] = None
+                item["etc_region_note_loi"] = f"Chua tach duoc ETC theo mien ({str(exc)[:120]}); KHONG coi la 0."
+            item["etc_plan_by_region"] = None
+            item["etc_region_note"] = (
+                "Nguon chi co ke hoach ETC TOAN CONG TY (plan_etc_revenue), KHONG co ke hoach ETC theo mien: chi neu "
+                "doanh thu ETC tung mien, % dat ETC chi tinh o cap cong ty. KHONG goi them tool de tim ke hoach nay.")
         # 15/09/2026 (UAT OTC-Only C-Level 14:17-14:20 "doanh so kenh MT cac thang" roi "bo sung ke
         # hoach va % thuc hien"): tra san doanh thu + ke hoach + % dat kenh dac biet (Kenh MT) tung thang
         # trong CUNG payload. So nay DA NAM SAN trong doanh thu OTC mien Nam, khong cong them.

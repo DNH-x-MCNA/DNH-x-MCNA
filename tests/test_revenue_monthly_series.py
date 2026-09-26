@@ -117,11 +117,12 @@ def test_co_s02_du_mien_khong_goi_doanh_thu_theo_vung(tmp_path, monkeypatch):
     conn.commit()
     conn.close()
     goi_vung = []
-    monkeypatch.setattr(rt, "revenue_by_region", lambda *a, **k: goi_vung.append(a) or [])
+    monkeypatch.setattr(rt, "revenue_by_region", lambda *a, **k: goi_vung.append(k.get("channel")) or [])
 
     r = rt.revenue_monthly_series(month_to="2026-07", months_back=1, include_yoy=False)
 
-    assert goi_vung == []
+    # 26/09: van KHONG tinh lai OTC theo mien tu hoa don khi da co S02; chi goi them mot lan cho ETC theo mien.
+    assert goi_vung == ["ETC"]
     thang = r["months"][0]
     assert {x["area_code"]: x["otc_revenue"] for x in thang["otc_by_region"]} == {"MB": 100.0, "MT": 50.0, "MN": 30.0}
     assert thang["s02_otc_company"]["target"] == 360.0
@@ -247,3 +248,25 @@ def test_mac_dinh_lay_thang_moi_nhat_co_du_lieu(tmp_path, monkeypatch):
     r = rt.revenue_monthly_series(months_back=1, include_yoy=False)
     assert r["month_to"] == "2026-07"
     assert r["months"][0]["revenue"] == 3_500_000
+
+
+def test_c02_etc_theo_mien_khop_tong_etc_va_noi_ro_khong_co_ke_hoach_mien(tmp_path, monkeypatch):
+    """26/09/2026 (Cost of Value): C02 "theo kenh va mien" tung ton 3-4 tool vi payload chi tach mien cho OTC.
+    Nguon khong co ke hoach ETC theo mien -> tra doanh thu ETC that tung mien + noi ro, mot lan goi la du."""
+    _setup(tmp_path, monkeypatch)
+    conn = sqlite3.connect(local_warehouse.DB_PATH)
+    conn.execute("CREATE TABLE dim_tinhthanhpho (city_id INTEGER, city_name TEXT, area_code TEXT)")
+    conn.execute("INSERT INTO dim_tinhthanhpho VALUES (1,'Ha Noi','MB')")
+    conn.execute("INSERT INTO dms_khachhang VALUES ('KH01','Khach 1',1,1,'NV01','OTC')")
+    conn.execute("INSERT INTO dmssx_khachhang VALUES ('KH02','Benh vien',1,2,'ETC')")
+    conn.commit()
+    conn.close()
+
+    thang = rt.revenue_monthly_series(month_to="2026-07", months_back=1, include_yoy=False)["months"][0]
+
+    assert thang["etc_by_region"] == [{"area_code": "MB", "etc_revenue": 500_000}]
+    assert thang["etc_region_reconciliation"]["revenue_matches"] is True
+    assert thang["etc_plan_by_region"] is None and "KHONG co ke hoach ETC theo mien" in thang["etc_region_note"]
+
+    otc = rt.revenue_monthly_series(month_to="2026-07", months_back=1, include_yoy=False, scope_channel="OTC")
+    assert "etc_by_region" not in otc["months"][0], "Tai khoan chi OTC khong duoc thay ETC theo mien."
