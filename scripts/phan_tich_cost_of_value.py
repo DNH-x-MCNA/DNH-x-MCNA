@@ -158,6 +158,24 @@ def _tools(run: dict | None) -> list:
     return [str(x) for x in ds if x]
 
 
+_TEN_TOOL = re.compile(r"(?:<template:|\[bao cao chuan\]\s*)(\w+)")
+
+
+def _goi_lai_cung_tool(tools: list) -> dict:
+    """{ten tool: so lan goi THUA} khi mot tool bi goi >= 2 lan trong mot luot, KE CA khac tham so (26/09: C02 goi
+    get_revenue_monthly_series 12 -> 6 -> 3 thang vi payload bi cat - chi so 'goi trung' cu khong bat duoc)."""
+    dem = defaultdict(int)
+    for t in tools:
+        m = _TEN_TOOL.search(t)
+        if m:
+            dem[m.group(1)] += 1
+    return {ten: n - 1 for ten, n in dem.items() if n > 1}
+
+
+def _so_sql_tu_viet(tools: list) -> int:
+    return sum(1 for t in tools if t.lstrip().startswith("[local]") or t.lstrip().upper().startswith("SELECT"))
+
+
 def _goi_trung(tools: list) -> int:
     dem = defaultdict(int)
     for t in tools:
@@ -220,6 +238,7 @@ def main():
                 "ts": vong[0]["ts"][:16], "user": user or "(khong ten)", "vai_tro": vai_tro.get(user, "?"),
                 "cau": khoa[1], "loai": _loai_cau(khoa[1]), "vnd": usd * USD_TO_VND_RATE, "so_vong": len(vong),
                 "ket_qua": _ket_qua_luot(run), "so_tool": len(tools), "goi_trung": _goi_trung(tools),
+                "goi_lai": _goi_lai_cung_tool(tools), "sql_tu_viet": _so_sql_tu_viet(tools),
                 "giay": round((run or {}).get("duration_ms") or 0) / 1000 if run else None,
                 "kiem_thu": kiem_thu, "loi": ((run or {}).get("error_message") or "").strip(),
                 "nguon": _nguon(user, sid),
@@ -276,6 +295,25 @@ def main():
         for u, ds in sorted(khong_ro.items(), key=lambda x: -sum(l["vnd"] for l in x[1]))[:15]:
             ngay = sorted({l["ts"][:10] for l in ds})
             print(f"  {u[:28]:<28} {len(ds):>4} luot {sum(l['vnd'] for l in ds):>10,.0f}d  {ngay[0]}..{ngay[-1]}")
+
+    goi_lai = defaultdict(lambda: [0, 0, 0.0])
+    for l in luot_ds:
+        for ten, n in l["goi_lai"].items():
+            goi_lai[ten][0] += 1
+            goi_lai[ten][1] += n
+            goi_lai[ten][2] += l["vnd"]
+    print("\nGOI LAI CUNG TOOL TRONG MOT LUOT (ke ca khac tham so - thuong do payload bi cat hoac tool thieu truong)")
+    for ten, (so_luot, thua, vnd) in sorted(goi_lai.items(), key=lambda x: -x[1][2])[:12]:
+        print(f"  {ten:<38} {so_luot:>4} luot {thua:>4} lan thua  cac luot do {vnd:>10,.0f}d")
+    tu_viet = [l for l in luot_ds if l["sql_tu_viet"]]
+    print(f"\nTU VIET SQL: {len(tu_viet)} luot ({sum(l['sql_tu_viet'] for l in tu_viet)} cau SQL), "
+          f"cac luot do tong {sum(l['vnd'] for l in tu_viet):,.0f}d - dau hieu tool thieu truong/thieu tool")
+    theo_loai_sql = defaultdict(lambda: [0, 0.0])
+    for l in tu_viet:
+        theo_loai_sql[l["loai"]][0] += 1
+        theo_loai_sql[l["loai"]][1] += l["vnd"]
+    for loai, (n, vnd) in sorted(theo_loai_sql.items(), key=lambda x: -x[1][1]):
+        print(f"  {loai:<20} {n:>4} luot {vnd:>10,.0f}d")
 
     trung = [l for l in luot_ds if l["goi_trung"]]
     print(f"\nTOOL GOI TRUNG: {len(trung)} luot, {sum(l['goi_trung'] for l in trung)} lan goi thua, "
