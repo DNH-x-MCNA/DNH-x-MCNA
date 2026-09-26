@@ -49,7 +49,12 @@ COST_LOG = os.environ.get("DNH_COST_LOG", str(BACKEND / "logs" / "cost_log.jsonl
 MEMORY_DB = os.environ.get("DNH_MEMORY_DB", str(BACKEND / "memory.db"))
 AUTH_DB = os.environ.get("DNH_AUTH_DB", str(BACKEND / "auth.db"))
 KHONG_GIA_TRI = {"het_gio", "loi", "huy_treo", "chi_hoi_lai"}
-TIEN_TO_KIEM_THU = ("cham-", "cham_", "kiemtra-", "kiemtra_", "uat-", "uat_", "test-", "test_", "eval-")
+# Tien to session_id/username cua cac script (26/09: ban dau thieu "chamlai" -> luot cham lai UAT, chay bang tai
+# khoan THAT dnh/danh.nguyen..., bi tinh la nguoi dung that). Nguon: cham_lai_uat.py "chamlai<ngay>-<ma>",
+# run_bo_138_cau.py "bo138-", business-eval "beval-" + username business-eval, run_complex_evaluation "complex-",
+# run_tool_routing_sample "routing-", evaluate_model_canary "canary-", verify_fixes "verify", tool check "kiemtra-".
+TIEN_TO_KIEM_THU = ("chamlai", "cham-", "cham_", "kiemtra", "bo138-", "beval-", "business-eval", "complex-",
+                    "routing-", "canary-", "verify", "uat-", "uat_", "test-", "test_", "eval-")
 
 
 def _plain(s: str) -> str:
@@ -110,7 +115,7 @@ def _doc_query_runs(tu: str, den: str) -> dict:
     conn.row_factory = sqlite3.Row
     # created_at UTC: noi rong 1 ngay moi dau de khong mat luot gan nua dem gio dia phuong.
     for r in conn.execute("SELECT query_id, session_id, username, question, answer, status, sql_used_json, "
-                          "duration_ms, created_at FROM query_runs WHERE substr(created_at,1,10) BETWEEN ? AND ? "
+                          "duration_ms, created_at, error_message FROM query_runs WHERE substr(created_at,1,10) BETWEEN ? AND ? "
                           "ORDER BY created_at", ((dt.date.fromisoformat(tu) - dt.timedelta(days=1)).isoformat(), den)):
         kq[(r["session_id"] or "", (r["question"] or "")[:120])].append(dict(r))
     conn.close()
@@ -160,6 +165,20 @@ def _goi_trung(tools: list) -> int:
     return sum(n - 1 for n in dem.values() if n > 1)
 
 
+def _nguon(user: str, sid: str) -> str:
+    for tt in TIEN_TO_KIEM_THU:
+        if (user or "").lower().startswith(tt) or (sid or "").lower().startswith(tt):
+            return "kiem_thu:" + tt.strip("-_")
+    return "kiem_thu:khong_ten" if not user else "that"
+
+
+def _nhom_loi(msg: str) -> str:
+    """Gom thong diep loi: bo so/ma de cac lan cung mot loai loi ve mot dong."""
+    m = re.sub(r"req_[A-Za-z0-9]+|\b[0-9a-f]{8,}\b", "<id>", msg or "")
+    m = re.sub(r"\d+", "N", m)
+    return re.sub(r"\s+", " ", m).strip()[:110] or "(khong ghi loi)"
+
+
 def main():
     ap = argparse.ArgumentParser()
     homnay = dt.date.today()
@@ -180,7 +199,7 @@ def main():
             run = ds_run[i] if i < len(ds_run) else None
             user = (vong[0].get("username") or (run or {}).get("username") or "").strip()
             sid = khoa[0]
-            kiem_thu = (not user) or user.lower().startswith(TIEN_TO_KIEM_THU) or sid.lower().startswith(TIEN_TO_KIEM_THU)
+            kiem_thu = _nguon(user, sid) != "that"
             if kiem_thu and not a.ca_kiem_thu:
                 continue
             usd = sum(float(e.get("cost_usd") or 0) for e in vong)
@@ -190,7 +209,8 @@ def main():
                 "cau": khoa[1], "loai": _loai_cau(khoa[1]), "vnd": usd * USD_TO_VND_RATE, "so_vong": len(vong),
                 "ket_qua": _ket_qua_luot(run), "so_tool": len(tools), "goi_trung": _goi_trung(tools),
                 "giay": round((run or {}).get("duration_ms") or 0) / 1000 if run else None,
-                "kiem_thu": kiem_thu,
+                "kiem_thu": kiem_thu, "loi": ((run or {}).get("error_message") or "").strip(),
+                "nguon": _nguon(user, sid),
             })
 
     if not luot_ds:
@@ -222,6 +242,28 @@ def main():
     _bang("THEO LOAI CAU HOI", lambda l: l["loai"])
     _bang("VAI TRO x LOAI", lambda l: f"{l['vai_tro']} / {l['loai']}")
     _bang("THEO KET QUA", lambda l: l["ket_qua"])
+
+    if a.ca_kiem_thu:
+        _bang("THEO NGUON (that / kiem thu theo tien to)", lambda l: l["nguon"])
+
+    print("\nLOI / HUY / HET GIO THEO NOI DUNG (error_message trong query_runs)")
+    g = defaultdict(list)
+    for l in luot_ds:
+        if l["ket_qua"] in ("loi", "huy_treo", "het_gio"):
+            g[(l["ket_qua"], _nhom_loi(l["loi"]))].append(l)
+    for (kq, msg), ds in sorted(g.items(), key=lambda x: -sum(l["vnd"] for l in x[1])):
+        ngay = sorted({l["ts"][:10] for l in ds})
+        print(f"  {len(ds):>3} luot {sum(l['vnd'] for l in ds):>9,.0f}d {kq:<9} {ngay[0][5:]}..{ngay[-1][5:]}  {msg}")
+
+    khong_ro = defaultdict(list)
+    for l in luot_ds:
+        if l["vai_tro"] == "?":
+            khong_ro[l["user"]].append(l)
+    if khong_ro:
+        print("\nUSERNAME KHONG CO TRONG auth.db (vai tro '?')")
+        for u, ds in sorted(khong_ro.items(), key=lambda x: -sum(l["vnd"] for l in x[1]))[:15]:
+            ngay = sorted({l["ts"][:10] for l in ds})
+            print(f"  {u[:28]:<28} {len(ds):>4} luot {sum(l['vnd'] for l in ds):>10,.0f}d  {ngay[0]}..{ngay[-1]}")
 
     trung = [l for l in luot_ds if l["goi_trung"]]
     print(f"\nTOOL GOI TRUNG: {len(trung)} luot, {sum(l['goi_trung'] for l in trung)} lan goi thua, "
