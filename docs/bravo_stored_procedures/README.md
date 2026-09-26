@@ -9,8 +9,16 @@ xác nhận chính thức để thay thế các công thức "tạm thời/provi
 
 | File | SP gốc | Mục đích |
 | --- | --- | --- |
-| (xem `.claude/skills/dnh-debt-aging-schema/assets/debt_aging_schema.sql`) | `usp_DeptAccDueDate_GetData` | Công nợ/tuổi nợ khách hàng — cung cấp 22/07/2026, đã áp dụng (xem skill `dnh-debt-aging-schema`). |
+| (không có trong cây hiện tại — xem ghi chú dưới bảng) | `usp_DeptAccDueDate_GetData` | Công nợ/tuổi nợ khách hàng — cung cấp 22/07/2026. |
 | `usp_StockLotFinance_Report.sql` | `usp_StockLotFinance_Report` | Tồn kho theo lô (hạn dùng) + tốc độ bán/tồn "chết" — cung cấp 22/07/2026. |
+
+> **Ghi chú 26/09/2026** (khi chuyển thư mục này ra khỏi bản sao `bao-cao-canh-bao/` trước khi xoá
+> bản sao): phân tích `usp_DeptAccDueDate_GetData` chỉ từng nằm trong bản skill của bản sao, commit
+> `13dc0dc` (22/07) — xem lại bằng
+> `git show 13dc0dc:bao-cao-canh-bao/.claude/skills/dnh-debt-aging-schema/assets/debt_aging_schema.sql`.
+> Commit đó bỏ cờ `provisional` **chỉ trong bản sao**. Code đang chạy vẫn để
+> `debt_aging.provisional: true` trong `config/config.yaml`, và skill ở `.claude/skills/` gốc repo vẫn
+> là placeholder. Tuổi nợ đã được xác nhận hay chưa là việc anh Đăng chốt, không tự đồng bộ.
 
 ## Điểm nghiệp vụ rút ra từ `usp_StockLotFinance_Report`
 
