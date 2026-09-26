@@ -61,9 +61,10 @@ backend/*.txt
 /scripts/*.db
 /scripts/*.db-wal
 /scripts/*.db-shm
-/bao-cao-canh-bao/scripts/*.db
-/bao-cao-canh-bao/scripts/*.db-wal
-/bao-cao-canh-bao/scripts/*.db-shm
+# 26/09/2026: ban sao bao-cao-canh-bao/ da go khoi Git. git pull chi xoa file duoc track - file
+# bi ignore (*.db, .env, __pycache__) van nam lai tren may cu. Ignore ca thu muc de phan con sot
+# nay khong bao gio bi `git add` nham len repo.
+/bao-cao-canh-bao/
 # 22/09/2026: chay script/test tu thu muc goc sinh warehouse.db o root (kho that ~160MB).
 /warehouse.db
 /warehouse.db-wal

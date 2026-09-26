@@ -1,8 +1,0 @@
-sqlalchemy
-pandas
-pyodbc
-pyyaml
-python-dotenv
-jinja2
-schedule
-anthropic
