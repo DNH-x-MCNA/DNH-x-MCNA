@@ -62,7 +62,7 @@ _DOMAIN_SPECS = (
         "domain": "kpi",
         "label": "Đối chiếu KPI và cây đội ngũ",
         "markers": ("kpi", "chi tieu", "target", "doi ngu", "nhan vien", "qlv", "tdv"),
-        "tools": ("get_kpi_ranking", "get_revenue_tree", "get_employee_kpi",
+        "tools": ("get_kpi_ranking", "get_revenue_tree", "get_employee_kpi", "get_kpi_scorecard",
                   "get_employee_daily_kpi", "get_kpi_gap_run_rate",
                   "get_workforce_productivity", "get_operational_data_quality",
                   "get_salary_ranking"),

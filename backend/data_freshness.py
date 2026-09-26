@@ -82,6 +82,7 @@ _TEMPLATE_SOURCES = {
     "get_new_customer_list": ("kpi",),
     "get_reorder_pending_customers": ("kpi", "kpi_salary_result"),
     "get_focus_product_kpi": ("kpi_salary_result",),
+    "get_kpi_scorecard": ("kpi_salary_result", "kpi", "debt"),
     "get_employee_daily_kpi": ("sales_otc", "kpi"),
     "get_employee_directory": ("employee",),
     "get_qlv_change_history": ("employee",),

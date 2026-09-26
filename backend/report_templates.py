@@ -630,9 +630,94 @@ def _mien_cua_khach(ma_khach) -> dict:
     return kq
 
 
+# 26/09/2026 (hop 24/09 - cap 2/3 = vung -> TDV -> khach -> SKU): "top khach cua TDV X", "top SKU doi QLV Y",
+# "khach Z mua SKU nao". Chi QLV la cap co doi; CS/TK/CTV/TDV ban truc tiep (hoa don ghi dung DMSId cua ho -
+# do tren kho 08/2026: CS 3 nguoi 11,3 ty, TK HCM03 5,1 ty). TP/PP/TBP la cap mien/kenh -> dung area_code.
+_VAI_TRO_CAP_MIEN = {"TP", "PP", "TBP"}
+
+
+def _loc_cap3(nv_hoi: str, kh_hoi: str, as_of: str, scope_area_code: str = None,
+              scope_employee_code: str = None, scope_channel: str = None) -> dict:
+    """Phan giai nhan vien/khach model truyen vao. Tra {"loi": payload} khi phai hoi lai/tu choi,
+    nguoc lai {"loc_nv_dms": [...], "loc_khach": ma, "thong_tin": {...}} de ham top loc TU DAU.
+    Scope server van ap dung song song trong ham top; kiem o day de bao ro "ngoai doi/ngoai vung"
+    thay vi tra 0 dong (0 dong se bi doc thanh "khong ban duoc")."""
+    kq = {"thong_tin": {}}
+    fdate = _fact_date_le(as_of) or as_of
+    if nv_hoi:
+        ident = _resolve_employee_identity(nv_hoi)
+        if ident.get("name_candidates"):
+            return {"loi": _ung_vien_ten_nhan_vien_loi(ident, nv_hoi)}
+        if not ident.get("name"):
+            return {"loi": {"error": f"Khong tim thay nhan vien '{nv_hoi}' trong danh muc nhan su.",
+                            "answer_rule": ("Noi ro khong tim thay; goi get_employee_directory de tra dung "
+                                            "ten/ma. KHONG tra top toan quoc thay the.")}}
+        vai_tro = str(ident.get("position_code") or "").upper()
+        if vai_tro in _VAI_TRO_CAP_MIEN:
+            return {"loi": {"error": (f"{ident['name']} ({ident['code']}) la cap Giam doc mien/kenh ({vai_tro}); "
+                                      "tool nay loc theo 1 TDV hoac doi 1 QLV."),
+                            "answer_rule": "Dung area_code (MB/MT/MN) cho cap mien, hoac get_revenue_tree."}}
+        if vai_tro == "QLV":
+            dms = _get_team_dms_ids(ident["code"], fdate)
+            kieu = "DOI_CUA_QLV"
+        else:
+            dms = [ident["dmsid"]]
+            kieu = "MOT_NHAN_VIEN"
+        if scope_employee_code and ident["code"] != scope_employee_code:
+            doi = set(_get_team_dms_ids(scope_employee_code, fdate))
+            if not set(dms) <= doi:
+                return {"chan_quyen": True, "loi": {"error": (
+                    f"{ident['name']} ({ident['code']}) khong thuoc doi cua tai khoan nay "
+                    f"(QLV {scope_employee_code}) - khong duoc xem.")}}
+        mien_nv = _mien_chuan(ident.get("area_code")) if ident.get("area_code") else None
+        if scope_area_code and mien_nv in ("MB", "MT", "MN") and mien_nv != scope_area_code:
+            return {"chan_quyen": True, "loi": {"error": (
+                f"{ident['name']} ({ident['code']}) thuoc {mien_nv}, ngoai vung "
+                f"{scope_area_code} cua tai khoan - khong duoc xem.")}}
+        kq["loc_nv_dms"] = dms
+        kq["thong_tin"]["nhan_vien"] = {
+            "kieu": kieu, "employee_code": ident["code"], "employee_name": ident["name"],
+            "vai_tro": vai_tro or None, "so_ma_ban_hang": len(dms),
+            "ghi_chu": ("Loc theo ma nhan vien GHI TREN HOA DON (doi QLV chot tai ky duoc hoi)."
+                        if kieu == "DOI_CUA_QLV" else "Loc theo ma nhan vien GHI TREN HOA DON."),
+        }
+    if kh_hoi:
+        ma = kh_hoi
+        la_ma = bool(re.fullmatch(r"[A-Za-z0-9_-]+", kh_hoi) and any(ch.isdigit() or ch == "_" for ch in kh_hoi))
+        if not _customer_code_exists(kh_hoi) and not la_ma:
+            ung_vien = _customer_name_candidates(kh_hoi, scope_area_code=scope_area_code,
+                                                 scope_channel=scope_channel)
+            if len(ung_vien) != 1:
+                return {"loi": {"customer_lookup_status": "ambiguous" if ung_vien else "not_found",
+                                "customer_query": kh_hoi, "customer_candidates": ung_vien,
+                                "answer_rule": ("ambiguous: liet ke ma+ten de nguoi dung chon, khong doan; "
+                                                "not_found: noi khong tim thay trong pham vi tai khoan.")}}
+            ma = ung_vien[0]["customer_code"]
+        mien_kh = _mien_cua_khach([ma]).get(ma)
+        if scope_area_code and mien_kh in ("MB", "MT", "MN") and mien_kh != scope_area_code:
+            return {"chan_quyen": True,
+                    "loi": {"error": f"Khach {ma} thuoc {mien_kh}, ngoai vung {scope_area_code} cua tai khoan."}}
+        kq["loc_khach"] = ma
+        kq["thong_tin"]["khach_hang"] = {"customer_code": ma,
+                                         "customer_name": _customer_names([ma]).get(ma), "mien": mien_kh}
+    return kq
+
+
+def _loc_cap3_clause(alias: str, loc_nv_dms=None, loc_khach: str = None) -> tuple:
+    sql, params = "", ()
+    if loc_nv_dms:
+        sql += f" AND {alias}.employee_code IN ({','.join('?' for _ in loc_nv_dms)})"
+        params += tuple(loc_nv_dms)
+    if loc_khach:
+        sql += f" AND {alias}.customer_code=?"
+        params += (loc_khach,)
+    return sql, params
+
+
 def top_products(date_from: str, date_to: str, limit: int = 10, channel: str = "ALL",
                   scope_area_code: str = None, scope_channel: str = None,
-                  scope_employee_code: str = None) -> list:
+                  scope_employee_code: str = None, loc_nv_dms: list = None,
+                  loc_khach: str = None) -> list:
     """Top N san pham theo doanh thu. Loai hang khuyen mai (unit_price=0) khoi so luong ban that.
     scope_area_code: ep loc theo vung khi tai khoan bi gioi han (xem revenue_by_channel).
     scope_channel: EP GHI DE tham so channel (bo qua gia tri AI truyen vao) khi tai khoan bi gioi
@@ -642,8 +727,9 @@ def top_products(date_from: str, date_to: str, limit: int = 10, channel: str = "
         channel = scope_channel
     scope_sql, scope_params = _scope_clause(scope_area_code)
     emp_sql, emp_params = _employee_scope_clause(scope_employee_code, "v", as_of=date_to)
-    scope_sql += emp_sql
-    scope_params += emp_params
+    cap3_sql, cap3_params = _loc_cap3_clause("v", loc_nv_dms, loc_khach)
+    scope_sql += emp_sql + cap3_sql
+    scope_params += emp_params + cap3_params
     parts, part_params = [], []
     if channel in ("OTC", "ALL"):
         join = _otc_area_join("v", scope_area_code)
@@ -710,26 +796,31 @@ def top_products(date_from: str, date_to: str, limit: int = 10, channel: str = "
 
 
 def top_customers(date_from: str, date_to: str, limit: int = 10, channel: str = "ALL",
-                   scope_area_code: str = None, scope_channel: str = None, scope_employee_code: str = None) -> list:
+                   scope_area_code: str = None, scope_channel: str = None, scope_employee_code: str = None,
+                   loc_nv_dms: list = None) -> list:
     """Top N khach hang theo doanh thu. scope_area_code: ep loc theo vung khi tai khoan bi gioi han.
-    scope_channel: EP GHI DE tham so channel khi tai khoan bi gioi han kenh (xem top_products)."""
+    scope_channel: EP GHI DE tham so channel khi tai khoan bi gioi han kenh (xem top_products).
+    loc_nv_dms: cap 3 - chi hoa don cua cac DMSId nay (1 TDV hoac doi 1 QLV, xem _loc_cap3)."""
     if scope_channel:
         channel = scope_channel
     scope_sql, scope_params = _scope_clause(scope_area_code)
     emp_sql, emp_params = _employee_scope_clause(scope_employee_code, "v", as_of=date_to)
-    scope_sql += emp_sql
-    scope_params += emp_params
-    parts, part_params = [], []
+    cap3_sql, cap3_params = _loc_cap3_clause("v", loc_nv_dms)
+    scope_sql += emp_sql + cap3_sql
+    scope_params += emp_params + cap3_params
+    parts, part_params, part_alias = [], [], []
     if channel in ("OTC", "ALL"):
         join = _otc_area_join("v", scope_area_code)
-        parts.append(f"SELECT v.customer_code, v.amount9 FROM vhoadon_otc v {join} "
+        parts.append(f"SELECT v.customer_code, v.employee_code, v.amount9 FROM vhoadon_otc v {join} "
                       f"WHERE v.doc_date BETWEEN ? AND ?{scope_sql}")
         part_params.append((date_from, date_to) + scope_params)
+        part_alias.append("v")
     if channel in ("ETC", "ALL"):
         join = _etc_area_join("v", scope_area_code)
-        parts.append(f"SELECT v.customer_code, v.amount9 FROM vhoadon_etc v {join} "
+        parts.append(f"SELECT v.customer_code, v.employee_code, v.amount9 FROM vhoadon_etc v {join} "
                       f"WHERE v.doc_date BETWEEN ? AND ?{scope_sql}")
         part_params.append((date_from, date_to) + scope_params)
+        part_alias.append("v")
 
     # date_from truoc cua so 12 thang chi tiet -> cong them phan da NEN tu monthly_customer_summary
     # (khong con item/created_at nhung van co customer_code + revenue nen top_customers tinh dung duoc).
@@ -737,22 +828,25 @@ def top_customers(date_from: str, date_to: str, limit: int = 10, channel: str = 
     if date_from < cutoff:
         summary_to = min(date_to, cutoff)
         ym_from, ym_to = date_from[:7], summary_to[:7]
+        cap3_m_sql, cap3_m_params = _loc_cap3_clause("m", loc_nv_dms)
         if channel in ("OTC", "ALL"):
             msc_sql, msc_params = _monthly_summary_scope_clause(scope_area_code, "OTC")
             msc_emp_sql, msc_emp_params = _employee_scope_clause(scope_employee_code, "m", as_of=date_to)
-            msc_sql += msc_emp_sql
-            msc_params += msc_emp_params
-            parts.append(f"SELECT m.customer_code, m.revenue AS amount9 FROM monthly_customer_summary m "
+            msc_sql += msc_emp_sql + cap3_m_sql
+            msc_params += msc_emp_params + cap3_m_params
+            parts.append(f"SELECT m.customer_code, m.employee_code, m.revenue AS amount9 FROM monthly_customer_summary m "
                          f"WHERE m.channel='OTC' AND m.year_month BETWEEN ? AND ?{msc_sql}")
             part_params.append((ym_from, ym_to) + msc_params)
+            part_alias.append("m")
         if channel in ("ETC", "ALL"):
             msc_sql, msc_params = _monthly_summary_scope_clause(scope_area_code, "ETC")
             msc_emp_sql, msc_emp_params = _employee_scope_clause(scope_employee_code, "m", as_of=date_to)
-            msc_sql += msc_emp_sql
-            msc_params += msc_emp_params
-            parts.append(f"SELECT m.customer_code, m.revenue AS amount9 FROM monthly_customer_summary m "
+            msc_sql += msc_emp_sql + cap3_m_sql
+            msc_params += msc_emp_params + cap3_m_params
+            parts.append(f"SELECT m.customer_code, m.employee_code, m.revenue AS amount9 FROM monthly_customer_summary m "
                          f"WHERE m.channel='ETC' AND m.year_month BETWEEN ? AND ?{msc_sql}")
             part_params.append((ym_from, ym_to) + msc_params)
+            part_alias.append("m")
 
     sql = f"""WITH combined AS ({" UNION ALL ".join(parts)})
               SELECT customer_code, SUM(amount9) rev, SUM(SUM(amount9)) OVER () scope_rev
@@ -760,12 +854,51 @@ def top_customers(date_from: str, date_to: str, limit: int = 10, channel: str = 
     params = tuple(p for pp in part_params for p in pp) + (limit,)
     rows = _q(sql, params)
     # 24/09/2026 (hop tien do: "top khach hang, no, khu vuc... bat lay detail theo khu vuc"): kem mien.
-    mien = _mien_cua_khach([r["customer_code"] for r in rows])
-    return [{"customer_code": r["customer_code"], "revenue": _f(r["rev"]),
-             "mien": mien.get(r["customer_code"], "Khac"),
-             "scope_revenue": _f(r["scope_rev"]),
-             "share_pct_of_scope": (_f(r["rev"]) / _f(r["scope_rev"]) * 100
-                                    if _f(r["scope_rev"]) else None)} for r in rows]
+    ma_kh = [r["customer_code"] for r in rows]
+    mien = _mien_cua_khach(ma_kh)
+    # 26/09/2026 (cap 3): kem ten khach va nhan vien ban chinh trong ky - truoc day chi co ma, model phai goi
+    # them get_customer_detail hang loat chi de lay ten (ton them mot vong). NV ban chinh = ma ghi tren hoa
+    # don co doanh thu lon nhat trong ky, KHONG phai phan cong tren danh muc khach.
+    try:
+        ten = _customer_names(ma_kh) if ma_kh else {}
+    except sqlite3.OperationalError:
+        ten = {}
+    ban_chinh = {}
+    if ma_kh:
+        ph = ",".join("?" for _ in ma_kh)
+        sub = [f"{p} AND {a}.customer_code IN ({ph})" for p, a in zip(parts, part_alias)]
+        sub_params = tuple(x for pp in part_params for x in pp + tuple(ma_kh))
+        tong_kh = {}
+        for r in _q(f"SELECT customer_code, employee_code, SUM(amount9) rev FROM ({' UNION ALL '.join(sub)}) "
+                    f"GROUP BY customer_code, employee_code", sub_params):
+            tong_kh[r["customer_code"]] = tong_kh.get(r["customer_code"], 0.0) + _f(r["rev"])
+            if r["employee_code"] and _f(r["rev"]) > ban_chinh.get(r["customer_code"], (None, 0.0))[1]:
+                ban_chinh[r["customer_code"]] = (r["employee_code"], _f(r["rev"]))
+        ma_nv = {}
+        dms = sorted({v[0] for v in ban_chinh.values()})
+        if dms:
+            try:
+                ma_nv = {r["dmsid"]: r["employee_code"] for r in _q(
+                    f"SELECT dmsid, employee_code FROM {_NV_THEO_DMSID} WHERE dmsid IN ({','.join('?' for _ in dms)})",
+                    tuple(dms))}
+            except sqlite3.OperationalError:
+                pass
+        for kh, (d, rev) in list(ban_chinh.items()):
+            ban_chinh[kh] = {"employee_code": ma_nv.get(d, d), "dms_id": d, "doanh_thu": rev,
+                             "ty_trong_pct": round(rev / tong_kh[kh] * 100, 1) if tong_kh.get(kh) else None}
+    kq = []
+    for r in rows:
+        dong = {"customer_code": r["customer_code"],
+                "customer_name": ten.get(r["customer_code"]) or "(khong co trong danh muc khach)",
+                "revenue": _f(r["rev"]),
+                "mien": mien.get(r["customer_code"], "Khac"),
+                "scope_revenue": _f(r["scope_rev"]),
+                "share_pct_of_scope": (_f(r["rev"]) / _f(r["scope_rev"]) * 100
+                                       if _f(r["scope_rev"]) else None)}
+        if ban_chinh.get(r["customer_code"]):
+            dong["nv_ban_chinh"] = ban_chinh[r["customer_code"]]
+        kq.append(dong)
+    return kq
 
 
 def _month_starts_between(date_from: str, date_to: str) -> list[str]:
@@ -3795,10 +3928,12 @@ def focus_product_kpi(year_month: str = None, limit: int = 100, manager_code: st
     ym = (year_month or str(latest))[:7]
     fdate = f"{ym}-{_last_day_of_month(int(ym[:4]), int(ym[5:7])):02d}"
     target_col = "f.tpr_target_amount" if "tpr_target_amount" in cols else "NULL"
+    msa_col = "f.month_sale_amount" if "month_sale_amount" in cols else "NULL"
     sql = ("WITH s AS (SELECT employee_code, MAX(save_date) d FROM fact_thongketinhluong "
            "WHERE save_date<=? AND substr(save_date,1,7)=? GROUP BY employee_code) "
            "SELECT f.employee_code, f.employee_name, f.position_code, f.area_code, f.manager_code, f.save_date, "
            f"f.target_product_amount actual, {target_col} target, f.target_product_percent pct_goc, "
+           f"{msa_col} msa, "
            "f.tpr_point diem FROM fact_thongketinhluong f "
            "JOIN s ON s.employee_code=f.employee_code AND s.d=f.save_date WHERE 1=1")
     params = [fdate, ym]
@@ -3811,13 +3946,28 @@ def focus_product_kpi(year_month: str = None, limit: int = 100, manager_code: st
 
     def _item(r):
         actual, target = _f(r["actual"]), (_f(r["target"]) if r["target"] is not None else None)
-        return {"employee_code": r["employee_code"], "employee_name": r["employee_name"],
+        item = {"employee_code": r["employee_code"], "employee_name": r["employee_name"],
                 "area_code": r["area_code"], "manager_code": r["manager_code"],
                 "manager_name": emp_names.get(r["manager_code"]),
-                "doanh_so_trong_tam": actual, "chi_tieu_trong_tam": target,
+                "doanh_so_trong_tam": actual, "chi_tieu_trong_tam": target, "kieu_chi_tieu": "so_tien",
                 "pct_dat": (actual / target * 100) if target else None,
                 "ty_le_goc_bravo": r["pct_goc"], "diem_kpi_trong_tam": r["diem"],
                 "snapshot_date": str(r["save_date"])[:10]}
+        if target is not None and 0 < target < 1:
+            # 26/09/2026: Mien Bac ghi TPRTargetAmount (= FACT_PhatSinhNhanVien.TProdTarget) la TY TRONG muc tieu
+            # 0,45-0,6 cua doanh so trong tam tren doanh so thang, KHONG phai so tien. Truoc day pct_dat = doanh so /
+            # 0,45 -> TDV doi MBKV2 bi bao 12.716.142.444% va chi tieu "0,45d". Bravo tinh
+            # TargetProductPercent = (trong tam / doanh so thang) / TProdTarget - khop 86/86, 87/87, 86/86 TDV MB
+            # o snapshot 31/08, 31/07, 23/09. MN/MT ghi so tien, pct = trong tam / chi tieu (khop 61/61).
+            msa = _f(r["msa"]) if r["msa"] is not None else 0.0
+            item.update(kieu_chi_tieu="ty_trong_doanh_so", chi_tieu_trong_tam=None,
+                        ty_trong_muc_tieu_pct=target * 100,
+                        ty_trong_thuc_te_pct=(actual / msa * 100) if msa else None,
+                        pct_dat=(actual / (target * msa) * 100) if msa else None)
+        elif target == 0:
+            item.update(chi_tieu_trong_tam=None,
+                        ghi_chu_chi_tieu="Bravo khong gan chi tieu trong tam cho dong nay (TPRTargetAmount=0).")
+        return item
 
     team_code = _ma_doi_hieu_luc(scope_employee_code, manager_code)
     managers = [r for r in rows if str(r["position_code"] or "").upper() == "QLV"]
@@ -3833,7 +3983,9 @@ def focus_product_kpi(year_month: str = None, limit: int = 100, manager_code: st
         "so_quan_ly_vung": len(manager_items),
         "definition": (
             "Doanh so trong tam = TargetProductAmount, chi tieu = TPRTargetAmount, pct_dat = doanh so / chi "
-            "tieu. ty_le_goc_bravo va diem_kpi_trong_tam la so Bravo da tinh san cho KPI luong. Snapshot moi "
+            "tieu. kieu_chi_tieu='ty_trong_doanh_so' (Mien Bac): chi tieu la TY TRONG trong tam tren doanh so "
+            "thang (ty_trong_muc_tieu_pct), pct_dat = ty_trong_thuc_te_pct / ty_trong_muc_tieu_pct - KHONG goi "
+            "la so tien chi tieu. ty_le_goc_bravo va diem_kpi_trong_tam la so Bravo da tinh san cho KPI luong. Snapshot moi "
             "nhat tung nguoi trong thang; chi tang QLV, KHONG cong TP/QLV/TDV vi cac tang chong nhau."),
         "pham_vi_kenh": "OTC",
         "data_as_of": latest_data_date(),
@@ -3846,6 +3998,203 @@ def focus_product_kpi(year_month: str = None, limit: int = 100, manager_code: st
         result["canh_bao_chi_tieu"] = ("Kho chua dong bo TPRTargetAmount nen chua co chi tieu trong tam; "
                                        "KHONG tu tinh % dat.")
     return result
+
+
+def _pct100(v):
+    return None if v is None else _f(v) * 100
+
+
+def _chi_tieu_suy_nguoc(so_luong, ty_le):
+    # Kho khong dong bo FACT_PhatSinhNhanVien; chi tieu = so dat / ty le dat. Do 31/08 tren Bravo: khop ASOTarget
+    # 156/160 va ReOrderTarget 147/160 TDV - ca lech deu la ty le 0/NULL, luc do tra None (khong doan).
+    return round(_f(so_luong) / _f(ty_le)) if ty_le and _f(ty_le) > 0 else None
+
+
+def kpi_scorecard(as_of_date: str = None, manager_code: str = None, employee_code: str = None,
+                  area_code: str = None, limit: int = None, scope_area_code: str = None,
+                  scope_employee_code: str = None) -> dict:
+    """BANG KPI QLV/TDV trong MOT lan goi (hop 24/09/2026: "bam bang KPI cua QLV/TDV: % dat KPI, nhom hang trong
+    tam, cong no qua han"). Moi nguoi ban hang (TDV/CTV/CS/TK) co cac chi so KPI tu ket qua tinh luong Bravo
+    (fact_thongketinhluong, snapshot moi nhat TUNG NGUOI trong thang - snapshot giua thang la luy ke den ngay do)
+    va no qua han cua khach phan cong cho ho. KHONG tra tien thuong/phu cap: phan do o tool luong (chi ky chot).
+
+    Doi = manager_code tren chinh fact_thongketinhluong (cung nguon voi get_salary_detail/focus_product_kpi).
+    Tai khoan QLV: _ma_doi_hieu_luc ep doi cua chinh ho."""
+    if not _table_columns("fact_thongketinhluong"):
+        return {"error": "Kho chua co ket qua KPI tinh luong."}
+    as_of = str(as_of_date or "")[:10] or None
+    moc_r = _q("SELECT save_date d FROM fact_thongketinhluong WHERE (? IS NULL OR save_date<=?) "
+               "GROUP BY save_date HAVING SUM(COALESCE(month_sale_amount,0))>0 ORDER BY save_date DESC LIMIT 1",
+               (as_of, as_of))
+    if not moc_r:
+        return {"error": f"Chua co snapshot KPI co doanh so den ngay {as_of or 'hom nay'}."}
+    # Bravo tao san dong khoi tao ngay 1 dau thang (doanh so 0) - bo qua, lay moc co so that gan nhat.
+    moc = str(moc_r[0]["d"])[:10]
+    ym = moc[:7]
+
+    thong_tin_loc = {}
+    ma_doi = _ma_doi_hieu_luc(scope_employee_code, None)
+    if manager_code and not ma_doi:
+        qlv = _resolve_employee_identity(str(manager_code).strip())
+        if qlv.get("name_candidates"):
+            return _ung_vien_ten_nhan_vien_loi(qlv, manager_code)
+        if not qlv.get("name"):
+            return {"error": f"Khong tim thay quan ly '{manager_code}' trong danh muc nhan su."}
+        ma_doi = qlv["code"]
+    ma_nv = None
+    if employee_code:
+        nv = _resolve_employee_identity(str(employee_code).strip())
+        if nv.get("name_candidates"):
+            return _ung_vien_ten_nhan_vien_loi(nv, employee_code)
+        if not nv.get("name"):
+            return {"error": f"Khong tim thay nhan vien '{employee_code}' trong danh muc nhan su."}
+        ma_nv = nv["code"]
+    vung = scope_area_code or (str(area_code or "").strip().upper() or None)
+
+    sql = ("WITH s AS (SELECT employee_code, MAX(save_date) d FROM fact_thongketinhluong "
+           "WHERE save_date<=? AND substr(save_date,1,7)=? GROUP BY employee_code) "
+           "SELECT f.* FROM fact_thongketinhluong f JOIN s ON s.employee_code=f.employee_code AND s.d=f.save_date "
+           f"WHERE UPPER(COALESCE(f.position_code,'')) IN ({','.join('?' for _ in _EMPLOYEE_TIER_POSITIONS)})")
+    params = [moc + " 23:59:59", ym, *_EMPLOYEE_TIER_POSITIONS]
+    if vung:
+        markers = _area_markers(vung)
+        sql += f" AND f.area_code IN ({','.join('?' for _ in markers)})"
+        params += markers
+    if ma_doi:
+        sql += " AND f.manager_code=?"
+        params.append(ma_doi)
+        thong_tin_loc["ma_doi"] = ma_doi
+    if ma_nv:
+        sql += " AND f.employee_code=?"
+        params.append(ma_nv)
+        thong_tin_loc["ma_nhan_vien"] = ma_nv
+    rows = _q(sql, tuple(params))
+    if ma_nv and not rows:
+        return {"error": (f"Khong co dong KPI thang {ym} cua {ma_nv}"
+                          + (f" trong doi {ma_doi}" if ma_doi else "") + (f" vung {vung}" if vung else "")
+                          + " - co the ngoai pham vi tai khoan hoac khong phai nhan vien ban hang."),
+                "month": ym}
+
+    # No qua han theo nguoi phu trach: phan cong KPI moi nhat cua tung khach (fact_tonghopkhachhang), chi OTC - cung
+    # nguon voi receivables_overview/_gan_nguoi_phu_trach_cong_no.
+    no_theo_nv, moc_cong_no, gan, cn = {}, None, [], {}
+    ma_ban = [r["employee_code"] for r in rows if r.get("employee_code")]
+    if ma_ban:
+        try:
+            cn = _q("SELECT customer_code, MAX(snapshot_at) at_, COALESCE(SUM(balance_end),0) bal, "
+                    "COALESCE(SUM(total_overdue),0) od, COALESCE(SUM(overdue_gt_45),0) od45 "
+                    "FROM fact_congno_khachhang WHERE UPPER(COALESCE(sales_channel,''))='OTC' GROUP BY customer_code")
+            cn = {r["customer_code"]: r for r in cn if r.get("customer_code")}
+            moc_cong_no = max((str(r["at_"]) for r in cn.values() if r.get("at_")), default=None)
+            # Cua so thay cho JOIN theo customer_code: bang khong co index customer_code, JOIN tu CTE mat >120 giay tren
+            # kho dev (46 nghin dong x 11,6 nghin khach); mot lan quet + sap xep duoi 1 giay.
+            vai_tro_nv = {r["employee_code"]: r["position_code"] for r in _q(
+                "SELECT employee_code, MAX(position_code) position_code FROM dim_nhanvien GROUP BY employee_code")}
+            gan = [dict(r, position_code=vai_tro_nv.get(r["employee_code"]), amount_ct=0) for r in _q(
+                "SELECT customer_code, employee_code, manager_code FROM (SELECT customer_code, employee_code, "
+                "manager_code, save_date, MAX(save_date) OVER (PARTITION BY customer_code) d "
+                "FROM fact_tonghopkhachhang WHERE save_date<=?) WHERE save_date=d", (moc + " 23:59:59",))]
+            chon = {}
+            for g in _prefer_employee_tier([g for g in gan if g["customer_code"] in cn]):
+                chon.setdefault(g["customer_code"], g["employee_code"])
+            dat = set(ma_ban)
+            for kh, nv in chon.items():
+                if nv not in dat:
+                    continue
+                d = no_theo_nv.setdefault(nv, {"du_no": 0.0, "no_qua_han": 0.0, "no_qua_han_tren_45_ngay": 0.0,
+                                               "so_khach_no_qua_han": 0})
+                d["du_no"] += _f(cn[kh]["bal"])
+                d["no_qua_han"] += _f(cn[kh]["od"])
+                d["no_qua_han_tren_45_ngay"] += _f(cn[kh]["od45"])
+                d["so_khach_no_qua_han"] += 1 if _f(cn[kh]["od"]) > 0 else 0
+        except sqlite3.OperationalError:
+            no_theo_nv = None
+
+    def _dong(r):
+        vai_tro = str(r.get("position_code") or "").upper()
+        dung_ac = _uses_is_ac(vai_tro)
+        pct_ds = _pct100(r.get("month_sale_percent"))
+        nguong = _bonus_threshold(vai_tro)
+        d = {"employee_code": r["employee_code"], "employee_name": r.get("employee_name"),
+             "position_code": vai_tro, "area_code": r.get("area_code"), "manager_code": r.get("manager_code"),
+             "snapshot_date": str(r["save_date"])[:10],
+             "doanh_so": _f(r.get("month_sale_amount")), "chi_tieu_doanh_so": _f(r.get("month_sale_target")),
+             "pct_doanh_so": pct_ds, "nguong_thuong_pct": nguong,
+             "toi_nguong_thuong": (pct_ds >= nguong) if pct_ds is not None else None,
+             "trong_tam_pct_dat": _pct100(r.get("target_product_percent")),
+             "sku": {"dat": _f(r.get("sku_quantity")), "chi_tieu": _f(r.get("sku_target")),
+                     "pct": _pct100(r.get("sku_percent"))},
+             "tai_don": {"dat": _f(r.get("reorder_cus_quantity")),
+                         "chi_tieu": _chi_tieu_suy_nguoc(r.get("reorder_cus_quantity"), r.get("reorder_percent")),
+                         "pct": _pct100(r.get("reorder_percent"))},
+             "khach_moi": {"dat": _f(r.get("new_cus_quantity")), "chi_tieu": _f(r.get("new_cus_target")),
+                           "pct": _pct100(r.get("new_cus_percent"))},
+             "tong_diem_kpi_bravo": r.get("total_point")}
+        if dung_ac:
+            d["active_customer"] = {"dat": _f(r.get("active_cus_quantity")), "chi_tieu": _f(r.get("active_cus_target")),
+                                    "pct": _pct100(r.get("active_cus_percent"))}
+        else:
+            d["aso"] = {"dat": _f(r.get("aso_quantity")),
+                        "chi_tieu": _chi_tieu_suy_nguoc(r.get("aso_quantity"), r.get("aso_percent")),
+                        "pct": _pct100(r.get("aso_percent"))}
+        if no_theo_nv is not None:
+            d["cong_no_khach_phu_trach"] = no_theo_nv.get(r["employee_code"]) or {
+                "du_no": 0.0, "no_qua_han": 0.0, "no_qua_han_tren_45_ngay": 0.0, "so_khach_no_qua_han": 0}
+        return d
+
+    dong = sorted((_dong(r) for r in rows), key=lambda x: (x["pct_doanh_so"] is None, x["pct_doanh_so"] or 0))
+    theo_qlv = {}
+    for d in dong:
+        t = theo_qlv.setdefault(d["manager_code"], {"manager_code": d["manager_code"], "so_nguoi": 0, "doanh_so": 0.0,
+                                                     "chi_tieu_doanh_so": 0.0, "so_nguoi_dat_chi_tieu": 0,
+                                                     "so_nguoi_toi_nguong_thuong": 0, "no_qua_han": 0.0})
+        t["so_nguoi"] += 1
+        t["doanh_so"] += d["doanh_so"]
+        t["chi_tieu_doanh_so"] += d["chi_tieu_doanh_so"]
+        t["so_nguoi_dat_chi_tieu"] += 1 if (d["pct_doanh_so"] or 0) >= 100 else 0
+        t["so_nguoi_toi_nguong_thuong"] += 1 if d["toi_nguong_thuong"] else 0
+        t["no_qua_han"] += (d.get("cong_no_khach_phu_trach") or {}).get("no_qua_han", 0.0)
+    # No ca doi theo DUNG dinh nghia receivables_overview (khach co dong phan cong moi nhat ghi manager_code hoac
+    # employee_code = QLV). Chenh voi tong thanh vien = khach cua nguoi KHONG co dong KPI thang nay (nghi/chuyen doi)
+    # hoac QLV tu giu - do kho dev 26/09: doi TM23110105 609,2tr thanh vien vs 871,2tr ca doi (TM23110110 2 khach
+    # 323tr + QLV tu giu 3 khach 324tr); MBKV2 khop tung dong.
+    if no_theo_nv is not None:
+        for t in theo_qlv.values():
+            kh_doi = {g["customer_code"] for g in gan
+                      if t["manager_code"] and t["manager_code"] in (g.get("manager_code"), g.get("employee_code"))}
+            t["no_qua_han_cua_thanh_vien"] = t.pop("no_qua_han")
+            t["no_qua_han_ca_doi"] = sum(_f(cn[k]["od"]) for k in kh_doi if k in cn)
+            t["no_qua_han_chua_gan_thanh_vien"] = t["no_qua_han_ca_doi"] - t["no_qua_han_cua_thanh_vien"]
+    for t in theo_qlv.values():
+        t["pct_doanh_so_doi"] = (t["doanh_so"] / t["chi_tieu_doanh_so"] * 100) if t["chi_tieu_doanh_so"] else None
+    try:
+        # Khong loc doi/nguoi: ca cong ty ~180 nguoi x ~800 ky tu - chi tra 20 nguoi % thap nhat + tong hop theo QLV.
+        limit = max(1, min(int(limit or (60 if (ma_doi or ma_nv) else 20)), 300))
+    except (TypeError, ValueError):
+        limit = 60
+    ket_qua = {
+        "month": ym, "moc_snapshot": moc,
+        "luy_ke_giua_thang": moc[8:10] != f"{_last_day_of_month(int(ym[:4]), int(ym[5:7])):02d}",
+        "loc": thong_tin_loc or None, "vung": vung,
+        "so_nguoi": len(dong), "nhan_vien": dong[:limit], "nhan_vien_bi_cat": len(dong) > limit,
+        "tong_hop_theo_qlv": sorted(theo_qlv.values(), key=lambda t: (t["pct_doanh_so_doi"] is None,
+                                                                      t["pct_doanh_so_doi"] or 0)),
+        "cong_no_tai": moc_cong_no,
+        "definition": (
+            "Nguon: ket qua tinh luong Bravo (FACT_ThongKeTinhLuong), snapshot moi nhat tung nguoi trong thang; "
+            "luy_ke_giua_thang=true la tien do den moc_snapshot, KHONG phai ket qua thang da chot. pct = so dat / chi "
+            "tieu cua Bravo. trong_tam_pct_dat = TargetProductPercent (Mien Bac chi tieu la ty trong doanh so, MN/MT "
+            "la so tien - xem get_focus_product_kpi). chi_tieu tai don/ASO suy tu so dat / ty le dat (None khi ty le "
+            "0). CS/TK dung active_customer, khong co ASO. tong_diem_kpi_bravo = TotalPoint Bravo, khong tu quy doi. "
+            "cong_no_khach_phu_trach: no OTC cua khach phan cong cho nguoi do tai cong_no_tai, khong phai no phat "
+            "sinh trong thang. Tong doi dung no_qua_han_ca_doi (khop get_receivables_overview); "
+            "no_qua_han_chua_gan_thanh_vien la khach cua nguoi khong co dong KPI thang nay hoac QLV tu giu. Danh sach xep % doanh so THAP truoc. Khong co tien thuong/phu cap."),
+        "pham_vi_kenh": "OTC",
+        "data_as_of": latest_data_date(),
+    }
+    if no_theo_nv is None:
+        ket_qua["canh_bao_cong_no"] = "Kho chua co bang cong no/phan cong khach - khong tinh no qua han theo nguoi."
+    return ket_qua
 
 
 # 15/09/2026 (anh Dang): moi ma san pham va ma nhan vien trong cau tra loi phai kem ten. (khoa ma,
@@ -14475,6 +14824,7 @@ TEMPLATES = {
     "get_new_customer_list": new_customer_list,
     "get_reorder_pending_customers": reorder_pending_customers,
     "get_focus_product_kpi": focus_product_kpi,
+    "get_kpi_scorecard": kpi_scorecard,
     "get_customer_attrition_risk": customer_attrition_risk,
     "get_customer_cohort_retention": customer_cohort_retention,
     "get_customer_movement": customer_movement,
@@ -14557,6 +14907,8 @@ _PERSON_LEVEL_TEMPLATES = {
     "get_etc_revenue_by_item_type",
     # 15/09/2026: danh sach khach moi/chua tai don va KPI trong tam - loc theo doi QLV.
     "get_new_customer_list", "get_reorder_pending_customers", "get_focus_product_kpi",
+    # 26/09/2026: bang KPI QLV/TDV - doi theo manager_code tren ket qua tinh luong.
+    "get_kpi_scorecard",
     # 19/08: inventory_by_region/qlv_change_history/revenue_reconciliation chi loc vung.
     # 15/09 V40: receivables_overview da ho tro loc khach theo doi, dang ky o CA HAI tap
     # de backend ep pham vi QLV ma khong chan nham tool nhu truoc day.
@@ -14591,6 +14943,7 @@ _EMPLOYEE_SCOPED_TEMPLATES = {
     "get_promotion_data_quality",
     "get_customer_revenue_debt_risk",
     "get_new_customer_list", "get_reorder_pending_customers", "get_focus_product_kpi",
+    "get_kpi_scorecard",
     "get_salary_detail", "get_salary_achievement_summary", "get_salary_bonus_policy",
     "get_salary_data_quality", "get_salary_aso_detail",
     "get_salary_ranking",
@@ -14622,6 +14975,8 @@ _CHANNEL_SCOPE_POLICIES = {
         "get_employee_kpi", "get_revenue_tree", "get_kpi_ranking", "get_revenue_reconciliation",
         # 15/09/2026: KPI san pham trong tam tu ket qua tinh luong OTC.
         "get_focus_product_kpi",
+        # 26/09/2026: bang KPI QLV/TDV cung nguon ket qua tinh luong OTC.
+        "get_kpi_scorecard",
         # 15/09/2026: bao cao lo/han dung kem nhu cau ban va khach mua OTC gan day - mo cho tai khoan
         # OTC; tai khoan ETC dung get_inventory_by_region/get_inventory_item_stock (khong lo khach OTC).
         "get_inventory_expiry_report",
@@ -14826,6 +15181,7 @@ def call_template(name: str, args: dict, question: str = "", username: str = Non
             if key in call_args and isinstance(call_args[key], str) and len(call_args[key]) == 10:
                 call_args[key] += " 23:59:59"
 
+        loc_cap3, ket_qua_cap3_loi = None, None
         if name in ("get_top_customers", "get_top_products"):
             # 24/09/2026 (hop tien do): "hoi top khach hang mien Trung, bot lay top 50 toan quoc roi moi loc ra
             # 2 khach mien Trung" - tool khong co tham so mien nen model khong loc duoc tu dau. area_code chi
@@ -14834,6 +15190,30 @@ def call_template(name: str, args: dict, question: str = "", username: str = Non
             call_args.pop("scope_area_code", None)   # model khong duoc tu truyen scope
             if mien_hoi in ("MB", "MT", "MN") and not scope_area_code:
                 call_args["scope_area_code"] = mien_hoi
+            # 26/09/2026 (cap 3): employee_code/customer_code cua model -> DMSId/ma khach da phan giai. Hai
+            # tham so noi bo loc_* KHONG nhan tu model (model tu dien DMSId la mo duoc doi khac).
+            call_args.pop("loc_nv_dms", None)
+            call_args.pop("loc_khach", None)
+            nv_hoi = str(call_args.pop("employee_code", None) or "").strip()
+            kh_hoi = str(call_args.pop("customer_code", None) or "").strip()
+            if name == "get_top_customers":
+                kh_hoi = ""
+            if nv_hoi or kh_hoi:
+                loc_cap3 = _loc_cap3(nv_hoi, kh_hoi, str(call_args.get("date_to") or "")[:10] or None,
+                                     scope_area_code or call_args.get("scope_area_code"),
+                                     scope_employee_code, scope_channel)
+                if loc_cap3.get("chan_quyen"):
+                    entry["status"] = "blocked"
+                    entry["error"] = loc_cap3["loi"]["error"]
+                    _write_log(entry)
+                    return {"ok": False, "error": loc_cap3["loi"]["error"]}
+                if loc_cap3.get("loi"):
+                    ket_qua_cap3_loi = loc_cap3["loi"]
+                else:
+                    if loc_cap3.get("loc_nv_dms"):
+                        call_args["loc_nv_dms"] = loc_cap3["loc_nv_dms"]
+                    if loc_cap3.get("loc_khach"):
+                        call_args["loc_khach"] = loc_cap3["loc_khach"]
         if scope_area_code and name not in _AREA_EXEMPT_TEMPLATES:
             call_args["scope_area_code"] = scope_area_code
         if scope_employee_code and name in _PERSON_LEVEL_TEMPLATES:
@@ -15059,7 +15439,9 @@ def call_template(name: str, args: dict, question: str = "", username: str = Non
         margin_question = any(marker in q_folded for marker in (
             "loi nhuan gop", "bien loi nhuan", "loi nhuan thap", "loi nhuan am",
         ))
-        if name == "get_revenue_monthly_series" and margin_question:
+        if ket_qua_cap3_loi is not None:
+            result = ket_qua_cap3_loi
+        elif name == "get_revenue_monthly_series" and margin_question:
             result = {
                 "status": "SOURCE_GAP_NO_COGS_OR_GROSS_MARGIN",
                 "requested": "Loi nhuan gop/bien loi nhuan va phan ra nguyen nhan",
@@ -15119,7 +15501,14 @@ def call_template(name: str, args: dict, question: str = "", username: str = Non
             if not hoi_chi_tieu:
                 result = dict(result)
                 result["chi_so_khong_co_theo_dia_ban"] = result.pop("unavailable_metrics")
-        if name == "get_top_customers" and isinstance(result, list):
+        if loc_cap3 and not loc_cap3.get("loi"):
+            khoa = "customers" if name == "get_top_customers" else "products"
+            result = {khoa: result} if isinstance(result, list) else dict(result)
+            result["loc_theo"] = loc_cap3["thong_tin"]
+            if not result.get(khoa):
+                result["loc_theo_ghi_chu"] = ("0 dong: khong co hoa don nao cua nhan vien/khach nay trong ky va pham "
+                                              "vi da loc - noi dung nhu vay, KHONG thay bang top toan quoc.")
+        elif name == "get_top_customers" and isinstance(result, list):
             if concentration_question:
                 result = {
                     "customers": result,
