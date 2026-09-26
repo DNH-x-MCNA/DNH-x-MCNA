@@ -739,7 +739,9 @@ TEMPLATE_TOOLS = [
                         "voi cung khoang ngay va limit: mot lan channel=OTC, mot lan channel=ETC; KHONG dung "
                         "channel=ALL vi ALL gop doanh thu hai kenh theo cung ma san pham. Tu dong tra ve top san "
                         "pham cua rieng doi QLV neu duoc hoi. Moi dong co theo_mien (doanh thu MB/MT/MN cua "
-                        "chinh SKU do): cau hoi KHONG gioi han vung thi BAT BUOC trinh bay kem chi tiet theo mien.",
+                        "chinh SKU do): cau hoi KHONG gioi han vung thi BAT BUOC trinh bay kem chi tiet theo mien. "
+                        "Cap 3: SKU cua 1 TDV/doi 1 QLV -> employee_code; SKU 1 khach mua -> customer_code "
+                        "(loc tu dau, ket qua co loc_theo).",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -748,6 +750,8 @@ TEMPLATE_TOOLS = [
                 "limit": {"type": "integer", "description": "So luong top can lay, mac dinh 10"},
                 "area_code": {"type": "string", "enum": ["MB", "MT", "MN"], "description": "Loc DUNG mot mien khi nguoi dung hoi top cua mien do (vd top khach hang mien Trung -> MT); KHONG lay top toan quoc roi tu loc."},
                 "channel": {"type": "string", "enum": ["OTC", "ETC", "ALL"], "description": "Kenh, mac dinh channel=ALL (gop ca 2 kenh). Khi tach/so sanh OTC va ETC, goi rieng channel=OTC va channel=ETC; khong dung channel=ALL."},
+                "employee_code": {"type": "string", "description": "Ma HOAC TEN 1 nhan vien: TDV/CS/TK -> hoa don cua chinh nguoi do; QLV -> ca doi cua QLV do. Khong dung cho TP/GD mien (dung area_code)."},
+                "customer_code": {"type": "string", "description": "Ma HOAC TEN 1 khach hang - top SKU khach do mua trong ky."},
             },
             "required": ["date_from", "date_to"],
         },
@@ -761,7 +765,10 @@ TEMPLATE_TOOLS = [
                         "C11/S70 co concentration_by_month cho top khach, top SKU va mien. "
                         "C32/M21/V19 co monthly_customer_changes: top tang/giam RIENG tung thang, "
                         "dong gop vao bien dong tong va ma nguoi phu trach. Moi dong co mien (MB/MT/MN cua "
-                        "khach): cau hoi KHONG gioi han vung thi BAT BUOC co cot Mien.",
+                        "khach): cau hoi KHONG gioi han vung thi BAT BUOC co cot Mien. Moi dong co san "
+                        "customer_name va nv_ban_chinh (NV ghi tren hoa don co doanh thu lon nhat trong ky, kem "
+                        "ty_trong_pct) - KHONG goi get_customer_detail chi de lay ten. Cap 3 'top khach cua TDV X/"
+                        "doi QLV Y' -> employee_code (loc tu dau, ket qua co loc_theo).",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -770,6 +777,7 @@ TEMPLATE_TOOLS = [
                 "limit": {"type": "integer", "description": "So luong top can lay, mac dinh 10"},
                 "area_code": {"type": "string", "enum": ["MB", "MT", "MN"], "description": "Loc DUNG mot mien khi nguoi dung hoi top cua mien do (vd top khach hang mien Trung -> MT); KHONG lay top toan quoc roi tu loc."},
                 "channel": {"type": "string", "enum": ["OTC", "ETC", "ALL"], "description": "Kenh, mac dinh ALL"},
+                "employee_code": {"type": "string", "description": "Ma HOAC TEN 1 nhan vien: TDV/CS/TK -> khach cua chinh nguoi do (theo hoa don); QLV -> khach cua ca doi. Khong dung cho TP/GD mien (dung area_code)."},
             },
             "required": ["date_from", "date_to"],
         },
@@ -3231,6 +3239,8 @@ QUAN TRONG VE CHON TOOL:
 - CHI TIET THEO KHU VUC (hop tien do 24/09/2026): cau hoi top khach hang, cong no, san pham/SKU, doanh
   thu ma KHONG gioi han vung -> trinh bay kem chi tiet theo mien (MB/MT/MN) tu truong mien/theo_mien/
   by_area/theo_vung ma tool da tra. Tai khoan da bi gioi han mot vung thi khong can tach.
+  Cap 2/3 = mien -> QLV/TDV -> khach -> SKU: top khach/SKU cua 1 TDV hoac doi 1 QLV dung employee_code,
+  SKU cua 1 khach dung customer_code tren get_top_customers/get_top_products; KHONG tu viet SQL.
 - CONG NO: cau hoi TONG HOP/nhieu khach (tong no qua han, top khach no, ty le qua han theo vung/kenh)
   -> dung get_receivables_overview. Cong no cua 1 khach cu the -> get_customer_detail. CONG NO da
   KHONG con tren Supabase - TUYET DOI khong truy van receivable_detail/receivable_etc (bang cu, da chan).
