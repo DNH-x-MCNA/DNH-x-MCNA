@@ -1400,7 +1400,8 @@ TEMPLATE_TOOLS = [
                        "khoan QLV kem tung thanh vien doi. BAT BUOC dung khi hoi doanh so/KPI san pham trong tam "
                        "theo QLV/doi. KHONG dung cho % target SKU trong tam theo khach hang. kieu_chi_tieu="
                        "'ty_trong_doanh_so' (Mien Bac): chi tieu la ty trong trong tam/doanh so (ty_trong_muc_tieu_pct),"
-                       " KHONG phai so tien.",
+                       " KHONG phai so tien. Trong tam theo TUNG TDV ca cong ty/mien -> get_kpi_scorecard mot lan, "
+                       "KHONG goi tool nay lan luot tung QLV.",
         "input_schema": {"type": "object", "properties": {
             "year_month": {"type": "string", "description": "YYYY-MM; mac dinh thang moi nhat."},
             "manager_code": {"type": "string", "description": "Ma QLV khi cau hoi gioi han MOT DOI (vd 'doi qlv "
@@ -1492,7 +1493,9 @@ TEMPLATE_TOOLS = [
                         "lan lap lai cho tung ma. Ket qua tra ve {'is_bulk': true, 'customers': [...]}, MOI "
                         "phan tu kem 'requested_customer_code' de biet ung voi ma nao da yeu cau - neu 1 ma "
                         "bi loi/tu choi (vd ngoai vung, khach thuan kenh khac), phan tu do se co 'error' "
-                        "kem ly do, PHAI neu ro voi nguoi dung, KHONG duoc im lang bo qua ma do.",
+                        "kem ly do, PHAI neu ro voi nguoi dung, KHONG duoc im lang bo qua ma do. "
+                        "Khoang NHIEU THANG -> ket qua co theo_thang (doanh thu/so don tung thang, tong khop "
+                        "revenue): hoi 'cac thang/5 thang gan day' thi goi MOT lan ca khoang, KHONG goi tung thang.",
         "input_schema": {
             "type": "object",
             "properties": {
