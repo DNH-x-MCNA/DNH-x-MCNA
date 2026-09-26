@@ -165,6 +165,14 @@ def _goi_trung(tools: list) -> int:
     return sum(n - 1 for n in dem.values() if n > 1)
 
 
+def _gio_dia_phuong(utc_text):
+    """query_runs.created_at la UTC; cost_log ghi gio may 24 (UTC+7)."""
+    try:
+        return dt.datetime.fromisoformat(str(utc_text or "")[:19]) + dt.timedelta(hours=7)
+    except ValueError:
+        return None
+
+
 def _nguon(user: str, sid: str) -> str:
     for tt in TIEN_TO_KIEM_THU:
         if (user or "").lower().startswith(tt) or (sid or "").lower().startswith(tt):
@@ -194,9 +202,13 @@ def main():
 
     luot_ds = []
     for khoa, nhom in cost.items():
-        ds_run = runs.get(khoa, [])
-        for i, vong in enumerate(nhom):
-            run = ds_run[i] if i < len(ds_run) else None
+        # Ghep theo GIO, khong theo thu tu (26/09): cham lai UAT dung CUNG session+cau hoi cho nhieu lan chay; lan
+        # 24/09 hong ket noi (0 dong cost) da an chi phi cua lan chay sau -> 18 luot "Connection error." 76.343d gia.
+        ds_run = [(r, _gio_dia_phuong(r.get("created_at"))) for r in runs.get(khoa, [])]
+        for vong in nhom:
+            bat_dau = dt.datetime.fromisoformat(vong[0]["ts"][:19])
+            ung_vien = [(t, r) for r, t in ds_run if t and t <= bat_dau + dt.timedelta(seconds=90)]
+            run = max(ung_vien, key=lambda x: x[0])[1] if ung_vien else None
             user = (vong[0].get("username") or (run or {}).get("username") or "").strip()
             sid = khoa[0]
             kiem_thu = _nguon(user, sid) != "that"
