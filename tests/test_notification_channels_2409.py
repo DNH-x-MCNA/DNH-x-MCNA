@@ -1,4 +1,5 @@
-"""Decision 24/09: ASM/RM use email; business Teams goes only to directors."""
+"""Decision 24/09: ASM/RM use email; business Teams goes to directors.
+26/09 (anh Dang, phuong an A): C-Level GIU Teams - Daily + canh bao - nhu truoc #106."""
 import json
 
 import pytest
@@ -61,14 +62,14 @@ def test_missing_manager_email_never_uses_legacy_teams(monkeypatch):
     assert not main.send_daily_digest()
 
 
-def test_alert_routes_exclude_managers_clevel_and_unknown_roles(monkeypatch):
+def test_alert_routes_exclude_managers_and_unknown_roles_keep_clevel(monkeypatch):
     recipients = [_team(), _team("asm"), _team("rm"), _director(),
                   {"audience": "GD OTC", "role": "channel_director", "channel": "OTC",
                    "teams_webhook": "https://otc.invalid"},
                   {"audience": "C-Level", "teams_webhook": "https://clevel.invalid"},
                   {"audience": "Other", "role": "staff", "region": "bac", "teams_webhook": "https://other.invalid"}]
     monkeypatch.setattr(notifier, "load_config", lambda: {"report_recipients": recipients})
-    assert {route[1] for route in notifier._resolve_teams_webhooks("Miền Bắc", "OTC")} == {"GD MB", "GD OTC"}
+    assert {route[1] for route in notifier._resolve_teams_webhooks("Miền Bắc", "OTC")} == {"GD MB", "GD OTC", "C-Level"}
 
 
 def test_no_recipient_configuration_never_sends_global_teams(monkeypatch):
@@ -150,3 +151,59 @@ def test_critical_retry_only_failed_recipient(monkeypatch):
     monkeypatch.setattr(notifier, "_send_with_retry", lambda fn, url, payload: payload["recipient"] == "mb@example.invalid")
     notifier.flush_critical_teams_queue()
     assert notifier._pending_critical_teams_alerts[0]["webhooks"] == [routes[1]]
+
+
+def _clevel(role=None):
+    r = {"audience": "C-Level (Toàn quốc)", "teams_webhook": "https://clevel.invalid"}
+    if role:
+        r["role"] = role
+    return r
+
+
+def _metrics_toan_quoc(scopes):
+    return lambda **kw: scopes.append(kw) or {
+        "date": "2026-09-28", "freshness_note": "", "insights": None,
+        "revenue": {"otc": 10, "etc": 20, "total": 30, "otc_invoice_count": 1,
+                    "etc_invoice_count": 2, "invoice_count": 3},
+        "inventory": {"dead_stock_available": False, "near_stockout_available": False},
+    }
+
+
+@pytest.mark.parametrize("role", [None, "c_level"])
+def test_clevel_daily_teams_toan_quoc_nhu_truoc_106(monkeypatch, role):
+    # 26/09: may 24 co audience 'C-Level (Toan quoc)' khong role, webhook rieng - Daily 25/09 da nhan HTTP 202.
+    monkeypatch.setattr(main, "load_config", lambda: {"report_recipients": [_clevel(role)]})
+    scopes, sent = [], []
+    monkeypatch.setattr(main, "get_daily_digest_metrics", _metrics_toan_quoc(scopes))
+    monkeypatch.setattr(main, "send_teams_alert", lambda **kw: sent.append(kw) or True)
+    monkeypatch.setattr(main, "send_email", lambda *a, **kw: pytest.fail("C-Level Daily van la Teams"))
+    assert main.send_daily_digest()
+    assert scopes == [{"region": None, "channel": None}], "C-Level nhan ban toan quoc"
+    assert sent[0]["webhook_url_override"] == "https://clevel.invalid"
+
+
+def test_clevel_nhan_canh_bao_toan_quoc_va_moi_mien(monkeypatch):
+    monkeypatch.setattr(notifier, "load_config", lambda: {"report_recipients": [_clevel(), _director()]})
+    assert {r[1] for r in notifier._resolve_teams_webhooks("Toàn quốc", None)} == {"C-Level (Toàn quốc)"}
+    assert {r[1] for r in notifier._resolve_teams_webhooks("Miền Nam", "ETC")} == {"C-Level (Toàn quốc)"}
+    assert {r[1] for r in notifier._resolve_teams_webhooks("Miền Bắc", "OTC")} == {"C-Level (Toàn quốc)", "GD MB"}
+
+
+def test_clevel_gan_vung_la_sai_cau_hinh_khong_gui(monkeypatch):
+    from src.teams_routing import teams_audience_allowed
+    assert not teams_audience_allowed({"audience": "X", "role": "c_level", "region": "bac"})
+    monkeypatch.setattr(notifier, "load_config", lambda: {"report_recipients": [
+        {"audience": "X", "role": "c_level", "region": "bac", "teams_webhook": "https://x.invalid"}]})
+    assert notifier._resolve_teams_webhooks("Miền Bắc", "OTC") == []
+
+
+def test_shared_flow_bat_buoc_co_upn_clevel(monkeypatch, tmp_path):
+    from src.teams_routing import TeamsRoutingError
+    _shared(monkeypatch, tmp_path, {"GD MB": "director@example.invalid"})
+    monkeypatch.setattr(notifier, "load_config", lambda: {"report_recipients": [_clevel(), _director()]})
+    with pytest.raises(TeamsRoutingError):
+        notifier._resolve_teams_webhooks("Miền Bắc", "OTC")
+    _shared(monkeypatch, tmp_path, {"GD MB": "director@example.invalid",
+                                    "C-Level (Toàn quốc)": "sep@example.invalid"})
+    assert {r[2] for r in notifier._resolve_teams_webhooks("Miền Bắc", "OTC")} == {
+        "director@example.invalid", "sep@example.invalid"}

@@ -1450,7 +1450,8 @@ def _resolve_teams_webhooks(region_label, channel_label):
     """Business alerts go only to matching regional/channel directors (24/09).
 
     No configuration means no authorized destination. Shared Flow validates all
-    director UPNs before returning any route; QLV/C-Level are excluded in both modes.
+    director UPNs before returning any route; QLV/ASM/RM are excluded in both modes.
+    26/09: C-Level (audience khong vung/kenh) nhan MOI alert tro lai - anh Dang chot phuong an A.
     """
     config = load_config()
     shared_routes = load_shared_routes(config)

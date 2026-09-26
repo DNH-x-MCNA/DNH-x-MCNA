@@ -270,12 +270,9 @@ def send_daily_digest(dry_run=False, audience_filter=None, webhook_override=None
                 continue
 
             if not teams_audience_allowed(r):
-                # The unscoped C-Level audience is no longer a business Teams target.
-                # Keep its existing Weekly/Monthly email schedule; no new Daily send.
-                if role not in {"", "c_level"} or region or channel:
-                    raise ValueError("Vai/phạm vi người nhận Teams không hợp lệ; chỉ giám đốc miền/kênh.")
-                print(f"[{datetime.now()}] '{audience}' không thuộc nhóm nhận Daily Teams; giữ email tuần/tháng.")
-                continue
+                # 26/09/2026: C-Level (khong vung/kenh) nhan Daily Teams tro lai (phuong an A). Con lai o day la
+                # vai tro/pham vi sai cau hinh - dung rieng nguoi nhan nay, khong doan pham vi.
+                raise ValueError("Vai/phạm vi người nhận Teams không hợp lệ; chỉ C-Level, giám đốc miền/kênh.")
             if routing_error:
                 raise TeamsRoutingError(routing_error)
             webhook, teams_recipient = resolve_destination(r, shared_routes, webhook_override)

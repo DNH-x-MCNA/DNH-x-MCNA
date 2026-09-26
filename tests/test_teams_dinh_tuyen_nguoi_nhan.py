@@ -53,7 +53,7 @@ def test_khong_dien_nguoi_nhan_thi_khu_trung_y_het_truoc_day(monkeypatch):
 
 
 def test_moi_audience_mot_webhook_rieng_van_gui_du(monkeypatch):
-    """Giữ phân vùng webhook, áp chính sách chỉ giám đốc miền/kênh ngày 24/09."""
+    """Giữ phân vùng webhook: C-Level + giám đốc miền đúng vùng (26/09 phương án A)."""
     _dat_audience(monkeypatch, [
         {"audience": "C-Level", "region": None, "channel": None, "teams_webhook": "https://flow-clevel"},
         {"audience": "Mien Bac", "region": "bac", "channel": None, "teams_webhook": "https://flow-mb"},
@@ -61,8 +61,8 @@ def test_moi_audience_mot_webhook_rieng_van_gui_du(monkeypatch):
     ])
     ket = notifier._resolve_teams_webhooks("Miền Bắc", None)
     urls = {r[0] for r in ket}
-    assert urls == {"https://flow-mb"}, \
-        "24/09: chỉ giám đốc miền/kênh nhận Teams; không C-Level/miền khác"
+    assert urls == {"https://flow-clevel", "https://flow-mb"}, \
+        "26/09: C-Level nhận mọi alert, giám đốc miền chỉ vùng mình; không miền khác"
 
 
 def test_khong_co_report_recipients_khong_tu_gui_webhook_mac_dinh(monkeypatch):
@@ -89,8 +89,8 @@ def test_cung_mot_flow_nhung_khac_nguoi_nhan_thi_KHONG_duoc_gop(monkeypatch):
          "teams_webhook": "https://flow-dinh-tuyen", "teams_recipient": "gd.otc@dnh.vn"},
     ])
     ket = notifier._resolve_teams_webhooks("Miền Bắc", "OTC")
-    assert len(ket) == 2, "24/09: hai giám đốc nhận riêng; C-Level bị loại"
-    assert {r[2] for r in ket} == {"gd.mienbac@dnh.vn", "gd.otc@dnh.vn"}
+    assert len(ket) == 3, "26/09: C-Level và hai giám đốc nhận riêng"
+    assert {r[2] for r in ket} == {"sep@dnh.vn", "gd.mienbac@dnh.vn", "gd.otc@dnh.vn"}
 
 
 def test_trung_ca_flow_lan_nguoi_nhan_thi_van_gop(monkeypatch):
@@ -117,7 +117,8 @@ def test_alert_theo_mien_khong_gui_cho_qlv_vi_chua_co_scope_doi(monkeypatch):
 
     ket = notifier._resolve_teams_webhooks("Miền Bắc", "OTC")
 
-    assert ket == [], "24/09: cả C-Level và QLV đều không thuộc Teams nghiệp vụ"
+    assert ket == [("https://flow-clevel", "C-Level", None)], \
+        "26/09: QLV không nhận Teams; C-Level vẫn nhận (phương án A)"
 
 
 def test_alert_cung_khong_gui_khi_qlv_quen_truong_role(monkeypatch):
