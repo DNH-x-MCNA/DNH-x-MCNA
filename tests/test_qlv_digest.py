@@ -306,7 +306,7 @@ def test_send_daily_qlv_di_nhanh_rieng_va_dinh_tuyen_dung_nguoi(monkeypatch):
             "region": "bac",
             "channel": "OTC",
             "employee_code": "QLV01",
-            "teams_recipient": "nguoi-nhan-a",
+            "emails": ["qlv.a@example.invalid"],
             "teams_webhook": "https://flow.example.test",
         }],
     })
@@ -322,15 +322,17 @@ def test_send_daily_qlv_di_nhanh_rieng_va_dinh_tuyen_dung_nguoi(monkeypatch):
         "get_daily_digest_metrics",
         lambda **kwargs: pytest.fail("QLV không được chạy nhánh digest toàn miền cũ"),
     )
-    monkeypatch.setattr(main, "send_teams_alert", lambda **kwargs: captured.setdefault("send", kwargs) or True)
+    monkeypatch.setattr(main, "send_teams_alert", lambda **kwargs: pytest.fail("QLV chỉ nhận email từ 24/09"))
+    monkeypatch.setattr(main, "send_email", lambda subject, body, **kwargs:
+                        captured.update(send=kwargs, body=body) or True)
 
     assert main.send_daily_digest(dry_run=False) is True
     assert captured["scope"] == {
         "employee_code": "QLV01", "region": "bac", "channel": "OTC",
     }
-    assert captured["send"]["recipient"] == "nguoi-nhan-a"
-    assert captured["send"]["audience"] == "QLV A"
-    assert all("tồn kho" not in str(section).lower() for section in captured["send"]["sections"])
+    assert captured["send"]["recipient_override"] == ["qlv.a@example.invalid"]
+    assert "QLV01" in captured["body"]
+    assert "không bao gồm tồn kho" in captured["body"]
 
 
 def test_send_weekly_qlv_dung_email_va_scope_rieng(monkeypatch):
@@ -408,7 +410,7 @@ def test_send_monthly_qlv_thieu_email_thi_fail_closed(monkeypatch):
     assert main.send_monthly_report(dry_run=False) is False
 
 
-@pytest.mark.parametrize("missing_field", ["employee_code", "region", "teams_recipient"])
+@pytest.mark.parametrize("missing_field", ["employee_code", "region", "emails"])
 def test_send_daily_qlv_thieu_cau_hinh_thi_khong_gui(monkeypatch, missing_field):
     recipient = {
         "audience": "QLV lỗi cấu hình",
@@ -416,7 +418,7 @@ def test_send_daily_qlv_thieu_cau_hinh_thi_khong_gui(monkeypatch, missing_field)
         "region": "bac",
         "channel": "OTC",
         "employee_code": "QLV01",
-        "teams_recipient": "nguoi-nhan-a",
+        "emails": ["qlv.a@example.invalid"],
     }
     recipient[missing_field] = None
     monkeypatch.setattr(main, "load_config", lambda: {"report_recipients": [recipient]})
@@ -427,8 +429,8 @@ def test_send_daily_qlv_thieu_cau_hinh_thi_khong_gui(monkeypatch, missing_field)
     )
     monkeypatch.setattr(
         main,
-        "send_teams_alert",
-        lambda **kwargs: pytest.fail("Không được gửi khi thiếu cấu hình fail-closed"),
+        "send_email",
+        lambda *args, **kwargs: pytest.fail("Không được gửi khi thiếu cấu hình fail-closed"),
     )
 
     assert main.send_daily_digest(dry_run=False) is False

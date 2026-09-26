@@ -28,12 +28,15 @@ load_env()
 from src.database import get_db_engines, load_config
 from src.etl import get_daily_digest_metrics, get_weekly_digest_metrics, get_monthly_digest_metrics
 from src.notifier import build_digest_email, send_email, flush_critical_teams_queue, send_teams_alert
+from src.teams_routing import (
+    TeamsRoutingError, is_team_manager, teams_audience_allowed, load_shared_routes, resolve_destination,
+)
 from src.insight_report import action_lines, pace_lines
 from src.qlv_digest import (
     build_qlv_digest_metrics,
     build_qlv_period_metrics,
     build_qlv_period_email,
-    build_qlv_teams_content,
+    build_qlv_daily_email,
 )
 from src.insights import build_insight_bundle
 from src.alerts import (
@@ -188,7 +191,7 @@ def _digest_table(metrics):
 
     return headers, rows
 
-def send_daily_digest(dry_run=False, audience_filter=None, webhook_override=None):
+def send_daily_digest(dry_run=False, audience_filter=None, webhook_override=None, email_override=None):
     print(f"[{datetime.now()}] Đang chuẩn bị báo cáo Daily Digest...")
     from src.region_map import REGION_NAMES_VI
     from src.etl import get_daily_kpi_pace_snapshot, get_kpi_revenue_reconciliation, get_etc_return_rate
@@ -196,14 +199,21 @@ def send_daily_digest(dry_run=False, audience_filter=None, webhook_override=None
     config = load_config()
     recipients = config.get('report_recipients') or []
     if not recipients:
-        print(f"[{datetime.now()}] Chưa cấu hình report_recipients — gửi Daily Digest bản không lọc (hành vi cũ).")
-        recipients = [{"audience": None, "region": None, "channel": None, "teams_webhook": None}]
+        print(f"[{datetime.now()}] Chưa cấu hình report_recipients; không có đích gửi Daily hợp lệ.")
+        return False
 
     if audience_filter:
         recipients = [r for r in recipients if r.get('audience') == audience_filter]
         if not recipients:
             print(f"[{datetime.now()}] KHÔNG tìm thấy audience_filter '{audience_filter}' trong report_recipients.")
             return False
+
+    # Validate the shared director mapping once, but keep QLV email independent.
+    shared_routes, routing_error = None, None
+    try:
+        shared_routes = load_shared_routes(config)
+    except TeamsRoutingError as exc:
+        routing_error = str(exc)
 
     overall_ok = True
     for r in recipients:
@@ -212,18 +222,14 @@ def send_daily_digest(dry_run=False, audience_filter=None, webhook_override=None
         channel = r.get('channel')
         role = str(r.get('role') or '').strip().lower()
         employee_code = str(r.get('employee_code') or '').strip()
-        webhook = webhook_override or (r.get('teams_webhook') or '').strip() or None
-        # 26/08/2026: truong TUY CHON, de trong thi payload y het truoc day. Dien vao thi mot Flow
-        # Power Automate duy nhat co the tu dinh tuyen theo nguoi nhan - xem ghi chu dai trong
-        # src/notifier.py::_resolve_teams_webhooks.
-        teams_recipient = (r.get('teams_recipient') or '').strip() or None
+        webhook, teams_recipient = None, None
 
         try:
-            if employee_code and role != "qlv":
+            if employee_code and not is_team_manager(r):
                 raise ValueError(
                     "Người nhận có employee_code nhưng role không phải qlv; đã dừng để tránh chạy nhánh toàn miền."
                 )
-            if role == "qlv":
+            if is_team_manager(r):
                 # Báo cáo chứa dữ liệu đúng một đội, vì vậy thiếu mã đội hoặc đích định tuyến là
                 # lỗi cấu hình phải dừng. Không dùng fallback toàn miền/toàn quốc của nhánh cũ.
                 if not employee_code:
@@ -234,61 +240,45 @@ def send_daily_digest(dry_run=False, audience_filter=None, webhook_override=None
                     raise ValueError(
                         "Người nhận QLV thiếu region; đã dừng để không mở rộng phạm vi báo cáo."
                     )
-                if not teams_recipient:
-                    raise ValueError(
-                        "Người nhận QLV thiếu teams_recipient; chưa thể định tuyến báo cáo riêng."
-                    )
+                emails = ([email_override.strip()] if email_override and email_override.strip()
+                          else [str(e).strip() for e in (r.get('emails') or []) if str(e).strip()])
+                if not emails:
+                    raise ValueError("Người nhận QLV thiếu emails; chưa thể gửi báo cáo email riêng.")
 
                 qlv_metrics = build_qlv_digest_metrics(
                     employee_code=employee_code,
                     region=region,
                     channel=channel,
                 )
-                headers, rows, sections = build_qlv_teams_content(
-                    qlv_metrics,
-                    format_vietnamese_money,
-                )
-                region_label = REGION_NAMES_VI.get(region, region)
+                html_content = build_qlv_daily_email(qlv_metrics, format_vietnamese_money)
                 title = (
                     f"BÁO CÁO ĐỘI QLV HÀNG NGÀY ({qlv_metrics['date']})"
                     + (f" — {audience}" if audience else "")
                 )
-                freshness = qlv_metrics.get('freshness_note') or ""
-                summary = (
-                    f"Doanh số, KPI, khách hàng và công nợ của riêng đội {employee_code}. "
-                    f"{freshness}"
-                ).strip()
-
                 if dry_run:
-                    print(f"[DRY-RUN] Dựng Daily Digest QLV thành công cho '{audience or employee_code}'.")
-                    print(f" - Employee code: {employee_code}")
-                    print(f" - Recipient routing: đã cấu hình")
-                    print(f" - Title: {title}")
-                    print(f" - Table Rows: {len(rows)}")
-                    print(f" - Sections: {len(sections)}")
-                    print(" - Inventory: không đưa vào báo cáo QLV")
+                    print(f"[DRY-RUN] Dựng email Daily QLV cho '{audience or employee_code}'.")
+                    print(f" - Employee code: {employee_code}; emails: {', '.join(emails)}")
+                    print(f" - HTML length: {len(html_content)}; không gửi ra ngoài.")
                     continue
+                sent = send_email(title, html_content, recipient_override=emails)
 
-                sent = send_teams_alert(
-                    title=title,
-                    summary=summary,
-                    table_headers=headers,
-                    table_rows=rows,
-                    severity="INFO",
-                    period=qlv_metrics['date'],
-                    channel=qlv_metrics['channel'],
-                    region=region_label,
-                    webhook_url_override=webhook,
-                    sections=sections,
-                    recipient=teams_recipient,
-                    audience=audience,
-                )
                 if sent:
                     print(f"[{datetime.now()}] Daily Digest QLV cho '{audience or employee_code}' đã gửi thành công.")
                 else:
                     print(f"[{datetime.now()}] Gửi Daily Digest QLV cho '{audience or employee_code}' thất bại.")
                     overall_ok = False
                 continue
+
+            if not teams_audience_allowed(r):
+                # The unscoped C-Level audience is no longer a business Teams target.
+                # Keep its existing Weekly/Monthly email schedule; no new Daily send.
+                if role not in {"", "c_level"} or region or channel:
+                    raise ValueError("Vai/phạm vi người nhận Teams không hợp lệ; chỉ giám đốc miền/kênh.")
+                print(f"[{datetime.now()}] '{audience}' không thuộc nhóm nhận Daily Teams; giữ email tuần/tháng.")
+                continue
+            if routing_error:
+                raise TeamsRoutingError(routing_error)
+            webhook, teams_recipient = resolve_destination(r, shared_routes, webhook_override)
 
             metrics = get_daily_digest_metrics(region=region, channel=channel)
             headers, rows = _digest_table(metrics)
@@ -369,7 +359,7 @@ def send_daily_digest(dry_run=False, audience_filter=None, webhook_override=None
                 })
 
             if dry_run:
-                print(f"[DRY-RUN] Gửi Daily Digest thành công cho '{audience or 'mặc định'}' (Webhook: {webhook or 'Mặc định'})")
+                print(f"[DRY-RUN] Dựng Daily Teams cho '{audience or 'mặc định'}'; đích gửi đã cấu hình, chưa gửi.")
                 print(f" - Title: {title}")
                 print(f" - Table Rows: {len(rows)}")
                 print(f" - Sections: {len(sections)}")
@@ -432,7 +422,7 @@ def _send_periodic_email_report(
     # không có gì để gửi, nhưng không được báo lỗi làm hỏng luồng email riêng bên dưới.
     if audience_filter and any(
         r.get('audience') == audience_filter
-        and str(r.get('role') or '').strip().lower() == 'qlv'
+        and is_team_manager(r)
         for r in configured_recipients
     ):
         return True
@@ -440,7 +430,7 @@ def _send_periodic_email_report(
     # QLV đi qua _send_qlv_periodic_email_report() bên dưới, có employee_code và scope thật.
     recipients = [
         recipient for recipient in configured_recipients
-        if str(recipient.get('role') or '').strip().lower() != 'qlv'
+        if not is_team_manager(recipient)
         and not str(recipient.get('employee_code') or '').strip()
     ]
     if not recipients:
@@ -448,7 +438,7 @@ def _send_periodic_email_report(
             print(f"[{datetime.now()}] Chưa cấu hình report_recipients — gửi {report_title} bản không lọc (hành vi cũ).")
             recipients = [{"audience": None, "region": None, "channel": None, "emails": None}]
         elif any(
-            str(r.get('role') or '').strip().lower() == 'qlv'
+            is_team_manager(r)
             for r in configured_recipients
         ):
             # Cấu hình chỉ có QLV: nhánh email tổng miền không có việc phải làm; nhánh
@@ -530,13 +520,13 @@ def _send_qlv_periodic_email_report(
 
     Luồng này tách khỏi báo cáo email toàn miền để không thể vô tình đưa số liệu vùng/công ty vào
     một tài khoản QLV. Thiếu employee_code, region hoặc địa chỉ email đều dừng riêng người nhận
-    đó (fail-closed). Teams chỉ dùng cho Daily Digest.
+    đó (fail-closed). QLV/ASM/RM nhận cả Daily/Weekly/Monthly qua email.
     """
     config = load_config()
     configured = config.get('report_recipients') or []
     qlv_recipients = [
         r for r in configured
-        if str(r.get('role') or '').strip().lower() == 'qlv'
+        if is_team_manager(r)
     ]
     if audience_filter:
         qlv_recipients = [r for r in qlv_recipients if r.get('audience') == audience_filter]
@@ -544,7 +534,7 @@ def _send_qlv_periodic_email_report(
         if not qlv_recipients:
             return True
     if not qlv_recipients:
-        print(f"[{datetime.now()}] Chưa cấu hình QLV cho báo cáo {period_type}; bỏ qua luồng Teams QLV.")
+        print(f"[{datetime.now()}] Chưa cấu hình QLV cho báo cáo {period_type}; bỏ qua luồng email QLV.")
         return True
 
     period_label = "TUẦN" if period_type == "weekly" else "THÁNG"
@@ -648,7 +638,7 @@ def main():
     parser.add_argument('--audience', type=str, help='Lọc chạy báo cáo cho duy nhất 1 audience (vd: "Quản lý Miền Bắc")')
     parser.add_argument('--teams-webhook-override', type=str, help='Ghi đè Webhook URL Teams để gửi test')
     parser.add_argument('--email-override', type=str,
-                        help='Ghi đè email người nhận Weekly/Monthly cho lần chạy kiểm thử')
+                        help='Ghi đè email người nhận báo cáo QLV/Daily/Weekly/Monthly cho lần kiểm thử')
     args = parser.parse_args()
 
     config = load_config()
@@ -666,6 +656,7 @@ def main():
             dry_run=args.dry_run,
             audience_filter=args.audience,
             webhook_override=args.teams_webhook_override,
+            email_override=args.email_override,
         )
         sys.exit(0 if ok else 1)
     if args.send_weekly:

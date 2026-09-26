@@ -36,7 +36,7 @@ def test_report_freshness_tach_ngay_du_lieu_va_gio_dong_bo(tmp_path, monkeypatch
 
 def test_daily_mac_dinh_chi_hien_tong_cong_no_khong_lap_top_5(monkeypatch):
     monkeypatch.setattr(main, "load_config", lambda: {
-        "report_recipients": [{"audience": "C-Level", "region": None, "channel": None,
+        "report_recipients": [{"audience": "GD Miền Bắc", "region": "bac", "channel": None,
                                "teams_webhook": "https://example.test"}],
         "report_feature_flags": {"show_daily_receivables_detail": False,
                                  "show_operational_quality": False},
