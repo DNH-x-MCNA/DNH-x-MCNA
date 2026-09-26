@@ -44,7 +44,11 @@ def _nap(monkeypatch, tmp_path):
          "2026-09-20T04:00:00"),
         ("q4", "s4", "nguoi_cu", "Top SKU mien Bac", "", "error", "[]", 900, "2026-09-21T02:00:00"),
         ("q5a", "s5", "qlv_a", "Cong no doi", "", "error", "[]", 100, "2026-09-22T01:00:00"),
-        ("q5b", "s5", "qlv_a", "Cong no doi", "No doi 1 ty.", "completed", '["t"]', 5000, "2026-09-22T01:05:00"),
+        ("q5b", "s5", "qlv_a", "Cong no doi", "No doi 1 ty.", "completed",
+         json.dumps(["[bao cao chuan] get_revenue_monthly_series({'months_back': 12})",
+                     "[bao cao chuan] get_revenue_monthly_series({'months_back': 6})",
+                     "[local] SELECT strftime('%Y-%m', doc_date) FROM vhoadon_etc"]),
+         5000, "2026-09-22T01:05:00"),
     ])
     c.execute("UPDATE query_runs SET error_message='Error code: 529 - overloaded req_abc123' WHERE query_id='q4'")
     c.commit(); c.close()
@@ -103,3 +107,16 @@ def test_ghep_query_run_theo_gio_khong_theo_thu_tu(tmp_path, monkeypatch, capsys
     out = capsys.readouterr().out
     assert "Khong ra gia tri: 3 luot" in out, "Chi phi 08:05 thuoc lan tra loi q5b, khong phai lan loi q5a."
     assert "Cong no doi" not in out.split("TOP 12 LUOT DAT NHAT KHONG RA GIA TRI")[1].split("TOP 12 LUOT DAT NHAT CO")[0]
+
+
+def test_goi_lai_cung_tool_khac_tham_so_va_tu_viet_sql(tmp_path, monkeypatch, capsys):
+    # 26/09: C02 goi get_revenue_monthly_series 12 -> 6 thang (payload bi cat) - chi so "goi trung" cu bo sot.
+    mod = _nap(monkeypatch, tmp_path)
+    monkeypatch.setattr("sys.argv", ["x", "--tu", "2026-09-01", "--den", "2026-09-30"])
+    mod.main()
+    out = capsys.readouterr().out
+    goi_lai = out.split("GOI LAI CUNG TOOL")[1].split("TU VIET SQL")[0]
+    assert "get_revenue_monthly_series" in goi_lai and "1 lan thua" in goi_lai
+    assert "get_revenue_by_channel" in goi_lai, "Goi trung y het cung tinh la goi lai."
+    assert "TU VIET SQL: 1 luot (1 cau SQL)" in out
+    assert mod._goi_lai_cung_tool(["<template:a>({'x': 1})", "<template:b>({})"]) == {}

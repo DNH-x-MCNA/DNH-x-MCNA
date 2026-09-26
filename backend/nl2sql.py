@@ -2333,6 +2333,79 @@ def _raw_query_payload(result: dict, db: str, question: str) -> dict:
     return payload
 
 
+# 26/09/2026 (Cost of Value, C02): chuoi 12 thang ~20 KB (27 KB sau khi them ETC theo mien) vuot MAX_PAYLOAD_CHARS nen
+# ban rut gon chung chi con 5/12 (roi 3/12) thang; model goi lai get_revenue_monthly_series voi 12 -> 6 -> 3 thang de
+# thay du (query_runs may 24 16-17/09: 3-4 lan goi, 5 vong, 12-13 nghin dong/luot). Dang bang: ten cot ghi mot lan.
+_COT_THANG = ("month", "revenue", "plan_revenue", "achievement_pct", "plan_variance", "otc_revenue",
+              "plan_otc_revenue", "etc_revenue", "plan_etc_revenue", "invoices", "mom_delta", "mom_pct",
+              "yoy_delta", "yoy_pct", "s02_otc_actual", "s02_otc_achievement_pct", "s02_otc_plan_variance",
+              "otc_mien_khop_tong", "etc_mien_khop_tong")
+_COT_OTC_MIEN = ("month", "area_code", "otc_revenue", "plan_otc_revenue", "achievement_pct", "plan_variance")
+_COT_ETC_MIEN = ("month", "area_code", "etc_revenue")
+_COT_KENH_DAC_BIET = ("month", "name", "area_code", "revenue", "plan_revenue", "achievement_pct")
+_KHOA_THANG_DA_GOM = set(_COT_THANG) | {
+    "otc_by_region", "s02_otc_company", "otc_region_reconciliation", "etc_by_region", "etc_region_reconciliation",
+    "etc_plan_by_region", "etc_region_note", "otc_special_channels", "target_source"}
+
+
+def _so_gon(v, pct=False):
+    if isinstance(v, float):
+        return round(v, 2) if pct else (int(round(v)) if abs(v) >= 1 else round(v, 2))
+    return v
+
+
+def _chuoi_thang_dang_bang(data: dict) -> dict:
+    thang, otc_mien, etc_mien, kenh, ghi_chu = [], [], [], [], {}
+    nguon_otc_mien, nguon_ke_hoach, ghi_chu_etc = set(), set(), None
+    for m in data["months"]:
+        if not isinstance(m, dict):
+            continue
+        s02 = m.get("s02_otc_company") or {}
+        otc_rec = m.get("otc_region_reconciliation") or {}
+        etc_rec = m.get("etc_region_reconciliation") or {}
+        dong = dict(m, s02_otc_actual=s02.get("actual"), s02_otc_achievement_pct=s02.get("achievement_pct"),
+                    s02_otc_plan_variance=s02.get("plan_variance"),
+                    otc_mien_khop_tong=(bool(otc_rec.get("revenue_matches") and otc_rec.get("plan_matches"))
+                                        if otc_rec else None),
+                    etc_mien_khop_tong=bool(etc_rec.get("revenue_matches")) if etc_rec else None)
+        thang.append([_so_gon(dong.get(c), pct=c.endswith("_pct")) for c in _COT_THANG])
+        for r in m.get("otc_by_region") or []:
+            otc_mien.append([m["month"]] + [_so_gon(r.get(c), pct=c.endswith("_pct")) for c in _COT_OTC_MIEN[1:]])
+            if r.get("actual_source"):
+                nguon_otc_mien.add(r["actual_source"])
+        for r in m.get("etc_by_region") or []:
+            etc_mien.append([m["month"], r.get("area_code"), _so_gon(r.get("etc_revenue"))])
+        for r in m.get("otc_special_channels") or []:
+            kenh.append([m["month"]] + [_so_gon(r.get(c), pct=c.endswith("_pct")) for c in _COT_KENH_DAC_BIET[1:]])
+        if m.get("target_source"):
+            nguon_ke_hoach.add(m["target_source"])
+        ghi_chu_etc = ghi_chu_etc or m.get("etc_region_note")
+        con_lai = {k: v for k, v in m.items() if k not in _KHOA_THANG_DA_GOM and v is not None}
+        if con_lai:
+            ghi_chu[m["month"]] = con_lai
+    gon = {k: v for k, v in data.items() if k != "months"}
+    gon.update({
+        "cot_thang": list(_COT_THANG), "thang": thang,
+        "cot_otc_theo_mien": list(_COT_OTC_MIEN), "otc_theo_mien": otc_mien,
+    })
+    if etc_mien:
+        gon.update({"cot_etc_theo_mien": list(_COT_ETC_MIEN), "etc_theo_mien": etc_mien,
+                    "etc_ke_hoach_theo_mien": None, "etc_ghi_chu": ghi_chu_etc})
+    if kenh:
+        gon.update({"cot_kenh_dac_biet": list(_COT_KENH_DAC_BIET), "kenh_dac_biet": kenh})
+    if ghi_chu:
+        gon["ghi_chu_theo_thang"] = ghi_chu
+    gon["_model_view"] = {
+        "mode": "bang_gon_du_thang",
+        "so_thang": len(thang),
+        "giai_thich": ("DU TAT CA cac thang da hoi - KHONG goi lai tool voi khung ngan hon. Moi dong 'thang' theo "
+                       "'cot_thang' (s02_otc_* = s02_otc_company; *_khop_tong = doi chieu tong mien khop tong cong "
+                       "ty). otc_theo_mien/etc_theo_mien/kenh_dac_biet theo cot tuong ung. Tien lam tron dong."),
+        "nguon_ke_hoach": sorted(nguon_ke_hoach), "nguon_otc_theo_mien": sorted(nguon_otc_mien),
+    }
+    return gon
+
+
 def _payload_for_model(tool_name: str, payload, question: str):
     """Rut gon co cau truc cho tool dai, giu payload day du o last_result/UI.
 
@@ -2359,6 +2432,13 @@ def _payload_for_model(tool_name: str, payload, question: str):
             concise = [{key: row[key] for key in fields if key in row}
                        if isinstance(row, dict) else row for row in programs]
             data = {**data, "programs": concise}
+            return {**wrapper, "du_lieu": data} if wrapper else data
+    if tool_name == "get_revenue_monthly_series":
+        wrapper = payload if isinstance(payload.get("du_lieu"), dict) else None
+        data = payload["du_lieu"] if wrapper else payload
+        if (isinstance(data.get("months"), list) and data["months"]
+                and len(json.dumps(data, ensure_ascii=False, default=str)) > MAX_PAYLOAD_CHARS):
+            data = _chuoi_thang_dang_bang(data)
             return {**wrapper, "du_lieu": data} if wrapper else data
     normalized = " ".join("".join(
         ch for ch in unicodedata.normalize("NFD", (question or "").lower())
