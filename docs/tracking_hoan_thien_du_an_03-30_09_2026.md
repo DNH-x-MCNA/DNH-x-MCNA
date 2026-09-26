@@ -161,7 +161,65 @@ một phát hiện, không được đọc thành "đã sạch".
 → Chặn ở tầng gọi: **✅ xong trong PR #65**. Truy nguồn các lượt cũ: còn lại, và xem ghi chú trên —
 các lượt `unknown` không có trong `query_runs` nên phải truy từ `cost_log.jsonl`.
 
-### 🔴 3. Cổng kiểm trước UAT đang CHƯA ĐẠT — đã truy ra nguyên nhân, xác nhận bằng số
+### ✅ 3. Cổng kiểm trước UAT — ĐÃ ĐẠT (23/09, sau PR #75)
+
+Chạy lại trên máy 24 sau khi deploy PR #75:
+
+```
+Da chay: 99 phep kiem DAT, 0 LECH, 2 muc khong chay duoc.
+[DAT] Tai khoan va pham vi du lieu
+[DAT] Phan quyen kenh ETC
+[DAT] Bat bien so lieu cua 40 cong cu
+KET LUAN: Cac cong kiem tra tu dong da dat; co the chuyen sang buoc test 5 cau.
+```
+
+Cả hai chỗ lệch **17.558.648đ** biến mất:
+
+| Phép kiểm | Trước PR #75 | Sau |
+|---|---:|---:|
+| Tổng từng tháng vs một lần gọi | lệch 17.558.648 | **0** |
+| Cộng địa bàn vs toàn công ty (09/2026) | lệch 17.558.648 | **`[DAT]`** |
+
+Hai mục `get_promotion_effectiveness` và `get_receivables_period_compare` vẫn "không chạy được" —
+thiếu nguồn đã biết, không phải lỗi.
+
+#### (đã đóng 24/09) Số dư mục 11 — cây KPI lệch 55.866.929đ
+
+Cổng kiểm ngày 23/09 báo mục 11 (cây KPI) lệch **55.866.929đ (0,303%)** giữa rollup QLV của Bravo và
+tổng TDV dưới quyền. Mức này dưới ngưỡng 1% nên vẫn `[DAT]`. Toàn bộ khoản lệch nằm ở một QLV,
+`Hoàng Công Thưởng`: rollup 941.259.147đ, cộng TDV ra 997.126.076đ.
+
+**Nguyên nhân: một TDV chuyển QLV, và `_team_of_qlv` giữ cô ấy ở cả hai đội.** TDV Lê Đỗ Ngọc Trinh
+(`TM26040104`) chuyển từ đội `TM23110109` sang đội `TM23110105` (QLV Thái Mạnh Tuấn). Cách cũ lấy hợp
+hai mốc snapshot rồi mới lọc theo QLV, nên người vừa chuyển đội vẫn được tính vào đội cũ. Xác nhận
+trên Bravo, chỉ đọc, chạy từ máy 24:
+
+| Kiểm tra | Kết quả |
+|---|---|
+| Hóa đơn của `TM26040104` từ 01/09 đến 23/09 | **55.866.929đ** — đúng bằng khoản lệch |
+| ManagerCode ở snapshot 31/08 | `TM23110109` (đội cũ) |
+| ManagerCode ở snapshot 24/09 | `TM23110105` (đội mới) |
+| Tổng TDV đội Thưởng trên snapshot 24/09 | trước sửa 1.005.219.382đ → sau sửa **946.874.358đ**, khớp rollup từng đồng |
+
+Trước sửa, chênh trên snapshot 24/09 là 58.345.024đ, lớn hơn 55.866.929đ vì cô Trinh bán thêm trong
+ngày 24/09. Cùng nguyên nhân, không phải khoản lệch khác.
+
+**Sửa ở PR #88** (Codex). `_team_of_qlv` dùng cùng roster với `employee_kpi`: chốt mốc mới nhất của
+từng người **trước**, rồi mới lọc theo QLV. Người chưa bán ở kỳ mới vẫn được giữ, còn quan hệ đội cũ
+thì bị phân công mới thay thế. Đã deploy máy 24 lên `1e7454f` ngày 24/09:
+- 47 test gate đạt trước khi khởi động lại;
+- `kiem_doi_ky_qua_khu.py` cho 05/2026 (21 QLV), 04/2026 (22), 07/2025 (25) và 08/2026 (21) đều
+  `DAT`, exit 0. Cách lấy đội mới không làm hỏng các kỳ đã đạt.
+
+**Giới hạn khi đóng mục:** kho không có snapshot đúng ngày 23/09, nên **không tái chạy được nguyên
+bảng KPI lịch sử của ngày 23/09** để thấy khoản lệch về 0 trên cùng mốc mà cổng kiểm đã đo. Việc xác
+nhận dựa vào hai điểm sau, không phải vào một lần chạy lại cổng kiểm ở mốc 23/09:
+- hóa đơn 01–23/09 của `TM26040104` khớp từng đồng với khoản lệch;
+- trên snapshot 24/09, sau sửa tổng TDV khớp rollup từng đồng.
+
+Lần chạy cổng kiểm tiếp theo trên máy 24 phải ra mục 11 lệch 0; nếu không thì mở lại mục này.
+
+### (đã đóng) Nguyên nhân lệch 17.558.648đ — giữ lại để tra cứu
 
 Chạy `kiem_truoc_uat.ps1` trên **máy 24** ngày 23/09 (lần đầu chạy có `auth.db` thật, 30 tài khoản):
 
