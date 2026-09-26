@@ -233,7 +233,7 @@ CREATE TABLE IF NOT EXISTS fact_thongketinhluong (
     v22_amount REAL, v22_percent REAL, v22_bonus REAL,
     v25_amount REAL, v25_percent REAL, v25_bonus REAL,
     target_product_amount REAL, target_product_percent REAL, tpr_point REAL,
-    tpr_target_amount REAL,   -- 15/09/2026: TPRTargetAmount = chi tieu doanh so san pham trong tam
+    tpr_target_amount REAL,   -- 15/09/2026: TPRTargetAmount = chi tieu trong tam: MN/MT so tien, MB TY TRONG 0,45-0,6 (26/09)
     lunch_amount REAL, transport_amount REAL, phone_amount REAL,
     salary_coeff REAL
 );

@@ -3928,10 +3928,12 @@ def focus_product_kpi(year_month: str = None, limit: int = 100, manager_code: st
     ym = (year_month or str(latest))[:7]
     fdate = f"{ym}-{_last_day_of_month(int(ym[:4]), int(ym[5:7])):02d}"
     target_col = "f.tpr_target_amount" if "tpr_target_amount" in cols else "NULL"
+    msa_col = "f.month_sale_amount" if "month_sale_amount" in cols else "NULL"
     sql = ("WITH s AS (SELECT employee_code, MAX(save_date) d FROM fact_thongketinhluong "
            "WHERE save_date<=? AND substr(save_date,1,7)=? GROUP BY employee_code) "
            "SELECT f.employee_code, f.employee_name, f.position_code, f.area_code, f.manager_code, f.save_date, "
            f"f.target_product_amount actual, {target_col} target, f.target_product_percent pct_goc, "
+           f"{msa_col} msa, "
            "f.tpr_point diem FROM fact_thongketinhluong f "
            "JOIN s ON s.employee_code=f.employee_code AND s.d=f.save_date WHERE 1=1")
     params = [fdate, ym]
@@ -3944,13 +3946,28 @@ def focus_product_kpi(year_month: str = None, limit: int = 100, manager_code: st
 
     def _item(r):
         actual, target = _f(r["actual"]), (_f(r["target"]) if r["target"] is not None else None)
-        return {"employee_code": r["employee_code"], "employee_name": r["employee_name"],
+        item = {"employee_code": r["employee_code"], "employee_name": r["employee_name"],
                 "area_code": r["area_code"], "manager_code": r["manager_code"],
                 "manager_name": emp_names.get(r["manager_code"]),
-                "doanh_so_trong_tam": actual, "chi_tieu_trong_tam": target,
+                "doanh_so_trong_tam": actual, "chi_tieu_trong_tam": target, "kieu_chi_tieu": "so_tien",
                 "pct_dat": (actual / target * 100) if target else None,
                 "ty_le_goc_bravo": r["pct_goc"], "diem_kpi_trong_tam": r["diem"],
                 "snapshot_date": str(r["save_date"])[:10]}
+        if target is not None and 0 < target < 1:
+            # 26/09/2026: Mien Bac ghi TPRTargetAmount (= FACT_PhatSinhNhanVien.TProdTarget) la TY TRONG muc tieu
+            # 0,45-0,6 cua doanh so trong tam tren doanh so thang, KHONG phai so tien. Truoc day pct_dat = doanh so /
+            # 0,45 -> TDV doi MBKV2 bi bao 12.716.142.444% va chi tieu "0,45d". Bravo tinh
+            # TargetProductPercent = (trong tam / doanh so thang) / TProdTarget - khop 86/86, 87/87, 86/86 TDV MB
+            # o snapshot 31/08, 31/07, 23/09. MN/MT ghi so tien, pct = trong tam / chi tieu (khop 61/61).
+            msa = _f(r["msa"]) if r["msa"] is not None else 0.0
+            item.update(kieu_chi_tieu="ty_trong_doanh_so", chi_tieu_trong_tam=None,
+                        ty_trong_muc_tieu_pct=target * 100,
+                        ty_trong_thuc_te_pct=(actual / msa * 100) if msa else None,
+                        pct_dat=(actual / (target * msa) * 100) if msa else None)
+        elif target == 0:
+            item.update(chi_tieu_trong_tam=None,
+                        ghi_chu_chi_tieu="Bravo khong gan chi tieu trong tam cho dong nay (TPRTargetAmount=0).")
+        return item
 
     team_code = _ma_doi_hieu_luc(scope_employee_code, manager_code)
     managers = [r for r in rows if str(r["position_code"] or "").upper() == "QLV"]
@@ -3966,7 +3983,9 @@ def focus_product_kpi(year_month: str = None, limit: int = 100, manager_code: st
         "so_quan_ly_vung": len(manager_items),
         "definition": (
             "Doanh so trong tam = TargetProductAmount, chi tieu = TPRTargetAmount, pct_dat = doanh so / chi "
-            "tieu. ty_le_goc_bravo va diem_kpi_trong_tam la so Bravo da tinh san cho KPI luong. Snapshot moi "
+            "tieu. kieu_chi_tieu='ty_trong_doanh_so' (Mien Bac): chi tieu la TY TRONG trong tam tren doanh so "
+            "thang (ty_trong_muc_tieu_pct), pct_dat = ty_trong_thuc_te_pct / ty_trong_muc_tieu_pct - KHONG goi "
+            "la so tien chi tieu. ty_le_goc_bravo va diem_kpi_trong_tam la so Bravo da tinh san cho KPI luong. Snapshot moi "
             "nhat tung nguoi trong thang; chi tang QLV, KHONG cong TP/QLV/TDV vi cac tang chong nhau."),
         "pham_vi_kenh": "OTC",
         "data_as_of": latest_data_date(),

@@ -1392,7 +1392,9 @@ TEMPLATE_TOOLS = [
         "description": "DOANH SO SAN PHAM TRONG TAM va KPI trong tam theo QUAN LY VUNG: doanh so trong tam, chi "
                        "tieu, % dat va diem KPI tu ket qua tinh luong Bravo (tang QLV, khong cong cac tang). Tai "
                        "khoan QLV kem tung thanh vien doi. BAT BUOC dung khi hoi doanh so/KPI san pham trong tam "
-                       "theo QLV/doi. KHONG dung cho % target SKU trong tam theo khach hang.",
+                       "theo QLV/doi. KHONG dung cho % target SKU trong tam theo khach hang. kieu_chi_tieu="
+                       "'ty_trong_doanh_so' (Mien Bac): chi tieu la ty trong trong tam/doanh so (ty_trong_muc_tieu_pct),"
+                       " KHONG phai so tien.",
         "input_schema": {"type": "object", "properties": {
             "year_month": {"type": "string", "description": "YYYY-MM; mac dinh thang moi nhat."},
             "manager_code": {"type": "string", "description": "Ma QLV khi cau hoi gioi han MOT DOI (vd 'doi qlv "
