@@ -59,3 +59,10 @@ def test_qlv_khong_co_chi_tieu_thi_khong_ghi_chi_tieu_0(tmp_path, monkeypatch):
     _kho(tmp_path, monkeypatch)
     q = next(x for x in rt.focus_product_kpi("2026-08")["quan_ly_vung"] if x["employee_code"] == "QMB")
     assert q["chi_tieu_trong_tam"] is None and q["pct_dat"] is None and "TPRTargetAmount=0" in q["ghi_chu_chi_tieu"]
+
+
+def test_khong_loc_doi_thi_chi_sang_bang_kpi_de_xem_tung_tdv(tmp_path, monkeypatch):
+    # 26/09/2026 (may 24 24/09 "theo trinh duoc vien"): model goi tool nay 11 lan, moi QLV mot lan.
+    _kho(tmp_path, monkeypatch)
+    assert "get_kpi_scorecard" in rt.focus_product_kpi("2026-08")["xem_theo_tdv"]
+    assert "xem_theo_tdv" not in rt.focus_product_kpi("2026-08", manager_code="QMB")

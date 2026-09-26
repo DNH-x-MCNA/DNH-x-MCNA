@@ -4018,6 +4018,11 @@ def focus_product_kpi(year_month: str = None, limit: int = 100, manager_code: st
         result["ma_doi"] = team_code
         result["thanh_vien_doi"] = sorted((_item(r) for r in members),
                                           key=lambda i: (i["pct_dat"] is None, i["pct_dat"] or 0))[:limit]
+    else:
+        # 26/09/2026 (query_runs may 24 24/09 "theo trinh duoc vien"): model goi tool nay 11 lan, moi QLV mot lan, de lay
+        # trong tam tung TDV. get_kpi_scorecard da co trong_tam_pct_dat tung nguoi trong mot lan goi.
+        result["xem_theo_tdv"] = ("Trong tam TUNG TDV: goi get_kpi_scorecard MOT lan (truong trong_tam_pct_dat; loc doi "
+                                  "bang manager_code neu can). KHONG goi lai tool nay cho tung QLV.")
     if target_col == "NULL":
         result["canh_bao_chi_tieu"] = ("Kho chua dong bo TPRTargetAmount nen chua co chi tieu trong tam; "
                                        "KHONG tu tinh % dat.")
@@ -10240,6 +10245,33 @@ def customer_detail(customer_code: str, date_from: str, date_to: str, scope_area
             "Giang nay thuoc Bac Ninh) danh muc con giu ten tinh cu, van la MOT khach."
         ),
     }
+    # 26/09/2026 (Cost of Value, query_runs may 24 23/09): hoi "QTI00109 chi tiet doanh thu 5 thang gan day", "DNA04189 cac
+    # thang truoc" -> model goi tool nay TUNG THANG (5 va 6 lan) vi chi co mot con so tong. Khoang nhieu thang thi tra san
+    # doanh thu/so don tung thang, cung nguon hoa don va cung kenh duoc phep voi con so tong.
+    if str(date_from)[:7] != str(date_to)[:7]:
+        cutoff = _detail_cutoff()
+        theo = {}
+        for bang, kenh in (("vhoadon_otc", "OTC"), ("vhoadon_etc", "ETC")):
+            if effective_channel in {"OTC", "ETC"} and effective_channel != kenh:
+                continue
+            for r in _q(f"SELECT substr(doc_date,1,7) ym, COALESCE(SUM(amount9),0) rev, COUNT(DISTINCT stt) hd "
+                        f"FROM {bang} WHERE customer_code=? AND doc_date BETWEEN ? AND ? GROUP BY substr(doc_date,1,7)",
+                        (customer_code, date_from, date_to)):
+                d = theo.setdefault(r["ym"], {"month": r["ym"], "revenue": 0.0, "orders": 0})
+                d["revenue"] += _f(r["rev"])
+                d["orders"] += int(r["hd"] or 0)
+                d[f"{kenh.lower()}_revenue"] = _f(r["rev"])
+        thang = []
+        for ym in _month_starts_between(date_from, date_to):
+            if ym < str(cutoff)[:7] and ym not in theo:
+                thang.append({"month": ym, "revenue": None, "ngoai_cua_so_chi_tiet": True})
+            else:
+                thang.append(theo.get(ym, {"month": ym, "revenue": 0.0, "orders": 0}))
+        result["theo_thang"] = thang
+        result["theo_thang_ghi_chu"] = (
+            "Doanh thu/so don tung thang trong khoang, tong khop 'revenue'. Thang revenue=0 la khach khong mua; "
+            "revenue=None (ngoai_cua_so_chi_tiet) la ngoai cua so hoa don chi tiet, KHONG phai 0. KHONG goi lai tool "
+            "tung thang.")
     if catalog_identity_warning:
         result["catalog_identity_warning"] = catalog_identity_warning
     if original_customer_query != customer_code:

@@ -301,3 +301,48 @@ def test_ma_trung_hai_danh_muc_chon_ten_theo_kenh_cong_no(tmp_path, monkeypatch)
     assert result["catalog_identity_warning"]["OTC"] == "Bệnh viện đa khoa Tỉnh Bắc Giang"
     assert result["catalog_identity_warning"]["ETC"] == "Bệnh viện đa khoa Bắc Ninh số 1"
     assert result["catalog_identity_warning"]["selected_channel"] == "ETC"
+
+
+def _kho_nhieu_thang(tmp_path, monkeypatch):
+    db_path = tmp_path / "warehouse.db"
+    _make_db(db_path)
+    conn = sqlite3.connect(db_path)
+    conn.execute("INSERT INTO dms_khachhang VALUES ('KH01','Khach A',1,100,NULL,'GT')")
+    conn.executemany("INSERT INTO vhoadon_otc VALUES (?,'KH01','SP01',?,1,1,?,1,'NV01',?,'ASM01')", [
+        ("2026-05-10", 100.0, "H5", "2026-05-10"), ("2026-05-20", 50.0, "H5b", "2026-05-20"),
+        ("2026-07-03", 300.0, "H7", "2026-07-03")])
+    conn.execute("INSERT INTO vhoadon_etc VALUES ('2026-07-04','KH01','SP01',40,1,1,'E7',1,'NV02','2026-07-04')")
+    conn.commit()
+    conn.close()
+    monkeypatch.setattr(local_warehouse, "DB_PATH", str(db_path))
+    monkeypatch.setattr(rt, "_detail_cutoff", lambda: "2025-10-01")
+
+
+def test_khoang_nhieu_thang_tra_theo_thang_tong_khop(tmp_path, monkeypatch):
+    # 26/09/2026 (may 24 23/09): "QTI00109 chi tiet doanh thu 5 thang" -> model goi tool 5 lan, moi thang mot lan.
+    _kho_nhieu_thang(tmp_path, monkeypatch)
+    r = rt.customer_detail(customer_code="KH01", date_from="2026-05-01", date_to="2026-07-31 23:59:59")
+    assert [(t["month"], t["revenue"], t["orders"]) for t in r["theo_thang"]] == [
+        ("2026-05", 150.0, 2), ("2026-06", 0.0, 0), ("2026-07", 340.0, 2)], "Thang khong mua = 0, van co dong."
+    assert sum(t["revenue"] for t in r["theo_thang"]) == r["revenue"] == 490.0
+    assert r["theo_thang"][2]["otc_revenue"] == 300.0 and r["theo_thang"][2]["etc_revenue"] == 40.0
+
+
+def test_theo_thang_chi_kenh_duoc_phep_va_ngoai_cua_so_la_none(tmp_path, monkeypatch):
+    _kho_nhieu_thang(tmp_path, monkeypatch)
+    r = rt.customer_detail(customer_code="KH01", date_from="2026-05-01", date_to="2026-07-31 23:59:59",
+                           scope_channel="OTC")
+    assert [t["revenue"] for t in r["theo_thang"]] == [150.0, 0.0, 300.0], "Tai khoan OTC khong thay ETC."
+    assert all("etc_revenue" not in t for t in r["theo_thang"])
+    r = rt.customer_detail(customer_code="KH01", date_from="2025-09-01", date_to="2025-10-31 23:59:59")
+    assert r["theo_thang"][0] == {"month": "2025-09", "revenue": None, "ngoai_cua_so_chi_tiet": True}
+    assert r["theo_thang"][1]["revenue"] == 0.0
+
+
+def test_mot_thang_khong_co_theo_thang_va_mo_ta_tool(tmp_path, monkeypatch):
+    _kho_nhieu_thang(tmp_path, monkeypatch)
+    r = rt.customer_detail(customer_code="KH01", date_from="2026-07-01", date_to="2026-07-31 23:59:59")
+    assert "theo_thang" not in r
+    mo_ta = {t["name"]: t["description"] for t in nl2sql.TEMPLATE_TOOLS}
+    assert "theo_thang" in mo_ta["get_customer_detail"]
+    assert "get_kpi_scorecard" in mo_ta["get_focus_product_kpi"]
