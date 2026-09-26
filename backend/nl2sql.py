@@ -2406,6 +2406,44 @@ def _chuoi_thang_dang_bang(data: dict) -> dict:
     return gon
 
 
+# 26/09/2026: do kich thuoc payload 52 tool tren kho dev - hai tool nay vuot MAX_PAYLOAD_CHARS nen bi cat dong:
+# get_kpi_scorecard ca cong ty 23,7 KB -> model chi thay 5/20 nguoi, 5/21 QLV; get_revenue_seasonality (C08) 10,8 KB ->
+# 5/12 thang moi kenh. Dang bang (ten cot ghi mot lan, gop truong con 'a.b') vua ngan sach ma giu du dong. Tool khac
+# van dung ban cat chung - doi sang day can du lieu goi lai tren may 24 truoc (nhieu test UAT khoa ban cat do).
+_TOOL_BANG_HOA_KHI_VUOT = {"get_kpi_scorecard", "get_revenue_seasonality"}
+
+
+def _lam_tron_gon(v):
+    if isinstance(v, float):
+        return int(round(v)) if abs(v) >= 1000 else round(v, 3)
+    return v
+
+
+def _phang_mot_cap(row: dict) -> dict:
+    out = {}
+    for k, v in row.items():
+        if isinstance(v, dict) and v and all(not isinstance(x, (dict, list)) for x in v.values()):
+            for k2, x in v.items():
+                out[f"{k}.{k2}"] = x
+        else:
+            out[k] = v
+    return out
+
+
+def _bang_hoa(value):
+    """list >= 3 dict phang (sau khi gop truong con) -> {"cot": [...], "dong": [[...]]}; so thuc lam tron."""
+    if isinstance(value, list):
+        if len(value) >= 3 and all(isinstance(x, dict) for x in value):
+            dong = [_phang_mot_cap(x) for x in value]
+            if all(not isinstance(v, (dict, list)) for d in dong for v in d.values()):
+                cot = list(dict.fromkeys(k for d in dong for k in d))
+                return {"cot": cot, "dong": [[_lam_tron_gon(d.get(c)) for c in cot] for d in dong]}
+        return [_bang_hoa(x) for x in value]
+    if isinstance(value, dict):
+        return {k: _bang_hoa(v) for k, v in value.items()}
+    return _lam_tron_gon(value)
+
+
 def _payload_for_model(tool_name: str, payload, question: str):
     """Rut gon co cau truc cho tool dai, giu payload day du o last_result/UI.
 
@@ -2438,8 +2476,24 @@ def _payload_for_model(tool_name: str, payload, question: str):
         data = payload["du_lieu"] if wrapper else payload
         if (isinstance(data.get("months"), list) and data["months"]
                 and len(json.dumps(data, ensure_ascii=False, default=str)) > MAX_PAYLOAD_CHARS):
-            data = _chuoi_thang_dang_bang(data)
-            return {**wrapper, "du_lieu": data} if wrapper else data
+            gon = _chuoi_thang_dang_bang(data)
+            gon = {**wrapper, "du_lieu": gon} if wrapper else gon
+            # Dang bang van vuot (vd 24 thang) thi tra ban goc cho luoi cat chung: cat chung tren bang se cat ca
+            # danh sach TEN COT va tung dong, lam hong bang.
+            if len(json.dumps(gon, ensure_ascii=False, default=str)) <= MAX_PAYLOAD_CHARS:
+                return gon
+            return payload
+    if (tool_name in _TOOL_BANG_HOA_KHI_VUOT
+            and len(json.dumps(payload, ensure_ascii=False, default=str)) > MAX_PAYLOAD_CHARS):
+        gon = _bang_hoa(payload)
+        gon["_model_view"] = {
+            "mode": "bang_gon_du_dong",
+            "giai_thich": ("Danh sach dang {cot, dong}: moi dong theo thu tu 'cot'; cot 'a.b' la truong b cua a. "
+                           "DU TAT CA cac dong - KHONG goi lai tool de lay them. So tien lam tron dong."),
+        }
+        if len(json.dumps(gon, ensure_ascii=False, default=str)) <= MAX_PAYLOAD_CHARS:
+            return gon
+        return payload
     normalized = " ".join("".join(
         ch for ch in unicodedata.normalize("NFD", (question or "").lower())
         if unicodedata.category(ch) != "Mn"

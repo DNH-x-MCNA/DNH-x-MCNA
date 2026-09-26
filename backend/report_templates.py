@@ -4196,11 +4196,18 @@ def kpi_scorecard(as_of_date: str = None, manager_code: str = None, employee_cod
         limit = max(1, min(int(limit or (60 if (ma_doi or ma_nv) else 20)), 300))
     except (TypeError, ValueError):
         limit = 60
+    if not (ma_doi or ma_nv):
+        # 26/09: ban dang bang gui model chi vua ~20 nguoi + tong hop QLV trong MAX_PAYLOAD_CHARS; hon nua thi luoi cat
+        # chung chi con 5 nguoi (do kho dev: mien Bac limit=60 -> 5/60). Xem du thi hoi theo tung QLV.
+        limit = min(limit, 20)
     ket_qua = {
         "month": ym, "moc_snapshot": moc,
         "luy_ke_giua_thang": moc[8:10] != f"{_last_day_of_month(int(ym[:4]), int(ym[5:7])):02d}",
         "loc": thong_tin_loc or None, "vung": vung,
         "so_nguoi": len(dong), "nhan_vien": dong[:limit], "nhan_vien_bi_cat": len(dong) > limit,
+        **({"nhan_vien_ghi_chu": (f"Dang liet ke {limit}/{len(dong)} nguoi % doanh so THAP nhat; tong_hop_theo_qlv du "
+                                   "moi doi. Xem du tung nguoi thi goi lai voi manager_code cua tung QLV.")}
+           if len(dong) > limit else {}),
         "tong_hop_theo_qlv": sorted(theo_qlv.values(), key=lambda t: (t["pct_doanh_so_doi"] is None,
                                                                       t["pct_doanh_so_doi"] or 0)),
         "cong_no_tai": moc_cong_no,
