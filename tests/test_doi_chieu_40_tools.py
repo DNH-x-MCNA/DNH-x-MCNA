@@ -22,7 +22,8 @@ def test_catalog_smoke_phu_dung_toan_bo_tool_da_dang_ky():
     # 15/09/2026: 49 sau khi them danh sach khach moi, khach chua tai don, KPI trong tam.
     # 15/09/2026: 50 sau khi them get_inventory_item_stock (ton kho theo ten san pham).
     # 21/09/2026: 51 sau khi them get_revenue_seasonality (C08/S80, tranh timeout).
-    assert len(cases) == 51
+    # 26/09/2026: 52 sau khi them get_kpi_scorecard (bang KPI QLV/TDV, hop 24/09).
+    assert len(cases) == 52
     assert set(cases) == set(checker.rt.TEMPLATES)
 
 

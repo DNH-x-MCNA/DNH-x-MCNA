@@ -259,6 +259,9 @@ def _required_tool_for_question(question: str) -> str | None:
     q = _fold_for_route(question)
     if _is_new_customer_quality_question(question):
         return "get_new_customer_list"
+    # 26/09/2026 (hop 24/09 "bam bang KPI QLV/TDV"): bang KPI doi/nguoi co mot nguon, khong ghep nhieu tool.
+    if "bang kpi" in q and not any(marker in q for marker in ("thuong", "luong", "xep hang")):
+        return "get_kpi_scorecard"
 
     # 14/09/2026 - phan hoi nguoi dung that: "nhung nhan vien ... duoi 60%" va cau noi
     # "danh sach duoi 65%" khong duoc dinh tuyen, model tu do qua nhieu tool KPI/revenue roi
@@ -1401,6 +1404,21 @@ TEMPLATE_TOOLS = [
                                                                "TM23100148') - tra dong QLV do kem tung thanh vien "
                                                                "doi. Tai khoan QLV bi ep doi cua chinh ho."},
             "limit": {"type": "integer", "minimum": 1, "maximum": 500}}, "required": []},
+    },
+    {
+        "name": "get_kpi_scorecard",
+        "description": "BANG KPI QLV/TDV trong MOT lan goi: moi TDV/CTV/CS/TK co % doanh so/chi tieu (kem nguong "
+                       "thuong theo vai tro), % dat trong tam, SKU, khach tai don, khach moi, ASO (CS/TK: active "
+                       "customer), tong diem KPI Bravo va no qua han cua khach phu trach; kem tong_hop_theo_qlv. "
+                       "Lay snapshot moi nhat trong thang, ke ca GIUA THANG (luy_ke_giua_thang=true -> goi la tien "
+                       "do den moc_snapshot). BAT BUOC dung cho 'bang KPI/tinh hinh KPI doi toi, cua TDV X, cua doi "
+                       "QLV Y' thay vi ghep nhieu tool. KHONG co tien thuong - hoi thuong dung tool luong.",
+        "input_schema": {"type": "object", "properties": {
+            "as_of_date": {"type": "string", "description": "YYYY-MM-DD, mac dinh moi nhat."},
+            "manager_code": {"type": "string", "description": "Ma HOAC ten QLV - bang KPI doi do. Tai khoan QLV bi ep doi cua chinh ho."},
+            "employee_code": {"type": "string", "description": "Ma HOAC ten 1 nhan vien - chi dong cua nguoi do."},
+            "area_code": {"type": "string", "enum": ["MB", "MT", "MN"], "description": "Loc mot mien."},
+            "limit": {"type": "integer", "minimum": 1, "maximum": 300}}, "required": []},
     },
     {
         "name": "get_etc_revenue_by_item_type",

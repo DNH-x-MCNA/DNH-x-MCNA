@@ -4000,6 +4000,203 @@ def focus_product_kpi(year_month: str = None, limit: int = 100, manager_code: st
     return result
 
 
+def _pct100(v):
+    return None if v is None else _f(v) * 100
+
+
+def _chi_tieu_suy_nguoc(so_luong, ty_le):
+    # Kho khong dong bo FACT_PhatSinhNhanVien; chi tieu = so dat / ty le dat. Do 31/08 tren Bravo: khop ASOTarget
+    # 156/160 va ReOrderTarget 147/160 TDV - ca lech deu la ty le 0/NULL, luc do tra None (khong doan).
+    return round(_f(so_luong) / _f(ty_le)) if ty_le and _f(ty_le) > 0 else None
+
+
+def kpi_scorecard(as_of_date: str = None, manager_code: str = None, employee_code: str = None,
+                  area_code: str = None, limit: int = None, scope_area_code: str = None,
+                  scope_employee_code: str = None) -> dict:
+    """BANG KPI QLV/TDV trong MOT lan goi (hop 24/09/2026: "bam bang KPI cua QLV/TDV: % dat KPI, nhom hang trong
+    tam, cong no qua han"). Moi nguoi ban hang (TDV/CTV/CS/TK) co cac chi so KPI tu ket qua tinh luong Bravo
+    (fact_thongketinhluong, snapshot moi nhat TUNG NGUOI trong thang - snapshot giua thang la luy ke den ngay do)
+    va no qua han cua khach phan cong cho ho. KHONG tra tien thuong/phu cap: phan do o tool luong (chi ky chot).
+
+    Doi = manager_code tren chinh fact_thongketinhluong (cung nguon voi get_salary_detail/focus_product_kpi).
+    Tai khoan QLV: _ma_doi_hieu_luc ep doi cua chinh ho."""
+    if not _table_columns("fact_thongketinhluong"):
+        return {"error": "Kho chua co ket qua KPI tinh luong."}
+    as_of = str(as_of_date or "")[:10] or None
+    moc_r = _q("SELECT save_date d FROM fact_thongketinhluong WHERE (? IS NULL OR save_date<=?) "
+               "GROUP BY save_date HAVING SUM(COALESCE(month_sale_amount,0))>0 ORDER BY save_date DESC LIMIT 1",
+               (as_of, as_of))
+    if not moc_r:
+        return {"error": f"Chua co snapshot KPI co doanh so den ngay {as_of or 'hom nay'}."}
+    # Bravo tao san dong khoi tao ngay 1 dau thang (doanh so 0) - bo qua, lay moc co so that gan nhat.
+    moc = str(moc_r[0]["d"])[:10]
+    ym = moc[:7]
+
+    thong_tin_loc = {}
+    ma_doi = _ma_doi_hieu_luc(scope_employee_code, None)
+    if manager_code and not ma_doi:
+        qlv = _resolve_employee_identity(str(manager_code).strip())
+        if qlv.get("name_candidates"):
+            return _ung_vien_ten_nhan_vien_loi(qlv, manager_code)
+        if not qlv.get("name"):
+            return {"error": f"Khong tim thay quan ly '{manager_code}' trong danh muc nhan su."}
+        ma_doi = qlv["code"]
+    ma_nv = None
+    if employee_code:
+        nv = _resolve_employee_identity(str(employee_code).strip())
+        if nv.get("name_candidates"):
+            return _ung_vien_ten_nhan_vien_loi(nv, employee_code)
+        if not nv.get("name"):
+            return {"error": f"Khong tim thay nhan vien '{employee_code}' trong danh muc nhan su."}
+        ma_nv = nv["code"]
+    vung = scope_area_code or (str(area_code or "").strip().upper() or None)
+
+    sql = ("WITH s AS (SELECT employee_code, MAX(save_date) d FROM fact_thongketinhluong "
+           "WHERE save_date<=? AND substr(save_date,1,7)=? GROUP BY employee_code) "
+           "SELECT f.* FROM fact_thongketinhluong f JOIN s ON s.employee_code=f.employee_code AND s.d=f.save_date "
+           f"WHERE UPPER(COALESCE(f.position_code,'')) IN ({','.join('?' for _ in _EMPLOYEE_TIER_POSITIONS)})")
+    params = [moc + " 23:59:59", ym, *_EMPLOYEE_TIER_POSITIONS]
+    if vung:
+        markers = _area_markers(vung)
+        sql += f" AND f.area_code IN ({','.join('?' for _ in markers)})"
+        params += markers
+    if ma_doi:
+        sql += " AND f.manager_code=?"
+        params.append(ma_doi)
+        thong_tin_loc["ma_doi"] = ma_doi
+    if ma_nv:
+        sql += " AND f.employee_code=?"
+        params.append(ma_nv)
+        thong_tin_loc["ma_nhan_vien"] = ma_nv
+    rows = _q(sql, tuple(params))
+    if ma_nv and not rows:
+        return {"error": (f"Khong co dong KPI thang {ym} cua {ma_nv}"
+                          + (f" trong doi {ma_doi}" if ma_doi else "") + (f" vung {vung}" if vung else "")
+                          + " - co the ngoai pham vi tai khoan hoac khong phai nhan vien ban hang."),
+                "month": ym}
+
+    # No qua han theo nguoi phu trach: phan cong KPI moi nhat cua tung khach (fact_tonghopkhachhang), chi OTC - cung
+    # nguon voi receivables_overview/_gan_nguoi_phu_trach_cong_no.
+    no_theo_nv, moc_cong_no, gan, cn = {}, None, [], {}
+    ma_ban = [r["employee_code"] for r in rows if r.get("employee_code")]
+    if ma_ban:
+        try:
+            cn = _q("SELECT customer_code, MAX(snapshot_at) at_, COALESCE(SUM(balance_end),0) bal, "
+                    "COALESCE(SUM(total_overdue),0) od, COALESCE(SUM(overdue_gt_45),0) od45 "
+                    "FROM fact_congno_khachhang WHERE UPPER(COALESCE(sales_channel,''))='OTC' GROUP BY customer_code")
+            cn = {r["customer_code"]: r for r in cn if r.get("customer_code")}
+            moc_cong_no = max((str(r["at_"]) for r in cn.values() if r.get("at_")), default=None)
+            # Cua so thay cho JOIN theo customer_code: bang khong co index customer_code, JOIN tu CTE mat >120 giay tren
+            # kho dev (46 nghin dong x 11,6 nghin khach); mot lan quet + sap xep duoi 1 giay.
+            vai_tro_nv = {r["employee_code"]: r["position_code"] for r in _q(
+                "SELECT employee_code, MAX(position_code) position_code FROM dim_nhanvien GROUP BY employee_code")}
+            gan = [dict(r, position_code=vai_tro_nv.get(r["employee_code"]), amount_ct=0) for r in _q(
+                "SELECT customer_code, employee_code, manager_code FROM (SELECT customer_code, employee_code, "
+                "manager_code, save_date, MAX(save_date) OVER (PARTITION BY customer_code) d "
+                "FROM fact_tonghopkhachhang WHERE save_date<=?) WHERE save_date=d", (moc + " 23:59:59",))]
+            chon = {}
+            for g in _prefer_employee_tier([g for g in gan if g["customer_code"] in cn]):
+                chon.setdefault(g["customer_code"], g["employee_code"])
+            dat = set(ma_ban)
+            for kh, nv in chon.items():
+                if nv not in dat:
+                    continue
+                d = no_theo_nv.setdefault(nv, {"du_no": 0.0, "no_qua_han": 0.0, "no_qua_han_tren_45_ngay": 0.0,
+                                               "so_khach_no_qua_han": 0})
+                d["du_no"] += _f(cn[kh]["bal"])
+                d["no_qua_han"] += _f(cn[kh]["od"])
+                d["no_qua_han_tren_45_ngay"] += _f(cn[kh]["od45"])
+                d["so_khach_no_qua_han"] += 1 if _f(cn[kh]["od"]) > 0 else 0
+        except sqlite3.OperationalError:
+            no_theo_nv = None
+
+    def _dong(r):
+        vai_tro = str(r.get("position_code") or "").upper()
+        dung_ac = _uses_is_ac(vai_tro)
+        pct_ds = _pct100(r.get("month_sale_percent"))
+        nguong = _bonus_threshold(vai_tro)
+        d = {"employee_code": r["employee_code"], "employee_name": r.get("employee_name"),
+             "position_code": vai_tro, "area_code": r.get("area_code"), "manager_code": r.get("manager_code"),
+             "snapshot_date": str(r["save_date"])[:10],
+             "doanh_so": _f(r.get("month_sale_amount")), "chi_tieu_doanh_so": _f(r.get("month_sale_target")),
+             "pct_doanh_so": pct_ds, "nguong_thuong_pct": nguong,
+             "toi_nguong_thuong": (pct_ds >= nguong) if pct_ds is not None else None,
+             "trong_tam_pct_dat": _pct100(r.get("target_product_percent")),
+             "sku": {"dat": _f(r.get("sku_quantity")), "chi_tieu": _f(r.get("sku_target")),
+                     "pct": _pct100(r.get("sku_percent"))},
+             "tai_don": {"dat": _f(r.get("reorder_cus_quantity")),
+                         "chi_tieu": _chi_tieu_suy_nguoc(r.get("reorder_cus_quantity"), r.get("reorder_percent")),
+                         "pct": _pct100(r.get("reorder_percent"))},
+             "khach_moi": {"dat": _f(r.get("new_cus_quantity")), "chi_tieu": _f(r.get("new_cus_target")),
+                           "pct": _pct100(r.get("new_cus_percent"))},
+             "tong_diem_kpi_bravo": r.get("total_point")}
+        if dung_ac:
+            d["active_customer"] = {"dat": _f(r.get("active_cus_quantity")), "chi_tieu": _f(r.get("active_cus_target")),
+                                    "pct": _pct100(r.get("active_cus_percent"))}
+        else:
+            d["aso"] = {"dat": _f(r.get("aso_quantity")),
+                        "chi_tieu": _chi_tieu_suy_nguoc(r.get("aso_quantity"), r.get("aso_percent")),
+                        "pct": _pct100(r.get("aso_percent"))}
+        if no_theo_nv is not None:
+            d["cong_no_khach_phu_trach"] = no_theo_nv.get(r["employee_code"]) or {
+                "du_no": 0.0, "no_qua_han": 0.0, "no_qua_han_tren_45_ngay": 0.0, "so_khach_no_qua_han": 0}
+        return d
+
+    dong = sorted((_dong(r) for r in rows), key=lambda x: (x["pct_doanh_so"] is None, x["pct_doanh_so"] or 0))
+    theo_qlv = {}
+    for d in dong:
+        t = theo_qlv.setdefault(d["manager_code"], {"manager_code": d["manager_code"], "so_nguoi": 0, "doanh_so": 0.0,
+                                                     "chi_tieu_doanh_so": 0.0, "so_nguoi_dat_chi_tieu": 0,
+                                                     "so_nguoi_toi_nguong_thuong": 0, "no_qua_han": 0.0})
+        t["so_nguoi"] += 1
+        t["doanh_so"] += d["doanh_so"]
+        t["chi_tieu_doanh_so"] += d["chi_tieu_doanh_so"]
+        t["so_nguoi_dat_chi_tieu"] += 1 if (d["pct_doanh_so"] or 0) >= 100 else 0
+        t["so_nguoi_toi_nguong_thuong"] += 1 if d["toi_nguong_thuong"] else 0
+        t["no_qua_han"] += (d.get("cong_no_khach_phu_trach") or {}).get("no_qua_han", 0.0)
+    # No ca doi theo DUNG dinh nghia receivables_overview (khach co dong phan cong moi nhat ghi manager_code hoac
+    # employee_code = QLV). Chenh voi tong thanh vien = khach cua nguoi KHONG co dong KPI thang nay (nghi/chuyen doi)
+    # hoac QLV tu giu - do kho dev 26/09: doi TM23110105 609,2tr thanh vien vs 871,2tr ca doi (TM23110110 2 khach
+    # 323tr + QLV tu giu 3 khach 324tr); MBKV2 khop tung dong.
+    if no_theo_nv is not None:
+        for t in theo_qlv.values():
+            kh_doi = {g["customer_code"] for g in gan
+                      if t["manager_code"] and t["manager_code"] in (g.get("manager_code"), g.get("employee_code"))}
+            t["no_qua_han_cua_thanh_vien"] = t.pop("no_qua_han")
+            t["no_qua_han_ca_doi"] = sum(_f(cn[k]["od"]) for k in kh_doi if k in cn)
+            t["no_qua_han_chua_gan_thanh_vien"] = t["no_qua_han_ca_doi"] - t["no_qua_han_cua_thanh_vien"]
+    for t in theo_qlv.values():
+        t["pct_doanh_so_doi"] = (t["doanh_so"] / t["chi_tieu_doanh_so"] * 100) if t["chi_tieu_doanh_so"] else None
+    try:
+        # Khong loc doi/nguoi: ca cong ty ~180 nguoi x ~800 ky tu - chi tra 20 nguoi % thap nhat + tong hop theo QLV.
+        limit = max(1, min(int(limit or (60 if (ma_doi or ma_nv) else 20)), 300))
+    except (TypeError, ValueError):
+        limit = 60
+    ket_qua = {
+        "month": ym, "moc_snapshot": moc,
+        "luy_ke_giua_thang": moc[8:10] != f"{_last_day_of_month(int(ym[:4]), int(ym[5:7])):02d}",
+        "loc": thong_tin_loc or None, "vung": vung,
+        "so_nguoi": len(dong), "nhan_vien": dong[:limit], "nhan_vien_bi_cat": len(dong) > limit,
+        "tong_hop_theo_qlv": sorted(theo_qlv.values(), key=lambda t: (t["pct_doanh_so_doi"] is None,
+                                                                      t["pct_doanh_so_doi"] or 0)),
+        "cong_no_tai": moc_cong_no,
+        "definition": (
+            "Nguon: ket qua tinh luong Bravo (FACT_ThongKeTinhLuong), snapshot moi nhat tung nguoi trong thang; "
+            "luy_ke_giua_thang=true la tien do den moc_snapshot, KHONG phai ket qua thang da chot. pct = so dat / chi "
+            "tieu cua Bravo. trong_tam_pct_dat = TargetProductPercent (Mien Bac chi tieu la ty trong doanh so, MN/MT "
+            "la so tien - xem get_focus_product_kpi). chi_tieu tai don/ASO suy tu so dat / ty le dat (None khi ty le "
+            "0). CS/TK dung active_customer, khong co ASO. tong_diem_kpi_bravo = TotalPoint Bravo, khong tu quy doi. "
+            "cong_no_khach_phu_trach: no OTC cua khach phan cong cho nguoi do tai cong_no_tai, khong phai no phat "
+            "sinh trong thang. Tong doi dung no_qua_han_ca_doi (khop get_receivables_overview); "
+            "no_qua_han_chua_gan_thanh_vien la khach cua nguoi khong co dong KPI thang nay hoac QLV tu giu. Danh sach xep % doanh so THAP truoc. Khong co tien thuong/phu cap."),
+        "pham_vi_kenh": "OTC",
+        "data_as_of": latest_data_date(),
+    }
+    if no_theo_nv is None:
+        ket_qua["canh_bao_cong_no"] = "Kho chua co bang cong no/phan cong khach - khong tinh no qua han theo nguoi."
+    return ket_qua
+
+
 # 15/09/2026 (anh Dang): moi ma san pham va ma nhan vien trong cau tra loi phai kem ten. (khoa ma,
 # cac khoa ten da co san thi khong gan lai, khoa ten se gan, loai danh muc)
 _MA_CAN_TEN = (
@@ -14627,6 +14824,7 @@ TEMPLATES = {
     "get_new_customer_list": new_customer_list,
     "get_reorder_pending_customers": reorder_pending_customers,
     "get_focus_product_kpi": focus_product_kpi,
+    "get_kpi_scorecard": kpi_scorecard,
     "get_customer_attrition_risk": customer_attrition_risk,
     "get_customer_cohort_retention": customer_cohort_retention,
     "get_customer_movement": customer_movement,
@@ -14709,6 +14907,8 @@ _PERSON_LEVEL_TEMPLATES = {
     "get_etc_revenue_by_item_type",
     # 15/09/2026: danh sach khach moi/chua tai don va KPI trong tam - loc theo doi QLV.
     "get_new_customer_list", "get_reorder_pending_customers", "get_focus_product_kpi",
+    # 26/09/2026: bang KPI QLV/TDV - doi theo manager_code tren ket qua tinh luong.
+    "get_kpi_scorecard",
     # 19/08: inventory_by_region/qlv_change_history/revenue_reconciliation chi loc vung.
     # 15/09 V40: receivables_overview da ho tro loc khach theo doi, dang ky o CA HAI tap
     # de backend ep pham vi QLV ma khong chan nham tool nhu truoc day.
@@ -14743,6 +14943,7 @@ _EMPLOYEE_SCOPED_TEMPLATES = {
     "get_promotion_data_quality",
     "get_customer_revenue_debt_risk",
     "get_new_customer_list", "get_reorder_pending_customers", "get_focus_product_kpi",
+    "get_kpi_scorecard",
     "get_salary_detail", "get_salary_achievement_summary", "get_salary_bonus_policy",
     "get_salary_data_quality", "get_salary_aso_detail",
     "get_salary_ranking",
@@ -14774,6 +14975,8 @@ _CHANNEL_SCOPE_POLICIES = {
         "get_employee_kpi", "get_revenue_tree", "get_kpi_ranking", "get_revenue_reconciliation",
         # 15/09/2026: KPI san pham trong tam tu ket qua tinh luong OTC.
         "get_focus_product_kpi",
+        # 26/09/2026: bang KPI QLV/TDV cung nguon ket qua tinh luong OTC.
+        "get_kpi_scorecard",
         # 15/09/2026: bao cao lo/han dung kem nhu cau ban va khach mua OTC gan day - mo cho tai khoan
         # OTC; tai khoan ETC dung get_inventory_by_region/get_inventory_item_stock (khong lo khach OTC).
         "get_inventory_expiry_report",
