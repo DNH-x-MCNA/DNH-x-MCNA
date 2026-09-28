@@ -58,15 +58,31 @@ SYNC_STALE_THRESHOLD_MIN = 90
 # (~20-40s do quan sat thuc te) de tranh bao dong gia trong luc dang tu cap nhat.
 TUNNEL_MISMATCH_THRESHOLD_MIN = 10
 
-# Webhook C-Level (Toan quoc) - lay tu config/config.yaml::report_recipients, audience "C-Level
-# (Toan quoc)" - dung chung kenh voi canh bao cong no hien co, KHONG can thiet lap webhook rieng.
+# Webhook C-Level (Toan quoc) - dung chung kenh voi canh bao cong no hien co (TEAMS_WEBHOOK_C_LEVEL trong .env).
 # Co the ghi de qua bien moi truong WATCHDOG_TEAMS_WEBHOOK neu sau nay can tach kenh rieng.
-DEFAULT_TEAMS_WEBHOOK = (
-    "https://default44841e983bfb4f7091c1f177b036a1.f3.environment.api.powerplatform.com:443/"
-    "powerautomate/automations/direct/cu/30/workflows/77995731b9a84a0ca215405a9a0aa44a/"
-    "triggers/manual/paths/invoke?api-version=1&sp=%2Ftriggers%2Fmanual%2Frun&sv=1.0&"
-    "sig=ua0ANvQq4GN3pX8LVmOJ0z124HWtaLB3rAWdZ5V6cpo"
-)
+# 28/09/2026: URL KHONG viet trong code nua (repo tung de public 07-28/09 va lo URL nay). Watchdog chay qua Task
+# Scheduler rieng, KHONG nap .env, nen tu doc dung ten bien can tu .env o goc repo roi backend/.
+PROJECT_ROOT = os.path.dirname(BACKEND_DIR)
+
+
+def _doc_bien_env(ten: str) -> str:
+    gia_tri = (os.environ.get(ten) or "").strip()
+    if gia_tri:
+        return gia_tri
+    for duong_dan in (os.path.join(PROJECT_ROOT, ".env"), os.path.join(BACKEND_DIR, ".env")):
+        try:
+            with open(duong_dan, "r", encoding="utf-8-sig") as f:
+                for dong in f:
+                    khoa, dau, gia_tri = dong.partition("=")
+                    if dau and khoa.strip() == ten and gia_tri.strip():
+                        return gia_tri.strip().strip('"').strip("'")
+        except OSError:
+            continue
+    return ""
+
+
+def _webhook_canh_bao() -> str:
+    return _doc_bien_env("WATCHDOG_TEAMS_WEBHOOK") or _doc_bien_env("TEAMS_WEBHOOK_C_LEVEL")
 
 
 def _log(msg: str):
@@ -92,7 +108,7 @@ def _save_state(state: dict):
 def _send_teams_alert(title: str, summary: str, severity: str = "CRITICAL") -> bool:
     """Ban TOI GIAN cua send_teams_alert() (xem src/notifier.py) - chi Container + TextBlock, du
     dung cho canh bao ha tang dang van ban ngan, khong can bang/anh nhu bao cao cong no."""
-    webhook_url = os.environ.get("WATCHDOG_TEAMS_WEBHOOK", DEFAULT_TEAMS_WEBHOOK)
+    webhook_url = _webhook_canh_bao()
     if not webhook_url:
         _log("KHONG co Teams webhook cau hinh - bo qua gui canh bao (chi ghi log).")
         return False
