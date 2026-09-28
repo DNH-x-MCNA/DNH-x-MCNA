@@ -701,8 +701,10 @@ def kiem_14_moi_QLV_phan_giai_du_doi():
         chi_tiet = chr(10).join(
             "%s: cay to chuc %d TDV nhung chi phan giai %d DMSId (hut %d nguoi)"
             % (m, a, b, a - b) for m, a, b in hut)
+        # Ngoac bao ca chuoi: "%" tinh truoc "+", truoc 29/09/2026 chi "%s" nhan 3 gia tri -> TypeError
+        # dung luc phat hien QLV hut nguoi (truong hop can bao nhat).
         _kiem("%d QLV: phan giai du doi" % len(codes), False,
-              "%d/%d QLV bi hut nguoi - doanh thu doi cua ho dang THIEU:" + chr(10) + "%s"
+              ("%d/%d QLV bi hut nguoi - doanh thu doi cua ho dang THIEU:" + chr(10) + "%s")
               % (len(hut), len(codes), chi_tiet))
     else:
         _kiem("%d QLV: phan giai du doi" % len(codes), True)
