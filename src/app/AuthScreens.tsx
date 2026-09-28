@@ -64,26 +64,31 @@ export default function AuthScreens({ onLoginSuccess }: AuthScreensProps) {
   };
 
   return (
-    <div className="flex min-h-dvh flex-col bg-soft">
-      <main className="flex flex-1 items-center justify-center px-4 py-12">
-        <div className="w-full max-w-[400px] animate-rise-in">
-          <div className="mb-8 flex flex-col items-center text-center">
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src="/namha-logo.png" alt="Công ty Cổ phần Dược Nam Hà" className="h-12 w-auto" />
-            <h1 className="mt-7 text-[24px] font-semibold tracking-tight text-navy">
-              {view === "login" ? "Đăng nhập" : "Lấy lại mật khẩu"}
-            </h1>
-            <p className="mt-1.5 max-w-sm text-[14.5px] leading-relaxed text-slate-500">
-              {view === "login"
-                ? "DNH AI Analyst · Trợ lý phân tích kinh doanh"
-                : "Nhập email công ty. Mật khẩu mới sẽ được gửi vào hộp thư Outlook của bạn."}
-            </p>
-          </div>
-
-          <div className="overflow-hidden rounded-3xl bg-white shadow-raised ring-1 ring-slate-900/5">
+    // Nen navy (mau thanh dieu huong toi cua ban 29/07) + the trang: form noi ro tren nen, khong con
+    // trang tren trang. Logo nam trong the vi chu "NAMHA" mau xanh dam khong doc duoc tren navy.
+    <div className="relative flex min-h-dvh flex-col overflow-hidden bg-navy">
+      <div
+        aria-hidden="true"
+        className="pointer-events-none absolute inset-0 bg-[radial-gradient(56rem_32rem_at_50%_-8%,rgb(79_70_229/0.38),transparent_70%)]"
+      />
+      <main className="relative flex flex-1 items-center justify-center px-4 py-12">
+        <div className="w-full max-w-[420px] animate-rise-in">
+          <div className="overflow-hidden rounded-3xl bg-white shadow-float">
             {/* Dai mau thuong hieu Nam Ha (xanh la -> cam) giu tu ban dang nhap truoc. */}
             <div className="h-1 bg-gradient-to-r from-emerald-800 via-emerald-600 to-orange-400" aria-hidden="true" />
-            <div className="p-6 sm:p-7">
+            <div className="px-6 pb-7 pt-8 sm:px-8">
+            <div className="mb-7 flex flex-col items-center text-center">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src="/namha-logo.png" alt="Công ty Cổ phần Dược Nam Hà" className="h-12 w-auto" />
+              <h1 className="mt-6 text-[22px] font-semibold tracking-tight text-navy">
+                {view === "login" ? "Đăng nhập" : "Lấy lại mật khẩu"}
+              </h1>
+              <p className="mt-1 max-w-sm text-[14px] leading-relaxed text-slate-600">
+                {view === "login"
+                  ? "DNH AI Analyst · Trợ lý phân tích kinh doanh"
+                  : "Nhập email công ty. Mật khẩu mới sẽ được gửi vào hộp thư Outlook của bạn."}
+              </p>
+            </div>
             {message && (
               <Notice tone={message.type === "success" ? "success" : "danger"} className="mb-5">{message.text}</Notice>
             )}
@@ -147,7 +152,7 @@ export default function AuthScreens({ onLoginSuccess }: AuthScreensProps) {
                 <button
                   type="button"
                   onClick={() => switchView("login")}
-                  className="mx-auto flex items-center gap-1 text-[13.5px] font-medium text-slate-500 hover:text-navy"
+                  className="mx-auto flex items-center gap-1 text-[13.5px] font-medium text-slate-600 hover:text-navy"
                 >
                   <IconChevronLeft className="h-4 w-4" /> Quay lại đăng nhập
                 </button>
@@ -156,12 +161,12 @@ export default function AuthScreens({ onLoginSuccess }: AuthScreensProps) {
             </div>
           </div>
 
-          <p className="mt-6 text-center text-[13px] leading-relaxed text-slate-400">
+          <p className="mt-6 text-center text-[13px] leading-relaxed text-slate-300">
             Tài khoản do quản trị viên cấp. Mật khẩu khởi tạo được gửi qua email Outlook của nhân viên.
           </p>
         </div>
       </main>
-      <footer className="pb-6 text-center text-[12px] text-slate-400">© {new Date().getFullYear()} Công ty Cổ phần Dược Nam Hà</footer>
+      <footer className="relative pb-6 text-center text-[12px] text-slate-400">© {new Date().getFullYear()} Công ty Cổ phần Dược Nam Hà</footer>
     </div>
   );
 }

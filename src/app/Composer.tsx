@@ -47,13 +47,13 @@ export const Composer = forwardRef<ComposerHandle, {
   const limit = quota.quota_limit;
   const remaining = quota.quota_remaining ?? 0;
   const quotaTone =
-    limit == null ? "" : remaining === 0 ? "text-red-600" : remaining <= limit * 0.2 ? "text-amber-700" : "text-slate-400";
+    limit == null ? "" : remaining === 0 ? "text-red-600" : remaining <= limit * 0.2 ? "text-amber-700" : "text-slate-500";
 
   return (
     <form onSubmit={handleSubmit} className="mx-auto w-full max-w-3xl px-3 pb-3 sm:px-6 sm:pb-5">
       <div
         className={cx(
-          "rounded-[22px] bg-white shadow-composer ring-1 ring-inset ring-line transition",
+          "rounded-[22px] bg-white shadow-composer ring-1 ring-inset ring-line-strong transition",
           !disabled && "focus-within:ring-2 focus-within:ring-brand/60",
           disabled && "bg-soft",
         )}
@@ -68,10 +68,10 @@ export const Composer = forwardRef<ComposerHandle, {
           onKeyDown={handleKeyDown}
           disabled={disabled}
           placeholder={disabledReason || "Hỏi về doanh thu, công nợ, KPI, tồn kho…"}
-          className="custom-scroll block max-h-[220px] w-full resize-none bg-transparent px-4 pb-1 pt-3.5 text-[15px] leading-relaxed text-navy outline-none placeholder:text-slate-400 disabled:cursor-not-allowed sm:px-5"
+          className="custom-scroll block max-h-[220px] w-full resize-none bg-transparent px-4 pb-1 pt-3.5 text-[15px] leading-relaxed text-navy outline-none placeholder:text-slate-500 disabled:cursor-not-allowed sm:px-5"
         />
         <div className="flex items-center justify-between gap-3 px-3 pb-2.5 pt-1 sm:px-4">
-          <span className="hidden text-[12px] text-slate-400 sm:inline">
+          <span className="hidden text-[12px] text-slate-500 sm:inline">
             {disabled ? "" : "Enter để gửi · Shift + Enter để xuống dòng"}
           </span>
           <div className="ml-auto flex items-center gap-3">
@@ -99,7 +99,7 @@ export const Composer = forwardRef<ComposerHandle, {
                 disabled={!canSend}
                 aria-label="Gửi câu hỏi"
                 title="Gửi câu hỏi"
-                className="flex h-9 w-9 items-center justify-center rounded-full bg-brand text-white transition hover:bg-brand-strong active:scale-95 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-400"
+                className="flex h-9 w-9 items-center justify-center rounded-full bg-brand text-white transition hover:bg-brand-strong active:scale-95 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500"
               >
                 <IconSend className="h-[18px] w-[18px]" />
               </button>
@@ -107,7 +107,7 @@ export const Composer = forwardRef<ComposerHandle, {
           </div>
         </div>
       </div>
-      <p className="mt-2 hidden text-center text-[11.5px] text-slate-400 sm:block">
+      <p className="mt-2 hidden text-center text-[11.5px] text-slate-500 sm:block">
         Trợ lý có thể nhầm. Với số liệu quan trọng, hãy mở “Xem truy vấn đã dùng” để đối chiếu.
       </p>
     </form>

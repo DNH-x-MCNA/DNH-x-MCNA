@@ -367,7 +367,7 @@ export default function Home() {
   if (authChecking) {
     return (
       <div className="flex h-dvh items-center justify-center bg-soft">
-        <Spinner className="h-5 w-5 text-slate-400" />
+        <Spinner className="h-5 w-5 text-slate-500" />
         <span className="sr-only">Đang kiểm tra đăng nhập…</span>
       </div>
     );
@@ -430,11 +430,11 @@ export default function Home() {
       />
 
       <div className="flex min-w-0 flex-1 flex-col">
-        <header className="flex h-14 shrink-0 items-center gap-2 border-b border-line/70 px-3 sm:px-5">
+        <header className="flex h-14 shrink-0 items-center gap-2 border-b border-line px-3 sm:px-5">
           <IconButton label="Mở lịch sử trò chuyện" onClick={() => setSidebarOpen(true)} className="md:hidden">
             <IconMenu className="h-5 w-5" />
           </IconButton>
-          <h2 className="min-w-0 flex-1 truncate text-[15px] font-medium text-navy">
+          <h2 className="min-w-0 flex-1 truncate text-[15px] font-semibold text-navy">
             {messages.length > 0 ? currentTitle || "Cuộc trò chuyện mới" : "Cuộc trò chuyện mới"}
           </h2>
           <IconButton label="Cuộc trò chuyện mới" onClick={startNewConversation} disabled={loading} className="md:hidden">

@@ -102,22 +102,24 @@ function remarkAlignNumericColumns() {
   };
 }
 
-const TABLE_WRAP = "custom-scroll overflow-x-auto rounded-xl ring-1 ring-inset ring-line";
-const TH = "whitespace-nowrap border-b border-line bg-soft px-3.5 py-2.5 text-[12.5px] font-medium text-slate-500";
-const TD = "border-b border-slate-100 px-3.5 py-2.5 align-top text-slate-800";
+// Khung bang dung `border`, khong dung ring-inset: nen cua thead/tbody ve de len vong inset lam mat
+// khung hai ben (chi con thay o goc bo tron).
+const TABLE_WRAP = "custom-scroll overflow-x-auto rounded-xl border border-line bg-white";
+const TH = "whitespace-nowrap border-b border-line bg-sunken px-3.5 py-2.5 text-[12.5px] font-semibold text-slate-700";
+const TD = "border-b border-line px-3.5 py-2.5 align-top text-slate-800";
 
 // Style rieng cho tung the markdown trong cau tra loi (bang, in dam, danh sach...)
 const markdownComponents = {
   p: ({ children }: { children?: ReactNode }) => <p className="my-3 first:mt-0 last:mb-0">{children}</p>,
   strong: ({ children }: { children?: ReactNode }) => <strong className="font-semibold text-navy">{children}</strong>,
-  em: ({ children }: { children?: ReactNode }) => <em className="text-slate-500">{children}</em>,
+  em: ({ children }: { children?: ReactNode }) => <em className="text-slate-600">{children}</em>,
   a: ({ children, href }: { children?: ReactNode; href?: string }) => (
     <a href={href} target="_blank" rel="noopener noreferrer" className="font-medium text-brand underline decoration-indigo-200 underline-offset-2 hover:decoration-brand">
       {children}
     </a>
   ),
-  ul: ({ children }: { children?: ReactNode }) => <ul className="my-3 list-disc space-y-1.5 pl-5 marker:text-slate-300 last:mb-0">{children}</ul>,
-  ol: ({ children }: { children?: ReactNode }) => <ol className="my-3 list-decimal space-y-1.5 pl-5 marker:text-slate-400 last:mb-0">{children}</ol>,
+  ul: ({ children }: { children?: ReactNode }) => <ul className="my-3 list-disc space-y-1.5 pl-5 marker:text-slate-400 last:mb-0">{children}</ul>,
+  ol: ({ children }: { children?: ReactNode }) => <ol className="my-3 list-decimal space-y-1.5 pl-5 marker:text-slate-500 last:mb-0">{children}</ol>,
   li: ({ children }: { children?: ReactNode }) => <li className="pl-1">{children}</li>,
   h1: ({ children }: { children?: ReactNode }) => <h3 className="mb-2 mt-5 text-[17px] font-semibold tracking-tight text-navy first:mt-0">{children}</h3>,
   h2: ({ children }: { children?: ReactNode }) => <h3 className="mb-2 mt-5 text-[16px] font-semibold tracking-tight text-navy first:mt-0">{children}</h3>,
@@ -141,7 +143,7 @@ const markdownComponents = {
   ),
   thead: ({ children }: { children?: ReactNode }) => <thead>{children}</thead>,
   tbody: ({ children }: { children?: ReactNode }) => <tbody className="bg-white">{children}</tbody>,
-  tr: ({ children }: { children?: ReactNode }) => <tr className="transition-colors hover:bg-slate-50/70">{children}</tr>,
+  tr: ({ children }: { children?: ReactNode }) => <tr className="transition-colors hover:bg-soft">{children}</tr>,
   // mdast-util-to-hast tao thuoc tinh HAST "align" (cu) tu truong "align" cua mdast ma
   // remarkAlignNumericColumns gan (xet CA COT). react-markdown roi chuyen thuoc tinh HAST "align" do
   // THANH prop `style={{textAlign}}` khi tao React element - da xac minh bang render thu - phai nhan
@@ -187,7 +189,7 @@ export function DataTable({ columns, rows }: { columns: string[]; rows: unknown[
         </thead>
         <tbody className="bg-white">
           {rows.map((row, ri) => (
-            <tr key={ri} className="transition-colors hover:bg-slate-50/70">
+            <tr key={ri} className="transition-colors hover:bg-soft">
               {row.map((cell, ci) => {
                 const cellText = cell === null ? "—" : String(cell);
                 const tagClass = CHANNEL_REGION_TAG_STYLES[cellText];
