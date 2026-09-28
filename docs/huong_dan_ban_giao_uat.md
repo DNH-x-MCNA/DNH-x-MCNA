@@ -47,6 +47,14 @@ Không gửi `.env`, API key, chuỗi kết nối, database hoặc log có thôn
 > đưa số — đó là đúng thiết kế. Đối chiếu số: `python scripts\doi_chieu_ctkm_sau_nap_bu.py --thang YYYY-MM
 > [--mien MB]` (chỉ đọc Bravo; 28/09 khớp 08/2026 toàn quốc, 03/2026 MB, 01/2026 — mỗi kỳ 50 chương trình).
 >
+> **Vận hành: CTKM do DNH NẠP TAY, không có job định kỳ** (job đồng bộ DMS → Bravo định kỳ không gồm hai bảng này).
+> Giữa hai lần nạp, đơn mới chưa có liên kết khuyến mãi — chatbot tự lùi mốc về ngày cuối đã nạp đủ và báo
+> tháng đang dở là "chưa nạp đủ". Lịch nạp đã đề xuất: **ngày làm việc đầu mỗi tháng** (để tháng trước đủ số),
+> **ngày trước buổi nghiệm thu/báo cáo quan trọng**, và tuỳ chọn sáng thứ Hai hằng tuần nếu cần số tháng đang
+> chạy. **Luôn nạp `DMS_DonHangCTKM` cùng `DMS_CTKM`**: thiếu `DMS_CTKM` thì chatbot báo "chương trình chưa có
+> trong danh mục DMS_CTKM — số liệu đang thiếu" (trường `don_thieu_danh_muc_ctkm`). Sau mỗi lần nạp, chạy script
+> đối chiếu ở trên trên máy 24: tháng vừa nạp phải đạt ≥99% và in "KET LUAN: KHOP".
+>
 > *Lịch sử (trước 28/09):* đồng bộ CTKM dừng từ 09/01/2026, đơn gắn CTKM bằng 0 từ 02/2026 nên chatbot chỉ
 > trả lời được kỳ 2025.
 >

@@ -23,8 +23,8 @@ CHUONG_TRINH = [{"ProgramId": 1, "ProgramCode": "KM01", "ProgramName": "Mua 10 t
                  "PaidProductOccurrences": 8, "GiftProductCount": 1}]
 
 
-def _bravo(moc, ngay, goi=None):
-    """moc: ngay cua dong lien ket cuoi; ngay: {YYYY-MM-DD: (don DMS, don co lien ket)}."""
+def _bravo(moc, ngay, goi=None, chinh=None):
+    """moc: ngay cua dong lien ket cuoi; ngay: {YYYY-MM-DD: (don DMS, don co lien ket)}; chinh: dong truy van chinh."""
     goi = goi if goi is not None else []
 
     def fn(sql, params=None):
@@ -34,7 +34,7 @@ def _bravo(moc, ngay, goi=None):
         if "LinkedOrders" in sql:
             tu, den = str(params["date_from"]), str(params["date_to_exclusive"])
             return [{"Ky": k, "Orders": d, "LinkedOrders": g} for k, (d, g) in ngay.items() if tu <= k < den]
-        return CHUONG_TRINH
+        return CHUONG_TRINH if chinh is None else chinh
 
     return fn
 
@@ -280,3 +280,42 @@ def test_moc_phu_lay_ngay_don_moi_nhat_co_lien_ket_khong_theo_id_cuoi(monkeypatc
     assert "MAX(h.DocDate) AS CoverageDate" in sql_moc and "INNER HASH JOIN dbo.DMS_DonHangHdr" in sql_moc
     assert "ORDER BY x.Id DESC" not in sql_moc
     assert r["status"] == "ok" and r["period"] == {"from": "2026-08-01", "to": "2026-08-31"}
+
+
+THIEU_DANH_MUC = {"ProgramId": None, "ProgramCode": None, "ProgramName": None, "LinkProgId": 120999,
+                  "MissingCatalog": 1, "Orders": 30, "Customers": 20, "AssociatedRevenue": 5_000_000_000,
+                  "OrdersWithoutInvoice": 0, "PaidProductOccurrences": 0, "GiftProductCount": 0}
+
+
+def test_don_gan_chuong_trinh_chua_co_trong_danh_muc_duoc_bao_ra(monkeypatch):
+    """28/09/2026: CTKM nap tay. Nap bang lien ket ma chua nap DMS_CTKM moi thi truoc day INNER JOIN bo mat don cua
+    chuong trinh moi khong bao - bang tra loi thieu ca chuong trinh ma trong nhu du."""
+    goi = []
+    monkeypatch.setattr(rt, "_q_bravo", _bravo("2026-08-31", {"2026-08-15": (10000, 9990)}, goi,
+                                               chinh=[THIEU_DANH_MUC] + CHUONG_TRINH))
+
+    r = rt.promotion_effectiveness("2026-08-01", "2026-08-31", limit=1)
+
+    sql_chinh = " ".join(next(s for s, _ in goi if "ProgramOrders" in s).split())
+    assert "LEFT JOIN dbo.DMS_CTKM p ON p.Id=po.ProgId" in sql_chinh and "MissingCatalog" in sql_chinh
+    assert r["status"] == "ok"
+    assert [p["program_code"] for p in r["programs"]] == ["KM01"], "Dong thieu danh muc khong duoc chiem cho top-N."
+    assert r["don_thieu_danh_muc_ctkm"] == {"so_chuong_trinh": 1, "so_luot_don": 30, "ma_lien_ket": [120999]}
+    assert "CHUA CO trong danh muc DMS_CTKM" in r["warning"] and "THIEU" in r["warning"]
+
+
+def test_ca_ky_chi_co_chuong_trinh_thieu_danh_muc_thi_la_source_gap(monkeypatch):
+    monkeypatch.setattr(rt, "_q_bravo", _bravo("2026-08-31", {"2026-08-15": (10000, 9990)}, chinh=[THIEU_DANH_MUC]))
+
+    r = rt.promotion_effectiveness("2026-08-01", "2026-08-31")
+
+    assert r["status"] == "source_gap" and r["programs"] == []
+    assert r["don_thieu_danh_muc_ctkm"]["so_chuong_trinh"] == 1
+
+
+def test_du_danh_muc_thi_khong_bao_thieu(monkeypatch):
+    monkeypatch.setattr(rt, "_q_bravo", _bravo("2026-08-31", {"2026-08-15": (10000, 9990)}))
+
+    r = rt.promotion_effectiveness("2026-08-01", "2026-08-31")
+
+    assert r["don_thieu_danh_muc_ctkm"] is None and "danh muc" not in (r["warning"] or "")

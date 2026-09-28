@@ -13670,15 +13670,23 @@ def promotion_effectiveness(date_from: str = None, date_to: str = None, limit: i
                SUM(CASE WHEN i.OrderId IS NULL THEN 1 ELSE 0 END) AS OrdersWithoutInvoice,
                SUM(ISNULL(i.PaidProductCount, 0)) AS PaidProductOccurrences,
                MAX(ISNULL(g.GiftProductCount, 0)) AS GiftProductCount,
-               p.FromDate AS ProgramFrom, p.ToDate AS ProgramTo
+               p.FromDate AS ProgramFrom, p.ToDate AS ProgramTo,
+               po.ProgId AS LinkProgId,
+               MAX(CASE WHEN p.Id IS NULL THEN 1 ELSE 0 END) AS MissingCatalog
         FROM ProgramOrders po
-        INNER JOIN dbo.DMS_CTKM p ON p.Id=po.ProgId
+        LEFT JOIN dbo.DMS_CTKM p ON p.Id=po.ProgId
         LEFT HASH JOIN InvoiceByOrder i ON i.OrderId=po.OrderId
         LEFT JOIN GiftProducts g ON g.ProgId=po.ProgId
-        GROUP BY p.Id, p.Code, p.Name, p.FromDate, p.ToDate
-        ORDER BY AssociatedRevenue DESC, p.Id
+        GROUP BY po.ProgId, p.Id, p.Code, p.Name, p.FromDate, p.ToDate
+        ORDER BY AssociatedRevenue DESC, po.ProgId
         OPTION (HASH JOIN)
     """, params)
+
+    # 28/09/2026: DNH nap tay CTKM. Neu chi nap bang lien ket ma chua nap DMS_CTKM moi, don cua chuong trinh moi
+    # truoc day bi INNER JOIN bo mat khong bao - bang tra loi thieu ca chuong trinh ma trong nhu du. LEFT JOIN +
+    # MissingCatalog tach rieng de noi ra; khong dua vao bang (khong co ma/ten/ky chuong trinh).
+    thieu_danh_muc = [row for row in rows if int(row.get("MissingCatalog") or 0)]
+    rows = [row for row in rows if not int(row.get("MissingCatalog") or 0)]
 
     # DMS_CTKM.Code is truncated and is not a program key. Limiting SQL rows before
     # checking codes can leave one program in the top N while hiding a lower-revenue
@@ -13765,10 +13773,24 @@ def promotion_effectiveness(date_from: str = None, date_to: str = None, limit: i
         don, gan = ngay_map.get(moc_lien_ket_cuoi, (0, 0))
         canh_bao.append(f"Ngay {moc_lien_ket_cuoi} moi co {gan}/{don} don duoc nap lien ket nen moc phu "
                         f"tinh den {coverage_date}.")
+    thieu_danh_muc_tom_tat = None
+    if thieu_danh_muc:
+        thieu_danh_muc_tom_tat = {
+            "so_chuong_trinh": len(thieu_danh_muc),
+            "so_luot_don": sum(int(row.get("Orders") or 0) for row in thieu_danh_muc),
+            "ma_lien_ket": sorted(row.get("LinkProgId") for row in thieu_danh_muc
+                                  if row.get("LinkProgId") is not None)[:10],
+        }
+        canh_bao.append(
+            "Co %d chuong trinh (%d luot don) trong ky CHUA CO trong danh muc DMS_CTKM - bang lien ket da nap "
+            "nhung bang chuong trinh chua nap. Cac chuong trinh do KHONG nam trong bang nay nen so lieu dang THIEU; "
+            "can DNH nap lai DMS_CTKM." % (thieu_danh_muc_tom_tat["so_chuong_trinh"],
+                                            thieu_danh_muc_tom_tat["so_luot_don"]))
     warning = " ".join(canh_bao) or None
 
     return {
-        "status": "ok" if programs else "no_data",
+        "status": "ok" if programs else ("source_gap" if thieu_danh_muc else "no_data"),
+        "don_thieu_danh_muc_ctkm": thieu_danh_muc_tom_tat,
         "period": {"from": str(report_from), "to": str(report_to)},
         "promotion_link_coverage_to": str(coverage_date),
         "promotion_link_last_row_date": str(moc_lien_ket_cuoi),
