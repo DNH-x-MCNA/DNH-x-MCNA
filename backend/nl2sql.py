@@ -2457,6 +2457,73 @@ def _bang_hoa(value):
     return _lam_tron_gon(value)
 
 
+# 28/09/2026: get_customer_movement ca cong ty dai 94 KB (by_employee 194 nguoi, customers 50 khach) -> luoi cat
+# chung con 5/194 nguoi va 5/50 khach; cau "ai mo nhieu khach moi nhung mua lai thap" bi goi lai voi limit=200
+# (may 24, 18/09) ma van khong thay them ai. Bang xep hang tinh tren TOAN BO nhan vien tra loi duoc ma vua ngan sach.
+_COT_KHACH_BIEN_DONG = (
+    "customer_code", "customer_name", "movement", "current_revenue", "previous_revenue", "delta",
+    "current_orders", "has_repeat_order_current", "employee_code", "channels", "areas", "first_purchase_month",
+    "inactive_months_before_reactivation", "pre_stop_average_monthly_revenue", "recovery_pct_vs_pre_stop_average")
+_XEP_HANG_NV_BIEN_DONG = (
+    ("mo_moi_nhieu_nhat", 20, ("khach_moi", "doanh_thu_khach_moi"),
+     ("khach_moi", "khach_moi_co_mua_lai", "ty_le_mua_lai_khach_moi_pct", "doanh_thu_khach_moi")),
+    ("tai_kich_hoat_nhieu_nhat", 15, ("khach_tai_kich_hoat", "doanh_thu_tai_kich_hoat"),
+     ("khach_tai_kich_hoat", "doanh_thu_tai_kich_hoat")),
+    ("mat_do_ngung_mua_nhieu_nhat", 15, ("doanh_thu_mat_do_ngung", "khach_ngung_mua"),
+     ("khach_ngung_mua", "doanh_thu_mat_do_ngung")),
+)
+
+
+def _bien_dong_khach_gon(data: dict) -> dict:
+    """Gui du by_employee neu vua; khong thi bang xep hang tren toan bo nhan vien + tong ca doi. Khach bot dan dong."""
+    def _so(value):
+        return value if isinstance(value, (int, float)) and not isinstance(value, bool) else 0
+
+    nhan_vien = [r for r in data.get("by_employee") or [] if isinstance(r, dict)]
+    khach = [{k: (", ".join(map(str, r[k])) if isinstance(r.get(k), list) else r.get(k))
+              for k in _COT_KHACH_BIEN_DONG if k in r}
+             for r in data.get("customers") or [] if isinstance(r, dict)]
+    tong = {k: sum(_so(r.get(k)) for r in nhan_vien) for k in (
+        "khach_moi", "khach_moi_co_mua_lai", "doanh_thu_khach_moi", "khach_tai_kich_hoat",
+        "doanh_thu_tai_kich_hoat", "khach_ngung_mua", "doanh_thu_mat_do_ngung")}
+    tong["ty_le_mua_lai_khach_moi_pct"] = (
+        tong["khach_moi_co_mua_lai"] / tong["khach_moi"] * 100 if tong["khach_moi"] else None)
+    xep_hang = {"so_nhan_vien": len(nhan_vien), "tong_ca_doi": tong}
+    for ten, so_dong, khoa, cot in _XEP_HANG_NV_BIEN_DONG:
+        dong = sorted((r for r in nhan_vien if _so(r.get(khoa[0])) > 0),
+                      key=lambda r: tuple(-_so(r.get(k)) for k in khoa))
+        xep_hang[ten] = [{"employee_code": r.get("employee_code"), "employee_name": r.get("employee_name"),
+                          **{c: r.get(c) for c in cot}} for r in dong[:so_dong]]
+        xep_hang[ten + "_so_nguoi_co_so_lieu"] = len(dong)
+
+    def dung(rut_nhan_vien: bool, so_khach: int) -> dict:
+        out = {k: v for k, v in data.items() if k not in ("by_employee", "customers")}
+        out["by_employee"] = (xep_hang if rut_nhan_vien else
+                              [{k: v for k, v in r.items() if k != "dms_id"} for r in nhan_vien])
+        out["customers"] = khach[:so_khach]
+        out = _bang_hoa(out)
+        out["_model_view"] = {
+            "mode": "bang_gon_du_dong",
+            "giai_thich": (
+                "Danh sach dang {cot, dong}: moi dong theo thu tu 'cot'. KHONG goi lai tool voi limit lon hon. "
+                + ("by_employee da rut thanh bang xep hang tinh tren TOAN BO %d nhan vien (tong_ca_doi cong ca doi); "
+                   "nguoi ngoai top KHONG co nghia la bang 0 - muon xem mot nguoi cu the thi hoi theo ten/ma. "
+                   % len(nhan_vien) if rut_nhan_vien else "by_employee du %d nhan vien. " % len(nhan_vien))
+                + "customers dang liet ke %d/%d khach dau, xep theo |delta| giam dan; so tong phai lay o "
+                  "summary_all_customers." % (min(so_khach, len(khach)), len(khach))),
+        }
+        return out
+
+    # Doi nho (QLV ~12 nguoi) thi giu du bang nhan vien, bot khach truoc; ca cong ty thi phai rut nhan vien.
+    out = dung(False, len(khach))
+    for rut_nhan_vien, so_khach in ((False, 30), (False, 20), (True, len(khach)), (True, 30), (True, 20),
+                                    (True, 10)):
+        if len(json.dumps(out, ensure_ascii=False, default=str)) <= MAX_PAYLOAD_CHARS:
+            break
+        out = dung(rut_nhan_vien, so_khach)
+    return out
+
+
 # 28/09/2026: check_order_timing theo thang (C13/M36, 6 thang) dai 64 KB vi ba bang tai chinh lap lai hai lan
 # (financial_quality_by_month.* va ban sao o goc) - luoi cat chung con 0/12 dong moi bang, model khong thay so nao.
 _BAN_SAO_BAO_CAO_DON = ("return_adjustment_by_month", "financial_quality_by_month_area",
@@ -2588,6 +2655,17 @@ def _payload_for_model(tool_name: str, payload, question: str):
             gon = _bao_cao_don_theo_thang_gon(data, normalized)
             gon = {**wrapper, "du_lieu": gon} if wrapper else gon
             # Van vuot thi tra ban goc cho luoi cat chung (cat chung tren bang se cat ca danh sach TEN COT).
+            if len(json.dumps(gon, ensure_ascii=False, default=str)) <= MAX_PAYLOAD_CHARS:
+                return gon
+            return payload
+
+    if tool_name == "get_customer_movement":
+        wrapper = payload if isinstance(payload.get("du_lieu"), dict) else None
+        data = payload["du_lieu"] if wrapper else payload
+        if (isinstance(data.get("by_employee"), list)
+                and len(json.dumps(data, ensure_ascii=False, default=str)) > MAX_PAYLOAD_CHARS):
+            gon = _bien_dong_khach_gon(data)
+            gon = {**wrapper, "du_lieu": gon} if wrapper else gon
             if len(json.dumps(gon, ensure_ascii=False, default=str)) <= MAX_PAYLOAD_CHARS:
                 return gon
             return payload
