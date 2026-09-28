@@ -11,7 +11,7 @@ sys.path.append(str(Path(__file__).resolve().parents[1] / "backend"))
 
 import nl2sql
 import report_templates as rt
-from query_plan import infer_domains
+from query_plan import build_query_plan, infer_domains
 from test_data_freshness import _patch_nl2sql_runtime
 from test_management_rounds_remaining import _setup
 
@@ -189,7 +189,24 @@ def test_sku_unknown_area_and_missing_history_fail_closed(tmp_path, monkeypatch)
 
 def test_c42_sku_decline_does_not_route_to_employee_streak():
     question = "SKU nao mat doanh so do thieu hang; SKU nao ton cao trong khi doanh so giam lien tiep?"
-    assert nl2sql._required_tool_for_question(question) is None
+    # Khong vao chuoi nhan vien, cung khong roi ve free-SQL (tests/test_dinh_tuyen_138.py): vong dau ep tool
+    # SKU hai ky + ton, ve thieu hang di tiep get_inventory_expiry_report theo query_plan.
+    assert nl2sql._required_tool_for_question(question) == "get_sku_revenue_drop_vs_stock"
+
+
+def test_c42_query_plan_van_goi_y_tool_thieu_hang():
+    question = "SKU nào mất doanh số do thiếu hàng; SKU nào tồn cao trong khi doanh số giảm liên tục?"
+    plan = build_query_plan(question, query_id="c42", scope_role="c_level", scope_area_code=None,
+                            scope_employee_code=None, scope_channel=None, max_rounds=6,
+                            max_tools_per_round=4, max_unique_tools=8, request_timeout_seconds=120)
+    goi_y = {tool for step in plan.steps for tool in step.tool_hints}
+    assert {"get_sku_revenue_drop_vs_stock", "get_inventory_expiry_report"} <= goi_y
+
+
+def test_v13_it_sku_van_vao_chuoi_giam_lien_tiep():
+    # #129 them dieu kien "sku not in q" vao luat chuoi -> V13 (co "it SKU") bi keo sang tool do phu khach-SKU.
+    question = "Ai giảm liên tiếp 2–3 tháng; nguyên nhân nằm ở khách mất, ít đơn, ít SKU hay giá trị đơn giảm?"
+    assert nl2sql._required_tool_for_question(question) == "get_workforce_productivity"
 
 
 def test_view_reconciliation_two_channels_zero_base_and_day_end(monkeypatch):
