@@ -1902,6 +1902,11 @@ này thấp hơn thực tế. Muốn đo đúng phải chốt với DNH khoảng
       FROM dbo.DMS_DonHangCTKM x LEFT JOIN dbo.DMS_DonHangHdr h ON h.Id=x.OrderId
     UNION ALL SELECT 'VIENG_THAM',MAX(DocDate),MAX(SyncAt) FROM dbo.DMS_DiTuyen;
 
+> ✅ **Cập nhật 28/09/2026: ĐÃ KHÔI PHỤC.** DNH nạp lại `DMS_DonHangCTKM` + `DMS_CTKM` lúc 10:46 28/09; mọi
+> tháng 01–09/2026 có 98,8–99,9% đơn gắn CTKM. Sau lần nạp lại, dòng liên kết Id lớn nhất có thể trỏ đơn chưa
+> có trong `DMS_DonHangHdr` (bảng đơn đồng bộ riêng) — nên mốc phủ phải lấy `MAX(h.DocDate)` như truy vấn
+> trên (NULL của dòng mất đơn tự bị bỏ qua), không lấy theo dòng Id cuối. Phần dưới là lịch sử sự cố.
+>
 > 🔴 **Đồng bộ khuyến mãi đã DỪNG từ 09/01/2026 — phát hiện 03/09/2026, tức đứng yên 8 tháng.**
 > Bảng liên kết `DMS_DonHangCTKM` có `MAX(SyncAt)` và `MAX(DocDate)` đều là 09/01/2026, trong khi mọi
 > nguồn khác đều cập nhật tới hôm nay. Đếm đơn gắn CTKM theo tháng cho thấy rõ điểm gãy:

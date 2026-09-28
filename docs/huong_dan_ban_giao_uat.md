@@ -39,10 +39,16 @@ Không gửi `.env`, API key, chuỗi kết nối, database hoặc log có thôn
 > là `TM25031901` (Nguyễn Quốc Chiến) có doanh số 4.180.953 nhưng không có chỉ tiêu, và không bị đánh
 > dấu trùng.
 
-> 🔴 **Cảnh báo cho người chấm — C18, M35, V34, C53 (khuyến mãi):** đồng bộ CTKM đã **dừng từ
-> 09/01/2026**, đứng yên gần 8 tháng. Đơn gắn CTKM từ 12.400–13.500/tháng (09–12/2025) tụt còn 2.042
-> trong 01/2026 rồi **bằng 0** từ 02/2026. Mọi câu hỏi hiệu quả khuyến mãi cho kỳ 2026 **không có dữ
-> liệu** — chatbot trả lời cho kỳ 2025 là đúng, đừng chấm trượt vì "số cũ".
+> ✅ **Cập nhật 28/09/2026 — C13, C18, M35, M36, V34, C53 (khuyến mãi): nguồn CTKM ĐÃ KHÔI PHỤC.** DNH nạp
+> lại `DMS_DonHangCTKM` + `DMS_CTKM` lúc 10:46 ngày 28/09 (2.695.660 dòng liên kết, 8.108 chương trình).
+> Mọi tháng 01–09/2026 có 98,8–99,9% đơn DMS gắn CTKM (bình thường 99,3–99,9%). Chatbot nay trả lời được
+> kỳ 2026; câu không nêu kỳ tự lấy **tháng đủ gần nhất (08/2026)**. C13/M36 có thêm giá trị khuyến mãi DMS
+> theo tháng/vùng (đã loại đơn huỷ). Tháng nào tỷ lệ gắn CTKM dưới 95% thì chatbot báo "chưa nạp đủ", không
+> đưa số — đó là đúng thiết kế. Đối chiếu số: `python scripts\doi_chieu_ctkm_sau_nap_bu.py --thang YYYY-MM
+> [--mien MB]` (chỉ đọc Bravo; 28/09 khớp 08/2026 toàn quốc, 03/2026 MB, 01/2026 — mỗi kỳ 50 chương trình).
+>
+> *Lịch sử (trước 28/09):* đồng bộ CTKM dừng từ 09/01/2026, đơn gắn CTKM bằng 0 từ 02/2026 nên chatbot chỉ
+> trả lời được kỳ 2025.
 >
 > **Đính chính 04/09:** trước đó tài liệu này ghi C18 là lỗi chatbot (dán nhãn số khách thành số đơn).
 > **Sai.** Gọi thẳng tool cho thấy nó trả về `invoiced_orders=309` và bình quân 9,57tr — chatbot hiển
@@ -50,8 +56,8 @@ Không gửi `.env`, API key, chuỗi kết nối, database hoặc log có thôn
 > truy vấn lấy cả tháng. **C18 không phải lỗi chatbot; chấm ĐẠT.**
 >
 > Ở C53, chatbot báo không lấy được mốc khuyến mãi do timeout: kết luận đúng hướng nhưng sai nguyên
-> nhân — checker lấy mốc bình thường, vấn đề nằm ở sync đã chết. **Cần khôi phục sync trước khi UAT
-> nhóm khuyến mãi.**
+> nhân — checker lấy mốc bình thường, vấn đề nằm ở sync đã chết. *(Sync đã khôi phục 28/09 — chấm lại
+> nhóm khuyến mãi theo mục cập nhật ở trên.)*
 
 > **Cảnh báo cho người chấm — C49, V16 (phủ tuyến/viếng thăm):** chatbot từ chối vì kho nó truy cập
 > không có dữ liệu viếng thăm — **đúng với quyền truy cập của nó**, chấm ĐẠT. Nhưng lý do nó nêu là
