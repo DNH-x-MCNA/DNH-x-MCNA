@@ -1,4 +1,5 @@
 import os
+import re
 import yaml
 from urllib.parse import quote_plus
 from sqlalchemy import create_engine
@@ -36,6 +37,28 @@ def _get_bravo_engine():
     return _bravo_engine
 
 
+# 28/09/2026: repo tung de PUBLIC (07-28/09) voi 6 URL webhook Teams viet thang trong config.yaml. Gia tri bi
+# mat khong nam trong git nua: config.yaml ghi "${TEN_BIEN}" (ca gia tri), gia tri that o .env cua may chay.
+_BIEN_ENV = re.compile(r"^\$\{([A-Z][A-Z0-9_]*)\}$")
+_bien_da_bao_thieu = set()
+
+
+def _thay_bien_env(value):
+    if isinstance(value, dict):
+        return {k: _thay_bien_env(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_thay_bien_env(v) for v in value]
+    match = _BIEN_ENV.match(value.strip()) if isinstance(value, str) else None
+    if not match:
+        return value
+    ten = match.group(1)
+    gia_tri = (os.getenv(ten) or "").strip()
+    if not gia_tri and ten not in _bien_da_bao_thieu:
+        _bien_da_bao_thieu.add(ten)
+        print(f"[CONFIG] Chua co bien moi truong {ten} trong .env - muc cau hinh dung no se de trong.")
+    return gia_tri
+
+
 def load_config():
     global CONFIG_PATH
     if not os.path.exists(CONFIG_PATH):
@@ -45,7 +68,7 @@ def load_config():
         else:
             raise FileNotFoundError(f"Config file not found at {CONFIG_PATH} or {alt_path}")
     with open(CONFIG_PATH, 'r', encoding='utf-8') as f:
-        return yaml.safe_load(f)
+        return _thay_bien_env(yaml.safe_load(f))
 
 
 def get_db_engines():

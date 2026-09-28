@@ -43,6 +43,9 @@ email:
 #     audience này -> tạm dùng chung TEAMS_WEBHOOK_URL trong .env (vẫn 1 webhook chung như cũ,
 #     không có tác dụng phân tách thật cho tới khi điền webhook riêng). Điền URL Power Automate
 #     riêng cho từng audience vào đây khi đã dựng xong Flow tương ứng — KHÔNG cần sửa code.
+#     28/09/2026: URL webhook KHONG ghi o day nua - repo tung de public 07-28/09 va lo 6 URL nay. Ghi
+#     "${TEN_BIEN}" (vd "${TEAMS_WEBHOOK_MIEN_BAC}"); gia tri that dat trong .env cua may chay, src/database.py
+#     thay luc doc. Chuyen tu ban cu sang .env: scripts/chuyen_webhook_sang_env.py (chi in ten bien).
 #     TRẠNG THÁI 26/08/2026: cả 6/6 audience ĐÃ có webhook riêng thật — phân tách Teams đang hoạt
 #     động đầy đủ. Phần chưa nối là EMAIL: cả 6 audience vẫn trỏ về cùng một hộp thư test, chờ DNH
 #     cấp danh sách email quản lý thật.
@@ -85,32 +88,32 @@ report_recipients:
     region: null
     channel: null
     emails: ["long.tran@namhapharma.com"]
-    teams_webhook: "https://default44841e983bfb4f7091c1f177b036a1.f3.environment.api.powerplatform.com:443/powerautomate/automations/direct/cu/30/workflows/77995731b9a84a0ca215405a9a0aa44a/triggers/manual/paths/invoke?api-version=1&sp=%2Ftriggers%2Fmanual%2Frun&sv=1.0&sig=ua0ANvQq4GN3pX8LVmOJ0z124HWtaLB3rAWdZ5V6cpo"
+    teams_webhook: "${TEAMS_WEBHOOK_C_LEVEL}"
   - audience: "Quản lý Miền Bắc"
     region: "bac"
     channel: null
     emails: ["levietdang1902@outlook.com.vn"]
-    teams_webhook: "https://default44841e983bfb4f7091c1f177b036a1.f3.environment.api.powerplatform.com:443/powerautomate/automations/direct/cu/04/workflows/4a60147f97274645870f9ea5ab64c046/triggers/manual/paths/invoke?api-version=1&sp=%2Ftriggers%2Fmanual%2Frun&sv=1.0&sig=vfic27p7M7S56pFz9b_bSO3TkU0Ohosc4yPzGhr63z4"
+    teams_webhook: "${TEAMS_WEBHOOK_MIEN_BAC}"
   - audience: "Quản lý Miền Nam"
     region: "nam"
     channel: null
     emails: ["levietdang1902@outlook.com.vn"]
-    teams_webhook: "https://default44841e983bfb4f7091c1f177b036a1.f3.environment.api.powerplatform.com:443/powerautomate/automations/direct/cu/25/workflows/c496e77307e9479ba9329499e0c95dd6/triggers/manual/paths/invoke?api-version=1&sp=%2Ftriggers%2Fmanual%2Frun&sv=1.0&sig=fNETN8TvLaSye-fOf09bXAl9I2DH7XzMjPOFD7Sd3_s"
+    teams_webhook: "${TEAMS_WEBHOOK_MIEN_NAM}"
   - audience: "Quản lý Miền Trung"
     region: "trung"
     channel: null
     emails: ["levietdang1902@outlook.com.vn"]
-    teams_webhook: "https://default44841e983bfb4f7091c1f177b036a1.f3.environment.api.powerplatform.com:443/powerautomate/automations/direct/cu/04/workflows/69f25da4851249949c12a8a4bc5c485b/triggers/manual/paths/invoke?api-version=1&sp=%2Ftriggers%2Fmanual%2Frun&sv=1.0&sig=cDzmr_S6KZLzYaYPynWVGNknLaTK2vzxV3owwj4qbrs"
+    teams_webhook: "${TEAMS_WEBHOOK_MIEN_TRUNG}"
   - audience: "Quản lý Kênh OTC"
     region: null
     channel: "OTC"
     emails: ["levietdang1902@outlook.com.vn"]
-    teams_webhook: "https://default44841e983bfb4f7091c1f177b036a1.f3.environment.api.powerplatform.com:443/powerautomate/automations/direct/cu/25/workflows/7d9622ae447840b7b29e326468f15fd2/triggers/manual/paths/invoke?api-version=1&sp=%2Ftriggers%2Fmanual%2Frun&sv=1.0&sig=p8vLgU7z1XXkUgncVHLmI6d7W_H5ZGSggEbUTAHHrfg"
+    teams_webhook: "${TEAMS_WEBHOOK_KENH_OTC}"
   - audience: "Quản lý Kênh ETC"
     region: null
     channel: "ETC"
     emails: ["levietdang1902@outlook.com.vn"]
-    teams_webhook: "https://default44841e983bfb4f7091c1f177b036a1.f3.environment.api.powerplatform.com:443/powerautomate/automations/direct/cu/25/workflows/9942a471b15d480587ad8453a4296014/triggers/manual/paths/invoke?api-version=1&sp=%2Ftriggers%2Fmanual%2Frun&sv=1.0&sig=GaU01Opf20FJjKDZ3D-jiXLtAwlY91DpGo8cS0erxSQ"
+    teams_webhook: "${TEAMS_WEBHOOK_KENH_ETC}"
 
 # Cấu hình các ngưỡng cảnh báo (Warning Thresholds)
 thresholds:

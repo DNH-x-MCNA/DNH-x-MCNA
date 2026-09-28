@@ -27,10 +27,10 @@ def get_sql_server_connection():
     """
     conn_str = (
         "Driver={ODBC Driver 17 for SQL Server};"
-        "Server=192.168.1.100;"  # IP Server cua DNH
+        "Server=<IP_MAY_CHU>;"  # IP Server cua DNH
         "Database=dnh_dwh;"
-        "UID=dnh_etl_user;"
-        "PWD=ETL_Secure_Password_2026;"
+        "UID=<TAI_KHOAN>;"
+        "PWD=<MAT_KHAU>;"
     )
     return pyodbc.connect(conn_str)
 
