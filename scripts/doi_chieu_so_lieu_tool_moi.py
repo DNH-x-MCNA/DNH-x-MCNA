@@ -58,7 +58,8 @@ _bo_qua = []
 _dat = [0]  # dem so phep kiem THUC SU chay va dat - de dong tong ket khong noi qua muc bang chung
 
 # Hai tool nay dang thieu du lieu nguon ben ngoai chatbot, da duoc ghi ro trong ke hoach UAT:
-# - CTKM chi co du lieu den 09/01/2026;
+# - CTKM doc Bravo song, script nay chi doc kho local nen khong kiem duoc (nguon da khoi phuc 28/09/2026;
+#   doi chieu CTKM bang scripts/doi_chieu_ctkm_sau_nap_bu.py);
 # - cong no khong co snapshot lich su 31/07/2026 de so sanh ky.
 # Chung duoc phep qua gate VOI TRANG THAI CO GIOI HAN, khong duoc doi thanh "da kiem sach".
 # Moi tool/kiem tra khac bi bo qua van lam gate that bai de tranh hop thuc hoa loi moi.

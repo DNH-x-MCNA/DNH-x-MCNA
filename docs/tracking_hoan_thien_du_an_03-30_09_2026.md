@@ -232,7 +232,8 @@ Bản 03/09 ghi *"35 phép đạt, 25 mục bị bỏ"*. Chạy lại toàn bộ
 | Bất biến số liệu 40 công cụ | **`[DAT]`** — **99 phép đạt, 0 lệch, 2 mục không chạy được** |
 
 **Từ 25 mục bị bỏ xuống còn 2**, và số phép kiểm chạy được tăng 35 → 99. Hai mục còn lại:
-`get_promotion_effectiveness` (chuỗi liên kết CTKM chết 09/01/2026 — phía DNH) và
+`get_promotion_effectiveness` (chuỗi liên kết CTKM chết 09/01/2026 — phía DNH; đã khôi phục 28/09, xem mục
+sự cố bên dưới) và
 `get_receivables_period_compare` (lịch sử công nợ chỉ lưu từ 21/08/2026).
 
 Đã rà `scripts/kiem_truoc_uat.ps1` trước khi khuyến nghị chạy trên máy thật: ba script nó gọi đều
@@ -319,7 +320,15 @@ uvicorn chạy trên `0.0.0.0:8010`.
 
 ---
 
-## 🔴 Sự cố vận hành — job đồng bộ CTKM đã chết (phát hiện 03/09, **vẫn chưa khôi phục**)
+## ✅ Sự cố vận hành — job đồng bộ CTKM đã chết (phát hiện 03/09, **đã khôi phục 28/09/2026**)
+
+> **28/09/2026:** DNH nạp lại `DMS_DonHangCTKM` (2.695.660 dòng, ghi lại cả bảng) + `DMS_CTKM` (8.108 chương
+> trình) + nhóm/phần thưởng lúc 10:46. Không nạp `DMS_CTKMOnTop*`, `DMS_DKKM*`, `DMS_CTKMUp*` — chatbot không
+> cần (PR #119 bỏ `configured_product_count`, trường duy nhất đọc chúng). Mọi tháng 01–09/2026 có 98,8–99,9%
+> đơn gắn CTKM. Lần nạp lại làm lộ lỗi mốc phủ (dòng Id cuối trỏ đơn chưa có trong `DMS_DonHangHdr` → tool
+> từ chối mọi câu) — sửa ở PR #121. Đối chiếu `scripts/doi_chieu_ctkm_sau_nap_bu.py`: 08/2026 toàn quốc,
+> 03/2026 MB, 01/2026 mỗi kỳ 50 chương trình khớp cả 4 số; giá trị khuyến mãi 12 tháng khớp từng đồng.
+> Phần dưới là lịch sử sự cố.
 
 **Không sửa được từ phía MCNA.** Repo chỉ ĐỌC các bảng `DMS_*` (không có `INSERT`/`UPDATE`/`MERGE`
 nào), và `sync_warehouse.py` chạy theo hướng Bravo → `warehouse.db`. Job hỏng nằm ở chiều ngược lại —
