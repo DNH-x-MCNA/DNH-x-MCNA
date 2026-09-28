@@ -7846,38 +7846,47 @@ def customer_assignment_change(as_of_date: str = None, lookback_months: int = 3,
         (previous_from, previous_to, previous_from, current_to) + scope_params + employee_params,
     )
 
-    grouped = {}
+    # 28/09/2026 (khop SQL dap an C28): khach "co mat" trong cua so khi doanh thu THUAN cua cua so > 0 - truoc
+    # day chi can co mot dong hoa don, nen khach ky nay chi con hang tra bi xep "giu nguyen NV" thay vi "khong con
+    # mua", va khach doanh thu 0 ca hai cua so bi dem thanh khach moi/roi bo. Ca hai cua so <= 0 -> loai khoi bang
+    # (doi soat rieng o excluded_non_positive_customers). NV chinh chon trong cac dong CO ma NV; chi xep
+    # UNKNOWN_ASSIGNMENT khi khach mua ca hai cua so ma mot cua so khong co dong nao mang ma NV.
+    revenue, named = {}, {}
     for row in rows:
         key = (row["customer_code"], row["period"])
-        grouped.setdefault(key, []).append({
-            "employee_code": row["employee_code"], "revenue": _f(row["revenue"]),
-        })
-    primary = {}
-    for key, candidates in grouped.items():
-        total = sum(item["revenue"] for item in candidates)
-        chosen = sorted(candidates, key=lambda item: (-item["revenue"], item["employee_code"]))[0]
-        primary[key] = {"employee_code": chosen["employee_code"], "revenue": total}
+        amount = _f(row["revenue"])
+        revenue[key] = revenue.get(key, 0.0) + amount
+        if row["employee_code"] != "UNKNOWN":
+            named.setdefault(key, []).append((row["employee_code"], amount))
 
-    customers = sorted({customer for customer, _ in primary})
+    def _primary_employee(key):
+        candidates = named.get(key)
+        return sorted(candidates, key=lambda item: (-item[1], item[0]))[0][0] if candidates else None
+
+    customers = sorted({customer for customer, _ in revenue})
     buckets = {
         "STABLE_EMPLOYEE": [], "CHANGED_EMPLOYEE": [], "CURRENT_ONLY": [],
         "PREVIOUS_ONLY": [], "UNKNOWN_ASSIGNMENT": [],
     }
+    excluded = {"customers": 0, "previous_revenue": 0.0, "current_revenue": 0.0}
     stable_by_employee = {}
-    detail = []
     for customer in customers:
-        previous = primary.get((customer, "PREVIOUS"))
-        current = primary.get((customer, "CURRENT"))
-        prev_revenue = _f(previous and previous["revenue"])
-        cur_revenue = _f(current and current["revenue"])
-        prev_employee = previous and previous["employee_code"]
-        cur_employee = current and current["employee_code"]
-        if "UNKNOWN" in (prev_employee, cur_employee):
-            group = "UNKNOWN_ASSIGNMENT"
-        elif not previous:
+        prev_revenue = revenue.get((customer, "PREVIOUS"), 0.0)
+        cur_revenue = revenue.get((customer, "CURRENT"), 0.0)
+        prev_employee = _primary_employee((customer, "PREVIOUS"))
+        cur_employee = _primary_employee((customer, "CURRENT"))
+        prev_bought, cur_bought = round(prev_revenue, 2) > 0, round(cur_revenue, 2) > 0
+        if not prev_bought and not cur_bought:
+            excluded["customers"] += 1
+            excluded["previous_revenue"] += prev_revenue
+            excluded["current_revenue"] += cur_revenue
+            continue
+        if not prev_bought:
             group = "CURRENT_ONLY"
-        elif not current:
+        elif not cur_bought:
             group = "PREVIOUS_ONLY"
+        elif prev_employee is None or cur_employee is None:
+            group = "UNKNOWN_ASSIGNMENT"
         elif prev_employee == cur_employee:
             group = "STABLE_EMPLOYEE"
         else:
@@ -7888,7 +7897,6 @@ def customer_assignment_change(as_of_date: str = None, lookback_months: int = 3,
             "current_revenue": cur_revenue, "delta": cur_revenue - prev_revenue, "group": group,
         }
         buckets[group].append(item)
-        detail.append(item)
         if group == "STABLE_EMPLOYEE":
             unit = stable_by_employee.setdefault(cur_employee, {
                 "employee_code": cur_employee, "customers": 0,
@@ -7915,10 +7923,10 @@ def customer_assignment_change(as_of_date: str = None, lookback_months: int = 3,
                               if unit["previous_revenue"] else None)
         stable_units.append(unit)
     stable_units.sort(key=lambda item: (-abs(item["delta"]), item["employee_code"]))
-    total_previous = sum(item["previous_revenue"] for item in detail)
-    total_current = sum(item["current_revenue"] for item in detail)
-    group_previous = sum(item["previous_revenue"] for item in groups)
-    group_current = sum(item["current_revenue"] for item in groups)
+    total_previous = sum(value for (_, period), value in revenue.items() if period == "PREVIOUS")
+    total_current = sum(value for (_, period), value in revenue.items() if period == "CURRENT")
+    group_previous = sum(item["previous_revenue"] for item in groups) + excluded["previous_revenue"]
+    group_current = sum(item["current_revenue"] for item in groups) + excluded["current_revenue"]
     stable = next(item for item in groups if item["group"] == "STABLE_EMPLOYEE")
     return {
         "status": "PARTIAL_SOURCE_LIMIT", "mode": "assignment_change", "channel": "OTC",
@@ -7926,6 +7934,7 @@ def customer_assignment_change(as_of_date: str = None, lookback_months: int = 3,
         "current_period": {"from": current_from, "to": current_to},
         "previous_period": {"from": previous_from, "to": previous_to},
         "groups": groups, "stable_customer_growth": stable,
+        "excluded_non_positive_customers": excluded,
         "stable_growth_by_employee": stable_units[:limit],
         "changed_customer_samples": sorted(
             buckets["CHANGED_EMPLOYEE"], key=lambda item: -abs(item["delta"]),
@@ -7939,7 +7948,9 @@ def customer_assignment_change(as_of_date: str = None, lookback_months: int = 3,
         },
         "definition": (
             "Tang truong it bi xao tron nhat = doanh thu cua cac khach co cung mot NV chinh o ca hai "
-            "cua so. NV chinh la NV co doanh thu cao nhat cua khach trong cua so; day la quy uoc "
+            "cua so. Khach co mua trong cua so khi doanh thu THUAN cua cua so > 0 (ky nay chi con hang tra = "
+            "PREVIOUS_ONLY); khach <= 0 ca hai cua so khong nam trong nhom nao (excluded_non_positive_customers). "
+            "NV chinh la NV co doanh thu cao nhat cua khach trong cua so, chi xet dong co ma NV; day la quy uoc "
             "phan tich, khong phai lich su phan cong chot chuan."
         ),
         "limitations": (
