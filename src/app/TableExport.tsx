@@ -1,6 +1,7 @@
 "use client";
 
 import { ReactNode, useRef, useState } from "react";
+import { IconCheck, IconDownload } from "./icons";
 
 /**
  * Xuất bảng ra file CSV mở được bằng Excel.
@@ -88,36 +89,16 @@ export function ExportableTable({
 
   return (
     <div className={wrapperClassName}>
-      <div className="mb-1 flex justify-end">
+      {/* data-copy-ignore: nut "Sao chep" cau tra loi bo qua chu cua nut nay. */}
+      <div className="mb-1 flex justify-end" data-copy-ignore>
         <button
           type="button"
           onClick={xuatFile}
           aria-label="Tải bảng này về máy dưới dạng file CSV mở được bằng Excel"
-          className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 py-1
-                     text-[11px] font-semibold text-slate-600 shadow-sm transition
-                     hover:border-slate-300 hover:bg-slate-50 hover:text-slate-800
-                     focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2
-                     focus-visible:outline-blue-600"
+          className="inline-flex h-7 items-center gap-1.5 rounded-lg px-2 text-[12.5px] font-medium text-slate-500 transition hover:bg-sunken hover:text-slate-900"
         >
-          {daTai ? (
-            <>
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"
-                   strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                <polyline points="20 6 9 17 4 12" />
-              </svg>
-              Đã tải
-            </>
-          ) : (
-            <>
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2"
-                   strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-                <polyline points="7 10 12 15 17 10" />
-                <line x1="12" y1="15" x2="12" y2="3" />
-              </svg>
-              Tải Excel
-            </>
-          )}
+          {daTai ? <IconCheck className="h-3.5 w-3.5 text-emerald-600" /> : <IconDownload className="h-3.5 w-3.5" />}
+          {daTai ? "Đã tải" : "Tải Excel"}
         </button>
       </div>
       <div ref={ref} className={className}>
