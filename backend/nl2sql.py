@@ -1555,7 +1555,10 @@ TEMPLATE_TOOLS = [
                         "C13/S87, C17/S77 va M36/S78 duoc backend tu bat group_by_month va tra "
                         "financial_quality_by_month: doanh thu gop, chiet khau, hang tra, doanh thu "
                         "thuan, ty le va co nguong theo thang/kenh/vung. Hang tang va khuyen mai co "
-                        "trang thai nguon rieng; khong bien thieu nguon thanh 0. "
+                        "trang thai nguon rieng; khong bien thieu nguon thanh 0. Khuyen mai nam o "
+                        "financial_quality_by_month.khuyen_mai_dms (gia tri thuong DMS tren don khong huy, "
+                        "theo thang va vung, ty le tren doanh thu gop OTC); thang trong thang_chua_nap_du "
+                        "PHAI noi la chua nap du lien ket CTKM, khong ghi 0. "
                         "TUYET DOI KHONG goi lai tool nhieu lan cho tung thang rieng le (da tung gay 1 cau "
                         "hoi phai goi 6-10 vong va het thoi gian request). Khi group_by_month=true, tool TU "
                         "DONG rut gon top_detail (mac dinh con 3 dong) va bo qua order_fulfillment_exceptions "
@@ -1901,7 +1904,10 @@ TEMPLATE_TOOLS = [
                        "Neu status=source_gap, PHAI neu "
                        "dung promotion_link_coverage_to va requested_period, noi ro day la lo hong dong "
                        "bo chu KHONG phai bang chung ky do khong co CTKM; khong suy dien khach/don/doanh "
-                       "thu va khong dung cot CTKM ghi chu tu do thay the.",
+                       "thu va khong dung cot CTKM ghi chu tu do thay the. Tool tu do ty le don DMS co lien "
+                       "ket CTKM tung thang (do_phu_lien_ket_theo_thang, binh thuong tren 99%): thang duoi 95% "
+                       "la CHUA NAP DU (thang_chua_nap_du) - khong dua so cho thang do; neu warning noi ky da "
+                       "bi cat vi thang chua nap du thi PHAI noi ro so chi tinh den period.to.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -1919,7 +1925,9 @@ TEMPLATE_TOOLS = [
                        "BUOC dung DUNG 1 LAN khi hoi 'du lieu khuyen mai den ngay nao', 'moc lien ket "
                        "CTKM', 'bao nhieu lien ket mat don/mat chuong trinh'. KHONG search catalog, "
                        "KHONG query SQL thu cong, KHONG goi get_promotion_effectiveness cho cau hoi "
-                       "chat luong nguon don thuan.",
+                       "chat luong nguon don thuan. do_phu_lien_ket_theo_thang cho ty le don co lien ket "
+                       "tung thang 12 thang gan nhat; thang_chua_nap_du la cac thang chua dong bo du - "
+                       "last_linked_order_date KHONG chung minh cac thang truoc do da du.",
         "input_schema": {"type": "object", "properties": {}, "required": []},
     },
     {
@@ -2449,6 +2457,74 @@ def _bang_hoa(value):
     return _lam_tron_gon(value)
 
 
+# 28/09/2026: check_order_timing theo thang (C13/M36, 6 thang) dai 64 KB vi ba bang tai chinh lap lai hai lan
+# (financial_quality_by_month.* va ban sao o goc) - luoi cat chung con 0/12 dong moi bang, model khong thay so nao.
+_BAN_SAO_BAO_CAO_DON = ("return_adjustment_by_month", "financial_quality_by_month_area",
+                        "financial_quality_by_month_region")
+_COT_BO_BAO_CAO_DON = ("gift_value_rate_pct", "return_threshold_pct", "invoice_revenue_after_returns")
+
+
+def _bao_cao_don_theo_thang_gon(data: dict, cau_hoi: str) -> dict:
+    """Bo ban sao, bang theo ma vung (MB+MB2 da gop o bang theo mien), cot hang so/luon null, roi dang bang.
+
+    Van vuot thi bo dan phan cau hoi khong dung: C13 can thang x kenh + khuyen mai theo thang, M36 can
+    thang x vung, C17 can ca hai nhung khong hoi khuyen mai, chi C12 can core_result_*. Moi phan bo di
+    duoc ghi ten trong _model_view de model khong tuong la nguon thieu.
+    """
+    gon = {k: v for k, v in data.items() if k not in _BAN_SAO_BAO_CAO_DON}
+    fq = {k: v for k, v in data["financial_quality_by_month"].items() if k != "rows_by_month_area"}
+    km = dict(fq["khuyen_mai_dms"]) if isinstance(fq.get("khuyen_mai_dms"), dict) else {}
+
+    def bo_cot(cot):
+        for key in ("rows_by_month_channel", "rows_by_month_region"):
+            if isinstance(fq.get(key), list):
+                fq[key] = [{c: v for c, v in row.items() if c not in cot}
+                           if isinstance(row, dict) else row for row in fq[key]]
+
+    bo_cot(_COT_BO_BAO_CAO_DON)
+    buoc = [{"goc": ("top_detail", "order_value_distribution")}]
+    if not any(m in cau_hoi for m in ("cot loi", "bat thuong", "dot bien")):
+        buoc.append({"goc": ("core_result_by_month", "core_result_by_channel", "core_result_by_month_note")})
+    if not any(m in cau_hoi for m in ("khuyen mai", "hang tang", "ctkm")):
+        buoc.append({"km": ("theo_thang", "theo_thang_vung", "do_phu_lien_ket_theo_thang")})
+    buoc.append({"cot": ("return_threshold_flag",)})
+    if any(m in cau_hoi for m in ("vung", "mien", "noi nao")) and "kenh" not in cau_hoi:
+        buoc.append({"fq": ("rows_by_month_channel",), "km": ("theo_thang",)})
+    else:
+        buoc.append({"fq": ("rows_by_month_region",), "km": ("theo_thang_vung",)})
+
+    da_bo = []
+
+    def dung():
+        if km:
+            fq["khuyen_mai_dms"] = km
+        out = _bang_hoa({**gon, "financial_quality_by_month": fq})
+        out["_model_view"] = {
+            "mode": "bang_gon_du_dong",
+            "giai_thich": ("Danh sach dang {cot, dong}: moi dong theo thu tu 'cot'. DU TAT CA cac thang/vung - KHONG "
+                           "goi lai tool. Bang theo mien da gop MB+MB2; gift_value_rate_pct luon null nen bo; nguong "
+                           "hang tra 2%. So tien lam tron dong."),
+            "bo_khoi_ban_gui_model": da_bo,
+        }
+        return out
+
+    out = dung()
+    for step in buoc:
+        if len(json.dumps(out, ensure_ascii=False, default=str)) <= MAX_PAYLOAD_CHARS:
+            break
+        for key in step.get("goc", ()):
+            gon.pop(key, None)
+        for key in step.get("fq", ()):
+            fq.pop(key, None)
+        for key in step.get("km", ()):
+            km.pop(key, None)
+        bo_cot(step.get("cot", ()))
+        da_bo.extend(step.get("goc", ()) + step.get("fq", ()) + tuple("khuyen_mai_dms." + k for k in step.get("km", ()))
+                     + tuple("cot " + c for c in step.get("cot", ())))
+        out = dung()
+    return out
+
+
 def _payload_for_model(tool_name: str, payload, question: str):
     """Rut gon co cau truc cho tool dai, giu payload day du o last_result/UI.
 
@@ -2503,6 +2579,18 @@ def _payload_for_model(tool_name: str, payload, question: str):
         ch for ch in unicodedata.normalize("NFD", (question or "").lower())
         if unicodedata.category(ch) != "Mn"
     ).replace("đ", "d").split())
+
+    if tool_name == "check_order_timing":
+        wrapper = payload if isinstance(payload.get("du_lieu"), dict) else None
+        data = payload["du_lieu"] if wrapper else payload
+        if (isinstance(data.get("financial_quality_by_month"), dict)
+                and len(json.dumps(data, ensure_ascii=False, default=str)) > MAX_PAYLOAD_CHARS):
+            gon = _bao_cao_don_theo_thang_gon(data, normalized)
+            gon = {**wrapper, "du_lieu": gon} if wrapper else gon
+            # Van vuot thi tra ban goc cho luoi cat chung (cat chung tren bang se cat ca danh sach TEN COT).
+            if len(json.dumps(gon, ensure_ascii=False, default=str)) <= MAX_PAYLOAD_CHARS:
+                return gon
+            return payload
 
     if (tool_name == "get_workforce_productivity"
             and "lien tiep" in normalized and "duoi 80" in normalized):

@@ -39,6 +39,8 @@ def test_promotion_effectiveness_uses_dms_link_and_latest_complete_month(monkeyp
         seen.append((sql, params or {}))
         if "LinkRowId" in sql:
             return [{"CoverageDate": "2026-01-09", "LinkSyncedAt": "2026-01-09T11:12:10", "LinkRowId": 9}]
+        if "LinkedOrders" in sql:  # do phu lien ket theo ngay (28/09): khong co dong -> bo qua kiem tra
+            return []
         assert "DMS_DonHangCTKM" in sql
         assert "DMS_CTKM p" in sql
         assert "GROUP BY CTKM" not in sql.upper()
@@ -52,7 +54,6 @@ def test_promotion_effectiveness_uses_dms_link_and_latest_complete_month(monkeyp
             "OrdersWithoutInvoice": 1,
             "PaidProductOccurrences": 8,
             "GiftProductCount": 1,
-            "ConfiguredProductCount": 1,
         }]
 
     monkeypatch.setattr(rt, "_q_bravo", fake_bravo)
@@ -62,7 +63,8 @@ def test_promotion_effectiveness_uses_dms_link_and_latest_complete_month(monkeyp
     assert result["programs"][0]["associated_revenue"] == 1_000_000
     assert result["programs"][0]["participating_customers"] == 4
     assert result["programs"][0]["average_revenue_per_invoiced_order"] == 250_000
-    assert len(seen) == 2
+    assert len(seen) == 3
+    assert result["do_phu_lien_ket_loi"] is None
 
 
 def test_promotion_effectiveness_does_not_fallback_to_invoice_note(monkeypatch):
@@ -213,6 +215,9 @@ def test_promotion_data_quality_is_one_scoped_query(monkeypatch):
 
     def fake_bravo(sql, params=None):
         captured.append((sql, params or {}))
+        if "LinkedOrders" in sql and "LEFT HASH JOIN" in sql:  # do phu toan cong ty theo ngay (28/09)
+            return [{"Ky": "2026-01-08", "Orders": 362, "LinkedOrders": 359},
+                    {"Ky": "2026-02-02", "Orders": 400, "LinkedOrders": 0}]
         return [{
             "FirstLinkedOrderDate": "2025-01-01",
             "LastLinkedOrderDate": "2026-01-09",
@@ -231,9 +236,12 @@ def test_promotion_data_quality_is_one_scoped_query(monkeypatch):
     assert result["last_linked_order_date"] == "2026-01-09"
     assert result["missing_order"] == 12
     assert result["missing_program"] == 22
-    assert len(captured) == 1
+    # Mot truy van chat luong co pham vi, cong them mot truy van do phu toan cong ty (khong pham vi).
+    assert len(captured) == 2
     assert "tp.AreaCode=:scope_area_code" in captured[0][0]
     assert captured[0][1]["scope_area_code"] == "MN"
+    assert "scope_area_code" not in captured[1][1]
+    assert result["thang_chua_nap_du"] == ["2026-02"]
 
 
 def test_salary_data_quality_reconciles_dm_in_fixed_queries(monkeypatch):
@@ -1083,6 +1091,8 @@ def test_m35_pham_vi_mien_phai_hien_trong_payload(monkeypatch):
     def fake_bravo(sql, params=None):
         if "LinkRowId" in sql:
             return [{"CoverageDate": "2026-01-09", "LinkSyncedAt": "2026-01-09", "LinkRowId": 9}]
+        if "LinkedOrders" in sql:  # do phu lien ket toan cong ty (28/09), khong mang pham vi
+            return []
         seen.append(params or {})
         return [{"ProgramId": 1, "ProgramCode": "KM01", "ProgramName": "Mua 10 tang 1", "Orders": 857,
                  "Customers": 369, "AssociatedRevenue": 23_830_000_000, "OrdersWithoutInvoice": 172,

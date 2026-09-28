@@ -10455,8 +10455,12 @@ def _order_fulfillment_exceptions(date_from: str, date_to: str, threshold_days: 
 def _sales_financial_quality_by_month(date_from: str, date_to: str,
                                       scope_area_code: str = None,
                                       scope_channel: str = None,
-                                      scope_employee_code: str = None) -> dict:
-    """S77/S78/S87 tu hoa don local; fail closed neu kho cu chua co DiscountRate/DocCode."""
+                                      scope_employee_code: str = None,
+                                      khuyen_mai_dms: dict = None) -> dict:
+    """S77/S78/S87 tu hoa don local; fail closed neu kho cu chua co DiscountRate/DocCode.
+
+    khuyen_mai_dms (tu _ctkm_gia_tri_theo_thang, doc Bravo) duoc gan them ty le tren doanh thu gop OTC.
+    """
     missing = {}
     not_populated = {}
     table_channels = (("vhoadon_otc", "OTC"), ("vhoadon_etc", "ETC"))
@@ -10578,7 +10582,7 @@ def _sales_financial_quality_by_month(date_from: str, date_to: str,
                           and previous[metric] is not None else None)
         previous_by_region[row["region"]] = row
 
-    return {
+    result = {
         "status": "ok",
         "rows_by_month_channel": aggregate(("month", "channel")),
         "rows_by_month_area": aggregate(("month", "area_code")),
@@ -10605,6 +10609,14 @@ def _sales_financial_quality_by_month(date_from: str, date_to: str,
             "khong suy tu DiscountRate va khong lap lai mot moc dong bo cu."
         ),
     }
+    if khuyen_mai_dms is not None:
+        result["khuyen_mai_dms"] = _gan_dt_otc_vao_khuyen_mai(khuyen_mai_dms, raw)
+        result["promotion_metric_status"] = _TRANG_THAI_KHUYEN_MAI.get(
+            khuyen_mai_dms.get("status"), result["promotion_metric_status"])
+        result["promotion_metric_note"] = (
+            "Xem khuyen_mai_dms: gia tri thuong DMS ghi tren don khong huy (hang tang + tien/chiet khau) "
+            "theo thang va vung, ty le tren doanh thu gop OTC; chi co so cho thang da nap du lien ket CTKM.")
+    return result
 
 
 def order_timing_check(date_from: str = None, date_to: str = None, threshold_days: int = 2, limit: int = None,
@@ -10800,8 +10812,14 @@ def order_timing_check(date_from: str = None, date_to: str = None, threshold_day
             "thuong' voi core_result_by_channel (hang tra/dieu chinh + tren 3x trung vi THAM CHIEU "
             "cua ca giai doan, khong tinh lai trung vi rieng tung thang)."
         )
+        try:
+            khuyen_mai = _ctkm_gia_tri_theo_thang(
+                date_from, date_to, scope_area_code, scope_channel, scope_employee_code)
+        except Exception as exc:  # Bravo loi khong duoc lam mat bang doanh thu/chiet khau tu kho local
+            khuyen_mai = {"status": "loi_doc_nguon", "loi": f"{type(exc).__name__}: {str(exc)[:160]}"}
         financial_quality = _sales_financial_quality_by_month(
-            date_from, date_to_query, scope_area_code, scope_channel, scope_employee_code)
+            date_from, date_to_query, scope_area_code, scope_channel, scope_employee_code,
+            khuyen_mai_dms=khuyen_mai)
         result["financial_quality_by_month"] = financial_quality
         result["return_adjustment_by_month"] = financial_quality.get("rows_by_month_channel", [])
         result["financial_quality_by_month_area"] = financial_quality.get("rows_by_month_area", [])
@@ -13258,6 +13276,194 @@ def _month_end(value: dt.date) -> dt.date:
     return next_month - dt.timedelta(days=1)
 
 
+# 28/09/2026: do tren Bravo, 06-12/2025 co 99,3-99,9% don DMS gan it nhat mot dong DMS_DonHangCTKM;
+# 01/2026 con 18,5% (dong bo dung 11:12 ngay 09/01 - rieng ngay 09/01 chi 140/319 don), tu 02/2026 la 0%.
+# Moc phu lay tu dong lien ket nap SAU CUNG khong du: ngay cuoi thuong nap do dang, va neu DNH nap bu khong
+# theo thu tu ngay thi moc nhay len hom nay trong khi cac thang giua van trong - tool se tra "khong co
+# chuong trinh" hoac so thieu ma khong ai biet. Do ty le theo ngay/thang truoc khi tin mot ky.
+_CTKM_NGUONG_DU_PCT = 95.0
+_CTKM_DON_TOI_THIEU = 30
+
+
+def _ngay_ctkm(value) -> dt.date:
+    if isinstance(value, dt.datetime):
+        return value.date()
+    if isinstance(value, dt.date):
+        return value
+    return dt.date.fromisoformat(str(value)[:10])
+
+
+def _ctkm_ky_du(don: int, gan: int) -> bool:
+    """Ngay/thang coi la da nap du lien ket CTKM khi ty le don DMS co lien ket dat nguong."""
+    if not don:
+        return True
+    if not gan:
+        return False
+    if don < _CTKM_DON_TOI_THIEU:
+        return True
+    return gan / don * 100 >= _CTKM_NGUONG_DU_PCT
+
+
+def _ctkm_don_gan_theo_ngay(date_from: dt.date, date_to: dt.date) -> dict:
+    """{ngay: (so don DMS, so don co lien ket CTKM)} trong [date_from, date_to], toan cong ty.
+
+    Day la phep do do day du cua dong bo, khong phai so kinh doanh, nen khong ap pham vi vung/doi.
+    """
+    rows = _q_bravo("""
+        SELECT h.DocDate AS Ky, COUNT_BIG(*) AS Orders,
+               SUM(CASE WHEN l.OrderId IS NOT NULL THEN 1 ELSE 0 END) AS LinkedOrders
+        FROM dbo.DMS_DonHangHdr h
+        LEFT HASH JOIN (SELECT DISTINCT OrderId FROM dbo.DMS_DonHangCTKM) l ON l.OrderId=h.Id
+        WHERE h.DocDate>=:date_from AND h.DocDate<:date_to_exclusive
+        GROUP BY h.DocDate
+    """, {"date_from": date_from, "date_to_exclusive": date_to + dt.timedelta(days=1)})
+    out = {}
+    for row in rows:
+        if row.get("Ky") is None or "Orders" not in row:
+            continue
+        out[_ngay_ctkm(row["Ky"])] = (int(row.get("Orders") or 0), int(row.get("LinkedOrders") or 0))
+    return out
+
+
+def _ctkm_thang(ngay_map: dict, date_from: dt.date, date_to: dt.date) -> list:
+    thang = {}
+    for ngay, (don, gan) in ngay_map.items():
+        if date_from <= ngay <= date_to:
+            don_cu, gan_cu = thang.get(ngay.strftime("%Y-%m"), (0, 0))
+            thang[ngay.strftime("%Y-%m")] = (don_cu + don, gan_cu + gan)
+    return [{"thang": ky, "don_dms": don, "don_gan_ctkm": gan,
+             "ty_le_gan_pct": round(gan / don * 100, 1) if don else None,
+             "da_nap_du": _ctkm_ky_du(don, gan)} for ky, (don, gan) in sorted(thang.items())]
+
+
+def _ctkm_lui_ngay_nap_do(moc: dt.date, ngay_map: dict, toi_da: int = 7) -> dt.date:
+    """Ngay cua dong lien ket cuoi cung thuong moi nap mot phan; lui ve ngay da nap du gan nhat."""
+    for _ in range(toi_da):
+        don, gan = ngay_map.get(moc, (0, 0))
+        if _ctkm_ky_du(don, gan):
+            break
+        moc -= dt.timedelta(days=1)
+    return moc
+
+
+def _ctkm_chua_nap_du(ky_tu, ky_den, moc_phu, thang_list: list) -> dict:
+    thieu = [t for t in thang_list if not t["da_nap_du"]]
+    return {
+        "status": "source_gap",
+        "requested_period": {"from": str(ky_tu), "to": str(ky_den)},
+        "promotion_link_coverage_to": str(moc_phu),
+        "programs": [],
+        "missing_source": "Lien ket DMS_DonHangCTKM chua nap du cho ky hoi",
+        "thang_chua_nap_du": [t["thang"] for t in thieu],
+        "do_phu_lien_ket_theo_thang": thang_list,
+        "warning": (
+            "Ty le don DMS co lien ket CTKM: %s (binh thuong tren 99%%, nguong coi la du %.0f%%). "
+            "Du lieu khuyen mai cac thang nay CHUA NAP DU, KHONG phai cac thang do khong co chuong trinh." % (
+                ", ".join(f"{t['thang']} {t['ty_le_gan_pct']}%" for t in thieu), _CTKM_NGUONG_DU_PCT)),
+        "answer_rule": (
+            "Noi ro thang nao chua nap du va ty le tuong ung; KHONG dua so khach/don/doanh thu CTKM cho "
+            "cac thang do va khong dung cot CTKM ghi chu tren hoa don thay the."),
+    }
+
+
+def _ctkm_gia_tri_theo_thang(date_from, date_to, scope_area_code: str = None, scope_channel: str = None,
+                             scope_employee_code: str = None) -> dict:
+    """C13/M36: gia tri khuyen mai DMS ghi tren don theo thang x vung, chi cho thang da nap du lien ket.
+
+    Nguon DMS_DonHangCTKM.Amount: moi dong la mot phan thuong cua mot don trong mot chuong trinh; co
+    ItemCode la hang tang, khong ItemCode la tien/chiet khau (cot Discount luon 0). Bo don DA HUY
+    (StatusId=2): ky 12/2025 don huy van giu 6,80/27,76 ty gia tri thuong.
+    """
+    if scope_channel and str(scope_channel).upper() not in ("OTC", "ALL"):
+        return {"status": "not_applicable", "note": "Khuyen mai DMS thuoc kenh OTC."}
+    ky_tu, ky_den = _ngay_ctkm(date_from), _ngay_ctkm(date_to)
+    thang_list = _ctkm_thang(_ctkm_don_gan_theo_ngay(ky_tu, ky_den), ky_tu, ky_den)
+    thang_du = [t["thang"] for t in thang_list if t["da_nap_du"] and t["don_dms"]]
+    out = {
+        "nguon": "DMS_DonHangCTKM.Amount tren don DMS khong huy (kenh OTC)",
+        "do_phu_lien_ket_theo_thang": [
+            {"thang": t["thang"], "ty_le_gan_pct": t["ty_le_gan_pct"], "da_nap_du": t["da_nap_du"]}
+            for t in thang_list],
+        "thang_chua_nap_du": [t["thang"] for t in thang_list if not t["da_nap_du"]],
+        "theo_thang": [], "theo_thang_vung": [],
+        "answer_rule": (
+            "Trinh bay khuyen mai thanh cot rieng 'khuyen mai (DMS)'; KHONG tru them vao doanh thu thuan "
+            "vi phan tien/chiet khau co the da nam trong chiet khau hoa don. Thang trong thang_chua_nap_du "
+            "PHAI noi la chua nap du lien ket CTKM, KHONG ghi 0 va KHONG noi thang do khong co khuyen mai."),
+    }
+    if not thang_du:
+        return {**out, "status": "source_gap"}
+    params = {"date_from": max(ky_tu, _ngay_ctkm(thang_du[0] + "-01")),
+              "date_to_exclusive": min(ky_den, _month_end(_ngay_ctkm(thang_du[-1] + "-01")))
+              + dt.timedelta(days=1)}
+    where = ""
+    if scope_employee_code:
+        dms_ids = _get_team_dms_ids(scope_employee_code, str(ky_den))
+        if not dms_ids:
+            return {**out, "status": "no_data", "note": "Doi khong co TDV nao co ma DMS trong ky."}
+        for idx, dms_id in enumerate(dms_ids):
+            params[f"emp_{idx}"] = dms_id
+        joined = ",".join(f":emp_{idx}" for idx in range(len(dms_ids)))
+        where = f" AND (h.DMSEmpId1 IN ({joined}) OR h.DMSEmpId2 IN ({joined}))"
+    rows = _q_bravo(f"""
+        SELECT CONVERT(char(7), h.DocDate, 126) AS Thang, COALESCE(tp.AreaCode, 'UNKNOWN') AS AreaCode,
+               COUNT(DISTINCT x.OrderId) AS PromoOrders,
+               SUM(CASE WHEN NULLIF(x.ItemCode, '') IS NOT NULL THEN CAST(x.Amount AS float) ELSE 0 END) AS GiftValue,
+               SUM(CASE WHEN NULLIF(x.ItemCode, '') IS NULL THEN CAST(x.Amount AS float) ELSE 0 END) AS MoneyValue
+        FROM dbo.DMS_DonHangHdr h
+        INNER HASH JOIN dbo.DMS_DonHangCTKM x ON x.OrderId=h.Id
+        LEFT JOIN dbo.DMS_KhachHang kh ON kh.Code=h.CustomerCode
+        LEFT JOIN dbo.DIM_TinhThanhPho tp ON tp.CityId=kh.CityId
+        WHERE h.DocDate>=:date_from AND h.DocDate<:date_to_exclusive AND ISNULL(h.StatusId, 0)<>2 {where}
+        GROUP BY CONVERT(char(7), h.DocDate, 126), COALESCE(tp.AreaCode, 'UNKNOWN')
+    """, params)
+    allowed = set(_area_markers(scope_area_code)) if scope_area_code else None
+    theo_vung, theo_thang = {}, {}
+    for row in rows:
+        thang, area = str(row.get("Thang") or "")[:7], row.get("AreaCode") or "UNKNOWN"
+        if thang not in thang_du or (allowed is not None and area not in allowed):
+            continue
+        vung = _AREA_TO_REGION_VI.get(area, "Khac/chua xac dinh")
+        for bucket in (theo_vung.setdefault((thang, vung), {"thang": thang, "vung": vung}),
+                       theo_thang.setdefault(thang, {"thang": thang})):
+            bucket["so_don_huong_km"] = bucket.get("so_don_huong_km", 0) + int(row.get("PromoOrders") or 0)
+            bucket["gia_tri_hang_tang"] = bucket.get("gia_tri_hang_tang", 0.0) + _f(row.get("GiftValue"))
+            bucket["gia_tri_tien_km"] = bucket.get("gia_tri_tien_km", 0.0) + _f(row.get("MoneyValue"))
+    for bucket in list(theo_vung.values()) + list(theo_thang.values()):
+        bucket["tong_gia_tri_km"] = bucket["gia_tri_hang_tang"] + bucket["gia_tri_tien_km"]
+    return {**out, "status": "mot_phan" if out["thang_chua_nap_du"] else "ok",
+            "theo_thang": [theo_thang[k] for k in sorted(theo_thang)],
+            "theo_thang_vung": [theo_vung[k] for k in sorted(theo_vung)]}
+
+
+def _gan_dt_otc_vao_khuyen_mai(khuyen_mai: dict, raw: list) -> dict:
+    """Ty le khuyen mai DMS tren doanh thu gop OTC cung thang (va cung vung) tu dung tap hoa don cua bao cao."""
+    gop = {}
+    for row in raw:
+        amount = _f(row.get("amount9"))
+        if row.get("channel") == "OTC" and amount > 0:
+            for key in ((row["month"],), (row["month"], row["region"])):
+                gop[key] = gop.get(key, 0.0) + amount
+    for field, key_of in (("theo_thang", lambda b: (b["thang"],)),
+                          ("theo_thang_vung", lambda b: (b["thang"], b["vung"]))):
+        for bucket in khuyen_mai.get(field) or []:
+            dt_gop = gop.get(key_of(bucket))
+            bucket["dt_gop_otc"] = dt_gop
+            bucket["ty_le_km_tren_dt_gop_otc_pct"] = bucket["tong_gia_tri_km"] / dt_gop * 100 if dt_gop else None
+            bucket["ty_le_hang_tang_tren_dt_gop_otc_pct"] = (
+                bucket["gia_tri_hang_tang"] / dt_gop * 100 if dt_gop else None)
+    return khuyen_mai
+
+
+_TRANG_THAI_KHUYEN_MAI = {
+    "ok": "AVAILABLE_FROM_DMS_PROMOTION_LINK",
+    "mot_phan": "PARTIAL_PROMOTION_LINK_NOT_FULLY_SYNCED",
+    "source_gap": "SOURCE_GAP_PROMOTION_LINK_NOT_SYNCED",
+    "no_data": "NO_DATA_IN_SCOPE",
+    "not_applicable": "NOT_APPLICABLE_NON_OTC",
+}
+
+
 def _promotion_period_fields(program_from, program_to, report_from, report_to) -> dict:
     """Ky chay THAT cua chuong trinh so voi ky bao cao dang xem.
 
@@ -13343,16 +13549,38 @@ def promotion_effectiveness(date_from: str = None, date_to: str = None, limit: i
         coverage_date = _parse_report_date(coverage_date, "coverage_date")
 
     used_default_period = not date_from and not date_to
+    if not used_default_period:
+        report_to = _parse_report_date(date_to or date_from, "date_to")
+        report_from = (_parse_report_date(date_from, "date_from") if date_from
+                       else dt.date(report_to.year, report_to.month, 1))
+        if report_from > report_to:
+            raise ValueError("date_from khong duoc lon hon date_to.")
+
+    moc_lien_ket_cuoi = coverage_date
+    ngay_map, do_phu_loi = {}, None
+    if used_default_period or report_from <= coverage_date:
+        cua_so_tu = (dt.date(coverage_date.year - 1, coverage_date.month, 1) if used_default_period
+                     else report_from)
+        try:
+            ngay_map = _ctkm_don_gan_theo_ngay(cua_so_tu, coverage_date)
+        except Exception as exc:  # lop kiem tra them: loi thi giu cach cu va bao ra payload
+            do_phu_loi = f"{type(exc).__name__}: {str(exc)[:160]}"
+        coverage_date = _ctkm_lui_ngay_nap_do(coverage_date, ngay_map)
+
+    thang_bo_qua = []
     if used_default_period:
         # Chi dung THANG DAY DU gan nhat. Neu link moi nhat dang o giua thang thi lui ve thang truoc.
         report_to = dt.date(coverage_date.year, coverage_date.month, 1) - dt.timedelta(days=1)
         report_from = dt.date(report_to.year, report_to.month, 1)
-    else:
-        report_to = _parse_report_date(date_to or date_from, "date_to")
-        report_from = (_parse_report_date(date_from, "date_from") if date_from
-                       else dt.date(report_to.year, report_to.month, 1))
-    if report_from > report_to:
-        raise ValueError("date_from khong duoc lon hon date_to.")
+        if ngay_map:
+            thang_truoc_moc = _ctkm_thang(ngay_map, cua_so_tu, report_to)
+            thang_du = [t for t in thang_truoc_moc if t["da_nap_du"] and t["don_dms"]]
+            if not thang_du:
+                return _ctkm_chua_nap_du(cua_so_tu, report_to, coverage_date, thang_truoc_moc)
+            thang_bo_qua = [t for t in thang_truoc_moc
+                            if t["thang"] > thang_du[-1]["thang"] and not t["da_nap_du"]]
+            report_from = _ngay_ctkm(thang_du[-1]["thang"] + "-01")
+            report_to = _month_end(report_from)
 
     requested_to = report_to
     if report_from > coverage_date:
@@ -13373,6 +13601,16 @@ def promotion_effectiveness(date_from: str = None, date_to: str = None, limit: i
                 "chung 'khong co du lieu' va khong suy dien khach/don/doanh thu CTKM."),
         }
     report_to = min(report_to, coverage_date)
+    do_phu_thang = _ctkm_thang(ngay_map, report_from, report_to) if ngay_map else []
+    thieu = [t for t in do_phu_thang if not t["da_nap_du"]]
+    if thieu and not used_default_period:
+        dau_thang_thieu = _ngay_ctkm(thieu[0]["thang"] + "-01")
+        if dau_thang_thieu <= report_from:
+            return _ctkm_chua_nap_du(report_from, requested_to, coverage_date, do_phu_thang)
+        # Chi giu cac thang du lien tiep tu dau ky; tu thang thieu dau tien tro di bi cat.
+        thang_bo_qua = [t for t in do_phu_thang if t["thang"] >= thieu[0]["thang"]]
+        do_phu_thang = [t for t in do_phu_thang if t["thang"] < thieu[0]["thang"]]
+        report_to = dau_thang_thieu - dt.timedelta(days=1)
     date_to_exclusive = report_to + dt.timedelta(days=1)
 
     params = {
@@ -13421,12 +13659,6 @@ def promotion_effectiveness(date_from: str = None, date_to: str = None, limit: i
             INNER JOIN dbo.DMS_DonHangCTKM x
               ON x.ProgId=po.ProgId AND x.OrderId=po.OrderId
             GROUP BY po.ProgId
-        ),
-        ConfiguredProducts AS (
-            SELECT t.ProgId, COUNT(DISTINCT NULLIF(d.ItemId, '')) AS ConfiguredProductCount
-            FROM dbo.DMS_CTKMOnTop1 t
-            INNER JOIN dbo.DMS_DKKMCt d ON d.CondId=t.CondId
-            GROUP BY t.ProgId
         )
         SELECT
                p.Id AS ProgramId, p.Code AS ProgramCode, p.Name AS ProgramName,
@@ -13436,13 +13668,11 @@ def promotion_effectiveness(date_from: str = None, date_to: str = None, limit: i
                SUM(CASE WHEN i.OrderId IS NULL THEN 1 ELSE 0 END) AS OrdersWithoutInvoice,
                SUM(ISNULL(i.PaidProductCount, 0)) AS PaidProductOccurrences,
                MAX(ISNULL(g.GiftProductCount, 0)) AS GiftProductCount,
-               MAX(ISNULL(c.ConfiguredProductCount, 0)) AS ConfiguredProductCount,
                p.FromDate AS ProgramFrom, p.ToDate AS ProgramTo
         FROM ProgramOrders po
         INNER JOIN dbo.DMS_CTKM p ON p.Id=po.ProgId
         LEFT HASH JOIN InvoiceByOrder i ON i.OrderId=po.OrderId
         LEFT JOIN GiftProducts g ON g.ProgId=po.ProgId
-        LEFT JOIN ConfiguredProducts c ON c.ProgId=po.ProgId
         GROUP BY p.Id, p.Code, p.Name, p.FromDate, p.ToDate
         ORDER BY AssociatedRevenue DESC, p.Id
         OPTION (HASH JOIN)
@@ -13470,7 +13700,6 @@ def promotion_effectiveness(date_from: str = None, date_to: str = None, limit: i
             "orders": orders,
             "invoiced_orders": invoiced_orders,
             "average_revenue_per_invoiced_order": revenue / invoiced_orders if invoiced_orders else 0.0,
-            "configured_product_count": int(row.get("ConfiguredProductCount") or 0),
             "gift_product_count": int(row.get("GiftProductCount") or 0),
             "paid_product_occurrences": int(row.get("PaidProductOccurrences") or 0),
             **_promotion_period_fields(row.get("ProgramFrom"), row.get("ProgramTo"),
@@ -13514,19 +13743,36 @@ def promotion_effectiveness(date_from: str = None, date_to: str = None, limit: i
         for prog in programs if prog["code_is_ambiguous"]
     ]
 
-    warning = None
-    if requested_to > coverage_date:
-        warning = (f"Du lieu lien ket don hang-chuong trinh moi den {coverage_date}; "
-                   f"bao cao da cat tai moc nay thay vi suy dien den {requested_to}.")
+    canh_bao = []
+    if thang_bo_qua and not used_default_period:
+        canh_bao.append("Tu thang %s lien ket CTKM chua nap du (%s; nguong %.0f%%) nen bao cao chi tinh den %s, "
+                        "khong phai toan bo ky da hoi." % (
+                            thang_bo_qua[0]["thang"],
+                            ", ".join(f"{t['thang']} {t['ty_le_gan_pct']}%" for t in thang_bo_qua),
+                            _CTKM_NGUONG_DU_PCT, report_to))
+    elif requested_to > coverage_date:
+        canh_bao.append(f"Du lieu lien ket don hang-chuong trinh moi den {coverage_date}; "
+                        f"bao cao da cat tai moc nay thay vi suy dien den {requested_to}.")
     elif used_default_period:
-        warning = (f"Khong co ky duoc chi dinh; dung thang day du gan nhat {report_from:%m/%Y}. "
-                   f"Lien ket don hang-chuong trinh moi nhat ghi nhan den {coverage_date}.")
+        canh_bao.append(f"Khong co ky duoc chi dinh; dung thang day du gan nhat {report_from:%m/%Y}. "
+                        f"Lien ket don hang-chuong trinh moi nhat ghi nhan den {coverage_date}.")
+        if thang_bo_qua:
+            canh_bao.append("Bo qua cac thang sau do vi lien ket CTKM chua nap du: %s." % ", ".join(
+                f"{t['thang']} {t['ty_le_gan_pct']}%" for t in thang_bo_qua))
+    if moc_lien_ket_cuoi != coverage_date:
+        don, gan = ngay_map.get(moc_lien_ket_cuoi, (0, 0))
+        canh_bao.append(f"Ngay {moc_lien_ket_cuoi} moi co {gan}/{don} don duoc nap lien ket nen moc phu "
+                        f"tinh den {coverage_date}.")
+    warning = " ".join(canh_bao) or None
 
     return {
         "status": "ok" if programs else "no_data",
         "period": {"from": str(report_from), "to": str(report_to)},
         "promotion_link_coverage_to": str(coverage_date),
+        "promotion_link_last_row_date": str(moc_lien_ket_cuoi),
         "promotion_link_synced_at": str(coverage_rows[0].get("LinkSyncedAt") or ""),
+        "do_phu_lien_ket_theo_thang": do_phu_thang,
+        "do_phu_lien_ket_loi": do_phu_loi,
         # 22/09/2026 (doi chieu M35 ky 12/2025): bang tra loi chi co so cua MIEN BAC ma khong cau nao
         # noi ra, nen nguoi doi chieu lay so toan quoc ra so va tuong chatbot sai doanh thu. Do that
         # tren Bravo: Q4.2025_SIRO_10_RV.KENH. toan quoc 1.056 don / 30,05 ty, rieng MB 857 don /
@@ -13615,8 +13861,21 @@ def promotion_data_quality(scope_area_code: str = None, scope_employee_code: str
     if not rows:
         return {"status": "source_gap", "note": "Khong doc duoc chuoi lien ket CTKM."}
     row = rows[0]
+    hom_nay = dt.date.today()
+    tu_thang = dt.date(hom_nay.year - 1, hom_nay.month, 1)
+    try:
+        do_phu_thang, do_phu_loi = _ctkm_thang(_ctkm_don_gan_theo_ngay(tu_thang, hom_nay), tu_thang, hom_nay), None
+    except Exception as exc:
+        do_phu_thang, do_phu_loi = [], f"{type(exc).__name__}: {str(exc)[:160]}"
     return {
         "status": "ok",
+        "do_phu_lien_ket_theo_thang": do_phu_thang,
+        "thang_chua_nap_du": [t["thang"] for t in do_phu_thang if not t["da_nap_du"]],
+        "do_phu_lien_ket_loi": do_phu_loi,
+        "do_phu_ghi_chu": (
+            "Ty le don DMS co lien ket CTKM theo thang, tinh tren toan cong ty (khong theo pham vi tai "
+            "khoan). Binh thuong tren 99%%; duoi %.0f%% la thang chua nap du. last_linked_order_date chi "
+            "la ngay don moi nhat co lien ket, KHONG chung minh cac thang truoc do da nap du." % _CTKM_NGUONG_DU_PCT),
         "first_linked_order_date": str(row.get("FirstLinkedOrderDate") or ""),
         "last_linked_order_date": str(row.get("LastLinkedOrderDate") or ""),
         "last_link_sync_at": str(row.get("LastLinkSyncAt") or ""),

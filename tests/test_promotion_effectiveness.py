@@ -102,7 +102,8 @@ def test_xay_dung_dung_cac_truong_dau_ra_va_khong_goi_la_ROI(monkeypatch):
     assert km01["invoiced_orders"] == 8  # 10 don - 2 chua co hoa don
     assert km01["average_revenue_per_invoiced_order"] == 100_000_000 / 8
     assert km01["gift_product_count"] == 3
-    assert km01["configured_product_count"] == 5
+    # 28/09/2026: bo truong nay - no doc DMS_CTKMOnTop1 + DMS_DKKMCt, hai bang DNH khong nap bu.
+    assert "configured_product_count" not in km01
 
     # 0 don co hoa don -> KHONG duoc chia cho 0, phai tra ve 0.
     assert km02["invoiced_orders"] == 0
