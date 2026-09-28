@@ -46,14 +46,45 @@ def _shared(goc, upn_c_level="clevel@example.test", them=""):
 
 def test_watchdog_che_do_cu_giu_nguyen(goc_gia):
     (goc_gia / ".env").write_text("TEAMS_WEBHOOK_C_LEVEL=https://cu.example.test/c\n", encoding="utf-8")
-    assert wd._dich_den_canh_bao() == ("https://cu.example.test/c", None)
+    assert wd._dich_den_canh_bao() == ("https://cu.example.test/c", ())
 
 
 def test_watchdog_mot_flow_gui_kem_upn_c_level(goc_gia, monkeypatch):
     _shared(goc_gia)
-    assert wd._dich_den_canh_bao() == ("https://shared.example.test/x", "clevel@example.test")
+    assert wd._dich_den_canh_bao() == ("https://shared.example.test/x", ("clevel@example.test",))
     monkeypatch.setenv("WATCHDOG_TEAMS_RECIPIENT", "ops@example.test")
-    assert wd._dich_den_canh_bao()[1] == "ops@example.test"
+    assert wd._dich_den_canh_bao()[1] == ("ops@example.test",)
+
+
+class _Resp:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+
+def test_watchdog_nhieu_nguoi_nhan_gui_tung_nguoi_mot_nguoi_loi_khong_chan(goc_gia, monkeypatch):
+    """28/09: C-Level co the 2-3 nguoi (danh sach trong bang), WATCHDOG_TEAMS_RECIPIENT nhieu nguoi cach nhau ;"""
+    goi = []
+
+    def _urlopen(req, timeout=10):
+        goi.append(json.loads(req.data.decode("utf-8"))["recipient"])
+        if goi[-1] == "loi@x.test":
+            raise OSError("mang loi")
+        return _Resp()
+
+    monkeypatch.setattr(wd.urllib.request, "urlopen", _urlopen)
+    _shared(goc_gia)
+    (goc_gia / "config" / "teams_recipients.local.json").write_text(
+        json.dumps({"C-Level (Toàn quốc)": ["a@x.test", "b@x.test"]}, ensure_ascii=False), encoding="utf-8")
+    assert wd._send_teams_alert("Sync dung", "x") is True
+    assert goi == ["a@x.test", "b@x.test"]
+
+    goi.clear()
+    monkeypatch.setenv("WATCHDOG_TEAMS_RECIPIENT", "loi@x.test; ops@x.test")
+    assert wd._send_teams_alert("Sync dung", "x") is True
+    assert goi == ["loi@x.test", "ops@x.test"]
 
 
 def test_watchdog_payload_co_recipient_va_thieu_nguoi_nhan_thi_khong_gui(goc_gia, monkeypatch):
@@ -113,3 +144,21 @@ def test_script_kiem_in_upn_da_che_va_bao_thieu(goc_gia, monkeypatch, capsys):
         {"audience": "Quản lý Miền Trung", "region": "trung", "channel": None}]})
     assert kiem.main([]) == 1
     assert "LOI CAU HINH" in capsys.readouterr().out
+
+
+def test_script_kiem_in_du_nhieu_nguoi_da_che(goc_gia, monkeypatch, capsys):
+    _shared(goc_gia)
+    bang = goc_gia / "config" / "teams_recipients.local.json"
+    bang.write_text(json.dumps({"C-Level (Toàn quốc)": ["an.a@x.test", "binh.b@x.test"]}, ensure_ascii=False),
+                    encoding="utf-8")
+    for k, v in (("TEAMS_DELIVERY_MODE", "shared"), ("TEAMS_SHARED_WEBHOOK_URL", "https://shared.example.test/x"),
+                 ("TEAMS_RECIPIENTS_FILE", str(bang))):
+        monkeypatch.setenv(k, v)
+    monkeypatch.setattr(kiem, "_nap_env", lambda: None)
+    import src.database as database
+    monkeypatch.setattr(database, "load_config", lambda: {"report_recipients": [
+        {"audience": "C-Level (Toàn quốc)", "region": None, "channel": None}]})
+    assert kiem.main([]) == 0
+    out = capsys.readouterr().out
+    assert out.count("an***@x.test, bi***@x.test") == 2, "ca nhom C-Level lan watchdog (mac dinh = C-Level)"
+    assert "an.a@" not in out and "binh.b@" not in out

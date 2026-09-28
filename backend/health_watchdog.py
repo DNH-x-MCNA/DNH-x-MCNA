@@ -26,6 +26,7 @@ card don gian, khong bang/section phuc tap) de watchdog nay DOC LAP hoan toan, k
 neu src/notifier.py doi cau truc.
 """
 import os
+import re
 import sys
 import json
 import math
@@ -85,30 +86,37 @@ def _webhook_canh_bao() -> str:
     return _doc_bien_env("WATCHDOG_TEAMS_WEBHOOK") or _doc_bien_env("TEAMS_WEBHOOK_C_LEVEL")
 
 
-def _upn_c_level() -> str:
-    """UPN cua nhom C-Level trong bang nguoi nhan cua che do mot Flow dung chung (TEAMS_RECIPIENTS_FILE)."""
+def _tach_upn(gia_tri) -> tuple:
+    """"a@x" / "a@x; b@x" (bien env) / ["a@x", "b@x"] (bang JSON) -> ("a@x", "b@x"), bo trung, giu thu tu."""
+    ds = gia_tri if isinstance(gia_tri, list) else re.split(r"[;,\s]+", str(gia_tri or ""))
+    return tuple(dict.fromkeys(str(u).strip() for u in ds if "@" in str(u)))
+
+
+def _upn_c_level() -> tuple:
+    """UPN nhom C-Level trong bang nguoi nhan cua che do mot Flow dung chung (TEAMS_RECIPIENTS_FILE) - 28/09/2026:
+    mot hoac nhieu nguoi."""
     duong_dan = _doc_bien_env("TEAMS_RECIPIENTS_FILE")
     if not duong_dan:
-        return ""
+        return ()
     if not os.path.isabs(duong_dan):
         duong_dan = os.path.join(PROJECT_ROOT, duong_dan)
     try:
         with open(duong_dan, "r", encoding="utf-8-sig") as f:
             bang = json.load(f)
     except (OSError, ValueError):
-        return ""
-    return next((str(upn).strip() for ten, upn in (bang.items() if isinstance(bang, dict) else [])
-                 if str(ten).strip().lower().startswith("c-level")), "")
+        return ()
+    return next((_tach_upn(upn) for ten, upn in (bang.items() if isinstance(bang, dict) else [])
+                 if str(ten).strip().lower().startswith("c-level")), ())
 
 
 def _dich_den_canh_bao() -> tuple:
-    """(webhook, nguoi_nhan). 28/09/2026: che do mot Flow dung chung (TEAMS_DELIVERY_MODE=shared) - Flow doc
-    triggerBody()?['recipient'] de gui chat ca nhan, nen watchdog PHAI gui kem nguoi nhan: WATCHDOG_TEAMS_RECIPIENT,
-    khong co thi UPN nhom C-Level (cung nguoi nhan voi canh bao cong no nhu truoc day)."""
+    """(webhook, (nguoi_nhan, ...)). 28/09/2026: che do mot Flow dung chung (TEAMS_DELIVERY_MODE=shared) - Flow doc
+    triggerBody()?['recipient'] de gui chat ca nhan, nen watchdog PHAI gui kem nguoi nhan: WATCHDOG_TEAMS_RECIPIENT
+    (nhieu nguoi cach nhau dau ;), khong co thi UPN nhom C-Level. Che do cu: khong kem nguoi nhan - tuple rong."""
     if _doc_bien_env("TEAMS_DELIVERY_MODE").lower() == "shared":
         webhook = _doc_bien_env("WATCHDOG_TEAMS_WEBHOOK") or _doc_bien_env("TEAMS_SHARED_WEBHOOK_URL")
-        return webhook, _doc_bien_env("WATCHDOG_TEAMS_RECIPIENT") or _upn_c_level()
-    return _webhook_canh_bao(), None
+        return webhook, _tach_upn(_doc_bien_env("WATCHDOG_TEAMS_RECIPIENT")) or _upn_c_level()
+    return _webhook_canh_bao(), ()
 
 
 def _log(msg: str):
@@ -171,19 +179,21 @@ def _send_teams_alert(title: str, summary: str, severity: str = "CRITICAL") -> b
             },
         }],
     }
-    if nguoi_nhan:
-        payload["recipient"] = nguoi_nhan
-        payload["audience"] = "Watchdog ha tang"
-    try:
-        data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-        req = urllib.request.Request(webhook_url.strip(), data=data,
-                                      headers={"Content-Type": "application/json"})
-        with urllib.request.urlopen(req, timeout=10):
-            _log(f"Da gui canh bao Teams: {title}")
-            return True
-    except Exception as e:
-        _log(f"LOI gui Teams: {e}")
-        return False
+    # Nhieu nguoi nhan: moi nguoi mot lan gui. True neu it nhat mot nguoi nhan duoc - de canh bao khong bi
+    # gui lai lien tuc cho nhung nguoi da nhan chi vi mot dia chi loi.
+    da_gui = False
+    for upn in nguoi_nhan or (None,):
+        goi = dict(payload, recipient=upn, audience="Watchdog ha tang") if upn else payload
+        try:
+            data = json.dumps(goi, ensure_ascii=False).encode("utf-8")
+            req = urllib.request.Request(webhook_url.strip(), data=data,
+                                          headers={"Content-Type": "application/json"})
+            with urllib.request.urlopen(req, timeout=10):
+                _log(f"Da gui canh bao Teams: {title}")
+                da_gui = True
+        except Exception as e:
+            _log(f"LOI gui Teams: {e}")
+    return da_gui
 
 
 def _check_sync_stale() -> tuple:

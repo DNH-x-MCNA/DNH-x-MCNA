@@ -8,7 +8,7 @@ from email.mime.multipart import MIMEMultipart
 from jinja2 import Template
 from dotenv import load_dotenv
 from src.database import load_config
-from src.teams_routing import teams_audience_allowed, load_shared_routes, resolve_destination
+from src.teams_routing import teams_audience_allowed, load_shared_routes, resolve_destinations
 import json
 import urllib.request
 from urllib.parse import quote
@@ -1475,12 +1475,14 @@ def _resolve_teams_webhooks(region_label, channel_label):
         channel_ok = (not aud_channel) or (aud_channel == alert_channel_key)
         if not (region_ok and channel_ok):
             continue
-        url, recipient = resolve_destination(r, shared_routes)
-        key = (url, recipient)
-        if key in seen:
-            continue
-        seen.add(key)
-        matched.append((url, r.get('audience'), recipient))
+        # 28/09/2026: mot audience co the nhieu nguoi nhan - moi nguoi mot phan tu. Cung mot nguoi o nhieu
+        # audience khop alert thi chi nhan MOT lan (khoa khong phan biet hoa thuong).
+        for url, recipient in resolve_destinations(r, shared_routes):
+            key = (url, recipient.lower() if recipient else None)
+            if key in seen:
+                continue
+            seen.add(key)
+            matched.append((url, r.get('audience'), recipient))
 
     return matched
 

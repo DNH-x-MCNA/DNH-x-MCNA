@@ -29,7 +29,7 @@ from src.database import get_db_engines, load_config
 from src.etl import get_daily_digest_metrics, get_weekly_digest_metrics, get_monthly_digest_metrics
 from src.notifier import build_digest_email, send_email, flush_critical_teams_queue, send_teams_alert
 from src.teams_routing import (
-    TeamsRoutingError, is_team_manager, teams_audience_allowed, load_shared_routes, resolve_destination,
+    TeamsRoutingError, is_team_manager, teams_audience_allowed, load_shared_routes, resolve_destinations,
 )
 from src.insight_report import action_lines, pace_lines
 from src.qlv_digest import (
@@ -275,7 +275,7 @@ def send_daily_digest(dry_run=False, audience_filter=None, webhook_override=None
                 raise ValueError("Vai/phạm vi người nhận Teams không hợp lệ; chỉ C-Level, giám đốc miền/kênh.")
             if routing_error:
                 raise TeamsRoutingError(routing_error)
-            webhook, teams_recipient = resolve_destination(r, shared_routes, webhook_override)
+            destinations = resolve_destinations(r, shared_routes, webhook_override)
 
             metrics = get_daily_digest_metrics(region=region, channel=channel)
             headers, rows = _digest_table(metrics)
@@ -356,7 +356,8 @@ def send_daily_digest(dry_run=False, audience_filter=None, webhook_override=None
                 })
 
             if dry_run:
-                print(f"[DRY-RUN] Dựng Daily Teams cho '{audience or 'mặc định'}'; đích gửi đã cấu hình, chưa gửi.")
+                print(f"[DRY-RUN] Dựng Daily Teams cho '{audience or 'mặc định'}'; đích gửi đã cấu hình "
+                      f"({len(destinations)} người nhận), chưa gửi.")
                 print(f" - Title: {title}")
                 print(f" - Table Rows: {len(rows)}")
                 print(f" - Sections: {len(sections)}")
@@ -364,24 +365,32 @@ def send_daily_digest(dry_run=False, audience_filter=None, webhook_override=None
                     print(f" - Freshness: {metrics['freshness_note']}")
                 continue
 
-            sent = send_teams_alert(
-                title=title,
-                summary=summary,
-                table_headers=headers,
-                table_rows=rows,
-                severity="INFO",
-                period=metrics['date'],
-                channel=channel or "OTC + ETC (gộp)",
-                region=region_label,
-                webhook_url_override=webhook,
-                sections=sections,
-                recipient=teams_recipient,
-                audience=audience
-            )
-            if sent:
-                print(f"[{datetime.now()}] Daily Digest cho '{audience or 'mặc định'}' đã gửi thành công.")
+            # 28/09/2026: mot audience co the nhieu nguoi nhan (vd 2-3 C-Level) - cung noi dung, moi nguoi mot
+            # tin 1-1 rieng; mot nguoi loi khong chan nhung nguoi con lai.
+            so_loi = 0
+            for webhook, teams_recipient in destinations:
+                sent = send_teams_alert(
+                    title=title,
+                    summary=summary,
+                    table_headers=headers,
+                    table_rows=rows,
+                    severity="INFO",
+                    period=metrics['date'],
+                    channel=channel or "OTC + ETC (gộp)",
+                    region=region_label,
+                    webhook_url_override=webhook,
+                    sections=sections,
+                    recipient=teams_recipient,
+                    audience=audience
+                )
+                if not sent:
+                    so_loi += 1
+            so_nguoi = f" ({len(destinations)} người nhận)" if len(destinations) > 1 else ""
+            if not so_loi:
+                print(f"[{datetime.now()}] Daily Digest cho '{audience or 'mặc định'}' đã gửi thành công{so_nguoi}.")
             else:
-                print(f"[{datetime.now()}] Gửi Daily Digest cho '{audience or 'mặc định'}' thất bại.")
+                print(f"[{datetime.now()}] Gửi Daily Digest cho '{audience or 'mặc định'}' thất bại "
+                      f"{so_loi}/{len(destinations)} người nhận.")
                 overall_ok = False
         except Exception as e:
             print(f"[{datetime.now()}] Lỗi khi tạo/gửi Daily Digest cho '{audience or 'mặc định'}': {e}")

@@ -2,7 +2,7 @@
 """Kiem cau hinh Teams MOT Flow dung chung (TEAMS_DELIVERY_MODE=shared) tren may chay. Mac dinh CHI DOC.
 
     python scripts/kiem_teams_dung_chung.py                      # kiem: nhom -> UPN (da che), watchdog
-    python scripts/kiem_teams_dung_chung.py --gui-thu "C-Level (Toàn quốc)"   # gui 1 the thu toi nguoi nhan nhom do
+    python scripts/kiem_teams_dung_chung.py --gui-thu "C-Level (Toàn quốc)"   # gui the thu toi tung nguoi nhan nhom do
 
 Khong in URL webhook; UPN in dang da che (vd tr***@ten-mien). --gui-thu gui THAT mot the ngan "thu nghiem" qua Flow
 dung chung - dung o buoc thu, khi bang nguoi nhan con tro ve UPN cua chinh nguoi van hanh.
@@ -70,19 +70,20 @@ def main(argv=None) -> int:
     except TeamsRoutingError as exc:
         print("LOI CAU HINH (he thong se DUNG gui Teams, khong gui nham):", exc)
         return 1
-    for audience, (_, upn) in routes.items():
-        print(f"   {audience:<24} -> {che(upn)}")
+    for audience, (_, upns) in routes.items():
+        print(f"   {audience:<24} -> {', '.join(che(u) for u in upns)}")
     import health_watchdog
-    wd_url, wd_upn = health_watchdog._dich_den_canh_bao()
-    print(f"   {'Watchdog ha tang':<24} -> {che(wd_upn) if wd_upn else 'THIEU nguoi nhan'}"
+    wd_url, wd_upns = health_watchdog._dich_den_canh_bao()
+    print(f"   {'Watchdog ha tang':<24} -> {', '.join(che(u) for u in wd_upns) if wd_upns else 'THIEU nguoi nhan'}"
           f"{'' if wd_url else ' (THIEU webhook)'}")
     if args.gui_thu:
         if args.gui_thu not in routes:
             print(f"Khong co nhom '{args.gui_thu}'. Ten nhom phai dung nhu tren.")
             return 1
-        webhook, upn = routes[args.gui_thu]
-        gui_thu(webhook, upn, args.gui_thu)
-    return 0 if routes and wd_url and wd_upn else 1
+        webhook, upns = routes[args.gui_thu]
+        for upn in upns:
+            gui_thu(webhook, upn, args.gui_thu)
+    return 0 if routes and wd_url and wd_upns else 1
 
 
 if __name__ == "__main__":
