@@ -106,6 +106,9 @@ def test_ytd_thieu_tham_so_thi_lay_thang_du_lieu_gan_nhat_chu_khong_vo(monkeypat
                         lambda *a, **k: {"total": {"revenue": 0.0, "invoices": 0},
                                          "otc": {"revenue": 0.0}, "etc": {"revenue": 0.0}})
 
+    # moc cung ky doc latest_data_date() tu backend/warehouse.db (khong nam trong git) - co dinh ngay kho.
+    monkeypatch.setattr(rt, "latest_data_date", lambda: "2026-09-23")
+
     kq = rt.revenue_ytd_cumulative()          # TRUOC DAY: TypeError -> "Loi khi chay bao cao chuan"
 
     assert kq["den_thang"] == "09" and kq["tu_thang"] == "01"

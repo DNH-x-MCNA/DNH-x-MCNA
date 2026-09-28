@@ -8,11 +8,21 @@ tinh (phan lon la cung don vi hai ma sau sap nhap). Du lieu gia (monkeypatch _q_
 import os
 import sys
 
+import pytest
+
 BACKEND = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "backend")
 if BACKEND not in sys.path:
     sys.path.append(BACKEND)
 
 import report_templates as rt
+
+
+@pytest.fixture(autouse=True)
+def _khong_doc_kho_local(monkeypatch):
+    # etc_contract_status ghi "data_as_of" = latest_data_date(), ham nay doc backend/warehouse.db (file du lieu
+    # cuc bo, KHONG nam trong git) -> worktree/may moi bao "no such table: vhoadon_otc". Test chi dung du lieu
+    # gia qua _q_bravo nen co dinh luon ngay kho.
+    monkeypatch.setattr(rt, "latest_data_date", lambda: "2026-09-23")
 
 
 def _dong(i, gia_tri, da_xuat, gan_nham=0, tien_gan_nham=0.0, khac_ma_khach=0.0):

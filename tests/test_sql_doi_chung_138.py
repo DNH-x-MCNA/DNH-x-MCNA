@@ -133,10 +133,22 @@ def test_trinh_doi_chung_thuc_su_chay_checker_kho_local():
     assert "chay_kho_local(" in nguon, "main() khong con chay checker kho local"
 
 
-@pytest.mark.skipif(
-    not os.path.isfile(os.path.join(bo_sql.ROOT, "backend", "warehouse.db")),
-    reason="Khong co warehouse.db tren may nay",
-)
+def _co_kho_local_that() -> bool:
+    """Co warehouse.db THAT (co bang vhoadon_otc). Tren may khong co kho, test khac goi _q() (vd compare_periods,
+    _tool_cases_40) de lai file warehouse.db RONG vi sqlite3.connect tu tao file; lan chay sau, dieu kien chi xet
+    file ton tai se chay test nay tren kho rong va bao hong gia."""
+    duong_dan = os.path.join(bo_sql.ROOT, "backend", "warehouse.db")
+    if not os.path.isfile(duong_dan):
+        return False
+    con = sqlite3.connect(duong_dan)
+    try:
+        return con.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='vhoadon_otc'").fetchone() is not None
+    finally:
+        con.close()
+
+
+@pytest.mark.skipif(not _co_kho_local_that(), reason="Khong co warehouse.db that (bang vhoadon_otc) tren may nay")
 def test_cau_lenh_kho_local_chay_duoc_that_tren_warehouse():
     """EXPLAIN tren kho that: bat ca loi cu phap lan bang/cot khong ton tai, khong tra du lieu."""
     con = sqlite3.connect(os.path.join(bo_sql.ROOT, "backend", "warehouse.db"))
