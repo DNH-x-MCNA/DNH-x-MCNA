@@ -2305,20 +2305,22 @@ Catalog có cờ sản phẩm trọng tâm nhưng cần map cột giá trị/s�
 
 ### S47 — Thiếu hàng và doanh số có nguy cơ mất — DERIVED
 
-    WITH demand AS (
-      SELECT ItemCode,SUM(CASE WHEN UnitPrice>0 THEN Quantity ELSE 0 END)/3.0 AvgMonthlyQty,
-             SUM(Amount9)/3.0 AvgMonthlyRevenue
-      FROM #sales WHERE DocDate>=DATEADD(month,-3,@MonthStart) AND DocDate<@MonthStart
-      GROUP BY ItemCode
-    ), stock AS (
-      SELECT p.Code ItemCode,SUM(t.Quantity) StockQty
-      FROM dbo.BRV_TonKhoDK t JOIN dbo.BRV_SanPham p ON p.Id=t.ItemId
-      WHERE t.IsActive=1 GROUP BY p.Code
-    )
-    SELECT d.ItemCode,s.StockQty,d.AvgMonthlyQty,d.AvgMonthlyRevenue,
-           s.StockQty/NULLIF(d.AvgMonthlyQty,0) MonthsOfCover
-    FROM demand d LEFT JOIN stock s ON s.ItemCode=d.ItemCode
-    WHERE ISNULL(s.StockQty,0)<d.AvgMonthlyQty ORDER BY MonthsOfCover;
+**Chú ý khi nghiệm thu C42:** `BRV_TonKhoDK` và `BRVSX_TonKhoDK` là tồn **đầu năm tài chính**.
+`SUM(Quantity)` trên hai bảng này (nhất là không lọc năm) không thể đối chiếu với tồn chatbot.
+Tồn TM theo lô của chatbot được đồng bộ từ `BRV_TonKhoDKLot` năm mới nhất **cộng biến động**
+`vTheKhoLot` (`ClassCode='TM'`) đến ngày đồng bộ. Hệ sản xuất SX là nguồn khác, không được cộng vào
+con số `get_sku_revenue_drop_vs_stock`. [SQL kiểm tra C42 theo cùng nguồn](./sql_check_c42_stock.sql)
+trả ba nhóm `zero_recorded_stock`, `positive_recorded_stock`, `unknown_or_negative_stock` và giữ
+riêng ngày chốt tồn với hai kỳ doanh thu. Mặc định tool chỉ lấy SKU kỳ trước >= 50 triệu và giảm
+>= 30%; đổi ngưỡng kiểm tra thì danh sách SKU cũng đổi.
+
+Vế “nguy cơ thiếu hàng” là so tồn TM với lượng bán OTC bình quân ba tháng hoàn tất gần nhất trong
+`get_inventory_expiry_report.supply_risk`. Đây là **cảnh báo suy diễn**, không xác nhận đơn hàng hay
+doanh thu đã mất. Vế “tồn cao trong khi doanh số giảm” cần so hai kỳ doanh thu bằng
+`get_sku_revenue_drop_vs_stock`; tồn dương chỉ là còn tồn, chưa đủ để kết luận tồn cao. Lượng tồn
+theo đơn vị danh mục và lượng bán theo hóa đơn có thể khác đơn vị, nên `months_of_cover` chưa thể
+dùng làm số tháng tồn chuẩn khi thiếu hệ số quy đổi đã xác nhận. So tổng hai kỳ ba tháng cũng không
+chứng minh SKU giảm **liên tục từng tháng**; cần chuỗi doanh thu tháng riêng để kết luận vế này.
 
 ### S48 — Danh sách khách ưu tiên hành động — DERIVED
 

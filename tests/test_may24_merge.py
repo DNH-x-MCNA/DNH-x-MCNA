@@ -176,6 +176,8 @@ def test_sku_stock_scope_year_missing_zero_and_last_day(tmp_path, monkeypatch):
     assert r["unknown_or_negative_stock"][0]["stock_qty"] is None
     assert r["positive_recorded_stock"][0]["item_code"] == "B"
     assert r["stock_basis"] == "FISCAL_YEAR_LOT_RECORDS_NOT_LIVE_ATP"
+    assert r["stock_scope"] == "TM_ONLY_BRV_TONKHODKLOT"
+    assert "Khong cong ton he san xuat SX" in r["definition"]
 
 
 def test_sku_unknown_area_and_missing_history_fail_closed(tmp_path, monkeypatch):
@@ -183,6 +185,11 @@ def test_sku_unknown_area_and_missing_history_fail_closed(tmp_path, monkeypatch)
     assert "error" in rt.sku_revenue_drop_vs_stock(scope_area_code="BAD")
     monkeypatch.setattr(rt, "_detail_cutoff", lambda: "2026-03-01")
     assert rt.sku_revenue_drop_vs_stock(months_back=1)["status"] == "source_gap"
+
+
+def test_c42_sku_decline_does_not_route_to_employee_streak():
+    question = "SKU nao mat doanh so do thieu hang; SKU nao ton cao trong khi doanh so giam lien tiep?"
+    assert nl2sql._required_tool_for_question(question) is None
 
 
 def test_view_reconciliation_two_channels_zero_base_and_day_end(monkeypatch):

@@ -307,13 +307,19 @@ def _required_tool_for_question(question: str) -> str | None:
             and any(marker in q for marker in ("3 mien", "ba mien", "theo mien", "theo vung"))):
         return "get_revenue_by_region"
     is_team = any(word in q for word in ("doi", "doi toi", "toan doi", "tong doi"))
+    # C42 can CA ton/nhu cau va hai ky doanh thu. Ep mot tool (hoac route chuoi
+    # nhan vien vi cum "giam lien tiep") se lam mat mot ve cua cau hoi.
+    if ("sku" in q and any(marker in q for marker in ("thieu hang", "kho thieu"))
+            and any(marker in q for marker in ("doanh thu giam", "doanh so giam"))):
+        return None
     # 13/09/2026 (ra soat 126 cau): cau hoi ve CHUOI THANG LIEN TIEP cua nguoi/doi phai vao
     # workforce_productivity - tool duy nhat co decline_streak_months va below_80_streak_months.
     # Dat TRUOC moi luat tu khoa khac: V13 ("ai giam lien tiep 2-3 thang; nguyen nhan mat khach, it
     # don, it SKU") tung bi luat "it don" keo sang tool do phu khach-SKU, con C47 ("duoi 80% lien tiep
     # 3 thang") bi luat dia ban keo di - ca hai tool deu khong co chuoi lien tiep nen khong tra loi
     # tron cau. Trong 126 cau chi C47/M05/M16/V13 co cum "lien tiep" nen luat nay khong cuop cau khac.
-    if "lien tiep" in q and any(marker in q for marker in ("giam", "duoi 80")):
+    if ("lien tiep" in q and "sku" not in q
+            and any(marker in q for marker in ("giam", "duoi 80"))):
         return "get_workforce_productivity"
     if "view" in q and any(marker in q for marker in ("doi soat", "doi chieu", "so sanh", "lech")):
         return "get_revenue_view_reconciliation"
@@ -678,10 +684,11 @@ def _required_tool_for_question(question: str) -> str | None:
 TEMPLATE_TOOLS = [
     {
         "name": "get_sku_revenue_drop_vs_stock",
-        "description": "So SKU giam doanh thu qua hai ky THANG TRON lien ke voi ton ghi nhan theo lo/nam. "
+        "description": "So SKU giam doanh thu qua hai ky THANG TRON lien ke voi ton theo lo he kinh doanh TM. "
                        "months_back la so thang moi ky, khong phai binh quan 30 ngay. "
                        "Tra zero_recorded_stock, positive_recorded_stock, unknown_or_negative_stock "
-                       "va counts truoc limit. Ton ghi nhan KHONG chung minh ton kha dung hien tai; "
+                       "va counts truoc limit. Ton chi gom TM, KHONG gom he san xuat SX; "
+                       "so ghi nhan da cong nhap-xuat khi dong bo KHONG chung minh ton kha dung hien tai; "
                        "thieu dong ton KHONG phai 0; con ton KHONG dong nghia ton cao. Khong ket luan "
                        "nguyen nhan mat doanh thu. Cau thieu/cham ban khong so hai ky dung inventory_expiry_report.",
         "input_schema": {"type": "object", "properties": {

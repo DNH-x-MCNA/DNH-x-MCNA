@@ -11413,12 +11413,16 @@ def sku_revenue_drop_vs_stock(months_back: int = 3, area_code: str = None,
         rows.sort(key=lambda r: (r["revenue_delta"], r["item_code"]))
     return {**periods, "status": "ok", "area_code": area_code, "channel": channel or "ALL",
             "stock_fiscal_year": year, "stock_basis": "FISCAL_YEAR_LOT_RECORDS_NOT_LIVE_ATP",
+            "stock_scope": "TM_ONLY_BRV_TONKHODKLOT",
             "thresholds": {"min_prev_revenue": min_prev_revenue, "drop_pct": drop_pct_threshold},
             "counts": {key: len(rows) for key, rows in groups.items()},
             **{key: rows[:limit] for key, rows in groups.items()},
             "truncated": any(len(rows) > limit for rows in groups.values()),
-            "definition": "Hai ky thang duong lich da tron; ton kho la so ghi nhan theo lo/nam. "
+            "definition": "Hai ky thang duong lich da tron; ton kho chi gom he kinh doanh TM theo lo "
+                          "cua nam tai chinh moi nhat, cong bien dong nhap-xuat neu dong bo thanh cong. "
+                          "Khong cong ton he san xuat SX vao cot stock_qty. "
                           "Khong co dong ton = chua biet, khong phai 0. Con ton khong dong nghia ton cao. "
+                          "Hai ky gop khong chung minh doanh so giam lien tiep tung thang. "
                           "Khong ket luan mat don/doanh thu do thieu hang hay nhu cau da xac nhan."}
 
 
