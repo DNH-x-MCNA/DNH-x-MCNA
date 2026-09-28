@@ -23,7 +23,7 @@ cd C:\dnh_chatbot\backend ; py cost_report.py --by-user --top 15
 ### 0.2 🔴 RÒ RỈ MẬT KHẨU — XỬ LÝ NGAY (phát hiện 27/07)
 54 file trong `bao-cao-canh-bao/scripts/*.py` **hardcode mật khẩu Supabase** và **đã commit + push lên
 GitHub** (`github.com/DNH-x-MCNA/DNH-x-MCNA`). Chuỗi lộ:
-`postgresql://postgres.jfinzudbkmzyfqhlfoor:Trieu10052004%40@aws-1-...pooler.supabase.com:5432/postgres`
+`postgresql://<USER>:<MAT_KHAU>@aws-1-...pooler.supabase.com:5432/postgres`
 
 Đây là mật khẩu DB thật, đang nằm trong lịch sử git công khai. Cần (theo thứ tự):
 1. **Đổi mật khẩu Supabase NGAY** (Dashboard → Database → Reset password) — coi như đã lộ.
