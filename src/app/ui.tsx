@@ -67,10 +67,18 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button
   );
 });
 
+// inverse*: nut dat tren nen navy (thanh ben).
+const ICON_BUTTON_TONES = {
+  default: "text-slate-600 hover:bg-sunken hover:text-slate-900",
+  danger: "text-slate-600 hover:bg-red-50 hover:text-red-600",
+  inverse: "text-slate-400 hover:bg-white/10 hover:text-white",
+  inverseDanger: "text-slate-400 hover:bg-red-500/15 hover:text-red-300",
+};
+
 type IconButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
   label: string;
   size?: "sm" | "md";
-  tone?: "default" | "danger";
+  tone?: keyof typeof ICON_BUTTON_TONES;
 };
 
 export function IconButton({ label, size = "md", tone = "default", className, children, type = "button", ...rest }: IconButtonProps) {
@@ -80,9 +88,9 @@ export function IconButton({ label, size = "md", tone = "default", className, ch
       aria-label={label}
       title={label}
       className={cx(
-        "inline-flex shrink-0 items-center justify-center rounded-lg text-slate-500 transition-colors duration-150",
+        "inline-flex shrink-0 items-center justify-center rounded-lg transition-colors duration-150",
         "disabled:cursor-not-allowed disabled:opacity-40",
-        tone === "danger" ? "hover:bg-red-50 hover:text-red-600" : "hover:bg-sunken hover:text-slate-900",
+        ICON_BUTTON_TONES[tone],
         size === "sm" ? "h-7 w-7" : "h-9 w-9",
         className,
       )}
@@ -105,8 +113,13 @@ export function Spinner({ className }: { className?: string }) {
 // ---------------------------------------------------------------------------- O nhap
 const CONTROL =
   "w-full rounded-xl bg-white text-[15px] text-slate-900 ring-1 ring-inset ring-line-strong transition " +
-  "placeholder:text-slate-400 hover:ring-slate-400 focus:outline-none focus:ring-2 focus:ring-brand " +
-  "disabled:cursor-not-allowed disabled:bg-sunken disabled:text-slate-500 disabled:hover:ring-line-strong";
+  "placeholder:text-slate-500 hover:ring-slate-400 focus:outline-none focus:ring-2 focus:ring-brand " +
+  "disabled:cursor-not-allowed disabled:bg-sunken disabled:text-slate-600 disabled:hover:ring-line-strong";
+// O chon tren nen navy (loc nguoi dung o thanh ben): nen dac de danh sach tuy chon cua trinh duyet
+// (lay mau nen/chu cua <select>) van doc duoc.
+const CONTROL_INVERSE =
+  "w-full rounded-lg bg-navy-soft text-[13px] text-slate-100 ring-1 ring-inset ring-white/15 transition " +
+  "hover:ring-white/30 focus:outline-none focus:ring-2 focus:ring-indigo-300";
 
 export function Field({ label, htmlFor, hint, trailing, children }: {
   label: string;
@@ -118,11 +131,11 @@ export function Field({ label, htmlFor, hint, trailing, children }: {
   return (
     <div className="space-y-1.5">
       <div className="flex items-baseline justify-between gap-3">
-        <label htmlFor={htmlFor} className="text-[13px] font-medium text-slate-700">{label}</label>
+        <label htmlFor={htmlFor} className="text-[13px] font-medium text-slate-800">{label}</label>
         {trailing}
       </div>
       {children}
-      {hint && <p className="text-[12.5px] leading-relaxed text-slate-500">{hint}</p>}
+      {hint && <p className="text-[12.5px] leading-relaxed text-slate-600">{hint}</p>}
     </div>
   );
 }
@@ -144,7 +157,7 @@ export function PasswordInput({ className, ...rest }: InputHTMLAttributes<HTMLIn
         onClick={() => setVisible((v) => !v)}
         aria-label={visible ? "Ẩn mật khẩu" : "Hiện mật khẩu"}
         title={visible ? "Ẩn mật khẩu" : "Hiện mật khẩu"}
-        className="absolute inset-y-0 right-1 my-auto flex h-9 w-9 items-center justify-center rounded-lg text-slate-400 transition hover:text-slate-700"
+        className="absolute inset-y-0 right-1 my-auto flex h-9 w-9 items-center justify-center rounded-lg text-slate-500 transition hover:text-slate-800"
       >
         {visible ? <IconEyeOff className="h-[18px] w-[18px]" /> : <IconEye className="h-[18px] w-[18px]" />}
       </button>
@@ -152,20 +165,24 @@ export function PasswordInput({ className, ...rest }: InputHTMLAttributes<HTMLIn
   );
 }
 
-export function Select({ className, children, compact = false, ...rest }: SelectHTMLAttributes<HTMLSelectElement> & { compact?: boolean }) {
+export function Select({ className, children, compact = false, inverse = false, ...rest }: SelectHTMLAttributes<HTMLSelectElement> & {
+  compact?: boolean;
+  /** Dat tren nen navy (thanh ben). Luon gon (h-9). */
+  inverse?: boolean;
+}) {
   return (
     <div className={cx("relative", className)}>
       <select
         className={cx(
-          CONTROL,
+          inverse ? CONTROL_INVERSE : CONTROL,
           "appearance-none pr-9",
-          compact ? "h-9 rounded-lg pl-3 text-[13px]" : "h-11 pl-3.5",
+          inverse || compact ? "h-9 rounded-lg pl-3 text-[13px]" : "h-11 pl-3.5",
         )}
         {...rest}
       >
         {children}
       </select>
-      <IconChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+      <IconChevronDown className={cx("pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2", inverse ? "text-slate-400" : "text-slate-500")} />
     </div>
   );
 }
@@ -197,12 +214,12 @@ export function SegmentedControl<T extends string>({ options, value, onChange, c
             onClick={() => onChange(o.value)}
             className={cx(
               "inline-flex h-8 items-center gap-1.5 whitespace-nowrap rounded-lg px-3 text-[13px] font-medium transition",
-              active ? "bg-white text-slate-900 shadow-card" : "text-slate-500 hover:text-slate-800",
+              active ? "bg-white text-slate-900 shadow-card" : "text-slate-600 hover:text-slate-900",
             )}
           >
             {o.label}
             {o.badge != null && (
-              <span className={cx("rounded-md px-1.5 text-[11px] tabular-nums", active ? "bg-sunken text-slate-600" : "bg-white/70 text-slate-500")}>
+              <span className={cx("rounded-md px-1.5 text-[11px] tabular-nums", active ? "bg-sunken text-slate-700" : "bg-white/70 text-slate-600")}>
                 {o.badge}
               </span>
             )}
@@ -215,7 +232,7 @@ export function SegmentedControl<T extends string>({ options, value, onChange, c
 
 type Tone = "neutral" | "brand" | "success" | "warning" | "danger";
 const BADGE_TONES: Record<Tone, string> = {
-  neutral: "bg-sunken text-slate-600",
+  neutral: "bg-sunken text-slate-700",
   brand: "bg-indigo-50 text-indigo-700",
   success: "bg-emerald-50 text-emerald-700",
   warning: "bg-amber-50 text-amber-800",
@@ -231,7 +248,7 @@ export function Badge({ tone = "neutral", children, className }: { tone?: Tone; 
 }
 
 const NOTICE_TONES: Record<"info" | "success" | "warning" | "danger", { box: string; icon: ReactNode }> = {
-  info: { box: "bg-slate-50 text-slate-700 ring-line", icon: <IconInfo className="h-[18px] w-[18px] text-slate-400" /> },
+  info: { box: "bg-soft text-slate-800 ring-line", icon: <IconInfo className="h-[18px] w-[18px] text-slate-500" /> },
   success: { box: "bg-emerald-50/70 text-emerald-900 ring-emerald-200/70", icon: <IconCheck className="h-[18px] w-[18px] text-emerald-600" /> },
   warning: { box: "bg-amber-50/80 text-amber-900 ring-amber-200/80", icon: <IconWarning className="h-[18px] w-[18px] text-amber-600" /> },
   danger: { box: "bg-red-50/70 text-red-900 ring-red-200/70", icon: <IconAlert className="h-[18px] w-[18px] text-red-600" /> },
@@ -257,8 +274,8 @@ export function Notice({ tone = "info", title, children, action, className }: {
   );
 }
 
-export function Skeleton({ className }: { className?: string }) {
-  return <div className={cx("animate-pulse rounded-md bg-slate-200/70", className)} />;
+export function Skeleton({ className, inverse = false }: { className?: string; inverse?: boolean }) {
+  return <div className={cx("animate-pulse rounded-md", inverse ? "bg-white/10" : "bg-slate-200", className)} />;
 }
 
 export function Avatar({ name, className }: { name: string; className?: string }) {
@@ -266,7 +283,7 @@ export function Avatar({ name, className }: { name: string; className?: string }
   const words = name.trim().split(/\s+/);
   const letter = (words[words.length - 1] || name).charAt(0).toUpperCase();
   return (
-    <span className={cx("flex shrink-0 items-center justify-center rounded-full bg-navy text-[13px] font-semibold text-white", className)} aria-hidden="true">
+    <span className={cx("flex shrink-0 items-center justify-center rounded-full bg-brand text-[13px] font-semibold text-white", className)} aria-hidden="true">
       {letter}
     </span>
   );
@@ -340,7 +357,7 @@ export function DialogHeader({ id, title, description, icon, onClose, actions }:
       )}
       <div className="min-w-0 flex-1">
         <h2 id={id} className="text-[17px] font-semibold tracking-tight text-navy">{title}</h2>
-        {description && <p className="mt-0.5 text-[13px] text-slate-500">{description}</p>}
+        {description && <p className="mt-0.5 text-[13px] text-slate-600">{description}</p>}
       </div>
       {actions && <div className="hidden items-center gap-2 sm:flex">{actions}</div>}
       {onClose && (
@@ -376,7 +393,7 @@ export function ConfirmDialog({ open, title, message, confirmLabel, onConfirm, o
     <Dialog open={open} onClose={onCancel} labelledBy="confirm-dialog-title" size="sm">
       <div className="px-5 pb-2 pt-5 sm:px-6">
         <h2 id="confirm-dialog-title" className="text-[17px] font-semibold tracking-tight text-navy">{title}</h2>
-        <div className="mt-1.5 text-[14px] leading-relaxed text-slate-600">{message}</div>
+        <div className="mt-1.5 text-[14px] leading-relaxed text-slate-700">{message}</div>
       </div>
       <div className="flex justify-end gap-2 px-5 pb-5 pt-4 sm:px-6">
         <Button variant="secondary" onClick={onCancel} data-autofocus>Hủy</Button>

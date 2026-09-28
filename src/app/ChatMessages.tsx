@@ -48,7 +48,7 @@ function findQuestionBefore(messages: Message[], index: number): string | null {
 function UserMessage({ text }: { text: string }) {
   return (
     <div className="flex animate-rise-in justify-end">
-      <div className="max-w-[85%] whitespace-pre-wrap break-words rounded-2xl rounded-br-md bg-sunken px-4 py-2.5 text-[15px] leading-relaxed text-navy sm:max-w-[75%]">
+      <div className="max-w-[85%] whitespace-pre-wrap break-words rounded-2xl rounded-br-md bg-brand px-4 py-2.5 text-[15px] leading-relaxed text-white shadow-sm selection:bg-white/30 sm:max-w-[75%]">
         {text}
       </div>
     </div>
@@ -118,7 +118,7 @@ function BotMessage({ message: m, streaming, onRetry, onFeedback }: {
             </div>
             {m.freshness && m.freshness.length > 0 && <FreshnessLine items={m.freshness} />}
             {!streaming && (
-              <div className="mt-2 flex flex-wrap items-center gap-1 text-slate-500">
+              <div className="mt-2 flex flex-wrap items-center gap-1 text-slate-600">
                 <CopyButton getText={visibleText} />
                 {sqlCount > 0 && (
                   <button type="button" onClick={() => setShowSql((v) => !v)} aria-expanded={showSql} className={ACTION}>
@@ -140,7 +140,7 @@ function BotMessage({ message: m, streaming, onRetry, onFeedback }: {
             )}
             {showSql && m.sqlUsed && (
               <div ref={sqlRef} className="mt-2 scroll-mb-6 space-y-2">
-                <p className="text-[12.5px] text-slate-500">Các truy vấn trợ lý đã chạy để lấy số liệu — dùng để đối chiếu khi cần.</p>
+                <p className="text-[12.5px] text-slate-600">Các truy vấn trợ lý đã chạy để lấy số liệu — dùng để đối chiếu khi cần.</p>
                 {m.sqlUsed.map((sql, si) => (
                   <pre key={si} className="custom-scroll overflow-x-auto rounded-xl bg-navy p-4 font-mono text-[12.5px] leading-relaxed text-slate-100">
                     {sql}
@@ -169,7 +169,7 @@ function FreshnessLine({ items }: { items: FreshnessItem[] }) {
     stale.length ? stale[0].warning || "nguồn có thể chưa đồng bộ kịp" : null,
   ].filter(Boolean);
   return (
-    <p className={cx("mt-3 flex items-start gap-1.5 text-[12.5px] leading-relaxed", stale.length ? "text-amber-700" : "text-slate-400")}>
+    <p className={cx("mt-3 flex items-start gap-1.5 text-[12.5px] leading-relaxed", stale.length ? "text-amber-700" : "text-slate-500")}>
       {stale.length > 0 && <IconWarning className="mt-0.5 h-3.5 w-3.5 shrink-0" />}
       <span>{parts.join(" · ")}</span>
     </p>
@@ -199,7 +199,7 @@ function CopyButton({ getText }: { getText: () => string }) {
 
 const TEXTAREA =
   "block w-full resize-y rounded-xl bg-white px-3.5 py-2.5 text-[14px] text-slate-900 ring-1 ring-inset ring-line-strong " +
-  "placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-brand";
+  "placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-brand";
 
 // Danh gia cau tra loi (PUT /api/queries/{id}/feedback). Hai long: luu ngay. Chua hai long: bat chon
 // ly do truoc khi luu - doi du an can biet sai o dau (so lieu, pham vi, hieu cau hoi...).
@@ -280,7 +280,7 @@ function FeedbackControls({ queryId, initialRating, initialCategory, initialComm
   return (
     <>
       <div className="ml-auto flex items-center gap-1">
-        <span className={cx("mr-1 text-[12.5px]", status === "saved" ? "font-medium text-emerald-600" : "hidden text-slate-400 sm:inline")}>
+        <span className={cx("mr-1 text-[12.5px]", status === "saved" ? "font-medium text-emerald-600" : "hidden text-slate-500 sm:inline")}>
           {status === "saved" ? "Đã lưu đánh giá" : "Câu trả lời có hữu ích?"}
         </span>
         <button type="button" onClick={chooseSatisfied} disabled={saving} aria-label="Hài lòng" title="Hài lòng"
@@ -317,7 +317,7 @@ function FeedbackControls({ queryId, initialRating, initialCategory, initialComm
             className={TEXTAREA}
           />
           <div className="flex items-center justify-between gap-3">
-            <span className="text-[12px] tabular-nums text-slate-400">{comment.length}/2000</span>
+            <span className="text-[12px] tabular-nums text-slate-500">{comment.length}/2000</span>
             <Button size="sm" variant="primary" loading={saving} onClick={saveDetails}>Gửi đánh giá</Button>
           </div>
         </div>
@@ -339,14 +339,14 @@ function ThinkingIndicator() {
     return () => window.clearInterval(t);
   }, []);
   return (
-    <div className="flex h-7 items-center gap-3 text-[14px] text-slate-500" aria-live="polite">
+    <div className="flex h-7 items-center gap-3 text-[14px] text-slate-600" aria-live="polite">
       <span className="flex gap-1" aria-hidden="true">
         <span className="typing-dot h-1.5 w-1.5 rounded-full bg-brand" />
         <span className="typing-dot h-1.5 w-1.5 rounded-full bg-brand [animation-delay:0.15s]" />
         <span className="typing-dot h-1.5 w-1.5 rounded-full bg-brand [animation-delay:0.3s]" />
       </span>
       <span>Đang phân tích dữ liệu</span>
-      {seconds >= 3 && <span className="tabular-nums text-slate-400">{seconds} giây</span>}
+      {seconds >= 3 && <span className="tabular-nums text-slate-500">{seconds} giây</span>}
     </div>
   );
 }

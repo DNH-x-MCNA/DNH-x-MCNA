@@ -95,7 +95,7 @@ export function ExportableTable({
           type="button"
           onClick={xuatFile}
           aria-label="Tải bảng này về máy dưới dạng file CSV mở được bằng Excel"
-          className="inline-flex h-7 items-center gap-1.5 rounded-lg px-2 text-[12.5px] font-medium text-slate-500 transition hover:bg-sunken hover:text-slate-900"
+          className="inline-flex h-7 items-center gap-1.5 rounded-lg px-2 text-[12.5px] font-medium text-slate-600 transition hover:bg-sunken hover:text-slate-900"
         >
           {daTai ? <IconCheck className="h-3.5 w-3.5 text-emerald-600" /> : <IconDownload className="h-3.5 w-3.5" />}
           {daTai ? "Đã tải" : "Tải Excel"}

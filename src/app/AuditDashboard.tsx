@@ -171,8 +171,8 @@ type AuditDashboardData = {
 
 type Tab = "users" | "weekly" | "logs";
 
-const TH = "sticky top-0 z-10 whitespace-nowrap border-b border-line bg-soft px-3.5 py-2.5 text-[12.5px] font-medium text-slate-500";
-const TD = "border-b border-slate-100 px-3.5 py-2.5 text-slate-700";
+const TH = "sticky top-0 z-10 whitespace-nowrap border-b border-line bg-sunken px-3.5 py-2.5 text-[12.5px] font-semibold text-slate-700";
+const TD = "border-b border-line px-3.5 py-2.5 text-slate-800";
 
 /** Chi mount khi dang mo (page.tsx): mo la tai ngay du lieu ky + du lieu tuan, dong la bo trang thai. */
 export function AuditDashboard({ authToken, onClose }: { authToken: string | null; onClose: () => void }) {
@@ -360,7 +360,7 @@ export function AuditDashboard({ authToken, onClose }: { authToken: string | nul
             {[0, 1, 2, 3].map((i) => <Skeleton key={i} className="h-28 rounded-2xl" />)}
           </div>
         ) : !auditData ? (
-          <div className="flex h-64 items-center justify-center text-[14px] text-slate-400">Không tải được dữ liệu Audit Log.</div>
+          <div className="flex h-64 items-center justify-center text-[14px] text-slate-500">Không tải được dữ liệu Audit Log.</div>
         ) : (
           <div className="space-y-5">
             <SummaryCards summary={auditData.summary} effectiveRate={effectiveRate} />
@@ -370,7 +370,7 @@ export function AuditDashboard({ authToken, onClose }: { authToken: string | nul
       </DialogBody>
 
       <DialogFooter className="justify-between">
-        <p className="max-w-4xl text-[12px] leading-relaxed text-slate-500">
+        <p className="max-w-4xl text-[12px] leading-relaxed text-slate-600">
           Chi phí quy đổi theo tỷ giá {Math.round(effectiveRate).toLocaleString("vi-VN")} đ/USD. Nhà cung cấp và model lấy từ
           log API thực tế của từng lượt; tổng lấy thẳng từ sổ chi phí nên luôn đúng, kể cả phần chưa quy được về người dùng
           cụ thể. <span className="font-medium text-slate-700">Số liệu ở đây chia ngày theo giờ Việt Nam, còn Anthropic Console
@@ -386,9 +386,9 @@ export function AuditDashboard({ authToken, onClose }: { authToken: string | nul
 function StatCard({ label, value, children }: { label: string; value: ReactNode; children?: ReactNode }) {
   return (
     <div className="rounded-2xl bg-white p-4 shadow-card ring-1 ring-inset ring-line">
-      <div className="text-[13px] text-slate-500">{label}</div>
+      <div className="text-[13px] text-slate-600">{label}</div>
       <div className="mt-1.5 text-[24px] font-semibold leading-tight tracking-tight text-navy tabular-nums">{value}</div>
-      {children && <div className="mt-2 text-[12.5px] leading-relaxed text-slate-500">{children}</div>}
+      {children && <div className="mt-2 text-[12.5px] leading-relaxed text-slate-600">{children}</div>}
     </div>
   );
 }
@@ -453,7 +453,7 @@ function Legend({ className, label }: { className: string; label: string }) {
 
 function TableCard({ children, className, nhan }: { children: ReactNode; className?: string; nhan: string }) {
   return (
-    <ExportableTable nhan={nhan} className={cx("custom-scroll max-h-[460px] overflow-auto rounded-2xl bg-white shadow-card ring-1 ring-inset ring-line", className)}>
+    <ExportableTable nhan={nhan} className={cx("custom-scroll max-h-[460px] overflow-auto rounded-2xl border border-line bg-white shadow-card", className)}>
       {children}
     </ExportableTable>
   );
@@ -496,14 +496,14 @@ function UsersTable({ rows }: { rows: UserBreakdownItem[] }) {
               // Ban backend cu chua tra cache_tokens - suy nguoc tu tong de cot Cache van dung thay vi hien 0.
               const cacheTokens = u.cache_tokens ?? Math.max(0, u.total_tokens - u.input_tokens - u.output_tokens);
               return (
-                <tr key={u.username} className={cx("transition-colors hover:bg-slate-50/70", u.is_unattributed && "italic text-slate-500")}>
+                <tr key={u.username} className={cx("transition-colors hover:bg-soft", u.is_unattributed && "italic text-slate-600")}>
                   <td className={cx(TD, "font-medium text-navy")}>
                     <span className="inline-flex items-center gap-2">
                       {u.user_name}
                       {isTop && <Badge tone="warning" className="not-italic">Cao nhất</Badge>}
                     </span>
                   </td>
-                  <td className={cx(TD, "font-mono text-[12.5px] text-slate-500")}>{u.username}</td>
+                  <td className={cx(TD, "font-mono text-[12.5px] text-slate-600")}>{u.username}</td>
                   <td className={cx(TD, "text-right")}>{u.query_count}</td>
                   <td className={cx(TD, "text-right")}>{u.input_tokens.toLocaleString("vi-VN")}</td>
                   <td className={cx(TD, "text-right")}>{u.output_tokens.toLocaleString("vi-VN")}</td>
@@ -531,7 +531,7 @@ function LogsTable({ logs }: { logs: QueryLogItem[] }) {
   });
   return (
     <div className="space-y-3">
-      <p className="text-[13px] text-slate-500">
+      <p className="text-[13px] text-slate-600">
         {queryOnlyLogs.length} lượt hỏi gần nhất. Cột token và chi phí tính cho <span className="font-medium text-slate-700">cả phiên</span> chứa lượt hỏi đó.
       </p>
       <TableCard nhan="nhat-ky-truy-van">
@@ -556,17 +556,17 @@ function LogsTable({ logs }: { logs: QueryLogItem[] }) {
             {queryOnlyLogs.map((log, idx) => {
               const status = queryStatusLabel(log.status);
               return (
-              <tr key={log.query_id ?? `${log.session_id}-${log.ts}-${idx}`} className="align-top transition-colors hover:bg-slate-50/70">
-                <td className={cx(TD, "whitespace-nowrap text-slate-500")}>{formatDateTime(log.ts, true) || "—"}</td>
+              <tr key={log.query_id ?? `${log.session_id}-${log.ts}-${idx}`} className="align-top transition-colors hover:bg-soft">
+                <td className={cx(TD, "whitespace-nowrap text-slate-600")}>{formatDateTime(log.ts, true) || "—"}</td>
                 <td className={cx(TD, "whitespace-nowrap font-medium text-navy")}>{log.user_name}</td>
                 <td className={cx(TD, "whitespace-nowrap")}>
                   {log.api_provider ? (
                     <div>
                       <div className="font-medium text-slate-800">{log.api_provider}</div>
-                      {log.api_model && <div className="text-[12px] text-slate-400">{log.api_model}</div>}
+                      {log.api_model && <div className="text-[12px] text-slate-500">{log.api_model}</div>}
                     </div>
                   ) : (
-                    <span className="text-slate-300">—</span>
+                    <span className="text-slate-400">—</span>
                   )}
                 </td>
                 <td className={cx(TD, "min-w-[14rem] max-w-xs text-slate-800")}>
@@ -586,13 +586,13 @@ function LogsTable({ logs }: { logs: QueryLogItem[] }) {
                         <IconThumbDown className="h-4 w-4" /> Không hài lòng
                       </span>
                       {log.feedback_category && (
-                        <div className="mt-0.5 text-[12px] text-slate-500">
+                        <div className="mt-0.5 text-[12px] text-slate-600">
                           {FEEDBACK_CATEGORY_LABELS[log.feedback_category] || log.feedback_category}
                         </div>
                       )}
                     </div>
                   ) : (
-                    <span className="text-slate-400">Chưa đánh giá</span>
+                    <span className="text-slate-500">Chưa đánh giá</span>
                   )}
                 </td>
                 <td className={cx(TD, "min-w-[12rem] max-w-[16rem] text-slate-600")}>
@@ -601,11 +601,11 @@ function LogsTable({ logs }: { logs: QueryLogItem[] }) {
                 <td className={cx(TD, "text-right")}>{log.session_input_tokens.toLocaleString("vi-VN")}</td>
                 <td className={cx(TD, "text-right")}>{log.session_output_tokens.toLocaleString("vi-VN")}</td>
                 <td className={cx(TD, "whitespace-nowrap text-right font-medium text-navy")}>{formatVnd(log.session_cost_vnd)}</td>
-                <td className={cx(TD, "whitespace-nowrap text-right text-slate-500")}>
+                <td className={cx(TD, "whitespace-nowrap text-right text-slate-600")}>
                   {log.duration_ms != null ? (
                     `${(log.duration_ms / 1000).toFixed(1).replace(".", ",")} giây`
                   ) : log.tool_duration_ms != null ? (
-                    <span className="text-slate-400" title={`Không có bản ghi cả lượt. Một lần gọi công cụ mất ${log.tool_duration_ms} ms — không phải thời gian trả lời.`}>—</span>
+                    <span className="text-slate-500" title={`Không có bản ghi cả lượt. Một lần gọi công cụ mất ${log.tool_duration_ms} ms — không phải thời gian trả lời.`}>—</span>
                   ) : (
                     "—"
                   )}
@@ -617,7 +617,7 @@ function LogsTable({ logs }: { logs: QueryLogItem[] }) {
                       <pre className="custom-scroll mt-2 max-w-md overflow-x-auto rounded-lg bg-navy p-3 font-mono text-[12px] leading-relaxed text-slate-100">{log.sql}</pre>
                     </details>
                   ) : (
-                    <span className="text-slate-300">—</span>
+                    <span className="text-slate-400">—</span>
                   )}
                 </td>
               </tr>
@@ -670,7 +670,7 @@ function WeeklyView({ data, loading, offset, onChangeWeek }: {
           <h3 className="text-[14px] font-semibold text-navy">Chi phí theo ngày</h3>
           {/* 17/08/2026: chu giai theo NHA CUNG CAP - mau mang nghia danh tinh (tien chay ve dau); to theo
               "hom nay" thi cung mot nha cung cap lai doi mau tuy ngay. Hom nay nhan ra qua nhan truc duoi. */}
-          <div className="flex flex-wrap items-center gap-3 text-[12px] text-slate-500">
+          <div className="flex flex-wrap items-center gap-3 text-[12px] text-slate-600">
             {providerNames.length > 0
               ? providerNames.map((ten) => <Swatch key={ten} color={mauNhaCungCap(ten)} label={ten} />)
               : <Swatch color={mauNhaCungCap("")} label="Chi phí" />}
@@ -686,7 +686,7 @@ function WeeklyView({ data, loading, offset, onChangeWeek }: {
               const providers = day.providers || [];
               return (
                 <div key={day.day_index} className="group relative flex h-full flex-col items-center justify-end">
-                  <span className={cx("mb-1.5 text-[11.5px] font-medium tabular-nums", day.is_today ? "text-navy" : "text-slate-500")}>
+                  <span className={cx("mb-1.5 text-[11.5px] font-medium tabular-nums", day.is_today ? "text-navy" : "text-slate-600")}>
                     {day.cost_vnd > 0 ? compactVnd(day.cost_vnd) : "—"}
                   </span>
                   <div className="flex w-full max-w-[44px] flex-1 flex-col justify-end">
@@ -714,7 +714,7 @@ function WeeklyView({ data, loading, offset, onChangeWeek }: {
                   <span className={cx("mt-2 rounded-md px-1.5 text-[12px] font-medium", day.is_today ? "bg-navy text-white" : "text-slate-700")}>
                     {day.day_name}
                   </span>
-                  <span className="text-[11px] tabular-nums text-slate-400">{day.is_today ? "hôm nay" : day.display_date}</span>
+                  <span className="text-[11px] tabular-nums text-slate-500">{day.is_today ? "hôm nay" : day.display_date}</span>
                   <div className="pointer-events-none absolute bottom-full z-20 mb-1 hidden w-52 rounded-xl bg-navy p-3 text-[12px] text-white shadow-float group-hover:block">
                     <div className="mb-1.5 font-semibold">{day.day_name}, {day.display_date}{day.is_today ? " · hôm nay" : ""}</div>
                     <div className="flex justify-between tabular-nums text-slate-300"><span>Chi phí</span><span className="text-white">{formatVnd(day.cost_vnd)}</span></div>
@@ -753,9 +753,9 @@ function WeeklyView({ data, loading, offset, onChangeWeek }: {
                     <span className="h-2.5 w-2.5 rounded-sm" style={{ background: mauNhaCungCap(p.provider) }} />
                     {p.provider}
                   </span>
-                  <span className="font-mono text-[11.5px] text-slate-400">{p.api_key_id}</span>
+                  <span className="font-mono text-[11.5px] text-slate-500">{p.api_key_id}</span>
                 </div>
-                <div className="mt-1 text-[12.5px] text-slate-500">{p.model}</div>
+                <div className="mt-1 text-[12.5px] text-slate-600">{p.model}</div>
                 <div className="mt-2 flex items-baseline justify-between tabular-nums">
                   <span className="text-[13px] text-slate-600">{p.query_count.toLocaleString("vi-VN")} lượt</span>
                   <span className="text-[16px] font-semibold text-navy">{formatVnd(p.cost_vnd)}</span>
@@ -780,7 +780,7 @@ function WeeklyView({ data, loading, offset, onChangeWeek }: {
                   .filter((d) => d.providers && d.providers.length > 0)
                   .flatMap((d) =>
                     d.providers.map((p, pi) => (
-                      <tr key={`${d.date_str}-${p.provider}-${p.api_key_id}-${p.model}`} className="transition-colors hover:bg-slate-50/70">
+                      <tr key={`${d.date_str}-${p.provider}-${p.api_key_id}-${p.model}`} className="transition-colors hover:bg-soft">
                         <td className={TD}>
                           {pi === 0 ? (
                             <span className="inline-flex items-center gap-2 font-medium text-navy">
@@ -788,11 +788,11 @@ function WeeklyView({ data, loading, offset, onChangeWeek }: {
                               {d.providers.length > 1 && <Badge tone="danger">{d.providers.length} nguồn</Badge>}
                             </span>
                           ) : (
-                            <span className="text-slate-300">↳</span>
+                            <span className="text-slate-400">↳</span>
                           )}
                         </td>
                         <td className={TD}><Swatch color={mauNhaCungCap(p.provider)} label={p.provider} /></td>
-                        <td className={cx(TD, "font-mono text-[12px] text-slate-500")}>{p.api_key_id}</td>
+                        <td className={cx(TD, "font-mono text-[12px] text-slate-600")}>{p.api_key_id}</td>
                         <td className={cx(TD, "text-slate-600")}>{p.model}</td>
                         <td className={cx(TD, "text-right")}>{p.query_count.toLocaleString("vi-VN")}</td>
                         <td className={cx(TD, "text-right font-semibold text-navy")}>{formatVnd(p.cost_vnd)}</td>
@@ -802,7 +802,7 @@ function WeeklyView({ data, loading, offset, onChangeWeek }: {
               </tbody>
             </table>
           </TableCard>
-          <p className="text-[12px] leading-relaxed text-slate-400">
+          <p className="text-[12px] leading-relaxed text-slate-500">
             Nhãn API key chỉ để phân biệt các key với nhau (4 ký tự cuối kèm mã băm), không khôi phục được key. Bản ghi
             trước 17/08 chưa lưu nhãn key nên hiện “(không ghi)”, nhà cung cấp được suy từ tên model.
           </p>
@@ -824,9 +824,9 @@ function WeeklyView({ data, loading, offset, onChangeWeek }: {
             </thead>
             <tbody>
               {data?.user_breakdown.map((u) => (
-                <tr key={u.username} className="transition-colors hover:bg-slate-50/70">
+                <tr key={u.username} className="transition-colors hover:bg-soft">
                   <td className={cx(TD, "font-medium text-navy")}>{u.user_name}</td>
-                  <td className={cx(TD, "font-mono text-[12.5px] text-slate-500")}>{u.username}</td>
+                  <td className={cx(TD, "font-mono text-[12.5px] text-slate-600")}>{u.username}</td>
                   <td className={cx(TD, "text-right")}>{u.query_count}</td>
                   <td className={cx(TD, "text-right")}>{u.total_tokens.toLocaleString("vi-VN")}</td>
                   <td className={cx(TD, "text-right font-semibold text-navy")}>{formatVnd(u.cost_vnd)}</td>
@@ -834,7 +834,7 @@ function WeeklyView({ data, loading, offset, onChangeWeek }: {
               ))}
               {(!data || data.user_breakdown.length === 0) && (
                 <tr>
-                  <td colSpan={5} className="px-3.5 py-8 text-center text-slate-400">Chưa có lượt hỏi nào trong tuần này.</td>
+                  <td colSpan={5} className="px-3.5 py-8 text-center text-slate-500">Chưa có lượt hỏi nào trong tuần này.</td>
                 </tr>
               )}
             </tbody>

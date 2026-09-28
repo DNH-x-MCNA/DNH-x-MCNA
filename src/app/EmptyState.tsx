@@ -44,14 +44,14 @@ export function EmptyState({ user, isAdmin, onAsk, onChangePassword, onOpenAudit
         <h1 className="mt-5 text-[28px] font-semibold leading-tight tracking-tight text-navy sm:text-[32px]">
           Xin chào, {displayName(user)}
         </h1>
-        <p className="mt-2 max-w-xl text-[15.5px] leading-relaxed text-slate-500">
+        <p className="mt-2 max-w-xl text-[15.5px] leading-relaxed text-slate-600">
           {opsOnly
             ? "Quản lý tài khoản nhân viên và theo dõi chi phí AI của hệ thống."
             : "Hỏi bằng tiếng Việt về doanh thu, công nợ, KPI hay tồn kho. Trợ lý tra cứu trực tiếp dữ liệu Bravo và DMS rồi trả lời kèm số liệu."}
         </p>
         {!opsOnly && !pending && (
           <div className="mt-4 inline-flex items-center gap-1.5 rounded-full bg-sunken px-3 py-1 text-[13px] text-slate-600">
-            <IconMapPin className="h-3.5 w-3.5 text-slate-400" />
+            <IconMapPin className="h-3.5 w-3.5 text-slate-500" />
             Phạm vi dữ liệu: <span className="font-medium text-slate-800">{scopeLabel(user)}</span>
           </div>
         )}
@@ -90,19 +90,19 @@ export function EmptyState({ user, isAdmin, onAsk, onChangePassword, onOpenAudit
                 type="button"
                 onClick={() => onAsk(s.question)}
                 style={{ animationDelay: `${60 + i * 35}ms` }}
-                className="group flex animate-rise-in items-start gap-3 rounded-2xl bg-white px-3.5 py-3 text-left ring-1 ring-inset ring-line transition hover:bg-soft hover:ring-line-strong"
+                className="group flex animate-rise-in items-start gap-3 rounded-2xl bg-white px-3.5 py-3 text-left shadow-card ring-1 ring-inset ring-line transition hover:ring-line-strong hover:shadow-raised"
               >
                 <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-indigo-50 text-brand transition group-hover:bg-brand group-hover:text-white">
                   {s.icon}
                 </span>
                 <span className="min-w-0">
-                  <span className="block text-[12.5px] font-medium text-slate-400">{s.topic}</span>
+                  <span className="block text-[12.5px] font-medium text-slate-500">{s.topic}</span>
                   <span className="mt-0.5 block text-[14.5px] leading-snug text-slate-800">{s.question}</span>
                 </span>
               </button>
             ))}
           </div>
-          <p className="mt-5 text-[13px] leading-relaxed text-slate-400">
+          <p className="mt-5 text-[13px] leading-relaxed text-slate-500">
             Mẹo: có thể hỏi tiếp như “còn tháng trước thì sao?” — trợ lý nhớ ngữ cảnh trong cùng cuộc trò chuyện.
           </p>
         </>

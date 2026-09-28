@@ -307,17 +307,17 @@ export default function AdminUsersPanel({ authToken, currentRole, onClose }: Adm
               {loading && users.length === 0 ? (
                 <div className="space-y-2">{[0, 1, 2, 3].map((i) => <Skeleton key={i} className="h-14 rounded-xl" />)}</div>
               ) : users.length === 0 ? (
-                <div className="py-16 text-center text-[14px] text-slate-400">Không có tài khoản nào phù hợp với bộ lọc.</div>
+                <div className="py-16 text-center text-[14px] text-slate-500">Không có tài khoản nào phù hợp với bộ lọc.</div>
               ) : (
-                <ExportableTable nhan="danh-sach-tai-khoan" className="custom-scroll overflow-x-auto rounded-2xl bg-white shadow-card ring-1 ring-inset ring-line">
+                <ExportableTable nhan="danh-sach-tai-khoan" className="custom-scroll overflow-x-auto rounded-2xl border border-line bg-white shadow-card">
                   <table className="w-full border-collapse text-left text-[13.5px]">
                     <thead>
-                      <tr className="border-b border-line bg-soft text-[12.5px] font-medium text-slate-500">
-                        <th className="px-4 py-2.5 font-medium">Tài khoản</th>
-                        <th className="px-4 py-2.5 font-medium">Trạng thái</th>
-                        <th className="px-4 py-2.5 font-medium">Vai trò & phạm vi</th>
-                        <th className="px-4 py-2.5 font-medium">Hoạt động gần nhất</th>
-                        <th className="px-4 py-2.5 text-right font-medium">Thao tác</th>
+                      <tr className="border-b border-line bg-sunken text-[12.5px] font-semibold text-slate-700">
+                        <th className="px-4 py-2.5 font-semibold">Tài khoản</th>
+                        <th className="px-4 py-2.5 font-semibold">Trạng thái</th>
+                        <th className="px-4 py-2.5 font-semibold">Vai trò & phạm vi</th>
+                        <th className="px-4 py-2.5 font-semibold">Hoạt động gần nhất</th>
+                        <th className="px-4 py-2.5 text-right font-semibold">Thao tác</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -330,10 +330,10 @@ export default function AdminUsersPanel({ authToken, currentRole, onClose }: Adm
                         // Admin Van Hanh khong dong vao tai khoan C-Level/Admin khac.
                         const opsOnPrivileged = isOps && PRIVILEGED_ROLES.includes(u.role);
                         return (
-                          <tr key={u.id} className="border-b border-slate-100 align-top transition-colors last:border-b-0 hover:bg-slate-50/70">
+                          <tr key={u.id} className="border-b border-line align-top transition-colors last:border-b-0 hover:bg-soft">
                             <td className="px-4 py-3">
                               <div className="font-medium text-navy">{u.name || u.username}</div>
-                              <div className="text-[12.5px] text-slate-500">
+                              <div className="text-[12.5px] text-slate-600">
                                 <span className="font-mono">{u.username}</span>
                                 {u.email ? ` · ${u.email}` : ""}
                               </div>
@@ -346,9 +346,9 @@ export default function AdminUsersPanel({ authToken, currentRole, onClose }: Adm
                             </td>
                             <td className="px-4 py-3">
                               <div className="text-slate-800">{getRoleLabel(u.role)}</div>
-                              {scope && <div className="text-[12.5px] text-slate-500">{scope}</div>}
+                              {scope && <div className="text-[12.5px] text-slate-600">{scope}</div>}
                             </td>
-                            <td className="px-4 py-3 text-[12.5px] text-slate-500">
+                            <td className="px-4 py-3 text-[12.5px] text-slate-600">
                               <div>{u.last_login_at ? `Đăng nhập ${formatDateTime(u.last_login_at)}` : "Chưa đăng nhập lần nào"}</div>
                               <div>{u.password_changed_at ? `Đổi mật khẩu ${formatDateTime(u.password_changed_at)}` : "Vẫn dùng mật khẩu khởi tạo"}</div>
                             </td>
@@ -383,7 +383,7 @@ export default function AdminUsersPanel({ authToken, currentRole, onClose }: Adm
             <div className="space-y-4">
               <div className="flex flex-wrap items-center gap-2">
                 <div className="relative min-w-[220px] flex-1">
-                  <IconSearch className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                  <IconSearch className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
                   <CompactInput value={secSearch} onChange={(e) => setSecSearch(e.target.value)} placeholder="Tìm theo tài khoản, họ tên, nội dung…" className="pl-9" aria-label="Tìm trong nhật ký" />
                 </div>
                 <Select compact value={secEventFilter} onChange={(e) => setSecEventFilter(e.target.value)} aria-label="Loại sự kiện">
@@ -397,7 +397,7 @@ export default function AdminUsersPanel({ authToken, currentRole, onClose }: Adm
                   </Button>
                 )}
               </div>
-              <p className="text-[13px] text-slate-500">
+              <p className="text-[13px] text-slate-600">
                 {filteredSecurityLogs.length}
                 {filteredSecurityLogs.length !== securityLogs.length ? ` / ${securityLogs.length}` : ""} sự kiện trong 90 ngày:
                 đăng nhập, đổi mật khẩu và thao tác quản trị.
@@ -405,29 +405,29 @@ export default function AdminUsersPanel({ authToken, currentRole, onClose }: Adm
               {logsLoading && securityLogs.length === 0 ? (
                 <div className="space-y-2">{[0, 1, 2].map((i) => <Skeleton key={i} className="h-11 rounded-xl" />)}</div>
               ) : securityLogs.length === 0 ? (
-                <div className="py-16 text-center text-[14px] text-slate-400">Chưa có dữ liệu nhật ký bảo mật.</div>
+                <div className="py-16 text-center text-[14px] text-slate-500">Chưa có dữ liệu nhật ký bảo mật.</div>
               ) : filteredSecurityLogs.length === 0 ? (
-                <div className="py-16 text-center text-[14px] text-slate-400">Không có sự kiện nào khớp bộ lọc.</div>
+                <div className="py-16 text-center text-[14px] text-slate-500">Không có sự kiện nào khớp bộ lọc.</div>
               ) : (
-                <ExportableTable nhan="nhat-ky-bao-mat" className="custom-scroll overflow-x-auto rounded-2xl bg-white shadow-card ring-1 ring-inset ring-line">
+                <ExportableTable nhan="nhat-ky-bao-mat" className="custom-scroll overflow-x-auto rounded-2xl border border-line bg-white shadow-card">
                   <table className="w-full border-collapse text-left text-[13.5px]">
                     <thead>
-                      <tr className="border-b border-line bg-soft text-[12.5px] text-slate-500">
-                        <th className="px-4 py-2.5 font-medium">Thời gian</th>
-                        <th className="px-4 py-2.5 font-medium">Người thực hiện</th>
-                        <th className="px-4 py-2.5 font-medium">Sự kiện</th>
-                        <th className="px-4 py-2.5 text-right font-medium">Kết quả</th>
+                      <tr className="border-b border-line bg-sunken text-[12.5px] font-semibold text-slate-700">
+                        <th className="px-4 py-2.5 font-semibold">Thời gian</th>
+                        <th className="px-4 py-2.5 font-semibold">Người thực hiện</th>
+                        <th className="px-4 py-2.5 font-semibold">Sự kiện</th>
+                        <th className="px-4 py-2.5 text-right font-semibold">Kết quả</th>
                       </tr>
                     </thead>
                     <tbody>
                       {filteredSecurityLogs.map((log, idx) => {
                         const cat = SEC_EVENT_CATEGORIES.slice(1).find((c) => c.match(log.sql || ""));
                         return (
-                          <tr key={idx} className="border-b border-slate-100 transition-colors last:border-b-0 hover:bg-slate-50/70">
-                            <td className="whitespace-nowrap px-4 py-3 tabular-nums text-slate-500">{formatDateTime(log.ts, true) || "—"}</td>
+                          <tr key={idx} className="border-b border-line transition-colors last:border-b-0 hover:bg-soft">
+                            <td className="whitespace-nowrap px-4 py-3 tabular-nums text-slate-600">{formatDateTime(log.ts, true) || "—"}</td>
                             <td className="whitespace-nowrap px-4 py-3">
                               <div className="font-medium text-navy">{log.user_name}</div>
-                              <div className="font-mono text-[12px] text-slate-500">{log.username}</div>
+                              <div className="font-mono text-[12px] text-slate-600">{log.username}</div>
                             </td>
                             <td className="px-4 py-3">
                               <div className="flex flex-wrap items-center gap-2">
@@ -556,7 +556,7 @@ function ApproveDialog({ user, authToken, onClose, onSaved }: {
               </Select>
             </Field>
           </div>
-          {scopeLocked && <p className="text-[12.5px] text-slate-500">Vai trò này xem được toàn công ty nên không cần chọn vùng, kênh.</p>}
+          {scopeLocked && <p className="text-[12.5px] text-slate-600">Vai trò này xem được toàn công ty nên không cần chọn vùng, kênh.</p>}
           {role === "qlv" && (
             <Field label="Mã nhân viên Bravo" htmlFor="approve-emp" hint="Mã QLV trên Bravo, ví dụ MBKV1 — dùng để giới hạn số liệu theo đội.">
               <TextInput id="approve-emp" placeholder="MBKV1" value={employeeCode} onChange={(e) => setEmployeeCode(e.target.value)} />

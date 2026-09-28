@@ -4,15 +4,17 @@
    DNH AI Analyst — bang mau GIU NGUYEN tu Executive Light Theme 29/07/2026 (navy + indigo).
    28/09/2026 (thiet ke lai): them token be mat/chu/bong/bo goc de moi man hinh dung chung mot
    he; doi gia tri o day la doi toan app, khong hardcode hex trong className.
+   29/09/2026 (tang tuong phan): thanh ben + man dang nhap navy nhu thanh dieu huong toi cua ban
+   29/07; vien/nen phu dam hon; chu phu toi thieu slate-500 tren nen trang.
    ============================================================================ */
 
 :root {
-  --background: #f8fafc;
+  --background: #f5f7fa;
   --foreground: #0b1528;
 
   /* Thuong hieu */
   --brand-navy: #0b1528;
-  --brand-navy-soft: #131f36;
+  --brand-navy-soft: #16233d;
   --brand-indigo: #4f46e5;
   --brand-indigo-strong: #4338ca;
   --brand-blue: #3b82f6;
@@ -25,11 +27,11 @@
 
   /* Be mat */
   --surface-card: #ffffff;
-  --surface-soft: #f8fafc;
-  --surface-sunken: #f1f5f9;
-  --surface-border: #e2e8f0;
-  --surface-border-strong: #cbd5e1;
-  --scrollbar-thumb: #cbd5e1;
+  --surface-soft: #f5f7fa;
+  --surface-sunken: #eceff5;
+  --surface-border: #d9dfe8;
+  --surface-border-strong: #b5c0ce;
+  --scrollbar-thumb: #b5c0ce;
 }
 
 @theme inline {
@@ -49,10 +51,10 @@
   --font-sans: var(--font-inter);
   --font-mono: var(--font-geist-mono);
 
-  --shadow-card: 0 1px 2px rgb(15 23 42 / 0.04), 0 1px 3px rgb(15 23 42 / 0.05);
-  --shadow-raised: 0 2px 4px rgb(15 23 42 / 0.04), 0 8px 24px -6px rgb(15 23 42 / 0.1);
-  --shadow-float: 0 2px 6px rgb(15 23 42 / 0.06), 0 24px 56px -16px rgb(15 23 42 / 0.28);
-  --shadow-composer: 0 1px 2px rgb(15 23 42 / 0.05), 0 8px 28px -10px rgb(15 23 42 / 0.16);
+  --shadow-card: 0 1px 2px rgb(15 23 42 / 0.06), 0 1px 3px rgb(15 23 42 / 0.08);
+  --shadow-raised: 0 2px 4px rgb(15 23 42 / 0.06), 0 8px 24px -6px rgb(15 23 42 / 0.14);
+  --shadow-float: 0 2px 6px rgb(15 23 42 / 0.08), 0 24px 56px -16px rgb(15 23 42 / 0.34);
+  --shadow-composer: 0 1px 2px rgb(15 23 42 / 0.07), 0 8px 28px -10px rgb(15 23 42 / 0.2);
 
   --animate-fade-in: fade-in 160ms ease-out both;
   --animate-rise-in: rise-in 220ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
@@ -127,6 +129,16 @@ table {
 }
 .custom-scroll::-webkit-scrollbar-thumb:hover {
   background-color: #94a3b8;
+}
+/* Tren nen navy (thanh ben): thanh cuon trang mo thay vi xam sang. */
+.custom-scroll.scroll-on-dark {
+  scrollbar-color: rgb(255 255 255 / 0.2) transparent;
+}
+.custom-scroll.scroll-on-dark::-webkit-scrollbar-thumb {
+  background-color: rgb(255 255 255 / 0.2);
+}
+.custom-scroll.scroll-on-dark::-webkit-scrollbar-thumb:hover {
+  background-color: rgb(255 255 255 / 0.32);
 }
 
 /* Tieu de dai bi cat mo dan thay vi ellipsis cung (tieu de cuoc tro chuyen trong sidebar). */
