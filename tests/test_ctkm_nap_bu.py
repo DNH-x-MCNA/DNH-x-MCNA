@@ -266,3 +266,17 @@ def test_bao_cao_don_theo_thang_gui_model_du_dong_phan_can_cho_cau_hoi(ma, cau_h
 def test_bao_cao_don_nho_giu_nguyen():
     raw = {"date_from": "2026-09-01", "financial_quality_by_month": {"status": "ok", "rows_by_month_channel": []}}
     assert json.loads(nl2sql._serialize_payload_for_model("check_order_timing", raw, "doanh thu gop")) == raw
+
+
+def test_moc_phu_lay_ngay_don_moi_nhat_co_lien_ket_khong_theo_id_cuoi(monkeypatch):
+    """28/09/2026: DNH nap lai CTKM, dong Id lon nhat tro don 826308 chua co trong DMS_DonHangHdr (bang don dong bo
+    rieng) -> LEFT JOIN ra DocDate NULL -> tool tu choi MOI cau khuyen mai tren may that."""
+    goi = []
+    monkeypatch.setattr(rt, "_q_bravo", _bravo("2026-09-28", {"2026-08-15": (10000, 9990)}, goi))
+
+    r = rt.promotion_effectiveness()
+
+    sql_moc = " ".join(goi[0][0].split())
+    assert "MAX(h.DocDate) AS CoverageDate" in sql_moc and "INNER HASH JOIN dbo.DMS_DonHangHdr" in sql_moc
+    assert "ORDER BY x.Id DESC" not in sql_moc
+    assert r["status"] == "ok" and r["period"] == {"from": "2026-08-01", "to": "2026-08-31"}

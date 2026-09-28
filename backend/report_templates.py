@@ -13528,11 +13528,13 @@ def promotion_effectiveness(date_from: str = None, date_to: str = None, limit: i
             "note": "Du lieu chuong trinh DMS nay thuoc kenh OTC; pham vi tai khoan khong co kenh OTC.",
         }
 
+    # 28/09/2026: DNH nap lai CTKM luc 10:46 - dong lien ket Id lon nhat tro don 826308 CHUA co trong
+    # DMS_DonHangHdr (bang don dong bo theo lich rieng, 930 dong lien ket dang nhu vay). Lay moc theo dong Id
+    # lon nhat thi CoverageDate = NULL va tool tu choi MOI cau khuyen mai. Moc = ngay don moi nhat CO lien ket.
     coverage_rows = _q_bravo("""
-        SELECT TOP (1) h.DocDate AS CoverageDate, x.SyncAt AS LinkSyncedAt, x.Id AS LinkRowId
+        SELECT MAX(h.DocDate) AS CoverageDate, MAX(x.SyncAt) AS LinkSyncedAt, MAX(x.Id) AS LinkRowId
         FROM dbo.DMS_DonHangCTKM x
-        LEFT JOIN dbo.DMS_DonHangHdr h ON h.Id=x.OrderId
-        ORDER BY x.Id DESC
+        INNER HASH JOIN dbo.DMS_DonHangHdr h ON h.Id=x.OrderId
     """)
     coverage_date = coverage_rows[0].get("CoverageDate") if coverage_rows else None
     if not coverage_date:
