@@ -1,0 +1,48 @@
+name: Test Python (pytest)
+
+# 29/09/2026: #129 lam do 3 test bat bien dinh tuyen tren master suot mot ngay ma khong ai thay, vi PR
+# chi co build Vercel (khong chay Python). Workflow nay chay toan bo pytest tren moi PR vao master va moi
+# lan push master.
+# - Khong goi model, khong can Bravo, khong can backend/warehouse.db (test danh dau "integration" bi loai
+#   qua addopts trong pyproject.toml). Khong can secret nao.
+# - Windows + Python 3.12: giong may 24 va may dev (test viet tren Windows).
+
+on:
+  pull_request:
+    branches: [master]
+  push:
+    branches: [master]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pytest-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pytest:
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            backend/requirements.txt
+
+      - name: Cai thu vien
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt -r backend/requirements.txt pytest openpyxl python-dateutil
+
+      - name: Chay pytest
+        env:
+          PYTHONIOENCODING: utf-8
+          PYTHONUTF8: "1"
+        run: python -m pytest -q -p no:cacheprovider
