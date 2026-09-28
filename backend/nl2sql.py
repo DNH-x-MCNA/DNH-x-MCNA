@@ -360,7 +360,12 @@ def _required_tool_for_question(question: str) -> str | None:
     if ("tung thang" in q or "moi thang dat" in q) and (
             "ytd" in q or "% ke hoach" in q or "phan tram ke hoach" in q):
         return "get_revenue_monthly_series"
-    if "luy ke" in q or "ytd" in q:
+    # 29/09/2026: tool nay CHI tinh luy ke DOANH THU. Truoc day moi cau co "luy ke"/"ytd" deu bi ep vao day, ke
+    # ca "Cong no luy ke cua khach BGI00699", "cong no qua han luy ke theo mien", "so khach hang moi luy ke" -
+    # vong dau goi tool doanh thu cho cau hoi cong no/khach hang. Ba cau YTD trong bo 138 (C03, M01, V01) deu
+    # la doanh thu nen khong doi.
+    if ("luy ke" in q or "ytd" in q) and not any(marker in q for marker in (
+            "cong no", "no qua han", "du no", "khach hang moi", "khach moi", "so khach", "ton kho")):
         return "get_revenue_ytd_cumulative"
     if any(marker in q for marker in ("loi nhuan gop", "bien loi nhuan", "loi nhuan thap", "loi nhuan am")):
         # Kho khong co gia von/COGS. Van dua vao mot template chi-doc de call_template tra
