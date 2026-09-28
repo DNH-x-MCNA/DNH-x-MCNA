@@ -37,7 +37,9 @@ Các điểm kiểm cho bàn giao SMTP DNH:
   phép kiểm bàn giao yêu cầu khai báo rõ để tránh tự suy phạm vi.
 - Audience QLV không trùng tên với bất kỳ dòng nào khác, kể cả lãnh đạo; nếu trùng,
   gửi thử theo audience có thể chọn nhiều người nhận.
-- Không kiểm UPN hay flow Teams: email QLV độc lập với việc Claude đang đổi flow.
+- Không kiểm webhook/Flow Power Automate đăng card lên Teams. Cấu hình hiện tại
+  có sáu Flow, mỗi audience một webhook; chế độ một Flow chung chỉ là tùy chọn
+  và khi bật mới cần bảng UPN. Email QLV độc lập với hai cách định tuyến này.
 
 Sau khi đạt và DNH xác nhận danh sách, anh Đăng gửi thử tới hộp thư đã duyệt, chọn
 đúng một audience QLV. Runner Daily cần bản sửa #126 để truyền `--email-override`.
