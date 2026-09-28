@@ -449,6 +449,14 @@ def _required_tool_for_question(question: str) -> str | None:
         and any(marker in q for marker in ("giam mua", "giam manh", "so voi lich su", "so lich su"))
     ):
         return "get_customer_attrition_risk"
+    # 29/09/2026: "ngung mua"/"khong mua"/"khong lay hang" KEM DO DAI ("3 thang nay", "90 ngay", "lau roi") la khach
+    # IM LANG theo so ngay tu lan mua cuoi - get_customers_silent (mo ta tool: 'khach nao ngung mua', 'im lang
+    # 30/60/90'). get_customer_movement chi so thang nay voi thang truoc (STOPPED = thang truoc co mua, thang nay
+    # khong) nen "Khach hang nao ngung mua 3 thang nay?" tung ra sai y. Cau khong neu do dai (C31, V23) giu nhu cu.
+    if (any(marker in q for marker in ("ngung mua", "khong mua", "khong lay hang", "khong dat hang"))
+            and (re.search(r"\b\d+\s*(?:thang|ngay)\b", q) or re.search(r"\blau\b", q))
+            and not any(marker in q for marker in ("tai kich hoat", "tung thang", "theo thang", "moi thang"))):
+        return "get_customers_silent"
     if any(marker in q for marker in (
         "tai kich hoat", "ngung mua", "tang truong den tu mo moi", "doanh thu mat",
         "bu duoc bao nhieu", "khach lon nao ngung", "keo dai chu ky mua",
