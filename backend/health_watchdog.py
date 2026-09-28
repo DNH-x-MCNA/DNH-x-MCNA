@@ -85,6 +85,32 @@ def _webhook_canh_bao() -> str:
     return _doc_bien_env("WATCHDOG_TEAMS_WEBHOOK") or _doc_bien_env("TEAMS_WEBHOOK_C_LEVEL")
 
 
+def _upn_c_level() -> str:
+    """UPN cua nhom C-Level trong bang nguoi nhan cua che do mot Flow dung chung (TEAMS_RECIPIENTS_FILE)."""
+    duong_dan = _doc_bien_env("TEAMS_RECIPIENTS_FILE")
+    if not duong_dan:
+        return ""
+    if not os.path.isabs(duong_dan):
+        duong_dan = os.path.join(PROJECT_ROOT, duong_dan)
+    try:
+        with open(duong_dan, "r", encoding="utf-8-sig") as f:
+            bang = json.load(f)
+    except (OSError, ValueError):
+        return ""
+    return next((str(upn).strip() for ten, upn in (bang.items() if isinstance(bang, dict) else [])
+                 if str(ten).strip().lower().startswith("c-level")), "")
+
+
+def _dich_den_canh_bao() -> tuple:
+    """(webhook, nguoi_nhan). 28/09/2026: che do mot Flow dung chung (TEAMS_DELIVERY_MODE=shared) - Flow doc
+    triggerBody()?['recipient'] de gui chat ca nhan, nen watchdog PHAI gui kem nguoi nhan: WATCHDOG_TEAMS_RECIPIENT,
+    khong co thi UPN nhom C-Level (cung nguoi nhan voi canh bao cong no nhu truoc day)."""
+    if _doc_bien_env("TEAMS_DELIVERY_MODE").lower() == "shared":
+        webhook = _doc_bien_env("WATCHDOG_TEAMS_WEBHOOK") or _doc_bien_env("TEAMS_SHARED_WEBHOOK_URL")
+        return webhook, _doc_bien_env("WATCHDOG_TEAMS_RECIPIENT") or _upn_c_level()
+    return _webhook_canh_bao(), None
+
+
 def _log(msg: str):
     print(f"[{dt.datetime.now().isoformat()}] {msg}")
 
@@ -108,9 +134,13 @@ def _save_state(state: dict):
 def _send_teams_alert(title: str, summary: str, severity: str = "CRITICAL") -> bool:
     """Ban TOI GIAN cua send_teams_alert() (xem src/notifier.py) - chi Container + TextBlock, du
     dung cho canh bao ha tang dang van ban ngan, khong can bang/anh nhu bao cao cong no."""
-    webhook_url = _webhook_canh_bao()
+    webhook_url, nguoi_nhan = _dich_den_canh_bao()
     if not webhook_url:
         _log("KHONG co Teams webhook cau hinh - bo qua gui canh bao (chi ghi log).")
+        return False
+    if _doc_bien_env("TEAMS_DELIVERY_MODE").lower() == "shared" and not nguoi_nhan:
+        _log("Che do mot Flow dung chung nhung KHONG xac dinh duoc nguoi nhan (WATCHDOG_TEAMS_RECIPIENT hoac nhom "
+             "C-Level trong TEAMS_RECIPIENTS_FILE) - bo qua gui canh bao (chi ghi log).")
         return False
 
     style = {"CRITICAL": "attention", "WARNING": "warning"}.get(severity.upper(), "good")
@@ -141,6 +171,9 @@ def _send_teams_alert(title: str, summary: str, severity: str = "CRITICAL") -> b
             },
         }],
     }
+    if nguoi_nhan:
+        payload["recipient"] = nguoi_nhan
+        payload["audience"] = "Watchdog ha tang"
     try:
         data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         req = urllib.request.Request(webhook_url.strip(), data=data,
