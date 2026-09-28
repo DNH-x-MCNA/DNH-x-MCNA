@@ -9,6 +9,9 @@ from urllib.parse import urlsplit
 
 ROOT = Path(__file__).resolve().parents[1]
 TEAM_ROLES = frozenset({"qlv", "asm", "rm"})
+_UPN = re.compile(r"[^\s@;,<>]+@[^\s@;,<>]+\.[^\s@;,<>]+")
+# 28/09/2026: mot audience co the nhieu nguoi (vd 2-3 C-Level). Tran nay chan dan nham ca danh sach phong ban.
+MAX_UPN_PER_AUDIENCE = 10
 
 
 class TeamsRoutingError(ValueError):
@@ -99,26 +102,38 @@ def load_shared_routes(config):
         raise TeamsRoutingError("Không đọc được bảng UPN Teams; kiểm tra JSON và khóa trùng.") from None
     if not isinstance(mapping, dict) or set(mapping) != set(names):
         raise TeamsRoutingError("Bảng UPN phải có đúng các audience C-Level và giám đốc miền/kênh; không có QLV.")
-    routes = {}
-    for name in names:
-        recipient = mapping[name]
-        if (not isinstance(recipient, str)
-                or not re.fullmatch(r"[^\s@;,<>]+@[^\s@;,<>]+\.[^\s@;,<>]+", recipient.strip())):
-            raise TeamsRoutingError(f"Audience '{name}' thiếu hoặc sai UPN Teams (mỗi audience một người).")
-        routes[name] = (webhook, recipient.strip())
-    return routes
+    return {name: (webhook, _upn_list(name, mapping[name])) for name in names}
 
 
-def resolve_destination(recipient_config, shared_routes, webhook_override=None):
+def _upn_list(name, value):
+    """"upn" hoac ["upn1", "upn2"] -> tuple UPN (bo trung, khong phan biet hoa thuong).
+
+    28/09/2026: mot audience co the nhieu nguoi nhan - moi nguoi mot tin 1-1 rieng qua Flow. Chuoi "a;b" van bi
+    tu choi: danh sach phai ghi dang JSON list, de loi go khong am tham thanh gui nham.
+    """
+    values = [value] if isinstance(value, str) else value
+    if not isinstance(values, list) or not values or len(values) > MAX_UPN_PER_AUDIENCE:
+        raise TeamsRoutingError(
+            f"Audience '{name}' phải có 1-{MAX_UPN_PER_AUDIENCE} UPN Teams (một chuỗi hoặc danh sách JSON).")
+    upns = {}
+    for item in values:
+        if not isinstance(item, str) or not _UPN.fullmatch(item.strip()):
+            raise TeamsRoutingError(f"Audience '{name}' thiếu hoặc sai UPN Teams (mỗi phần tử đúng một email).")
+        upns.setdefault(item.strip().lower(), item.strip())
+    return tuple(upns.values())
+
+
+def resolve_destinations(recipient_config, shared_routes, webhook_override=None):
+    """[(webhook, upn)] - moi nguoi nhan mot phan tu. Legacy: dung mot phan tu, upn co the None."""
     if not teams_audience_allowed(recipient_config):
         raise TeamsRoutingError("Teams nghiệp vụ chỉ dành cho giám đốc miền và giám đốc kênh.")
     if shared_routes is not None:
-        webhook, upn = shared_routes[recipient_config["audience"]]
+        webhook, upns = shared_routes[recipient_config["audience"]]
     else:
         webhook = ((recipient_config.get("teams_webhook") or "").strip()
                    or os.getenv("TEAMS_WEBHOOK_URL"))
-        upn = (recipient_config.get("teams_recipient") or "").strip() or None
+        upns = ((recipient_config.get("teams_recipient") or "").strip() or None,)
     webhook = webhook_override or webhook
     if not webhook:
         raise TeamsRoutingError("Chưa cấu hình webhook Teams cho giám đốc.")
-    return webhook, upn
+    return [(webhook, upn) for upn in upns]
