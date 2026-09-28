@@ -1,200 +1,163 @@
 "use client";
 
-import React, { useState } from "react";
-import { IconKey, IconUnlock, IconCheck, IconWarning, IconLightbulb } from "./icons";
+import { FormEvent, useState } from "react";
+import { IconChevronLeft } from "./icons";
+import type { UserInfo } from "./lib";
+import { Button, Field, Notice, PasswordInput, TextInput } from "./ui";
 
 interface AuthScreensProps {
-  onLoginSuccess: (token: string, user: any) => void;
+  onLoginSuccess: (token: string, user: UserInfo) => void;
 }
 
 export default function AuthScreens({ onLoginSuccess }: AuthScreensProps) {
-  const [tab, setTab] = useState<"login" | "forgot">("login");
+  // Khong co tu dang ky: tai khoan do quan tri vien (C-Level) khoi tao.
+  const [view, setView] = useState<"login" | "forgot">("login");
   const [identifier, setIdentifier] = useState("");
   const [password, setPassword] = useState("");
   const [email, setEmail] = useState("");
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState<{ text: string; type: "success" | "error" } | null>(null);
 
-  const handleLoginSubmit = async (e: React.FormEvent) => {
+  function switchView(next: "login" | "forgot") {
+    setView(next);
+    setMessage(null);
+  }
+
+  const handleLoginSubmit = async (e: FormEvent) => {
     e.preventDefault();
     setLoading(true);
     setMessage(null);
-
     try {
       const res = await fetch("/api/auth/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ username: identifier, password }),
       });
-
       const data = await res.json();
       if (!res.ok) throw new Error(data.detail || data.error || "Đăng nhập thất bại");
-
       onLoginSuccess(data.token, data);
-    } catch (err: any) {
-      setMessage({ text: err.message, type: "error" });
+    } catch (err) {
+      setMessage({ text: (err as Error).message, type: "error" });
     } finally {
       setLoading(false);
     }
   };
 
-  const handleForgotSubmit = async (e: React.FormEvent) => {
+  const handleForgotSubmit = async (e: FormEvent) => {
     e.preventDefault();
     setLoading(true);
     setMessage(null);
-
     try {
       const res = await fetch("/api/auth/forgot-password", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email }),
       });
-
       const data = await res.json();
       if (!res.ok) throw new Error(data.detail || "Yêu cầu cấp lại mật khẩu thất bại");
-
       setMessage({ text: data.message, type: "success" });
-    } catch (err: any) {
-      setMessage({ text: err.message, type: "error" });
+    } catch (err) {
+      setMessage({ text: (err as Error).message, type: "error" });
     } finally {
       setLoading(false);
     }
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-slate-900 px-4 py-8">
-      <div className="w-full max-w-md bg-white rounded-2xl shadow-2xl overflow-hidden border border-slate-100">
-        {/* Header */}
-        <div className="bg-gradient-to-r from-blue-700 to-indigo-800 p-6 text-white text-center">
-          <div className="flex justify-center mb-3">
+    <div className="flex min-h-dvh flex-col bg-soft">
+      <main className="flex flex-1 items-center justify-center px-4 py-12">
+        <div className="w-full max-w-[400px] animate-rise-in">
+          <div className="mb-8 flex flex-col items-center text-center">
             {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              src="/namha-logo.png"
-              alt="CÔNG TY CỔ PHẦN DƯỢC NAM HÀ"
-              className="h-16 w-auto bg-white/95 p-2 rounded-xl shadow-md border border-white/20 object-contain"
-            />
+            <img src="/namha-logo.png" alt="Công ty Cổ phần Dược Nam Hà" className="h-12 w-auto" />
+            <h1 className="mt-7 text-[24px] font-semibold tracking-tight text-navy">
+              {view === "login" ? "Đăng nhập" : "Lấy lại mật khẩu"}
+            </h1>
+            <p className="mt-1.5 max-w-sm text-[14.5px] leading-relaxed text-slate-500">
+              {view === "login"
+                ? "DNH AI Analyst · Trợ lý phân tích kinh doanh"
+                : "Nhập email công ty. Mật khẩu mới sẽ được gửi vào hộp thư Outlook của bạn."}
+            </p>
           </div>
-          <h1 className="text-xl font-bold tracking-wide uppercase">CÔNG TY CỔ PHẦN DƯỢC NAM HÀ</h1>
-          <p className="text-xs text-white/80 mt-1">Hệ thống AI Chatbot Quản trị Báo cáo</p>
+
+          <div className="rounded-3xl bg-white p-6 shadow-raised ring-1 ring-slate-900/5 sm:p-7">
+            {message && (
+              <Notice tone={message.type === "success" ? "success" : "danger"} className="mb-5">{message.text}</Notice>
+            )}
+
+            {view === "login" ? (
+              <form onSubmit={handleLoginSubmit} className="space-y-4">
+                <Field label="Email công ty hoặc tên đăng nhập" htmlFor="login-id">
+                  <TextInput
+                    id="login-id"
+                    required
+                    autoFocus
+                    autoComplete="username"
+                    placeholder="ten.nhanvien@namhapharma.com"
+                    value={identifier}
+                    onChange={(e) => setIdentifier(e.target.value)}
+                  />
+                </Field>
+                <Field
+                  label="Mật khẩu"
+                  htmlFor="login-pwd"
+                  trailing={
+                    <button type="button" onClick={() => switchView("forgot")} className="text-[13px] font-medium text-brand hover:text-brand-strong">
+                      Quên mật khẩu?
+                    </button>
+                  }
+                >
+                  <PasswordInput
+                    id="login-pwd"
+                    required
+                    autoComplete="current-password"
+                    placeholder="Nhập mật khẩu"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                  />
+                </Field>
+                <Button type="submit" variant="primary" size="lg" loading={loading} className="mt-2 w-full">
+                  {loading ? "Đang đăng nhập…" : "Đăng nhập"}
+                </Button>
+              </form>
+            ) : (
+              <form onSubmit={handleForgotSubmit} className="space-y-4">
+                <Field
+                  label="Email Dược Nam Hà"
+                  htmlFor="forgot-email"
+                  hint="Mọi phiên đăng nhập trên thiết bị khác sẽ tự động bị đăng xuất."
+                >
+                  <TextInput
+                    id="forgot-email"
+                    type="email"
+                    required
+                    autoFocus
+                    autoComplete="email"
+                    placeholder="ten.nhanvien@namhapharma.com"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                  />
+                </Field>
+                <Button type="submit" variant="primary" size="lg" loading={loading} className="mt-2 w-full">
+                  {loading ? "Đang gửi…" : "Gửi mật khẩu mới"}
+                </Button>
+                <button
+                  type="button"
+                  onClick={() => switchView("login")}
+                  className="mx-auto flex items-center gap-1 text-[13.5px] font-medium text-slate-500 hover:text-navy"
+                >
+                  <IconChevronLeft className="h-4 w-4" /> Quay lại đăng nhập
+                </button>
+              </form>
+            )}
+          </div>
+
+          <p className="mt-6 text-center text-[13px] leading-relaxed text-slate-400">
+            Tài khoản do quản trị viên cấp. Mật khẩu khởi tạo được gửi qua email Outlook của nhân viên.
+          </p>
         </div>
-
-        {/* Tab Navigation (Bỏ Tự đăng ký, chỉ giữ 2 tab Đăng nhập & Quên mật khẩu) */}
-        <div className="flex border-b border-slate-200 bg-slate-50">
-          <button
-            onClick={() => { setTab("login"); setMessage(null); }}
-            className={`flex-1 py-3.5 text-xs font-semibold transition-all flex items-center justify-center gap-1.5 ${
-              tab === "login"
-                ? "bg-white text-blue-700 border-b-2 border-blue-700 shadow-sm"
-                : "text-slate-500 hover:text-blue-600"
-            }`}
-          >
-            <IconKey className="w-3.5 h-3.5" /> Đăng nhập hệ thống
-          </button>
-          <button
-            onClick={() => { setTab("forgot"); setMessage(null); }}
-            className={`flex-1 py-3.5 text-xs font-semibold transition-all flex items-center justify-center gap-1.5 ${
-              tab === "forgot"
-                ? "bg-white text-amber-700 border-b-2 border-amber-700 shadow-sm"
-                : "text-slate-500 hover:text-amber-600"
-            }`}
-          >
-            <IconUnlock className="w-3.5 h-3.5" /> Quên mật khẩu
-          </button>
-        </div>
-
-        {/* Form Body */}
-        <div className="p-6">
-          {message && (
-            <div
-              className={`p-3.5 rounded-lg text-xs font-medium mb-4 flex items-start gap-2 ${
-                message.type === "success"
-                  ? "bg-emerald-50 text-emerald-800 border border-emerald-200"
-                  : "bg-rose-50 text-rose-800 border border-rose-200"
-              }`}
-            >
-              <span>{message.type === "success" ? <IconCheck className="w-4 h-4" /> : <IconWarning className="w-4 h-4" />}</span>
-              <span className="flex-1">{message.text}</span>
-            </div>
-          )}
-
-          {/* TAB 1: ĐĂNG NHẬP */}
-          {tab === "login" && (
-            <form onSubmit={handleLoginSubmit} className="space-y-4">
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1.5">
-                  Email công ty hoặc Tên đăng nhập
-                </label>
-                <input
-                  type="text"
-                  required
-                  placeholder="nhanvien@namhapharma.com hoặc username"
-                  value={identifier}
-                  onChange={(e) => setIdentifier(e.target.value)}
-                  className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:border-blue-600 focus:bg-white text-slate-800 transition"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1.5">
-                  Mật khẩu
-                </label>
-                <input
-                  type="password"
-                  required
-                  placeholder="Nhập mật khẩu"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:border-blue-600 focus:bg-white text-slate-800 transition"
-                />
-              </div>
-
-              <div className="bg-slate-50 border border-slate-200 p-3 rounded text-[11px] text-slate-600 flex items-start gap-1.5">
-                <IconLightbulb className="w-3.5 h-3.5 shrink-0 mt-0.5" />
-                <span><strong>Lưu ý:</strong> Tài khoản mới do Quản trị viên (C-Level) khởi tạo. Mật khẩu khởi tạo được gửi trực tiếp về email Outlook của nhân viên.</span>
-              </div>
-
-              <button
-                type="submit"
-                disabled={loading}
-                className="w-full py-3 bg-gradient-to-r from-blue-700 to-blue-800 hover:from-blue-800 hover:to-blue-900 text-white font-semibold text-sm rounded-lg shadow-md transition disabled:opacity-50"
-              >
-                {loading ? "Đang xác thực..." : "Đăng nhập ngay ➔"}
-              </button>
-            </form>
-          )}
-
-          {/* TAB 2: QUÊN MẬT KHẨU */}
-          {tab === "forgot" && (
-            <form onSubmit={handleForgotSubmit} className="space-y-4">
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1.5">
-                  Email Dược Nam Hà (@namhapharma.com)
-                </label>
-                <input
-                  type="email"
-                  required
-                  placeholder="tennhanvien@namhapharma.com"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:border-amber-600 focus:bg-white text-slate-800 transition"
-                />
-              </div>
-
-              <div className="bg-amber-50 border-l-4 border-amber-600 p-3 rounded text-xs text-amber-900">
-                Mật khẩu mới sẽ được sinh tự động và gửi về email Outlook. Tất cả các phiên làm việc trước đó trên các thiết bị khác sẽ tự động bị đăng xuất.
-              </div>
-
-              <button
-                type="submit"
-                disabled={loading}
-                className="w-full py-3 bg-gradient-to-r from-amber-600 to-amber-700 hover:from-amber-700 hover:to-amber-800 text-white font-semibold text-sm rounded-lg shadow-md transition disabled:opacity-50 flex items-center justify-center gap-1.5"
-              >
-                {loading ? "Đang xử lý..." : (<>Cấp lại mật khẩu mới qua Email <IconUnlock className="w-4 h-4" /></>)}
-              </button>
-            </form>
-          )}
-        </div>
-      </div>
+      </main>
+      <footer className="pb-6 text-center text-[12px] text-slate-400">© {new Date().getFullYear()} Công ty Cổ phần Dược Nam Hà</footer>
     </div>
   );
 }

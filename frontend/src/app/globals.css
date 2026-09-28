@@ -1,67 +1,120 @@
 @import "tailwindcss";
 
 /* ============================================================================
-   DNH AI Analyst — Executive Light Theme
-   Bảng màu + font theo yêu cầu 29/07/2026. Đổi giá trị ở đây sẽ áp dụng toàn bộ
-   app vì mọi nơi trong page.tsx dùng các biến/utility bên dưới thay vì hardcode
-   hex trực tiếp trong className.
+   DNH AI Analyst — bang mau GIU NGUYEN tu Executive Light Theme 29/07/2026 (navy + indigo).
+   28/09/2026 (thiet ke lai): them token be mat/chu/bong/bo goc de moi man hinh dung chung mot
+   he; doi gia tri o day la doi toan app, khong hardcode hex trong className.
    ============================================================================ */
 
 :root {
   --background: #f8fafc;
   --foreground: #0b1528;
 
-  /* Primary Navy / Slate — header & thanh điều hướng tối */
+  /* Thuong hieu */
   --brand-navy: #0b1528;
   --brand-navy-soft: #131f36;
-
-  /* Brand accents — nút hành động chính */
   --brand-indigo: #4f46e5;
+  --brand-indigo-strong: #4338ca;
   --brand-blue: #3b82f6;
 
-  /* Status colors */
+  /* Trang thai */
   --status-danger: #ef4444;
   --status-danger-strong: #dc2626;
   --status-warning: #f59e0b;
   --status-positive: #10b981;
 
-  /* Surfaces */
+  /* Be mat */
   --surface-card: #ffffff;
   --surface-soft: #f8fafc;
+  --surface-sunken: #f1f5f9;
   --surface-border: #e2e8f0;
+  --surface-border-strong: #cbd5e1;
   --scrollbar-thumb: #cbd5e1;
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
+  --color-navy: var(--brand-navy);
+  --color-navy-soft: var(--brand-navy-soft);
+  --color-brand: var(--brand-indigo);
+  --color-brand-strong: var(--brand-indigo-strong);
+  --color-brand-blue: var(--brand-blue);
+  --color-surface: var(--surface-card);
+  --color-soft: var(--surface-soft);
+  --color-sunken: var(--surface-sunken);
+  --color-line: var(--surface-border);
+  --color-line-strong: var(--surface-border-strong);
+
   --font-sans: var(--font-inter);
   --font-mono: var(--font-geist-mono);
+
+  --shadow-card: 0 1px 2px rgb(15 23 42 / 0.04), 0 1px 3px rgb(15 23 42 / 0.05);
+  --shadow-raised: 0 2px 4px rgb(15 23 42 / 0.04), 0 8px 24px -6px rgb(15 23 42 / 0.1);
+  --shadow-float: 0 2px 6px rgb(15 23 42 / 0.06), 0 24px 56px -16px rgb(15 23 42 / 0.28);
+  --shadow-composer: 0 1px 2px rgb(15 23 42 / 0.05), 0 8px 28px -10px rgb(15 23 42 / 0.16);
+
+  --animate-fade-in: fade-in 160ms ease-out both;
+  --animate-rise-in: rise-in 220ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  --animate-dialog-in: dialog-in 200ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  --animate-sheet-in: sheet-in 240ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+
+  @keyframes fade-in {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
+  @keyframes rise-in {
+    from { opacity: 0; transform: translateY(6px); }
+    to { opacity: 1; transform: none; }
+  }
+  @keyframes dialog-in {
+    from { opacity: 0; transform: translateY(8px) scale(0.985); }
+    to { opacity: 1; transform: none; }
+  }
+  @keyframes sheet-in {
+    from { transform: translateX(-100%); }
+    to { transform: none; }
+  }
 }
 
-body {
-  background: var(--background);
-  color: var(--foreground);
+/* Nam trong layer base de class tien ich (vd outline-none cua o nhap da co vong focus rieng) van de duoc. */
+@layer base {
+  html {
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  body {
+    background: var(--background);
+    color: var(--foreground);
+    font-feature-settings: "cv11", "ss01";
+    text-rendering: optimizeLegibility;
+  }
+
+  ::selection {
+    background: rgb(79 70 229 / 0.16);
+  }
+
+  /* Moi phan tu tuong tac dung chung mot vong focus, chi hien khi dung ban phim. */
+  :focus-visible {
+    outline: 2px solid var(--brand-indigo);
+    outline-offset: 2px;
+  }
 }
 
-/* Số liệu tài chính (doanh thu, công nợ, token) gióng hàng dọc thẳng tắp thay vì
-   proportional-width mặc định — quan trọng cho mọi bảng và stat card trong app. */
+/* So lieu tai chinh (doanh thu, cong no, token) giong hang doc thay vi proportional-width mac dinh. */
 .tabular-nums,
 table {
   font-variant-numeric: tabular-nums;
 }
 
-/* ============================================================================
-   Custom scrollbar mỏng mịn — dùng cho sidebar lịch sử trò chuyện và các vùng
-   overflow-y dài trong modal Audit Log.
-   ============================================================================ */
+/* Thanh cuon mong - sidebar lich su, bang dai trong dashboard. */
 .custom-scroll {
   scrollbar-width: thin;
   scrollbar-color: var(--scrollbar-thumb) transparent;
 }
 .custom-scroll::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: 8px;
+  height: 8px;
 }
 .custom-scroll::-webkit-scrollbar-track {
   background: transparent;
@@ -69,51 +122,54 @@ table {
 .custom-scroll::-webkit-scrollbar-thumb {
   background-color: var(--scrollbar-thumb);
   border-radius: 9999px;
+  border: 2px solid transparent;
+  background-clip: content-box;
 }
 .custom-scroll::-webkit-scrollbar-thumb:hover {
   background-color: #94a3b8;
 }
 
-/* ============================================================================
-   Fade-gradient cho văn bản dài bị cắt (thay vì ellipsis cứng) — dùng cho tiêu
-   đề cuộc trò chuyện trong sidebar.
-   ============================================================================ */
+/* Tieu de dai bi cat mo dan thay vi ellipsis cung (tieu de cuoc tro chuyen trong sidebar). */
 .fade-truncate {
   overflow: hidden;
   white-space: nowrap;
-  mask-image: linear-gradient(to right, black 82%, transparent 100%);
-  -webkit-mask-image: linear-gradient(to right, black 82%, transparent 100%);
+  mask-image: linear-gradient(to right, black 85%, transparent 100%);
+  -webkit-mask-image: linear-gradient(to right, black 85%, transparent 100%);
 }
 
-/* ============================================================================
-   Glow accent nhẹ cho badge "AI ANALYST" ở header.
-   ============================================================================ */
-.glow-indigo {
-  box-shadow: 0 0 0 1px rgba(99, 102, 241, 0.4), 0 0 16px 0 rgba(79, 70, 229, 0.35);
+/* Ba cham "dang phan tich" - nhip cham, khong nhay gat. */
+@keyframes typing-dot {
+  0%, 80%, 100% { opacity: 0.25; transform: translateY(0); }
+  40% { opacity: 1; transform: translateY(-2px); }
+}
+.typing-dot {
+  animation: typing-dot 1.2s ease-in-out infinite;
 }
 
-/* Pill button viền kính mờ (glassmorphism) trên nền tối của header */
-.btn-glass {
-  background: rgba(255, 255, 255, 0.08);
-  border: 1px solid rgba(255, 255, 255, 0.14);
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
-}
-.btn-glass:hover {
-  background: rgba(255, 255, 255, 0.14);
-}
-
-/* Floating pill input ở đáy khung chat */
-.input-floating {
-  background: rgba(255, 255, 255, 0.85);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-}
-
-@keyframes pulse-dot {
+/* Cau tra loi dang stream - con tro nhap nhay cuoi doan cuoi cung. */
+@keyframes caret-blink {
   0%, 100% { opacity: 1; }
-  50% { opacity: 0.35; }
+  50% { opacity: 0; }
 }
-.status-dot-live {
-  animation: pulse-dot 1.8s ease-in-out infinite;
+.streaming-caret > :last-child::after {
+  content: "";
+  display: inline-block;
+  width: 2px;
+  height: 1.05em;
+  margin-left: 3px;
+  vertical-align: -0.15em;
+  border-radius: 1px;
+  background: var(--brand-indigo);
+  animation: caret-blink 1s step-end infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }

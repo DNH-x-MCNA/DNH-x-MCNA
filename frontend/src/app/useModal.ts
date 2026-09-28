@@ -14,6 +14,8 @@ const FOCUSABLE_SELECTOR =
  *
  * `active`: true khi modal dang hien (component goi hook nay co the luon mounted
  * hoac chi mounted khi mo - ca hai deu dung duoc, chi can truyen dung trang thai).
+ * 28/09/2026: phan tu co `data-autofocus` duoc focus truoc (vd o nhap dau tien cua form), khong co
+ * thi moi lay phan tu focusable dau tien nhu cu.
  */
 export function useModal(active: boolean, onClose: () => void) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -25,15 +27,18 @@ export function useModal(active: boolean, onClose: () => void) {
   // re-render, tao onClose moi, kich hoat lai effect va CUOP FOCUS ve phan tu focusable dau tien
   // (thuong la nut dong "X") ngay giua luc dang go - bug thuc te da gap 05/08/2026.
   const onCloseRef = useRef(onClose);
-  onCloseRef.current = onClose;
+  useEffect(() => {
+    onCloseRef.current = onClose;
+  });
 
   useEffect(() => {
     if (!active) return;
 
     previousFocusRef.current = document.activeElement as HTMLElement | null;
     const container = containerRef.current;
+    const preferred = container?.querySelector<HTMLElement>("[data-autofocus]");
     const focusables = container?.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR);
-    (focusables && focusables[0] ? focusables[0] : container)?.focus();
+    (preferred || (focusables && focusables[0]) || container)?.focus();
 
     const prevOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
@@ -64,7 +69,6 @@ export function useModal(active: boolean, onClose: () => void) {
       document.body.style.overflow = prevOverflow;
       previousFocusRef.current?.focus?.();
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active]);
 
   return containerRef;
