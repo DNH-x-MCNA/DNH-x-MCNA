@@ -57,6 +57,7 @@ def run_digest(period: str, *, dry_run: bool = False, audience: str | None = Non
             dry_run=dry_run,
             audience_filter=audience,
             webhook_override=webhook_override,
+            email_override=email_override,
         ))
     if period == "weekly":
         return bool(app.send_weekly_report(
