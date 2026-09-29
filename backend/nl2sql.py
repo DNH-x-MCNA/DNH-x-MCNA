@@ -623,11 +623,17 @@ def _required_tool_for_question(question: str) -> str | None:
         return "get_revenue_monthly_series"
 
     if any(marker in q for marker in (
-        "phu thuoc top", "top 10 khach", "top 10 san pham", "top 3 mien", "muc do tap trung",
+        "phu thuoc top", "top 10 khach", "top 3 mien", "muc do tap trung",
     )):
         # C11: top-customers tra mau so toan pham vi (scope_revenue), sau do model co the
         # goi them top-products/geography neu cau hoi yeu cau du ca ba chieu.
         return "get_top_customers"
+    # 29/09/2026: "top 10 san pham" tung nam trong danh sach ngay tren nen MOI cau top san pham - ke ca
+    # "Top 10 san pham ban chay nhat?" (goi y tren man chao) va "Top 10 san pham OTC va top 10 ETC khac nhau
+    # the nao?" (backlog 14/08) - bi ep vong dau vao get_top_customers (KHACH HANG), ton them mot vong goi
+    # tool. C11 van vao get_top_customers qua luat "phu thuoc vao top" phia tren va "top 10 khach".
+    if "top 10 san pham" in q:
+        return "get_top_products"
     if "hang tra" in q or "dieu chinh don" in q:
         # C13: Amount9 am phai di qua bao cao don, khong suy tu doanh thu tong hop.
         return "check_order_timing"
