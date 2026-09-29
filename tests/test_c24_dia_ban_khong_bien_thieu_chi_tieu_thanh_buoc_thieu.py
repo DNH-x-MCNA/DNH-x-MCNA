@@ -3,6 +3,8 @@
 get_geography_monthly_performance LUON tra unavailable_metrics (target/gap/TDV theo tinh); query_plan coi moi
 danh sach khong rong la buoc chua du -> cau khong hoi chi tieu bi danh dau thieu nguon, model goi lai tool
 roi tu viet SQL den het gio. Chi giu la gioi han khi cau hoi thuc su hoi chi tieu/phu trach theo dia ban."""
+import pytest
+
 import test_management_rounds_remaining as goc
 import report_templates as rt
 from types import SimpleNamespace
@@ -40,3 +42,25 @@ def test_c29_mo_ta_tool_bat_trinh_bay_theo_vung():
     import nl2sql
     tool = next(t for t in nl2sql.TEMPLATE_TOOLS if t["name"] == "get_customer_lifecycle_summary")
     assert "BAT BUOC trinh bay them bang theo vung" in tool["description"]
+
+
+def test_c43_ke_hoach_thau_khong_hoi_theo_tinh_thi_khong_thanh_buoc_thieu(tmp_path, monkeypatch):
+    # UAT 29/09 C43: co chu "ke hoach" nhung khong hoi theo tinh -> truoc day van gan "Phan chua the kiem chung:
+    # target_by_city..." va "Gioi han ket luan" vao cuoi cau tra loi.
+    cau = "Kế hoạch thầu ETC, giá trị tham gia, giá trị trúng, tỷ lệ trúng và doanh thu thực hiện theo tháng/quý là bao nhiêu?"
+    r = _goi(tmp_path, monkeypatch, cau)
+    assert "unavailable_metrics" not in r
+    assert "target_by_city" in r["chi_so_khong_co_theo_dia_ban"]
+    assert _gioi_han(r, cau) is None
+
+
+def test_hoi_tinh_hinh_ke_hoach_khong_nham_chu_tinh_voi_tinh_thanh(tmp_path, monkeypatch):
+    r = _goi(tmp_path, monkeypatch, "Tình hình thực hiện kế hoạch doanh thu tháng này thế nào?")
+    assert "unavailable_metrics" not in r
+
+
+@pytest.mark.parametrize("cau", ["Địa bàn nào hụt kế hoạch nhiều nhất?",
+                                 "TDV nào phụ trách các tỉnh doanh thu thấp?"])
+def test_hoi_ke_hoach_theo_dia_ban_hoac_nguoi_phu_trach_van_giu_gioi_han(tmp_path, monkeypatch, cau):
+    r = _goi(tmp_path, monkeypatch, cau)
+    assert "target_by_city" in r["unavailable_metrics"], cau

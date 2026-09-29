@@ -15926,9 +15926,17 @@ def call_template(name: str, args: dict, question: str = "", username: str = Non
             # con lai van bao cho model biet nhung khong bien thanh buoc thieu.
             hoi_chi_tieu = any(marker in q_folded for marker in (
                 "ke hoach", "chi tieu", "target", "muc tieu", "% dat", "phan tram dat", "dat bao nhieu",
-                "hut", "thieu so voi", "trach nhiem", "phu trach", "nguoi phu trach",
+                "hut", "thieu so voi",
             ))
-            if not hoi_chi_tieu:
+            # 29/09/2026 (UAT C43 "Ke hoach THAU ETC... theo thang/quy"): co chu "ke hoach" nhung khong hoi gi theo
+            # tinh, van bi gan "Phan chua the kiem chung: target_by_city..." + "Gioi han ket luan". Ba chi so thieu deu
+            # la THEO TINH/DIA BAN, nen chi la gioi han khi cau hoi co ca chi tieu lan dia ban. "tinh" bo dau trung
+            # "tinh hinh"/"tinh toan", nen xet chu "tỉnh" tren cau goc.
+            hoi_theo_dia_ban = ("tỉnh" in unicodedata.normalize("NFC", question or "").lower()
+                                or any(marker in q_folded for marker in (
+                                    "thanh pho", "dia ban", "quan huyen", "tung huyen")))
+            hoi_phu_trach = any(marker in q_folded for marker in ("trach nhiem", "phu trach"))
+            if not ((hoi_chi_tieu and hoi_theo_dia_ban) or hoi_phu_trach):
                 result = dict(result)
                 result["chi_so_khong_co_theo_dia_ban"] = result.pop("unavailable_metrics")
         if loc_cap3 and not loc_cap3.get("loi"):
