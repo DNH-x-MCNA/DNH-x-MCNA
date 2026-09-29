@@ -373,7 +373,7 @@ def _an_luong_khi_xem_ho(history: list[dict], owner: str, viewer: dict) -> list[
         return history
     sql_by_query = get_sql_used_by_query(m.get("query_id") for m in history if m.get("role") == "assistant")
     return [
-        {**m, "content": NOI_DUNG_LUONG_DA_AN}
+        {**m, "content": NOI_DUNG_LUONG_DA_AN, "charts": []}
         if m.get("role") == "assistant" and _luot_co_so_lieu_luong(sql_by_query.get(m.get("query_id")))
         else m
         for m in history
@@ -467,6 +467,7 @@ class ChatResponse(BaseModel):
     query_id: str
     answer: str
     sql_used: list[str]
+    charts: Optional[list[dict[str, Any]]] = None
     freshness: Optional[list[dict[str, Any]]] = None
     columns: Optional[list[str]] = None
     rows: Optional[list[list[Any]]] = None
@@ -489,6 +490,7 @@ class SessionSummary(BaseModel):
 
 
 class HistoryMessage(BaseModel):
+    charts: Optional[list[dict[str, Any]]] = None
     id: int
     role: str
     content: str
@@ -991,6 +993,7 @@ def chat(req: ChatRequest, user: dict = Depends(require_approved_user)):
     return ChatResponse(
         query_id=query_id,
         answer=result["answer"],
+        charts=result.get("charts", []),
         sql_used=result["sql_used"],
         freshness=result.get("freshness"),
         columns=lr.get("columns") if is_raw_sql else None,
@@ -1053,6 +1056,7 @@ def chat_stream(req: ChatRequest, user: dict = Depends(require_approved_user)):
                         "type": "done",
                         "query_id": query_id,
                         "answer": chunk["answer"],
+                        "charts": chunk.get("charts", []),
                         "sql_used": chunk["sql_used"],
                         "freshness": chunk.get("freshness", []),
                         "columns": lr.get("columns") if is_raw_sql else None,

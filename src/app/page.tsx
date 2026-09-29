@@ -1,5 +1,6 @@
 "use client";
 
+import type { ChartSpec } from "./ReportChart";
 import { useCallback, useEffect, useRef, useState } from "react";
 import AdminUsersPanel from "./AdminUsersPanel";
 import { AuditDashboard } from "./AuditDashboard";
@@ -101,6 +102,7 @@ export default function Home() {
             id: h.id,
             role: h.role === "user" ? "user" : "bot",
             text: h.content,
+            charts: h.charts,
             queryId: h.query_id,
             feedbackRating: h.feedback_rating,
             feedbackCategory: h.feedback_category,
@@ -267,7 +269,7 @@ export default function Home() {
           let evt: {
             type: string; query_id?: string; text?: string; message?: string; answer?: string;
             sql_used?: string[]; columns?: string[] | null; rows?: unknown[][] | null;
-            freshness?: FreshnessItem[];
+            freshness?: FreshnessItem[]; charts?: ChartSpec[];
             quota_used?: number | null; quota_limit?: number | null;
             quota_remaining?: number | null; quota_resets_at?: string | null;
           };
@@ -298,6 +300,7 @@ export default function Home() {
                   columns: evt.columns,
                   rows: evt.rows,
                   freshness: evt.freshness,
+                  charts: evt.charts,
                 };
               }
               return next;

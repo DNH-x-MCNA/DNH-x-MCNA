@@ -50,6 +50,16 @@ def _noi_dung(history):
     return [m["content"] for m in history if m["role"] == "assistant"]
 
 
+def test_an_ca_bieu_do_khi_noi_dung_luong_bi_an(tmp_path, monkeypatch):
+    chatbot_main = _nap_main(tmp_path, monkeypatch, "lich_su_an_luong_chart")
+    monkeypatch.setattr(chatbot_main, "get_sql_used_by_query", lambda ids: {
+        "q": ["[bao cao chuan] get_salary_detail({})"]})
+    history = [{"role": "assistant", "content": SO_LUONG, "query_id": "q", "charts": [{"salary": 18500000}]}]
+    result = chatbot_main._an_luong_khi_xem_ho(history, "qlv", {"username": "gd", "role": "regional_director"})
+    assert result[0]["charts"] == []
+    assert result[0]["content"] == chatbot_main.NOI_DUNG_LUONG_DA_AN
+
+
 def test_giam_doc_mien_doc_phien_qlv_khong_thay_so_luong(tmp_path, monkeypatch):
     chatbot_main = _nap_main(tmp_path, monkeypatch, "lich_su_an_luong_gd")
     auth.create_user("qlv.mb", "mat-khau-qlv-1", name="QLV", role="qlv", scope_value="MB",

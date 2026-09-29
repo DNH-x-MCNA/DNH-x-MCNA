@@ -38,7 +38,10 @@ from realtime_context import REALTIME_TOOLS, REALTIME_TOOL_NAMES, get_current_da
 from glossary_memory import save_glossary_term, retrieve_relevant_glossary
 from longterm_memory import save_example, retrieve_similar_examples
 from cost_logger import compute_and_log_cost
+from chat_charts import build_charts
+from period_projection import render_projection
 from feature_policy import (
+    projection_period, feature_enabled,
     DISABLED_FUTURE_TOOL_NAMES,
     FUTURE_FORECAST_DISABLED_MESSAGE,
     is_future_forecast_question,
@@ -256,6 +259,8 @@ def _fold_for_route(question: str) -> str:
 
 def _required_tool_for_question(question: str) -> str | None:
     """Ep tool cho cac intent co mot duong du lieu duy nhat, tranh do catalog nhieu vong."""
+    if projection_period(question):
+        return "get_current_period_projection"
     q = _fold_for_route(question)
     if _is_new_customer_quality_question(question):
         return "get_new_customer_list"
@@ -746,6 +751,13 @@ def _required_tool_for_question(question: str) -> str | None:
     return None
 
 TEMPLATE_TOOLS = [
+    {"name": "get_current_period_projection",
+     "description": "Dự phóng tháng/quý đang chạy theo số thực tế; kịch bản lịch sử không phải xác suất. Không nhận kỳ tương lai.",
+     "input_schema": {"type": "object", "properties": {
+         "period": {"type": "string", "enum": ["month", "quarter"]},
+         "group_by": {"type": "string", "enum": ["overall", "channel", "area", "qlv", "employee"]}},
+         "additionalProperties": False}},
+
     {
         "name": "get_sku_revenue_drop_vs_stock",
         "description": "So SKU giam doanh thu qua hai ky THANG TRON lien ke voi ton theo lo he kinh doanh TM. "
@@ -2371,6 +2383,8 @@ def _tools_for_request(scope_area_code: str = None, scope_channel: str = None,
     }:
         return []
     tools = ALL_TOOLS
+    if not feature_enabled("DNH_BAT_DU_PHONG"):
+        tools = [t for t in tools if t["name"] != "get_current_period_projection"]
     if scope_area_code or scope_channel:
         tools = [tool for tool in tools if tool["name"] not in RAW_SQL_TOOLS]
     elif scope_role not in LIVE_SQL_ALLOWED_ROLES:
@@ -4234,6 +4248,11 @@ def ask(question: str, session_id: str = "default", username: str = None, scope_
     o SQL tu do).
     Tra ve dict: {answer: str, sql_used: [list mo ta cac tool/SQL da chay], last_result: {...} hoac None}
     """
+    if projection_period(question):
+        result = _projection_response(question, session_id, username, scope_area_code,
+                                      scope_employee_code, scope_channel, scope_role, query_id)
+        return result
+
     if is_future_forecast_question(question):
         return _blocked_future_forecast_response(question, session_id, query_id)
 
@@ -4369,12 +4388,14 @@ def ask(question: str, session_id: str = "default", username: str = None, scope_
             answer_text = freshness.finalize_answer(answer_text)
             answer_text = query_plan.finalize_warnings(answer_text)
             append_message(session_id, "user", question, query_id=query_id)
-            append_message(session_id, "assistant", answer_text, query_id=query_id)
+            charts = build_charts(last_tool_used[0] if last_tool_used else None, last_result)
+            append_message(session_id, "assistant", answer_text, query_id=query_id,
+                           **({"charts": charts} if charts else {}))
             if last_tool_used:
                 set_query_state(session_id, last_tool_used[0], last_tool_used[1])
             if ran_adhoc_query:
                 save_example(*ran_adhoc_query)
-            return {"answer": answer_text, "sql_used": sql_used, "last_result": last_result,
+            return {"answer": answer_text, "sql_used": sql_used, "last_result": last_result, "charts": charts,
                     "freshness": freshness.as_dicts(),
                     "query_plan": query_plan.as_dict(),
                     "query_id": query_id}
@@ -4650,6 +4671,13 @@ def ask_stream(question: str, session_id: str = "default", username: str = None,
     {"type": "done", "answer": str, "sql_used": [...], "last_result": {...}} voi KET QUA DAY DU
     (giong het cau truc return cua ask()) de client biet ket thuc va co du lieu cho UI (bang/cot...).
     """
+    if projection_period(question):
+        result = _projection_response(question, session_id, username, scope_area_code,
+                                      scope_employee_code, scope_channel, scope_role, query_id)
+        yield {"type": "text_delta", "text": result["answer"]}
+        yield {"type": "done", **result}
+        return
+
     if is_future_forecast_question(question):
         blocked = _blocked_future_forecast_response(question, session_id, query_id)
         yield {"type": "text_delta", "text": blocked["answer"]}
@@ -4772,13 +4800,15 @@ def ask_stream(question: str, session_id: str = "default", username: str = None,
             answer_text = query_plan.finalize_warnings(answer_text)
             yield {"type": "text_delta", "text": answer_text}
             append_message(session_id, "user", question, query_id=query_id)
-            append_message(session_id, "assistant", answer_text, query_id=query_id)
+            charts = build_charts(last_tool_used[0] if last_tool_used else None, last_result)
+            append_message(session_id, "assistant", answer_text, query_id=query_id,
+                           **({"charts": charts} if charts else {}))
             if last_tool_used:
                 set_query_state(session_id, last_tool_used[0], last_tool_used[1])
             if ran_adhoc_query:
                 save_example(*ran_adhoc_query)
             yield {"type": "done", "answer": answer_text, "sql_used": sql_used,
-                   "last_result": last_result, "freshness": freshness.as_dicts(),
+                   "last_result": last_result, "charts": charts, "freshness": freshness.as_dicts(),
                    "query_plan": query_plan.as_dict(),
                    "query_id": query_id}
             return
@@ -5008,3 +5038,56 @@ def ask_stream(question: str, session_id: str = "default", username: str = None,
            "freshness": freshness.as_dicts(),
            "query_plan": query_plan.as_dict(),
            "partial_results_hidden": True, "query_id": query_id}
+
+
+def _projection_response(question, session_id, username, scope_area_code,
+                         scope_employee_code, scope_channel, scope_role, query_id):
+    q = _fold_for_route(question)
+    requested_area = next((code for text, code in (("mien bac", "MB"), ("mien trung", "MT"), ("mien nam", "MN")) if text in q), None)
+    requested_channels = [c for c in ("OTC", "ETC") if re.search(r"\b" + c.lower() + r"\b", q)]
+    requested_channel = requested_channels[0] if len(requested_channels) == 1 else None
+    conflict = ((requested_area and scope_area_code and requested_area != scope_area_code)
+                or (requested_channel and scope_channel and scope_channel != "ALL" and requested_channel != scope_channel))
+    if conflict:
+        answer = "Phạm vi được hỏi nằm ngoài miền/kênh của tài khoản. Hãy hỏi trong phạm vi được cấp."
+        append_message(session_id, "user", question, query_id=query_id)
+        append_message(session_id, "assistant", answer, query_id=query_id)
+        return {"answer": answer, "sql_used": [], "last_result": None, "charts": [], "freshness": [], "query_id": query_id}
+    scope_area_code = scope_area_code or requested_area
+    scope_channel = requested_channel if scope_channel in (None, "ALL") else scope_channel
+    periods = [projection_period(question)]
+    if "thang/quy" in q or "thang va quy" in q:
+        periods = ["month", "quarter"]
+    groups = []
+    if "kenh" in q:
+        groups.append("channel")
+    if "mien" in q or "vung" in q:
+        groups.append("area")
+    if "qlv" in q:
+        groups.append("qlv")
+    elif "tdv" in q or "nhan vien" in q:
+        groups.append("employee")
+    if scope_employee_code:
+        groups = ["overall"]
+    groups = groups or ["overall"]
+    answers, charts, sql_used, freshness = [], [], [], []
+    result = None
+    for period in periods:
+        for group in groups:
+            args = {"period": period, "group_by": group}
+            statement = f"[bao cao chuan] get_current_period_projection({args})"
+            _record_sql_used(query_id, sql_used, statement)
+            result = call_template("get_current_period_projection", args, question=question,
+                                   username=username, session_id=session_id, scope_area_code=scope_area_code,
+                                   scope_employee_code=scope_employee_code, scope_channel=scope_channel, scope_role=scope_role)
+            data = result.get("result", {}) if result.get("ok") else {"error": result.get("error", "Không thể dự phóng.")}
+            answers.append(render_projection(data))
+            charts.extend(build_charts("get_current_period_projection", result))
+            if data.get("as_of"):
+                freshness.append({"source_name": data.get("basis", "Kho dữ liệu"), "business_data_date": data["as_of"]})
+    charts = charts[:3]
+    answer = "\n\n".join(answers)
+    append_message(session_id, "user", question, query_id=query_id)
+    append_message(session_id, "assistant", answer, query_id=query_id, **({"charts": charts} if charts else {}))
+    return {"answer": answer, "sql_used": sql_used, "last_result": result,
+            "charts": charts, "freshness": freshness, "query_id": query_id}

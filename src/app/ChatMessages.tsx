@@ -1,5 +1,6 @@
 "use client";
 
+import { ReportCharts } from "./ReportChart";
 import { memo, useEffect, useRef, useState } from "react";
 import { AnswerMarkdown, DataTable } from "./AnswerMarkdown";
 import { IconCheck, IconCopy, IconDatabase, IconRetry, IconThumbDown, IconThumbUp, IconWarning } from "./icons";
@@ -114,6 +115,7 @@ function BotMessage({ message: m, streaming, onRetry, onFeedback }: {
               <div className={cx("break-words text-[15px] leading-7 text-slate-800", streaming && "streaming-caret")}>
                 <AnswerMarkdown text={m.text} />
               </div>
+              {!streaming && <ReportCharts charts={m.charts} />}
               {hasTable && <DataTable columns={m.columns as string[]} rows={m.rows as unknown[][]} />}
             </div>
             {m.freshness && m.freshness.length > 0 && <FreshnessLine items={m.freshness} />}
