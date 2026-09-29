@@ -3944,7 +3944,7 @@ def reorder_pending_customers(year_month: str = None, limit: int = 200, manager_
 
 def focus_product_kpi(year_month: str = None, limit: int = 100, manager_code: str = None,
                       scope_area_code: str = None, scope_employee_code: str = None,
-                      area_code: str = None, limit_tdv: int = 30, thu_tu: str = "cao_truoc") -> dict:
+                      area_code: str = None, limit_tdv: int = 20, thu_tu: str = "cao_truoc") -> dict:
     """DOANH SO SAN PHAM TRONG TAM va KPI trong tam theo QUAN LY VUNG (tang QLV) tu FACT_ThongKeTinhLuong.
 
     15/09/2026 (UAT 14:10-14:11 "Doanh so san pham trong tam theo quan ly vung" - thieu KPI san pham
@@ -3961,11 +3961,13 @@ def focus_product_kpi(year_month: str = None, limit: int = 100, manager_code: st
     fdate = f"{ym}-{_last_day_of_month(int(ym[:4]), int(ym[5:7])):02d}"
     target_col = "f.tpr_target_amount" if "tpr_target_amount" in cols else "NULL"
     msa_col = "f.month_sale_amount" if "month_sale_amount" in cols else "NULL"
+    sku_cols = ", ".join(f"f.{c} {a}" if c in cols else f"NULL {a}"
+                         for c, a in (("sku_quantity", "sku_dat"), ("sku_target", "sku_ct"), ("sku_percent", "sku_pct")))
     sql = ("WITH s AS (SELECT employee_code, MAX(save_date) d FROM fact_thongketinhluong "
            "WHERE save_date<=? AND substr(save_date,1,7)=? GROUP BY employee_code) "
            "SELECT f.employee_code, f.employee_name, f.position_code, f.area_code, f.manager_code, f.save_date, "
            f"f.target_product_amount actual, {target_col} target, f.target_product_percent pct_goc, "
-           f"{msa_col} msa, "
+           f"{msa_col} msa, {sku_cols}, "
            "f.tpr_point diem FROM fact_thongketinhluong f "
            "JOIN s ON s.employee_code=f.employee_code AND s.d=f.save_date WHERE 1=1")
     params = [fdate, ym]
@@ -3992,6 +3994,10 @@ def focus_product_kpi(year_month: str = None, limit: int = 100, manager_code: st
                 # thang, MN/MT = TPRTargetAmount. con_thieu = chi tieu quy doi - doanh so trong tam (am = vuot).
                 "chi_tieu_quy_doi": target if target else None,
                 "con_thieu": (target - actual) if target else None,
+                # KPI SKU cua ket qua tinh luong (SKUQuantity/SKUTarget): so ma hang ban duoc so chi tieu so ma.
+                "sku_dat": _f(r["sku_dat"]) if r["sku_dat"] is not None else None,
+                "sku_chi_tieu": _f(r["sku_ct"]) if r["sku_ct"] is not None else None,
+                "sku_pct": _pct100(r["sku_pct"]),
                 "snapshot_date": str(r["save_date"])[:10]}
         if target is not None and 0 < target < 1:
             # 26/09/2026: Mien Bac ghi TPRTargetAmount (= FACT_PhatSinhNhanVien.TProdTarget) la TY TRONG muc tieu
@@ -4050,9 +4056,9 @@ def focus_product_kpi(year_month: str = None, limit: int = 100, manager_code: st
         for hang, i in enumerate(xep, 1):
             i["hang"] = hang
         try:
-            so_hien = max(1, min(int(limit_tdv or 30), 300))
+            so_hien = max(1, min(int(limit_tdv or 20), 300))
         except (TypeError, ValueError):
-            so_hien = 30
+            so_hien = 20
         cot_tdv = ("hang", "employee_code", "employee_name", "manager_code", "manager_name", "area_code",
                    "doanh_so_trong_tam", "chi_tieu_quy_doi", "con_thieu", "ty_trong_muc_tieu_pct", "pct_dat",
                    "pct_he_thong")
@@ -4086,6 +4092,40 @@ def focus_product_kpi(year_month: str = None, limit: int = 100, manager_code: st
         for t in theo_mien.values():
             t["pct_dat"] = (t["doanh_so_trong_tam_co_chi_tieu"] / t["chi_tieu_quy_doi"] * 100) if t["chi_tieu_quy_doi"] else None
         result["theo_mien_tdv"] = sorted(theo_mien.values(), key=lambda t: str(t["mien"]))
+
+        # 29/09/2026 (UAT M32 lan 2): ve "vung nao co khoang trong do phu lon nhat" model goi them tool do phu, tool tu
+        # chon mode sku_target va bao "khong co target theo SKU" -> tra loi khong tinh duoc. Kho CO KPI SKU cua tung TDV
+        # (SKUQuantity/SKUTarget trong ket qua tinh luong) - dung lam khoang trong do phu theo doi va theo mien.
+        def _khoang_trong(nhom):
+            co_ct = [i for i in nhom if i["sku_chi_tieu"]]
+            return {
+                "so_tdv": len(nhom), "so_tdv_co_chi_tieu_sku": len(co_ct),
+                "so_tdv_chua_dat_sku": sum(1 for i in co_ct if (i["sku_pct"] or 0) < 100),
+                "so_ma_con_thieu": sum(max(0.0, i["sku_chi_tieu"] - (i["sku_dat"] or 0.0)) for i in co_ct),
+                "pct_sku_trung_binh": (sum(i["sku_pct"] or 0 for i in co_ct) / len(co_ct)) if co_ct else None,
+            }
+
+        theo_doi_sku = {}
+        for i in tdv:
+            theo_doi_sku.setdefault(i["manager_code"], []).append(i)
+        doi = [dict(manager_code=ma, manager_name=emp_names.get(ma), mien=_mien(ds[0]["area_code"]), **_khoang_trong(ds))
+               for ma, ds in theo_doi_sku.items()]
+        doi = [d for d in doi if d["so_tdv_co_chi_tieu_sku"]]
+        doi.sort(key=lambda d: (-d["so_ma_con_thieu"], -d["so_tdv_chua_dat_sku"], str(d["manager_code"])))
+        mien_sku = {}
+        for i in tdv:
+            mien_sku.setdefault(_mien(i["area_code"]), []).append(i)
+        if doi:
+            result["khoang_trong_do_phu_sku"] = {
+                "theo_doi": doi[:15], "so_doi": len(doi),
+                "theo_mien": sorted((dict(mien=m, **_khoang_trong(ds)) for m, ds in mien_sku.items()),
+                                    key=lambda d: -d["so_ma_con_thieu"]),
+                "dinh_nghia": (
+                    "KPI SKU cua ket qua tinh luong Bravo: so ma hang TDV ban duoc (SKUQuantity) so chi tieu so ma "
+                    "(SKUTarget), snapshot moi nhat trong thang. so_ma_con_thieu = tong phan chua dat chi tieu so ma cua "
+                    "cac TDV; xep doi thieu nhieu nhat truoc. Day la do phu SKU noi chung, KHONG rieng SKU trong tam (kho "
+                    "chua co co SKU trong tam theo tung ma); noi ro dieu nay khi tra loi."),
+            }
         result["xem_theo_tdv"] = ("Trong tam TUNG TDV da co san o tdv_xep_hang (du moi doi, hang tinh tren ca pham vi) va "
                                   "tong theo mien o theo_mien_tdv. KHONG goi lai tool nay cho tung QLV. Cac KPI khac cua "
                                   "tung TDV (doanh so, SKU, khach moi...): get_kpi_scorecard.")

@@ -62,8 +62,10 @@ _DOMAIN_SPECS = (
         "domain": "kpi",
         "label": "Đối chiếu KPI và cây đội ngũ",
         "markers": ("kpi", "chi tieu", "target", "doi ngu", "nhan vien", "qlv", "tdv"),
+        # 29/09/2026 (UAT M32): get_focus_product_kpi cung nguon KPI tinh luong voi get_kpi_scorecard; thieu no thi
+        # cau M32 tra loi du ma van bi gan "Doi chieu KPI va cay doi ngu: model chua goi nguon".
         "tools": ("get_kpi_ranking", "get_revenue_tree", "get_employee_kpi", "get_kpi_scorecard",
-                  "get_employee_daily_kpi", "get_kpi_gap_run_rate",
+                  "get_focus_product_kpi", "get_employee_daily_kpi", "get_kpi_gap_run_rate",
                   "get_workforce_productivity", "get_operational_data_quality",
                   "get_salary_ranking"),
         "metrics": ("kpi",),
@@ -97,7 +99,8 @@ _DOMAIN_SPECS = (
         "domain": "product",
         "label": "Phân tích sản phẩm",
         "markers": ("san pham", "sp", "ma hang", "sku", "nhom hang", "gia ban", "san luong"),
-        "tools": ("get_top_products", "get_customer_product_coverage",
+        # 29/09/2026 (UAT M32): SKU trong tam/chien luoc va do phu SKU (KPI SKU tinh luong) nam o get_focus_product_kpi.
+        "tools": ("get_top_products", "get_customer_product_coverage", "get_focus_product_kpi",
                   "get_cross_sell_opportunities", "get_inventory_by_region",
                   "get_inventory_expiry_report", "get_sku_revenue_drop_vs_stock",
                   "get_promotion_effectiveness"),
@@ -703,6 +706,22 @@ class QueryPlan:
                 "team_employee_rollup", True,
                 "Đã lấy cây/xếp hạng KPI theo nguồn phân công; chưa đối chiếu hóa đơn từng nhân viên.",
                 tools=("get_revenue_tree", "get_kpi_ranking"),
+            )
+        # 29/09/2026 (UAT M32): bang KPI va KPI trong tam doc thang ket qua tinh luong Bravo, tra xep hang tung nguoi
+        # KEM tong theo doi/mien cung mot snapshot - la bang chung rollup doi/nhan vien. Truoc day chi get_revenue_tree/
+        # get_kpi_ranking duoc tinh, nen cau KPI nhieu domain tra loi du van bi gan "Gioi han ket luan".
+        kpi_tong_hop = {
+            "get_kpi_scorecard": ("nhan_vien", "tong_hop_theo_qlv"),
+            "get_focus_product_kpi": ("tdv_xep_hang", "theo_mien_tdv", "thanh_vien_doi", "quan_ly_vung"),
+        }
+        co_rollup = [name for name, keys in kpi_tong_hop.items()
+                     if isinstance(self._evidence.get(name), dict) and not self._evidence[name].get("error")
+                     and any(isinstance(self._evidence[name].get(k), list) for k in keys)]
+        if co_rollup:
+            self._set_reconciliation(
+                "team_employee_rollup", True,
+                "Đã lấy KPI từng người kèm tổng theo đội/miền từ kết quả tính lương Bravo (cùng snapshot từng người).",
+                tools=tuple(co_rollup),
             )
 
         if any(name in self._evidence for name in (
