@@ -659,9 +659,19 @@ def _required_tool_for_question(question: str) -> str | None:
             threshold in q for threshold in ("65", "70", "80", "100", "120")):
         return "get_employee_kpi"
 
-    is_salary = any(word in q for word in (
-        "lương", "luong", "thưởng", "thuong", "v25", "totalpoint", "dmbonus",
-    ))
+    # 29/09/2026: chuoi con "luong"/"thuong" tren cau da bo dau bat ca "số lượng", "sản lượng", "chất lượng",
+    # "thương hiệu", "bình thường", "bất thường" va ten nguoi "Thương" -> cau doanh thu/du lieu kem "thay doi"/"tung
+    # nguoi" bi ep vao get_salary_ranking (du lieu LUONG nhay cam, nguoi hoi khong he hoi luong). Cau go co dau thi chi
+    # nhan chu "lương"/"thưởng"; cau go khong dau thi go bo cac cum khong phai luong/thuong truoc khi xet.
+    if cau_goc.isascii():
+        q_xet_luong = q
+        for cum in ("so luong", "san luong", "chat luong", "khoi luong", "luong/don", "luong don",
+                    "binh thuong", "bat thuong", "thuong hieu", "thuong mai", "thuong xuyen"):
+            q_xet_luong = q_xet_luong.replace(cum, " ")
+        is_salary = any(word in q_xet_luong for word in ("luong", "thuong"))
+    else:
+        is_salary = "lương" in cau_goc or "thưởng" in cau_goc
+    is_salary = is_salary or any(word in q for word in ("v25", "totalpoint", "dmbonus"))
     if is_salary:
         if any(marker in q for marker in (
             "chi phi thuong", "thuong tren doanh thu", "thuong kinh doanh tren doanh thu",
