@@ -529,18 +529,26 @@ def _required_tool_for_question(question: str) -> str | None:
         "quy mo lon", "tang truong thap", "co hoi trang",
     )):
         return "get_geography_monthly_performance"
+    # 29/09/2026: "Khach hang nao can uu tien thu no?" tung vao day (do phu khach-SKU) - cau uu tien THU NO
+    # thuoc nhanh cong no ben duoi.
+    hoi_no = any(marker in q for marker in ("thu no", "cong no", "no qua han", "no xau"))
     if any(marker in q for marker in ("uu tien", "dong gap", "can uu tien")) and any(
-            marker in q for marker in ("khach hang", "san pham", "nhan vien", "tdv")):
+            marker in q for marker in ("khach hang", "san pham", "nhan vien", "tdv")) and not hoi_no:
         return "get_customer_product_coverage"
     if any(marker in q for marker in ("ke hoach thau", "ty le trung thau", "gia tri trung thau")):
         # Ke hoach/gia tri tham gia thau va ty le trung KHONG co trong vHopDongETC (bang do chi co hop
         # dong da ky). Giu bao cao dia ban ETC cho phan doanh thu thuc hien va buoc chatbot neu ro
         # phan thau la thieu nguon - C43/M41 dang khop theo huong nay.
         return "get_geography_monthly_performance"
+    # 29/09/2026: sau khi bo dau "giảm lượng" (san luong - y cua luat nay) va "giảm lương" (tien luong) cung la
+    # "giam luong"; cau "Vi sao TDV ... bi giam luong thang nay?" tung bi ep vao tool do phu khach-SKU thay vi
+    # xuong nhanh luong o cuoi ham. Doc cau goc con dau de tach: co "lương" ma khong co "lượng" la tien luong.
+    goc = unicodedata.normalize("NFC", (question or "").lower())
+    luong_la_tien_luong = "lương" in goc and "lượng" not in goc
     if any(marker in q for marker in (
         "xoi mon gia", "gia ban thuc te", "giam gia ban", "do it khach", "it don",
         "giam luong", "luong/don", "doanh thu/khach", "mua it sku", "share-of-wallet noi bo",
-    )):
+    ) if not (luong_la_tien_luong and marker == "giam luong")):
         return "get_customer_product_coverage"
     if ("sku" in q or "san pham" in q or "nhom sp" in q) and any(
             marker in q for marker in ("dong gop", "tang/giam", "keo giam")):
@@ -568,8 +576,11 @@ def _required_tool_for_question(question: str) -> str | None:
                 "toan cong ty", "toan kenh", "ty le no",
             )):
         return "get_customer_detail"
-    if any(marker in q for marker in (
-        "tong no", "no qua han", "dso", "thu tien", "no xau", "bop ban", "thu hoi",
+    # 29/09/2026: "thu hoi" chi la thu hoi NO khi cau co chu no/tien ("Sản phẩm nào bị thu hồi?" la thu hoi san
+    # pham, tung bi ep vao tool cong no); them "thu no" cho cau uu tien thu no o tren.
+    thu_hoi_no = "thu hoi" in q and (re.search(r"\bno\b", q) is not None or "tien" in q)
+    if thu_hoi_no or any(marker in q for marker in (
+        "tong no", "no qua han", "dso", "thu tien", "no xau", "bop ban", "thu no",
     )):
         if any(marker in q for marker in ("khach can", "khach vua", "doanh thu nguy co", "bop ban")):
             return "get_customer_revenue_debt_risk"
