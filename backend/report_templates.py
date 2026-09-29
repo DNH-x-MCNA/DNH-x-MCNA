@@ -3943,7 +3943,8 @@ def reorder_pending_customers(year_month: str = None, limit: int = 200, manager_
 
 
 def focus_product_kpi(year_month: str = None, limit: int = 100, manager_code: str = None,
-                      scope_area_code: str = None, scope_employee_code: str = None) -> dict:
+                      scope_area_code: str = None, scope_employee_code: str = None,
+                      area_code: str = None, limit_tdv: int = 30, thu_tu: str = "cao_truoc") -> dict:
     """DOANH SO SAN PHAM TRONG TAM va KPI trong tam theo QUAN LY VUNG (tang QLV) tu FACT_ThongKeTinhLuong.
 
     15/09/2026 (UAT 14:10-14:11 "Doanh so san pham trong tam theo quan ly vung" - thieu KPI san pham
@@ -3968,8 +3969,11 @@ def focus_product_kpi(year_month: str = None, limit: int = 100, manager_code: st
            "f.tpr_point diem FROM fact_thongketinhluong f "
            "JOIN s ON s.employee_code=f.employee_code AND s.d=f.save_date WHERE 1=1")
     params = [fdate, ym]
-    if scope_area_code:
-        markers = _area_markers(scope_area_code)
+    # 29/09/2026 (UAT M32): C-Level hoi "vung MB" ma tool khong co tham so vung -> tra ca cong ty. Pham vi tai
+    # khoan (scope_area_code) LUON thang tham so model truyen vao.
+    vung = scope_area_code or (str(area_code or "").strip().upper() or None)
+    if vung:
+        markers = _area_markers(vung)
         sql += f" AND f.area_code IN ({','.join('?' for _ in markers)})"
         params += markers
     rows = _q(sql, tuple(params))
@@ -3983,6 +3987,11 @@ def focus_product_kpi(year_month: str = None, limit: int = 100, manager_code: st
                 "doanh_so_trong_tam": actual, "chi_tieu_trong_tam": target, "kieu_chi_tieu": "so_tien",
                 "pct_dat": (actual / target * 100) if target else None,
                 "ty_le_goc_bravo": r["pct_goc"], "diem_kpi_trong_tam": r["diem"],
+                "pct_he_thong": _pct100(r["pct_goc"]),
+                # 29/09/2026: chi tieu quy ve TIEN nhu cong thuc Bravo: MB (ty trong) = TPRTargetAmount x doanh so
+                # thang, MN/MT = TPRTargetAmount. con_thieu = chi tieu quy doi - doanh so trong tam (am = vuot).
+                "chi_tieu_quy_doi": target if target else None,
+                "con_thieu": (target - actual) if target else None,
                 "snapshot_date": str(r["save_date"])[:10]}
         if target is not None and 0 < target < 1:
             # 26/09/2026: Mien Bac ghi TPRTargetAmount (= FACT_PhatSinhNhanVien.TProdTarget) la TY TRONG muc tieu
@@ -3994,9 +4003,11 @@ def focus_product_kpi(year_month: str = None, limit: int = 100, manager_code: st
             item.update(kieu_chi_tieu="ty_trong_doanh_so", chi_tieu_trong_tam=None,
                         ty_trong_muc_tieu_pct=target * 100,
                         ty_trong_thuc_te_pct=(actual / msa * 100) if msa else None,
-                        pct_dat=(actual / (target * msa) * 100) if msa else None)
+                        pct_dat=(actual / (target * msa) * 100) if msa else None,
+                        chi_tieu_quy_doi=(target * msa) if msa else None,
+                        con_thieu=(target * msa - actual) if msa else None)
         elif target == 0:
-            item.update(chi_tieu_trong_tam=None,
+            item.update(chi_tieu_trong_tam=None, chi_tieu_quy_doi=None, con_thieu=None,
                         ghi_chu_chi_tieu="Bravo khong gan chi tieu trong tam cho dong nay (TPRTargetAmount=0).")
         return item
 
@@ -4027,9 +4038,63 @@ def focus_product_kpi(year_month: str = None, limit: int = 100, manager_code: st
                                           key=lambda i: (i["pct_dat"] is None, i["pct_dat"] or 0))[:limit]
     else:
         # 26/09/2026 (query_runs may 24 24/09 "theo trinh duoc vien"): model goi tool nay 11 lan, moi QLV mot lan, de lay
-        # trong tam tung TDV. get_kpi_scorecard da co trong_tam_pct_dat tung nguoi trong mot lan goi.
-        result["xem_theo_tdv"] = ("Trong tam TUNG TDV: goi get_kpi_scorecard MOT lan (truong trong_tam_pct_dat; loc doi "
-                                  "bang manager_code neu can). KHONG goi lai tool nay cho tung QLV.")
+        # trong tam tung TDV. 29/09/2026 (UAT M32): van thieu - get_kpi_scorecard khong loc doi chi tra 20 nguoi % DOANH
+        # SO thap nhat, nen model goi tung doi (10 doi MB) roi cham gioi han 5 tool/vong, thieu doi MBKV2, tu xep sai.
+        # Nay tra THANG xep hang TDV theo % he thong (TargetProductPercent_R) + tong theo mien trong mot lan goi, dung
+        # cach dap an cua anh Dang: chi PositionCode TDV, snapshot moi nhat tung nguoi trong thang.
+        cao_truoc = str(thu_tu or "cao_truoc").strip().lower() != "thap_truoc"
+        tdv = [_item(r) for r in rows if str(r["position_code"] or "").upper() == "TDV"]
+        co_pct = sorted((i for i in tdv if i["pct_he_thong"] is not None),
+                        key=lambda i: ((-i["pct_he_thong"]) if cao_truoc else i["pct_he_thong"], str(i["employee_code"])))
+        xep = co_pct + [i for i in tdv if i["pct_he_thong"] is None]
+        for hang, i in enumerate(xep, 1):
+            i["hang"] = hang
+        try:
+            so_hien = max(1, min(int(limit_tdv or 30), 300))
+        except (TypeError, ValueError):
+            so_hien = 30
+        cot_tdv = ("hang", "employee_code", "employee_name", "manager_code", "manager_name", "area_code",
+                   "doanh_so_trong_tam", "chi_tieu_quy_doi", "con_thieu", "ty_trong_muc_tieu_pct", "pct_dat",
+                   "pct_he_thong")
+        result["tdv_xep_hang"] = [{k: i.get(k) for k in cot_tdv} for i in xep[:so_hien]]
+        result["so_tdv"] = len(xep)
+        result["so_tdv_khong_co_ty_le"] = len(xep) - len(co_pct)
+        result["tdv_xep_hang_thu_tu"] = "pct_he_thong cao nhat truoc" if cao_truoc else "pct_he_thong thap nhat truoc"
+        if len(xep) > so_hien:
+            result["tdv_xep_hang_ghi_chu"] = (
+                f"Dang liet ke {so_hien}/{len(xep)} TDV theo {result['tdv_xep_hang_thu_tu']}; hang tinh tren TOAN BO "
+                f"{len(xep)} TDV. KHONG noi tong bang so dong dang hien. Can nhom thap nhat thi goi lai voi "
+                "thu_tu='thap_truoc'; can du mot doi thi manager_code. KHONG goi tung QLV va KHONG xin limit_tdv qua "
+                "lon (ban gui model co tran kich thuoc, se bi cat con it dong hon).")
+
+        def _mien(ma):
+            ma = str(ma or "").strip().upper()
+            return next((ms[0] for ms in REGION_SQL_MARKERS.values() if ma in ms), ma or None)
+
+        theo_mien = {}
+        for i in tdv:
+            t = theo_mien.setdefault(_mien(i["area_code"]), {
+                "mien": _mien(i["area_code"]), "so_tdv": 0, "so_tdv_co_chi_tieu": 0, "so_tdv_dat_100": 0,
+                "doanh_so_trong_tam": 0.0, "doanh_so_trong_tam_co_chi_tieu": 0.0, "chi_tieu_quy_doi": 0.0})
+            t["so_tdv"] += 1
+            t["doanh_so_trong_tam"] += i["doanh_so_trong_tam"] or 0.0
+            if i["chi_tieu_quy_doi"]:
+                t["so_tdv_co_chi_tieu"] += 1
+                t["doanh_so_trong_tam_co_chi_tieu"] += i["doanh_so_trong_tam"] or 0.0
+                t["chi_tieu_quy_doi"] += i["chi_tieu_quy_doi"]
+            t["so_tdv_dat_100"] += 1 if (i["pct_he_thong"] or 0) >= 100 else 0
+        for t in theo_mien.values():
+            t["pct_dat"] = (t["doanh_so_trong_tam_co_chi_tieu"] / t["chi_tieu_quy_doi"] * 100) if t["chi_tieu_quy_doi"] else None
+        result["theo_mien_tdv"] = sorted(theo_mien.values(), key=lambda t: str(t["mien"]))
+        result["xem_theo_tdv"] = ("Trong tam TUNG TDV da co san o tdv_xep_hang (du moi doi, hang tinh tren ca pham vi) va "
+                                  "tong theo mien o theo_mien_tdv. KHONG goi lai tool nay cho tung QLV. Cac KPI khac cua "
+                                  "tung TDV (doanh so, SKU, khach moi...): get_kpi_scorecard.")
+        result["dinh_nghia_xep_hang"] = (
+            "Chi TDV (PositionCode='TDV'), snapshot moi nhat tung nguoi trong thang. pct_he_thong = TargetProductPercent "
+            "cua Bravo (dung de xep hang); pct_dat = doanh so trong tam / chi tieu, tu tinh. chi_tieu_quy_doi: Mien Bac = "
+            "ty trong muc tieu x doanh so thang, MN/MT = TPRTargetAmount. con_thieu = chi tieu quy doi - doanh so trong "
+            "tam (am = da vuot). theo_mien_tdv.pct_dat = tong doanh so trong tam cua TDV co chi tieu / tong chi tieu quy "
+            "doi. Chi tieu la cho CA NHOM san pham trong tam cua tung TDV, KHONG co chi tieu rieng tung SKU hay tung khach.")
     if target_col == "NULL":
         result["canh_bao_chi_tieu"] = ("Kho chua dong bo TPRTargetAmount nen chua co chi tieu trong tam; "
                                        "KHONG tu tinh % dat.")
@@ -4046,9 +4111,13 @@ def _chi_tieu_suy_nguoc(so_luong, ty_le):
     return round(_f(so_luong) / _f(ty_le)) if ty_le and _f(ty_le) > 0 else None
 
 
+_XEP_KPI = {"pct_doanh_so": "pct_doanh_so", "trong_tam_pct_dat": "trong_tam_pct_dat"}
+
+
 def kpi_scorecard(as_of_date: str = None, manager_code: str = None, employee_code: str = None,
                   area_code: str = None, limit: int = None, scope_area_code: str = None,
-                  scope_employee_code: str = None) -> dict:
+                  scope_employee_code: str = None, xep_theo: str = "pct_doanh_so",
+                  thu_tu: str = "thap_truoc", position_code: str = None) -> dict:
     """BANG KPI QLV/TDV trong MOT lan goi (hop 24/09/2026: "bam bang KPI cua QLV/TDV: % dat KPI, nhom hang trong
     tam, cong no qua han"). Moi nguoi ban hang (TDV/CTV/CS/TK) co cac chi so KPI tu ket qua tinh luong Bravo
     (fact_thongketinhluong, snapshot moi nhat TUNG NGUOI trong thang - snapshot giua thang la luy ke den ngay do)
@@ -4104,6 +4173,13 @@ def kpi_scorecard(as_of_date: str = None, manager_code: str = None, employee_cod
         sql += " AND f.employee_code=?"
         params.append(ma_nv)
         thong_tin_loc["ma_nhan_vien"] = ma_nv
+    vai_tro_loc = str(position_code or "").strip().upper() or None
+    if vai_tro_loc:
+        if vai_tro_loc not in _EMPLOYEE_TIER_POSITIONS:
+            return {"error": "position_code chi nhan: " + ", ".join(_EMPLOYEE_TIER_POSITIONS)}
+        sql += " AND UPPER(f.position_code)=?"
+        params.append(vai_tro_loc)
+        thong_tin_loc["vai_tro"] = vai_tro_loc
     rows = _q(sql, tuple(params))
     if ma_nv and not rows:
         return {"error": (f"Khong co dong KPI thang {ym} cua {ma_nv}"
@@ -4178,7 +4254,17 @@ def kpi_scorecard(as_of_date: str = None, manager_code: str = None, employee_cod
                 "du_no": 0.0, "no_qua_han": 0.0, "no_qua_han_tren_45_ngay": 0.0, "so_khach_no_qua_han": 0}
         return d
 
-    dong = sorted((_dong(r) for r in rows), key=lambda x: (x["pct_doanh_so"] is None, x["pct_doanh_so"] or 0))
+    # 29/09/2026 (UAT M32 "top 10 TDV dat % cao nhat"): truoc day LUON xep % doanh so THAP truoc va cat 20 dong khi
+    # khong loc doi - hoi "cao nhat" thi model khong co cach nao lay dung top trong mot lan goi.
+    cot_xep = _XEP_KPI.get(str(xep_theo or "pct_doanh_so").strip().lower(), "pct_doanh_so")
+    cao_truoc = str(thu_tu or "thap_truoc").strip().lower() == "cao_truoc"
+    tat_ca = [_dong(r) for r in rows]
+    co_so = sorted((x for x in tat_ca if x[cot_xep] is not None),
+                   key=lambda x: ((-x[cot_xep]) if cao_truoc else x[cot_xep], str(x["employee_code"])))
+    dong = co_so + [x for x in tat_ca if x[cot_xep] is None]
+    for hang, x in enumerate(dong, 1):
+        x["hang"] = hang
+    mo_ta_thu_tu = f"{cot_xep} {'CAO' if cao_truoc else 'THAP'} truoc"
     theo_qlv = {}
     for d in dong:
         t = theo_qlv.setdefault(d["manager_code"], {"manager_code": d["manager_code"], "so_nguoi": 0, "doanh_so": 0.0,
@@ -4217,8 +4303,10 @@ def kpi_scorecard(as_of_date: str = None, manager_code: str = None, employee_cod
         "luy_ke_giua_thang": moc[8:10] != f"{_last_day_of_month(int(ym[:4]), int(ym[5:7])):02d}",
         "loc": thong_tin_loc or None, "vung": vung,
         "so_nguoi": len(dong), "nhan_vien": dong[:limit], "nhan_vien_bi_cat": len(dong) > limit,
-        **({"nhan_vien_ghi_chu": (f"Dang liet ke {limit}/{len(dong)} nguoi % doanh so THAP nhat; tong_hop_theo_qlv du "
-                                   "moi doi. Xem du tung nguoi thi goi lai voi manager_code cua tung QLV.")}
+        "thu_tu_danh_sach": mo_ta_thu_tu,
+        **({"nhan_vien_ghi_chu": (f"Dang liet ke {limit}/{len(dong)} nguoi theo {mo_ta_thu_tu}; hang tinh tren TOAN BO "
+                                   f"{len(dong)} nguoi; tong_hop_theo_qlv du moi doi. Can top N cao nhat/thap nhat thi goi "
+                                   "MOT lan voi xep_theo/thu_tu/limit, KHONG goi tung QLV.")}
            if len(dong) > limit else {}),
         "tong_hop_theo_qlv": sorted(theo_qlv.values(), key=lambda t: (t["pct_doanh_so_doi"] is None,
                                                                       t["pct_doanh_so_doi"] or 0)),
@@ -4231,7 +4319,9 @@ def kpi_scorecard(as_of_date: str = None, manager_code: str = None, employee_cod
             "0). CS/TK dung active_customer, khong co ASO. tong_diem_kpi_bravo = TotalPoint Bravo, khong tu quy doi. "
             "cong_no_khach_phu_trach: no OTC cua khach phan cong cho nguoi do tai cong_no_tai, khong phai no phat "
             "sinh trong thang. Tong doi dung no_qua_han_ca_doi (khop get_receivables_overview); "
-            "no_qua_han_chua_gan_thanh_vien la khach cua nguoi khong co dong KPI thang nay hoac QLV tu giu. Danh sach xep % doanh so THAP truoc. Khong co tien thuong/phu cap."),
+            "no_qua_han_chua_gan_thanh_vien la khach cua nguoi khong co dong KPI thang nay hoac QLV tu giu. Thu tu danh sach: "
+            "xem thu_tu_danh_sach (mac dinh % doanh so THAP truoc); hang tinh tren toan bo nguoi trong pham vi. Khong co "
+            "tien thuong/phu cap."),
         "pham_vi_kenh": "OTC",
         "data_as_of": latest_data_date(),
     }
