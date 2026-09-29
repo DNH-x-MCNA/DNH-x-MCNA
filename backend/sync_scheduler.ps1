@@ -57,6 +57,19 @@ function Do-Sync {
 
 Log "=== Sync scheduler (may chu DNH, ket noi truc tiep) khoi dong ==="
 $lastRunTime = Get-Date -Year 2000 -Month 1 -Day 1
+# 29/09/2026: truoc day moi lan khoi dong (tuc MOI lan Restart-Service DNH_Chatbot_Backend khi deploy) deu
+# dong bo Bravo NGAY vi $lastRunTime mac dinh nam 2000 - ngay 29/09 hai lan deploy 14:10 va 14:39 them hai
+# lan doc Bravo ngoai lich, dung luc DNH dang soi tai may chu Bravo. Lay moc tu lan dong bo THANH CONG gan
+# nhat (file ket qua do sync_warehouse.py ghi "OK" o cuoi moi lan chay): con trong 60 phut thi cho dung lich.
+# File vang mat/ghi FAIL (lan truoc loi hoac bi huy vi qua gio) thi van dong bo ngay nhu cu.
+try {
+    if ((Test-Path $RESULT_FILE) -and ((Get-Content $RESULT_FILE -Raw).Trim() -eq "OK")) {
+        $lastRunTime = (Get-Item $RESULT_FILE).LastWriteTime
+        Log "Lan dong bo thanh cong gan nhat: $($lastRunTime.ToString('yyyy-MM-dd HH:mm:ss')) - cho toi dung lich $REGULAR_INTERVAL_MIN phut."
+    }
+} catch {
+    Log "Khong doc duoc moc dong bo truoc ($($_.Exception.Message)) - dong bo ngay."
+}
 $lastSpecialRunDate = ""
 
 while ($true) {
