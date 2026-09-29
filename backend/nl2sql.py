@@ -3399,6 +3399,10 @@ def _payload_for_model(tool_name: str, payload, question: str):
             "sync_warning": data.get("sync_warning"),
             "pham_vi_du_lieu": data.get("pham_vi_du_lieu"),
         }
+        # 29/09/2026 (UAT C41): ton SKU = so sach da tru lo am; tong han dung chi gom lo duong. Model phai biet de khong
+        # dua hai con so lech nhau (1.350.134 vs 1.277.726) ma khong giai thich.
+        if data.get("lo_am"):
+            compact_data["lo_am"] = data["lo_am"]
         if wrapper:
             return {**payload, "du_lieu": compact_data}
         return compact_data

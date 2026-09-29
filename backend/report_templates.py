@@ -11293,7 +11293,7 @@ def _inventory_supply_risk(stock_by_item: dict, item_names: dict, area_code: str
         demand = demand_by_item.get(code, {})
         avg_qty = _f(demand.get("qty_3m")) / 3.0
         avg_revenue = _f(demand.get("revenue_3m")) / 3.0
-        cover = stock_qty / avg_qty if avg_qty > 0 else None
+        cover = max(stock_qty, 0.0) / avg_qty if avg_qty > 0 else None
         # 29/09/2026: stock_by_item nay co ca SKU ton ghi nhan = 0 (lo da ban het). Het hang ma khong con nhu cau thi
         # khong phai "ton khong ban"; het hang ma con nhu cau la truong hop thieu hang ro nhat.
         het_hang = stock_qty <= 0
@@ -11316,6 +11316,7 @@ def _inventory_supply_risk(stock_by_item: dict, item_names: dict, area_code: str
             "months_of_cover": round(cover, 2) if cover is not None else None,
             "status": status,
             **({"het_hang_ghi_nhan": True} if het_hang and status != "BINH_THUONG" else {}),
+            **({"ton_so_sach_am": True} if stock_qty < 0 else {}),
         })
 
     actionable = [r for r in risk_rows if r["status"] != "BINH_THUONG"]
@@ -11621,9 +11622,12 @@ def inventory_expiry_report(area_code: str = None, max_bucket: str = None, limit
              LEFT JOIN brv_lot l ON l.item_lot_code = t.item_lot_code AND l.item_id = t.item_id
              LEFT JOIN brv_sanpham sp ON sp.id_code = t.item_id
              LEFT JOIN brv_kho k ON k.id_code = t.warehouse_id
-             WHERE t.is_active = 1 AND t.quantity >= 0"""
+             WHERE t.is_active = 1"""
     # 29/09/2026: lay ca lo = 0 (dong bo nay GIU lo da ban het) de supply_risk thay SKU het sach con nhu cau;
     # han dung/tong so luong ben duoi van chi tinh lo con hang (qty > 0) nhu truoc.
+    # 29/09/2026 (UAT C41): lay ca lo AM. Truoc day loc quantity >= 0 nen ton theo SKU chi cong lo duong - Thuoc ho
+    # vien ngam bo phe ra 1.350.134 trong khi so sach (bang tong, cau Top 20) la 1.277.726: 4 lo am -72.408 bi bo.
+    # Ton SKU (supply_risk) nay = tong moi lo, khop bang tong; han dung van chi tinh lo duong; lo am bao rieng.
     # 04/09/2026 - LOI NANG DA SUA: cung ly do inventory_by_region. Khong loc nam thi ton dau ky
     # nam 2024/2025 (hang da ban het tu lau) van bi tinh, sinh ra 668 "lo da het han" voi 7,67 trieu
     # don vi - hoan toan la lo ma. Loc nam 2026: 0 lo het han.
@@ -11642,13 +11646,18 @@ def inventory_expiry_report(area_code: str = None, max_bucket: str = None, limit
     unknown_expiry_count = 0
     detail = []
     stock_by_item, item_names = {}, {}
+    lo_am = {}
     for r in rows:
         qty = _f(r["quantity"])
         item_code = r["item_code"] or str(r["item_id"])
         stock_by_item[item_code] = stock_by_item.get(item_code, 0.0) + qty
         item_names[item_code] = r["item_name"] or item_names.get(item_code)
+        if qty < 0:
+            am = lo_am.setdefault(item_code, {"item_code": item_code, "so_lo_am": 0, "so_luong_am": 0.0})
+            am["so_lo_am"] += 1
+            am["so_luong_am"] += qty
         if qty <= 0:
-            continue   # lo da ban het: chi dung cho supply_risk, khong phai lo can theo doi han dung
+            continue   # lo da ban het/lo am: chi dung cho ton so sach cua supply_risk, khong theo doi han dung
         if not r["expiry_date"]:
             unknown_expiry_count += 1
             continue
@@ -11709,6 +11718,17 @@ def inventory_expiry_report(area_code: str = None, max_bucket: str = None, limit
         "tong_so_lo_hien_thi": len(detail),
         "rows": detail[:limit],
         "supply_risk": supply_risk,
+        **({"lo_am": {
+            "so_lo_am": sum(x["so_lo_am"] for x in lo_am.values()),
+            "tong_so_luong_am": sum(x["so_luong_am"] for x in lo_am.values()),
+            "so_sku_co_lo_am": len(lo_am),
+            "sku_am_nhieu_nhat": [dict(x, item_name=item_names.get(x["item_code"]))
+                                  for x in sorted(lo_am.values(), key=lambda x: x["so_luong_am"])[:5]],
+            "giai_thich": ("Lo am = Bravo ghi xuat vuot ton cua lo do (loi ghi lo). Ton theo SKU trong supply_risk la "
+                           "ton SO SACH = tong moi lo (da tru lo am), khop bang tong ton kho; summary han dung chi "
+                           "gom lo con hang nen tong co the LON HON ton so sach dung bang phan am nay. Noi ro khi "
+                           "so sanh hai con so, khong goi lo am la hang that."),
+        }} if lo_am else {}),
         "note": (f"Chi hien thi {min(limit, len(detail))}/{len(detail)} lo (sap xep gan het han nhat "
                  f"truoc) - dung 'summary' de biet TONG THE ca khung, 'rows' chi la mau minh hoa."
                  if len(detail) > limit else None),
