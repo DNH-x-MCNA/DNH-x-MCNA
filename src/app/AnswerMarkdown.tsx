@@ -118,6 +118,10 @@ const markdownComponents = {
       {children}
     </a>
   ),
+  // 29/09/2026: KHONG tai anh tu URL trong cau tra loi. Markdown ![](https://ngoai/?d=...) lam trinh duyet tu
+  // goi toi may chu la ngay luc hien, nguoi dung khong can bam gi - neu model bi dan dat (qua noi dung lay tu
+  // du lieu) dua so lieu vao URL anh thi so lieu roi ra ngoai. Chatbot khong tra anh, chi hien chu thay the.
+  img: ({ alt }: { alt?: string }) => (alt ? <span className="text-slate-500">[{alt}]</span> : null),
   ul: ({ children }: { children?: ReactNode }) => <ul className="my-3 list-disc space-y-1.5 pl-5 marker:text-slate-400 last:mb-0">{children}</ul>,
   ol: ({ children }: { children?: ReactNode }) => <ol className="my-3 list-decimal space-y-1.5 pl-5 marker:text-slate-500 last:mb-0">{children}</ol>,
   li: ({ children }: { children?: ReactNode }) => <li className="pl-1">{children}</li>,
