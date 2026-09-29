@@ -306,12 +306,7 @@ def _required_tool_for_question(question: str) -> str | None:
     if (any(marker in q for marker in ("doanh thu", "doanh so", "phat sinh"))
             and any(marker in q for marker in ("3 mien", "ba mien", "theo mien", "theo vung"))):
         return "get_revenue_by_region"
-    # 29/09/2026: bo dau thi "đội" (doi nhom) trung "đối chieu", "thay đổi", "chuyen đổi", "đổi tra", "đối thu", "đôi"
-    # -> "Doi tra hang cua khach thang 9", "Khach hang nao thay doi TDV phu trach?", "Doi chieu doanh thu khach
-    # BGI00699" deu bi ep vao tool do phu khach-SKU danh cho chi so cua DOI. Cau go co dau thi chi nhan "đội"; cau
-    # go khong dau khong tach duoc nen giu nhu cu.
-    cau_goc = unicodedata.normalize("NFC", (question or "").lower())
-    is_team = ("doi" in q) if cau_goc.isascii() else ("đội" in cau_goc)
+    is_team = any(word in q for word in ("doi", "doi toi", "toan doi", "tong doi"))
     # C42 can CA ton/nhu cau va hai ky doanh thu. Ep mot tool (hoac route chuoi
     # nhan vien vi cum "giam lien tiep") se lam mat mot ve cua cau hoi.
     if ("sku" in q and any(marker in q for marker in ("thieu hang", "kho thieu"))
@@ -634,6 +629,14 @@ def _required_tool_for_question(question: str) -> str | None:
     if any(marker in q for marker in ("don/hoa don bat thuong", "don bat thuong", "hoa don bat thuong",
                                        "ty le tra hang", "hang tang tren dt")):
         return "check_order_timing"
+
+    # 29/09/2026: bo dau thi "đội" (doi nhom) trung "đối chieu", "thay đổi", "chuyen đổi", "đổi tra", "đối thu", "đôi"
+    # -> "Doi tra hang cua khach thang 9", "Khach hang nao thay doi TDV phu trach?", "Doi chieu doanh thu khach
+    # BGI00699" deu bi ep vao tool do phu khach-SKU danh cho chi so cua DOI. Cau go co dau thi chi nhan "đội"; cau
+    # go khong dau khong tach duoc nen giu nhu cu. (is_team chi dung tu day tro xuong.)
+    cau_goc = unicodedata.normalize("NFC", (question or "").lower())
+    if not cau_goc.isascii():
+        is_team = "đội" in cau_goc
 
     # Cac intent UAT cua QLV da tung chon sai/roi du lieu khi model tu ghep 4-12 tool. Ep DUONG
     # BAO CAO DA CO SAN ngay tu vong dau; cac vong sau van duoc phep goi them neu cau hoi co nhieu ve.
