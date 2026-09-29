@@ -11172,8 +11172,13 @@ def _inventory_supply_risk(stock_by_item: dict, item_names: dict, area_code: str
         avg_qty = _f(demand.get("qty_3m")) / 3.0
         avg_revenue = _f(demand.get("revenue_3m")) / 3.0
         cover = stock_qty / avg_qty if avg_qty > 0 else None
+        # 29/09/2026: stock_by_item nay co ca SKU ton ghi nhan = 0 (lo da ban het). Het hang ma khong con nhu cau thi
+        # khong phai "ton khong ban"; het hang ma con nhu cau la truong hop thieu hang ro nhat.
+        het_hang = stock_qty <= 0
         if avg_qty > 0 and stock_qty < avg_qty:
             status = "CO_NGUY_CO_THIEU_HANG_DERIVED"
+        elif het_hang:
+            status = "BINH_THUONG"
         elif avg_qty <= 0:
             status = "TON_KHONG_BAN_3_THANG"
         elif cover > 6:
@@ -11188,6 +11193,7 @@ def _inventory_supply_risk(stock_by_item: dict, item_names: dict, area_code: str
             "average_monthly_revenue_3m": avg_revenue,
             "months_of_cover": round(cover, 2) if cover is not None else None,
             "status": status,
+            **({"het_hang_ghi_nhan": True} if het_hang and status != "BINH_THUONG" else {}),
         })
 
     actionable = [r for r in risk_rows if r["status"] != "BINH_THUONG"]
@@ -11325,6 +11331,8 @@ def _inventory_supply_risk(stock_by_item: dict, item_names: dict, area_code: str
         "definition": (
             "Canh bao suy dien tu ton hien co so voi binh quan ban OTC 3 thang da chot. "
             "Khong co du lieu don cho xu ly/chia ton/khach cam ket nen KHONG ket luan da mat don hay doanh thu. "
+            "het_hang_ghi_nhan=true: ton ghi nhan theo lo = 0 (lo da ban het) trong khi 3 thang qua van ban - "
+            "ung vien thieu hang ro nhat, van la suy dien. "
             + ("Binh quan ban va khach mua gan day CHI thuoc doi QLV; ton kho van la ton dung chung "
                "trong pham vi vung da loc, chua phan bo cho doi. Chua tinh duoc so thang du ban khi "
                "thieu quy doi don vi ton va ban; "
@@ -11491,7 +11499,9 @@ def inventory_expiry_report(area_code: str = None, max_bucket: str = None, limit
              LEFT JOIN brv_lot l ON l.item_lot_code = t.item_lot_code AND l.item_id = t.item_id
              LEFT JOIN brv_sanpham sp ON sp.id_code = t.item_id
              LEFT JOIN brv_kho k ON k.id_code = t.warehouse_id
-             WHERE t.is_active = 1 AND t.quantity > 0"""
+             WHERE t.is_active = 1 AND t.quantity >= 0"""
+    # 29/09/2026: lay ca lo = 0 (dong bo nay GIU lo da ban het) de supply_risk thay SKU het sach con nhu cau;
+    # han dung/tong so luong ben duoi van chi tinh lo con hang (qty > 0) nhu truoc.
     # 04/09/2026 - LOI NANG DA SUA: cung ly do inventory_by_region. Khong loc nam thi ton dau ky
     # nam 2024/2025 (hang da ban het tu lau) van bi tinh, sinh ra 668 "lo da het han" voi 7,67 trieu
     # don vi - hoan toan la lo ma. Loc nam 2026: 0 lo het han.
@@ -11515,6 +11525,8 @@ def inventory_expiry_report(area_code: str = None, max_bucket: str = None, limit
         item_code = r["item_code"] or str(r["item_id"])
         stock_by_item[item_code] = stock_by_item.get(item_code, 0.0) + qty
         item_names[item_code] = r["item_name"] or item_names.get(item_code)
+        if qty <= 0:
+            continue   # lo da ban het: chi dung cho supply_risk, khong phai lo can theo doi han dung
         if not r["expiry_date"]:
             unknown_expiry_count += 1
             continue

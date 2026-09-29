@@ -79,11 +79,14 @@ def test_ton_kinh_doanh_cong_dung_bien_dong_khong_dung_im_o_dau_nam(tmp_path, mo
             "AND is_active=1 AND year=2026").fetchone()[0]
         assert tong_sx == 170.0
 
-        # Theo lo: LOT-A ban het (60-60=0 -> XOA, khong con dong lech), LOT-B con 40+25=65.
+        # Theo lo: LOT-A ban het (60-60=0), LOT-B con 40+25=65.
+        # 29/09/2026 (UAT C42): LOT-A GIU mot dong 0 don vi thay vi bi xoa. Xoa di thi SKU ban het hang khong con
+        # dong nao va tool coi la "chua biet" (SQL doi chieu co 21 SKU ton = 0, chatbot bao 0). Bao cao han dung
+        # chi doc lo quantity > 0 nen dong 0 khong hien thanh "lo con han".
         lots = dict(conn.execute(
             "SELECT item_lot_code, quantity FROM brv_tonkhodklot "
             "WHERE warehouse_id=10 AND item_id=500 AND year=2026").fetchall())
-        assert lots == {"LOT-B": 65.0}          # LOT-A da bien mat, KHONG con dong "0 don vi" ma
+        assert lots == {"LOT-A": 0.0, "LOT-B": 65.0}
         # Tong theo lo van khop voi tong kinh doanh moi (145): 65 (LOT-B) + phan da chen o tren (45)
         # + ton dau nam LOT-A da xoa (60) - LOT-A ban het (60) = 145. Kiem bang cach doc lai tu dong
         # da chen o bang tong hop:
