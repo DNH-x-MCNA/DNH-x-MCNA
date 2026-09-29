@@ -1410,6 +1410,11 @@ TEMPLATE_TOOLS = [
             "min_remaining_value": {"type": "number", "minimum": 0,
                                     "description": "Nguong gia tri con lai VND do nguoi dung yeu cau; "
                                                    "bo trong thi xep giam dan gia tri duong, khong tu dat nguong."},
+            "sap_xep_duoi_50": {"type": "string", "enum": ["ty_le", "gia_tri", "con_lai"],
+                                "description": "Thu tu hop_dong_thuc_hien_duoi_50_pct: 'ty_le' (mac dinh, ty le "
+                                               "thap nhat truoc), 'gia_tri' (gia tri hop dong lon nhat truoc - "
+                                               "dung khi hoi 'hop dong gia tri cao nhat trong nhom duoi 50%'), "
+                                               "'con_lai' (con lai lon nhat truoc)."},
             "limit": {"type": "integer", "minimum": 1, "maximum": 200}}, "required": []},
     },
     {
@@ -2657,6 +2662,72 @@ def _bao_cao_don_theo_thang_gon(data: dict, cau_hoi: str) -> dict:
     return out
 
 
+# 29/09/2026 (UAT C43): get_etc_contract_status tra 5 danh sach x toi 50 hop dong, moi dong ~20 truong -> luoi cat
+# chung ha tung danh sach xuong 12/8/5/3/1 va model chi con 1 hop dong/nhom du xin limit=10 hay 50 ("gioi han co
+# dinh cua nguon"). Ban gon: danh sach cau hoi nham toi di du dong, cac danh sach con lai vai dong, dang bang hep.
+_COT_HOP_DONG_ETC = ("so_hop_dong", "customer_code", "gia_tri_hop_dong", "da_xuat_hoa_don",
+                     "con_lai", "ty_le_thuc_hien_pct", "den_ngay", "con_lai_ngay")
+_DANH_SACH_HOP_DONG_ETC = (
+    # (khoa danh sach, khoa dem tong, dau hieu trong cau hoi da bo dau)
+    ("hop_dong_thuc_hien_duoi_50_pct", "so_hop_dong_thuc_hien_duoi_50_pct",
+     ("duoi 50", "thuc hien thap", "thuc hien cham", "ty le thuc hien")),
+    ("hop_dong_con_lai_lon_nhat", "so_hop_dong_con_lai_theo_nguong",
+     ("con lai", "chua giai ngan", "chua xuat", "gia tri lon")),
+    ("hop_dong_sap_het_han", "so_hop_dong_sap_het_han", ("sap het han", "het hieu luc", "sap het")),
+    ("hop_dong_gia_tri_bat_thuong", "so_hop_dong_gia_tri_bat_thuong", ("bat thuong",)),
+    ("hop_dong_co_chung_tu_gan_nham", "so_hop_dong_co_chung_tu_gan_nham", ("gan nham",)),
+)
+
+
+def _hop_dong_etc_gon(data: dict, normalized: str) -> dict:
+    """Giu moi so dem/tong/dinh nghia; danh sach thanh {cot, dong}. Danh sach duoc hoi di du, con lai rut dan."""
+    trong_tam = [key for key, _dem, dau_hieu in _DANH_SACH_HOP_DONG_ETC
+                 if any(marker in normalized for marker in dau_hieu)]
+    if not trong_tam:
+        trong_tam = [_DANH_SACH_HOP_DONG_ETC[0][0], _DANH_SACH_HOP_DONG_ETC[1][0]]
+    khoa_danh_sach = {key for key, _dem, _dh in _DANH_SACH_HOP_DONG_ETC}
+    goc = {k: v for k, v in data.items() if k not in khoa_danh_sach}
+
+    def bang(rows, so_dong):
+        rows = [r for r in rows if isinstance(r, dict)][:so_dong]
+        cot = [c for c in _COT_HOP_DONG_ETC if any(c in r for r in rows)] or list(_COT_HOP_DONG_ETC[:3])
+        return {"cot": cot, "dong": [[_lam_tron_gon(r.get(c)) for c in cot] for r in rows]}
+
+    def dung(so_trong_tam, so_phu):
+        out = dict(goc)
+        dang_liet_ke = []
+        for key, khoa_dem, _dh in _DANH_SACH_HOP_DONG_ETC:
+            rows = data.get(key)
+            if not isinstance(rows, list):
+                continue
+            so = so_trong_tam if key in trong_tam else so_phu
+            out[key] = bang(rows, so)
+            hien = len(out[key]["dong"])
+            tong = data.get(khoa_dem, len(rows))
+            if hien < (tong if isinstance(tong, int) else len(rows)):
+                dang_liet_ke.append({"danh_sach": key, "dang_hien": hien, "tong_that": tong})
+        out["_model_view"] = {
+            "mode": "bang_gon_hop_dong_etc",
+            "giai_thich": ("Moi danh sach dang {cot, dong}: moi dong theo thu tu 'cot'. So tien la VND TRUOC VAT, "
+                           "lam tron dong. Cac so dem so_hop_dong_* la TONG THAT; danh sach chi liet ke mot phan "
+                           "(xem dang_liet_ke) - KHONG noi tong bang so dong dang hien, KHONG noi nguon chi tra 1 "
+                           "dong. KHONG goi lai tool chi de lay them dong (ban gui model co tran kich thuoc); "
+                           "neu can nhieu hon thi noi ro dang hien bao nhieu/tong va de nghi loc hep hon "
+                           "(theo mien, nguong gia tri con lai)."),
+            "danh_sach_trong_tam": trong_tam,
+            "dang_liet_ke": dang_liet_ke,
+        }
+        return out
+
+    out = None
+    for so_trong_tam, so_phu in ((200, 5), (200, 3), (200, 0), (60, 0), (50, 0), (40, 0), (30, 0), (20, 0),
+                                 (10, 0), (5, 0)):
+        out = dung(so_trong_tam, so_phu)
+        if len(json.dumps(out, ensure_ascii=False, default=str)) <= MAX_PAYLOAD_CHARS:
+            return out
+    return out
+
+
 def _payload_for_model(tool_name: str, payload, question: str):
     """Rut gon co cau truc cho tool dai, giu payload day du o last_result/UI.
 
@@ -2730,6 +2801,17 @@ def _payload_for_model(tool_name: str, payload, question: str):
         if (isinstance(data.get("by_employee"), list)
                 and len(json.dumps(data, ensure_ascii=False, default=str)) > MAX_PAYLOAD_CHARS):
             gon = _bien_dong_khach_gon(data)
+            gon = {**wrapper, "du_lieu": gon} if wrapper else gon
+            if len(json.dumps(gon, ensure_ascii=False, default=str)) <= MAX_PAYLOAD_CHARS:
+                return gon
+            return payload
+
+    if tool_name == "get_etc_contract_status":
+        wrapper = payload if isinstance(payload.get("du_lieu"), dict) else None
+        data = payload["du_lieu"] if wrapper else payload
+        if (isinstance(data.get("hop_dong_thuc_hien_duoi_50_pct"), list)
+                and len(json.dumps(data, ensure_ascii=False, default=str)) > MAX_PAYLOAD_CHARS):
+            gon = _hop_dong_etc_gon(data, normalized)
             gon = {**wrapper, "du_lieu": gon} if wrapper else gon
             if len(json.dumps(gon, ensure_ascii=False, default=str)) <= MAX_PAYLOAD_CHARS:
                 return gon
@@ -3377,6 +3459,17 @@ def _normalize_tool_input_for_question(tool_name: str, tool_input: dict, questio
         requested_top = re.search(r"\btop\s*(\d{1,3})\b", q)
         if requested_top:
             args["top_n"] = min(100, max(1, int(requested_top.group(1))))
+        return args
+
+    if tool_name == "get_etc_contract_status":
+        # 29/09/2026 (UAT C43): "10 hop dong gia tri cao nhat trong nhom thuc hien duoi 50%" - danh sach
+        # duoi 50% mac dinh xep theo ty le, nen model lay hop dong 0% con lai lon nhat lam "gia tri cao nhat".
+        if ("duoi 50" in q or "thuc hien thap" in q) and re.search(
+                r"gia tri (hop dong )?(cao|lon) nhat|gia tri hop dong (cao|lon)", q):
+            args["sap_xep_duoi_50"] = "gia_tri"
+        so_can = re.search(r"\btop\s*(\d{1,3})\b|\b(\d{1,3})\s*hop dong\b", q)
+        if so_can:
+            args["limit"] = max(int(args.get("limit") or 0), min(200, int(so_can.group(1) or so_can.group(2))))
         return args
 
     if tool_name == "get_customer_product_coverage" and args.get("mode") == "product":
