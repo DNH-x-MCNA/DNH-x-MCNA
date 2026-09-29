@@ -213,13 +213,25 @@ brv_kho: danh muc KHO trong Bravo (co hang chuc kho vat ly/dai ly khac nhau). Co
   bo, dung join voi brv_tonkhodk.warehouse_id), branch_code (**day la truong quyet dinh VUNG MIEN cho
   ton kho**: B01=San xuat/tru so chinh, B02=Kinh doanh Mien Bac, B03=Kinh doanh Mien Trung, B04=Kinh
   doanh Mien Nam - xac nhan voi DA ben Bravo 15/07/2026), code, name (ten kho cu the, vd 'Kho WHI91').
-brv_tonkhodk: TON KHO DAU KY THEO TUNG NAM TAI CHINH (cot fiscal_year) - **KHONG phai ton kho hien
-  tai**, va **KHONG PHAI toan bo ton kho cong ty**. Bravo giu ban ghi dau ky cua NHIEU nam
-  (2024/2025/2026); PHAI loc fiscal_year = nam moi nhat, neu khong se cong don ca 3 nam va dem
-  trung cung mot lo hang toi 3 lan. Ban ghi nam moi nhat duoc chot dau nam (vd 21/01/2026) va
-  KHONG cap nhat trong nam - khi tra loi PHAI noi ro day la anh chup dau nam, khong duoc goi la
-  'ton kho hien tai'. Bang nay CHI la kho KINH DOANH (B01-B04, ~5,4 ty nam 2026); kho SAN XUAT
-  nam o brvsx_tonkhodk (~229,8 ty) - xem ngay duoi. THAY THE nguon Supabase cu
+brv_tonkhodk: TON KHO KINH DOANH theo nam tai chinh (cot fiscal_year), **KHONG PHAI toan bo ton kho
+  cong ty**. Bravo giu ban ghi dau ky cua NHIEU nam (2024/2025/2026); PHAI loc fiscal_year = nam moi
+  nhat, neu khong se cong don ca 3 nam va dem trung cung mot lo hang toi 3 lan.
+  !!! 29/09/2026 - SO LUONG LA TON HIEN TAI, GIA TRI LA DAU NAM. Nam moi nhat co HAI loai dong:
+    (1) dong ton dau nam nap tu Bravo BRV_TonKhoDK (chot dau nam, vd 27/01/2026): amount KHAC NULL;
+    (2) dong bien dong moi lan dong bo them vao (sync_tonkho_hien_tai: nhap - xuat tu dau nam den ngay
+        dong bo, lay tu Bravo vTheKhoLot): amount = NULL.
+  => SUM(quantity) (fiscal_year moi nhat, is_active=1) = TON HIEN TAI den lan dong bo gan nhat. Goi dung
+     la "ton hien tai (den lan dong bo ...)", **KHONG duoc noi day la so du dau nam / anh chup dau nam**.
+     Chi can ton DAU NAM thi them "AND amount IS NOT NULL".
+  => SUM(amount) CHI la GIA TRI DAU NAM: dong bien dong khong co cot tien (vTheKhoLot chi co so luong).
+     Phai ghi ro "gia tri dau nam", KHONG goi la gia tri ton hien tai, KHONG chia amount cho so luong
+     hien tai de ra don gia. Them nua nhieu dong amount = 0 hoac AM du so luong duong (cau A3 - DNH chua
+     chot nguon gia), nen khong cong thanh "tong gia tri ton kho".
+  => Neu nam moi nhat KHONG co dong nao amount IS NULL thi lan dong bo bien dong da loi: luc do so luong
+     van la dau nam, phai noi ro.
+  => Khong co lich su ton theo tung thang (chi co dau nam + hien tai), cau hoi "theo thang" phai noi ro.
+  Bang nay CHI la kho KINH DOANH (B01-B04, gia tri dau nam ~5,4 ty nam 2026); kho SAN XUAT
+  nam o brvsx_tonkhodk (~229,8 ty dau nam) - xem ngay duoi. THAY THE nguon Supabase cu
   (bang "inventory" ben Supabase co cot "warehouse" nhung 100% NULL, KHONG dung de loc vung duoc -
   DA XAC NHAN LOI, tuyet doi khong dung Supabase cho cau hoi ton kho THEO VUNG nua, chi con Bravo/kho
   local nay moi co du lieu vung dung). Cot: warehouse_id (JOIN brv_kho.id_code de biet vung/ten kho),
@@ -237,7 +249,8 @@ brvsx_tonkhodk + brvsx_kho: HE KHO SAN XUAT - dong bo tu 04/09/2026. TACH HAN vo
   khi co bang nay chatbot bao 5,4 ty NHU LA ton kho toan cong ty - sai 43 lan.
   Cot: id_code/warehouse_id (khoa noi, JOIN brvsx_kho.id_code), branch_code (rong hoac 'A01'),
   quantity, amount (CO day du UnitCost/Amount, khac brv_tonkhodk nhieu dong =0), year (LUON loc
-  nam moi nhat, cung ly do nhu brv_tonkhodk).
+  nam moi nhat, cung ly do nhu brv_tonkhodk). Cung hai loai dong nhu brv_tonkhodk: SUM(quantity) =
+  ton HIEN TAI (dong bien dong co amount NULL), SUM(amount) = gia tri DAU NAM.
   get_inventory_by_region() da tra ve CA HAI he, moi dong co co `he_thong` = 'KINH_DOANH' hoac
   'SAN_XUAT'. KHI TRA LOI: neu ro hai he rieng, KHONG gop mu thanh mot con so; va vi kho san
   xuat khong thuoc vung MB/MT/MN nao nen no KHONG hien voi tai khoan bi gioi han vung (giong
