@@ -3,6 +3,7 @@
 Gui email tai khoan qua SMTP da cau hinh. Khong ghi mat khau vao log.
 """
 import os
+import html
 import logging
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
@@ -36,8 +37,12 @@ def get_smtp_config():
     return smtp_settings()
 
 
-def send_password_email(to_email: str, password: str, is_reset: bool = False) -> bool:
-    """Gui email mat khau khoi tao / cap lai mat khau cho nhan vien qua SMTP Office365 hoac Gmail."""
+def send_password_email(to_email: str, password: str, is_reset: bool = False,
+                        giu_mat_khau_cu: bool = False) -> bool:
+    """Gui email mat khau khoi tao / cap lai mat khau cho nhan vien qua SMTP Office365 hoac Gmail.
+
+    giu_mat_khau_cu=True: mat khau tam cua "Quen mat khau" (29/09/2026) - mat khau cu van dung duoc
+    cho toi khi nguoi dung dang nhap bang mat khau tam, noi ro de ai khong yeu cau thi khong hoang."""
     # 29/07/2026 - TUYET DOI KHONG ghi mat khau ra log/stdout.
     # Ban truoc co ham _log_local_fallback() ghi mat khau DANG CHU THUONG vao
     # backend/logs/sent_passwords.log va print ra stdout, chay trong CA HAI truong hop: chua cau hinh
@@ -61,6 +66,20 @@ def send_password_email(to_email: str, password: str, is_reset: bool = False) ->
 
     action_title = "Cấp lại mật khẩu tài khoản" if is_reset else "Tài khoản đăng ký mới & Mật khẩu khởi tạo"
     subject = f"[Dược Nam Hà] {action_title}"
+    email_html = html.escape(to_email)
+    password_html = html.escape(password)
+    if giu_mat_khau_cu:
+        luu_y = (
+            "<li>Mật khẩu hiện tại của bạn <strong>vẫn dùng được</strong>. Mật khẩu tạm ở trên có hiệu lực "
+            "24 giờ; khi bạn đăng nhập bằng nó, mật khẩu cũ mới bị thay và mọi phiên đăng nhập cũ bị đăng xuất.</li>"
+            "<li>Sau khi đăng nhập bằng mật khẩu tạm, bạn phải <strong>Đổi mật khẩu mới</strong> trước khi dùng tiếp.</li>"
+            "<li>Nếu bạn không yêu cầu, cứ bỏ qua email này: tiếp tục đăng nhập bằng mật khẩu cũ là mật khẩu tạm bị huỷ.</li>"
+        )
+    else:
+        luu_y = (
+            "<li>Bạn có thể đăng nhập ngay bằng email này và mật khẩu được cấp ở trên.</li>"
+            "<li>Vui lòng thực hiện <strong>Đổi mật khẩu mới</strong> ngay tại menu tài khoản sau khi đăng nhập thành công.</li>"
+        )
 
     html_content = f"""
     <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; border: 1px solid #e0e0e0; border-radius: 8px; overflow: hidden; background: #ffffff;">
@@ -69,18 +88,17 @@ def send_password_email(to_email: str, password: str, is_reset: bool = False) ->
         <p style="margin: 6px 0 0 0; opacity: 0.9; font-size: 14px;">Hệ thống AI Chatbot Quản trị Báo cáo</p>
       </div>
       <div style="padding: 24px; color: #333333; line-height: 1.6;">
-        <p>Xin chào <strong>{to_email}</strong>,</p>
+        <p>Xin chào <strong>{email_html}</strong>,</p>
         <p>Hệ thống đã nhận được yêu cầu {'cấp lại mật khẩu' if is_reset else 'khởi tạo tài khoản mới'} cho email công ty của bạn.</p>
         
         <div style="background: #eef9f5; border-left: 4px solid #00875a; padding: 16px; margin: 20px 0; border-radius: 4px;">
           <p style="margin: 0 0 8px 0; font-size: 14px; color: #333;">🔑 <strong>Mật khẩu đăng nhập ngẫu nhiên của bạn:</strong></p>
-          <div style="font-size: 22px; font-family: monospace; font-weight: bold; color: #00875a; background: #ffffff; padding: 8px 14px; border-radius: 4px; display: inline-block; border: 1px dashed #00875a;">{password}</div>
+          <div style="font-size: 22px; font-family: monospace; font-weight: bold; color: #00875a; background: #ffffff; padding: 8px 14px; border-radius: 4px; display: inline-block; border: 1px dashed #00875a;">{password_html}</div>
         </div>
 
         <p><strong>Lưu ý quan trọng:</strong></p>
         <ul>
-          <li>Bạn có thể đăng nhập ngay bằng email này và mật khẩu được cấp ở trên.</li>
-          <li>Vui lòng thực hiện <strong>Đổi mật khẩu mới</strong> ngay tại menu tài khoản sau khi đăng nhập thành công.</li>
+          {luu_y}
         </ul>
 
         <p style="font-size: 13px; color: #777; margin-top: 24px;">Nếu bạn không yêu cầu hành động này, vui lòng liên hệ ngay với Quản trị viên hệ thống DNH.</p>

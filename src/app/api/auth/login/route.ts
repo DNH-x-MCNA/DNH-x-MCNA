@@ -1,4 +1,4 @@
-import { proxyFetch } from "../../_proxy";
+import { clientIpHeaders, proxyFetch } from "../../_proxy";
 
 export async function POST(request: Request) {
   const backendUrl = process.env.BACKEND_API_URL;
@@ -13,6 +13,7 @@ export async function POST(request: Request) {
     headers: {
       "Content-Type": "application/json",
       ...(apiKey ? { "X-API-Key": apiKey } : {}),
+      ...clientIpHeaders(request),
     },
     body,
   });
