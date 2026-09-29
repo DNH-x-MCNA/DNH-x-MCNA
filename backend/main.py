@@ -4,6 +4,7 @@ import json
 import time
 import uuid
 import datetime as dt
+import ipaddress
 from collections import defaultdict
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Header, Depends, Query, Request
@@ -44,6 +45,7 @@ from auth import (
     generate_password,
     admin_create_user,
     set_password,
+    set_pending_reset_password,
     reset_password_and_revoke_sessions,
     approve_user,
     set_user_email,
@@ -146,9 +148,27 @@ def _check_rate_limit(username: str):
     _USER_LAST_REQUEST[username] = now
 
 
+# Proxy Next.js (src/app/api/_proxy.ts::clientIpHeaders) gui IP nguoi dung o header nay.
+CLIENT_IP_HEADER = "x-dnh-client-ip"
+
+
 def _login_client_ip(request: Request) -> str:
-    """Lay IP ket noi that. Khong tin X-Forwarded-For vi backend quick-tunnel co the bi goi truc tiep."""
-    return request.client.host if request.client else "unknown"
+    """IP de gioi han dang nhap/quen mat khau theo tung may.
+
+    29/09/2026: sau cloudflared, request.client.host KHONG phai IP nguoi dung - uvicorn tin
+    X-Forwarded-For tu 127.0.0.1 nen lay IP ma Cloudflare thay, tuc may chu Vercel dang goi toi. Ca cong
+    ty dung chung vai IP do: 30 lan sai tu bat ky ai (qua trang dang nhap cong khai) la khoa dang nhap
+    cua nguoi khac. Proxy Next.js gui IP that o CLIENT_IP_HEADER (Vercel tu ghi de x-real-ip, nguoi
+    dung khong gia duoc). Chi tin header khi backend co BACKEND_API_KEY: request toi duoc day da qua
+    require_api_key, tuc la di qua proxy. Khong co khoa thi ai goi thang tunnel cung tu ghi duoc header.
+    """
+    fallback = request.client.host if request.client else "unknown"
+    if not API_KEY:
+        return fallback
+    try:
+        return str(ipaddress.ip_address((request.headers.get(CLIENT_IP_HEADER) or "").strip()))
+    except ValueError:
+        return fallback
 
 
 def _prune_login_attempts(key: str, store: dict, now: dt.datetime) -> list:
@@ -527,19 +547,20 @@ def forgot_password(req: ForgotPasswordRequest, request: Request):
     if len(parts) != 2 or parts[1] != ALLOWED_EMAIL_DOMAIN:
         raise HTTPException(400, f"Chức năng chỉ hỗ trợ email công ty Dược Nam Hà (@{ALLOWED_EMAIL_DOMAIN})")
 
-    client_ip = request.client.host if request.client else "local"
+    client_ip = _login_client_ip(request)
     _check_public_auth_rate_limit(clean_email, client_ip)
 
     user = get_user_by_email_or_username(clean_email)
     if user:
-        # 29/07/2026 - THU TU QUAN TRONG: gui mail TRUOC, doi mat khau trong DB SAU.
-        # Lam nguoc lai (doi truoc, gui sau) thi khi SMTP loi - sai app password, mang chap chon,
-        # Office365 chan - mat khau da bi thay doi nhung nguoi dung KHONG nhan duoc mat khau moi,
-        # tu khoa chinh minh ra khoi tai khoan va bat buoc phai nho admin can thiep.
+        # 29/07/2026 - THU TU QUAN TRONG: gui mail TRUOC, ghi mat khau tam vao DB SAU (SMTP loi thi
+        # khong co mat khau nao ma nguoi dung khong nhan duoc).
+        # 29/09/2026: KHONG thay mat khau cu, KHONG thu hoi phien o day. Email cong ty doan duoc
+        # (ten.ho@namhapharma.com), nen truoc day ai cung bam "Quen mat khau" duoc de doi mat khau that
+        # va da nguoi khac ra khoi moi phien, 3 lan/gio. Mat khau tam song song voi mat khau cu trong
+        # RESET_PASSWORD_TTL_HOURS; chi khi chinh chu dang nhap bang no thi auth.verify_login moi doi han.
         new_pwd = generate_password(10)
-        if send_password_email(clean_email, new_pwd, is_reset=True):
-            set_password(clean_email, new_pwd, must_change_password=True)
-            delete_all_sessions_for_user(user["id"])
+        if send_password_email(clean_email, new_pwd, is_reset=True, giu_mat_khau_cu=True):
+            set_pending_reset_password(clean_email, new_pwd)
             _write_log({
                 "ts": dt.datetime.now().isoformat(),
                 "username": user["username"],
@@ -562,7 +583,7 @@ def forgot_password(req: ForgotPasswordRequest, request: Request):
     # Luon tra CUNG MOT thong bao, du email co ton tai hay khong va du gui mail thanh cong hay khong.
     # Neu phan biet (vd tra 500 khi email co that), ke ngoai chi can thu lan luot vai email roi xem
     # phan hoi nao khac di la do duoc chinh xac ai dang co tai khoan trong he thong.
-    return {"ok": True, "message": "Nếu email thuộc hệ thống Dược Nam Hà, mật khẩu mới đã được gửi đến hộp thư Outlook của bạn."}
+    return {"ok": True, "message": "Nếu email thuộc hệ thống Dược Nam Hà, mật khẩu tạm đã được gửi đến hộp thư Outlook của bạn. Mật khẩu hiện tại vẫn dùng được cho tới khi bạn đăng nhập bằng mật khẩu tạm."}
 
 
 @app.post("/auth/change-password", dependencies=[Depends(require_api_key)])

@@ -71,3 +71,16 @@ export async function proxyFetch(url: string, init?: RequestInit): Promise<Respo
     headers: { "Content-Type": "application/json" },
   });
 }
+
+/**
+ * IP that cua nguoi dung cho backend gioi han dang nhap / quen mat khau theo tung may.
+ *
+ * 29/09/2026: backend nam sau Cloudflare tunnel, nen IP no tu thay la IP may chu Vercel - ca cong ty
+ * dung chung, 30 lan sai tu bat ky ai la khoa dang nhap cua moi nguoi. Vercel tu ghi de x-real-ip /
+ * x-forwarded-for bang IP ket noi that (trinh duyet khong gia duoc). Backend chi tin header nay khi
+ * request mang dung X-API-Key, tuc la di qua chinh route nay.
+ */
+export function clientIpHeaders(request: Request): Record<string, string> {
+  const ip = (request.headers.get("x-real-ip") || request.headers.get("x-forwarded-for")?.split(",")[0] || "").trim();
+  return ip ? { "X-DNH-Client-IP": ip } : {};
+}

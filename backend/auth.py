@@ -16,6 +16,7 @@ import datetime as dt
 
 DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "auth.db")
 SESSION_TTL_HOURS = 24 * 7  # phien dang nhap song 7 ngay
+RESET_PASSWORD_TTL_HOURS = 24  # mat khau tam cua "Quen mat khau" song song voi mat khau cu toi da 24 gio
 
 VALID_ROLES = frozenset({"c_level", "admin_ops", "regional_director", "qlv"})
 VALID_STATUSES = frozenset({"pending", "approved"})
@@ -105,6 +106,9 @@ def init_schema():
         ("last_login_at", "TEXT"),
         ("weekly_question_count", "INTEGER DEFAULT 0"),
         ("weekly_reset_at", "TEXT"),
+        ("reset_password_hash", "TEXT"),
+        ("reset_salt", "TEXT"),
+        ("reset_expires_at", "TEXT"),
     ]:
         col_name, col_type = col_def
         try:
@@ -236,12 +240,19 @@ def get_user_by_email_or_username(identifier: str) -> dict | None:
 
 
 def verify_login(identifier: str, password: str) -> dict | None:
+    """Kiem tra mat khau chinh, hoac mat khau tam con han cua "Quen mat khau".
+
+    29/09/2026: mat khau tam KHONG thay mat khau cu ngay khi gui mail (ai biet email cung bam "Quen
+    mat khau" duoc). Chi khi chinh chu dang nhap bang mat khau tam thi ham nay moi doi han sang mat
+    khau tam, bat doi mat khau va thu hoi moi phien cu. Dang nhap bang mat khau cu thi huy mat khau
+    tam dang cho (khong de mot mat khau con hieu luc nam trong hop thu).
+    """
     clean_id = identifier.lower().strip()
     conn = get_conn()
     try:
         row = conn.execute(
             "SELECT id, username, email, password_hash, salt, name, role, scope_value, employee_code, scope_channel, "
-            "status, is_active, must_change_password "
+            "status, is_active, must_change_password, reset_password_hash, reset_salt, reset_expires_at "
             "FROM users WHERE username=? OR email=?",
             (clean_id, clean_id),
         ).fetchone()
@@ -252,9 +263,16 @@ def verify_login(identifier: str, password: str) -> dict | None:
         return None
 
     (uid, db_username, db_email, pwd_hash, salt, name, role, scope_value, employee_code,
-     scope_channel, status, is_active, must_change_password) = row
+     scope_channel, status, is_active, must_change_password,
+     reset_hash, reset_salt, reset_expires_at) = row
 
-    if not hmac.compare_digest(_hash_password(password, salt), pwd_hash):
+    if hmac.compare_digest(_hash_password(password, salt), pwd_hash):
+        if reset_hash:
+            _huy_mat_khau_tam(uid)
+    elif _mat_khau_tam_khop(password, reset_hash, reset_salt, reset_expires_at):
+        _dung_mat_khau_tam(uid, reset_hash, reset_salt)
+        must_change_password = 1
+    else:
         return {"error": "wrong_password"}
 
     return {
@@ -272,8 +290,69 @@ def verify_login(identifier: str, password: str) -> dict | None:
     }
 
 
+def _mat_khau_tam_khop(password: str, reset_hash: str, reset_salt: str, reset_expires_at: str) -> bool:
+    if not (reset_hash and reset_salt and reset_expires_at):
+        return False
+    try:
+        if dt.datetime.fromisoformat(reset_expires_at) < dt.datetime.now():
+            return False
+    except ValueError:
+        return False
+    return hmac.compare_digest(_hash_password(password, reset_salt), reset_hash)
+
+
+def _huy_mat_khau_tam(user_id: int) -> None:
+    conn = get_conn()
+    try:
+        conn.execute(
+            "UPDATE users SET reset_password_hash=NULL, reset_salt=NULL, reset_expires_at=NULL WHERE id=?",
+            (user_id,),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _dung_mat_khau_tam(user_id: int, reset_hash: str, reset_salt: str) -> None:
+    """Mat khau tam thanh mat khau chinh + bat doi mat khau + thu hoi moi phien, trong mot transaction."""
+    conn = get_conn()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        conn.execute(
+            "UPDATE users SET password_hash=?, salt=?, must_change_password=1, password_changed_at=?, "
+            "reset_password_hash=NULL, reset_salt=NULL, reset_expires_at=NULL "
+            "WHERE id=? AND reset_password_hash=?",
+            (reset_hash, reset_salt, dt.datetime.now().isoformat(), user_id, reset_hash),
+        )
+        conn.execute("DELETE FROM sessions WHERE user_id=?", (user_id,))
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def set_pending_reset_password(identifier: str, new_password: str) -> bool:
+    """Luu mat khau tam cua "Quen mat khau" (het han sau RESET_PASSWORD_TTL_HOURS). Mat khau cu va moi
+    phien dang nhap giu nguyen; xem verify_login()."""
+    clean_id = identifier.lower().strip()
+    salt = secrets.token_hex(16)
+    expires = dt.datetime.now() + dt.timedelta(hours=RESET_PASSWORD_TTL_HOURS)
+    conn = get_conn()
+    try:
+        cur = conn.execute(
+            "UPDATE users SET reset_password_hash=?, reset_salt=?, reset_expires_at=? WHERE username=? OR email=?",
+            (_hash_password(new_password, salt), salt, expires.isoformat(), clean_id, clean_id),
+        )
+        conn.commit()
+        return cur.rowcount > 0
+    finally:
+        conn.close()
+
+
 def set_password(identifier: str, new_password: str, must_change_password: bool = False) -> bool:
-    """Dat lai mat khau cho 1 tai khoan theo username hoac email."""
+    """Dat lai mat khau cho 1 tai khoan theo username hoac email (huy luon mat khau tam dang cho)."""
     clean_id = identifier.lower().strip()
     salt = secrets.token_hex(16)
     pwd_hash = _hash_password(new_password, salt)
@@ -281,7 +360,8 @@ def set_password(identifier: str, new_password: str, must_change_password: bool 
     conn = get_conn()
     try:
         cur = conn.execute(
-            "UPDATE users SET password_hash=?, salt=?, must_change_password=?, password_changed_at=? WHERE username=? OR email=?",
+            "UPDATE users SET password_hash=?, salt=?, must_change_password=?, password_changed_at=?, "
+            "reset_password_hash=NULL, reset_salt=NULL, reset_expires_at=NULL WHERE username=? OR email=?",
             (pwd_hash, salt, 1 if must_change_password else 0, now_iso, clean_id, clean_id)
         )
         conn.commit()
@@ -312,7 +392,8 @@ def reset_password_and_revoke_sessions(identifier: str, new_password: str,
             return False
         conn.execute(
             "UPDATE users SET password_hash=?, salt=?, must_change_password=?, "
-            "password_changed_at=? WHERE id=?",
+            "password_changed_at=?, reset_password_hash=NULL, reset_salt=NULL, reset_expires_at=NULL "
+            "WHERE id=?",
             (pwd_hash, salt, 1 if must_change_password else 0, now_iso, row[0]),
         )
         conn.execute("DELETE FROM sessions WHERE user_id=?", (row[0],))
