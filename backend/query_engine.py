@@ -26,9 +26,14 @@ STATEMENT_TIMEOUT_SEC = 30
 _FORBIDDEN = re.compile(
     r"\b(INSERT|UPDATE|DELETE|DROP|ALTER|TRUNCATE|GRANT|REVOKE|CREATE|COPY|CALL|EXEC|EXECUTE|MERGE|"
     r"VACUUM|INTO|WAITFOR|DBCC|BULK|OPENROWSET|OPENQUERY|OPENDATASOURCE|xp_cmdshell|"
+    r"BACKUP|RESTORE|SHUTDOWN|KILL|DENY|RECONFIGURE|SETUSER|CHECKPOINT|"
     r"pg_sleep|pg_terminate_backend|pg_read_file)\b",
     re.IGNORECASE,
 )
+# 29/09/2026: T-SQL chay NHIEU cau trong mot batch ma khong can ';' ("SELECT 1 USE KhoKhac SELECT ...").
+# Rieng USE doi database cho phan con lai cua batch, lach duoc _CROSS_DATABASE_REFERENCE ben duoi (chi
+# bat ten 3 phan db.schema.bang). Chi bat "USE <ten>" de khong chan nham chu "use" dung mot minh.
+_USE_DATABASE = re.compile(r"\bUSE\s+(?:\[[^\]]+\]|[A-Za-z_][\w$#@]*)", re.IGNORECASE)
 
 # 29/07/2026 (R-B): CHOT FAIL-CLOSED - chan cung moi SQL dung 2 bang cong no Excel cu tren Supabase.
 # Cong no da chuyen HAN sang kho local (fact_congno_khachhang). 2 bang nay tung thoi no 1 khach len
@@ -128,7 +133,7 @@ def validate_sql(sql: str, db: str = "local") -> str:
                           "sai lech lon). Cong no hien lay tu bang fact_congno_khachhang o kho local.")
     if db == "bravo" and _BLOCKED_SQL_SERVER_OBJECTS.search(s):
         raise SqlRejected("Object chua thong tin dang nhap/credential va bi cam truy van tu chatbot.")
-    if db == "bravo" and _CROSS_DATABASE_REFERENCE.search(s):
+    if db == "bravo" and (_CROSS_DATABASE_REFERENCE.search(s) or _USE_DATABASE.search(s)):
         raise SqlRejected("Chi duoc truy van object trong database SQL Server hien tai.")
     if db == "bravo" and _SELECT_ALL_COLUMNS.search(s):
         raise SqlRejected("SQL Server live khong cho phep SELECT *; phai liet ke dung cac cot can doc.")

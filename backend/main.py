@@ -4,6 +4,7 @@ import json
 import time
 import uuid
 import datetime as dt
+import hmac
 from collections import defaultdict
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Header, Depends, Query, Request
@@ -87,7 +88,15 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(title="DNH AI Chatbot API", version="1.0.0", lifespan=lifespan)
+# 29/09/2026: /docs, /redoc, /openapi.json cua FastAPI khong di qua require_api_key - ai biet URL tunnel
+# cung doc duoc toan bo danh sach endpoint va schema. Chi bat khi can xem tren may dev.
+_BAT_API_DOCS = os.getenv("DNH_BAT_API_DOCS", "").strip() == "1"
+app = FastAPI(
+    title="DNH AI Chatbot API", version="1.0.0", lifespan=lifespan,
+    docs_url="/docs" if _BAT_API_DOCS else None,
+    redoc_url="/redoc" if _BAT_API_DOCS else None,
+    openapi_url="/openapi.json" if _BAT_API_DOCS else None,
+)
 
 API_KEY = os.getenv("BACKEND_API_KEY", "").strip()
 ALLOWED_EMAIL_DOMAIN = "namhapharma.com"
@@ -98,7 +107,8 @@ _IP_AUTH_ATTEMPTS = defaultdict(list)
 
 
 def require_api_key(x_api_key: str = Header(default=None)):
-    if API_KEY and x_api_key != API_KEY:
+    # compare_digest: thoi gian so sanh khong phu thuoc so ky tu dung, khong do dan duoc khoa qua tunnel.
+    if API_KEY and not hmac.compare_digest((x_api_key or "").encode("utf-8"), API_KEY.encode("utf-8")):
         raise HTTPException(401, "API Key khong hop le")
 
 
@@ -447,6 +457,13 @@ FEEDBACK_CATEGORIES = {
 
 def _elapsed_ms(started_at: float) -> int:
     return max(0, round((time.monotonic() - started_at) * 1000))
+
+
+def _loi_he_thong_cho_nguoi_dung(query_id: str) -> str:
+    """29/09/2026: truoc day tra nguyen van str(e) - loi pyodbc/SQLite/nha cung cap model co the chua IP
+    may chu, duong dan, cau SQL. Chi tiet van nam trong query_runs.error_message (fail_query_run)."""
+    return (f"Lỗi hệ thống khi trả lời câu hỏi này. Vui lòng thử lại sau; nếu vẫn lỗi, gửi mã tra cứu "
+            f"{query_id} cho Quản trị viên.")
 
 
 # --- ENDPOINTS ---
@@ -908,7 +925,7 @@ def chat(req: ChatRequest, user: dict = Depends(require_approved_user)):
         raise
     except Exception as e:
         fail_query_run(query_id, str(e), duration_ms=_elapsed_ms(started_at))
-        raise HTTPException(500, f"Loi he thong: {str(e)[:300]}")
+        raise HTTPException(500, _loi_he_thong_cho_nguoi_dung(query_id))
 
     return ChatResponse(
         query_id=query_id,
@@ -1011,7 +1028,7 @@ def chat_stream(req: ChatRequest, user: dict = Depends(require_approved_user)):
             # than try/except cua endpoint /chat (tra ve "Loi he thong: ...").
             fail_query_run(query_id, str(e), duration_ms=_elapsed_ms(started_at))
             err_payload = {"type": "error", "query_id": query_id,
-                           "message": f"Loi he thong: {str(e)[:300]}"}
+                           "message": _loi_he_thong_cho_nguoi_dung(query_id)}
             yield f"data: {json.dumps(err_payload, ensure_ascii=False)}\n\n"
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")

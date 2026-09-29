@@ -152,3 +152,24 @@ def test_live_sql_validator_blocks_write_secret_cross_db_and_external_access(sql
 def test_live_sql_validator_accepts_bounded_tsql_select():
     sql = "SELECT TOP (20) [DocDate], [Amount9] FROM dbo.vHoaDonTotal WHERE [DocDate] >= '2026-08-01'"
     assert query_engine.validate_sql(sql, db="bravo") == sql
+
+
+# 29/09/2026: T-SQL khong can ';' giua hai cau lenh - cau thu hai chay cung batch voi SELECT dau tien.
+@pytest.mark.parametrize("sql", [
+    "SELECT 1 AS a USE KhoKhac SELECT [Code] FROM dbo.DIM_NhanVien",
+    "SELECT 1 AS a USE [Kho Khac] SELECT [Code] FROM dbo.DIM_NhanVien",
+    "SELECT 1 AS a BACKUP DATABASE BravoDNH TO DISK = 'C:\\x.bak'",
+    "SELECT 1 AS a RESTORE DATABASE BravoDNH FROM DISK = 'C:\\x.bak'",
+    "SELECT 1 AS a KILL 53",
+    "SELECT 1 AS a SHUTDOWN WITH NOWAIT",
+    "SELECT 1 AS a DENY SELECT ON dbo.vHoaDonTotal TO public",
+    "SELECT 1 AS a RECONFIGURE",
+])
+def test_live_sql_validator_blocks_second_statement_without_semicolon(sql):
+    with pytest.raises(query_engine.SqlRejected):
+        query_engine.validate_sql(sql, db="bravo")
+
+
+def test_live_sql_validator_still_accepts_the_word_use_inside_data():
+    sql = "SELECT TOP (5) [Code], [Name] FROM dbo.DIM_SanPham WHERE [Note] = N'use'"
+    assert query_engine.validate_sql(sql, db="bravo") == sql
