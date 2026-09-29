@@ -50,6 +50,13 @@ def _fold_question(value: str) -> str:
     ).replace("đ", "d").split())
 
 
+def _cau_hoi_neu_nguong(question: str) -> bool:
+    """Cau hoi tu neu nguong so (tien/%) hay chu 'nguong' - khi do moi dung nguong model truyen vao."""
+    q = _fold_question(question)
+    return "nguong" in q or re.search(
+        r"\d+(?:[.,]\d+)?\s*(?:trieu|tr\b|ty\b|nghin|k\b|%|phan tram)", q) is not None
+
+
 def _warn(msg: str, *, code: str, severity: str, message: str):
     """Keep model guidance and a separately authored, user-facing message together.
 
@@ -15551,7 +15558,13 @@ def call_template(name: str, args: dict, question: str = "", username: str = Non
             call_args["scope_role"] = scope_role
 
         _enforce_non_future_dates(name, call_args, question)
-        
+        if name == "get_sku_revenue_drop_vs_stock" and not _cau_hoi_neu_nguong(question):
+            # 29/09/2026 (UAT C42): nguoi hoi khong neu nguong ma model tu ha min_prev_revenue xuong 10 trieu -> danh
+            # sach SKU lech SQL doi chieu S47 (docs/sql_check_c42_stock.sql: 50 trieu, giam >=30%). Chi nhan nguong
+            # cua model khi chinh cau hoi co so tien/%/"nguong".
+            call_args.pop("min_prev_revenue", None)
+            call_args.pop("drop_pct_threshold", None)
+
         # 28/07/2026: Tu dong append " 23:59:59" vao bat ky tham so nao la date_to/date_to_a/date_to_b
         # (YYYY-MM-DD) truoc khi truyen cho SQL. Neu khong co phan nay, "BETWEEN date_from AND date_to"
         # trong SQLite se am tham LOAI BO hoan toan cac hoa don phat sinh TRONG ngay cuoi cung (date_to),
