@@ -513,8 +513,14 @@ def _required_tool_for_question(question: str) -> str | None:
         return "get_customer_product_coverage"
     # V30/S46: phai goi duong bao cao co canh bao mau so target theo SKU dang thieu; khong de model
     # lay target doanh so tong cua TDV roi gan nham thanh target cua tung SKU/khach.
-    if any(marker in q for marker in ("sku trong tam", "sku trọng tâm", "sku chien luoc")) and \
-            any(marker in q for marker in ("target", "% target", "phan tram target", "khoang thieu")):
+    # 29/09/2026 (UAT M32 "SKU chien luoc dat %KH tai vung"): chi tieu SKU trong tam CO o cap TDV (TPRTargetAmount,
+    # ket qua tinh luong Bravo) - chi khong co theo TUNG SKU/TUNG KHACH. Cau khong hoi theo khach -> xep hang TDV +
+    # tong theo mien cua get_focus_product_kpi; cau hoi theo khach (V30) van di duong bao thieu nguon.
+    if any(marker in q for marker in ("sku trong tam", "sku trọng tâm", "sku chien luoc", "san pham chien luoc")) and \
+            any(marker in q for marker in ("target", "% target", "phan tram target", "khoang thieu", "%kh", "% kh",
+                                           "ke hoach", "% dat", "ty le dat", "dat bao nhieu")):
+        if "khach" not in q:
+            return "get_focus_product_kpi"
         return "get_customer_product_coverage"
     # V31/S23: phan bo SKU theo KH/luong-don/AOV la hai nhom so sanh, khong phai top doanh thu
     # hay bao cao xoi mon gia chung.
@@ -1472,10 +1478,18 @@ TEMPLATE_TOOLS = [
                        "khoan QLV kem tung thanh vien doi. BAT BUOC dung khi hoi doanh so/KPI san pham trong tam "
                        "theo QLV/doi. KHONG dung cho % target SKU trong tam theo khach hang. kieu_chi_tieu="
                        "'ty_trong_doanh_so' (Mien Bac): chi tieu la ty trong trong tam/doanh so (ty_trong_muc_tieu_pct),"
-                       " KHONG phai so tien. Trong tam theo TUNG TDV ca cong ty/mien -> get_kpi_scorecard mot lan, "
-                       "KHONG goi tool nay lan luot tung QLV.",
+                       " KHONG phai so tien. Khong loc doi: kem tdv_xep_hang (TDV xep theo % dat trong tam cua Bravo, "
+                       "du moi doi, co hang) va theo_mien_tdv (% dat theo mien) - dung cho 'SKU chien luoc/trong tam dat "
+                       "bao nhieu % theo vung', 'top N TDV dat trong tam cao nhat'. KHONG goi tool nay lan luot tung QLV. "
+                       "Cac KPI khac cua tung TDV (doanh so, SKU, khach moi, ASO) -> get_kpi_scorecard.",
         "input_schema": {"type": "object", "properties": {
             "year_month": {"type": "string", "description": "YYYY-MM; mac dinh thang moi nhat."},
+            "area_code": {"type": "string", "enum": ["MB", "MT", "MN"], "description": "Loc mot mien (tai khoan bi "
+                                                                                     "gioi han vung bi ep vung cua minh)."},
+            "limit_tdv": {"type": "integer", "minimum": 1, "maximum": 300,
+                          "description": "So TDV liet ke trong tdv_xep_hang (mac dinh 30; 'top 10' -> 10)."},
+            "thu_tu": {"type": "string", "enum": ["cao_truoc", "thap_truoc"],
+                       "description": "tdv_xep_hang: 'cao_truoc' (mac dinh) hoac 'thap_truoc' khi hoi TDV dat thap nhat."},
             "manager_code": {"type": "string", "description": "Ma QLV khi cau hoi gioi han MOT DOI (vd 'doi qlv "
                                                                "TM23100148') - tra dong QLV do kem tung thanh vien "
                                                                "doi. Tai khoan QLV bi ep doi cua chinh ho."},
@@ -1494,6 +1508,12 @@ TEMPLATE_TOOLS = [
             "manager_code": {"type": "string", "description": "Ma HOAC ten QLV - bang KPI doi do. Tai khoan QLV bi ep doi cua chinh ho."},
             "employee_code": {"type": "string", "description": "Ma HOAC ten 1 nhan vien - chi dong cua nguoi do."},
             "area_code": {"type": "string", "enum": ["MB", "MT", "MN"], "description": "Loc mot mien."},
+            "xep_theo": {"type": "string", "enum": ["pct_doanh_so", "trong_tam_pct_dat"],
+                         "description": "Xep danh sach theo % doanh so (mac dinh) hoac % dat trong tam."},
+            "thu_tu": {"type": "string", "enum": ["thap_truoc", "cao_truoc"],
+                       "description": "'thap_truoc' (mac dinh) hoac 'cao_truoc' khi hoi top N cao nhat."},
+            "position_code": {"type": "string", "enum": ["TDV", "CTV", "CS", "TK"],
+                              "description": "Chi mot vai tro, vd hoi 'TDV' thi 'TDV'."},
             "limit": {"type": "integer", "minimum": 1, "maximum": 300}}, "required": []},
     },
     {
@@ -2327,6 +2347,11 @@ def _required_tool_for_request(question: str, tools_for_request: list[dict],
     if (tool in _SALARY_SENSITIVE_TEMPLATE_NAMES and tool not in names
             and _SALARY_FALLBACK_TOOL in names):
         return _SALARY_FALLBACK_TOOL, "\n\n" + _SALARY_FALLBACK_NOTE
+    if tool == "get_focus_product_kpi" and "do phu" in _fold_for_route(question):
+        return tool, ("\n\nLUU Y CAU NAY (M32): % dat SKU trong tam lay tu get_focus_product_kpi (theo_mien_tdv + "
+                      "tdv_xep_hang, du moi doi trong MOT lan goi). Ve 'khoang trong do phu' goi THEM "
+                      "get_customer_product_coverage. Chi tieu la cho ca nhom SKU trong tam cua tung TDV, khong co chi "
+                      "tieu rieng tung SKU/khach.")
     return tool, ""
 
 
@@ -2493,7 +2518,7 @@ def _chuoi_thang_dang_bang(data: dict) -> dict:
 # get_kpi_scorecard ca cong ty 23,7 KB -> model chi thay 5/20 nguoi, 5/21 QLV; get_revenue_seasonality (C08) 10,8 KB ->
 # 5/12 thang moi kenh. Dang bang (ten cot ghi mot lan, gop truong con 'a.b') vua ngan sach ma giu du dong. Tool khac
 # van dung ban cat chung - doi sang day can du lieu goi lai tren may 24 truoc (nhieu test UAT khoa ban cat do).
-_TOOL_BANG_HOA_KHI_VUOT = {"get_kpi_scorecard", "get_revenue_seasonality"}
+_TOOL_BANG_HOA_KHI_VUOT = {"get_kpi_scorecard", "get_revenue_seasonality", "get_focus_product_kpi"}
 
 
 def _lam_tron_gon(v):
@@ -3496,6 +3521,25 @@ def _normalize_tool_input_for_question(tool_name: str, tool_input: dict, questio
             min_months = max(1, int(requested.group(1))) if requested else 3
             args["months_back"] = max(min_months + 1, int(args.get("months_back") or 0))
             args["limit"] = max(1000, int(args.get("limit") or 0))
+        return args
+
+    if tool_name in {"get_kpi_scorecard", "get_focus_product_kpi"}:
+        # 29/09/2026 (UAT M32): "top 10 TDV dat % cao nhat" - truoc day bang KPI luon xep THAP truoc va cat 20
+        # nguoi, model goi tung doi roi tu xep sai thu tu. Ep thu tu/so dong/vai tro theo dung cau hoi.
+        hoi_cao = any(m in q for m in ("cao nhat", "tot nhat", "dan dau", "top "))
+        hoi_thap = any(m in q for m in ("thap nhat", "kem nhat", "yeu nhat", "bottom"))
+        if hoi_cao != hoi_thap:
+            args["thu_tu"] = "cao_truoc" if hoi_cao else "thap_truoc"
+        so = re.search(r"\btop\s*(\d{1,3})\b|\b(\d{1,3})\s*(?:tdv|trinh duoc vien|nhan vien)\b", q)
+        if tool_name == "get_kpi_scorecard":
+            if any(m in q for m in ("trong tam", "chien luoc")):
+                args["xep_theo"] = "trong_tam_pct_dat"
+            if re.search(r"\btdv\b|trinh duoc vien", q) and not args.get("employee_code"):
+                args["position_code"] = "TDV"
+            if so:
+                args["limit"] = max(int(args.get("limit") or 0), min(300, int(so.group(1) or so.group(2))))
+        elif so:
+            args["limit_tdv"] = max(int(args.get("limit_tdv") or 0), min(300, int(so.group(1) or so.group(2))))
         return args
 
     if tool_name != "get_employee_kpi":

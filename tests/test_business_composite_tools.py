@@ -442,7 +442,9 @@ def test_m_role_questions_start_from_their_verified_report_not_free_sql():
         "Mở nhiều khách mới nhưng DT/khách và tỷ lệ mua lại thấp": "get_new_customer_list",
         "Tỉnh/huyện ít khách hoạt động/ít đơn/DT-khách thấp hơn chuẩn miền": "get_geography_monthly_performance",
         "NPP/chi nhánh tăng khách tốt nhưng công nợ/tồn kho xấu đi": "get_geography_monthly_performance",
-        "SKU chiến lược đạt %KH tại vùng; khoảng trống độ phủ lớn nhất": "get_customer_product_coverage",
+        # 29/09/2026 (UAT M32): doi tu get_customer_product_coverage. Ban 07/09 chot truoc khi kho co chi tieu SKU
+        # trong tam cap TDV (TPRTargetAmount, 15/09); duong cu tra "khong co mau so target" nen M32 khong co % dat.
+        "SKU chiến lược đạt %KH tại vùng; khoảng trống độ phủ lớn nhất": "get_focus_product_kpi",
         "SP mới đạt độ phủ/DT sau 1/3/6 tháng tại vùng": "get_customer_product_coverage",
         "Tỷ lệ trả hàng/chiết khấu/hàng tặng trên DT của từng vùng thay đổi": "check_order_timing",
         "Tổng nợ/quá hạn/DSO/thu tiền từng vùng-QLV qua từng tháng; đơn vị xấu nhanh nhất": "get_receivables_overview",
