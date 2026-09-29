@@ -306,7 +306,12 @@ def _required_tool_for_question(question: str) -> str | None:
     if (any(marker in q for marker in ("doanh thu", "doanh so", "phat sinh"))
             and any(marker in q for marker in ("3 mien", "ba mien", "theo mien", "theo vung"))):
         return "get_revenue_by_region"
-    is_team = any(word in q for word in ("doi", "doi toi", "toan doi", "tong doi"))
+    # 29/09/2026: bo dau thi "đội" (doi nhom) trung "đối chieu", "thay đổi", "chuyen đổi", "đổi tra", "đối thu", "đôi"
+    # -> "Doi tra hang cua khach thang 9", "Khach hang nao thay doi TDV phu trach?", "Doi chieu doanh thu khach
+    # BGI00699" deu bi ep vao tool do phu khach-SKU danh cho chi so cua DOI. Cau go co dau thi chi nhan "đội"; cau
+    # go khong dau khong tach duoc nen giu nhu cu.
+    cau_goc = unicodedata.normalize("NFC", (question or "").lower())
+    is_team = ("doi" in q) if cau_goc.isascii() else ("đội" in cau_goc)
     # C42 can CA ton/nhu cau va hai ky doanh thu. Ep mot tool (hoac route chuoi
     # nhan vien vi cum "giam lien tiep") se lam mat mot ve cua cau hoi.
     if ("sku" in q and any(marker in q for marker in ("thieu hang", "kho thieu"))
