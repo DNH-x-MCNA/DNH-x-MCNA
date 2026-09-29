@@ -619,10 +619,13 @@ def _required_tool_for_question(question: str) -> str | None:
     if ("doanh so, target" in q and "tung qlv/doi" in q) or \
             "qlv nao co nhieu nhan vien duoi 80%" in q:
         return "get_workforce_productivity"
+    # 29/09/2026: cau "con thieu"/"moi ngay can" thuoc get_kpi_gap_run_rate (mo ta tool ghi BAT BUOC) - truoc day
+    # "Con thieu bao nhieu de dat 100% KPI?" bi cum "dat 100%" o day ep vao employee_kpi truoc luat run-rate.
+    hoi_khoang_thieu = any(marker in q for marker in ("con thieu", "moi ngay can"))
     if any(marker in q for marker in (
         "tdv trong doi", "doanh so/target", "dat 100%", "qua cong 65", "duoi cong",
         "so nv duoi 80",
-    )):
+    )) and not hoi_khoang_thieu:
         return "get_employee_kpi"
     if "mua vu" in q:
         # C08: phai bat dau bang chuoi thang, de tool tu danh dau thang khong du du lieu
@@ -671,8 +674,10 @@ def _required_tool_for_question(question: str) -> str | None:
             word in q for word in ("hàng trả", "hang tra", "đơn lớn", "don lon",
                                    "bất thường", "bat thuong", "chạy đơn", "chay don")):
         return "check_order_timing"
+    # "Moi ngay can ban bao nhieu de dat target?" khong co so % hay chu KPI - them target/chi tieu/ke hoach.
     if any(word in q for word in ("còn thiếu", "con thieu", "mỗi ngày cần", "moi ngay can")) and any(
-            threshold in q for threshold in ("65", "70", "80", "100", "120", "kpi")):
+            threshold in q for threshold in ("65", "70", "80", "100", "120", "kpi", "target", "chi tieu",
+                                             "ke hoach")):
         return "get_kpi_gap_run_rate"
     metric_words = ("khách", "khach", "đơn", "don", "aov", "tần suất", "tan suat",
                     "sản lượng", "san luong", "giá trị đơn", "gia tri don")
