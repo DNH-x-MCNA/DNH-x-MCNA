@@ -23,6 +23,21 @@ import { IconCheck, IconDownload } from "./icons";
  */
 const CSV_DELIMITER = ";";
 
+/**
+ * 29/09/2026 — chống chèn công thức vào file CSV.
+ * Ô bắt đầu bằng = + - @ thì Excel hiểu là CÔNG THỨC khi mở file: tên khách/sản phẩm lấy từ Bravo/DMS
+ * kiểu `=HYPERLINK("http://…";"Bấm")` sẽ chạy ngay khi người dùng mở. Thêm dấu nháy đơn phía trước để
+ * Excel coi là chữ. Số âm, số có dấu, phần trăm ("-5,2%", "+3", "-1,234,000") giữ nguyên để vẫn là số;
+ * ô chỉ có "-" (ô trống) cũng giữ nguyên.
+ */
+const MO_DAU_CONG_THUC = /^[=+\-@]/;
+const CHI_LA_SO = /^[+-]?[\d.,]+\s*(%|đ|vnd|usd|tỷ|triệu|nghìn|k)?$/i;
+
+export function oCsvKhongChayCongThuc(text: string): string {
+  if (!MO_DAU_CONG_THUC.test(text) || CHI_LA_SO.test(text) || text === "-") return text;
+  return `'${text}`;
+}
+
 /** Đọc thẳng từ DOM nên dùng chung được cho mọi bảng, bất kể do markdown hay React dựng ra. */
 export function tableToCsv(root: HTMLElement): string {
   const table = root.tagName === "TABLE" ? root : root.querySelector("table");
@@ -32,7 +47,7 @@ export function tableToCsv(root: HTMLElement): string {
     .map((tr) =>
       Array.from(tr.querySelectorAll("th,td"))
         .map((cell) => {
-          const text = (cell as HTMLElement).innerText.replace(/\s+/g, " ").trim();
+          const text = oCsvKhongChayCongThuc((cell as HTMLElement).innerText.replace(/\s+/g, " ").trim());
           // RFC 4180: chỉ bọc nháy khi cần, và nháy đôi bên trong phải nhân đôi
           const canBoc = text.includes(CSV_DELIMITER) || text.includes('"') || /[\r\n]/.test(text);
           return canBoc ? `"${text.replace(/"/g, '""')}"` : text;
