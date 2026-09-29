@@ -3233,9 +3233,23 @@ def _payload_for_model(tool_name: str, payload, question: str):
         risk_rows = risk_rows if isinstance(risk_rows, list) else []
         # Ty le ton/ban chua quy doi don vi va co the lech khac nhau theo tung SKU.
         # Giu trong ket qua goc de doi chieu, nhung khong dua con so nay cho model.
+        # 29/09/2026 (UAT C42): tool tra rows da xep THEO NHOM trang thai (focus overstock: 11 ton khong ban, 14 cham
+        # luan chuyen, 5 thieu hang); lay 6 dong dau thi model chi thay nhom dau, 16 SKU nguy co thieu hang khong toi
+        # duoc model ("chi co so dem") du answer_rule noi moi trang thai deu co dong mau. Chon luan phien tung nhom.
+        nhom_theo_trang_thai: dict = {}
+        for row in risk_rows:
+            if isinstance(row, dict):
+                nhom_theo_trang_thai.setdefault(row.get("status"), []).append(row)
+        # Mot nhom: giu 6 dong nhu truoc (V39 dang dat UAT voi muc nay); nhieu nhom: toi da 4 dong moi nhom.
+        tran = 6 if len(nhom_theo_trang_thai) <= 1 else min(12, 4 * len(nhom_theo_trang_thai))
+        chon = []
+        for vong in range(max((len(ds) for ds in nhom_theo_trang_thai.values()), default=0)):
+            for ds in nhom_theo_trang_thai.values():
+                if vong < len(ds) and len(chon) < tran:
+                    chon.append(ds[vong])
         shown_risks = [
             {key: value for key, value in row.items() if key != "months_of_cover"}
-            for row in risk_rows[:6] if isinstance(row, dict)
+            for row in chon
         ]
         shown_codes = {row.get("item_code") for row in shown_risks if isinstance(row, dict)}
         candidates = supply.get("recent_customer_candidates") or []
@@ -3245,6 +3259,15 @@ def _payload_for_model(tool_name: str, payload, question: str):
         compact_supply = {
             key: value for key, value in supply.items()
             if key not in {"rows", "recent_customer_candidates"}
+        }
+        dem_trang_thai = supply.get("status_counts") if isinstance(supply.get("status_counts"), dict) else {}
+        da_hien = {}
+        for row in shown_risks:
+            da_hien[row.get("status")] = da_hien.get(row.get("status"), 0) + 1
+        # So SKU chua liet ke theo goc nhin cua MODEL (khong phai theo limit cua tool) de answer_rule dung.
+        compact_supply["so_dong_chua_hien_theo_trang_thai"] = {
+            tt: int(so) - da_hien.get(tt, 0) for tt, so in dem_trang_thai.items()
+            if isinstance(so, (int, float)) and int(so) > da_hien.get(tt, 0)
         }
         compact_supply.update({
             "rows_shown_to_model": len(shown_risks),
