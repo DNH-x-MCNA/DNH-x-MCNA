@@ -363,6 +363,31 @@ def get_query_run(query_id: str):
         conn.close()
 
 
+def get_sql_used_by_query(query_ids) -> dict:
+    """{query_id: [cau lenh/tool da chay]} cho mot nhom luot hoi; luot khong co ban ghi thi vang mat."""
+    ids = sorted({qid for qid in query_ids if qid})
+    if not ids:
+        return {}
+    conn = _conn()
+    try:
+        result = {}
+        for i in range(0, len(ids), 400):
+            chunk = ids[i:i + 400]
+            rows = conn.execute(
+                f"SELECT query_id, sql_used_json FROM query_runs WHERE query_id IN ({','.join('?' for _ in chunk)})",
+                chunk,
+            ).fetchall()
+            for query_id, raw in rows:
+                try:
+                    used = json.loads(raw or "[]")
+                except (TypeError, json.JSONDecodeError):
+                    used = []
+                result[query_id] = used if isinstance(used, list) else []
+        return result
+    finally:
+        conn.close()
+
+
 def list_query_runs(limit: int = 5000):
     """Nguon chuan cho dashboard lich su truy van; gioi han de khong nap vo han vao RAM."""
     safe_limit = max(1, min(int(limit or 5000), 10000))

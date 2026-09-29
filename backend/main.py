@@ -1,6 +1,7 @@
 import os
 import sys
 import json
+import re
 import time
 import uuid
 import datetime as dt
@@ -70,8 +71,10 @@ from conversation_memory import (
     get_query_run,
     list_query_runs,
     save_query_feedback,
+    get_sql_used_by_query,
 )
 from nl2sql import ApiCreditExhaustedError, ask, ask_stream
+from report_templates import _SALARY_SENSITIVE_TEMPLATES
 from query_engine import _write_log
 from pricing import USD_TO_VND_RATE, api_provider_for_model
 
@@ -302,22 +305,59 @@ def _check_public_auth_rate_limit(email: str, client_ip: str = "local"):
     _IP_AUTH_ATTEMPTS[client_ip].append(now)
 
 
-def _require_session_access(session_id: str, user: dict):
-    """Chi dung cho DOC (GET /history) - admin_ops & c_level duoc xem tat ca, regional_director xem duoc cua QLV thuoc scope."""
+def _require_session_access(session_id: str, user: dict) -> str:
+    """Chi dung cho DOC (GET /history) - admin_ops & c_level duoc xem tat ca, regional_director xem duoc cua QLV thuoc scope.
+    Tra ve username chu phien."""
     from conversation_memory import get_session_owner
     owner = get_session_owner(session_id)
     if owner is None:
         raise HTTPException(404, "Khong tim thay cuoc tro chuyen hoac chua xac dinh duoc chu so huu")
     role = user.get("role")
     if role in ("c_level", "admin_ops"):
-        return
+        return owner
     if owner == user["username"]:
-        return
+        return owner
     if role == "regional_director":
         subordinates = get_subordinate_usernames(user)
         if subordinates and owner in subordinates:
-            return
+            return owner
     raise HTTPException(403, "Khong co quyen truy cap cuoc tro chuyen nay")
+
+
+# 29/09/2026: call_template() chan moi tool luong voi regional_director, con admin_ops bi chan khoi
+# /chat. Nhung GET /history cho ca hai doc phien cua nguoi khac - QLV xem duoc luong/thuong doi minh,
+# C-Level xem duoc luong toan cong ty - nen doc lich su la duong vong lay dung so lieu da bi chan.
+_VAI_TRO_KHONG_XEM_LUONG = {"regional_director", "admin_ops"}
+_TOOL_LUONG = re.compile(r"\b(get_salary_\w+)\s*\(")
+_BANG_LUONG = re.compile(r"thongketinhluong", re.IGNORECASE)
+NOI_DUNG_LUONG_DA_AN = (
+    "[Đã ẩn] Câu trả lời này có số liệu lương/thưởng cá nhân. Vai trò của bạn không được xem "
+    "lương/thưởng cá nhân, kể cả khi đọc lịch sử trò chuyện của người khác."
+)
+
+
+def _luot_co_so_lieu_luong(sql_used: list) -> bool:
+    """Luot hoi co doc bao cao luong: tool luong, hoac SQL tu do (chi C-Level) cham bang luong."""
+    for statement in sql_used or []:
+        text_statement = str(statement)
+        if any(name in _SALARY_SENSITIVE_TEMPLATES for name in _TOOL_LUONG.findall(text_statement)):
+            return True
+        if text_statement.startswith(("[local]", "[bravo]")) and _BANG_LUONG.search(text_statement):
+            return True
+    return False
+
+
+def _an_luong_khi_xem_ho(history: list[dict], owner: str, viewer: dict) -> list[dict]:
+    """Thay noi dung tra loi co so lieu luong khi nguoi xem khong phai chu phien va khong co quyen xem luong."""
+    if owner == viewer.get("username") or viewer.get("role") not in _VAI_TRO_KHONG_XEM_LUONG:
+        return history
+    sql_by_query = get_sql_used_by_query(m.get("query_id") for m in history if m.get("role") == "assistant")
+    return [
+        {**m, "content": NOI_DUNG_LUONG_DA_AN}
+        if m.get("role") == "assistant" and _luot_co_so_lieu_luong(sql_by_query.get(m.get("query_id")))
+        else m
+        for m in history
+    ]
 
 
 def _require_session_write_access(session_id: str, user: dict):
@@ -805,8 +845,8 @@ def reset_user_password_endpoint(username: str, user: dict = Depends(require_app
 
 @app.get("/history/{session_id}", response_model=list[HistoryMessage], dependencies=[Depends(require_api_key)])
 def get_history(session_id: str, user: dict = Depends(require_approved_user)):
-    _require_session_access(session_id, user)
-    return get_session_history(session_id)
+    owner = _require_session_access(session_id, user)
+    return _an_luong_khi_xem_ho(get_session_history(session_id), owner, user)
 
 
 @app.put("/queries/{query_id}/feedback", dependencies=[Depends(require_api_key)])
