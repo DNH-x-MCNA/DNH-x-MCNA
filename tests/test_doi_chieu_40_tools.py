@@ -11,7 +11,10 @@ checker = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(checker)
 
 
-def test_catalog_smoke_phu_dung_toan_bo_tool_da_dang_ky():
+def test_catalog_smoke_phu_dung_toan_bo_tool_da_dang_ky(monkeypatch):
+    # _tool_cases_40 lay thang tron gan nhat tu backend/warehouse.db (file du lieu cuc bo, khong nam trong
+    # git); test chi dem danh sach tool nen co dinh khoang thang.
+    monkeypatch.setattr(checker.rt, "_revenue_data_month_range", lambda: ("2026-01", "2026-09"))
     cases = checker._tool_cases_40()
 
     # 10/09/2026: 41 sau khi them get_customer_attrition_risk cho M22/S88.

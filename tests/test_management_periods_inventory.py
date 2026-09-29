@@ -96,6 +96,9 @@ def test_revenue_ytd_cumulative_tinh_tang_truong_va_giu_scope(monkeypatch):
 def test_revenue_ytd_cumulative_tra_ke_hoach_va_phan_con_lai_tu_target_da_nhap(monkeypatch):
     monkeypatch.setattr(rt, "revenue_by_channel", lambda *args: _period_result(300.0))
     monkeypatch.setattr(rt, "_revenue_data_month_range", lambda: ("2020-01", "2026-08"))
+    # data_as_of / moc cung ky doc latest_data_date() tu backend/warehouse.db (khong nam trong git) - co dinh
+    # ngay kho sau thang dang hoi de thang 08 la thang tron, nhu tren may co kho.
+    monkeypatch.setattr(rt, "latest_data_date", lambda: "2026-09-23")
     monkeypatch.setattr(rt, "_ytd_plan", lambda *args: {
         "total": 500.0, "otc": 400.0, "etc": 100.0, "note": None,
     })
@@ -115,6 +118,7 @@ def test_revenue_ytd_cumulative_khong_chia_doanh_thu_thieu_lich_su_voi_target_da
     phep chia sai (2 thang actual / 8 thang target), phai bao thieu du lieu va khong tao %KH/gap."""
     monkeypatch.setattr(rt, "revenue_by_channel", lambda *args: _period_result(100.0))
     monkeypatch.setattr(rt, "_revenue_data_month_range", lambda: ("2026-07", "2026-08"))
+    monkeypatch.setattr(rt, "latest_data_date", lambda: "2026-09-23")  # khong doc warehouse.db cuc bo
     monkeypatch.setattr(rt, "_ytd_plan", lambda *args: {
         "total": 500.0, "otc": 400.0, "etc": 100.0, "note": None,
     })
