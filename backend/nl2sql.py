@@ -1487,7 +1487,7 @@ TEMPLATE_TOOLS = [
             "area_code": {"type": "string", "enum": ["MB", "MT", "MN"], "description": "Loc mot mien (tai khoan bi "
                                                                                      "gioi han vung bi ep vung cua minh)."},
             "limit_tdv": {"type": "integer", "minimum": 1, "maximum": 300,
-                          "description": "So TDV liet ke trong tdv_xep_hang (mac dinh 30; 'top 10' -> 10)."},
+                          "description": "So TDV liet ke trong tdv_xep_hang (mac dinh 20; 'top 10' -> 10)."},
             "thu_tu": {"type": "string", "enum": ["cao_truoc", "thap_truoc"],
                        "description": "tdv_xep_hang: 'cao_truoc' (mac dinh) hoac 'thap_truoc' khi hoi TDV dat thap nhat."},
             "manager_code": {"type": "string", "description": "Ma QLV khi cau hoi gioi han MOT DOI (vd 'doi qlv "
@@ -2349,9 +2349,11 @@ def _required_tool_for_request(question: str, tools_for_request: list[dict],
         return _SALARY_FALLBACK_TOOL, "\n\n" + _SALARY_FALLBACK_NOTE
     if tool == "get_focus_product_kpi" and "do phu" in _fold_for_route(question):
         return tool, ("\n\nLUU Y CAU NAY (M32): % dat SKU trong tam lay tu get_focus_product_kpi (theo_mien_tdv + "
-                      "tdv_xep_hang, du moi doi trong MOT lan goi). Ve 'khoang trong do phu' goi THEM "
-                      "get_customer_product_coverage. Chi tieu la cho ca nhom SKU trong tam cua tung TDV, khong co chi "
-                      "tieu rieng tung SKU/khach.")
+                      "tdv_xep_hang, du moi doi trong MOT lan goi). Ve 'khoang trong do phu' dung khoang_trong_do_phu_sku "
+                      "trong CUNG ket qua do (KPI SKU tinh luong: so ma ban duoc / chi tieu so ma, theo doi va theo mien) "
+                      "va noi ro day la do phu SKU noi chung, khong rieng SKU trong tam. KHONG goi "
+                      "get_customer_product_coverage mode sku_target cho ve nay (che do do chi noi target theo tung "
+                      "SKU/khach). Chi tieu trong tam la cho ca nhom SKU cua tung TDV, khong co chi tieu rieng tung SKU/khach.")
     return tool, ""
 
 
