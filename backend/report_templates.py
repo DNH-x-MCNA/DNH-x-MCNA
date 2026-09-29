@@ -8443,10 +8443,18 @@ def etc_revenue_by_item_type(date_from: str, date_to: str, scope_area_code: str 
     return result
 
 
+_SAP_XEP_DUOI_50 = {
+    # (khoa sap xep, mo ta) - "ty_le" giu thu tu cu: ty le thap nhat truoc, cung ty le thi con lai lon truoc.
+    "ty_le": (lambda x: (x["ty_le_thuc_hien_pct"], -x["con_lai"]), "ty le thuc hien tang dan"),
+    "gia_tri": (lambda x: (-x["gia_tri_hop_dong"], str(x["contract_id"])), "gia tri hop dong giam dan"),
+    "con_lai": (lambda x: (-x["con_lai"], str(x["contract_id"])), "gia tri con lai giam dan"),
+}
+
+
 def etc_contract_status(as_of_date: str = None, expiring_days: int = 90, limit: int = 50,
                         only_active: bool = True, scope_area_code: str = None,
                         scope_channel: str = None, scope_employee_code: str = None,
-                        min_remaining_value: float = None) -> dict:
+                        min_remaining_value: float = None, sap_xep_duoi_50: str = "ty_le") -> dict:
     """C43/C44/M42: hop dong ETC - gia tri, da xuat hoa don, con lai, ty le thuc hien, sap het han.
 
     13/09/2026 - VI SAO CO TOOL NAY: ba cau cum H bi ghi la "chua co khoa lien ket hoa don voi hop
@@ -8463,6 +8471,9 @@ def etc_contract_status(as_of_date: str = None, expiring_days: int = 90, limit: 
     as_of_date = dt.date.fromisoformat((as_of_date or latest_data_date())[:10]).isoformat()
     expiring_days = max(1, min(int(expiring_days or 90), 720))
     limit = max(1, min(int(limit or 50), 200))
+    sap_xep_duoi_50 = str(sap_xep_duoi_50 or "ty_le").strip().lower()
+    if sap_xep_duoi_50 not in _SAP_XEP_DUOI_50:
+        raise ValueError("sap_xep_duoi_50 chi nhan: " + ", ".join(_SAP_XEP_DUOI_50))
     if min_remaining_value is not None:
         min_remaining_value = float(min_remaining_value)
         if not 0 <= min_remaining_value < float("inf"):
@@ -8609,15 +8620,22 @@ def etc_contract_status(as_of_date: str = None, expiring_days: int = 90, limit: 
     # 24/09/2026 (Claude #95 + Codex): "con hieu luc" = DA bat dau, chua het han va CO du ngay hieu luc.
     # Truoc day chi xet ngay ket thuc nen hop dong chua toi ngay bat dau (0%) lot vao "chua xuat hoa don
     # nao" va "duoi 50%" nhu the thuc hien cham. Hai nhom nay tach rieng, van bao so luong.
+    def _con_hieu_luc(x):
+        return not x["da_het_han"] and not x["chua_den_hieu_luc"] and not x["thieu_ngay_hieu_luc"]
+
     chua_den_hieu_luc = [x for x in hop_dong if x["chua_den_hieu_luc"]]
-    dang_hieu_luc = [x for x in hop_dong if not x["da_het_han"]
-                     and not x["chua_den_hieu_luc"] and not x["thieu_ngay_hieu_luc"]]
+    dang_hieu_luc = [x for x in hop_dong if _con_hieu_luc(x)]
+    # 29/09/2026 (UAT C43): hop dong gia tri bat thuong van la hop dong DANG HOAT DONG - chi gia tri cua
+    # no khong dung duoc. so_hop_dong_con_hieu_luc (phan sach, dung cho moi con so tien) de nguyen; dem
+    # rieng phan bat thuong de cau "bao nhieu hop dong dang hoat dong" tra dung tong.
+    bat_thuong_hieu_luc = [x for x in bat_thuong if _con_hieu_luc(x)]
     xet = dang_hieu_luc if only_active else hop_dong
     sap_het = [x for x in xet if x["sap_het_han"]]
     chua_xuat = [x for x in xet if x["so_hoa_don"] == 0]
+    khoa_duoi_50, mo_ta_duoi_50 = _SAP_XEP_DUOI_50[sap_xep_duoi_50]
     thuc_hien_thap = sorted(
         [x for x in xet if x["ty_le_thuc_hien_pct"] is not None and x["ty_le_thuc_hien_pct"] < 50],
-        key=lambda x: (x["ty_le_thuc_hien_pct"], -x["con_lai"]))
+        key=khoa_duoi_50)
     gan_nham = [x for x in xet if x.get("chung_tu_gan_nham_da_loai")]
     con_lai_lon = sorted(
         [x for x in xet if x["con_lai"] > 0
@@ -8633,6 +8651,8 @@ def etc_contract_status(as_of_date: str = None, expiring_days: int = 90, limit: 
                         "hop dong - kiem chung 13/09/2026."),
         "tong_so_hop_dong": len(hop_dong) + len(bat_thuong),
         "so_hop_dong_con_hieu_luc": len(dang_hieu_luc),
+        "so_hop_dong_con_hieu_luc_gia_tri_bat_thuong": len(bat_thuong_hieu_luc),
+        "so_hop_dong_con_hieu_luc_tat_ca": len(dang_hieu_luc) + len(bat_thuong_hieu_luc),
         "so_hop_dong_chua_den_hieu_luc": len(chua_den_hieu_luc),
         "gia_tri_hop_dong_chua_den_hieu_luc": sum(x["gia_tri_hop_dong"] for x in chua_den_hieu_luc),
         "so_hop_dong_thieu_ngay_hieu_luc": sum(x["thieu_ngay_hieu_luc"] for x in hop_dong),
@@ -8648,11 +8668,16 @@ def etc_contract_status(as_of_date: str = None, expiring_days: int = 90, limit: 
         # nhu the do la tong that (UAT 17/09, cau C44). Cung lop loi voi "hoi top 10 tra top 3".
         "so_hop_dong_thuc_hien_duoi_50_pct": len(thuc_hien_thap),
         "hop_dong_thuc_hien_duoi_50_pct": thuc_hien_thap[:limit],
+        "hop_dong_thuc_hien_duoi_50_pct_sap_xep": mo_ta_duoi_50,
         "nguong_gia_tri_con_lai": min_remaining_value,
         "so_hop_dong_con_lai_theo_nguong": len(con_lai_lon),
         "hop_dong_con_lai_lon_nhat": con_lai_lon[:limit],
         "gioi_han_moi_danh_sach": limit,
         "dinh_nghia": {
+            "con_hieu_luc": "Da bat dau, chua het han, co du ngay hieu luc tai as_of. "
+                            "so_hop_dong_con_hieu_luc chi gom hop dong co gia tri dung duoc (dung cho moi "
+                            "tong tien); hoi 'bao nhieu hop dong dang hoat dong/con hieu luc' thi bao "
+                            "so_hop_dong_con_hieu_luc_tat_ca va neu ro so hop dong gia tri bat thuong trong do.",
             "thuc_hien_thap": "Da xuat hoa don duoi 50% gia tri; chi la chi bao sang loc, "
                                "chua chung minh cham so voi lich giao hang cam ket.",
             "con_lai": "Gia tri hop dong tru da xuat hoa don, TRUOC VAT; KHONG phai tien "
