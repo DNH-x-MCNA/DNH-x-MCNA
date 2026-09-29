@@ -613,12 +613,15 @@ def sync_tonkho_hien_tai(as_of: dt.date = None):
         conn.close()
 
     # --- Kinh doanh (TM): bang theo LO - phai xoa+ghi lai dung 1 dong/lo, khong duoc chen them ---
+    # 29/09/2026 (UAT C42): GIU lo ve 0. Truoc day lo cong xong = 0 bi XOA han, lo nhap roi ban het trong nam
+    # (bien dong rong = 0) bi HAVING bo qua -> SKU da ban het hang KHONG con dong nao; tool coi "khong co dong ton"
+    # la "chua biet" (dung nguyen tac), nen SQL doi chieu tren Bravo co 21 SKU ton = 0 ma chatbot bao 0 SKU, va
+    # canh bao nguy co thieu hang bo sot dung SKU het sach con nhu cau. Doc lo co quantity > 0 (han dung) khong doi.
     try:
         _, rows = bravo_query(
             "SELECT WarehouseCode, ItemId, ItemLotCode, SUM(ReceiptQuantity - IssueQuantity) delta_qty "
             "FROM dbo.vTheKhoLot WHERE ClassCode='TM' AND FiscalYear=:yr AND DocDate<=:as_of "
-            "GROUP BY WarehouseCode, ItemId, ItemLotCode "
-            "HAVING SUM(ReceiptQuantity - IssueQuantity) <> 0",
+            "GROUP BY WarehouseCode, ItemId, ItemLotCode",
             yr=str(year), as_of=as_of.isoformat())
     except Exception as e:
         print(f"[tonkho_hien_tai] Khong doc duoc vTheKhoLot theo lo (TM): {e} - GIU nguyen ton dau nam.")
@@ -627,7 +630,7 @@ def sync_tonkho_hien_tai(as_of: dt.date = None):
     try:
         for wcode, item_id, lot_code, delta in rows:
             mapped = kho_tm.get(wcode)
-            if not mapped or not delta or not lot_code:
+            if not mapped or not lot_code:
                 continue
             wid, branch = mapped
             existing = conn.execute(
@@ -637,12 +640,11 @@ def sync_tonkho_hien_tai(as_of: dt.date = None):
             conn.execute(
                 "DELETE FROM brv_tonkhodklot WHERE warehouse_id=? AND item_id=? AND item_lot_code=? AND year=?",
                 (wid, item_id, lot_code, year))
-            moi = existing + delta
-            if moi != 0:
-                conn.execute(
-                    "INSERT INTO brv_tonkhodklot (branch_code, warehouse_id, item_id, item_lot_code, "
-                    "quantity, is_active, year) VALUES (?,?,?,?,?,1,?)",
-                    (branch, wid, item_id, lot_code, moi, year))
+            moi = existing + (delta or 0)
+            conn.execute(
+                "INSERT INTO brv_tonkhodklot (branch_code, warehouse_id, item_id, item_lot_code, "
+                "quantity, is_active, year) VALUES (?,?,?,?,?,1,?)",
+                (branch, wid, item_id, lot_code, moi, year))
             ket_qua["tm_lot"] += 1
         conn.commit()
     finally:
