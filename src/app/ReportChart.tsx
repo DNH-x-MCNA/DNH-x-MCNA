@@ -20,7 +20,8 @@ export function parseCharts(value: unknown): ChartSpec[] {
 }
 
 const COLORS = ["#0369a1", "#b45309", "#7c3aed", "#047857", "#be123c"];
-const full = (v: number | null) => v === null ? "Chưa đủ dữ liệu" : `${v.toLocaleString("vi-VN")} đ`;
+// Tron toi dong: mac dinh toLocaleString giu 3 so le (du phong tuyen tinh tung hien "21.761.085.237,931 đ").
+const full = (v: number | null) => v === null ? "Chưa đủ dữ liệu" : `${v.toLocaleString("vi-VN", { maximumFractionDigits: 0 })} đ`;
 const short = (v: number) => Math.abs(v) >= 1e9 ? `${(v / 1e9).toLocaleString("vi-VN", { maximumFractionDigits: 1 })} tỷ`
   : Math.abs(v) >= 1e6 ? `${(v / 1e6).toLocaleString("vi-VN", { maximumFractionDigits: 1 })} tr`
   : v.toLocaleString("vi-VN", { maximumFractionDigits: 0 });

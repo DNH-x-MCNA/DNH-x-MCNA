@@ -39,7 +39,7 @@ from glossary_memory import save_glossary_term, retrieve_relevant_glossary
 from longterm_memory import save_example, retrieve_similar_examples
 from cost_logger import compute_and_log_cost
 from chat_charts import build_charts
-from period_projection import render_projection
+from period_projection import render_projection, render_projection_method
 from feature_policy import (
     projection_period, feature_enabled,
     DISABLED_FUTURE_TOOL_NAMES,
@@ -5094,6 +5094,7 @@ def _projection_response(question, session_id, username, scope_area_code,
         answers.append(f"⚠️ {warning}")
         freshness.append({"source_name": "Đồng bộ kho", "is_stale": True, "warning": warning})
     result = None
+    phuong_phap = None
     for period in periods:
         for group in groups:
             for area in areas:
@@ -5105,12 +5106,25 @@ def _projection_response(question, session_id, username, scope_area_code,
                                        username=username, session_id=session_id, scope_area_code=area,
                                        scope_employee_code=scope_employee_code, scope_channel=scope_channel, scope_role=scope_role)
                 data = result.get("result", {}) if result.get("ok") else {"error": result.get("error", "Không thể dự phóng.")}
-                answers.append(render_projection(data))
+                answers.append(render_projection(data, kem_phuong_phap=False))
+                if data.get("method"):
+                    phuong_phap = render_projection_method(data)
                 charts.extend(build_charts("get_current_period_projection", result))
-                if data.get("as_of"):
-                    freshness.append({"source_name": data.get("basis", "Kho dữ liệu"), "business_data_date": data["as_of"]})
+                moc = {"source_name": data.get("basis", "Kho dữ liệu"), "business_data_date": data.get("as_of")}
+                if data.get("as_of") and moc not in freshness:
+                    freshness.append(moc)
     charts = charts[:3]
-    answer = "\n\n".join(answers)
+    if phuong_phap:
+        answers.append(phuong_phap)
+    # 30/09/2026 (test that C50: 4 bang thang/quy x kenh/mien): phuong phap/gia dinh va ghi chu chung (ke hoach ETC
+    # chi co toan quoc...) tung lap lai sau MOI bang. Moi doan chi in mot lan; "Lich su hop le" gan voi tung bang.
+    da_in, doan = set(), []
+    for khoi in answers:
+        for para in khoi.split("\n\n"):
+            if para.startswith("Lịch sử hợp lệ") or para not in da_in:
+                da_in.add(para)
+                doan.append(para)
+    answer = "\n\n".join(doan)
     append_message(session_id, "user", question, query_id=query_id)
     append_message(session_id, "assistant", answer, query_id=query_id, **({"charts": charts} if charts else {}))
     return {"answer": answer, "sql_used": sql_used, "last_result": result,
