@@ -72,10 +72,42 @@ def test_snapshot_kpi_mang_ngay_hom_nay_van_du_phong_duoc(kho, monkeypatch):
     kq = pp.current_period_projection(group_by="qlv")
     assert "error" not in kq, kq.get("error")
     assert hoi == ["2026-09-16"]                        # hoi theo hom nay, khong phai hom qua
-    assert kq["as_of"] == "2026-09-15"                   # cung moc voi du lieu doanh thu (het hom qua)
+    # 30/09 (kiem that may 24): snapshot hom nay DA GOM doanh so trong ngay (KPI khop hoa don tinh ca hom nay), nen
+    # moc cua bang KPI la chinh ngay snapshot - ban #167 lay "hom qua" lam kich ban cong trung phan ban hom nay.
+    assert kq["as_of"] == "2026-09-16"
+    assert ("2026-08-01", "2026-08-16") in kho           # nhip lich su so cung ngay 16 cua thang truoc
     row = kq["rows"][0]
     assert row["linear"] == 190.0 and row["scenarios"] is not None   # van dung run-rate S35 cua tool KPI
-    assert pp.render_projection(kq).count("snapshot ngày 16/09/2026") == 1
+    van_ban = pp.render_projection(kq)
+    assert van_ban.count("snapshot ngày 16/09/2026, đã gồm doanh số ghi nhận trong ngày") == 1
+
+
+class Ngay30(dt.date):
+    @classmethod
+    def today(cls):
+        return cls(2026, 9, 30)
+
+
+def test_ngay_cuoi_thang_kpi_khong_cong_trung_phan_ban_hom_nay(kho, monkeypatch):
+    monkeypatch.setattr(pp.dt, "date", Ngay30)
+    monkeypatch.setattr(rt, "latest_data_date", lambda: "2026-09-29")
+    _kpi_theo_snapshot(monkeypatch, ["2026-08-31", "2026-09-30"])
+    kq = pp.current_period_projection(group_by="qlv")
+    row = kq["rows"][0]
+    assert kq["as_of"] == "2026-09-30" == kq["period_to"]
+    # Het thang: khong nhan them ty le "cuoi ngay 29 -> het thang" vao so da gom ngay 30.
+    assert row["scenarios"] == {"low": 100.0, "base": 100.0, "high": 100.0}
+    dong = next(l for l in pp.render_projection(kq).splitlines() if l.startswith("| Đội 1 |"))
+    assert dong.endswith("| — |") and "Chưa đủ dữ liệu" not in dong
+
+
+def test_nhan_tong_doi_co_dau(kho, monkeypatch):
+    def kpi(day, group, limit, **scope):
+        return {"as_of": day, "rows": [{"group_code": "QLV1", "group_name": "Tong doi cua ban", "actual": 100.0,
+                                        "target": 300.0, "linear_run_rate": 190.0}]}
+    monkeypatch.setattr(rt, "kpi_gap_run_rate", kpi)
+    kq = pp.current_period_projection(scope_employee_code="QLV1", scope_area_code="MB")
+    assert kq["rows"][0]["label"] == "Tổng đội của bạn"
 
 
 def test_snapshot_kpi_cu_hon_du_lieu_doanh_thu_thi_tinh_theo_snapshot(kho, monkeypatch):

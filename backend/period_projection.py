@@ -11,6 +11,10 @@ def _end(day):
     return day.replace(day=calendar.monthrange(day.year, day.month)[1])
 
 
+# Nhan tong cua tool KPI (report_templates.kpi_gap_run_rate) viet khong dau; cau tra loi du phong hien co dau.
+_NHAN_CO_DAU = {"Tong doi cua ban": "Tổng đội của bạn", "Toan bo pham vi": "Toàn bộ phạm vi"}
+
+
 def current_period_projection(period="month", group_by="overall", scope_area_code=None,
                               scope_channel=None, scope_employee_code=None):
     if not feature_enabled("DNH_BAT_DU_PHONG"):
@@ -55,13 +59,18 @@ def current_period_projection(period="month", group_by="overall", scope_area_cod
             # thang/ngay yeu cau"): kho chi giu 1 snapshot KPI/thang, thang dang chay mang ngay dong bo gan nhat -
             # thuong la HOM NAY. Hoi snapshot "<= hom qua" luon roi ve snapshot cuoi thang TRUOC roi bao loi, tuc
             # V09/M43/KPI theo QLV chua bao gio chay duoc trong thang dang chay. Lay snapshot moi nhat cua thang
-            # (<= hom nay); moc tinh kich ban/so ngay con lai la ngay SOM hon giua snapshot va du lieu doanh thu.
+            # (<= hom nay).
             current, snap = kpi_rows(today)
         except (ValueError, rt.KhongXacDinhDuocDoi) as exc:
             return {"error": str(exc)}
-        as_of = min(as_of, snap)
-        current = [{"key": r["group_code"], "label": r["group_name"], "actual": r["actual"],
-                    "target": r["target"], "linear": r["linear_run_rate"]} for r in current]
+        # 30/09/2026 (kiem that may 24): doanh so KPI KHOP DUNG hoa don OTC (T7 1,0000; T8 0,9999) va snapshot ngay hom
+        # nay khop hoa don TINH CA HOM NAY (0,9997 so voi 1,2059 neu chi den hom qua) - tuc snapshot gom doanh so trong
+        # ngay toi lan dong bo gan nhat. Ban #167 lay moc "hom qua" cho kich ban nen nhan ty le "cuoi ngay 29 -> het
+        # thang" vao so da gom ngay 30: Co so/Tot bi thoi phong. Moc cua bang KPI la CHINH ngay snapshot, cung dinh
+        # nghia voi run-rate S35 (luy ke / so ngay lich da qua, ke ca ngay dang chay).
+        as_of = snap
+        current = [{"key": r["group_code"], "label": _NHAN_CO_DAU.get(r["group_name"], r["group_name"]),
+                    "actual": r["actual"], "target": r["target"], "linear": r["linear_run_rate"]} for r in current]
         # Loi 2 (review 30/09): kho chi giu 1 snapshot KPI/thang (thang cu = ngay cuoi thang) nen khong bao gio co
         # "luy ke cung ngay" cua thang truoc -> V09 khong co kich ban. Lay nhip tu hoa don OTC CUNG PHAM VI.
         pace_scope = {**scope, "scope_channel": "OTC"}
@@ -70,8 +79,9 @@ def current_period_projection(period="month", group_by="overall", scope_area_cod
         notes.append(f"Kịch bản đội/TDV dùng nhịp hóa đơn OTC của {pace_label} trong các tháng trước, "
                      "áp cùng một tỷ lệ cho lũy kế KPI từng dòng; kho chỉ giữ snapshot KPI cuối tháng nên không có "
                      "lũy kế KPI cùng ngày của tháng cũ.")
-        notes.append(f"Số KPI lấy từ snapshot ngày {snap:%d/%m/%Y} (kho chỉ giữ bản mới nhất của tháng); kịch bản "
-                     f"và số cần mỗi ngày tính từ mốc {as_of:%d/%m/%Y}, cùng mốc với dự phóng doanh thu.")
+        notes.append(f"Số KPI lấy từ snapshot ngày {snap:%d/%m/%Y}, đã gồm doanh số ghi nhận trong ngày tới lần đồng bộ "
+                     "gần nhất; tuyến tính, kịch bản và số cần mỗi ngày tính cùng mốc này (như run-rate S35). Buổi sáng "
+                     "khi ngày mới bán ít, tuyến tính có thể thấp hơn thực tế vì ngày đang chạy được tính trọn một ngày.")
     else:
         slices = [("ALL", "Tổng phạm vi", scope)]
         if group_by == "area":
@@ -191,6 +201,8 @@ def render_projection(data, kem_phuong_phap=True):
         return data["error"]
     def money(value):
         return "Chưa đủ dữ liệu" if value is None else f"{value:,.0f}".replace(",", ".")
+    # Het ky (moc = ngay cuoi thang/quy): khong con ngay nao de chia, "Can/ngay" hien "—" chu khong phai thieu du lieu.
+    het_ky = data.get("as_of") == data.get("period_to")
     scope_note = " · ".join(str(v) for v in data["scope"].values() if v) or "Toàn công ty"
     lines = [f"**Dự phóng {'quý' if data['period'] == 'quarter' else 'tháng'} đang chạy** — dữ liệu đến {data['as_of']}",
              f"Nguồn: {data['basis']}. Phạm vi: {scope_note}. Đơn vị: đồng.",
@@ -199,8 +211,9 @@ def render_projection(data, kem_phuong_phap=True):
     for r in data["rows"]:
         s = r["scenarios"] or {}
         label = str(r["label"]).replace("|", " ").replace("\n", " ")
-        values = [r["actual"], r["target"], r["linear"], s.get("low"), s.get("base"), s.get("high"), r["needed_per_day"]]
-        lines.append("| " + " | ".join([label] + [money(x) for x in values]) + " |")
+        values = [r["actual"], r["target"], r["linear"], s.get("low"), s.get("base"), s.get("high")]
+        can_ngay = "—" if het_ky and r["needed_per_day"] is None else money(r["needed_per_day"])
+        lines.append("| " + " | ".join([label] + [money(x) for x in values] + [can_ngay]) + " |")
     notes = list(dict.fromkeys([*(data.get("notes") or []),
                                 *(r["target_note"] for r in data["rows"] if r.get("target_note"))]))
     extra = []
