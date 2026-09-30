@@ -37,7 +37,7 @@ def current_period_projection(period="month", group_by="overall", scope_area_cod
             raise ValueError(value["error"])
         observed = dt.date.fromisoformat(value["as_of"][:10])
         if observed.year != day.year or observed.month != day.month or observed > day:
-            raise ValueError("Không có snapshot KPI đúng tháng/ngày yêu cầu.")
+            raise ValueError("Chưa có snapshot KPI của tháng hiện tại trong kho.")
         return value["rows"], observed
 
     def revenue(first, last, filters):
@@ -51,9 +51,15 @@ def current_period_projection(period="month", group_by="overall", scope_area_cod
     notes = []
     if kpi:
         try:
-            current, as_of = kpi_rows(as_of)
+            # 30/09/2026 (test that may 24: "Du phong KPI cuoi thang theo QLV" -> "Khong co snapshot KPI dung
+            # thang/ngay yeu cau"): kho chi giu 1 snapshot KPI/thang, thang dang chay mang ngay dong bo gan nhat -
+            # thuong la HOM NAY. Hoi snapshot "<= hom qua" luon roi ve snapshot cuoi thang TRUOC roi bao loi, tuc
+            # V09/M43/KPI theo QLV chua bao gio chay duoc trong thang dang chay. Lay snapshot moi nhat cua thang
+            # (<= hom nay); moc tinh kich ban/so ngay con lai la ngay SOM hon giua snapshot va du lieu doanh thu.
+            current, snap = kpi_rows(today)
         except (ValueError, rt.KhongXacDinhDuocDoi) as exc:
             return {"error": str(exc)}
+        as_of = min(as_of, snap)
         current = [{"key": r["group_code"], "label": r["group_name"], "actual": r["actual"],
                     "target": r["target"], "linear": r["linear_run_rate"]} for r in current]
         # Loi 2 (review 30/09): kho chi giu 1 snapshot KPI/thang (thang cu = ngay cuoi thang) nen khong bao gio co
@@ -64,6 +70,8 @@ def current_period_projection(period="month", group_by="overall", scope_area_cod
         notes.append(f"Kịch bản đội/TDV dùng nhịp hóa đơn OTC của {pace_label} trong các tháng trước, "
                      "áp cùng một tỷ lệ cho lũy kế KPI từng dòng; kho chỉ giữ snapshot KPI cuối tháng nên không có "
                      "lũy kế KPI cùng ngày của tháng cũ.")
+        notes.append(f"Số KPI lấy từ snapshot ngày {snap:%d/%m/%Y} (kho chỉ giữ bản mới nhất của tháng); kịch bản "
+                     f"và số cần mỗi ngày tính từ mốc {as_of:%d/%m/%Y}, cùng mốc với dự phóng doanh thu.")
     else:
         slices = [("ALL", "Tổng phạm vi", scope)]
         if group_by == "area":
@@ -173,7 +181,12 @@ def current_period_projection(period="month", group_by="overall", scope_area_cod
             "assumptions": "Giả định nhịp bán và cơ cấu giữ nguyên; chưa mô hình hóa mùa vụ, ngày nghỉ hay chương trình mới."}
 
 
-def render_projection(data):
+def render_projection_method(data):
+    """Doan phuong phap/kich ban/gia dinh chung cua moi bang - cau tra loi nhieu bang chi in MOT lan o cuoi."""
+    return "\n\n".join([data["method"], data["scenario_note"], data["assumptions"]])
+
+
+def render_projection(data, kem_phuong_phap=True):
     if data.get("error"):
         return data["error"]
     def money(value):
@@ -201,4 +214,5 @@ def render_projection(data):
             parts.append(f"{x['label']} {pct(x['linear_pct'])} (cơ sở {pct(x['base_pct'])}{nhip})")
         extra.append("**Dự phóng đạt thấp nhất so với kế hoạch trước:** " + "; ".join(parts) + ". Đây là xếp hạng "
                      "theo dự phóng và số tháng lịch sử có nhịp đủ đạt, KHÔNG phải xác suất thống kê.")
-    return "\n".join(lines) + "\n\n" + "\n\n".join([*extra, data["method"], data["scenario_note"], data["assumptions"], "Lịch sử hợp lệ: " + "; ".join(f"{r['label']}: {r['history_count']}/6 tháng" for r in data["rows"]), *notes])
+    phuong_phap = [render_projection_method(data)] if kem_phuong_phap else []
+    return "\n".join(lines) + "\n\n" + "\n\n".join([*extra, *phuong_phap, "Lịch sử hợp lệ: " + "; ".join(f"{r['label']}: {r['history_count']}/6 tháng" for r in data["rows"]), *notes])
