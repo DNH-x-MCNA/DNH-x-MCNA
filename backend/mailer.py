@@ -7,6 +7,7 @@ import html
 import logging
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+from email.utils import formataddr
 
 if __package__:
     from .mail_transport import smtp_settings, send_smtp_message, mail_failure_reason
@@ -111,7 +112,9 @@ def send_password_email(to_email: str, password: str, is_reset: bool = False,
 
     msg = MIMEMultipart("alternative")
     msg["Subject"] = subject
-    msg["From"] = f"Dược Nam Hà AI Bot <{sender_email}>"
+    # 30/09/2026: ten co dau ma ghep chuoi "Ten <dia chi>" thi thu vien email ma hoa CA cum, ke ca dia chi
+    # (=?utf-8?b?...?=) - may chu nhan khong doc duoc From. formataddr chi ma hoa phan ten.
+    msg["From"] = formataddr(("Dược Nam Hà AI Bot", sender_email))
     msg["To"] = to_email
     msg.attach(MIMEText(html_content, "html", "utf-8"))
 

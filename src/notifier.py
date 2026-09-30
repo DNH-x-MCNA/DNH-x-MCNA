@@ -5,6 +5,7 @@ import sqlite3
 from datetime import datetime
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+from email.utils import formataddr
 from jinja2 import Template
 from dotenv import load_dotenv
 from src.database import load_config
@@ -1049,7 +1050,8 @@ def send_email(subject, html_content, recipient_override=None, importance=None):
     # Thiết lập email
     msg = MIMEMultipart('alternative')
     msg['Subject'] = subject
-    msg['From'] = f"{sender_name} <{sender_email}>"
+    # Chi ma hoa phan ten (ten co dau thi ghep chuoi se ma hoa ca dia chi) - xem backend/mailer.py.
+    msg['From'] = formataddr((sender_name, sender_email))
     msg['To'] = ", ".join(recipient_emails)
     if importance == "high":
         # Cả 2 header vì Outlook/Office365 (MAPI) đọc "Importance", 1 số client khác đọc

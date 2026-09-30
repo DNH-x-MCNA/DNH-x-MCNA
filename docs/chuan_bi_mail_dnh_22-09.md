@@ -88,3 +88,42 @@ python -m pytest -q -p no:cacheprovider
 ```
 
 Tham chiếu transport: https://docs.python.org/3.12/library/smtplib.html
+
+## Cập nhật 30/09/2026: gửi bằng `system@namhapharma.com`, không đăng nhập
+
+Kết quả kiểm trên máy 24 (chỉ đọc cấu hình; thăm dò SMTP dừng trước bước gửi nội dung, trừ một thư thử):
+
+- Email báo cáo Tuần/Tháng **đang gửi bằng Gmail cá nhân** (`smtp.gmail.com`, khai trong `.env` gốc). Đây là
+  cách tạm, cần thay bằng hộp thư của DNH.
+- Microsoft 365 của DNH **tắt SMTP AUTH cho cả tenant**. Cả `smtp.office365.com` lẫn `smtp-mail.outlook.com` đều
+  trả `535 5.7.139 ... SmtpClientAuthentication is disabled for the Tenant`, nên app password của `system@`
+  chưa dùng được.
+- **Direct send**: gửi thẳng vào `namhapharma-com.mail.protection.outlook.com:25`, STARTTLS, không đăng nhập.
+  Người nhận nội bộ `@namhapharma.com` được nhận (250); người nhận ngoài bị từ chối (451). Thư thử đã tới nơi,
+  nhưng Outlook gắn nhãn "Unverified Sender" vì SPF chưa có IP máy 24.
+
+Cấu hình, đặt trong `backend\.env`. File này ghi đè `.env` gốc cho cả dịch vụ báo cáo lẫn email cấp mật khẩu:
+
+```dotenv
+SMTP_AUTH=none
+SMTP_SERVER=namhapharma-com.mail.protection.outlook.com
+SMTP_PORT=25
+SMTP_SECURITY=starttls
+SENDER_EMAIL=system@namhapharma.com
+```
+
+- `SMTP_AUTH=none`: không gọi đăng nhập, **bắt buộc TLS** và **bắt buộc `SENDER_EMAIL`**. Nếu `.env` gốc còn tài
+  khoản Gmail thì tài khoản đó bị bỏ qua.
+- **Chỉ gửi được tới `@namhapharma.com`.** Hộp thư UAT ngoài công ty sẽ bị từ chối; mỗi lượt bị từ chối được
+  báo là thất bại, không bị tính là đã gửi.
+- **DNS:** người quản lý DNS `namhapharma.com` (Mắt Bão) sửa bản ghi SPF đang có thành
+  `v=spf1 ip4:210.245.88.137 include:spf.protection.outlook.com -all`. `210.245.88.137` là IP public tĩnh
+  (FPT) của máy 24. Không thêm bản ghi SPF thứ hai.
+- Muốn gửi **ra ngoài công ty** thì cần admin Microsoft 365 bật SMTP AUTH cho riêng hộp thư:
+  `Set-CASMailbox -Identity system@namhapharma.com -SmtpClientAuthenticationDisabled $false`. Sau đó dùng
+  `SMTP_AUTH=password` (mặc định) với app password.
+- Sửa kèm: header `From` của email cấp mật khẩu. Tên có dấu "Dược Nam Hà AI Bot" trước đây làm thư viện email
+  mã hoá cả cụm, kể cả địa chỉ, nên máy chủ nhận không đọc được địa chỉ người gửi. Nay dùng `formataddr`, chỉ
+  mã hoá phần tên.
+
+Test: `tests/test_smtp_khong_dang_nhap.py`.
