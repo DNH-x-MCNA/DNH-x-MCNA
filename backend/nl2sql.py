@@ -5040,20 +5040,34 @@ def ask_stream(question: str, session_id: str = "default", username: str = None,
            "partial_results_hidden": True, "query_id": query_id}
 
 
+def _projection_requested_areas(folded_question):
+    """Named regions, including 'miền Bắc và Nam' and MB/MT/MN, in mention order."""
+    labels = {"bac": "MB", "trung": "MT", "nam": "MN", "mb": "MB", "mt": "MT", "mn": "MN"}
+    pattern = (r"\b(?:mien|vung)\s+(?:bac|trung|nam)\b"
+               r"(?:\s*(?:,|/|va|&)\s*(?:(?:mien|vung)\s+)?(?:bac|trung|nam)\b)*"
+               r"|\b(?:mb|mt|mn)\b")
+    areas = []
+    for match in re.finditer(pattern, folded_question):
+        for label in re.findall(r"\b(?:bac|trung|nam|mb|mt|mn)\b", match.group()):
+            if labels[label] not in areas:
+                areas.append(labels[label])
+    return areas
+
+
 def _projection_response(question, session_id, username, scope_area_code,
                          scope_employee_code, scope_channel, scope_role, query_id):
     q = _fold_for_route(question)
-    requested_area = next((code for text, code in (("mien bac", "MB"), ("mien trung", "MT"), ("mien nam", "MN")) if text in q), None)
+    requested_areas = _projection_requested_areas(q)
     requested_channels = [c for c in ("OTC", "ETC") if re.search(r"\b" + c.lower() + r"\b", q)]
     requested_channel = requested_channels[0] if len(requested_channels) == 1 else None
-    conflict = ((requested_area and scope_area_code and requested_area != scope_area_code)
+    conflict = ((scope_area_code and any(area != scope_area_code for area in requested_areas))
                 or (requested_channel and scope_channel and scope_channel != "ALL" and requested_channel != scope_channel))
     if conflict:
         answer = "Phạm vi được hỏi nằm ngoài miền/kênh của tài khoản. Hãy hỏi trong phạm vi được cấp."
         append_message(session_id, "user", question, query_id=query_id)
         append_message(session_id, "assistant", answer, query_id=query_id)
         return {"answer": answer, "sql_used": [], "last_result": None, "charts": [], "freshness": [], "query_id": query_id}
-    scope_area_code = scope_area_code or requested_area
+    areas = [scope_area_code] if scope_area_code else (requested_areas or [None])
     scope_channel = requested_channel if scope_channel in (None, "ALL") else scope_channel
     periods = [projection_period(question)]
     if "thang/quy" in q or "thang va quy" in q:
@@ -5071,20 +5085,30 @@ def _projection_response(question, session_id, username, scope_area_code,
         groups = ["overall"]
     groups = groups or ["overall"]
     answers, charts, sql_used, freshness = [], [], [], []
+    sync_warning = sync_freshness_note()
+    if sync_warning:
+        # The normal path puts this note into the model prompt. This path renders
+        # directly: retain the evidence, not the instruction addressed to the model.
+        warning = sync_warning.partition(" PHẢI cảnh báo rõ người dùng")[0].strip()
+        warning += " Dữ liệu có thể cũ hơn bình thường; dự phóng cần được kiểm tra lại sau khi đồng bộ phục hồi."
+        answers.append(f"⚠️ {warning}")
+        freshness.append({"source_name": "Đồng bộ kho", "is_stale": True, "warning": warning})
     result = None
     for period in periods:
         for group in groups:
-            args = {"period": period, "group_by": group}
-            statement = f"[bao cao chuan] get_current_period_projection({args})"
-            _record_sql_used(query_id, sql_used, statement)
-            result = call_template("get_current_period_projection", args, question=question,
-                                   username=username, session_id=session_id, scope_area_code=scope_area_code,
-                                   scope_employee_code=scope_employee_code, scope_channel=scope_channel, scope_role=scope_role)
-            data = result.get("result", {}) if result.get("ok") else {"error": result.get("error", "Không thể dự phóng.")}
-            answers.append(render_projection(data))
-            charts.extend(build_charts("get_current_period_projection", result))
-            if data.get("as_of"):
-                freshness.append({"source_name": data.get("basis", "Kho dữ liệu"), "business_data_date": data["as_of"]})
+            for area in areas:
+                args = {"period": period, "group_by": group}
+                recorded_args = {**args, "scope_area_code": area}
+                statement = f"[bao cao chuan] get_current_period_projection({recorded_args})"
+                _record_sql_used(query_id, sql_used, statement)
+                result = call_template("get_current_period_projection", args, question=question,
+                                       username=username, session_id=session_id, scope_area_code=area,
+                                       scope_employee_code=scope_employee_code, scope_channel=scope_channel, scope_role=scope_role)
+                data = result.get("result", {}) if result.get("ok") else {"error": result.get("error", "Không thể dự phóng.")}
+                answers.append(render_projection(data))
+                charts.extend(build_charts("get_current_period_projection", result))
+                if data.get("as_of"):
+                    freshness.append({"source_name": data.get("basis", "Kho dữ liệu"), "business_data_date": data["as_of"]})
     charts = charts[:3]
     answer = "\n\n".join(answers)
     append_message(session_id, "user", question, query_id=query_id)

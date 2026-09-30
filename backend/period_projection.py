@@ -59,7 +59,9 @@ def current_period_projection(period="month", group_by="overall", scope_area_cod
         # Loi 2 (review 30/09): kho chi giu 1 snapshot KPI/thang (thang cu = ngay cuoi thang) nen khong bao gio co
         # "luy ke cung ngay" cua thang truoc -> V09 khong co kich ban. Lay nhip tu hoa don OTC CUNG PHAM VI.
         pace_scope = {**scope, "scope_channel": "OTC"}
-        notes.append("Kịch bản đội/TDV dùng nhịp hóa đơn OTC của cả phạm vi (đội hoặc miền) trong các tháng trước, "
+        pace_label = (f"đội {scope_employee_code}" if scope_employee_code else
+                      f"miền {scope_area_code}" if scope_area_code else "toàn công ty")
+        notes.append(f"Kịch bản đội/TDV dùng nhịp hóa đơn OTC của {pace_label} trong các tháng trước, "
                      "áp cùng một tỷ lệ cho lũy kế KPI từng dòng; kho chỉ giữ snapshot KPI cuối tháng nên không có "
                      "lũy kế KPI cùng ngày của tháng cũ.")
     else:
