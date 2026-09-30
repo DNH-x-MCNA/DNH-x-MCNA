@@ -18,6 +18,19 @@ from typing import Any, Callable, Iterable, Optional
 
 
 DEFAULT_STALE_MINUTES = 90
+# 30/09/2026: sync_scheduler.ps1 dong bo MOI 60 PHUT ($REGULAR_INTERVAL_MIN), kiem moi 5 phut, huy sau 90 s,
+# nen luc binh thuong lan dong bo gan nhat da cach toi ~67 phut. Dong freshness tren giao dien VA canh bao
+# sync trong cau tra loi (report_templates.sync_freshness_note) dung CHUNG nguong duoi day. Truoc day canh
+# bao trong cau tra loi dung 60 phut (tuong chu ky 15-30 phut) nen gio nao cung co vai phut bao "TREO" gia.
+SYNC_INTERVAL_MINUTES = 60
+
+
+def configured_stale_minutes() -> int:
+    """So phut coi dong bo la tre: CHAT_FRESHNESS_STALE_MINUTES, sai/thieu thi DEFAULT_STALE_MINUTES."""
+    try:
+        return max(1, int(os.getenv("CHAT_FRESHNESS_STALE_MINUTES", str(DEFAULT_STALE_MINUTES))))
+    except (TypeError, ValueError):
+        return DEFAULT_STALE_MINUTES
 
 
 @dataclass(frozen=True)
@@ -282,9 +295,9 @@ class FreshnessCollector:
         now: Optional[Callable[[], datetime]] = None,
     ):
         self.warehouse_path = warehouse_path or _default_warehouse_path()
-        configured = os.getenv("CHAT_FRESHNESS_STALE_MINUTES", str(DEFAULT_STALE_MINUTES))
         try:
-            self.stale_minutes = max(1, int(stale_minutes if stale_minutes is not None else configured))
+            self.stale_minutes = (max(1, int(stale_minutes)) if stale_minutes is not None
+                                  else configured_stale_minutes())
         except (TypeError, ValueError):
             self.stale_minutes = DEFAULT_STALE_MINUTES
         self._now = now or _local_now

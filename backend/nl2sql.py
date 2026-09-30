@@ -3700,7 +3700,7 @@ def _llm_client():
 def _static_system_prompt() -> str:
     """Phan TINH cua system prompt (quy tac + schema) - KHONG bao gio doi giua cac lan goi, nen danh
     cache_control (TTL 1h) o day. Moc ngay du lieu ("hom nay") la phan DONG, tach rieng o
-    _dynamic_context_note() de khong lam vo cache moi 15-30 phut khi kho dong bo lai."""
+    _dynamic_context_note() de khong lam vo cache moi khi kho dong bo lai (~60 phut)."""
     return f"""Ban la AI Analyst chuyen phan tich du lieu kinh doanh cho Duoc Nam Ha (DNH),
 mot doanh nghiep duoc pham. Nguoi dung se hoi bang tieng Viet ve doanh thu, cong no, KPI nhan vien,
 ton kho, vung mien... Ban dung cac tool duoc cung cap de truy van du lieu THAT. Bao cao chuan uu tien
@@ -4034,11 +4034,11 @@ def _dynamic_context_note(question: str = "", session_id: str = "", scope_area_c
                            scope_employee_code: str = None, scope_channel: str = None,
                            username: str = None, scope_role: str = None) -> str:
     """Phan DONG cua system prompt (ngay du lieu + ngu canh doi theo tung cau hoi) - tach rieng khoi
-    phan tinh de KHONG lam vo cache (kho local dong bo lai moi 15-30 phut, glossary/query-state doi
+    phan tinh de KHONG lam vo cache (kho local dong bo lai moi ~60 phut, glossary/query-state doi
     theo tung cau hoi nen KHONG the cache chung voi schema/rules tinh)."""
     latest = latest_data_date()
     parts = [f'Ngay co du lieu moi nhat trong kho hien tai: {latest} (dung lam moc cho "hom nay"/'
-             f'"gan day" neu nguoi dung khong noi ro ngay; kho local co the tre toi da ~15-30 phut so voi Bravo that).']
+             f'"gan day" neu nguoi dung khong noi ro ngay; kho local dong bo moi ~60 phut nen co the tre toi da khoang 1 gio so voi Bravo that).']
 
     # 19/08/2026: sync_freshness_note() da ton tai tu 20/07/2026 (kiem tra tien trinh sync co TREO
     # khong, khac latest_data_date() chi biet NGAY du lieu moi nhat chu khong biet sync con song hay
