@@ -55,11 +55,16 @@ export async function POST(request: Request) {
   }
 
   // Backend OK va co body dang stream - pipe THANG, khong doc/buffer.
+  // 30/09/2026 (tu chay tren Cloud Server): Nginx mac dinh buffer phan hoi, don het chu lai toi cuoi.
+  // X-Accel-Buffering tat buffer do (theo huong dan self-hosting cua Next; nginx conf cung tat san cho route
+  // nay). `next start` nen gzip cac trang; do 30/09 voi Next 16.3.6 thi stream nay CHUA bi nen, no-transform
+  // giu de ban Next sau co doi cach nen cung khong gom stream lai. Vercel bo qua ca hai header.
   return new Response(res.body, {
     status: 200,
     headers: {
       "Content-Type": "text/event-stream",
-      "Cache-Control": "no-cache",
+      "Cache-Control": "no-cache, no-transform",
+      "X-Accel-Buffering": "no",
       Connection: "keep-alive",
     },
   });

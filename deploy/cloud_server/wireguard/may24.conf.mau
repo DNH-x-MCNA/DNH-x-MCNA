@@ -1,0 +1,16 @@
+# MAU duong ham tren MAY 24 (WireGuard for Windows). KHONG luu file nay kem khoa that.
+# WireGuard > Add Tunnel > Add empty tunnel..., dat ten dnh-cloud. App tu tao dong PrivateKey (giu nguyen,
+# khong gui ai) va hien "Public key" (gui cho nguoi chay cai_wireguard.sh tren Cloud Server).
+# Them cac dong con lai o duoi, thay KHOA_CONG_KHAI_CLOUD_SERVER va IP_CLOUD_SERVER, Save, roi Activate.
+# App chay duong ham thanh service Windows, tu bat lai khi may 24 khoi dong.
+[Interface]
+# PrivateKey = (app tu dien)
+Address = 10.88.24.2/32
+
+[Peer]
+PublicKey = KHOA_CONG_KHAI_CLOUD_SERVER
+Endpoint = IP_CLOUD_SERVER:51820
+# CHI dia chi duong ham cua Cloud Server: khong doi tuyen mang hay DNS nao khac cua may 24.
+AllowedIPs = 10.88.24.1/32
+# May 24 nam sau NAT cua DNH: giu duong ham song de Cloud Server goi vao bat cu luc nao.
+PersistentKeepalive = 25
