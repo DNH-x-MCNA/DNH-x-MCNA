@@ -26,6 +26,7 @@ def projection(monkeypatch):
     monkeypatch.setattr(pp.dt, "date", FixedDate)
     monkeypatch.setattr(rt, "latest_data_date", lambda: "2026-09-15")
     monkeypatch.setattr(rt, "_detail_cutoff", lambda: "2025-09-01")
+    monkeypatch.setattr(nl2sql, "sync_freshness_note", lambda: "")
     seen = []
     def revenue(first, last, **scope):
         seen.append((first, last, scope))
@@ -185,3 +186,71 @@ def test_missing_historical_team_does_not_hide_current_projection(projection, mo
     assert result["rows"][0]["scenarios"] is not None and result["rows"][0]["history_count"] == 6
     assert result["skipped_history"] == []
     assert any("nhịp hóa đơn OTC" in n for n in result["notes"])
+
+
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("stale", [False, True])
+def test_projection_sync_warning_survives_response_and_history(projection, monkeypatch, tmp_path, stream, stale):
+    monkeypatch.setattr(memory, "DB_PATH", str(tmp_path / "memory.db"))
+    memory.init()
+    note = ("CẢNH BÁO ĐỒNG BỘ: vhoadon_otc: lần đồng bộ gần nhất cách đây 120 phút."
+            " PHẢI cảnh báo rõ người dùng trong câu trả lời") if stale else ""
+    monkeypatch.setattr(nl2sql, "sync_freshness_note", lambda: note)
+    monkeypatch.setattr(nl2sql, "_llm_client", lambda: pytest.fail("No model needed"))
+    kwargs = {"session_id": "sync-warning", "scope_role": "c_level"}
+    question = "Dự báo doanh thu cuối tháng"
+    result = list(nl2sql.ask_stream(question, **kwargs))[-1] if stream else nl2sql.ask(question, **kwargs)
+    answer = result["answer"]
+    assert ("CẢNH BÁO ĐỒNG BỘ" in answer) == stale
+    assert "PHẢI cảnh báo rõ người dùng" not in answer
+    assert any(f.get("is_stale") for f in result["freshness"]) == stale
+    if stale:
+        assert "120 phút" in answer and "Dữ liệu có thể cũ hơn bình thường" in answer
+    assert memory.get_session_history("sync-warning")[-1]["content"] == answer
+
+
+@pytest.mark.parametrize("regions, expected", [
+    ("miền Bắc và miền Nam", ["MB", "MN"]),
+    ("miền Bắc và Nam", ["MB", "MN"]),
+    ("MB/MT", ["MB", "MT"]),
+    ("miền Bắc, Trung và Nam", ["MB", "MT", "MN"]),
+    ("miền Bắc và MB", ["MB"]),
+])
+def test_projection_answers_every_requested_region_only(projection, monkeypatch, tmp_path, regions, expected):
+    monkeypatch.setattr(memory, "DB_PATH", str(tmp_path / "memory.db"))
+    memory.init()
+    result = nl2sql.ask(f"Dự báo doanh thu cuối tháng {regions}", session_id="regions", scope_role="c_level")
+    assert list(dict.fromkeys(scope["scope_area_code"] for _, _, scope in projection)) == expected
+    assert len(result["sql_used"]) == len(expected)
+    for area in expected:
+        assert f"Phạm vi: {area}" in result["answer"]
+    for area in set(["MB", "MT", "MN"]) - set(expected):
+        assert f"Phạm vi: {area}" not in result["answer"]
+
+
+def test_multi_region_request_cannot_escape_account_scope(projection, monkeypatch, tmp_path):
+    monkeypatch.setattr(memory, "DB_PATH", str(tmp_path / "memory.db"))
+    memory.init()
+    monkeypatch.setattr(nl2sql, "sync_freshness_note", lambda: pytest.fail("Denied before data access"))
+    result = nl2sql.ask("Dự báo doanh thu cuối tháng miền Bắc và miền Nam", session_id="denied-regions",
+                        scope_area_code="MB", scope_role="regional_director")
+    assert "ngoài miền/kênh" in result["answer"]
+    assert result["last_result"] is None and not result["charts"] and not result["sql_used"]
+    assert projection == []
+
+
+@pytest.mark.parametrize("area, employee, label", [
+    (None, None, "toàn công ty"),
+    ("MB", None, "miền MB"),
+    ("MB", "QLV1", "đội QLV1"),
+])
+def test_kpi_scenario_note_names_actual_invoice_scope(projection, monkeypatch, area, employee, label):
+    def kpi(day, *args, **scope):
+        return {"as_of": day, "rows": [{"group_code": "QLV1", "group_name": "Đội 1",
+                "actual": 100, "target": 200, "linear_run_rate": 200}]}
+    monkeypatch.setattr(rt, "kpi_gap_run_rate", kpi)
+    result = pp.current_period_projection(group_by="qlv", scope_area_code=area, scope_employee_code=employee)
+    assert f"nhịp hóa đơn OTC của {label}" in pp.render_projection(result)
+    assert "đội hoặc miền" not in pp.render_projection(result)
+    assert projection and all(scope == {"scope_area_code": area, "scope_employee_code": employee,
+                                       "scope_channel": "OTC"} for _, _, scope in projection)

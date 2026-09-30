@@ -22,12 +22,19 @@ tự chạy idempotent trên database hội thoại hiện có, không cần s�
 - Mốc đầu vào tối đa là ngày hôm qua và ngày dữ liệu khả dụng, để không coi ngày đang chạy dở
   là ngày hoàn chỉnh. KPI có thể dùng snapshot cũ hơn trong cùng tháng và phải nêu đúng ngày đó.
   Không có dữ liệu tháng hiện tại thì trả thiếu nguồn, không suy từ tháng cũ.
+- Câu dự phóng kèm cảnh báo đồng bộ trễ/treo từ `sync_freshness_note`, cả chat thường, SSE
+  và nội dung lưu trong lịch sử. Ngày dữ liệu không thay thế cảnh báo về tình trạng đồng bộ.
+- Khi hỏi nhiều miền cụ thể, trả riêng từng miền được hỏi; nếu có miền ngoài quyền tài khoản
+  thì từ chối yêu cầu. Mọi lượt đọc vẫn giữ scope kênh/đội do server cấp.
 - Tháng: lũy kế / số ngày lịch đã qua × số ngày tháng. Quý: cộng thực tế các tháng đã đóng,
   cộng dự phóng tháng hiện tại, rồi dùng nhịp ngày tháng hiện tại cho các tháng còn lại của quý.
   **Chưa hỗ trợ quý ở cấp đội/TDV** vì chưa có bộ snapshot/chỉ tiêu đủ quý; trả thông báo rõ.
 - Xấu/cơ sở/tốt: min/trung vị/max tỷ lệ doanh thu cuối tháng trên lũy kế cùng ngày của tối đa
   sáu tháng trước. Cần ít nhất ba tháng hợp lệ; tổng tháng đã nén không được dùng thay MTD.
-  Snapshot KPI phải đúng ngày so sánh và đúng cuối tháng. Thiếu lịch sử, mẫu số không dương,
+  Kịch bản KPI dùng nhịp hóa đơn OTC cùng phạm vi: đội khi có scope đội, miền khi chỉ có scope miền,
+  toàn công ty khi không có hai scope này (kể cả C-Level xem theo QLV). Nêu rõ phạm vi trong câu trả lời;
+  cùng một tỷ lệ được áp cho từng dòng KPI, vì kho chỉ giữ snapshot KPI cuối tháng.
+  Thiếu lịch sử, mẫu số không dương,
   hoặc số liệu âm thì không dựng kịch bản giả. Có số tháng hợp lệ trong câu trả lời.
 - Đây là kịch bản mô tả, **không phải khoảng tin cậy hoặc xác suất đạt**. Chưa mô hình hóa ngày nghỉ,
   mùa vụ hoặc tác động CTKM mới. Không gắn nhãn "xác suất không đạt cao nhất" khi chưa có mô hình đó.
