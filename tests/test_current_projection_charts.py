@@ -180,5 +180,8 @@ def test_missing_historical_team_does_not_hide_current_projection(projection, mo
     monkeypatch.setattr(rt, "kpi_gap_run_rate", kpi)
     result = pp.current_period_projection(scope_employee_code="QLV1")
     assert result["rows"][0]["linear"] == 200
-    assert result["rows"][0]["scenarios"] is None
-    assert len(result["skipped_history"]) == 6
+    # 30/09 (review): kho chi giu snapshot KPI cuoi thang, nen kich ban doi lay nhip hoa don OTC cung pham vi
+    # thay vi snapshot KPI cung ngay cua thang cu (khong bao gio co) - thieu lich su KPI khong con lam mat kich ban.
+    assert result["rows"][0]["scenarios"] is not None and result["rows"][0]["history_count"] == 6
+    assert result["skipped_history"] == []
+    assert any("nhịp hóa đơn OTC" in n for n in result["notes"])

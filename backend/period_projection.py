@@ -40,8 +40,15 @@ def current_period_projection(period="month", group_by="overall", scope_area_cod
             raise ValueError("Không có snapshot KPI đúng tháng/ngày yêu cầu.")
         return value["rows"], observed
 
+    def revenue(first, last, filters):
+        value = rt.revenue_by_channel(str(first), str(last) + " 23:59:59", **filters)
+        if value.get("data_coverage", {}).get("complete") is False:
+            raise ValueError(value.get("coverage_warning") or "Thiếu dữ liệu doanh thu trong kỳ.")
+        return float(value["total"]["revenue"])
+
     histories = []
     skipped = []
+    notes = []
     if kpi:
         try:
             current, as_of = kpi_rows(as_of)
@@ -49,6 +56,12 @@ def current_period_projection(period="month", group_by="overall", scope_area_cod
             return {"error": str(exc)}
         current = [{"key": r["group_code"], "label": r["group_name"], "actual": r["actual"],
                     "target": r["target"], "linear": r["linear_run_rate"]} for r in current]
+        # Loi 2 (review 30/09): kho chi giu 1 snapshot KPI/thang (thang cu = ngay cuoi thang) nen khong bao gio co
+        # "luy ke cung ngay" cua thang truoc -> V09 khong co kich ban. Lay nhip tu hoa don OTC CUNG PHAM VI.
+        pace_scope = {**scope, "scope_channel": "OTC"}
+        notes.append("Kịch bản đội/TDV dùng nhịp hóa đơn OTC của cả phạm vi (đội hoặc miền) trong các tháng trước, "
+                     "áp cùng một tỷ lệ cho lũy kế KPI từng dòng; kho chỉ giữ snapshot KPI cuối tháng nên không có "
+                     "lũy kế KPI cùng ngày của tháng cũ.")
     else:
         slices = [("ALL", "Tổng phạm vi", scope)]
         if group_by == "area":
@@ -57,12 +70,19 @@ def current_period_projection(period="month", group_by="overall", scope_area_cod
         elif group_by == "channel":
             slices = [(c, c, {**scope, "scope_channel": c}) for c in
                       ([scope_channel] if scope_channel and scope_channel != "ALL" else ["OTC", "ETC"])]
-
-        def revenue(first, last, filters):
-            value = rt.revenue_by_channel(str(first), str(last) + " 23:59:59", **filters)
-            if value.get("data_coverage", {}).get("complete") is False:
-                raise ValueError(value.get("coverage_warning") or "Thiếu dữ liệu doanh thu trong kỳ.")
-            return float(value["total"]["revenue"])
+        # Loi 1 (review 30/09): ke hoach ETC chi co toan quoc, _ytd_plan theo mien tra total=None trong khi thuc te la
+        # OTC+ETC -> dong mien khong co chi tieu/gap/%. Loc theo mien ma khong chi kenh: chi tinh OTC cho khop ke hoach.
+        chinh, doi_sang_otc = [], False
+        for key, label, filters in slices:
+            if filters.get("scope_area_code") and str(filters.get("scope_channel") or "ALL").upper() == "ALL":
+                filters = {**filters, "scope_channel": "OTC"}
+                label = f"{label} · OTC"
+                doi_sang_otc = True
+            chinh.append((key, label, filters))
+        if doi_sang_otc:
+            notes.append("Kế hoạch ETC chỉ có toàn quốc, không tách theo miền, nên dòng theo miền chỉ tính OTC: "
+                         "thực tế OTC so với kế hoạch OTC của miền.")
+        slices = chinh
 
         current = []
         try:
@@ -81,17 +101,14 @@ def current_period_projection(period="month", group_by="overall", scope_area_cod
         last = _end(first)
         comparable = first.replace(day=min(as_of.day, last.day))
         try:
+            # Compressed monthly totals cannot stand in for same-day MTD.
+            if str(first) < rt._detail_cutoff():
+                raise ValueError("Lịch sử chỉ còn tổng tháng")
             if kpi:
-                partial, partial_day = kpi_rows(comparable)
-                full, full_day = kpi_rows(last)
-                if partial_day != comparable or full_day != last:
-                    raise ValueError("Snapshot không đúng ngày so sánh/cuối tháng")
-                partial = {r["group_code"]: r["actual"] for r in partial}
-                full = {r["group_code"]: r["actual"] for r in full}
+                a, b = revenue(first, comparable, pace_scope), revenue(first, last, pace_scope)
+                partial = {row["key"]: a for row in current}
+                full = {row["key"]: b for row in current}
             else:
-                # Compressed monthly totals cannot stand in for same-day MTD.
-                if str(first) < rt._detail_cutoff():
-                    raise ValueError("Lịch sử chỉ còn tổng tháng")
                 partial = {key: revenue(first, comparable, filters) for key, _, filters in slices}
                 full = {key: revenue(first, last, filters) for key, _, filters in slices}
             histories.append((ym, partial, full))
@@ -130,10 +147,22 @@ def current_period_projection(period="month", group_by="overall", scope_area_cod
             row["target"], row["target_note"] = plan["total"], plan.get("note")
         remaining = ((quarter_end if period == "quarter" else end) - as_of).days
         gap = max(0, row["target"] - row["actual"]) if row["target"] is not None else None
+        target = row["target"]
+        du_dat = None
+        if target and ratios and period == "month" and as_of != end:
+            du_dat = sum(1 for r in ratios if actual * r >= target)
         row.update(scenarios=scenarios, history_months=samples, history_count=len(samples),
                    gap=gap, needed_per_day=(gap / remaining if remaining else (0 if gap == 0 else None)) if gap is not None else None,
-                   projected_gap=(row["target"] - row["linear"]) if row["target"] is not None else None)
+                   projected_gap=(target - row["linear"]) if target is not None else None,
+                   linear_pct=(row["linear"] / target * 100) if target else None,
+                   base_pct=(scenarios["base"] / target * 100) if target and scenarios else None,
+                   months_pace_reaching_target=du_dat)
+    co_pct = [r for r in current if r.get("linear_pct") is not None]
+    ranking = [{"label": r["label"], "linear_pct": r["linear_pct"], "base_pct": r["base_pct"],
+                "months_pace_reaching_target": r["months_pace_reaching_target"], "history_count": r["history_count"]}
+               for r in sorted(co_pct, key=lambda r: (r["linear_pct"], str(r["label"])))] if len(co_pct) > 1 else []
     return {"period": period, "as_of": str(as_of), "period_from": str(quarter_start if period == "quarter" else start),
+            "ranking_lowest_first": ranking, "notes": notes,
             "period_to": str(quarter_end if period == "quarter" else end), "rows": current,
             "basis": "KPI đội/nhân viên" if kpi else "Doanh thu hóa đơn",
             "scope": scope, "skipped_history": skipped,
@@ -157,5 +186,17 @@ def render_projection(data):
         label = str(r["label"]).replace("|", " ").replace("\n", " ")
         values = [r["actual"], r["target"], r["linear"], s.get("low"), s.get("base"), s.get("high"), r["needed_per_day"]]
         lines.append("| " + " | ".join([label] + [money(x) for x in values]) + " |")
-    notes = list(dict.fromkeys(r["target_note"] for r in data["rows"] if r.get("target_note")))
-    return "\n".join(lines) + "\n\n" + "\n\n".join([data["method"], data["scenario_note"], data["assumptions"], "Lịch sử hợp lệ: " + "; ".join(f"{r['label']}: {r['history_count']}/6 tháng" for r in data["rows"]), *notes])
+    notes = list(dict.fromkeys([*(data.get("notes") or []),
+                                *(r["target_note"] for r in data["rows"] if r.get("target_note"))]))
+    extra = []
+    if data.get("ranking_lowest_first"):
+        def pct(v):
+            return "—" if v is None else f"{v:,.1f}%".replace(",", "X").replace(".", ",").replace("X", ".")
+        parts = []
+        for x in data["ranking_lowest_first"]:
+            nhip = (f", {x['months_pace_reaching_target']}/{x['history_count']} tháng có nhịp đủ đạt kế hoạch"
+                    if x.get("months_pace_reaching_target") is not None else "")
+            parts.append(f"{x['label']} {pct(x['linear_pct'])} (cơ sở {pct(x['base_pct'])}{nhip})")
+        extra.append("**Dự phóng đạt thấp nhất so với kế hoạch trước:** " + "; ".join(parts) + ". Đây là xếp hạng "
+                     "theo dự phóng và số tháng lịch sử có nhịp đủ đạt, KHÔNG phải xác suất thống kê.")
+    return "\n".join(lines) + "\n\n" + "\n\n".join([*extra, data["method"], data["scenario_note"], data["assumptions"], "Lịch sử hợp lệ: " + "; ".join(f"{r['label']}: {r['history_count']}/6 tháng" for r in data["rows"]), *notes])

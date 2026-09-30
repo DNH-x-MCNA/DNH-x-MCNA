@@ -59,7 +59,7 @@ from auth import (
     check_and_consume_weekly_quota,
     get_weekly_quota_status,
 )
-from feature_policy import is_future_forecast_question
+from feature_policy import is_future_forecast_question, projection_period
 from mailer import send_password_email
 from conversation_memory import (
     register_session,
@@ -303,7 +303,8 @@ def _quota_for_question(user: dict, question: str) -> dict:
     goi ask() that: neu se bi chan mien phi thi CHI DOC trang thai (khong tru), con lai chan+tru nhu
     binh thuong. Neu sau nay them nhanh mien phi khac trong ask(), phai them dieu kien tuong ung o
     day (khong tu dong dong bo)."""
-    if is_future_forecast_question(question):
+    if is_future_forecast_question(question) or projection_period(question):
+        # 30/09/2026: cau du phong ky hien tai tra loi TAT DINH (period_projection), khong goi model.
         return _quota_status_for(user)
     return _check_weekly_quota(user)
 
