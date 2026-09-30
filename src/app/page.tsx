@@ -10,15 +10,17 @@ import { MessageList } from "./ChatMessages";
 import { ChatSidebar } from "./ChatSidebar";
 import { Composer, ComposerHandle } from "./Composer";
 import { EmptyState } from "./EmptyState";
-import { IconArrowDown, IconCompose, IconMenu } from "./icons";
+import { IconArrowDown, IconCompose, IconMenu, IconSidebar } from "./icons";
 import {
   API_URL, AUTH_TOKEN_KEY, FreshnessItem, HistoryMessage, Message, SessionSummary, SubmitFeedback, UserInfo,
   authHeaders, getOrCreateSessionId, isAdminRole, rememberSessionId,
 } from "./lib";
-import { ConfirmDialog, IconButton, Skeleton, Spinner } from "./ui";
+import { ConfirmDialog, IconButton, Skeleton, Spinner, cx } from "./ui";
 
 // Cach mep duoi (px) van coi la "dang o cuoi" - trong khoang nay cau tra loi dang stream tu keo xuong.
 const STICK_TO_BOTTOM_PX = 120;
+// 30/09/2026: may tinh thu gon thanh ben - chi la tien ich cua tung trinh duyet, khong luu len server.
+const SIDEBAR_COLLAPSED_KEY = "dnh_sidebar_collapsed";
 
 export default function Home() {
   const [sessionId, setSessionId] = useState<string>("default");
@@ -39,6 +41,7 @@ export default function Home() {
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [sessionsLoaded, setSessionsLoaded] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState<SessionSummary | null>(null);
 
   // Trang thai dang nhap - kiem tra token da luu truoc khi cho vao giao dien chat
@@ -59,6 +62,27 @@ export default function Home() {
       abortControllerRef.current.abort();
       abortControllerRef.current = null;
     }
+  }
+
+  // Doc lua chon thu gon thanh ben SAU khi hien trang (HTML server va client phai khop nhau). Trinh duyet
+  // chan localStorage (che do an danh...) thi coi nhu chua thu gon.
+  useEffect(() => {
+    try {
+      if (window.localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === "1") setSidebarCollapsed(true);
+    } catch {}
+  }, []);
+
+  function setCollapsed(collapsed: boolean) {
+    setSidebarCollapsed(collapsed);
+    try {
+      window.localStorage.setItem(SIDEBAR_COLLAPSED_KEY, collapsed ? "1" : "0");
+    } catch {}
+  }
+
+  // Cung mot nut o header: may tinh mo lai thanh ben da thu gon, man hinh nho truot thanh ben ra nhu cu.
+  function openSidebar() {
+    if (window.matchMedia("(min-width: 768px)").matches) setCollapsed(false);
+    else setSidebarOpen(true);
   }
 
   // Kiem tra token da luu (neu co) ngay khi mo trang - xac nhan qua /auth/me truoc khi cho vao chat
@@ -417,6 +441,8 @@ export default function Home() {
       <ChatSidebar
         open={sidebarOpen}
         onClose={() => setSidebarOpen(false)}
+        collapsed={sidebarCollapsed}
+        onCollapse={() => setCollapsed(true)}
         user={userInfo}
         isAdmin={isAdmin}
         sessions={sessions}
@@ -434,13 +460,16 @@ export default function Home() {
 
       <div className="flex min-w-0 flex-1 flex-col">
         <header className="flex h-14 shrink-0 items-center gap-2 border-b border-line px-3 sm:px-5">
-          <IconButton label="Mở lịch sử trò chuyện" onClick={() => setSidebarOpen(true)} className="md:hidden">
-            <IconMenu className="h-5 w-5" />
+          {/* May tinh chi hien hai nut nay khi thanh ben dang thu gon. */}
+          <IconButton label="Mở lịch sử trò chuyện" onClick={openSidebar} className={cx(!sidebarCollapsed && "md:hidden")}>
+            <IconMenu className="h-5 w-5 md:hidden" />
+            <IconSidebar className="hidden h-5 w-5 md:block" />
           </IconButton>
           <h2 className="min-w-0 flex-1 truncate text-[15px] font-semibold text-navy">
             {messages.length > 0 ? currentTitle || "Cuộc trò chuyện mới" : "Cuộc trò chuyện mới"}
           </h2>
-          <IconButton label="Cuộc trò chuyện mới" onClick={startNewConversation} disabled={loading} className="md:hidden">
+          <IconButton label="Cuộc trò chuyện mới" onClick={startNewConversation} disabled={loading}
+            className={cx(!sidebarCollapsed && "md:hidden")}>
             <IconCompose className="h-5 w-5" />
           </IconButton>
         </header>

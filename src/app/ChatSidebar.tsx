@@ -2,7 +2,7 @@
 
 import { ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import {
-  IconChart, IconClose, IconCompose, IconKey, IconLogout, IconSearch, IconSelector, IconTrash, IconUsers,
+  IconChart, IconClose, IconCompose, IconKey, IconLogout, IconSearch, IconSelector, IconSidebar, IconTrash, IconUsers,
 } from "./icons";
 import {
   SessionSummary, UserInfo, displayName, foldVietnamese, formatRelativeTime, groupSessionsByDate, roleLabel,
@@ -13,11 +13,14 @@ import { Avatar, IconButton, Select, Skeleton, cx } from "./ui";
 type Owner = { username: string; label: string; count: number };
 
 export function ChatSidebar({
-  open, onClose, user, isAdmin, sessions, sessionsLoaded, currentSessionId, busy,
+  open, onClose, collapsed, onCollapse, user, isAdmin, sessions, sessionsLoaded, currentSessionId, busy,
   onSelect, onNew, onRequestDelete, onOpenAudit, onOpenUsers, onChangePassword, onLogout,
 }: {
   open: boolean;
   onClose: () => void;
+  /** May tinh: nguoi dung da thu gon thanh ben. Man hinh nho van dong/mo bang `open` nhu cu. */
+  collapsed: boolean;
+  onCollapse: () => void;
   user: UserInfo;
   isAdmin: boolean;
   sessions: SessionSummary[];
@@ -34,7 +37,7 @@ export function ChatSidebar({
 }) {
   const [query, setQuery] = useState("");
 
-  // Man hinh nho: Esc dong thanh ben dang mo (tren may tinh thanh ben luon hien, khong can).
+  // Man hinh nho: Esc dong thanh ben dang mo (tren may tinh thu gon bang nut, khong can).
   useEffect(() => {
     if (!open) return;
     function onKey(e: KeyboardEvent) {
@@ -88,7 +91,8 @@ export function ChatSidebar({
         className={cx(
           "z-40 w-[288px] shrink-0 flex-col bg-navy text-slate-300 [&_:focus-visible]:outline-indigo-300",
           open ? "fixed inset-y-0 left-0 flex animate-sheet-in shadow-float" : "hidden",
-          "md:static md:flex md:animate-none md:shadow-none",
+          "md:static md:animate-none md:shadow-none",
+          collapsed ? "md:hidden" : "md:flex",
         )}
       >
         <div className="flex h-14 items-center gap-2.5 px-4">
@@ -98,6 +102,10 @@ export function ChatSidebar({
             <div className="text-[14px] font-semibold tracking-tight text-white">DNH AI Analyst</div>
             <div className="text-[12px] text-slate-400">Dược Nam Hà</div>
           </div>
+          {/* max-md:hidden thay vi "hidden md:inline-flex": IconButton da co san inline-flex. */}
+          <IconButton label="Thu gọn thanh bên" tone="inverse" onClick={onCollapse} className="max-md:hidden">
+            <IconSidebar className="h-5 w-5" />
+          </IconButton>
           <IconButton label="Đóng thanh bên" tone="inverse" onClick={onClose} className="md:hidden">
             <IconClose className="h-5 w-5" />
           </IconButton>
