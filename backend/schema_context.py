@@ -4,7 +4,7 @@ Mo ta schema du lieu DNH cho AI hieu de sinh SQL dung.
 
 NGUON DU LIEU (tu 2026-07-08):
 - "local" (SQLite, file warehouse.db) la kho CHINH cho HAU HET cau hoi - duoc dong bo dinh ky
-  (moi 15-30 phut) tu Bravo qua sync_warehouse.py, co INDEX + DAY DU LICH SU NHIEU NAM, tra loi
+  (moi ~60 phut) tu Bravo qua sync_warehouse.py, co INDEX + DAY DU LICH SU NHIEU NAM, tra loi
   nhanh (<=10s). Dung tool query_database cho cau hoi tu do ve doanh thu/san pham/khach hang/
   nhan vien/vung mien/tra hang khong thuoc 5 tool bao cao chuan.
 - 25/09/2026: DA BO HAN Supabase. Ton kho doc tu kho local (brv_tonkhodk/brv_kho/brv_sanpham, tool
@@ -13,7 +13,7 @@ NGUON DU LIEU (tu 2026-07-08):
 - Bravo (SQL Server song, may chu that cua khach hang) la nguon fallback CHI-DOC cho object/cot chua
   duoc warehouse phu. Chatbot tim schema dong tu catalog toan bo object duoc cap quyen, sau do moi
   query live bang T-SQL. Bao cao chuan van uu tien warehouse/tool da kiem chung de nhanh va on dinh.
-!!! Du lieu "local" co the tre toi da ~15-30 phut so voi Bravo that - neu nguoi dung hoi so lieu
+!!! Du lieu "local" co the tre toi da ~60 phut so voi Bravo that - neu nguoi dung hoi so lieu
 "vua moi/ngay bay gio", noi ro day la so lieu tai lan dong bo gan nhat, khong phai tuc thoi 100%.
 """
 

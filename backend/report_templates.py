@@ -4,7 +4,7 @@ Cac truy van BAO CAO CHUAN - doc tu KHO LOCAL (SQLite, warehouse.db), duoc dong 
 qua sync_warehouse.py (xem file do). Doc local giup tra loi nhanh (<=10s) va co du lich su nhieu nam
 de so sanh, thay vi phai goi Bravo qua VPN cho moi cau hoi (cham + phu thuoc VPN on dinh).
 
-Du lieu co the tre toi da ~15-30 phut (chu ky dong bo) so voi Bravo that - chap nhan duoc cho hầu het
+Du lieu co the tre toi da ~60 phut (chu ky dong bo, xem sync_scheduler.ps1) so voi Bravo that - chap nhan duoc cho hầu het
 cau hoi phan tich/bao cao. Neu can so lieu "ngay tuc thi", noi ro voi nguoi dung day la so lieu tai
 lan dong bo gan nhat.
 """
@@ -17,6 +17,7 @@ import unicodedata
 from statistics import median
 from sqlalchemy import text
 from local_warehouse import get_conn, get_sync_meta
+from data_freshness import SYNC_INTERVAL_MINUTES, configured_stale_minutes
 from customer_scope import TEAM_CUSTOMER_WINDOW_DAYS, team_customer_codes
 from query_engine import _write_log, _get_engine
 from region_map import region_from_customer_code, REGION_SQL_MARKERS, REGION_NAMES_VI
@@ -144,15 +145,19 @@ def latest_data_date() -> str:
     return d if d else str(dt.date.today())
 
 
-def sync_freshness_note(stale_minutes: int = 60) -> str:
+def sync_freshness_note(stale_minutes: int = None) -> str:
     """20/07/2026: kiem tra sync CO DANG SONG khong - khac latest_data_date() (chi biet NGAY du lieu
     moi nhat, khong biet tien trinh sync co dung/treo hay khong: cuoi tuan/le khong co hoa don moi
     van trong "binh thuong" du sync da treo vai ngay - nguoi dung se duoc tra loi tu tin bang du lieu
     cu/thieu ma khong ai biet). Doc sync_meta.last_synced_at (moc THOI GIAN THAT sync chay xong lan
     cuoi, ghi boi set_sync_meta() trong sync_warehouse.py - KHAC voi ngay cua ban than du lieu) cho
-    2 bang giao dich quan trong nhat. Tra ve chuoi CANH BAO neu qua han (mac dinh >60 phut - gap doi
-    chu ky binh thuong 15-30 phut da ghi trong docstring dau file), rong neu van tuoi/khong xac dinh
-    duoc (KHONG chan cau tra loi, chi bo sung canh bao)."""
+    2 bang giao dich quan trong nhat. Tra ve chuoi CANH BAO neu qua han, rong neu van tuoi/khong xac
+    dinh duoc (KHONG chan cau tra loi, chi bo sung canh bao).
+
+    30/09/2026: nguong mac dinh la configured_stale_minutes() (90 phut, CHUNG voi dong freshness tren giao
+    dien). Truoc day la 60 phut trong khi sync that chay moi 60 phut -> vai phut moi gio bao "TREO" gia."""
+    if stale_minutes is None:
+        stale_minutes = configured_stale_minutes()
     warnings = []
     for table in ("vhoadon_otc", "vhoadon_etc"):
         try:
@@ -173,7 +178,8 @@ def sync_freshness_note(stale_minutes: int = 60) -> str:
     if not warnings:
         return ""
     return ("CẢNH BÁO ĐỒNG BỘ: có thể tiến trình sync đã TREO/LỖI — " + "; ".join(warnings) +
-            " (chu kỳ bình thường 15-30 phút). PHẢI cảnh báo rõ người dùng trong câu trả lời rằng "
+            f" (đồng bộ định kỳ {SYNC_INTERVAL_MINUTES} phút, cảnh báo khi quá {stale_minutes} phút)."
+            " PHẢI cảnh báo rõ người dùng trong câu trả lời rằng "
             "dữ liệu có thể CŨ HƠN BÌNH THƯỜNG, không chỉ nói ngày dữ liệu như bình thường.")
 
 
