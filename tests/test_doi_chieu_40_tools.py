@@ -27,7 +27,9 @@ def test_catalog_smoke_phu_dung_toan_bo_tool_da_dang_ky(monkeypatch):
     # 21/09/2026: 51 sau khi them get_revenue_seasonality (C08/S80, tranh timeout).
     # 26/09/2026: 52 sau khi them get_kpi_scorecard (bang KPI QLV/TDV, hop 24/09).
     assert len(cases) == 52
-    assert set(cases) == set(checker.rt.TEMPLATES)
+    # Opt-in projection has its own offline suite. Do not add it to the live
+    # smoke runner or change its workload when both new flags are off.
+    assert set(cases) == set(checker.rt.TEMPLATES) - {"get_current_period_projection"}
 
 
 def test_payload_rong_khong_duoc_tinh_la_da_kiem():

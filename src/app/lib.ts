@@ -1,3 +1,4 @@
+import type { ChartSpec } from "./ReportChart";
 // Kieu du lieu, hang so API va ham dinh dang dung chung (tach tu page.tsx 28/09/2026 khi thiet ke lai
 // giao dien - logic giu nguyen).
 import { ROLE_LABELS } from "./roleLabels";
@@ -24,6 +25,7 @@ export function authHeaders(token: string | null): HeadersInit {
 export type FeedbackRating = 1 | -1;
 
 export type HistoryMessage = {
+  charts?: ChartSpec[];
   id: number;
   role: "user" | "assistant";
   content: string;
@@ -75,6 +77,7 @@ export type SessionSummary = {
 };
 
 export type Message = {
+  charts?: ChartSpec[];
   id?: number;
   role: "user" | "bot";
   text: string;

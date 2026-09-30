@@ -22,6 +22,7 @@ from query_engine import _write_log, _get_engine
 from region_map import region_from_customer_code, REGION_SQL_MARKERS, REGION_NAMES_VI
 import org_hierarchy as oh
 from pricing import USD_TO_VND_RATE
+from period_projection import current_period_projection
 from feature_policy import (
     DISABLED_FUTURE_TOOL_NAMES,
     FUTURE_FORECAST_DISABLED_MESSAGE,
@@ -15386,6 +15387,7 @@ def forecast_model1(target_month: str = "2026-08", scope_area_code: str = None, 
 
 
 TEMPLATES = {
+    "get_current_period_projection": current_period_projection,
     "get_revenue_by_channel": revenue_by_channel,
     "get_top_products": top_products,
     "get_top_customers": top_customers,
@@ -15498,6 +15500,7 @@ _PERSON_LEVEL_TEMPLATES = {
 }
 
 _EMPLOYEE_SCOPED_TEMPLATES = {
+    "get_current_period_projection",
     "get_receivables_overview",
     # 17/09/2026: ca hai tool lich su cong no da ho tro loc khach theo doi (cung nguon phan cong
     # KPI voi receivables_overview) nen dang ky o CA HAI tap - QLV van dung duoc, chi bi ep dung
@@ -15528,6 +15531,7 @@ _EMPLOYEE_SCOPED_TEMPLATES = {
 _CHANNEL_SCOPE_POLICIES = {
     # Tool co tham so scope_channel va bat buoc duoc backend ghi de.
     **{name: "filter" for name in {
+        "get_current_period_projection",
         "get_revenue_by_channel", "get_top_products", "get_top_customers",
         "compare_periods", "get_revenue_ytd_cumulative", "get_revenue_monthly_series",
         "get_revenue_seasonality",
@@ -15695,6 +15699,19 @@ def call_template(name: str, args: dict, question: str = "", username: str = Non
     try:
         fn = TEMPLATES[name]
         call_args = dict(args)
+        if name == "get_current_period_projection":
+            if scope_role == "admin_ops" or (scope_role == "qlv" and not scope_employee_code):
+                entry.update(status="blocked", error="Tai khoan khong co pham vi du phong hop le.")
+                _write_log(entry)
+                return {"ok": False, "error": "Tai khoan khong co pham vi du phong hop le."}
+            if scope_role == "regional_director" and not (scope_area_code or scope_channel):
+                entry.update(status="blocked", error="Tai khoan giam doc thieu pham vi.")
+                _write_log(entry)
+                return {"ok": False, "error": "Tai khoan giam doc thieu pham vi."}
+            # No user/model argument can widen a server-owned scope.
+            call_args.update(scope_area_code=scope_area_code, scope_channel=scope_channel,
+                             scope_employee_code=scope_employee_code)
+
         if name == "get_employee_kpi":
             # Nguon nhan su la lua chon noi bo, khong nhan tu tham so model. M20 cua giam doc mien
             # doi chieu TDV theo S33; khong mo bat ky truong luong/thuong ca nhan nao.

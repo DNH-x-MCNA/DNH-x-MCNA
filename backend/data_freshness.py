@@ -112,6 +112,7 @@ _TEMPLATE_SOURCES = {
     "get_geography_monthly_performance": ("sales_otc", "sales_etc"),
     "get_inventory_expiry_report": ("inventory", "sales_otc"),
     "get_kpi_gap_run_rate": ("kpi_salary_result",),
+    "get_current_period_projection": ("sales_otc", "sales_etc", "kpi_salary_result"),
     "get_operational_data_quality": ("sales_otc", "sales_etc", "employee", "kpi"),
     "get_promotion_data_quality": ("promotion_live",),
     "get_receivables_history_dates": ("debt",),

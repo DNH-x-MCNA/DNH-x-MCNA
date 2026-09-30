@@ -8,6 +8,8 @@ Chi luu VAN BAN cau hoi + cau tra loi cuoi (khong luu lai chi tiet cac buoc goi 
 don gian, ben vung qua nhieu lan restart server (SQLite file), va Claude van suy luan tot tu ngu canh
 van ban thuan nay ma khong can replay lai dung tool_use/tool_result cu.
 """
+from chat_charts import validate_charts
+from feature_policy import feature_enabled
 import json
 import os
 import sqlite3
@@ -46,6 +48,7 @@ def init():
     )""")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_msg_session ON messages(session_id, id)")
     _ensure_column(conn, "messages", "query_id", "TEXT")
+    _ensure_column(conn, "messages", "charts_json", "TEXT")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_msg_query ON messages(query_id)")
     # Query State (co cau truc) - luu tool/tham so vua dung trong session, de cau hoi noi tiep kieu
     # "con quy truoc thi sao?" co the doi chieu chac chan thay vi chi doc lai text lich su tho.
@@ -223,12 +226,12 @@ def load_history(session_id: str, max_turns: int = 10):
         conn.close()
 
 
-def append_message(session_id: str, role: str, content: str, query_id: str = None):
+def append_message(session_id: str, role: str, content: str, query_id: str = None, charts=None):
     conn = _conn()
     try:
         cursor = conn.execute(
-            "INSERT INTO messages (session_id, role, content, created_at, query_id) VALUES (?,?,?,?,?)",
-            (session_id, role, content, time.strftime("%Y-%m-%d %H:%M:%S"), query_id),
+            "INSERT INTO messages (session_id, role, content, created_at, query_id, charts_json) VALUES (?,?,?,?,?,?)",
+            (session_id, role, content, time.strftime("%Y-%m-%d %H:%M:%S"), query_id, json.dumps(validate_charts(charts), ensure_ascii=False)),
         )
         conn.commit()
         return cursor.lastrowid
@@ -460,7 +463,7 @@ def get_session_history(session_id: str):
     try:
         rows = conn.execute(
             "SELECT m.id, m.role, m.content, m.query_id, qr.feedback_rating, "
-            "qr.feedback_category, qr.feedback_comment "
+            "qr.feedback_category, qr.feedback_comment, m.charts_json "
             "FROM messages m LEFT JOIN query_runs qr ON qr.query_id=m.query_id "
             "WHERE m.session_id=? ORDER BY m.id",
             (session_id,),
@@ -474,6 +477,7 @@ def get_session_history(session_id: str):
                 "feedback_rating": row[4],
                 "feedback_category": row[5],
                 "feedback_comment": row[6],
+                "charts": _read_charts(row[7]),
             }
             for row in rows
         ]
@@ -497,3 +501,12 @@ init()
 
 # Aliases for compatibility with main.py imports
 delete_session = clear_session
+
+
+def _read_charts(raw):
+    if not feature_enabled("DNH_BAT_BIEU_DO"):
+        return []
+    try:
+        return validate_charts(json.loads(raw or "[]"))
+    except (ValueError, TypeError):
+        return []

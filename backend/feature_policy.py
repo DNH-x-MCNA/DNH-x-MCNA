@@ -1,13 +1,13 @@
 # -*- coding: utf-8 -*-
 """Chinh sach tinh nang co tinh quyet dinh, khong phu thuoc vao AI.
 
-Tu 14/08/2026, moi tinh nang du bao tuong lai bi khoa de uu tien doi chieu va
-do dung cua du lieu da phat sinh. Khong cung cap bien moi truong de bat lai vo
-tinh; viec mo lai can mot thay doi code duoc review va bo kiem thu rieng.
+Cong cu du bao cu van bi khoa. Du phong thang/quy dang chay chi mo qua
+DNH_BAT_DU_PHONG, mac dinh tat; cac ky tuong lai khac van bi chan.
 """
 from __future__ import annotations
 
 import re
+import os
 import unicodedata
 
 
@@ -88,6 +88,9 @@ def is_future_forecast_question(question: str) -> bool:
     if not text:
         return False
 
+    if projection_period(question):
+        return False
+
     explicit_forecast = bool(_EXPLICIT_FORECAST_RE.search(text))
     if explicit_forecast:
         return True
@@ -115,3 +118,25 @@ def is_future_forecast_question(question: str) -> bool:
         return True
 
     return False
+
+
+def feature_enabled(name: str) -> bool:
+    return os.getenv(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def projection_period(question: str) -> str | None:
+    """Only opt in to current month/quarter revenue/KPI. Other future requests stay blocked."""
+    if not feature_enabled("DNH_BAT_DU_PHONG"):
+        return None
+    text = _plain_text(question)
+    if re.search(r"\b(?:thang|quy|nam|tuan) (?:sau|toi|ke tiep)\b|\bngay mai\b|\bnam nay\b|\b20\d{2}\b|\b(?:thang|quy)\s+\d", text):
+        return None
+    if re.search(r"\b(?:ton kho|cong no|luong|thuong|khach hang)\b", text):
+        return None
+    if not re.search(r"du bao|du phong|run.rate|kha nang dat|xac suat|uoc tinh|se dat", text):
+        return None
+    if not re.search(r"doanh thu|doanh so|kpi|chi tieu|cuoi thang|cuoi quy", text):
+        return None
+    if not re.search(r"cuoi thang|thang nay|cuoi quy|quy nay|thang/quy", text):
+        return None
+    return "quarter" if re.search(r"cuoi quy|quy nay", text) else "month"
