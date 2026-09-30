@@ -6,6 +6,7 @@ Khoa cac dieu kien ma sai mot cai la hong hoac ho, nhung khong ai thay cho toi k
 - stream chat khong bi buffer/nen; web chi nghe 127.0.0.1; backend chi qua duong ham;
 - dia chi duong ham khop nhau o moi file; mau khong chua khoa that; file chay tren Linux dung LF.
 Chi doc file, khong chay nginx/systemd/WireGuard."""
+import os
 import re
 import shutil
 import subprocess
@@ -146,8 +147,20 @@ def test_file_chay_tren_linux_dung_lf():
             assert b"\r" not in path.read_bytes(), path
 
 
-@pytest.mark.skipif(shutil.which("bash") is None, reason="khong co bash")
+def _bash():
+    """Git Bash tren Windows. CI chay windows-latest, ma `bash` dau tien tren PATH o do la trinh khoi dong
+    WSL (System32\\bash.exe) - khong co distro nen loi ma khong in gi (PR #164 lan dau)."""
+    if os.name != "nt":
+        return shutil.which("bash")
+    ung_vien = [Path(r"C:\Program Files\Git\bin\bash.exe")]
+    git = shutil.which("git")
+    if git:
+        ung_vien.insert(0, Path(git).resolve().parents[1] / "bin" / "bash.exe")   # ...\Git\cmd\git.exe
+    return next((str(p) for p in ung_vien if p.is_file()), None)
+
+
+@pytest.mark.skipif(_bash() is None, reason="khong co bash (Git Bash tren Windows)")
 @pytest.mark.parametrize("script", ["deploy_web.sh", "cai_dat_lan_dau.sh", "cai_wireguard.sh"])
 def test_script_bash_dung_cu_phap(script):
-    kq = subprocess.run(["bash", "-n", str(CS / script)], capture_output=True, text=True)
-    assert kq.returncode == 0, kq.stderr
+    kq = subprocess.run([_bash(), "-n", (CS / script).as_posix()], capture_output=True, text=True)
+    assert kq.returncode == 0, (kq.stdout, kq.stderr)
