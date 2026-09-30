@@ -53,6 +53,10 @@ export const IconCoin = (p: IconProps) => (
 export const IconMenu = (p: IconProps) => (
   <Svg {...p}><path d="M4 7h16" /><path d="M4 12h16" /><path d="M4 17h16" /></Svg>
 );
+// 30/09/2026: nut thu gon / mo lai thanh ben tren may tinh (khung co vach ngan ben trai).
+export const IconSidebar = (p: IconProps) => (
+  <Svg {...p}><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M9 4v16" /></Svg>
+);
 export const IconClose = (p: IconProps) => (
   <Svg {...p}><path d="M18 6 6 18" /><path d="m6 6 12 12" /></Svg>
 );
