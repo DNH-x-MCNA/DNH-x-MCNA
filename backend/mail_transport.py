@@ -23,8 +23,14 @@ def report_email_provider():
 def smtp_settings(defaults=None):
     """Resolve already-loaded environment over legacy YAML defaults; validate offline.
 
-    Username/password SMTP is the currently supported authentication method. Do not
-    silently guess an unauthenticated relay or OAuth setup before DNH supplies it.
+    Username/password SMTP is the default authentication method. Do not silently guess an
+    unauthenticated relay or OAuth setup: SMTP_AUTH=none must be chosen explicitly.
+
+    30/09/2026: tenant Microsoft 365 cua DNH TAT SMTP AUTH cho ca to chuc (535 5.7.139 ... disabled for the
+    Tenant), con hop thu system@namhapharma.com chi de gui, khong dang nhap. Kiem tu may 24: gui thang vao
+    namhapharma-com.mail.protection.outlook.com:25 KHONG dang nhap (direct send) thi nguoi nhan noi bo
+    @namhapharma.com duoc nhan (250), nguoi nhan ngoai bi tu choi (451). SMTP_AUTH=none dung cho duong do:
+    khong goi login(), bat buoc TLS (email mat khau tam khong duoc di dang tho) va bat buoc SENDER_EMAIL.
     """
     defaults = defaults or {}
 
@@ -37,7 +43,8 @@ def smtp_settings(defaults=None):
 
     user = str(value("SMTP_USER", "smtp_user")).strip()
     password = str(value("SMTP_PASSWORD", "smtp_password"))
-    sender = str(value("SENDER_EMAIL", "sender_email", user)).strip()
+    explicit_sender = str(value("SENDER_EMAIL", "sender_email")).strip()
+    sender = explicit_sender or user
     host = str(value("SMTP_SERVER", "smtp_server", "smtp.office365.com")).strip()
     # Absent SMTP_SECURITY preserves the existing report use_tls setting; account
     # emails have no YAML defaults and therefore continue to require STARTTLS.
@@ -45,6 +52,9 @@ def smtp_settings(defaults=None):
                 or ("starttls" if defaults.get("use_tls", True) else "none"))
     if security not in {"starttls", "ssl", "none"}:
         raise MailConfigurationError("SMTP_SECURITY chi nhan starttls, ssl hoac none.")
+    auth = os.getenv("SMTP_AUTH", "").strip().lower() or "password"
+    if auth not in {"password", "none"}:
+        raise MailConfigurationError("SMTP_AUTH chi nhan password hoac none.")
     try:
         port = int(value("SMTP_PORT", "smtp_port", 587))
         timeout = float(value("SMTP_TIMEOUT_SECONDS", "smtp_timeout_seconds", 15))
@@ -54,12 +64,19 @@ def smtp_settings(defaults=None):
         raise MailConfigurationError("SMTP_PORT phai tu 1 den 65535.")
     if not math.isfinite(timeout) or not 0 < timeout <= 120:
         raise MailConfigurationError("SMTP_TIMEOUT_SECONDS phai > 0 va <= 120.")
-    if not user or not password or user == "hophu_email@namhapharma.com":
+    if auth == "none":
+        if security == "none":
+            raise MailConfigurationError("SMTP_AUTH=none bat buoc co TLS: dat SMTP_SECURITY=starttls hoac ssl.")
+        # Khong dang nhap thi SMTP_USER khong con la nguoi gui: phai ghi ro dia chi gui.
+        if not explicit_sender:
+            raise MailConfigurationError("SMTP_AUTH=none can SENDER_EMAIL (dia chi gui, vd system@namhapharma.com).")
+        sender = explicit_sender
+    elif not user or not password or user == "hophu_email@namhapharma.com":
         raise MailConfigurationError("Thieu SMTP_USER/SMTP_PASSWORD.")
     if not host or not sender or any(c in sender + user + host for c in "\r\n"):
         raise MailConfigurationError("SMTP_SERVER, SMTP_USER hoac SENDER_EMAIL khong hop le.")
     return {"user": user, "password": password, "sender": sender, "server": host,
-            "port": port, "security": security, "timeout": timeout}
+            "port": port, "security": security, "timeout": timeout, "auth": auth}
 
 
 def send_smtp_message(message, recipients, settings):
@@ -77,7 +94,8 @@ def send_smtp_message(message, recipients, settings):
         if settings["security"] == "starttls":
             server.starttls(context=ssl.create_default_context())
             server.ehlo()
-        server.login(settings["user"], settings["password"])
+        if settings.get("auth", "password") == "password":
+            server.login(settings["user"], settings["password"])
         refused = server.sendmail(settings["sender"], recipients, message.as_string())
         if refused:
             raise smtplib.SMTPRecipientsRefused(refused)
