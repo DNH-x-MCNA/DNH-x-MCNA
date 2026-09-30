@@ -1,0 +1,4 @@
+# Cau hinh/script chay tren Cloud Server Linux: bat buoc LF, ke ca khi checkout tren Windows
+# (CRLF lam "set -euo pipefail\r" va file unit systemd hong ngay dong dau).
+deploy/cloud_server/** text eol=lf
+*.sh text eol=lf

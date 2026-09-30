@@ -79,6 +79,9 @@ export async function proxyFetch(url: string, init?: RequestInit): Promise<Respo
  * dung chung, 30 lan sai tu bat ky ai la khoa dang nhap cua moi nguoi. Vercel tu ghi de x-real-ip /
  * x-forwarded-for bang IP ket noi that (trinh duyet khong gia duoc). Backend chi tin header nay khi
  * request mang dung X-API-Key, tuc la di qua chinh route nay.
+ * 30/09/2026: tren Cloud Server Mat Bao, Nginx (deploy/cloud_server/nginx) phai GHI DE hai header nay bang
+ * $remote_addr - tests/test_cau_hinh_cloud_server.py khoa dieu kien do. Web chi nghe 127.0.0.1 nen khong ai
+ * goi thang vao duoc de tu dat header.
  */
 export function clientIpHeaders(request: Request): Record<string, string> {
   const ip = (request.headers.get("x-real-ip") || request.headers.get("x-forwarded-for")?.split(",")[0] || "").trim();

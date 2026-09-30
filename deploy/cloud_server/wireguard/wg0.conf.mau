@@ -1,0 +1,12 @@
+# /etc/wireguard/wg0.conf tren Cloud Server - cai_wireguard.sh ghi file nay (0600) tu mau.
+# KHONG chua khoa rieng: khoa nap tu /etc/wireguard/privatekey luc bat duong ham (PostUp).
+[Interface]
+Address = 10.88.24.1/30
+ListenPort = 51820
+PostUp = wg set %i private-key /etc/wireguard/privatekey
+
+[Peer]
+# May 24 (DC-DATA-REPORT). Chi dia chi duong ham cua may 24: Cloud Server KHONG vao duoc mang noi bo DNH
+# qua day (may 24 khong chuyen tiep goi tin; AllowedIPs chi 1 dia chi).
+PublicKey = KHOA_CONG_KHAI_MAY_24
+AllowedIPs = 10.88.24.2/32
