@@ -81,6 +81,7 @@ def test_doi_du_phong_neu_ten_nhom_duoi_3_tdv_thay_vi_lang_le_bo(monkeypatch):
 
     monkeypatch.setattr(alerts, "get_bravo_kpi_tdv_snapshot", fake_snapshot)
     monkeypatch.setattr(alerts, "get_bravo_manager_codes", lambda: {"MBKV2", "MN1", "MN4"})
+    monkeypatch.setattr(alerts, "get_bravo_kpi_snapshot_date", lambda: dt.date(2026, 9, 20))   # cùng tháng với as_of
 
     part = insights._team_pace_part(dt.date(2026, 9, 20), {"expected_share_pct": 50}, insights.DEFAULT_RULES)
 

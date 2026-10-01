@@ -61,7 +61,14 @@ def test_route_question_is_forced_to_current_month_daily_mode(monkeypatch):
         "số lượng đơn hàng đúng tuyến từng ngày từ đầu tháng của các trình dược viên"
     ) == "get_workforce_productivity"
 
+    # 01/10/2026: test ghim "2026-09" nhưng code lấy tháng của NGÀY CHẠY -> sang tháng 10 là hỏng. Cố định ngày chạy.
+    class Ngay(rt.dt.date):
+        @classmethod
+        def today(cls):
+            return cls(2026, 9, 24)
+
     calls = {}
+    monkeypatch.setattr(rt.dt, "date", Ngay)
     monkeypatch.setattr(rt, "_write_log", lambda entry: None)
     monkeypatch.setattr(rt, "_route_visit_effectiveness", lambda *args, **kwargs: calls.update(
         {"args": args, "kwargs": kwargs}) or {"daily_summary": []})

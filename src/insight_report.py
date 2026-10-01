@@ -160,13 +160,26 @@ def pace_lines(view, money):
     for channel, pace in (view.get("month_pace") or {}).items():
         if not pace or pace.get("gap_pct") is None:
             continue
+        nhan = f"Lũy kế tháng {channel} (đến {view.get('as_of_display')})"
+        lookback = view.get("lookback", 3)
+        if pace.get("evaluated") is False:
+            # 01/10/2026: đầu tháng tỷ trọng thường lệ mới vài %, chia ra dự phóng lệch hàng chục điểm (tháng
+            # 9/2026: ngày 5 dự phóng OTC -55% trong khi cả tháng -7%). Chỉ in lũy kế cho tới ngày đã kiểm thử.
+            rows.append([nhan, f"{money(pace['mtd'])} — so nhịp thường lệ và dự phóng cả tháng: đánh giá từ "
+                               f"ngày {pace.get('min_day')} hằng tháng"])
+            continue
+        if pace.get("month_complete"):
+            lech = pace["projected_vs_baseline_pct"]
+            rows.append([nhan, f"{money(pace['mtd'])} — đã hết tháng; "
+                               f"{'thấp' if lech < 0 else 'cao'} hơn TB {lookback} tháng {abs(lech):.0f}%"])
+            continue
         gap = pace["gap_pct"]
         trang_thai = f"chậm {gap:.0f}%" if gap > 0 else f"nhanh {-gap:.0f}%"
         rows.append([
-            f"Lũy kế tháng {channel} (đến {view.get('as_of_display')})",
+            nhan,
             f"{money(pace['mtd'])} — {trang_thai} so nhịp thường lệ; dự phóng cả tháng "
             f"{money(pace['projected_full_month'])} ({pace['projected_vs_baseline_pct']:+.0f}% so TB "
-            f"{view.get('lookback', 3)} tháng)",
+            f"{lookback} tháng)",
         ])
     return rows
 
