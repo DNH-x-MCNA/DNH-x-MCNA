@@ -131,16 +131,21 @@ def month_pace(daily, as_of, lookback=3):
         return sum(v for d, v in by_month.get((year, month), ()) if d <= n)
 
     y, m, n = as_of.year, as_of.month, as_of.day
+    # 01/10/2026: as_of là NGÀY CUỐI tháng (vd 30/09) thì tháng đã đủ số -> so với TRỌN các tháng nền. Trước
+    # đây ngày 30 của tháng 30 ngày bị so với "tới ngày 30" của tháng 31 ngày, thiếu ngày chốt tháng (ngày
+    # cuối tháng 6-7/2026 chiếm 16-17% doanh thu OTC), nên báo cáo ngày 01 "dự phóng" tháng ĐÃ HẾT cao hơn
+    # số thật ~6% (tháng 9/2026: ~39,5 tỷ so với ~37,4 tỷ thực tế).
+    month_complete = n >= _days_in_month(y, m)
     mtd = upto(y, m, n)
     py, pm = month_add(y, m, -1)
-    prev_same = upto(py, pm, min(n, _days_in_month(py, pm)))
+    prev_same = upto(py, pm, _days_in_month(py, pm) if month_complete else min(n, _days_in_month(py, pm)))
     shares, fulls = [], []
     for k in range(1, lookback + 1):
         yy, mm = month_add(y, m, -k)
         full = totals.get((yy, mm), 0.0)
         if full <= 0:
             continue
-        shares.append(upto(yy, mm, min(n, _days_in_month(yy, mm))) / full)
+        shares.append(1.0 if month_complete else upto(yy, mm, min(n, _days_in_month(yy, mm))) / full)
         fulls.append(full)
     if len(shares) < 2:
         return None
@@ -152,6 +157,7 @@ def month_pace(daily, as_of, lookback=3):
         "as_of": as_of.isoformat(),
         "day": n,
         "days_in_month": _days_in_month(y, m),
+        "month_complete": month_complete,
         "mtd": mtd,
         "prev_month_same_days": prev_same,
         "vs_prev_month_same_days_pct": (mtd / prev_same - 1) * 100 if prev_same > 0 else None,
@@ -642,11 +648,20 @@ def channel_pace_for_scope(as_of, region=None, channel=None, rules=None):
     else:
         daily = fetch_daily_revenue(_curve_window_start(as_of, lookback), as_of, region=region)
         paces = {ch: month_pace(series, as_of, lookback) for ch, series in daily.items()}
+        # 01/10/2026: phép so nhịp/dự phóng chỉ được kiểm thử ngược TỪ ngày min_day (OTC 10, ETC 8). Chạy lại số
+        # tháng 9/2026: ngày 5 dự phóng OTC -55%, ngày 7 -41% so TB 3 tháng trong khi cả tháng thật chỉ -7%. Cảnh
+        # báo đã có chốt min_day; báo cáo (Daily/Weekly/Monthly) trước đây in thẳng từ ngày 1 -> gắn cờ để ẩn.
+        min_days = (rules.get("channel_pace") or {}).get("min_day") or {}
+        for ch, pace in paces.items():
+            if pace:
+                pace["min_day"] = int(min_days.get(ch, 1))
+                pace["evaluated"] = pace["day"] >= pace["min_day"]
         _PACE_CACHE[key] = (time.time(), paces)
     return {ch: pace for ch, pace in paces.items() if not channel or ch == channel}
 
 
 def _team_pace_part(as_of, otc_pace, rules):
+    from src import alerts
     from src.alerts import get_bravo_kpi_tdv_snapshot, get_bravo_manager_codes
     rule = rules["team_pace"]
     part = {"evaluated": as_of.day >= int(rule["min_day"]), "min_day": int(rule["min_day"]),
@@ -654,6 +669,23 @@ def _team_pace_part(as_of, otc_pace, rules):
     if not otc_pace or not otc_pace.get("expected_share_pct"):
         # 15/09/2026: không có nhịp OTC thì KHÔNG dự phóng được - ghi lý do, không để lặng thành "0 đội".
         part["skipped_reason"] = "Chưa có nhịp doanh thu OTC để dự phóng đội."
+        return part
+    # 01/10/2026: get_bravo_kpi_tdv_snapshot luôn trả tháng của snapshot MỚI NHẤT trên Bravo, còn as_of là ngày dữ
+    # liệu đủ gần nhất. Ngày 01, as_of còn là ngày cuối tháng trước (đã qua min_day): Bravo sang tháng mới là số
+    # KPI ngày 1 (đạt 2-3%) bị chia cho đường cong tháng cũ -> MỌI đội thành "dự phóng dưới 60%". Lệch tháng thì
+    # không dự phóng. Không đọc được ngày snapshot thì giữ cách cũ.
+    try:
+        snap = alerts.get_bravo_kpi_snapshot_date()
+    except Exception:
+        snap = None
+    if snap is not None and (snap.year, snap.month) != (as_of.year, as_of.month):
+        if (snap.year, snap.month) > (as_of.year, as_of.month):
+            part["evaluated"] = False          # sang tháng mới: như đầu tháng, chưa tới ngày đánh giá
+            part["skipped_reason"] = (f"Số KPI trên Bravo đã sang tháng {snap:%m/%Y}; dự phóng đội tính lại từ "
+                                      f"ngày {part['min_day']} của tháng mới.")
+        else:
+            part["skipped_reason"] = (f"Số KPI trên Bravo mới tới tháng {snap:%m/%Y}, chưa có tháng "
+                                      f"{as_of:%m/%Y}; chưa dự phóng được đội.")
         return part
     tdvs = get_bravo_kpi_tdv_snapshot(position_codes=("TDV",))
     # QLV thật có thể bị Bravo gắn nhầm cờ trùng (xem get_bravo_kpi_tdv_snapshot) nên lấy tên kèm cả dòng trùng.

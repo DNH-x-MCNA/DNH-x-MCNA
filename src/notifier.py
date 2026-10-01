@@ -603,8 +603,13 @@ DIGEST_EMAIL_TEMPLATE = """
                     <tr>
                         <td>{{ ch }}</td>
                         <td>{{ (p.mtd)|vnd }}</td>
-                        <td>{% if p.gap_pct > 0 %}<span class="trend-down">Chậm {{ "%.0f"|format(p.gap_pct) }}%</span>{% else %}<span class="trend-up">Nhanh {{ "%.0f"|format(-p.gap_pct) }}%</span>{% endif %}</td>
+                        {# 01/10/2026: trước ngày đã kiểm thử ngược (OTC 10, ETC 8) chỉ in lũy kế; tháng đã hết thì không còn "nhịp". #}
+                        {% if p.evaluated is defined and not p.evaluated %}
+                        <td colspan="2">Đánh giá từ ngày {{ p.min_day }} hằng tháng</td>
+                        {% else %}
+                        <td>{% if p.month_complete %}Đã hết tháng{% elif p.gap_pct > 0 %}<span class="trend-down">Chậm {{ "%.0f"|format(p.gap_pct) }}%</span>{% else %}<span class="trend-up">Nhanh {{ "%.0f"|format(-p.gap_pct) }}%</span>{% endif %}</td>
                         <td>{{ (p.projected_full_month)|vnd }} ({{ "%+.0f"|format(p.projected_vs_baseline_pct) }}% so TB {{ metrics.insights.lookback }} tháng)</td>
+                        {% endif %}
                     </tr>
                     {% endif %}{% endfor %}
                 </tbody>

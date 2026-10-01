@@ -293,9 +293,13 @@ def send_daily_digest(dry_run=False, audience_filter=None, webhook_override=None
             # việc cần xử lý tính trực tiếp theo quy tắc đã kiểm thử ngược - src/insight_report.py.
             action_items = action_lines(metrics.get('insights'), format_vietnamese_money)
             if action_items:
+                # 01/10/2026: ghi ngày dữ liệu như email. Ngày 01, các dòng "... tháng này" bên dưới là của tháng
+                # TRƯỚC (dữ liệu đủ gần nhất = ngày cuối tháng trước); không ghi thì người đọc hiểu là tháng mới.
+                den_ngay = metrics['insights'].get('as_of_display')
                 sections.append({
                     "id": "section_action_items",
-                    "title": f"📌 VIỆC CẦN XỬ LÝ ({metrics['insights']['action_count']})",
+                    "title": (f"📌 VIỆC CẦN XỬ LÝ ({metrics['insights']['action_count']})"
+                              + (f" — dữ liệu đến {den_ngay}" if den_ngay else "")),
                     "is_collapsed": False,
                     "items": action_items
                 })

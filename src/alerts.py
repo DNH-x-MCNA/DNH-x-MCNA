@@ -823,6 +823,29 @@ def get_bravo_kpi_tdv_snapshot(position_codes=('TDV',), include_duplicates=False
     return result
 
 
+def get_bravo_kpi_snapshot_date():
+    """SaveDate mới nhất của FACT_TongHopKhachHang — tháng của nó chính là tháng mà
+    get_bravo_kpi_tdv_snapshot() trả về (xem _MONTH_START_OF_LATEST_SNAPSHOT_SQL). 01/10/2026: người gọi
+    (src/insights.py::_team_pace_part) cần biết để không chia số KPI tháng mới cho đường cong tháng cũ.
+    None nếu bảng rỗng; raise nếu không có Bravo engine."""
+    from sqlalchemy import text
+    from src.database import _get_bravo_engine
+    engine = _get_bravo_engine()
+    if engine is None:
+        raise RuntimeError("Không có Bravo engine (thiếu BRAVO_SQL_* trong .env)")
+    with engine.connect() as conn:
+        row = conn.execute(text("SELECT MAX([SaveDate]) FROM [FACT_TongHopKhachHang]")).fetchone()
+    value = row[0] if row else None
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.date()
+    if hasattr(value, "strftime"):
+        return value
+    # Driver ODBC cũ "SQL Server" trả cột date dạng chuỗi 'YYYY-MM-DD' (xem _last_complete_data_day).
+    return datetime.strptime(str(value)[:10], "%Y-%m-%d").date()
+
+
 def get_bravo_management_kpi_snapshot(position_codes=('TP', 'PP', 'TBP')):
     """
     Snapshot KPI TỨC THỜI từ Bravo cho cấp quản lý cao (TP/PP/TBP) — bảng `FACT_ThongKeTinhLuong`
@@ -3031,7 +3054,13 @@ def check_team_pace_alert(bundle=None):
     rules = bundle.get("rules") or insights.rule_config()
     as_of, lookback = bundle["as_of"], int(rules["curve_lookback_months"])
     if not part.get("evaluated"):
-        print(f"[ALERTS][team_pace] Ngày {as_of.day} chưa tới ngày {part.get('min_day')} — chưa đánh giá đội.")
+        ly_do = part.get("skipped_reason") or f"Ngày {as_of.day} chưa tới ngày {part.get('min_day')} — chưa đánh giá đội."
+        print(f"[ALERTS][team_pace] {ly_do}")
+        return
+    if as_of.day >= insights._days_in_month(as_of.year, as_of.month):
+        # 01/10/2026: ngày 01, as_of là ngày CUỐI tháng trước -> tháng đã hết, "nguy cơ hụt chỉ tiêu nếu giữ
+        # nhịp" không còn việc gì để làm. Kết quả cuối tháng vẫn nằm trong báo cáo Daily/Monthly.
+        print(f"[ALERTS][team_pace] Tháng {as_of:%m/%Y} đã hết — không cảnh báo nguy cơ hụt chỉ tiêu nữa.")
         return
     at_risk = part.get("at_risk") or []
     threshold = float(part.get("threshold_pct") or rules["team_pace"]["max_projection_pct"])
