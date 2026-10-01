@@ -14,6 +14,21 @@ def _end(day):
 # Nhan tong cua tool KPI (report_templates.kpi_gap_run_rate) viet khong dau; cau tra loi du phong hien co dau.
 _NHAN_CO_DAU = {"Tong doi cua ban": "Tổng đội của bạn", "Toan bo pham vi": "Toàn bộ phạm vi"}
 
+# 01/10/2026: chay lai 6 thang 03-08/2026 tren kho (tong OTC+ETC). Truoc ngay 5, luy ke moi vai % ca thang nen ty le
+# "cuoi thang / luy ke cung ngay" bung no: kich ban Tot cao gap 3-19 lan so that o 4/6 thang (T4 ngay 2: +1802%; T7
+# ngay 2: 368 ty so voi 74,8 ty that), Co so lech -100%..+169%, Tuyen tinh -100%..+53%. Tu ngay 5: Tot <= +119%, Co so
+# trong -38%..+32%. Duoi 5 ngay du lieu thi khong dua so du phong (giong ngay 01 "kho chua co du lieu thang hien tai").
+MIN_NGAY_DU_LIEU = 5
+
+
+def _chua_du_ngay(as_of):
+    if as_of.day >= MIN_NGAY_DU_LIEU:
+        return None
+    return {"error": (f"Tháng {as_of:%m/%Y} mới có {as_of.day} ngày dữ liệu (đến {as_of:%d/%m/%Y}). Dự phóng cuối kỳ "
+                      f"cần ít nhất {MIN_NGAY_DU_LIEU} ngày: đầu tháng lũy kế mới vài phần trăm cả tháng nên tỷ lệ "
+                      "lịch sử dao động rất mạnh, chưa đủ cơ sở để đưa số. Số lũy kế hiện tại vẫn hỏi được bình thường."),
+            "as_of": str(as_of)}
+
 
 def current_period_projection(period="month", group_by="overall", scope_area_code=None,
                               scope_channel=None, scope_employee_code=None):
@@ -32,6 +47,8 @@ def current_period_projection(period="month", group_by="overall", scope_area_cod
     kpi = bool(scope_employee_code or group_by in {"qlv", "employee"})
     if kpi and period == "quarter":
         return {"error": "Chưa có bộ chỉ tiêu/snapshot đủ kỳ để dự phóng quý theo đội/TDV. Hãy chọn tháng hiện tại."}
+    if not kpi and _chua_du_ngay(as_of):       # bang KPI doi moc sang ngay snapshot ben duoi roi moi kiem
+        return _chua_du_ngay(as_of)
     scope = dict(scope_area_code=scope_area_code, scope_channel=scope_channel,
                  scope_employee_code=scope_employee_code)
 
@@ -69,6 +86,8 @@ def current_period_projection(period="month", group_by="overall", scope_area_cod
         # thang" vao so da gom ngay 30: Co so/Tot bi thoi phong. Moc cua bang KPI la CHINH ngay snapshot, cung dinh
         # nghia voi run-rate S35 (luy ke / so ngay lich da qua, ke ca ngay dang chay).
         as_of = snap
+        if _chua_du_ngay(as_of):
+            return _chua_du_ngay(as_of)
         current = [{"key": r["group_code"], "label": _NHAN_CO_DAU.get(r["group_name"], r["group_name"]),
                     "actual": r["actual"], "target": r["target"], "linear": r["linear_run_rate"]} for r in current]
         # Loi 2 (review 30/09): kho chi giu 1 snapshot KPI/thang (thang cu = ngay cuoi thang) nen khong bao gio co
