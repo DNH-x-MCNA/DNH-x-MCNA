@@ -42,9 +42,13 @@ def test_moi_nhom_trang_thai_deu_toi_model_du_tool_xep_theo_nhom():
     assert hien.count("CO_NGUY_CO_THIEU_HANG_DERIVED") >= 3, hien
     assert hien.count("TON_KHONG_BAN_3_THANG") >= 3 and hien.count("CHAM_LUAN_CHUYEN_DERIVED") >= 3
     assert all("months_of_cover" not in r for r in gui["supply_risk"]["rows"])
-    # So chua liet ke tinh theo goc nhin cua model: 16 thieu hang - so dong da gui.
+    # So chua liet ke tinh theo goc nhin cua model: 16 thieu hang - so dong da gui. 01/10/2026: "da gui" gom ca bang
+    # gon cac_dong_con_lai (truoc day chi tinh dong mau, cac dong con lai khong toi model).
+    bang = gui["supply_risk"]["cac_dong_con_lai"]["theo_trang_thai"]
+    assert len(hien) + sum(len(ds) for ds in bang.values()) == 30          # du 30 dong tool tra
+    assert gui["supply_risk"]["rows_not_shown_to_model"] == 0
     assert gui["supply_risk"]["so_dong_chua_hien_theo_trang_thai"]["CO_NGUY_CO_THIEU_HANG_DERIVED"] \
-        == 16 - hien.count("CO_NGUY_CO_THIEU_HANG_DERIVED")
+        == 16 - hien.count("CO_NGUY_CO_THIEU_HANG_DERIVED") - len(bang.get("CO_NGUY_CO_THIEU_HANG_DERIVED", []))
 
 
 def test_nguong_c42_giu_mac_dinh_khi_cau_hoi_khong_neu(monkeypatch):

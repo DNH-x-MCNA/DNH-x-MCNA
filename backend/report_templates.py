@@ -2106,15 +2106,22 @@ def employee_directory(search: str = None, position_code: str = None, area_code:
     if scope_area_code:
         area_code = scope_area_code
     limit = max(1, min(int(limit or 30), 100))
+    # 01/10/2026 (Cost of Value thang 9, log may 24): model tra ten cho 5 ma nhan vien bang 5 lan goi rieng (28/09
+    # "san pham giam nhieu nhat do nhung tdv nao phu trach"; ca thang 6 luot, 26 lan goi thua). Cho phep nhieu ma/ten
+    # cach nhau bang dau phay hoac cham phay trong MOT lan goi; mot gia tri thi y het truoc day.
+    tu_khoa = list(dict.fromkeys(t.strip() for t in re.split(r"[,;\n]+", str(search or "")) if t.strip()))[:20]
+    if len(tu_khoa) > 1:
+        limit = max(limit, min(100, 10 * len(tu_khoa)))
     sql = """SELECT n.employee_code employee_code, n.dmsid dmsid, n.name name,
                     n.position_code position_code, c.description position_label, n.area_code area_code,
                     n.is_duplicate is_duplicate
              FROM dim_nhanvien n LEFT JOIN dim_chucvu c ON c.position_code=n.position_code
              WHERE 1=1"""
     params = []
-    if search:
-        sql += " AND (n.name LIKE ? OR n.employee_code LIKE ? OR n.dmsid LIKE ?)"
-        params += [f"%{search}%", f"%{search}%", f"%{search}%"]
+    if tu_khoa:
+        sql += " AND (" + " OR ".join("n.name LIKE ? OR n.employee_code LIKE ? OR n.dmsid LIKE ?" for _ in tu_khoa) + ")"
+        for t in tu_khoa:
+            params += [f"%{t}%", f"%{t}%", f"%{t}%"]
     if position_code:
         sql += " AND n.position_code=?"
         params.append(position_code)
@@ -2122,10 +2129,10 @@ def employee_directory(search: str = None, position_code: str = None, area_code:
         sql += " AND n.area_code=?"
         params.append(area_code)
     rows = _q(sql, tuple(params))
-    if search and not position_code and not area_code:
-        sx_rows = _q("""SELECT dmscode employee_code, code dmsid, name name
-                         FROM dmssx_nhanvien WHERE name LIKE ? OR dmscode LIKE ? OR code LIKE ?""",
-                     (f"%{search}%", f"%{search}%", f"%{search}%"))
+    if tu_khoa and not position_code and not area_code:
+        sx_rows = _q("SELECT dmscode employee_code, code dmsid, name name FROM dmssx_nhanvien WHERE "
+                     + " OR ".join("name LIKE ? OR dmscode LIKE ? OR code LIKE ?" for _ in tu_khoa),
+                     tuple(p for t in tu_khoa for p in (f"%{t}%", f"%{t}%", f"%{t}%")))
         for r in sx_rows:
             r["position_code"] = None; r["position_label"] = None
             r["area_code"] = None; r["is_duplicate"] = 0
@@ -11472,12 +11479,14 @@ def _inventory_supply_risk(stock_by_item: dict, item_names: dict, area_code: str
             if len(ds) > sum(1 for r in shown_rows if r["status"] == tt)
         },
         "answer_rule": (
-            "Moi trang thai co trong status_counts deu DA co it nhat vai dong mau trong rows. "
-            "Neu so_dong_chua_hien_theo_trang_thai con so du cho mot trang thai, day la danh sach BI "
-            "CAT theo limit - noi ro con bao nhieu SKU chua liet ke. Tra loi TU rows + status_counts; CHI goi "
-            "lai (limit lon hon hoac focus='shortage'/'overstock') khi nguoi dung doi DANH SACH DAY DU cua mot "
-            "nhom (26/09: model tu goi lai focus='shortage' sau focus='all' o 4 luot tong quan ton kho 18-22/09). "
-            "TUYET DOI khong noi la khong lay duoc danh sach."),
+            # 01/10/2026: truoc day ghi "goi lai voi limit lon hon khi nguoi dung doi danh sach day du", trong khi ban
+            # gui model chi co 6-12 dong du limit bao nhieu -> 8 luot goi lai vo ich 27/09-01/10 (log may 24). Nay cac
+            # dong con lai di kem o bang gon cac_dong_con_lai (nl2sql._payload_for_model).
+            "Moi trang thai co trong status_counts deu DA co it nhat vai dong mau trong rows; cac SKU con lai nam o "
+            "cac_dong_con_lai (bang gon, neu co). Neu so_dong_chua_hien_theo_trang_thai con so du cho mot trang "
+            "thai thi noi ro con bao nhieu SKU chua liet ke. Tra loi TU rows + cac_dong_con_lai + status_counts; "
+            "KHONG goi lai chi de xin them dong. CHI goi lai MOT lan (limit=50, focus cua nhom can xem) khi nguoi "
+            "dung doi danh sach day du ma nhom do con so du. TUYET DOI khong noi la khong lay duoc danh sach."),
         "recent_customer_candidates": buyer_candidates,
         # 18/09/2026 (cau M40): hai ve cua phep chia KHONG cung don vi. brv_sanpham.unit cua cac ma
         # nay la "Vien" va ton kho theo lo dem bang vien, trong khi hoa don ban theo HOP - don gia
@@ -15890,6 +15899,10 @@ def call_template(name: str, args: dict, question: str = "", username: str = Non
                 "thieu hang", "kho thieu", "nguy co mat",
             )):
                 call_args["focus"] = "shortage"
+            # 01/10/2026: hoi DANH SACH thi lay luon muc tran 50 SKU canh bao cua tool. Truoc day mac dinh 30 roi
+            # model goi lai voi limit 100/200 (log may 24 28-29/09: "danh sach sku" goi 2-3 lan moi luot).
+            if any(marker in q_folded for marker in ("danh sach", "liet ke", "tat ca", "day du")):
+                call_args["limit"] = max(50, int(call_args.get("limit") or 0))
         if name == "get_workforce_productivity":
             if any(marker in q_folded for marker in (
                 "vieng tham", "di tuyen", "dung tuyen", "phu tuyen",

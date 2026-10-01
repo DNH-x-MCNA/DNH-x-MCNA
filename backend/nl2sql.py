@@ -1621,7 +1621,7 @@ TEMPLATE_TOOLS = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "search": {"type": "string", "description": "Tim gan dung theo ten hoac ma nhan vien (khong bat buoc)"},
+                "search": {"type": "string", "description": "Tim gan dung theo ten hoac ma nhan vien (khong bat buoc). Can tra NHIEU nguoi thi truyen cac ma/ten cach nhau bang dau phay trong MOT lan goi (vd 'DNH00097, DNH00098'), KHONG goi tung nguoi."},
                 "position_code": {"type": "string", "description": "Loc theo vai tro: TDV/QLV/CTV/CS/TP/PP/TBP/TK (khong bat buoc). TP = Truong phong = Giam doc Mien = Giam doc Kenh (cap quan ly mien/kenh). TK = Truong kenh = Truong kenh MT (Modern Trade) - cap QLV, KHONG phai TP. CS = Cho si - cung cap QLV."},
                 "area_code": {"type": "string", "description": "Loc theo vung: MB/MT/MN (khong bat buoc)"},
                 "limit": {"type": "integer", "description": "So luong toi da tra ve, mac dinh 30"},
@@ -2769,6 +2769,18 @@ def _hop_dong_etc_gon(data: dict, normalized: str) -> dict:
     return out
 
 
+# 01/10/2026: bang gon cac SKU canh bao ton kho ngoai phan dong mau (xem nhanh get_inventory_expiry_report trong
+# _payload_for_model). Khong co months_of_cover (ty le chua quy doi don vi) va doanh thu (dong mau da co).
+_COT_TON_KHO_GON = ("item_code", "item_name", "stock_qty", "average_monthly_qty_3m")
+_TEN_TON_KHO_RUT = (70, 56, 44)          # do dai ten thu lan luot khi bang chua vua; ten bi rut ket thuc bang "…"
+_GHI_CHU_BANG_TON_KHO_GON = (
+    "Bang gon cac SKU con lai ma tool da tra, ngoai 'rows': moi dong theo thu tu 'cot', gop theo trang thai, cung "
+    "nguon va cung do tin cay voi rows; cot ghi_chu (neu co): 'het_hang' = ton ghi nhan bang 0, 'ton_am' = ton so "
+    "sach am; ten ket thuc bang '…' la ten da rut gon, dinh danh bang item_code. Nguoi dung hoi danh sach thi liet "
+    "ke CA rows LAN bang nay. so_dong_chua_hien_theo_trang_thai la so SKU nam ngoai ca hai phan. KHONG goi lai voi "
+    "limit lon hon chi de xin them dong: tool tra toi da 50 SKU va ban nay da gom moi dong vua ngan sach.")
+
+
 def _payload_for_model(tool_name: str, payload, question: str):
     """Rut gon co cau truc cho tool dai, giu payload day du o last_result/UI.
 
@@ -3379,49 +3391,107 @@ def _payload_for_model(tool_name: str, payload, question: str):
         shown_candidates = [item for item in candidates if (
             isinstance(item, dict) and item.get("item_code") in shown_codes
         )][:3]
-        compact_supply = {
-            key: value for key, value in supply.items()
-            if key not in {"rows", "recent_customer_candidates"}
-        }
         dem_trang_thai = supply.get("status_counts") if isinstance(supply.get("status_counts"), dict) else {}
-        da_hien = {}
-        for row in shown_risks:
-            da_hien[row.get("status")] = da_hien.get(row.get("status"), 0) + 1
-        # So SKU chua liet ke theo goc nhin cua MODEL (khong phai theo limit cua tool) de answer_rule dung.
-        compact_supply["so_dong_chua_hien_theo_trang_thai"] = {
-            tt: int(so) - da_hien.get(tt, 0) for tt, so in dem_trang_thai.items()
-            if isinstance(so, (int, float)) and int(so) > da_hien.get(tt, 0)
-        }
-        compact_supply.update({
-            "rows_shown_to_model": len(shown_risks),
-            "rows_not_shown_to_model": max(0, len(risk_rows) - len(shown_risks)),
-            "rows_are_sample": len(risk_rows) > len(shown_risks),
-            "rows": shown_risks,
-            "recent_customer_candidates": shown_candidates,
-            "customer_candidate_groups_shown": len(shown_candidates),
-        })
         asks_expiry = any(marker in normalized for marker in (
             "can date", "han su dung", "het han", "gan han",
         ))
         expiry_rows = data.get("rows") or []
-        compact_data = {
-            "as_of": data.get("as_of"),
-            "area_code": data.get("area_code"),
-            "summary": data.get("summary"),
-            "khong_xac_dinh_han": data.get("khong_xac_dinh_han"),
-            "expiry_rows": expiry_rows[:3] if asks_expiry else [],
-            "expiry_rows_are_sample": bool(asks_expiry and len(expiry_rows) > 3),
-            "supply_risk": compact_supply,
-            "sync_warning": data.get("sync_warning"),
-            "pham_vi_du_lieu": data.get("pham_vi_du_lieu"),
-        }
-        # 29/09/2026 (UAT C41): ton SKU = so sach da tru lo am; tong han dung chi gom lo duong. Model phai biet de khong
-        # dua hai con so lech nhau (1.350.134 vs 1.277.726) ma khong giai thich.
-        if data.get("lo_am"):
-            compact_data["lo_am"] = data["lo_am"]
-        if wrapper:
-            return {**payload, "du_lieu": compact_data}
-        return compact_data
+        # 01/10/2026 (Cost of Value thang 9, log may 24): tool tra 30-50 SKU nhung model chi nhan 6-12 dong mau du goi
+        # limit 30, 100 hay 200. 27/09-01/10 co 8 luot goi lai chi de "xin them dong" (vo ich), ba lan nguoi dung hoi
+        # "danh sach SKU" deu khong liet ke duoc va mot luot phai tu viet SQL. Cac dong con lai nay di kem o dang bang
+        # gon (ten cot ghi mot lan); dong mau chi tiet giu nguyen. Phai cat cho vua ngan sach thi luan phien tung nhom.
+        da_chon = {id(row) for row in chon}
+        con_lai_theo_nhom: dict = {}
+        for row in risk_rows:
+            if isinstance(row, dict) and id(row) not in da_chon:
+                con_lai_theo_nhom.setdefault(row.get("status"), []).append(row)
+        con_lai = []
+        for vong in range(max((len(ds) for ds in con_lai_theo_nhom.values()), default=0)):
+            for ds in con_lai_theo_nhom.values():
+                if vong < len(ds):
+                    con_lai.append(ds[vong])
+        hoi_danh_sach = any(marker in normalized for marker in (
+            "danh sach", "liet ke", "tat ca", "day du", "sku nao", "cac sku", "nhung sku", "mat hang nao",
+            "san pham nao",
+        ))
+
+        def dung(so_bang, so_ung_vien, ten_toi_da=None):
+            chon_bang = con_lai[:so_bang]
+            # Cot ghi_chu chi them khi co dong can danh dau (het hang / ton so sach am).
+            co_ghi_chu = any(row.get("het_hang_ghi_nhan") or row.get("ton_so_sach_am") for row in chon_bang)
+            bang: dict = {}
+            for row in chon_bang:
+                dong = [_lam_tron_gon(row.get(cot)) for cot in _COT_TON_KHO_GON]
+                ten = dong[1]
+                if ten_toi_da and isinstance(ten, str) and len(ten) > ten_toi_da:
+                    dong[1] = ten[:ten_toi_da - 1].rstrip() + "…"
+                if co_ghi_chu:
+                    dong.append("het_hang" if row.get("het_hang_ghi_nhan")
+                                else "ton_am" if row.get("ton_so_sach_am") else "")
+                bang.setdefault(row.get("status"), []).append(dong)
+            so_bang = len(chon_bang)
+            da_hien = {}
+            for row in shown_risks:
+                da_hien[row.get("status")] = da_hien.get(row.get("status"), 0) + 1
+            for trang_thai, ds in bang.items():
+                da_hien[trang_thai] = da_hien.get(trang_thai, 0) + len(ds)
+            compact_supply = {
+                key: value for key, value in supply.items()
+                if key not in {"rows", "recent_customer_candidates"}
+            }
+            # So SKU chua liet ke theo goc nhin cua MODEL (khong phai theo limit cua tool) de answer_rule dung.
+            compact_supply["so_dong_chua_hien_theo_trang_thai"] = {
+                tt: int(so) - da_hien.get(tt, 0) for tt, so in dem_trang_thai.items()
+                if isinstance(so, (int, float)) and int(so) > da_hien.get(tt, 0)
+            }
+            ung_vien = shown_candidates[:so_ung_vien]
+            compact_supply.update({
+                "rows_shown_to_model": len(shown_risks),
+                "rows_in_compact_table": so_bang,
+                "rows_not_shown_to_model": max(0, len(risk_rows) - len(shown_risks) - so_bang),
+                "rows_are_sample": len(risk_rows) > len(shown_risks) + so_bang,
+                "rows": shown_risks,
+            })
+            if bang:
+                compact_supply["cac_dong_con_lai"] = {
+                    "cot": [*_COT_TON_KHO_GON, *(["ghi_chu"] if co_ghi_chu else [])], "theo_trang_thai": bang}
+                compact_supply["cac_dong_con_lai_ghi_chu"] = _GHI_CHU_BANG_TON_KHO_GON
+            compact_supply.update({
+                "recent_customer_candidates": ung_vien,
+                "customer_candidate_groups_shown": len(ung_vien),
+            })
+            compact_data = {
+                "as_of": data.get("as_of"),
+                "area_code": data.get("area_code"),
+                "summary": data.get("summary"),
+                "khong_xac_dinh_han": data.get("khong_xac_dinh_han"),
+                "expiry_rows": expiry_rows[:3] if asks_expiry else [],
+                "expiry_rows_are_sample": bool(asks_expiry and len(expiry_rows) > 3),
+                "supply_risk": compact_supply,
+                "sync_warning": data.get("sync_warning"),
+                "pham_vi_du_lieu": data.get("pham_vi_du_lieu"),
+            }
+            # 29/09/2026 (UAT C41): ton SKU = so sach da tru lo am; tong han dung chi gom lo duong. Model phai biet de
+            # khong dua hai con so lech nhau (1.350.134 vs 1.277.726) ma khong giai thich.
+            if data.get("lo_am"):
+                compact_data["lo_am"] = data["lo_am"]
+            return {**payload, "du_lieu": compact_data} if wrapper else compact_data
+
+        # Hoi danh sach: uu tien du SKU - bo dan khach goi y, roi rut ten dai (ma van du de dinh danh), sau cung moi bot
+        # dong. Cau khac (V39...): giu 3 nhom khach goi y nhu truoc, bang chi dung phan ngan sach con lai. Vuot
+        # MAX_PAYLOAD_CHARS thi luoi cat chung se cat MOI danh sach xuong vai dong, nen phai tu vua o day.
+        tat_ca = len(con_lai)
+        if hoi_danh_sach:
+            cac_muc = [(tat_ca, 3, None), (tat_ca, 1, None), (tat_ca, 0, None)]
+            cac_muc += [(tat_ca, 0, ten) for ten in _TEN_TON_KHO_RUT]
+            cac_muc += [(so, 0, _TEN_TON_KHO_RUT[-1]) for so in range(tat_ca - 1, -1, -1)]
+        else:
+            cac_muc = [(so, 3, None) for so in range(tat_ca, -1, -1)]
+        for so_bang, so_ung_vien, ten_toi_da in cac_muc:
+            ket_qua = dung(so_bang, so_ung_vien, ten_toi_da)
+            if len(json.dumps(ket_qua, ensure_ascii=False, default=_json_mac_dinh)) <= MAX_PAYLOAD_CHARS:
+                return ket_qua
+        return dung(0, 3)
 
     if tool_name != "check_order_timing":
         return payload
