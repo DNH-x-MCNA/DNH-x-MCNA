@@ -188,15 +188,26 @@ function Set-DichVu([string]$ten, [string]$exe, [string]$thamSo, [string]$thuMuc
     & $Nssm set $ten AppRotateBytes 10485760 | Out-Null
     & $Nssm set $ten Start SERVICE_AUTO_START | Out-Null
     # Khong chay bang SYSTEM: tien trinh nhan ket noi Internet chi co quyen cua LOCAL SERVICE.
-    # 02/10/2026 (thu tren may dev, PS 5.1): viet "& sc.exe ... password= ''" thi PowerShell BO MAT tham so rong,
-    # sc.exe in huong dan roi thoat 1639 va script dung ngay o dich vu dau tien. Start-Process giu nguyen tung
-    # tham so, ke ca cap password= "" ma sc.exe doi cho tai khoan khong co mat khau.
-    $sc = Start-Process -FilePath sc.exe -Wait -NoNewWindow -PassThru -ArgumentList `
-        'config', $ten, 'obj=', '"NT AUTHORITY\LocalService"', 'password=', '""'
+    $ma = Invoke-Sc "config $ten obj= `"NT AUTHORITY\LocalService`" password= `"`""
     $chayBang = (Get-CimInstance Win32_Service -Filter "Name='$ten'").StartName
-    if ($sc.ExitCode -ne 0 -or $chayBang -notmatch 'Local\s?Service') {
-        throw "khong doi duoc tai khoan chay cua $ten (sc.exe thoat $($sc.ExitCode); dang chay bang '$chayBang')"
+    if ($ma -ne 0 -or $chayBang -notmatch 'Local\s?Service') {
+        throw "khong doi duoc tai khoan chay cua $ten (sc.exe thoat $ma; dang chay bang '$chayBang')"
     }
+}
+
+# Chay sc.exe voi NGUYEN VAN chuoi tham so, tra ve ma thoat. Hai cach viet thong thuong deu hong tren PS 5.1:
+#  - "& sc.exe ... password= ''": PowerShell BO MAT tham so rong, sc.exe in huong dan roi thoat 1639 (thu 02/10/2026);
+#  - "Start-Process sc.exe -Wait -PassThru": sc.exe thoat qua nhanh thi Start-Process tu nem loi "Cannot process
+#    request because the process (...) has exited" - luc duoc luc khong (hong 2 lan tren CI 02/10/2026).
+# Process.Start cua .NET giu tay cam tien trinh tu luc tao nen khong co khoang ho do.
+function Invoke-Sc([string]$thamSo) {
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = Join-Path $env:SystemRoot 'System32\sc.exe'
+    $psi.Arguments = $thamSo
+    $psi.UseShellExecute = $false
+    $p = [System.Diagnostics.Process]::Start($psi)
+    $p.WaitForExit()
+    return $p.ExitCode
 }
 
 if ($GoBo) {

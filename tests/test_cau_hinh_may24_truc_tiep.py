@@ -119,37 +119,46 @@ def test_kiem_caddyfile_khong_chet_vi_stderr_va_chi_tra_dung_sai():
     assert ham.count("$ErrorActionPreference = $uuTienCu") == 2                  # tra lai ca khi loi
 
 
-def _tham_so_sc():
-    """Danh sach tham so ma cai_dat_lan_dau.ps1 truyen cho sc.exe (nguyen van trong script)."""
+def _ham_invoke_sc():
+    """(toan van script, nguyen van ham Invoke-Sc) cua cai_dat_lan_dau.ps1."""
     text = _doc(TT / "cai_dat_lan_dau.ps1")
-    m = re.search(r"\$sc = Start-Process -FilePath sc\.exe -Wait -NoNewWindow -PassThru -ArgumentList `\r?\n\s*(.+)", text)
-    assert m, "khong thay lenh doi tai khoan dich vu"
-    return text, m.group(1).strip()
+    assert "function Invoke-Sc(" in text, "khong thay ham Invoke-Sc"
+    than = text.split("function Invoke-Sc(", 1)[1].split("\n}\n", 1)[0]
+    return text, "function Invoke-Sc(" + than + "\n}\n"
 
 
 def test_doi_tai_khoan_dich_vu_giu_tham_so_mat_khau_rong():
-    """02/10/2026, thu tren may dev truoc khi -ApDung lan dau: `& sc.exe config X obj= '...' password= ''` trong
-    PS 5.1 BO MAT tham so rong, sc.exe in huong dan va thoat 1639 -> script dung ngay o dich vu dau tien, web khong
-    len. Phai truyen qua Start-Process voi cap password= "" va kiem lai tai khoan sau khi doi."""
-    text, tham_so = _tham_so_sc()
-    assert tham_so == """'config', $ten, 'obj=', '"NT AUTHORITY\\LocalService"', 'password=', '""'"""
+    """Hai cach viet thong thuong deu hong tren PS 5.1 (02/10/2026):
+    - `& sc.exe config X obj= '...' password= ''`: mat tham so rong, sc.exe thoat 1639 -> script dung o dich vu dau;
+    - `Start-Process sc.exe -Wait -PassThru`: sc.exe thoat qua nhanh thi Start-Process nem "the process has exited"
+      (luc duoc luc khong: tren may 24 chay duoc, tren CI hong 2 lan).
+    Phai goi qua Process.Start cua .NET voi nguyen van chuoi tham so, va kiem lai tai khoan sau khi doi."""
+    text, ham = _ham_invoke_sc()
+    assert '$ma = Invoke-Sc "config $ten obj= `"NT AUTHORITY\\LocalService`" password= `"`""' in text
+    assert "[System.Diagnostics.Process]::Start($psi)" in ham and "$p.WaitForExit()" in ham
+    assert "$psi.UseShellExecute = $false" in ham and "return $p.ExitCode" in ham
     lenh = "\n".join(d for d in text.splitlines() if not d.lstrip().startswith("#"))
-    assert "& sc.exe" not in lenh
-    assert "$chayBang -notmatch 'Local\\s?Service'" in text and "$sc.ExitCode -ne 0" in text
+    assert "& sc.exe" not in lenh and "Start-Process" not in lenh
+    assert "$ma -ne 0 -or $chayBang -notmatch 'Local\\s?Service'" in text
 
 
 @pytest.mark.skipif(not CO_POWERSHELL, reason="khong co Windows PowerShell")
-def test_sc_exe_nhan_dung_dang_tham_so_cua_script():
-    """Chay dung dang tham so do voi mot dich vu KHONG ton tai: 1060 (khong co dich vu) = sc.exe da hieu tham so;
-    1639 = sai cu phap dong lenh (dang cu). Khong doi gi tren may."""
-    _, tham_so = _tham_so_sc()
-    moi = ("$ten = 'DNH_Khong_Ton_Tai_Kiem_Thu'; $p = Start-Process -FilePath sc.exe -Wait -NoNewWindow -PassThru "
-           f"-ArgumentList {tham_so}; exit $p.ExitCode")
-    cu = "& sc.exe config DNH_Khong_Ton_Tai_Kiem_Thu obj= 'NT AUTHORITY\\LocalService' password= ''; exit $LASTEXITCODE"
-    kq = _powershell(["-Command", moi])
-    assert kq.returncode == 1060, kq.stderr[-800:]
-    kq = _powershell(["-Command", cu])
-    assert kq.returncode == 1639, kq.stderr[-800:]
+def test_sc_exe_nhan_dung_dang_tham_so_cua_script(tmp_path):
+    """Chay HAM THAT cua script 20 lan voi mot dich vu KHONG ton tai: lan nao cung phai ra 1060 (khong co dich vu =
+    sc.exe da hieu tham so). Dang viet cu `& sc.exe ... password= ''` ra 1639 (sai cu phap). Khong doi gi tren may."""
+    _, ham = _ham_invoke_sc()
+    thu = tmp_path / "thu_sc.ps1"
+    thu.write_text(ham + r'''
+$ma = @()
+1..20 | ForEach-Object { $ma += Invoke-Sc 'config DNH_Khong_Ton_Tai_Kiem_Thu obj= "NT AUTHORITY\LocalService" password= ""' }
+'MA=' + (($ma | Sort-Object -Unique) -join ',') + ' LAN=' + $ma.Count
+& sc.exe config DNH_Khong_Ton_Tai_Kiem_Thu obj= 'NT AUTHORITY\LocalService' password= '' | Out-Null
+"CU=$LASTEXITCODE"
+''', encoding="ascii")
+    kq = _powershell(["-File", str(thu)], timeout=180)
+    dong = [d.strip() for d in kq.stdout.splitlines()]
+    assert "MA=1060 LAN=20" in dong, (kq.stdout[-600:], kq.stderr[-600:])
+    assert "CU=1639" in dong, (kq.stdout[-600:], kq.stderr[-600:])
 
 
 def test_cai_dat_doi_tuong_lua_va_dns_truoc_khi_xin_chung_chi():
