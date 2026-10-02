@@ -257,3 +257,20 @@ def test_canh_bao_doi_khong_gui_khi_thang_da_het(gui):
 
     alerts.check_team_pace_alert(_bundle(dt.date(2026, 9, 29)))
     assert [s["alert_name"] for s in gui] == ["ĐỘI QLV CÓ NGUY CƠ HỤT CHỈ TIÊU THÁNG"]
+
+
+def _bundle_khach_im(as_of):
+    khach = {"customer_code": "KH001", "customer_name": "Khách mẫu", "sales_channel": "OTC", "region_key": "bac",
+             "baseline_monthly": 120_000_000, "months_ordered_by_this_day": 6}
+    return {"as_of": as_of, "rules": copy.deepcopy(insights.DEFAULT_RULES), "errors": {},
+            "silent_customers": {"evaluated": True, "rows": [khach]}}
+
+
+def test_canh_bao_khach_mua_deu_khong_goi_thang_da_het_la_thang_nay(gui):
+    """Sáng ngày 01, as_of là ngày cuối tháng trước: thẻ 01/10/2026 ghi "chưa có đơn THÁNG NÀY" cho tháng 9."""
+    alerts.check_silent_regular_customers_alert(_bundle_khach_im(dt.date(2026, 9, 30)))
+    assert gui == []
+
+    alerts.check_silent_regular_customers_alert(_bundle_khach_im(dt.date(2026, 9, 29)))
+    assert [s["alert_name"] for s in gui] == ["KHÁCH MUA ĐỀU CHƯA CÓ ĐƠN THÁNG NÀY (OTC)"]
+    assert "tới hết 29/09 tháng này chưa có đơn nào" in gui[0]["summary"]

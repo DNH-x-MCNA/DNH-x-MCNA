@@ -3106,6 +3106,12 @@ def check_silent_regular_customers_alert(bundle=None):
     if not part.get("evaluated"):
         print(f"[ALERTS][silent_customer] Ngày {as_of.day} chưa tới ngày {rule['min_day']} — chưa đánh giá.")
         return
+    if as_of.day >= insights._days_in_month(as_of.year, as_of.month):
+        # 02/10/2026: ngày 01, as_of là ngày CUỐI tháng trước. Thẻ sáng 01/10 ghi "chưa có đơn THÁNG NÀY" cho
+        # tháng 9 đã hết - người đọc hiểu là tháng 10, và "nên liên hệ sớm" không còn tác dụng với tháng đã khép.
+        # Cùng cách xử lý với cảnh báo đội (#169).
+        print(f"[ALERTS][silent_customer] Tháng {as_of:%m/%Y} đã hết — không cảnh báo 'chưa có đơn tháng này' nữa.")
+        return
     rows = part.get("rows") or []
     print(f"[ALERTS][silent_customer] {len(rows)} khách mua đều chưa có đơn tháng này.")
     month, lookback = as_of.strftime('%Y-%m'), int(rule["lookback_months"])
