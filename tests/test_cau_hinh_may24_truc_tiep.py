@@ -44,8 +44,11 @@ def _khoi(text, mo_dau):
 
 
 def _powershell(lenh, **kw):
+    # CI chay pytest tu PowerShell 7: bien PSModulePath cua no tro vao module ban 7, Windows PowerShell 5.1 ke thua
+    # bien do thi khong nap duoc Microsoft.PowerShell.Security (Get-Acl). Bo bien de 5.1 dung duong dan mac dinh.
+    moi_truong = {k: v for k, v in os.environ.items() if k.upper() != "PSMODULEPATH"}
     return subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass"] + lenh,
-                          capture_output=True, text=True, **kw)
+                          capture_output=True, text=True, env=moi_truong, **kw)
 
 
 def test_caddy_ghi_de_header_ip_cho_moi_duong_vao_web():
