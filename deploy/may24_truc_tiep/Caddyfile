@@ -1,0 +1,73 @@
+# Web chatbot DNH chay THANG tren may 24 (02/10/2026, anh Dang chot): DNS A -> IP public DNH -> NAT TCP 443 ->
+# may 24 -> Caddy (file nay) -> Next.js 127.0.0.1:3000 -> FastAPI 127.0.0.1:8010.
+# Sua trong repo roi khoi dong lai dich vu DNH_Chatbot_Proxy; KHONG sua tay ban dang chay.
+# Kiem cu phap truoc khi chay:  caddy.exe validate --config Caddyfile --adapter caddyfile
+#
+# Ten mien va may chu ACME lay tu bien moi truong cua dich vu (cai_dat_lan_dau.ps1 dat):
+#   DNH_WEB_HOST  - mac dinh chatbot.namhatrading.com; chay thu dat uat-chatbot.namhatrading.com
+#   DNH_ACME_CA   - mac dinh Let's Encrypt that; chay thu dat ban staging de khong dung gioi han cap chung chi
+{
+	# Chi cong 443 duoc NAT vao may 24. Khong mo cong 80: bo chuyen huong HTTP->HTTPS va lay chung chi bang
+	# TLS-ALPN-01 ngay tren cong 443 (xem tls ben duoi).
+	auto_https disable_redirects
+	# Chung chi + khoa rieng nam o day (thu muc chi Administrators/SYSTEM/LOCAL SERVICE doc duoc).
+	storage file_system C:/dnh_web/caddy_data
+	# Khong mo cong quan tri; doi cau hinh = khoi dong lai dich vu.
+	admin off
+	servers {
+		# NAT chi co TCP 443 nen khong quang cao HTTP/3 (UDP).
+		protocols h1 h2
+	}
+}
+
+(proxy_web) {
+	# CHONG DO MAT KHAU: src/app/api/_proxy.ts (clientIpHeaders) lay IP nguoi dung tu x-real-ip roi
+	# x-forwarded-for va chuyen cho backend lam khoa gioi han dang nhap sai. Hai header nay phai bi GHI DE bang
+	# IP ket noi that; khong ghi de thi nguoi dung tu gui X-Real-IP gia moi lan la ne duoc gioi han.
+	header_up X-Real-IP {remote_host}
+	header_up X-Forwarded-For {remote_host}
+	transport http {
+		# /api/chat (khong stream) cho het cau tra loi moi tra ve; cau nang co the chay vai phut.
+		response_header_timeout 300s
+	}
+}
+
+{$DNH_WEB_HOST:chatbot.namhatrading.com} {
+	tls {
+		issuer acme {
+			dir {$DNH_ACME_CA:https://acme-v02.api.letsencrypt.org/directory}
+			disable_http_challenge
+		}
+	}
+
+	# Khong includeSubDomains: chi ap cho dung ten chatbot. Header bao mat con lai do next.config.ts dat.
+	header Strict-Transport-Security "max-age=31536000"
+	header -Server
+
+	# Cau hoi/chat chi vai KB; khong co chuc nang tai file len.
+	request_body {
+		max_size 1MB
+	}
+
+	# Tra loi dang stream (SSE): day tung manh ngay, khong gom lai.
+	@stream path /api/chat/stream
+	handle @stream {
+		reverse_proxy 127.0.0.1:3000 {
+			import proxy_web
+			flush_interval -1
+		}
+	}
+
+	handle {
+		reverse_proxy 127.0.0.1:3000 {
+			import proxy_web
+		}
+	}
+
+	log {
+		output file C:/dnh_web/logs/caddy_access.log {
+			roll_size 20MiB
+			roll_keep 10
+		}
+	}
+}
