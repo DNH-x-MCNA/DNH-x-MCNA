@@ -90,6 +90,18 @@ def test_web_chi_nghe_localhost_va_dich_vu_khong_chay_system():
     assert "DNH_ACME_CA=$ACME_THU" in text and "acme-staging-v02" in text   # chay thu dung chung chi staging
 
 
+def test_kiem_caddyfile_khong_chet_vi_stderr_va_chi_tra_dung_sai():
+    """02/10/2026, lan dau chay tren may 24: Caddy ghi nhat ky ra stderr, PS 5.1 + ErrorActionPreference=Stop bien
+    dong do thanh loi dung script truoc khi co ket qua. Va ham tung tra kem cac dong chu nen `if` luon dung."""
+    text = _doc(TT / "cai_dat_lan_dau.ps1")
+    ham = text.split("function Test-Caddyfile {", 1)[1].split("
+function ", 1)[0]
+    assert ham.index("$ErrorActionPreference = 'Continue'") < ham.index("& $Caddy validate")
+    assert "$ma = $LASTEXITCODE" in ham and "return ($ma -eq 0)" in ham
+    assert "Write-Host" in ham and 'ForEach-Object { "   $_" }' not in ham      # khong tha chuoi vao gia tri tra ve
+    assert ham.count("$ErrorActionPreference = $uuTienCu") == 2                  # tra lai ca khi loi
+
+
 def test_tuong_lua_cho_443_cho_caddy_va_dong_3000_8010():
     text = _doc(TT / "tuong_lua_truc_tiep.ps1")
     assert re.search(r"-Action Allow -Protocol TCP -LocalPort 443 -Program \$Caddy", text)
