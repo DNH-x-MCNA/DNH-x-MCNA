@@ -43,12 +43,15 @@ def _khoi(text, mo_dau):
     return text[sau:i - 1]
 
 
-def _powershell(lenh, **kw):
-    # CI chay pytest tu PowerShell 7: bien PSModulePath cua no tro vao module ban 7, Windows PowerShell 5.1 ke thua
-    # bien do thi khong nap duoc Microsoft.PowerShell.Security (Get-Acl). Bo bien de 5.1 dung duong dan mac dinh.
-    moi_truong = {k: v for k, v in os.environ.items() if k.upper() != "PSMODULEPATH"}
+def _powershell(lenh, bo_module_path=False, **kw):
+    """Goi Windows PowerShell 5.1. CI chay pytest tu PowerShell 7, hai luot CI 02/10/2026 cho thay:
+    - giu nguyen moi truong: Get-Acl KHONG nap duoc (PSModulePath cua ban 7 tro vao module ban 7);
+    - dung lai moi truong tu os.environ de bo bien do: Get-Acl chay, nhung Start-Process lai loi.
+    Nen chi bo PSModulePath cho lan goi can Get-Acl; cac lan khac ke thua nguyen moi truong."""
+    if bo_module_path:
+        kw["env"] = {k: v for k, v in os.environ.items() if k.upper() != "PSMODULEPATH"}
     return subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass"] + lenh,
-                          capture_output=True, text=True, env=moi_truong, **kw)
+                          capture_output=True, text=True, **kw)
 
 
 def test_caddy_ghi_de_header_ip_cho_moi_duong_vao_web():
@@ -143,8 +146,10 @@ def test_sc_exe_nhan_dung_dang_tham_so_cua_script():
     moi = ("$ten = 'DNH_Khong_Ton_Tai_Kiem_Thu'; $p = Start-Process -FilePath sc.exe -Wait -NoNewWindow -PassThru "
            f"-ArgumentList {tham_so}; exit $p.ExitCode")
     cu = "& sc.exe config DNH_Khong_Ton_Tai_Kiem_Thu obj= 'NT AUTHORITY\\LocalService' password= ''; exit $LASTEXITCODE"
-    assert _powershell(["-Command", moi]).returncode == 1060
-    assert _powershell(["-Command", cu]).returncode == 1639
+    kq = _powershell(["-Command", moi])
+    assert kq.returncode == 1060, kq.stderr[-800:]
+    kq = _powershell(["-Command", cu])
+    assert kq.returncode == 1639, kq.stderr[-800:]
 
 
 def test_cai_dat_doi_tuong_lua_va_dns_truoc_khi_xin_chung_chi():
@@ -265,7 +270,7 @@ def test_khoa_quyen_chay_that_tren_thu_muc_tam(tmp_path):
     do = tmp_path / "in_ace.ps1"
     do.write_text(_IN_ACE, encoding="ascii")
     kq = _powershell(["-File", str(do), "-Script", str(TT / "khoa_quyen_truc_tiep.ps1"), "-Goc", str(tmp_path / "cay")],
-                     timeout=180)
+                     bo_module_path=True, timeout=180)
     assert kq.returncode == 0, (kq.stdout, kq.stderr)
     ra = dict(d.split("=", 1) for d in kq.stdout.splitlines() if "=" in d)
     for bi_mat in ("env", "env_backend", "deploy_khac"):
