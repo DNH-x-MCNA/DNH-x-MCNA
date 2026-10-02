@@ -23,6 +23,8 @@ $RELEASES = Join-Path $GocWeb 'releases'
 $CURRENT = Join-Path $GocWeb 'current'
 $ENV_FILE = Join-Path $GocWeb 'web.env'
 $KHOA = Join-Path $GocWeb 'deploy.lock'
+# Ten file do cai_dat_lan_dau.ps1 dat cho NSSM: logs\<ten dich vu>.err.log
+$NHAT_KY_LOI = Join-Path $GocWeb "logs\$DichVu.err.log"
 
 function Log([string]$s) { Write-Host ("{0} {1}" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $s) }
 function Dung([string]$s) { Log "DUNG: $s"; throw $s }
@@ -88,7 +90,7 @@ function Invoke-QuayLai {
     if (-not $truoc) { Dung "khong co ban build truoc de quay ve (dang chay: $dangChay)" }
     Log "Quay ve $truoc (dang chay: $dangChay)"
     Set-BanChay $truoc
-    if ((Test-CoDichVu) -and -not (Test-WebLen)) { Dung "ban truoc cung khong len - xem $GocWeb\logs\web.err.log" }
+    if ((Test-CoDichVu) -and -not (Test-WebLen)) { Dung "ban truoc cung khong len - xem $NHAT_KY_LOI" }
     Log "DAT: web chay lai ban $truoc"
 }
 
@@ -156,7 +158,7 @@ function Invoke-Deploy {
             Set-BanChay $truoc
             if (Test-WebLen) { Log "Da quay ve $truoc" }
         }
-        Dung "deploy $sha that bai - xem $GocWeb\logs\web.err.log (ban loi giu lai o $dich de xem)"
+        Dung "deploy $sha that bai - xem $NHAT_KY_LOI (ban loi giu lai o $dich de xem)"
     }
     Log "DAT: web chay ban $sha ($dich)"
     Test-Backend

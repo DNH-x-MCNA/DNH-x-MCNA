@@ -5,6 +5,8 @@
 # cloudflared (goi localhost:8010) KHONG bi anh huong. Rule CHAN thang rule CHO, nen dong 8010 o day la dong han,
 # ke ca khi dang co rule cho python.exe. uvicorn van nghe 0.0.0.0:8010 (run_supervisor.ps1) - khong can sua code.
 # Firewall/NAT cua DNH la lop ngoai: chi duoc NAT TCP 443; day la lop trong tren chinh may 24.
+# Chay -ApDung TRUOC cai_dat_lan_dau.ps1 -ApDung: Let's Encrypt kiem ten mien bang cach goi vao cong 443 cua may nay,
+# chua co rule CHO thi lan xin chung chi dau tien hong. Rule gan theo duong dan caddy.exe nen tao truoc duoc.
 #
 #   .\tuong_lua_truc_tiep.ps1            # CHI KIEM, khong doi gi (mac dinh)
 #   .\tuong_lua_truc_tiep.ps1 -ApDung    # tao 2 rule tren
