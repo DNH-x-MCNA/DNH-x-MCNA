@@ -1,4 +1,5 @@
 import os
+import re
 import sys
 import time
 import sqlite3
@@ -222,19 +223,38 @@ def _log_alert_severity(alert_name, severity, region=None, issue=None, channel=N
 
 
 
-def _count_alert_occurrences_this_month(alert_name):
+_PHAN_TRAM_DAU_CHAM = re.compile(r"(?<![\d.,])(\d+)\.(\d+)(\s?%)")
+
+
+def _phan_tram_kieu_viet(value):
+    """02/10/2026: "40.7%" -> "40,7%" trong nội dung cảnh báo. Số tiền trong thẻ đã dùng dấu phẩy thập phân
+    (format_vietnamese_money) còn khoảng 50 chỗ in phần trăm bằng f-string để dấu chấm, nên cùng một thẻ có cả
+    "1,25 tỷ" lẫn "40.7%". Đổi ở MỘT chỗ trước khi gửi thay vì sửa từng chuỗi. Chỉ đụng số liền trước dấu %."""
+    if isinstance(value, str):
+        return _PHAN_TRAM_DAU_CHAM.sub(r"\1,\2\3", value)
+    if isinstance(value, (list, tuple)):
+        return type(value)(_phan_tram_kieu_viet(v) for v in value)
+    if isinstance(value, dict):
+        return {k: _phan_tram_kieu_viet(v) for k, v in value.items()}
+    return value
+
+
+def _count_alert_occurrences_this_month(alert_name, region=None, channel=None):
     """15/07/2026: đếm số lần alert_name đã bắn CRITICAL (tức thực sự lên Teams — WARNING/INFO
     chỉ log, không gửi, xem require_critical_for_teams) trong THÁNG HIỆN TẠI, tính cả lần vừa được
     _log_alert_severity() ghi ngay phía trên lời gọi hàm này — dùng để báo "lần thứ N trong tháng"
     trong card Teams, giúp người nhận phân biệt cảnh báo lặp lại (vấn đề tồn đọng) hay mới phát
-    sinh. Lỗi đếm không được chặn gửi alert thật — trả về 1 (coi như lần đầu) nếu lỗi."""
+    sinh. Lỗi đếm không được chặn gửi alert thật — trả về 1 (coi như lần đầu) nếu lỗi.
+
+    02/10/2026: đếm theo CÙNG vùng và kênh. Trước đây chỉ đếm theo tên cảnh báo nên thẻ ĐẦU TIÊN của Miền Bắc
+    bị ghi "lần thứ 2 … đã lặp lại" chỉ vì Miền Nam vừa có một thẻ cùng tên (thẻ 01/10/2026)."""
     try:
         conn = sqlite3.connect(STATE_DB_PATH)
         month_prefix = datetime.now().strftime('%Y-%m')
         row = conn.execute(
             "SELECT COUNT(*) FROM alert_severity_log WHERE alert_name=? AND severity='CRITICAL' "
-            "AND strftime('%Y-%m', sent_at)=?",
-            (alert_name, month_prefix)
+            "AND strftime('%Y-%m', sent_at)=? AND IFNULL(region, '')=? AND IFNULL(channel, '')=?",
+            (alert_name, month_prefix, region or '', channel or '')
         ).fetchone()
         conn.close()
         return row[0] if row else 1
@@ -1731,6 +1751,7 @@ def send_alert_to_all_channels(alert_name, severity, summary, table_headers=None
     """
     print(f"\n--- BAT DAU GUI CANH BAO: {alert_name} [{severity}] (kenh: {', '.join(channels)}) ---")
     _log_alert_severity(alert_name, severity, region=region, issue=issue, channel=channel)
+    summary, table_rows, sections = (_phan_tram_kieu_viet(v) for v in (summary, table_rows, sections))
     any_sent = False
 
     # 1. Gui qua Email
@@ -1761,10 +1782,11 @@ def send_alert_to_all_channels(alert_name, severity, summary, table_headers=None
             if not webhooks:
                 print("[WARNING] Không có webhook Teams nào khớp (kiểm tra TEAMS_WEBHOOK_URL/.env hoặc report_recipients).")
             else:
-                occurrence_n = _count_alert_occurrences_this_month(alert_name)
+                occurrence_n = _count_alert_occurrences_this_month(alert_name, region=region, channel=channel)
                 occurrence_summary = summary
                 if occurrence_n > 1:
-                    occurrence_summary += f" (Lần thứ {occurrence_n} trong tháng {datetime.now().strftime('%m/%Y')} — cảnh báo này đã lặp lại nhiều lần, vấn đề có thể vẫn tồn đọng.)"
+                    occurrence_summary += (f" (Lần thứ {occurrence_n} trong tháng {datetime.now().strftime('%m/%Y')} "
+                                           "của cùng phạm vi — cảnh báo này lặp lại, vấn đề có thể vẫn tồn đọng.)")
                 _pending_critical_teams_alerts.append({
                     "alert_name": alert_name, "summary": occurrence_summary,
                     "period": period, "channel": channel, "region": region, "issue": issue,
