@@ -547,7 +547,14 @@ def test_v39_payload_uu_tien_ton_cao_khach_goi_y_va_van_duoi_gioi_han():
     assert len(encoded) <= nl2sql.MAX_PAYLOAD_CHARS
     assert compact["supply_risk"]["focus"] == "overstock"
     assert compact["supply_risk"]["rows_shown_to_model"] == 6
-    assert compact["supply_risk"]["rows_not_shown_to_model"] == 16
+    # 01/10/2026: truoc day 16 dong con lai KHONG toi model (rows_not_shown_to_model == 16) - log may 24 cho thay model
+    # goi lai voi limit lon hon ma van chi nhan 6-12 dong. Nay 16 dong do di kem o bang gon; dong mau va khach goi y
+    # giu nguyen nhu ban dang dat UAT.
+    assert compact["supply_risk"]["rows_in_compact_table"] == 16
+    assert compact["supply_risk"]["rows_not_shown_to_model"] == 0
+    bang = compact["supply_risk"]["cac_dong_con_lai"]
+    assert bang["cot"] == ["item_code", "item_name", "stock_qty", "average_monthly_qty_3m"]
+    assert [d[0] for d in bang["theo_trang_thai"]["CHAM_LUAN_CHUYEN_DERIVED"]] == [f"SLOW{i}" for i in range(6, 22)]
     assert all("months_of_cover" not in row for row in compact["supply_risk"]["rows"])
     assert "months_of_cover" not in encoded
     assert len(compact["supply_risk"]["recent_customer_candidates"]) == 3
