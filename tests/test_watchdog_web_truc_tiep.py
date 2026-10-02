@@ -17,9 +17,12 @@ from pathlib import Path
 import pytest
 
 GOC = Path(__file__).resolve().parents[1]
+# Them backend/ vao CUOI sys.path, khong chen len dau: chen len dau thi file test nap sau do ma `import main` se nhan
+# backend/main.py thay cho main.py o goc repo (02/10/2026: 2 test cua test_tien_do_thang_chuyen_thang.py hong tren
+# may 24 chi vi duoc chay sau file nay).
 for _p in (str(GOC), str(GOC / "backend")):
     if _p not in sys.path:
-        sys.path.insert(0, _p)
+        sys.path.append(_p)
 
 import health_watchdog as wd  # noqa: E402
 
