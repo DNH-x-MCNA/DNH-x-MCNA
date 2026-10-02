@@ -80,7 +80,7 @@ def test_caddy_chi_443_khong_cong_80_khong_cong_quan_tri():
     assert "disable_http_challenge" in tls                                 # lay chung chi qua 443 (TLS-ALPN-01)
     assert "{$DNH_ACME_CA:https://acme-v02.api.letsencrypt.org/directory}" in tls
     # Chi MOT site, ten lay tu bien moi truong, mac dinh la ten that; khong co site ":80" hay "http://".
-    assert "{$DNH_WEB_HOST:chatbot.namhatrading.com} {" in text
+    assert "{$DNH_WEB_HOST:chat.namhatrading.com} {" in text
     assert not re.search(r"^\s*(:80|http://)", text, re.M)
 
 

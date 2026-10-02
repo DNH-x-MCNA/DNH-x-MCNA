@@ -4,7 +4,7 @@
 # Ca hai chay bang tai khoan LOCAL SERVICE (khong phai SYSTEM): day la phan duy nhat nhan ket noi tu Internet.
 #
 #   .\cai_dat_lan_dau.ps1                      # CHI KIEM, khong doi gi (mac dinh)
-#   .\cai_dat_lan_dau.ps1 -ApDung              # dang ky/cap nhat dich vu cho chatbot.namhatrading.com, chung chi that
+#   .\cai_dat_lan_dau.ps1 -ApDung              # dang ky/cap nhat dich vu cho chat.namhatrading.com, chung chi that
 #   .\cai_dat_lan_dau.ps1 -ApDung -ChayThu     # cung ten mien nhung xin chung chi THU (staging): dung de do loi xin
 #                                              # chung chi ma khong ton han muc Let's Encrypt; trinh duyet se canh bao
 #   .\cai_dat_lan_dau.ps1 -GoBo                # dung va xoa hai dich vu (khong xoa C:\dnh_web)
@@ -18,7 +18,7 @@ param(
     [switch]$GoBo,
     [switch]$ChayThu,
     [switch]$BoQuaKiemTruoc,
-    [string]$TenMien = 'chatbot.namhatrading.com',
+    [string]$TenMien = 'chat.namhatrading.com',
     [string]$TenMienThu = '',
     [string]$GocWeb = 'C:\dnh_web',
     [string]$Repo = 'C:\dnh_chatbot',

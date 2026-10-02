@@ -2,20 +2,24 @@
 
 Trạng thái 02/10/2026:
 
-- **Đã xong trên máy 24:** code `5fa4ad8`, `C:\dnh_web\web.env`, bản build web (`current` → `releases\…`),
-  `caddy.exe` 2.11.6 (đã đối chiếu SHA512), Caddyfile hợp lệ, web tạm ↔ backend gọi được nhau.
-- **Chưa làm:** rule Windows Firewall, đăng ký hai dịch vụ, khoá quyền, chứng chỉ.
-- **Chờ DNH:** NAT 443 và bản ghi DNS (kiểm 02/10 14:30: `chatbot.namhatrading.com` chưa có bản ghi A).
+- **Đã xong trên máy 24:** `C:\dnh_web\web.env`, bản build web (`current` → `releases\…`), `caddy.exe` 2.11.6 (đã
+  đối chiếu SHA512), rule Windows Firewall, hai dịch vụ `DNH_Chatbot_Web` và `DNH_Chatbot_Proxy` chạy bằng
+  `LOCAL SERVICE` (đăng ký 15:54 ở chế độ `-ChayThu`; Caddy nghe 443, gọi được từ mạng nội bộ).
+- **Chưa làm:** chứng chỉ thật, khoá quyền, đổi `CHATBOT_WEB_URL`.
+- **Chờ DNH:** NAT 443 (16:12 từ ngoài chưa nối được `210.245.88.137:443`) và bản ghi DNS. `chat.namhatrading.com`
+  đang là **CNAME** trỏ tới một Cloudflare Tunnel cũ (`….cfargotunnel.com`, không dùng được vì tên miền không nằm
+  trên Cloudflare): phải xoá CNAME đó rồi thêm bản ghi A.
 - Người dùng vẫn vào `https://dnh-bot.vercel.app`.
 
 Anh Đăng chốt 02/10: bỏ cả Vercel lẫn Cloud Server trung gian, tên miền trỏ thẳng vào máy 24, và đi thẳng tên thật
-`chatbot.namhatrading.com` (không dựng `uat-chatbot`). Bộ `deploy/cloud_server/` (#164) giữ lại làm phương án dự phòng.
+`chat.namhatrading.com` (không dựng tên thử riêng). Tên này do DNH chọn; bản soạn đầu của bộ cài ghi nhầm là
+`chatbot.namhatrading.com`. Bộ `deploy/cloud_server/` (#164) giữ lại làm phương án dự phòng và vẫn ghi tên cũ.
 
 ## Sơ đồ
 
 ```
 Trình duyệt
-  │ (1) hỏi DNS Mắt Bão: chatbot.namhatrading.com → IP public của DNH (bản ghi A)
+  │ (1) hỏi DNS Mắt Bão: chat.namhatrading.com → IP public của DNH (bản ghi A)
   │ (2) HTTPS, cổng 443
   ▼
 Firewall/NAT của DNH: IP public:443 → máy 24:443 (chỉ cổng này)
@@ -49,8 +53,8 @@ Máy 24 (DC-DATA-REPORT, 172.16.0.24)
 |---|---|---|
 | 1 | NAT **TCP 443** từ một IP public tĩnh vào `172.16.0.24:443`, nguồn `Any`. Không NAT 80, 3000, 8010, SQL, RDP | Từ ngoài mạng DNH, `Test-NetConnection <IP public> -Port 443` ra `True` (sau khi Caddy chạy) |
 | 2 | NAT phải **giữ IP nguồn của người dùng** (DNAT, không đổi nguồn thành IP firewall) | Xem mục kiểm IP bên dưới |
-| 3 | Bản ghi **A** `chatbot` → IP public đó, TTL 300 (DNS Mắt Bão của `namhatrading.com`) | `cai_dat_lan_dau.ps1` in `DNS cong khai : <đúng IP>` |
-| 4 | Người ngồi **trong văn phòng** mở được tên miền: firewall cho vòng lại (hairpin NAT), hoặc thêm bản ghi DNS nội bộ `chatbot.namhatrading.com` → `172.16.0.24` | Từ một máy trong văn phòng mở được `https://chatbot.namhatrading.com` |
+| 3 | Xoá bản ghi **CNAME** `chat` đang có, thêm bản ghi **A** `chat` → IP public đó (`210.245.88.137`), TTL 300 (DNS Mắt Bão của `namhatrading.com`) | `cai_dat_lan_dau.ps1` in `DNS cong khai : <đúng IP>` |
+| 4 | Người ngồi **trong văn phòng** mở được tên miền: firewall cho vòng lại (hairpin NAT), hoặc thêm bản ghi DNS nội bộ `chat.namhatrading.com` → `172.16.0.24` | Từ một máy trong văn phòng mở được `https://chat.namhatrading.com` |
 
 Không đụng `@`, MX, SPF, DKIM hay bản ghi khác của tên miền.
 
@@ -101,13 +105,13 @@ Không dán khoá API hay nội dung `web.env` vào chat, email hoặc repo.
    `remote_ip` của dòng đó phải là IP Internet của máy ngoài, không phải IP firewall DNH. Nếu là IP firewall thì
    dừng, báo DNH sửa NAT (mục 2 của bảng DNH).
 4. Từ một máy khác trong LAN: `Test-NetConnection 172.16.0.24 -Port 8010` và `-Port 3000` phải ra `False`.
-5. Từ một máy trong văn phòng: mở được `https://chatbot.namhatrading.com` (mục 4 của bảng DNH).
+5. Từ một máy trong văn phòng: mở được `https://chat.namhatrading.com` (mục 4 của bảng DNH).
 6. Phân quyền: đăng nhập bằng một tài khoản QLV, một GĐ miền, một C-Level; mỗi tài khoản chỉ thấy phạm vi của mình.
 7. Chỉ hỏi câu tốn phí model khi anh Đăng duyệt.
 
 ## Chuyển người dùng sang tên miền mới
 
-1. Sửa `CHATBOT_WEB_URL=https://chatbot.namhatrading.com` trong `C:\dnh_chatbot\.env`, rồi
+1. Sửa `CHATBOT_WEB_URL=https://chat.namhatrading.com` trong `C:\dnh_chatbot\.env`, rồi
    `Restart-Service DNH_Realtime_Alerts` (link trong thẻ Teams và email). Tránh 17:15–18:15.
 2. Báo người dùng địa chỉ mới.
 3. Giữ `DNH_Chatbot_Tunnel` và Vercel chạy song song cho tới khi DNH xác nhận ổn định. Sau đó
