@@ -45,11 +45,21 @@ function Get-MoiTruongProxy {
 
 function Test-Caddyfile {
     $cu = $env:DNH_WEB_HOST, $env:DNH_ACME_CA
+    $uuTienCu = $ErrorActionPreference
     try {
         foreach ($kv in Get-MoiTruongProxy) { $k, $v = $kv -split '=', 2; Set-Item -Path "env:$k" -Value $v }
-        & $Caddy validate --config $CADDYFILE --adapter caddyfile 2>&1 | Select-Object -Last 3 | ForEach-Object { "   $_" }
-        return ($LASTEXITCODE -eq 0)
+        # 02/10/2026 (lan dau chay tren may 24): Caddy ghi nhat ky ra stderr; PS 5.1 voi ErrorActionPreference=Stop
+        # bien dong stderr DAU TIEN cua lenh ngoai thanh loi dung script, chua kip co ket qua. Ha xuong Continue
+        # trong luc goi. Ket qua in bang Write-Host de ham CHI tra ve dung/sai (truoc day tra kem ca cac dong chu,
+        # nen "if (Test-Caddyfile)" luon dung).
+        $ErrorActionPreference = 'Continue'
+        $ra = & $Caddy validate --config $CADDYFILE --adapter caddyfile 2>&1 | ForEach-Object { "$_" }
+        $ma = $LASTEXITCODE
+        $ErrorActionPreference = $uuTienCu
+        $ra | Select-Object -Last 3 | ForEach-Object { Write-Host "   $_" }
+        return ($ma -eq 0)
     } finally {
+        $ErrorActionPreference = $uuTienCu
         $env:DNH_WEB_HOST, $env:DNH_ACME_CA = $cu
     }
 }
