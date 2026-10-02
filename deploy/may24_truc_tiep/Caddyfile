@@ -4,8 +4,8 @@
 # Kiem cu phap truoc khi chay:  caddy.exe validate --config Caddyfile --adapter caddyfile
 #
 # Ten mien va may chu ACME lay tu bien moi truong cua dich vu (cai_dat_lan_dau.ps1 dat):
-#   DNH_WEB_HOST  - mac dinh chatbot.namhatrading.com; chay thu dat uat-chatbot.namhatrading.com
-#   DNH_ACME_CA   - mac dinh Let's Encrypt that; chay thu dat ban staging de khong dung gioi han cap chung chi
+#   DNH_WEB_HOST  - mac dinh chatbot.namhatrading.com
+#   DNH_ACME_CA   - mac dinh Let's Encrypt that; -ChayThu dat ban staging de do loi ma khong ton han muc cap chung chi
 {
 	# Chi cong 443 duoc NAT vao may 24. Khong mo cong 80: bo chuyen huong HTTP->HTTPS va lay chung chi bang
 	# TLS-ALPN-01 ngay tren cong 443 (xem tls ben duoi).

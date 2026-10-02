@@ -32,7 +32,10 @@ import json
 import math
 import time
 import datetime as dt
+import socket
 import sqlite3
+import ssl
+import urllib.parse
 import urllib.request
 
 # Chay qua Task Scheduler (console cp1252 tren Windows) - log co the chua URL/ky tu dac biet (vd
@@ -58,6 +61,19 @@ SYNC_STALE_THRESHOLD_MIN = 90
 # Tunnel URL lech Vercel qua 10 phut - du dai hon nhieu so voi thoi gian redeploy binh thuong
 # (~20-40s do quan sat thuc te) de tranh bao dong gia trong luc dang tu cap nhat.
 TUNNEL_MISMATCH_THRESHOLD_MIN = 10
+
+# 02/10/2026: web chatbot chay THANG tren may 24 (deploy/may24_truc_tiep): Caddy :443 -> Next.js 127.0.0.1:3000.
+# Khi web con o Vercel thi watchdog khong canh gi phan web. Chi canh khi CA HAI dung: CHATBOT_WEB_URL (link trong the
+# Teams/email) da tro ve ten mien rieng, va ban web co tren may nay. Truoc luc chuyen, hoac khi quay ve Vercel: bo qua.
+WEB_DIR = r"C:\dnh_web\current"
+WEB_URL_NOI_BO = "http://127.0.0.1:3000/"
+WEB_LOG_DIR = r"C:\dnh_web\logs"
+# deploy_web.ps1 va viec khoi dong lai dich vu lam web/Caddy ngung vai giay: thu lai truoc khi coi la su co.
+WEB_SO_LAN_THU = 3
+WEB_CHO_GIUA_LAN_S = 10
+# Caddy tu gia han khi con 1/3 thoi han chung chi. Con duoi 1/6 (chung chi 90 ngay: duoi 15 ngay) nghia la viec gia
+# han da loi mot thoi gian dang ke.
+CERT_PHAN_CON_LAI_BAO_DONG = 1 / 6
 
 # Webhook C-Level (Toan quoc) - dung chung kenh voi canh bao cong no hien co (TEAMS_WEBHOOK_C_LEVEL trong .env).
 # Co the ghi de qua bien moi truong WATCHDOG_TEAMS_WEBHOOK neu sau nay can tach kenh rieng.
@@ -320,6 +336,154 @@ def _recent_credit_rejection() -> tuple | None:
     return row[0], row[1]
 
 
+def _ten_mien_web_truc_tiep():
+    """Ten mien can canh, hoac None khi web khong chay tren may nay (con o Vercel / chua chuyen / da quay ve)."""
+    url = _doc_bien_env("CHATBOT_WEB_URL")
+    host = (urllib.parse.urlsplit(url).hostname or "").lower() if url else ""
+    if not host or host.endswith(".vercel.app"):
+        return None
+    if not os.path.isdir(_doc_bien_env("WATCHDOG_WEB_DIR") or WEB_DIR):
+        return None
+    return host
+
+
+def _bay_gio_utc() -> dt.datetime:
+    return dt.datetime.now(dt.timezone.utc).replace(tzinfo=None)
+
+
+def _goi_web_noi_bo():
+    """Goi web Next.js qua loopback, bo qua proxy he thong. Khong 200 -> nem loi."""
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    with opener.open(WEB_URL_NOI_BO, timeout=10) as r:
+        if r.status != 200:
+            raise RuntimeError(f"HTTP {r.status}")
+    return True
+
+
+def _lay_chung_chi_der(host: str, may: str = "127.0.0.1", cong: int = 443) -> bytes:
+    """Bat tay TLS voi Caddy tren chinh may nay (SNI = ten mien) va tra ve chung chi dang phuc vu (DER).
+    Khong xac thuc chuoi chung chi: Python tren Windows dung kho CA cua may, kho do co the chua co goc cua
+    Let's Encrypt va se bao dong gia. O day chi can biet Caddy co phuc vu chung chi va no het han ngay nao."""
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    with socket.create_connection((may, cong), timeout=10) as s:
+        with ctx.wrap_socket(s, server_hostname=host) as t:
+            der = t.getpeercert(binary_form=True)
+    if not der:
+        raise RuntimeError("may chu khong gui chung chi")
+    return der
+
+
+def _der_phan_tu(buf: bytes, vi_tri: int) -> tuple:
+    """(tag, dau_noi_dung, cuoi_noi_dung) cua phan tu DER bat dau tai vi_tri."""
+    tag = buf[vi_tri]
+    do_dai = buf[vi_tri + 1]
+    vi_tri += 2
+    if do_dai & 0x80:
+        so_byte = do_dai & 0x7F
+        do_dai = int.from_bytes(buf[vi_tri:vi_tri + so_byte], "big")
+        vi_tri += so_byte
+    return tag, vi_tri, vi_tri + do_dai
+
+
+def _han_chung_chi(der: bytes) -> tuple:
+    """(notBefore, notAfter) theo gio UTC cua mot chung chi X.509 dang DER. Tu doc cau truc de watchdog khong phu
+    thuoc thu vien ngoai: Certificate -> tbsCertificate -> [version] serial, signature, issuer, validity."""
+    _, p, _ = _der_phan_tu(der, 0)
+    _, p, _ = _der_phan_tu(der, p)
+    tag, _, cuoi = _der_phan_tu(der, p)
+    if tag == 0xA0:                         # [0] version - chung chi v1 khong co
+        p = cuoi
+    for _ in range(3):                      # serialNumber, signature, issuer
+        _, _, p = _der_phan_tu(der, p)
+    _, p, _ = _der_phan_tu(der, p)          # validity
+    moc = []
+    for _ in range(2):
+        tag, dau, p = _der_phan_tu(der, p)
+        dinh_dang = "%y%m%d%H%M%SZ" if tag == 0x17 else "%Y%m%d%H%M%SZ"   # UTCTime / GeneralizedTime
+        moc.append(dt.datetime.strptime(der[dau:p].decode("ascii"), dinh_dang))
+    return moc[0], moc[1]
+
+
+def _thu_nhieu_lan(viec) -> tuple:
+    """(ket_qua, None) neu mot lan thu dat; (None, loi_cuoi) neu ca WEB_SO_LAN_THU lan deu loi."""
+    loi = "khong ro"
+    for lan in range(WEB_SO_LAN_THU):
+        if lan:
+            time.sleep(WEB_CHO_GIUA_LAN_S)
+        try:
+            return viec(), None
+        except Exception as exc:
+            loi = f"{type(exc).__name__}: {exc}"
+    return None, loi
+
+
+def _bao_khi_doi(state: dict, khoa: str, dang_loi: bool, bao_loi: tuple, bao_het: tuple):
+    """Gui MOT canh bao khi bat dau loi va MOT tin khi het loi, ghi nho vao state[khoa]. bao_loi = (tieu de, noi
+    dung, muc do); bao_het = (tieu de, noi dung). Chi ghi nho "da bao" khi Teams nhan, de canh bao khong mat vi mot
+    lan gui loi."""
+    da_bao = state.get(khoa, False)
+    if dang_loi and not da_bao:
+        if _send_teams_alert(bao_loi[0], bao_loi[1], severity=bao_loi[2]):
+            state[khoa] = True
+    elif not dang_loi and da_bao:
+        _send_teams_alert(bao_het[0], bao_het[1], severity="INFO")
+        state[khoa] = False
+
+
+def _kiem_web_truc_tiep(state: dict):
+    """Canh web chay thang tren may 24: Next.js (3000), Caddy (443) va han chung chi. Ghi ket qua vao state."""
+    host = _ten_mien_web_truc_tiep()
+    if not host:
+        _log("Web check: BO QUA (CHATBOT_WEB_URL chua tro ve ten mien rieng, hoac may nay khong co ban web)")
+        return
+
+    _, loi_web = _thu_nhieu_lan(_goi_web_noi_bo)
+    _bao_khi_doi(
+        state, "web_local_down_alerted", loi_web is not None,
+        ("Web chatbot DNH không trả lời",
+         f"Web (Next.js, cổng 3000 trên máy 24) không trả lời sau {WEB_SO_LAN_THU} lần thử: {loi_web}. "
+         f"Người dùng mở https://{host} sẽ gặp lỗi 502. Kiểm tra dịch vụ DNH_Chatbot_Web trên máy 24; "
+         f"nhật ký ở {WEB_LOG_DIR}\\DNH_Chatbot_Web.err.log.",
+         "CRITICAL"),
+        ("Web chatbot DNH đã trả lời lại", "Web (cổng 3000 trên máy 24) trả lời bình thường."),
+    )
+
+    der, loi_tls = _thu_nhieu_lan(lambda: _lay_chung_chi_der(host))
+    _bao_khi_doi(
+        state, "web_proxy_down_alerted", loi_tls is not None,
+        ("Cổng HTTPS của chatbot DNH không nhận kết nối",
+         f"Caddy (cổng 443 trên máy 24) không bắt tay TLS được cho {host} sau {WEB_SO_LAN_THU} lần thử: "
+         f"{loi_tls}. Người dùng không mở được https://{host}. Kiểm tra dịch vụ DNH_Chatbot_Proxy trên "
+         f"máy 24; nhật ký ở {WEB_LOG_DIR}\\DNH_Chatbot_Proxy.err.log.",
+         "CRITICAL"),
+        ("Cổng HTTPS của chatbot DNH đã nhận kết nối lại", f"Caddy phục vụ {host} bình thường."),
+    )
+
+    con_lai = None
+    if der:
+        try:
+            tu, den = _han_chung_chi(der)
+        except (ValueError, IndexError) as exc:
+            _log(f"Web check: khong doc duoc han chung chi: {type(exc).__name__}: {exc}")
+            return
+        con_lai = (den - _bay_gio_utc()).total_seconds() / 86400
+        thoi_han = (den - tu).total_seconds() / 86400
+        _bao_khi_doi(
+            state, "web_cert_expiring_alerted", con_lai < thoi_han * CERT_PHAN_CON_LAI_BAO_DONG,
+            ("Chứng chỉ HTTPS của chatbot DNH sắp hết hạn",
+             f"Chứng chỉ của {host} hết hạn ngày {den:%d/%m/%Y} (còn {max(con_lai, 0):.0f} ngày). Caddy tự gia "
+             "hạn khi còn 1/3 thời hạn, nên còn ít thế này nghĩa là việc gia hạn đang lỗi — thường do cổng 443 "
+             "từ Internet vào máy 24 bị chặn hoặc bản ghi DNS đã đổi. Hết hạn thì trình duyệt chặn trang. "
+             f"Xem {WEB_LOG_DIR}\\DNH_Chatbot_Proxy.err.log.",
+             "WARNING"),
+            ("Chứng chỉ HTTPS của chatbot DNH đã được gia hạn", f"Hạn mới của {host}: {den:%d/%m/%Y}."),
+        )
+    _log(f"Web check: host={host}, web_loi={loi_web}, tls_loi={loi_tls}, "
+         f"chung_chi_con_ngay={None if con_lai is None else round(con_lai, 1)}")
+
+
 def run_check():
     state = _load_state()
     changed = False
@@ -412,6 +576,15 @@ def run_check():
     elif not rejection and state.get("api_credit_exhausted_alerted", False):
         state["api_credit_exhausted_alerted"] = False
         changed = True
+
+    # Loi o phan canh web khong duoc lam mat trang thai cua cac kiem tra phia tren; canh bao nao da gui thi van
+    # duoc ghi nho (so state truoc/sau thay vi tin gia tri tra ve).
+    truoc = dict(state)
+    try:
+        _kiem_web_truc_tiep(state)
+    except Exception as exc:
+        _log(f"Web check: LOI khong luong truoc: {type(exc).__name__}: {exc}")
+    changed = changed or state != truoc
 
     if changed:
         _save_state(state)
